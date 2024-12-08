@@ -4,7 +4,6 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -13,6 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -49,14 +49,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import lixuan.focubili.ui.theme.FocuBiliTheme
 
 class MainActivity : ComponentActivity() {
@@ -75,7 +71,6 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-val Nachocolor = Color(0xFFA7C9EC)
 
 @Composable
 fun HomeScreen(modifier: Modifier = Modifier) {
@@ -221,59 +216,115 @@ fun FeatureCard(
     }
 }
 
+// 首先定义一个数据类来存储每个象限的内容和颜色
+data class QuadrantData(
+    val title: String,
+    val description: String,
+    val backgroundColor: Color
+)
+
+// 声明所有象限的内容
+private val quadrantContents = listOf(
+    QuadrantData(
+        title = "Text composable",
+        description = "Displays text and follows the recommended Material Design guidelines.",
+        backgroundColor = Color(0xFFEADDFF)
+    ),
+    QuadrantData(
+        title = "Image composable",
+        description = "Creates a composable that lays out and draws a given Painter class object.",
+        backgroundColor = Color(0xFFD0BCFF)
+    ),
+    QuadrantData(
+        title = "Row composable",
+        description = "A layout composable that places its children in a horizontal sequence.",
+        backgroundColor = Color(0xFFB69DF8)
+    ),
+    QuadrantData(
+        title = "Column composable",
+        description = "A layout composable that places its children in a vertical sequence.",
+        backgroundColor = Color(0xFFF6EDFF)
+    )
+)
+
 @Composable
-fun GreetingText(message: String,
-                 from: String,
-                 modifier: Modifier = Modifier) {
-    Column( verticalArrangement = Arrangement.Center,
-        modifier = modifier,
-        ) {
+fun LittleText(modifier: Modifier = Modifier, data: QuadrantData) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,) {
         Text(
-            text = message,
-            fontSize = 80.sp,
-            lineHeight = 108.sp,
-            textAlign = TextAlign.Center,
+            text = data.title,
+            fontWeight = FontWeight.Bold,
+            modifier = modifier
+                .padding(bottom = 16.dp),
+            textAlign = TextAlign.Justify
         )
         Text(
-            text = from,
-            fontSize = 36.sp,
-            modifier = Modifier
-                .padding(16.dp)
-                .align(alignment = Alignment.CenterHorizontally),
+            text = data.description
         )
     }
 }
+
 @Composable
-fun GreetingImage(message: String,
-                    from: String,
-                    modifier: Modifier = Modifier) {
-    val image = painterResource(R.drawable.androidparty)
-    Box(modifier) {
-        Image(
-            painter = image,
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            alpha = 0.8f,
-        )
-        GreetingText(
-            message = message,
-            from = from,
+fun Quadrant(modifier: Modifier = Modifier, data: QuadrantData) {
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .fillMaxHeight(), // 设置为填充父布局
+        colors = CardDefaults.cardColors(containerColor = data.backgroundColor),
+        shape = RoundedCornerShape(0.dp), // 设置为直角
+    ) {
+        LittleText(data = data)
+    }
+}
+
+@Composable
+private fun ComposeQuadrant(modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .fillMaxSize(),
+    ) {
+        Row(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(8.dp)
-        )
+                .fillMaxWidth()
+                .fillMaxHeight(0.5f),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Quadrant(
+                modifier = Modifier.weight(1f),
+                data = quadrantContents[0]  // 使用第一象限数据
+            )
+            Quadrant(
+                modifier = Modifier.weight(1f),
+                data = quadrantContents[1]  // 使用第二象限数据
+            )
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Quadrant(
+                modifier = Modifier.weight(1f),
+                data = quadrantContents[2]  // 使用第三象限数据
+            )
+            Quadrant(
+                modifier = Modifier.weight(1f),
+                data = quadrantContents[3]  // 使用第四象限数据
+            )
+        }
     }
 }
 
 @Preview(showBackground = true)
 @Composable
-fun BirthdayCardPreview() {
+fun QuadrantPreview() {
     FocuBiliTheme {
-        GreetingImage(
-            message = stringResource(R.string.happy_birthday_text),
-            from = stringResource(R.string.signature_text),
-            modifier = Modifier
-        )
+        Quadrant(data = quadrantContents[0])  // 预览第一象限
     }
 }
 @Preview(showBackground = true)
@@ -281,5 +332,13 @@ fun BirthdayCardPreview() {
 fun HomeScreenPreview() {
     FocuBiliTheme {
         HomeScreen()
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+fun ComposeQuadrantPreview() {
+    FocuBiliTheme {
+        ComposeQuadrant(Modifier.fillMaxSize())
     }
 }
