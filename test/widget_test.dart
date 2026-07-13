@@ -110,6 +110,8 @@ class _FakePlaybackService implements PlaybackService {
   final SavedPlaybackState? savedState;
   final bool rejectQuality;
   int pictureInPictureRequests = 0;
+  int seekByRequests = 0;
+  int seekToRequests = 0;
   double brightness = 0.5;
   double volume = 0.5;
 
@@ -150,6 +152,7 @@ class _FakePlaybackService implements PlaybackService {
   /// 模拟按相对时长快进或快退，并把位置限制在视频有效范围内。
   @override
   Future<void> seekBy(Duration offset) async {
+    seekByRequests += 1;
     final int nextMilliseconds =
         (_position.inMilliseconds + offset.inMilliseconds)
             .clamp(0, _duration.inMilliseconds)
@@ -161,6 +164,7 @@ class _FakePlaybackService implements PlaybackService {
   /// 模拟跳转到给定位置，并把位置限制在视频有效范围内。
   @override
   Future<void> seekTo(Duration position) async {
+    seekToRequests += 1;
     _position = Duration(
       milliseconds:
           position.inMilliseconds.clamp(0, _duration.inMilliseconds).toInt(),
@@ -257,6 +261,30 @@ VideoPreview _createMultiPartVideo() {
         pageNumber: 2,
         cid: 137649200,
         title: '第二P',
+        duration: Duration(minutes: 3),
+      ),
+    ],
+  );
+}
+
+/// 创建带超长分P标题的测试视频，验证折叠和展开选集不会产生布局异常。
+VideoPreview _createLongPartTitleVideo() {
+  return const VideoPreview(
+    bvid: 'BV1GJ411x7h7',
+    cid: 137649199,
+    title: '超长分P标题测试视频',
+    ownerName: '焦点哔哩',
+    parts: <VideoPart>[
+      VideoPart(
+        pageNumber: 1,
+        cid: 137649199,
+        title: '这一条非常非常长的分P标题用于验证在按钮内部超过两行后能够竖向循环显示并且不会造成布局溢出',
+        duration: Duration(minutes: 2),
+      ),
+      VideoPart(
+        pageNumber: 2,
+        cid: 137649200,
+        title: '短标题',
         duration: Duration(minutes: 3),
       ),
     ],
@@ -626,6 +654,209 @@ void main() {
     await tester.pump();
     expect(service._speed, 1);
     expect(find.text('二倍速中>>'), findsNothing);
+  });
+
+  /// 验证长按横向移动只在松手时提交一次进度跳转，并恢复原本播放倍速。
+  testWidgets('长按横向拖动可以预览并一次性跳转进度', (
+    WidgetTester tester,
+  ) async {
+    final _FakePlaybackService service = _FakePlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: service,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('play-pause-button')));
+    await tester.pump();
+    final Rect playerBounds = tester.getRect(
+      find.byKey(const Key('player-surface')),
+    );
+    final TestGesture gesture = await tester.startGesture(playerBounds.center);
+    await tester.pump(const Duration(milliseconds: 650));
+    await gesture.moveBy(const Offset(300, 0));
+    await tester.pump();
+
+    expect(service.seekToRequests, 0);
+    expect(service._speed, 1);
+    expect(find.text('跳转至 0:30'), findsOneWidget);
+
+    await gesture.up();
+    await tester.pumpAndSettle();
+
+    expect(service.seekToRequests, 1);
+    expect(service._position, const Duration(seconds: 30));
+    expect(service._speed, 1);
+  });
+
+  /// 验证长按跳转超过单次上限时会被限制为两分钟，避免长视频一次跳到不可控位置。
+  testWidgets('长按横向拖动会限制单次快捷跳转范围', (
+    WidgetTester tester,
+  ) async {
+    final _FakePlaybackService service = _FakePlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: service,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('play-pause-button')));
+    await tester.pump();
+    final Rect playerBounds = tester.getRect(
+      find.byKey(const Key('player-surface')),
+    );
+    final TestGesture gesture = await tester.startGesture(playerBounds.center);
+    await tester.pump(const Duration(milliseconds: 650));
+    await gesture.moveBy(const Offset(2000, 0));
+    await tester.pump();
+    await gesture.up();
+    await tester.pumpAndSettle();
+
+    expect(service._position, const Duration(minutes: 2));
+    expect(service.seekToRequests, 1);
+  });
+
+  /// 验证系统取消长按时会恢复播放速度，且不会把预览位置写入原生播放器。
+  testWidgets('取消长按跳转不会写入预览进度', (WidgetTester tester) async {
+    final _FakePlaybackService service = _FakePlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: service,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('play-pause-button')));
+    await tester.pump();
+    final Rect playerBounds = tester.getRect(
+      find.byKey(const Key('player-surface')),
+    );
+    final TestGesture gesture = await tester.startGesture(playerBounds.center);
+    await tester.pump(const Duration(milliseconds: 650));
+    await gesture.moveBy(const Offset(300, 0));
+    await tester.pump();
+    await gesture.cancel();
+    await tester.pumpAndSettle();
+
+    expect(service.seekToRequests, 0);
+    expect(service._position, Duration.zero);
+    expect(service._speed, 1);
+  });
+
+  /// 验证暂停时控制栏不会因旧计时器自动隐藏，继续播放后才恢复五秒自动收起。
+  testWidgets('暂停时控制栏保持显示，播放时才自动隐藏', (
+    WidgetTester tester,
+  ) async {
+    final _FakePlaybackService service = _FakePlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: service,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final Finder controls = find.byKey(const Key('player-controls'));
+
+    await tester.pump(const Duration(seconds: 6));
+    expect(tester.widget<AnimatedOpacity>(controls).opacity, 1);
+
+    await tester.tap(find.byKey(const Key('play-pause-button')));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 6));
+    expect(tester.widget<AnimatedOpacity>(controls).opacity, 0);
+  });
+
+  /// 验证全屏上下安全区内的竖滑不会调节亮度，而中间区域仍可正常调节。
+  testWidgets('全屏竖滑会避开顶部和底部系统手势区', (
+    WidgetTester tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final _FakePlaybackService service = _FakePlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (BuildContext context, Widget? child) {
+          return MediaQuery(
+            data: MediaQuery.of(context).copyWith(
+              padding: const EdgeInsets.only(top: 36, bottom: 28),
+              viewPadding: const EdgeInsets.only(top: 36, bottom: 28),
+            ),
+            child: child!,
+          );
+        },
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: service,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final IconButton fullscreenButton = tester.widget<IconButton>(
+      find.byWidgetPredicate(
+        (Widget widget) => widget is IconButton && widget.tooltip == '进入全屏',
+      ),
+    );
+    fullscreenButton.onPressed!();
+    await tester.pumpAndSettle();
+    final Rect playerBounds = tester.getRect(
+      find.byKey(const Key('player-surface')),
+    );
+
+    await tester.dragFrom(
+      Offset(playerBounds.left + 40, playerBounds.top + 20),
+      const Offset(0, -180),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(service.brightness, 0.5);
+
+    await tester.dragFrom(
+      Offset(playerBounds.left + 40, playerBounds.center.dy),
+      const Offset(0, -180),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(service.brightness, greaterThan(0.5));
+    final double brightnessAfterMiddle = service.brightness;
+
+    await tester.dragFrom(
+      Offset(playerBounds.left + 40, playerBounds.bottom - 12),
+      const Offset(0, -180),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(service.brightness, brightnessAfterMiddle);
+  });
+
+  /// 验证超长分P标题使用独立两行竖向组件，展开选集后也不会触发布局异常。
+  testWidgets('分P超长标题在折叠和展开列表中保持可用', (
+    WidgetTester tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _createLongPartTitleVideo(),
+          playbackService: _FakePlaybackService(),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.byKey(const Key('part-title-1')), findsOneWidget);
+    await tester.tap(find.text('展开'));
+    await tester.pump(const Duration(seconds: 6));
+    expect(find.byKey(const Key('part-title-1')), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   /// 验证全屏时系统返回键只退出全屏，不会直接关闭播放器页面。

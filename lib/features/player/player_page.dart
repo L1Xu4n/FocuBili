@@ -26,7 +26,11 @@ class _PlayerPageState extends State<PlayerPage> {
   static const Duration _controlsAutoHideDelay = Duration(seconds: 5);
   static const Duration _transientHintDuration = Duration(seconds: 3);
   static const Duration _resumeNoticeDuration = _transientHintDuration;
-  static const double _fullscreenGestureExclusionHeight = 72;
+  static const double _fullscreenBottomGestureExclusionHeight = 72;
+  static const double _fullscreenTopGestureExclusionHeight = 56;
+  static const double _longPressSeekActivationDistance = 24;
+  static const double _longPressSeekSecondsPerLogicalPixel = 0.1;
+  static const Duration _longPressSeekMaximumOffset = Duration(seconds: 120);
   static const double _expandedPartItemHeight = 76;
   static const List<double> _playbackSpeeds = <double>[
     0.75,
@@ -62,7 +66,10 @@ class _PlayerPageState extends State<PlayerPage> {
   bool _partsAscending = true;
   bool _danmakuEnabled = false;
   bool _temporaryDoubleSpeedActive = false;
+  bool _longPressScrubbing = false;
   double _speedBeforeLongPress = 1;
+  double _longPressStartProgress = 0;
+  double _longPressTargetProgress = 0;
   int? _shownRestoredCid;
   double _brightness = 0.5;
   double _volume = 0.5;
@@ -180,7 +187,9 @@ class _PlayerPageState extends State<PlayerPage> {
         !snapshot.isInPictureInPicture;
     setState(() {
       _playbackSnapshot = snapshot;
-      if (!_isDraggingProgress && snapshot.duration > Duration.zero) {
+      if (!_isDraggingProgress &&
+          !_longPressScrubbing &&
+          snapshot.duration > Duration.zero) {
         _progress = (snapshot.position.inMilliseconds /
                 snapshot.duration.inMilliseconds)
             .clamp(0, 1)
@@ -207,9 +216,9 @@ class _PlayerPageState extends State<PlayerPage> {
       _shownRestoredCid = _currentPart.cid;
       _showResumeNotice(snapshot.restoredPosition);
     }
-    if (_showControls &&
-        !snapshot.isInPictureInPicture &&
-        _controlsTimer == null) {
+    if (!snapshot.isPlaying || snapshot.isInPictureInPicture) {
+      _stopControlsAutoHideTimer();
+    } else if (_showControls && _controlsTimer == null) {
       _restartControlsAutoHideTimer();
     }
   }
@@ -305,15 +314,28 @@ class _PlayerPageState extends State<PlayerPage> {
   /// 在视频播放且控制层可见时，安排五秒后自动隐藏控制层。
   void _restartControlsAutoHideTimer() {
     _stopControlsAutoHideTimer();
-    if (!_showControls) {
+    if (!_showControls ||
+        !_playing ||
+        _playbackSnapshot.isInPictureInPicture ||
+        _isDraggingProgress ||
+        _temporaryDoubleSpeedActive ||
+        _longPressScrubbing) {
       return;
     }
     _controlsTimer = Timer(_controlsAutoHideDelay, () {
-      if (mounted) {
+      if (mounted &&
+          _showControls &&
+          _playing &&
+          !_playbackSnapshot.isInPictureInPicture &&
+          !_isDraggingProgress &&
+          !_temporaryDoubleSpeedActive &&
+          !_longPressScrubbing) {
         setState(() {
           _showControls = false;
           _controlsTimer = null;
         });
+      } else {
+        _controlsTimer = null;
       }
     });
   }
@@ -406,24 +428,101 @@ class _PlayerPageState extends State<PlayerPage> {
     }
   }
 
-  /// 长按正在播放的画面时记住原倍速，并临时切换到二倍速。
+  /// 长按正在播放的画面时记住原倍速，并准备二倍速或横向快捷跳转。
   void _startTemporaryDoubleSpeed(LongPressStartDetails details) {
-    if (!_playing || _temporaryDoubleSpeedActive) {
+    if (!_playing || _temporaryDoubleSpeedActive || _longPressScrubbing) {
       return;
     }
     _speedBeforeLongPress = _playbackSpeed;
-    setState(() => _temporaryDoubleSpeedActive = true);
+    _longPressStartProgress = _progress;
+    _longPressTargetProgress = _progress;
+    _stopControlsAutoHideTimer();
+    setState(() {
+      _temporaryDoubleSpeedActive = true;
+      _longPressScrubbing = false;
+    });
     unawaited(_setTemporaryPlaybackSpeed(2));
   }
 
-  /// 松开长按手势后恢复用户此前选择的播放倍速。
-  void _stopTemporaryDoubleSpeed(LongPressEndDetails details) {
-    if (!_temporaryDoubleSpeedActive) {
+  /// 长按后横向移动超过阈值时预览目标进度，且不在移动过程中频繁请求原生跳转。
+  void _updateTemporaryLongPress(LongPressMoveUpdateDetails details) {
+    if (!_temporaryDoubleSpeedActive && !_longPressScrubbing) {
       return;
     }
+    final double horizontalOffset = details.localOffsetFromOrigin.dx;
+    if (!_longPressScrubbing &&
+        horizontalOffset.abs() < _longPressSeekActivationDistance) {
+      return;
+    }
+    final double durationSeconds = _displayDuration.inMilliseconds / 1000;
+    if (durationSeconds <= 0) {
+      return;
+    }
+    final double maximumOffsetSeconds =
+        _longPressSeekMaximumOffset.inMilliseconds / 1000;
+    final double requestedOffsetSeconds =
+        (horizontalOffset * _longPressSeekSecondsPerLogicalPixel)
+            .clamp(-maximumOffsetSeconds, maximumOffsetSeconds)
+            .toDouble();
+    final double targetSeconds =
+        (_longPressStartProgress * durationSeconds + requestedOffsetSeconds)
+            .clamp(0, durationSeconds)
+            .toDouble();
+    final double targetProgress = targetSeconds / durationSeconds;
+    final bool startedScrubbing = !_longPressScrubbing;
+    _seekFeedbackTimer?.cancel();
+    setState(() {
+      _longPressScrubbing = true;
+      _temporaryDoubleSpeedActive = false;
+      _longPressTargetProgress = targetProgress;
+      _progress = targetProgress;
+      _showControls = true;
+      _seekFeedback = '跳转至 ${_formatSeconds(targetSeconds.round())}';
+    });
+    if (startedScrubbing) {
+      unawaited(_setTemporaryPlaybackSpeed(_speedBeforeLongPress));
+    }
+  }
+
+  /// 松开长按手势后，普通长按恢复倍速；快捷跳转只提交一次最终目标位置。
+  void _stopTemporaryDoubleSpeed(LongPressEndDetails details) {
+    if (!_temporaryDoubleSpeedActive && !_longPressScrubbing) {
+      return;
+    }
+    final bool wasScrubbing = _longPressScrubbing;
     final double speedToRestore = _speedBeforeLongPress;
-    setState(() => _temporaryDoubleSpeedActive = false);
+    final double targetProgress = _longPressTargetProgress;
+    setState(() {
+      _temporaryDoubleSpeedActive = false;
+      _longPressScrubbing = false;
+    });
+    if (wasScrubbing) {
+      unawaited(_seekToProgress(targetProgress));
+      _scheduleSeekFeedbackClear();
+    } else {
+      unawaited(_setTemporaryPlaybackSpeed(speedToRestore));
+    }
+    _restartControlsAutoHideTimer();
+  }
+
+  /// 手势被系统取消时恢复原倍速但不跳转，避免用户未松手时意外改变进度。
+  void _cancelTemporaryLongPress() {
+    if (!_temporaryDoubleSpeedActive && !_longPressScrubbing) {
+      return;
+    }
+    final bool wasScrubbing = _longPressScrubbing;
+    final double speedToRestore = _speedBeforeLongPress;
+    setState(() {
+      _temporaryDoubleSpeedActive = false;
+      _longPressScrubbing = false;
+      _progress = _longPressStartProgress;
+      if (wasScrubbing) {
+        _seekFeedback = null;
+      }
+    });
+    _seekFeedbackTimer?.cancel();
     unawaited(_setTemporaryPlaybackSpeed(speedToRestore));
+    _restartControlsAutoHideTimer();
   }
 
   /// 向原生播放器发送临时倍速，失败时恢复提示状态并显示原因。
@@ -441,6 +540,16 @@ class _PlayerPageState extends State<PlayerPage> {
       }
       _showPlaybackError('无法临时切换倍速：$error');
     }
+  }
+
+  /// 让快捷跳转提示在用户松手后三秒消失，避免永久遮挡画面。
+  void _scheduleSeekFeedbackClear() {
+    _seekFeedbackTimer?.cancel();
+    _seekFeedbackTimer = Timer(_transientHintDuration, () {
+      if (mounted) {
+        setState(() => _seekFeedback = null);
+      }
+    });
   }
 
   /// 请求原生播放器保留当前进度并切换到所选清晰度。
@@ -569,18 +678,29 @@ class _PlayerPageState extends State<PlayerPage> {
     );
   }
 
-  /// 根据手指起点选择左侧亮度或右侧音量，并避开全屏底部系统手势区。
+  /// 根据手指起点选择左侧亮度或右侧音量，并避开全屏顶部与底部系统手势区。
   void _startVerticalAdjustment(
     DragStartDetails details,
     Size playerSize,
+    double topSystemInset,
     double bottomSystemInset,
   ) {
-    final double excludedHeight =
-        (_fullscreenGestureExclusionHeight + bottomSystemInset)
+    if (_temporaryDoubleSpeedActive || _longPressScrubbing) {
+      _verticalAdjustmentMode = _VerticalAdjustmentMode.none;
+      return;
+    }
+    final double topExcludedHeight =
+        (_fullscreenTopGestureExclusionHeight + topSystemInset)
+            .clamp(0, playerSize.height)
+            .toDouble();
+    final double bottomExcludedHeight =
+        (_fullscreenBottomGestureExclusionHeight + bottomSystemInset)
             .clamp(0, playerSize.height)
             .toDouble();
     if (_fullscreen &&
-        details.localPosition.dy >= playerSize.height - excludedHeight) {
+        (details.localPosition.dy <= topExcludedHeight ||
+            details.localPosition.dy >=
+                playerSize.height - bottomExcludedHeight)) {
       _verticalAdjustmentMode = _VerticalAdjustmentMode.none;
       return;
     }
@@ -802,7 +922,7 @@ class _PlayerPageState extends State<PlayerPage> {
     );
   }
 
-  /// 创建两行分P卡片，标题过长时在折叠与展开列表中都会自动滚动。
+  /// 创建分P卡片，标题在同一按钮内最多显示两行并按需竖向滚动。
   Widget _buildPartCard(VideoPart part, {required bool compact}) {
     final bool selected = part.cid == _currentPart.cid;
     final ColorScheme colors = Theme.of(context).colorScheme;
@@ -833,11 +953,12 @@ class _PlayerPageState extends State<PlayerPage> {
               ),
               SizedBox(height: compact ? 1 : 3),
               Expanded(
-                child: _AutoScrollingText(
+                child: _PartTitleMarquee(
+                  key: Key('part-title-${part.pageNumber}'),
                   text: part.title,
                   style: TextStyle(
                     color: selected ? colors.onPrimaryContainer : null,
-                    fontSize: compact ? 13 : 14,
+                    fontSize: compact ? 12 : 14,
                   ),
                 ),
               ),
@@ -1038,15 +1159,20 @@ class _PlayerPageState extends State<PlayerPage> {
           onDoubleTapDown: _recordDoubleTapPosition,
           // 双击处理函数依据画面宽度计算左中右分区。
           onDoubleTap: () => _handleDoubleTap(constraints.maxWidth),
-          // 长按开始函数只在正在播放时临时切换到二倍速。
+          // 长按开始函数先临时切换到二倍速，并记录快捷跳转的起点。
           onLongPressStart: _startTemporaryDoubleSpeed,
-          // 长按结束函数恢复用户原先选择的播放倍速。
+          // 长按移动函数只在横向超过阈值后预览进度，避免与短距离移动冲突。
+          onLongPressMoveUpdate: _updateTemporaryLongPress,
+          // 长按结束函数恢复原倍速或只提交一次最终进度跳转。
           onLongPressEnd: _stopTemporaryDoubleSpeed,
-          // 竖向手势开始函数判断左侧亮度、右侧音量和底部排除区。
+          // 长按取消函数恢复界面状态且不提交未确认的进度。
+          onLongPressCancel: _cancelTemporaryLongPress,
+          // 竖向手势开始函数判断左侧亮度、右侧音量和上下安全区排除。
           onVerticalDragStart: (DragStartDetails details) =>
               _startVerticalAdjustment(
             details,
             constraints.biggest,
+            MediaQuery.of(context).viewPadding.top,
             MediaQuery.of(context).viewPadding.bottom,
           ),
           // 竖向手势更新函数实时调整窗口亮度或媒体音量。
@@ -1467,6 +1593,182 @@ class _PlayerPageState extends State<PlayerPage> {
       // 系统返回函数保证全屏时先回到竖屏播放器，而不是离开视频页。
       onPopInvoked: _handlePopInvoked,
       child: pageScaffold,
+    );
+  }
+}
+
+/// 在固定两行高度内竖向循环标题，避免超长分P名称被横向截断。
+class _PartTitleMarquee extends StatefulWidget {
+  /// 创建一个会在两行内容溢出时自动竖向滚动的分P标题。
+  const _PartTitleMarquee({
+    super.key,
+    required this.text,
+    required this.style,
+  });
+
+  final String text;
+  final TextStyle style;
+
+  /// 创建分P标题滚动组件的状态对象。
+  @override
+  State<_PartTitleMarquee> createState() => _PartTitleMarqueeState();
+}
+
+/// 测量两行标题的实际溢出高度，并管理竖向循环动画的生命周期。
+class _PartTitleMarqueeState extends State<_PartTitleMarquee>
+    with SingleTickerProviderStateMixin {
+  static const double _textGap = 12;
+  late final AnimationController _controller;
+  double _travelDistance = 0;
+  String? _animationSignature;
+  bool _elementActive = true;
+
+  /// 创建竖向标题动画控制器，只有内容超过两行时才会启动。
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(vsync: this);
+  }
+
+  /// 当标题文字或样式变化时清除旧的测量结果，等待下一帧重新判断溢出。
+  @override
+  void didUpdateWidget(covariant _PartTitleMarquee oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.text != widget.text || oldWidget.style != widget.style) {
+      _stopAnimation();
+    }
+  }
+
+  /// 组件重新进入树时重新允许动画在布局完成后启动。
+  @override
+  void activate() {
+    super.activate();
+    _elementActive = true;
+  }
+
+  /// 列表回收组件时停止动画，防止失活状态继续触发框架刷新。
+  @override
+  void deactivate() {
+    _elementActive = false;
+    _controller.stop();
+    _animationSignature = null;
+    super.deactivate();
+  }
+
+  /// 停止并清空旧动画状态，供短标题或新标题重新测量。
+  void _stopAnimation() {
+    _controller.stop();
+    _controller.reset();
+    _animationSignature = null;
+    _travelDistance = 0;
+  }
+
+  /// 在布局完成后按实际竖向距离启动匀速循环，避免在 build 中直接改变动画状态。
+  void _scheduleAnimation(double travelDistance) {
+    final String signature = '${widget.text}:$travelDistance:${widget.style}';
+    if (_animationSignature == signature) {
+      return;
+    }
+    _animationSignature = signature;
+    _travelDistance = travelDistance;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_elementActive || _animationSignature != signature) {
+        return;
+      }
+      final int milliseconds =
+          (travelDistance / 18 * 1000).round().clamp(5000, 28000).toInt();
+      _controller
+        ..duration = Duration(milliseconds: milliseconds)
+        ..repeat();
+    });
+  }
+
+  /// 释放动画控制器，避免分P列表销毁后仍占用动画资源。
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  /// 构建静态两行标题，或构建两份文字组成的无缝竖向循环标题。
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        if (!constraints.hasBoundedWidth) {
+          return Text(
+            widget.text,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: widget.style,
+          );
+        }
+        final TextPainter visiblePainter = TextPainter(
+          text: TextSpan(text: widget.text, style: widget.style),
+          maxLines: 2,
+          textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context),
+        )..layout(maxWidth: constraints.maxWidth);
+        if (!visiblePainter.didExceedMaxLines) {
+          if (_animationSignature != null) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted && _elementActive) {
+                _stopAnimation();
+              }
+            });
+          }
+          return Text(
+            widget.text,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: widget.style,
+          );
+        }
+        final TextPainter completePainter = TextPainter(
+          text: TextSpan(text: widget.text, style: widget.style),
+          textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context),
+        )..layout(maxWidth: constraints.maxWidth);
+        final double travelDistance =
+            completePainter.height - visiblePainter.height + _textGap;
+        _scheduleAnimation(travelDistance);
+        return SizedBox(
+          width: constraints.maxWidth,
+          height: visiblePainter.height,
+          child: ClipRect(
+            child: AnimatedBuilder(
+              animation: _controller,
+              // 动画构建函数在两行裁剪区域内竖向移动两份完整标题，实现循环阅读。
+              builder: (BuildContext context, Widget? child) {
+                final double offset = _travelDistance * _controller.value;
+                return Stack(
+                  clipBehavior: Clip.none,
+                  children: <Widget>[
+                    Positioned(
+                      top: -offset,
+                      left: 0,
+                      right: 0,
+                      child: SizedBox(
+                        width: constraints.maxWidth,
+                        child: Text(widget.text, style: widget.style),
+                      ),
+                    ),
+                    Positioned(
+                      top: completePainter.height + _textGap - offset,
+                      left: 0,
+                      right: 0,
+                      child: SizedBox(
+                        width: constraints.maxWidth,
+                        child: Text(widget.text, style: widget.style),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+        );
+      },
     );
   }
 }

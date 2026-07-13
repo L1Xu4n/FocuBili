@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
@@ -31,6 +32,7 @@ class SearchPage extends StatefulWidget {
 
 /// 管理关键词搜索、BV 查询、增量加载、筛选和进入播放器的页面状态。
 class _SearchPageState extends State<SearchPage> {
+  static const int _maxEpisodeCountLookupConcurrency = 2;
   static final RegExp _bvidPattern = RegExp(
     r'BV[0-9A-Za-z]{10}',
     caseSensitive: false,
@@ -64,6 +66,10 @@ class _SearchPageState extends State<SearchPage> {
   final FocusNode _searchFocusNode = FocusNode();
   final ScrollController _resultScrollController = ScrollController();
   final SearchHistoryService _historyService = SearchHistoryService();
+  final Queue<VideoSearchResult> _episodeCountLookupQueue =
+      Queue<VideoSearchResult>();
+  final Set<String> _episodeCountLookupAttemptedBvids = <String>{};
+  final Map<String, String> _fallbackEpisodeCountTexts = <String, String>{};
   late final BilibiliService _service;
   Timer? _suggestionDebounce;
   VideoPreview? _directResult;
@@ -77,6 +83,7 @@ class _SearchPageState extends State<SearchPage> {
   bool _hasSubmitted = false;
   int _currentPage = 0;
   int _totalPages = 0;
+  int _activeEpisodeCountLookups = 0;
   VideoSearchFilter _filter = const VideoSearchFilter();
   List<String> _searchHistory = const <String>[];
 
@@ -334,6 +341,77 @@ class _SearchPageState extends State<SearchPage> {
           duration: const Duration(seconds: 3),
         ),
       );
+  }
+
+  /// 为当前已渲染、且服务端未返回分集文字的卡片安排一次详情补查。
+  ///
+  /// 该函数在绘制完成后才入队，避免为尚未出现的搜索结果消耗网络；同一
+  /// BV 号无论成功或失败都只会尝试一次，避免滚动列表重复触发详情请求。
+  void _scheduleEpisodeCountFallback(VideoSearchResult result) {
+    if (result.episodeCountText.isNotEmpty ||
+        _fallbackEpisodeCountTexts.containsKey(result.bvid)) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_isSearchResultDisplayed(result.bvid)) {
+        return;
+      }
+      if (!_episodeCountLookupAttemptedBvids.add(result.bvid)) {
+        return;
+      }
+      _episodeCountLookupQueue.addLast(result);
+      _pumpEpisodeCountLookups();
+    });
+  }
+
+  /// 判断某个 BV 号是否仍在当前搜索列表中，防止切换关键词后补查旧卡片。
+  bool _isSearchResultDisplayed(String bvid) {
+    return _searchResults.any(
+      (VideoSearchResult result) => result.bvid == bvid,
+    );
+  }
+
+  /// 在最多两个并发请求的限制内，依次启动已渲染卡片的分集详情补查。
+  void _pumpEpisodeCountLookups() {
+    while (_activeEpisodeCountLookups < _maxEpisodeCountLookupConcurrency &&
+        _episodeCountLookupQueue.isNotEmpty) {
+      final VideoSearchResult result = _episodeCountLookupQueue.removeFirst();
+      if (!_isSearchResultDisplayed(result.bvid)) {
+        continue;
+      }
+      _activeEpisodeCountLookups += 1;
+      unawaited(_resolveEpisodeCountFallback(result));
+    }
+  }
+
+  /// 查询视频详情并仅在分P数大于一时写入“共 N P”的补充角标。
+  ///
+  /// 请求失败会被静默保留在“已尝试”集合中：卡片仍能点击播放，且不会因
+  /// 每次滚动重新发起同一条失败请求。
+  Future<void> _resolveEpisodeCountFallback(VideoSearchResult result) async {
+    try {
+      final VideoPreview video = await _service.lookupVideo(result.bvid);
+      final int partCount = video.parts.length;
+      if (mounted && partCount > 1 && _isSearchResultDisplayed(result.bvid)) {
+        setState(() {
+          _fallbackEpisodeCountTexts[result.bvid] = '共 $partCount P';
+        });
+      }
+    } catch (_) {
+      // 分集补查失败不影响现有结果的展示或点击播放。
+    } finally {
+      _activeEpisodeCountLookups -= 1;
+      if (mounted) {
+        _pumpEpisodeCountLookups();
+      }
+    }
+  }
+
+  /// 返回服务端原始分集文字；仅在它缺失时使用详情补查得到的文字。
+  String _episodeCountTextFor(VideoSearchResult result) {
+    return result.episodeCountText.isNotEmpty
+        ? result.episodeCountText
+        : (_fallbackEpisodeCountTexts[result.bvid] ?? '');
   }
 
   /// 切换排序方式并立即重新请求第一页结果。
@@ -838,6 +916,8 @@ class _SearchPageState extends State<SearchPage> {
   /// 创建包含缓存缩略图、角标、发布日期、UP、播放和弹幕数的结果卡片。
   Widget _buildSearchResultCard(VideoSearchResult result) {
     final bool opening = _openingBvid == result.bvid;
+    final String episodeCountText = _episodeCountTextFor(result);
+    _scheduleEpisodeCountFallback(result);
     return Card(
       key: ValueKey<String>('search-${result.bvid}'),
       margin: EdgeInsets.zero,
@@ -850,7 +930,10 @@ class _SearchPageState extends State<SearchPage> {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              _buildSearchThumbnail(result),
+              _buildSearchThumbnail(
+                result,
+                episodeCountText: episodeCountText,
+              ),
               const SizedBox(width: 10),
               Expanded(
                 child: SizedBox(
@@ -910,8 +993,11 @@ class _SearchPageState extends State<SearchPage> {
     );
   }
 
-  /// 创建使用内存与磁盘缓存的低分辨率封面，并叠加时长和分集角标。
-  Widget _buildSearchThumbnail(VideoSearchResult result) {
+  /// 创建缓存封面，并叠加时长和服务端或详情补查得到的分集角标。
+  Widget _buildSearchThumbnail(
+    VideoSearchResult result, {
+    required String episodeCountText,
+  }) {
     return SizedBox(
       width: 146,
       height: 92,
@@ -940,11 +1026,11 @@ class _SearchPageState extends State<SearchPage> {
               bottom: 5,
               child: _buildThumbnailBadge(_formatDuration(result.duration)),
             ),
-            if (result.episodeCountText.isNotEmpty)
+            if (episodeCountText.isNotEmpty)
               Positioned(
                 left: 5,
                 top: 5,
-                child: _buildThumbnailBadge(result.episodeCountText),
+                child: _buildThumbnailBadge(episodeCountText),
               ),
           ],
         ),

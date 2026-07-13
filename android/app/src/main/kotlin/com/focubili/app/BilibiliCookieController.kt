@@ -34,15 +34,31 @@ class BilibiliCookieController(
                     result.error("missing_session", "Cookie 中没有找到 SESSDATA。", null)
                     return
                 }
-                writeBilibiliCookies(cookies, result)
+                replaceBilibiliCookies(cookies, result)
             }
-            "clearCookies" -> clearCookies(result)
+            "replaceCookies" -> {
+                val rawCookie = call.argument<String>("cookie").orEmpty()
+                val cookies = parseCookiePairs(rawCookie)
+                if (cookies.none { cookie -> cookie.first.equals("SESSDATA", true) }) {
+                    result.error("missing_session", "Cookie 中没有找到 SESSDATA。", null)
+                    return
+                }
+                replaceBilibiliCookies(cookies, result)
+            }
+            "clearCookies", "clearBilibiliCookies" -> clearBilibiliCookies(result)
             else -> result.notImplemented()
         }
     }
 
     /** 从 B 站常用子域读取 Cookie，并按名称去重后组合为标准请求头。 */
     private fun readBilibiliCookies(): String {
+        return readBilibiliCookieValues().entries.joinToString("; ") { entry ->
+            "${entry.key}=${entry.value}"
+        }
+    }
+
+    /** 汇总 B 站常用子域的 Cookie 名称和值，供读取和仅限 B 站的清理操作复用。 */
+    private fun readBilibiliCookieValues(): LinkedHashMap<String, String> {
         val valuesByName = linkedMapOf<String, String>()
         BILIBILI_COOKIE_URLS.forEach { url ->
             cookieManager.getCookie(url)
@@ -51,9 +67,7 @@ class BilibiliCookieController(
                 .mapNotNull(::parseCookiePair)
                 .forEach { cookie -> valuesByName[cookie.first] = cookie.second }
         }
-        return valuesByName.entries.joinToString("; ") { entry ->
-            "${entry.key}=${entry.value}"
-        }
+        return valuesByName
     }
 
     /** 将用户粘贴的 Cookie 文本拆成合法名称和值，并忽略 Domain 等属性字段。 */
@@ -112,11 +126,69 @@ class BilibiliCookieController(
         }
     }
 
-    /** 清除本应用 WebView 的全部 Cookie，并在异步操作完成后通知 Flutter。 */
-    private fun clearCookies(result: MethodChannel.Result) {
-        cookieManager.removeAllCookies {
+    /** 先删除旧 B 站域 Cookie，再写入已通过 Flutter 官方接口验证的新单账号会话。 */
+    private fun replaceBilibiliCookies(
+        cookies: List<Pair<String, String>>,
+        result: MethodChannel.Result,
+    ) {
+        clearBilibiliCookies { cleared ->
+            if (!cleared) {
+                result.error("cookie_clear_failed", "旧 B 站 Cookie 无法清除。", null)
+            } else {
+                writeBilibiliCookies(cookies, result)
+            }
+        }
+    }
+
+    /** 仅清除本应用 WebView 中 B 站域 Cookie，并在异步操作完成后通知 Flutter。 */
+    private fun clearBilibiliCookies(result: MethodChannel.Result) {
+        clearBilibiliCookies { cleared ->
+            if (cleared) {
+                cookieManager.flush()
+                result.success(null)
+            } else {
+                result.error("cookie_clear_failed", "B 站 Cookie 无法清除。", null)
+            }
+        }
+    }
+
+    /** 收集当前 B 站 Cookie 名称并逐个过期，避免误删同一 WebView 的其他网站数据。 */
+    private fun clearBilibiliCookies(onComplete: (Boolean) -> Unit) {
+        expireBilibiliCookies(
+            readBilibiliCookieValues().keys,
+            onComplete,
+        )
+    }
+
+    /** 对每个 B 站 Cookie 同时清除主机 Cookie 和根域 Cookie，兼容网页登录产生的两种范围。 */
+    private fun expireBilibiliCookies(
+        cookieNames: Set<String>,
+        onComplete: (Boolean) -> Unit,
+    ) {
+        val deleteOperations = cookieNames.flatMap { cookieName ->
+            BILIBILI_COOKIE_URLS.flatMap { url ->
+                listOf(
+                    url to "$cookieName=; Max-Age=0; Path=/; Secure",
+                    url to "$cookieName=; Max-Age=0; Domain=.bilibili.com; Path=/; Secure",
+                )
+            }
+        }
+        if (deleteOperations.isEmpty()) {
             cookieManager.flush()
-            result.success(null)
+            onComplete(true)
+            return
+        }
+        var remainingCount = deleteOperations.size
+        var deleteFailed = false
+        deleteOperations.forEach { operation ->
+            cookieManager.setCookie(operation.first, operation.second) { accepted ->
+                deleteFailed = deleteFailed || !accepted
+                remainingCount -= 1
+                if (remainingCount == 0) {
+                    cookieManager.flush()
+                    onComplete(!deleteFailed)
+                }
+            }
         }
     }
 

@@ -10,8 +10,14 @@ enum _LoginMode { phone, password, cookie }
 
 /// 提供登录方式选择，并把账号密码与验证码交给 B 站官方页面处理。
 class LoginPage extends StatefulWidget {
-  /// 创建默认选择手机号入口的登录页面。
-  const LoginPage({super.key});
+  /// 创建登录页面；账号切换时可在首帧后直接打开官方网页登录。
+  const LoginPage({
+    super.key,
+    this.openOfficialLoginOnStart = false,
+  });
+
+  /// 表示此页是否由“切换账号”打开，并应优先进入 B 站官方网页登录。
+  final bool openOfficialLoginOnStart;
 
   /// 创建保存登录方式、Cookie 输入和提交状态的页面状态。
   @override
@@ -25,7 +31,25 @@ class _LoginPageState extends State<LoginPage> {
   _LoginMode _mode = _LoginMode.phone;
   bool _submitting = false;
   bool _obscureCookie = true;
+  bool _openedOfficialLoginOnStart = false;
   String? _errorMessage;
+
+  /// 首帧完成后根据账号切换入口打开官方登录页，避免在构建期间重复导航。
+  @override
+  void initState() {
+    super.initState();
+    if (!widget.openOfficialLoginOnStart) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _openedOfficialLoginOnStart) {
+        return;
+      }
+      _openedOfficialLoginOnStart = true;
+      // 自动打开函数只进入官方网页，不会读取密码、验证码或 Cookie 原文。
+      unawaited(_openOfficialLogin());
+    });
+  }
 
   /// 释放 Cookie 输入控制器，避免关闭页面后继续占用输入资源。
   @override
@@ -298,13 +322,15 @@ class _OfficialWebLoginPageState extends State<_OfficialWebLoginPage> {
     }
     _checking = true;
     try {
-      final BilibiliAccount? account = await _authService.loadCurrentAccount();
-      if (mounted && account != null) {
-        await _completeOfficialLogin(account);
-      }
-    } on BilibiliAuthException catch (error) {
-      if (mounted) {
-        setState(() => _statusMessage = error.message);
+      final BilibiliSessionState session =
+          await _authService.loadCurrentSession();
+      if (mounted && session.isActive) {
+        await _completeOfficialLogin(session.account!);
+      } else if (mounted &&
+          session.status == BilibiliSessionStatus.networkError) {
+        setState(() {
+          _statusMessage = session.message ?? '暂时无法读取登录状态，请稍后重试。';
+        });
       }
     } finally {
       _checking = false;
