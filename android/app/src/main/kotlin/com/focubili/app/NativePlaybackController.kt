@@ -1,8 +1,13 @@
 package com.focubili.app
 
 import android.app.Activity
+import android.app.PendingIntent
 import android.app.PictureInPictureParams
+import android.app.RemoteAction
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.graphics.drawable.Icon
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
@@ -42,11 +47,26 @@ import io.flutter.view.TextureRegistry
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.lang.ref.WeakReference
 import java.net.URL
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import javax.net.ssl.HttpsURLConnection
+
+/**
+ * 接收 Android 画中画窗口发出的播放/暂停指令。
+ *
+ * 这里使用广播而不是重新打开 Activity，因此点按小窗按钮时不会主动退出画中画。
+ */
+class PictureInPicturePlaybackActionReceiver : BroadcastReceiver() {
+    /** 将系统小窗操作转交给当前仍存活的原生播放器控制器。 */
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == NativePlaybackController.PICTURE_IN_PICTURE_TOGGLE_ACTION) {
+            NativePlaybackController.handlePictureInPicturePlaybackToggle()
+        }
+    }
+}
 
 /**
  * 直接请求公开视频播放数据，并把唯一的 Media3 播放器输出为 Flutter Texture。
@@ -263,9 +283,14 @@ class NativePlaybackController(
         channel.setMethodCallHandler(null)
     }
 
-    /** Android 画中画状态变化时同步给 Flutter，以隐藏小窗中的非视频控件。 */
+    /** Android 画中画状态变化时同步给 Flutter，并刷新小窗中的播放/暂停操作。 */
     fun onPictureInPictureModeChanged(inPictureInPicture: Boolean) {
         isInPictureInPicture = inPictureInPicture
+        if (inPictureInPicture) {
+            refreshPictureInPictureParams()
+        } else {
+            unregisterPictureInPictureActionHandler()
+        }
         emitPlaybackState()
     }
 
@@ -282,10 +307,25 @@ class NativePlaybackController(
             result.error("pip_not_ready", "视频准备完成后才能进入画中画。", null)
             return
         }
-        val safeAspectRatio = requestedAspectRatio
-            .takeIf { ratio -> ratio.isFinite() && ratio > 0.0 }
-            ?.coerceIn(MIN_PICTURE_IN_PICTURE_ASPECT, MAX_PICTURE_IN_PICTURE_ASPECT)
-            ?: DEFAULT_VIDEO_ASPECT_RATIO.toDouble()
+        registerPictureInPictureActionHandler()
+        val entered = runCatching {
+            activity.enterPictureInPictureMode(
+                buildPictureInPictureParams(requestedAspectRatio),
+            )
+        }.getOrDefault(false)
+        if (!entered) {
+            unregisterPictureInPictureActionHandler()
+        }
+        result.success(entered)
+    }
+
+    /**
+     * 构造画中画参数，并附上当前播放状态匹配的系统播放/暂停按钮。
+     *
+     * Android 8.0 起支持 `RemoteAction`；Android 12 起额外启用无缝缩放，避免尺寸切换闪烁。
+     */
+    private fun buildPictureInPictureParams(requestedAspectRatio: Double): PictureInPictureParams {
+        val safeAspectRatio = sanitizePictureInPictureAspectRatio(requestedAspectRatio)
         val paramsBuilder = PictureInPictureParams.Builder()
             .setAspectRatio(
                 Rational(
@@ -293,13 +333,102 @@ class NativePlaybackController(
                     PICTURE_IN_PICTURE_RATIO_BASE,
                 ),
             )
+            .setActions(listOf(createPictureInPicturePlaybackAction()))
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             paramsBuilder.setSeamlessResizeEnabled(true)
         }
-        val entered = runCatching {
-            activity.enterPictureInPictureMode(paramsBuilder.build())
-        }.getOrDefault(false)
-        result.success(entered)
+        return paramsBuilder.build()
+    }
+
+    /** 将调用方传入的画中画比例限制在 Android 支持的安全范围内。 */
+    private fun sanitizePictureInPictureAspectRatio(requestedAspectRatio: Double): Double {
+        return requestedAspectRatio
+            .takeIf { ratio -> ratio.isFinite() && ratio > 0.0 }
+            ?.coerceIn(MIN_PICTURE_IN_PICTURE_ASPECT, MAX_PICTURE_IN_PICTURE_ASPECT)
+            ?: DEFAULT_VIDEO_ASPECT_RATIO.toDouble()
+    }
+
+    /**
+     * 创建与当前 `playWhenReady` 状态一致的画中画播放/暂停按钮。
+     *
+     * 使用不可变 `PendingIntent`，让 Android 12 及以上系统在保留安全性的前提下执行应用内广播。
+     */
+    private fun createPictureInPicturePlaybackAction(): RemoteAction {
+        val shouldPause = player?.playWhenReady == true &&
+            player?.playbackState != Player.STATE_ENDED
+        val iconResource = if (shouldPause) {
+            android.R.drawable.ic_media_pause
+        } else {
+            android.R.drawable.ic_media_play
+        }
+        val label = if (shouldPause) "暂停" else "播放"
+        val toggleIntent = Intent(activity, PictureInPicturePlaybackActionReceiver::class.java)
+            .setAction(PICTURE_IN_PICTURE_TOGGLE_ACTION)
+            .setPackage(activity.packageName)
+        val pendingIntent = PendingIntent.getBroadcast(
+            activity,
+            PICTURE_IN_PICTURE_TOGGLE_REQUEST_CODE,
+            toggleIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        return RemoteAction(
+            Icon.createWithResource(activity, iconResource),
+            label,
+            "${label}当前视频",
+            pendingIntent,
+        )
+    }
+
+    /**
+     * 在播放状态变化时更新系统画中画按钮的图标和文字。
+     *
+     * 更新参数不会把小窗展开为普通 Activity，因此不会主动离开画中画。
+     */
+    private fun refreshPictureInPictureParams() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
+            !isInPictureInPicture ||
+            !playbackPrepared
+        ) {
+            return
+        }
+        runCatching {
+            activity.setPictureInPictureParams(
+                buildPictureInPictureParams(videoAspectRatio.toDouble()),
+            )
+        }
+    }
+
+    /** 记录当前控制器的弱引用，使系统广播只操作仍存活的播放器而不泄漏 Activity。 */
+    private fun registerPictureInPictureActionHandler() {
+        activePictureInPictureController = WeakReference(this)
+    }
+
+    /** 在播放资源释放或进入画中画失败时移除自身引用，避免旧小窗按钮操作已销毁播放器。 */
+    private fun unregisterPictureInPictureActionHandler() {
+        if (activePictureInPictureController?.get() === this) {
+            activePictureInPictureController = null
+        }
+    }
+
+    /**
+     * 响应画中画按钮并切换 Media3 播放状态。
+     *
+     * 该方法只修改播放器，不启动 Activity，因此不会主动退出画中画。
+     */
+    private fun togglePlaybackFromPictureInPicture() {
+        if (!isInPictureInPicture || !playbackPrepared) {
+            return
+        }
+        val nativePlayer = player ?: return
+        if (nativePlayer.playWhenReady) {
+            resumeAfterPrepare = false
+            nativePlayer.pause()
+        } else {
+            resumeAfterPrepare = true
+            nativePlayer.play()
+        }
+        refreshPictureInPictureParams()
+        emitPlaybackState()
     }
 
     /** 创建 Media3 播放器、音频焦点和系统媒体会话，并注册状态监听。 */
@@ -325,6 +454,7 @@ class NativePlaybackController(
                     playbackMessage = null
                 }
                 updateKeepScreenOn(isPlaying)
+                refreshPictureInPictureParams()
                 emitPlaybackState()
             }
 
@@ -347,6 +477,7 @@ class NativePlaybackController(
                         clearSavedPlaybackProgress(currentBvid, currentCid)
                     }
                 }
+                refreshPictureInPictureParams()
                 emitPlaybackState()
             }
 
@@ -1070,6 +1201,7 @@ class NativePlaybackController(
         saveCurrentPlaybackProgress(force = true)
         invalidatePlaybackRequests()
         mainHandler.removeCallbacks(stateTicker)
+        unregisterPictureInPictureActionHandler()
         updateKeepScreenOn(false)
         mediaSession?.release()
         mediaSession = null
@@ -1148,6 +1280,22 @@ class NativePlaybackController(
     }
 
     companion object {
+        /** 供应用内画中画广播识别播放/暂停切换请求的显式 Action 名称。 */
+        internal const val PICTURE_IN_PICTURE_TOGGLE_ACTION =
+            "com.focubili.app.action.TOGGLE_PICTURE_IN_PICTURE_PLAYBACK"
+
+        /** 为唯一的画中画播放按钮保留稳定请求编号，便于系统更新同一个 PendingIntent。 */
+        private const val PICTURE_IN_PICTURE_TOGGLE_REQUEST_CODE = 4101
+
+        /** 仅以弱引用保留当前控制器，避免静态广播处理器持有已销毁的 Activity。 */
+        @Volatile
+        private var activePictureInPictureController: WeakReference<NativePlaybackController>? = null
+
+        /** 将画中画广播安全地分发给当前仍存在的控制器；没有播放器时直接忽略。 */
+        internal fun handlePictureInPicturePlaybackToggle() {
+            activePictureInPictureController?.get()?.togglePlaybackFromPictureInPicture()
+        }
+
         private const val CHANNEL_NAME = "com.focubili.app/playback"
         private const val PHASE_IDLE = "idle"
         private const val PHASE_LOADING = "loading"

@@ -5,6 +5,10 @@
         android:label="焦点哔哩"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <!-- 仅接收系统画中画 PendingIntent；不对其他应用导出，避免外部任意控制播放。 -->
+        <receiver
+            android:name=".PictureInPicturePlaybackActionReceiver"
+            android:exported="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true"
