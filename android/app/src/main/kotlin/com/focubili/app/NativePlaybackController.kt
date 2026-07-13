@@ -86,6 +86,10 @@ class NativePlaybackController(
         PROGRESS_PREFERENCES_NAME,
         Context.MODE_PRIVATE,
     )
+    private val cachePreferences = activity.getSharedPreferences(
+        CACHE_PREFERENCES_NAME,
+        Context.MODE_PRIVATE,
+    )
     private val audioManager = activity.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val cacheDatabaseProvider = StandaloneDatabaseProvider(activity)
     private var mediaCache: SimpleCache? = null
@@ -137,6 +141,12 @@ class NativePlaybackController(
 
     /** 表示播放数据服务返回了可向用户说明的预期错误。 */
     private class PlaybackSourceException(message: String) : Exception(message)
+
+    /** 表示缓存管理请求中可安全展示给 Flutter 页面的预期错误。 */
+    private class CacheOperationException(
+        val errorCode: String,
+        message: String,
+    ) : Exception(message)
 
     /** 每半秒保存必要进度并向 Flutter 发送播放器状态。 */
     private val stateTicker = object : Runnable {
@@ -249,6 +259,26 @@ class NativePlaybackController(
                 val aspectRatio = call.argument<Number>("aspectRatio")?.toDouble()
                     ?: videoAspectRatio.toDouble()
                 enterPictureInPicture(aspectRatio, result)
+            }
+            "getMediaCacheStatus" -> {
+                handleMediaCacheOperation(result, ::readMediaCacheStatus)
+            }
+            "setMediaCacheCapacity" -> {
+                val capacityBytes = call.argument<Number>("capacityBytes")?.toLong()
+                if (capacityBytes == null || !isSupportedMediaCacheCapacity(capacityBytes)) {
+                    result.error(
+                        "invalid_cache_capacity",
+                        "缓存上限只能设为 128MB、256MB、512MB、1GB 或 2GB。",
+                        null,
+                    )
+                } else {
+                    handleMediaCacheOperation(result) {
+                        setMediaCacheCapacity(capacityBytes)
+                    }
+                }
+            }
+            "clearMediaCache" -> {
+                handleMediaCacheOperation(result, ::clearMediaCache)
             }
             "dispose" -> {
                 releasePlaybackResources()
@@ -881,17 +911,103 @@ class NativePlaybackController(
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
     }
 
-    /** 延迟创建最大 512MB 的 LRU 视频缓存，容量满后自动删除最久未使用的数据。 */
+    /**
+     * 延迟创建当前设置容量的 LRU 边播边缓存，容量满后自动删除最久未使用的数据。
+     *
+     * 该缓存只减少短期重复请求，不保存完整视频，也不构成离线下载。
+     */
     private fun ensureMediaCache(): SimpleCache {
         mediaCache?.let { cache -> return cache }
         val cacheDirectory = File(activity.cacheDir, MEDIA_CACHE_DIRECTORY_NAME)
         val cache = SimpleCache(
             cacheDirectory,
-            LeastRecentlyUsedCacheEvictor(MEDIA_CACHE_MAX_BYTES),
+            LeastRecentlyUsedCacheEvictor(readConfiguredMediaCacheCapacity()),
             cacheDatabaseProvider,
         )
         mediaCache = cache
         return cache
+    }
+
+    /** 将缓存操作统一转换为 MethodChannel 的成功结果或可识别错误码。 */
+    private fun handleMediaCacheOperation(
+        result: MethodChannel.Result,
+        operation: () -> Map<String, Any>,
+    ) {
+        try {
+            result.success(operation())
+        } catch (exception: CacheOperationException) {
+            result.error(exception.errorCode, exception.message, null)
+        } catch (_: Exception) {
+            result.error("cache_error", "视频缓存暂时无法操作，请稍后重试。", null)
+        }
+    }
+
+    /** 返回缓存占用、已配置上限和播放器是否仍占用缓存的当前快照。 */
+    private fun readMediaCacheStatus(): Map<String, Any> {
+        val cache = ensureMediaCache()
+        return mapOf(
+            "usedBytes" to cache.cacheSpace,
+            "capacityBytes" to readConfiguredMediaCacheCapacity(),
+            "isPlaybackActive" to isMediaPlaybackActive(),
+        )
+    }
+
+    /**
+     * 在没有活跃播放器时保存新的上限，并重新打开缓存以让新的 LRU 淘汰策略生效。
+     *
+     * 使用同步 `commit`，只有持久化成功后才向 Flutter 报告成功，避免 App 被杀死时设置丢失。
+     */
+    private fun setMediaCacheCapacity(capacityBytes: Long): Map<String, Any> {
+        requireMediaCacheIdle()
+        if (readConfiguredMediaCacheCapacity() == capacityBytes) {
+            return readMediaCacheStatus()
+        }
+        releaseMediaCache()
+        val saved = cachePreferences.edit()
+            .putLong(CACHE_CAPACITY_PREFERENCE_KEY, capacityBytes)
+            .commit()
+        if (!saved) {
+            throw CacheOperationException("cache_error", "无法保存视频缓存上限，请稍后重试。")
+        }
+        return readMediaCacheStatus()
+    }
+
+    /** 在没有活跃播放器时删除所有缓存资源，并返回清理后的缓存快照。 */
+    private fun clearMediaCache(): Map<String, Any> {
+        requireMediaCacheIdle()
+        val cache = ensureMediaCache()
+        cache.keys.toList().forEach { cacheKey ->
+            cache.removeResource(cacheKey)
+        }
+        return readMediaCacheStatus()
+    }
+
+    /** 确认播放器尚未创建；暂停但仍在播放页的播放器同样视为占用缓存。 */
+    private fun requireMediaCacheIdle() {
+        if (isMediaPlaybackActive()) {
+            throw CacheOperationException(
+                "cache_busy",
+                "视频播放中，停止播放并退出播放页后才能管理缓存。",
+            )
+        }
+    }
+
+    /** 返回是否存在仍可能读取缓存的 Media3 播放器实例。 */
+    private fun isMediaPlaybackActive(): Boolean = player != null
+
+    /** 读取已持久化的上限，遇到旧版本或异常值时安全回退为默认 512MB。 */
+    private fun readConfiguredMediaCacheCapacity(): Long {
+        val savedCapacity = cachePreferences.getLong(
+            CACHE_CAPACITY_PREFERENCE_KEY,
+            MEDIA_CACHE_DEFAULT_MAX_BYTES,
+        )
+        return savedCapacity.takeIf(::isSupportedMediaCacheCapacity)
+            ?: MEDIA_CACHE_DEFAULT_MAX_BYTES
+    }
+
+    /** 只接受界面明确提供的五档容量，避免任意数值造成不可预测的磁盘占用。 */
+    private fun isSupportedMediaCacheCapacity(capacityBytes: Long): Boolean {
+        return SUPPORTED_MEDIA_CACHE_CAPACITIES.contains(capacityBytes)
     }
 
     /** 选择当前主备线路地址，越界时回退到该轨道的第一条安全地址。 */
@@ -1303,6 +1419,8 @@ class NativePlaybackController(
         private const val PHASE_ENDED = "ended"
         private const val PHASE_ERROR = "error"
         private const val PROGRESS_PREFERENCES_NAME = "focubili_playback_progress"
+        private const val CACHE_PREFERENCES_NAME = "focubili_media_cache_preferences"
+        private const val CACHE_CAPACITY_PREFERENCE_KEY = "media_cache_capacity_bytes"
         private const val STATE_TICK_INTERVAL_MS = 500L
         private const val PROGRESS_SAVE_INTERVAL_MS = 500L
         private const val MIN_RESUME_POSITION_MS = 1L
@@ -1325,7 +1443,7 @@ class NativePlaybackController(
         private const val MIN_PICTURE_IN_PICTURE_ASPECT = 0.42
         private const val MAX_PICTURE_IN_PICTURE_ASPECT = 2.39
         private const val PICTURE_IN_PICTURE_RATIO_BASE = 1000
-        private const val MEDIA_CACHE_MAX_BYTES = 512L * 1024L * 1024L
+        private const val MEDIA_CACHE_DEFAULT_MAX_BYTES = 512L * 1024L * 1024L
         private const val MEDIA_CACHE_DIRECTORY_NAME = "focubili_media_cache"
         private const val PREFERRED_TRACK_SCORE = 1_000_000_000_000L
         private const val HEIGHT_SCORE_UNIT = 1_000_000L
@@ -1334,5 +1452,13 @@ class NativePlaybackController(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
                 "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
         private val BVID_PATTERN = Regex("(?i)^BV[0-9A-Za-z]{10}$")
+        /** 保存界面可选的全部缓存容量，避免 Flutter 与 Android 两端接受的配置不一致。 */
+        private val SUPPORTED_MEDIA_CACHE_CAPACITIES = setOf(
+            128L * 1024L * 1024L,
+            256L * 1024L * 1024L,
+            MEDIA_CACHE_DEFAULT_MAX_BYTES,
+            1024L * 1024L * 1024L,
+            2L * 1024L * 1024L * 1024L,
+        )
     }
 }

@@ -373,7 +373,9 @@ class _ProfilePageState extends State<ProfilePage> {
           _ProfileTile(
             icon: Icons.settings_outlined,
             title: '设置',
-            onTap: () => _showComingSoon(context, '设置'),
+            // 设置入口函数进入目前已实现的视频缓存管理页。
+            onTap: () =>
+                Navigator.of(context).pushNamed(AppRoutes.cacheManagement),
           ),
         ],
       ),

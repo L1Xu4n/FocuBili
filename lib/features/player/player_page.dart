@@ -9,6 +9,17 @@ import '../../services/native_playback_service.dart';
 /// 标识一次竖向滑动正在调整亮度、音量，或因底部手势区而不做处理。
 enum _VerticalAdjustmentMode { none, brightness, volume }
 
+/// 标识全屏视频画面应保留比例、裁切填充，还是按屏幕比例拉伸。
+enum _VideoFitMode { contain, cover, stretch }
+
+/// 标识全屏右上角“更多”菜单中可执行的本地播放器设置。
+enum _PlayerMoreMenuAction {
+  decoderSettings,
+  fitContain,
+  fitCover,
+  fitStretch,
+}
+
 /// 新架构的原生播放器页面，提供简洁的 App 风格控制层。
 class PlayerPage extends StatefulWidget {
   const PlayerPage({super.key, required this.video, this.playbackService});
@@ -65,6 +76,7 @@ class _PlayerPageState extends State<PlayerPage> {
   bool _partSelectorExpanded = false;
   bool _partsAscending = true;
   bool _danmakuEnabled = false;
+  _VideoFitMode _videoFitMode = _VideoFitMode.contain;
   bool _temporaryDoubleSpeedActive = false;
   bool _longPressScrubbing = false;
   double _speedBeforeLongPress = 1;
@@ -1035,6 +1047,96 @@ class _PlayerPageState extends State<PlayerPage> {
     _restartControlsAutoHideTimer();
   }
 
+  /// 根据菜单操作切换画面比例，或提示解码设置仍需要后续原生能力支持。
+  void _handleMoreSettingsSelection(_PlayerMoreMenuAction action) {
+    switch (action) {
+      case _PlayerMoreMenuAction.decoderSettings:
+        _showPendingPlayerSetting('解码设置');
+        return;
+      case _PlayerMoreMenuAction.fitContain:
+        _changeVideoFitMode(_VideoFitMode.contain);
+        return;
+      case _PlayerMoreMenuAction.fitCover:
+        _changeVideoFitMode(_VideoFitMode.cover);
+        return;
+      case _PlayerMoreMenuAction.fitStretch:
+        _changeVideoFitMode(_VideoFitMode.stretch);
+        return;
+    }
+  }
+
+  /// 保存用户选择的全屏画面比例，并用三秒提示确认该设置已经只作用于渲染层。
+  void _changeVideoFitMode(_VideoFitMode mode) {
+    if (_videoFitMode != mode) {
+      setState(() => _videoFitMode = mode);
+    }
+    _showAdjustmentFeedback('画面比例：${_videoFitModeLabel(mode)}');
+    _seekFeedbackTimer?.cancel();
+    _seekFeedbackTimer = Timer(_transientHintDuration, () {
+      if (mounted) {
+        setState(() => _seekFeedback = null);
+      }
+    });
+    _showPlayerControls();
+  }
+
+  /// 将内部画面比例枚举转换为菜单和提示中使用的中文名称。
+  String _videoFitModeLabel(_VideoFitMode mode) {
+    switch (mode) {
+      case _VideoFitMode.contain:
+        return '适应画面';
+      case _VideoFitMode.cover:
+        return '填充画面';
+      case _VideoFitMode.stretch:
+        return '拉伸铺满';
+    }
+  }
+
+  /// 构建“更多”菜单，勾选当前画面比例，并明确标注尚未接入的播放器能力。
+  List<PopupMenuEntry<_PlayerMoreMenuAction>> _buildMoreSettingsMenu() {
+    return <PopupMenuEntry<_PlayerMoreMenuAction>>[
+      const PopupMenuItem<_PlayerMoreMenuAction>(
+        value: _PlayerMoreMenuAction.decoderSettings,
+        child: Text('解码设置（待实现）'),
+      ),
+      const PopupMenuDivider(),
+      const PopupMenuItem<_PlayerMoreMenuAction>(
+        enabled: false,
+        child: Text('画面比例'),
+      ),
+      _buildVideoFitModeMenuItem(
+        action: _PlayerMoreMenuAction.fitContain,
+        mode: _VideoFitMode.contain,
+      ),
+      _buildVideoFitModeMenuItem(
+        action: _PlayerMoreMenuAction.fitCover,
+        mode: _VideoFitMode.cover,
+      ),
+      _buildVideoFitModeMenuItem(
+        action: _PlayerMoreMenuAction.fitStretch,
+        mode: _VideoFitMode.stretch,
+      ),
+      const PopupMenuDivider(),
+      const PopupMenuItem<_PlayerMoreMenuAction>(
+        enabled: false,
+        child: Text('字幕与真实弹幕（待实现）'),
+      ),
+    ];
+  }
+
+  /// 创建一项带勾选状态的画面比例菜单，帮助用户确认当前正在使用的模式。
+  CheckedPopupMenuItem<_PlayerMoreMenuAction> _buildVideoFitModeMenuItem({
+    required _PlayerMoreMenuAction action,
+    required _VideoFitMode mode,
+  }) {
+    return CheckedPopupMenuItem<_PlayerMoreMenuAction>(
+      key: Key('video-fit-mode-${mode.name}'),
+      value: action,
+      checked: _videoFitMode == mode,
+      child: Text(_videoFitModeLabel(mode)),
+    );
+  }
+
   /// 请求 Android 原生画中画；失败时用三秒提示说明系统或播放状态限制。
   Future<void> _enterPictureInPicture() async {
     final double aspectRatio = _playbackSnapshot.videoAspectRatio > 0
@@ -1070,7 +1172,7 @@ class _PlayerPageState extends State<PlayerPage> {
       );
   }
 
-  /// 创建原生 Texture 视频画面：普通页面按宽度铺满，全屏时保持比例并居中。
+  /// 创建原生 Texture 视频画面：普通页面保持原有填充策略，全屏时应用用户选择的比例模式。
   Widget _buildVideoOutput() {
     final int? textureId = _textureId;
     if (textureId != null) {
@@ -1081,20 +1183,12 @@ class _PlayerPageState extends State<PlayerPage> {
         child: Texture(textureId: textureId),
       );
       if (_fullscreen) {
-        return Center(
-          child: AspectRatio(aspectRatio: aspectRatio, child: texture),
-        );
+        return _buildFullscreenVideoOutput(texture, aspectRatio);
       }
-      return SizedBox.expand(
-        child: FittedBox(
-          fit: BoxFit.cover,
-          clipBehavior: Clip.hardEdge,
-          child: SizedBox(
-            width: 1000 * aspectRatio,
-            height: 1000,
-            child: texture,
-          ),
-        ),
+      return _buildScaledVideoOutput(
+        texture: texture,
+        aspectRatio: aspectRatio,
+        fit: BoxFit.cover,
       );
     }
     return Center(
@@ -1104,6 +1198,47 @@ class _PlayerPageState extends State<PlayerPage> {
             : Icons.play_circle_outline_rounded,
         size: 86,
         color: Colors.white24,
+      ),
+    );
+  }
+
+  /// 按当前全屏画面比例模式返回保留黑边、裁切填充或拉伸后的 Texture 布局。
+  Widget _buildFullscreenVideoOutput(Widget texture, double aspectRatio) {
+    switch (_videoFitMode) {
+      case _VideoFitMode.contain:
+        return Center(
+          child: AspectRatio(aspectRatio: aspectRatio, child: texture),
+        );
+      case _VideoFitMode.cover:
+        return _buildScaledVideoOutput(
+          texture: texture,
+          aspectRatio: aspectRatio,
+          fit: BoxFit.cover,
+        );
+      case _VideoFitMode.stretch:
+        return _buildScaledVideoOutput(
+          texture: texture,
+          aspectRatio: aspectRatio,
+          fit: BoxFit.fill,
+        );
+    }
+  }
+
+  /// 用指定 BoxFit 缩放 Texture：cover 会裁切，fill 会按屏幕比例拉伸。
+  Widget _buildScaledVideoOutput({
+    required Widget texture,
+    required double aspectRatio,
+    required BoxFit fit,
+  }) {
+    return SizedBox.expand(
+      child: FittedBox(
+        fit: fit,
+        clipBehavior: Clip.hardEdge,
+        child: SizedBox(
+          width: 1000 * aspectRatio,
+          height: 1000,
+          child: texture,
+        ),
       ),
     );
   }
@@ -1368,27 +1503,18 @@ class _PlayerPageState extends State<PlayerPage> {
                                           _danmakuEnabled ? '关闭弹幕' : '开启弹幕',
                                     ),
                                   if (_fullscreen)
-                                    PopupMenuButton<String>(
+                                    PopupMenuButton<_PlayerMoreMenuAction>(
                                       key: const Key('more-settings-menu'),
                                       tooltip: '更多选项',
                                       icon: const Icon(
                                         Icons.more_vert_rounded,
                                         color: Colors.white,
                                       ),
-                                      // 更多菜单选择函数提示该设置仍在规划中。
-                                      onSelected: _showPendingPlayerSetting,
-                                      // 更多菜单构建函数先放置视频设置和画面比例入口。
+                                      // 更多菜单选择函数只更新 Flutter 的本地画面布局，不改变解码或播放源。
+                                      onSelected: _handleMoreSettingsSelection,
+                                      // 更多菜单构建函数提供可勾选的画面比例，并保留未接入能力的待实现说明。
                                       itemBuilder: (BuildContext context) =>
-                                          const <PopupMenuEntry<String>>[
-                                        PopupMenuItem<String>(
-                                          value: '视频设置',
-                                          child: Text('视频设置（待实现）'),
-                                        ),
-                                        PopupMenuItem<String>(
-                                          value: '画面比例设置',
-                                          child: Text('画面比例（待实现）'),
-                                        ),
-                                      ],
+                                          _buildMoreSettingsMenu(),
                                     ),
                                 ],
                               ),

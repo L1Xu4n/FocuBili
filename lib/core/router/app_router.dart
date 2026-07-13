@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../features/player/player_page.dart';
+import '../../features/profile/cache_management_page.dart';
 import '../../features/profile/login_page.dart';
 import '../../features/shell/main_shell.dart';
 import '../../models/video_preview.dart';
@@ -10,6 +11,7 @@ abstract final class AppRoutes {
   static const String home = '/';
   static const String player = '/player';
   static const String login = '/login';
+  static const String cacheManagement = '/settings/cache';
 }
 
 /// 根据路由名称创建页面，是整个应用唯一的页面导航入口。
@@ -36,6 +38,12 @@ abstract final class AppRouter {
         return MaterialPageRoute<Object?>(
           // 登录页构建函数创建手机号、密码、Cookie 和官方网页登录入口。
           builder: (BuildContext context) => const LoginPage(),
+          settings: settings,
+        );
+      case AppRoutes.cacheManagement:
+        return MaterialPageRoute<void>(
+          // 缓存设置页构建函数创建只管理边播边缓存的独立设置页面。
+          builder: (BuildContext context) => const CacheManagementPage(),
           settings: settings,
         );
       default:
