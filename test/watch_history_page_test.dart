@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -15,6 +16,9 @@ WatchHistoryEntry _entry({
   String bvid = 'BV1GJ411x7h7',
   String title = '本机保存的视频标题',
   int part = 2,
+  DateTime? watchedAt,
+  String thumbnailUrl = '',
+  Duration lastPosition = Duration.zero,
 }) {
   return WatchHistoryEntry(
     bvid: bvid,
@@ -22,7 +26,9 @@ WatchHistoryEntry _entry({
     ownerName: '测试 UP 主',
     lastPartTitle: '第 $part P 的测试标题',
     lastPartPageNumber: part,
-    watchedAt: DateTime(2026, 7, 15, 12, 34),
+    watchedAt: watchedAt ?? DateTime(2026, 7, 15, 12, 34),
+    thumbnailUrl: thumbnailUrl,
+    lastPosition: lastPosition,
   );
 }
 
@@ -157,10 +163,18 @@ Widget _buildTestApp({
 
 /// 验证本机观看记录页面的状态、删除确认和重新打开视频行为。
 void main() {
-  /// 验证页面展示本机范围说明、记录字段和空状态。
+  /// 验证页面展示本机范围说明、封面、观看位置、日期字段和空状态。
   testWidgets('显示本机说明、记录内容和空状态', (WidgetTester tester) async {
-    final _FakeWatchHistoryService historyService =
-        _FakeWatchHistoryService(<WatchHistoryEntry>[_entry()]);
+    const String thumbnailUrl =
+        'https://i0.hdslb.com/bfs/archive/watch-history-cover.jpg';
+    final _FakeWatchHistoryService historyService = _FakeWatchHistoryService(
+      <WatchHistoryEntry>[
+        _entry(
+          thumbnailUrl: thumbnailUrl,
+          lastPosition: const Duration(hours: 1, minutes: 2, seconds: 3),
+        ),
+      ],
+    );
     final _FakeBilibiliService bilibiliService = _FakeBilibiliService(
       preview: VideoPreview.placeholder(),
     );
@@ -177,6 +191,15 @@ void main() {
     expect(find.textContaining('仅保存在本机'), findsOneWidget);
     expect(find.text('本机保存的视频标题'), findsOneWidget);
     expect(find.textContaining('上次看至 P2'), findsOneWidget);
+    expect(find.textContaining('上次观看：2026-07-15 12:34'), findsOneWidget);
+    expect(find.text('已看 1:02:03'), findsOneWidget);
+    expect(
+      find.byWidgetPredicate(
+        (Widget widget) =>
+            widget is CachedNetworkImage && widget.imageUrl == thumbnailUrl,
+      ),
+      findsOneWidget,
+    );
 
     await tester.tap(find.byTooltip('移除记录'));
     await tester.pumpAndSettle();

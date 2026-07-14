@@ -1,8 +1,23 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 /// 集中保存应用主题，避免每个页面重复定义颜色和控件样式。
 abstract final class AppTheme {
   static const Color _brandColor = Color(0xFF1677FF);
+
+  /// 根据页面明暗背景返回可读的 Android 状态栏与导航栏图标颜色。
+  static SystemUiOverlayStyle systemOverlayStyle(Brightness brightness) {
+    final bool isLight = brightness == Brightness.light;
+    return SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: isLight ? Brightness.dark : Brightness.light,
+      statusBarBrightness: isLight ? Brightness.light : Brightness.dark,
+      systemNavigationBarColor: Colors.transparent,
+      systemNavigationBarDividerColor: Colors.transparent,
+      systemNavigationBarIconBrightness:
+          isLight ? Brightness.dark : Brightness.light,
+    );
+  }
 
   /// 创建跟随品牌蓝色的浅色 Material 3 主题。
   static ThemeData light() {
@@ -36,6 +51,9 @@ abstract final class AppTheme {
           borderRadius: BorderRadius.circular(18),
           borderSide: BorderSide.none,
         ),
+      ),
+      appBarTheme: AppBarTheme(
+        systemOverlayStyle: systemOverlayStyle(brightness),
       ),
       navigationBarTheme: NavigationBarThemeData(
         height: 72,

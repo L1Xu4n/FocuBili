@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/router/app_router.dart';
@@ -205,6 +206,90 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
     return '$year-$month-$day $hour:$minute';
   }
 
+  /// 将已观看的位置转换为简短时分秒文本，供缩略图右下角展示。
+  String _formatWatchedPosition(Duration position) {
+    final int totalSeconds = position.inSeconds.clamp(0, 24 * 60 * 60).toInt();
+    final int hours = totalSeconds ~/ 3600;
+    final int minutes = (totalSeconds % 3600) ~/ 60;
+    final int seconds = totalSeconds % 60;
+    final String twoDigitsMinutes = minutes.toString().padLeft(2, '0');
+    final String twoDigitsSeconds = seconds.toString().padLeft(2, '0');
+    return hours > 0
+        ? '$hours:$twoDigitsMinutes:$twoDigitsSeconds'
+        : '$minutes:$twoDigitsSeconds';
+  }
+
+  /// 构建缓存缩略图、网络失败占位图和右下角的已观看时长角标。
+  Widget _buildHistoryThumbnail(WatchHistoryEntry entry) {
+    return SizedBox(
+      width: 132,
+      height: 82,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: Stack(
+          fit: StackFit.expand,
+          children: <Widget>[
+            if (entry.thumbnailUrl.isEmpty)
+              _buildThumbnailPlaceholder()
+            else
+              CachedNetworkImage(
+                imageUrl: entry.thumbnailUrl,
+                httpHeaders: const <String, String>{
+                  'Referer': 'https://www.bilibili.com/',
+                },
+                fit: BoxFit.cover,
+                memCacheWidth: 320,
+                maxWidthDiskCache: 640,
+                fadeInDuration: const Duration(milliseconds: 120),
+                placeholder: (BuildContext context, String url) =>
+                    _buildThumbnailPlaceholder(),
+                errorWidget: (
+                  BuildContext context,
+                  String url,
+                  Object error,
+                ) =>
+                    _buildThumbnailPlaceholder(),
+              ),
+            Positioned(
+              right: 5,
+              bottom: 5,
+              child: _buildThumbnailBadge(
+                '已看 ${_formatWatchedPosition(entry.lastPosition)}',
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 创建无法获得封面时使用的低干扰本地占位图。
+  Widget _buildThumbnailPlaceholder() {
+    return ColoredBox(
+      color: Theme.of(context).colorScheme.surfaceVariant,
+      child: const Center(
+        child: Icon(Icons.play_arrow_rounded, color: Colors.black45),
+      ),
+    );
+  }
+
+  /// 创建覆盖在缩略图上的半透明文字角标。
+  Widget _buildThumbnailBadge(String text) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.72),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+        child: Text(
+          text,
+          style: const TextStyle(color: Colors.white, fontSize: 11),
+        ),
+      ),
+    );
+  }
+
   /// 构建顶部的本机范围说明，明确它不等同于 B 站账号观看历史。
   Widget _buildLocalOnlyNotice() {
     return const Card(
@@ -292,9 +377,7 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
           key: Key('watch-history-${entry.bvid}'),
           child: ListTile(
             isThreeLine: true,
-            leading: const CircleAvatar(
-              child: Icon(Icons.play_arrow_rounded),
-            ),
+            leading: _buildHistoryThumbnail(entry),
             title: Text(
               entry.title,
               maxLines: 2,
@@ -302,7 +385,7 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
             ),
             subtitle: Text(
               '${entry.ownerName}\n上次看至 P${entry.lastPartPageNumber} · '
-              '${entry.lastPartTitle}\n${_formatWatchedAt(entry.watchedAt)}',
+              '${entry.lastPartTitle}\n上次观看：${_formatWatchedAt(entry.watchedAt)}',
               maxLines: 3,
               overflow: TextOverflow.ellipsis,
             ),

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
@@ -18,6 +19,13 @@ class FocuBiliApp extends StatelessWidget {
       themeMode: ThemeMode.system,
       initialRoute: AppRoutes.home,
       onGenerateRoute: AppRouter.onGenerateRoute,
+      // 根据实际主题在整棵页面树外层设置系统栏图标颜色，覆盖无 AppBar 的页面。
+      builder: (BuildContext context, Widget? child) {
+        return AnnotatedRegion<SystemUiOverlayStyle>(
+          value: AppTheme.systemOverlayStyle(Theme.of(context).brightness),
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
     );
   }
 }

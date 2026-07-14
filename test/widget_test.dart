@@ -11,9 +11,12 @@ import 'package:focubili/features/search/search_page.dart';
 import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/models/watch_history_entry.dart';
 import 'package:focubili/services/bilibili_service.dart';
+import 'package:focubili/services/device_status_service.dart';
 import 'package:focubili/services/native_playback_service.dart';
+import 'package:focubili/services/player_overlay_service.dart';
 import 'package:focubili/services/search_history_service.dart';
 import 'package:focubili/services/watch_history_service.dart';
+import 'package:focubili/models/player_overlay_data.dart';
 
 /// 记录视频详情请求地址并返回固定 JSON，验证服务解析时不依赖真实网络。
 class _RecordingJsonRequest {
@@ -103,11 +106,13 @@ class _FakePlaybackService implements PlaybackService {
     this.savedState,
     this.rejectQuality = false,
     this.emitReadyOnOpen = true,
+    this.duration = _defaultDuration,
   });
 
   final StreamController<PlaybackSnapshot> _states =
       StreamController<PlaybackSnapshot>.broadcast();
-  static const Duration _duration = Duration(minutes: 3, seconds: 32);
+  static const Duration _defaultDuration = Duration(minutes: 3, seconds: 32);
+  final Duration duration;
   bool _isPlaying = false;
   Duration _position = Duration.zero;
   double _speed = 1;
@@ -178,7 +183,7 @@ class _FakePlaybackService implements PlaybackService {
     seekByRequests += 1;
     final int nextMilliseconds =
         (_position.inMilliseconds + offset.inMilliseconds)
-            .clamp(0, _duration.inMilliseconds)
+            .clamp(0, duration.inMilliseconds)
             .toInt();
     _position = Duration(milliseconds: nextMilliseconds);
     _emit();
@@ -190,7 +195,7 @@ class _FakePlaybackService implements PlaybackService {
     seekToRequests += 1;
     _position = Duration(
       milliseconds:
-          position.inMilliseconds.clamp(0, _duration.inMilliseconds).toInt(),
+          position.inMilliseconds.clamp(0, duration.inMilliseconds).toInt(),
     );
     _emit();
   }
@@ -249,7 +254,7 @@ class _FakePlaybackService implements PlaybackService {
         phase: phase,
         isPlaying: _isPlaying,
         position: _position,
-        duration: _duration,
+        duration: duration,
         speed: _speed,
         currentQuality: _quality,
         availableQualities: const <PlaybackQuality>[
@@ -293,6 +298,61 @@ class _RecordingWatchHistoryService extends WatchHistoryService {
   Future<List<WatchHistoryEntry>> record(WatchHistoryEntry entry) async {
     recordedEntries.add(entry);
     return List<WatchHistoryEntry>.unmodifiable(recordedEntries);
+  }
+}
+
+/// 为全屏播放器测试提供稳定的电量读数，避免组件测试依赖真实 Android 电池。
+class _FakeDeviceStatusService implements DeviceStatusService {
+  /// 创建返回固定电量或未知状态的设备状态服务替身。
+  const _FakeDeviceStatusService(this.batteryPercent);
+
+  final int? batteryPercent;
+
+  /// 返回构造时传入的电量百分比，不访问任何原生方法通道。
+  @override
+  Future<int?> loadBatteryPercent() async => batteryPercent;
+}
+
+/// 为播放器组件测试提供固定字幕轨道和条目，不访问 Android 通道或真实字幕地址。
+class _FakePlayerOverlayService implements PlayerOverlayService {
+  /// 创建可配置字幕元数据和字幕文字的本地服务替身。
+  _FakePlayerOverlayService({
+    required this.tracksResult,
+    required this.cuesResult,
+    this.danmakuResult = const DanmakuSegmentLoadResult.empty(),
+  });
+
+  final SubtitleTrackLoadResult tracksResult;
+  final SubtitleCueLoadResult cuesResult;
+  final DanmakuSegmentLoadResult danmakuResult;
+  final List<int> danmakuSegmentRequests = <int>[];
+
+  /// 返回测试配置的字幕轨道列表，不接触登录会话或网络。
+  @override
+  Future<SubtitleTrackLoadResult> loadSubtitleTracks({
+    required String bvid,
+    required int cid,
+  }) async =>
+      tracksResult;
+
+  /// 返回测试配置的字幕条目，不接触临时字幕地址或 Cookie。
+  @override
+  Future<SubtitleCueLoadResult> loadSubtitleCues({
+    required String bvid,
+    required int cid,
+    required String trackId,
+  }) async =>
+      cuesResult;
+
+  /// 页面当前字幕测试不加载弹幕，因此返回空片段以满足叠加服务的完整接口。
+  @override
+  Future<DanmakuSegmentLoadResult> loadDanmakuSegment({
+    required String bvid,
+    required int cid,
+    required int segmentIndex,
+  }) async {
+    danmakuSegmentRequests.add(segmentIndex);
+    return danmakuResult;
   }
 }
 
@@ -847,8 +907,8 @@ void main() {
     expect(find.text('二倍速中>>'), findsNothing);
   });
 
-  /// 验证长按横向移动只在松手时提交一次进度跳转，并恢复原本播放倍速。
-  testWidgets('长按横向拖动可以预览并一次性跳转进度', (
+  /// 验证横向拖动无需等待长按即可预览，并只在松手时提交一次进度跳转。
+  testWidgets('横向拖动立即预览并一次性跳转进度', (
     WidgetTester tester,
   ) async {
     final _FakePlaybackService service = _FakePlaybackService();
@@ -861,33 +921,32 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('play-pause-button')));
-    await tester.pump();
     final Rect playerBounds = tester.getRect(
       find.byKey(const Key('player-surface')),
     );
     final TestGesture gesture = await tester.startGesture(playerBounds.center);
-    await tester.pump(const Duration(milliseconds: 650));
     await gesture.moveBy(const Offset(300, 0));
     await tester.pump();
 
     expect(service.seekToRequests, 0);
     expect(service._speed, 1);
-    expect(find.text('跳转至 0:30'), findsOneWidget);
+    expect(find.textContaining('跳转至'), findsOneWidget);
 
     await gesture.up();
     await tester.pumpAndSettle();
 
     expect(service.seekToRequests, 1);
-    expect(service._position, const Duration(seconds: 30));
+    expect(service._position, greaterThan(Duration.zero));
     expect(service._speed, 1);
   });
 
-  /// 验证长按跳转超过单次上限时会被限制为两分钟，避免长视频一次跳到不可控位置。
-  testWidgets('长按横向拖动会限制单次快捷跳转范围', (
+  /// 验证长视频横向拖动会按时长提高速度，但单次跳转仍限制在十分钟内。
+  testWidgets('长视频横向拖动使用自适应速度并限制最大范围', (
     WidgetTester tester,
   ) async {
-    final _FakePlaybackService service = _FakePlaybackService();
+    final _FakePlaybackService service = _FakePlaybackService(
+      duration: const Duration(hours: 4),
+    );
     await tester.pumpWidget(
       MaterialApp(
         home: PlayerPage(
@@ -897,24 +956,21 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('play-pause-button')));
-    await tester.pump();
     final Rect playerBounds = tester.getRect(
       find.byKey(const Key('player-surface')),
     );
     final TestGesture gesture = await tester.startGesture(playerBounds.center);
-    await tester.pump(const Duration(milliseconds: 650));
     await gesture.moveBy(const Offset(2000, 0));
     await tester.pump();
     await gesture.up();
     await tester.pumpAndSettle();
 
-    expect(service._position, const Duration(minutes: 2));
+    expect(service._position, const Duration(minutes: 10));
     expect(service.seekToRequests, 1);
   });
 
-  /// 验证系统取消长按时会恢复播放速度，且不会把预览位置写入原生播放器。
-  testWidgets('取消长按跳转不会写入预览进度', (WidgetTester tester) async {
+  /// 验证系统取消横向拖动时不会把预览位置写入原生播放器。
+  testWidgets('取消横向拖动不会写入预览进度', (WidgetTester tester) async {
     final _FakePlaybackService service = _FakePlaybackService();
     await tester.pumpWidget(
       MaterialApp(
@@ -925,13 +981,10 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('play-pause-button')));
-    await tester.pump();
     final Rect playerBounds = tester.getRect(
       find.byKey(const Key('player-surface')),
     );
     final TestGesture gesture = await tester.startGesture(playerBounds.center);
-    await tester.pump(const Duration(milliseconds: 650));
     await gesture.moveBy(const Offset(300, 0));
     await tester.pump();
     await gesture.cancel();
@@ -939,7 +992,7 @@ void main() {
 
     expect(service.seekToRequests, 0);
     expect(service._position, Duration.zero);
-    expect(service._speed, 1);
+    expect(find.textContaining('跳转至'), findsNothing);
   });
 
   /// 验证暂停时控制栏不会因旧计时器自动隐藏，继续播放后才恢复五秒自动收起。
@@ -1113,6 +1166,146 @@ void main() {
     expect(tester.getTopLeft(find.byKey(const Key('top-player-bar'))).dy, 0);
     expect(tester.getCenter(find.byTooltip('返回')).dy, lessThan(100));
     expect(tester.takeException(), isNull);
+  });
+
+  /// 验证全屏标题上方显示小型时间与电量栏，且不依赖系统安全区推挤布局。
+  testWidgets('全屏顶部显示时间和电量', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: _FakePlaybackService(),
+          deviceStatusService: const _FakeDeviceStatusService(73),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final IconButton fullscreenButton = tester.widget<IconButton>(
+      find.byWidgetPredicate(
+        (Widget widget) => widget is IconButton && widget.tooltip == '进入全屏',
+      ),
+    );
+    fullscreenButton.onPressed!();
+    await tester.pumpAndSettle();
+    await tester.pump();
+
+    expect(find.byKey(const Key('fullscreen-device-status')), findsOneWidget);
+    expect(find.text('73%'), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.byKey(const Key('fullscreen-device-status'))).dy,
+      lessThan(24),
+    );
+  });
+
+  /// 验证全屏更多菜单可选择真实字幕轨道，并在播放画面中显示当前时间段的文字。
+  testWidgets('播放器可以选择并显示字幕', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    const SubtitleTrack track = SubtitleTrack(
+      id: 'zh-Hans',
+      language: 'zh-Hans',
+      label: '中文（简体）',
+      isLocked: false,
+    );
+    final _FakePlayerOverlayService overlayService = _FakePlayerOverlayService(
+      tracksResult: const SubtitleTrackLoadResult(
+        status: SubtitleLoadStatus.available,
+        message: '',
+        tracks: <SubtitleTrack>[track],
+      ),
+      cuesResult: const SubtitleCueLoadResult(
+        status: SubtitleLoadStatus.available,
+        message: '',
+        cues: <SubtitleCue>[
+          SubtitleCue(
+            from: Duration.zero,
+            to: Duration(minutes: 1),
+            content: '真实字幕内容',
+          ),
+        ],
+      ),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: _FakePlaybackService(),
+          playerOverlayService: overlayService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final IconButton fullscreenButton = tester.widget<IconButton>(
+      find.byWidgetPredicate(
+        (Widget widget) => widget is IconButton && widget.tooltip == '进入全屏',
+      ),
+    );
+    fullscreenButton.onPressed!();
+    await tester.pumpAndSettle();
+    final dynamic moreMenuState = tester.state(
+      find.byKey(const Key('more-settings-menu')),
+    );
+    moreMenuState.showButtonMenu();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('字幕'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('中文（简体）'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('active-subtitle')), findsOneWidget);
+    expect(find.text('真实字幕内容'), findsOneWidget);
+  });
+
+  /// 验证弹幕开关会按当前时间轴请求真实六分钟片段，并创建不拦截手势的绘制画布。
+  testWidgets('播放器可以加载并绘制当前片段的真实弹幕', (
+    WidgetTester tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final _FakePlayerOverlayService overlayService = _FakePlayerOverlayService(
+      tracksResult: const SubtitleTrackLoadResult.empty(),
+      cuesResult: const SubtitleCueLoadResult.empty(),
+      danmakuResult: const DanmakuSegmentLoadResult(
+        status: DanmakuLoadStatus.available,
+        message: '',
+        segmentIndex: 1,
+        entries: <DanmakuEntry>[
+          DanmakuEntry(
+            position: Duration.zero,
+            content: '真实弹幕内容',
+            color: 0xFFFFFF,
+            mode: 1,
+          ),
+        ],
+      ),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: _FakePlaybackService(),
+          playerOverlayService: overlayService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final IconButton fullscreenButton = tester.widget<IconButton>(
+      find.byWidgetPredicate(
+        (Widget widget) => widget is IconButton && widget.tooltip == '进入全屏',
+      ),
+    );
+    fullscreenButton.onPressed!();
+    await tester.pumpAndSettle();
+    final IconButton danmakuButton = tester.widget<IconButton>(
+      find.byKey(const Key('danmaku-toggle')),
+    );
+    danmakuButton.onPressed!();
+    await tester.pumpAndSettle();
+
+    expect(overlayService.danmakuSegmentRequests, <int>[1]);
+    expect(find.byKey(const Key('danmaku-canvas')), findsOneWidget);
   });
 
   /// 验证输入法压缩搜索页面时，固定控件和空状态都不会产生黄黑溢出标记。

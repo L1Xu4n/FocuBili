@@ -30,6 +30,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
@@ -46,6 +47,7 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.view.TextureRegistry
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.lang.ref.WeakReference
 import java.net.URL
@@ -82,6 +84,7 @@ class NativePlaybackController(
     private val channel = MethodChannel(messenger, CHANNEL_NAME)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val playbackRequestExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    private val overlayDataRequestExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val progressPreferences = activity.getSharedPreferences(
         PROGRESS_PREFERENCES_NAME,
         Context.MODE_PRIVATE,
@@ -123,6 +126,8 @@ class NativePlaybackController(
     private var playbackPhase = PHASE_IDLE
     private var playbackMessage: String? = null
     private var isInPictureInPicture = false
+    @Volatile
+    private var subtitleTrackSession: SubtitleTrackSession? = null
 
     /** 保存一档可供 Flutter 选择的清晰度编号与名称。 */
     private data class PlaybackQualityOption(
@@ -139,11 +144,52 @@ class NativePlaybackController(
         val qualities: List<PlaybackQualityOption>,
     )
 
+    /** 保存播放失败中可安全展示的原因类型和 HTTP 状态，不含地址、请求头或会话资料。 */
+    private data class PlaybackFailureDetails(
+        val causeType: String,
+        val httpStatusCode: Int?,
+    )
+
+    /** 保存当前视频可读取轨道的临时地址；该地址只留在原生内存，绝不经过 Flutter 或磁盘。 */
+    private data class SubtitleTrackSession(
+        val bvid: String,
+        val cid: Long,
+        val readableTrackUrls: Map<String, String>,
+    )
+
+    /** 保存一条可展示但不含临时资源地址的字幕轨道元数据。 */
+    private data class SubtitleTrackOption(
+        val id: String,
+        val language: String,
+        val label: String,
+        val isLocked: Boolean,
+    )
+
+    /** 保存已从一段 Protobuf 数据安全解析出的普通弹幕展示字段。 */
+    private data class DanmakuElement(
+        val progressMs: Long,
+        val content: String,
+        val color: Int,
+        val mode: Int,
+    )
+
     /** 表示播放数据服务返回了可向用户说明的预期错误。 */
     private class PlaybackSourceException(message: String) : Exception(message)
 
     /** 表示缓存管理请求中可安全展示给 Flutter 页面的预期错误。 */
     private class CacheOperationException(
+        val errorCode: String,
+        message: String,
+    ) : Exception(message)
+
+    /** 表示字幕接口或内容格式中可安全展示给 Flutter 页面的预期错误。 */
+    private class SubtitleOperationException(
+        val errorCode: String,
+        message: String,
+    ) : Exception(message)
+
+    /** 表示弹幕数据接口或 Protobuf 内容中可安全展示给 Flutter 页面的预期错误。 */
+    private class DanmakuOperationException(
         val errorCode: String,
         message: String,
     ) : Exception(message)
@@ -280,6 +326,37 @@ class NativePlaybackController(
             "clearMediaCache" -> {
                 handleMediaCacheOperation(result, ::clearMediaCache)
             }
+            "loadSubtitleTracks" -> {
+                val bvid = call.argument<String>("bvid")?.trim().orEmpty()
+                val cid = call.argument<Number>("cid")?.toLong()
+                if (buildVideoPageUrl(bvid) == null || cid == null || cid <= 0L) {
+                    result.error("invalid_subtitle_request", "字幕请求参数无效。", null)
+                } else {
+                    requestSubtitleTracks(bvid, cid, result)
+                }
+            }
+            "loadSubtitleCues" -> {
+                val bvid = call.argument<String>("bvid")?.trim().orEmpty()
+                val cid = call.argument<Number>("cid")?.toLong()
+                val trackId = call.argument<String>("trackId")?.trim().orEmpty()
+                if (buildVideoPageUrl(bvid) == null || cid == null || cid <= 0L || trackId.isEmpty()) {
+                    result.error("invalid_subtitle_request", "字幕请求参数无效。", null)
+                } else {
+                    requestSubtitleCues(bvid, cid, trackId, result)
+                }
+            }
+            "loadDanmakuSegment" -> {
+                val bvid = call.argument<String>("bvid")?.trim().orEmpty()
+                val cid = call.argument<Number>("cid")?.toLong()
+                val segmentIndex = call.argument<Number>("segmentIndex")?.toInt()
+                if (buildVideoPageUrl(bvid) == null || cid == null || cid <= 0L ||
+                    segmentIndex == null || segmentIndex !in 1..MAX_DANMAKU_SEGMENT_INDEX
+                ) {
+                    result.error("invalid_danmaku_request", "弹幕请求参数无效。", null)
+                } else {
+                    requestDanmakuSegment(bvid, cid, segmentIndex, result)
+                }
+            }
             "dispose" -> {
                 releasePlaybackResources()
                 result.success(null)
@@ -310,6 +387,7 @@ class NativePlaybackController(
         releasePlaybackResources()
         releaseMediaCache()
         playbackRequestExecutor.shutdownNow()
+        overlayDataRequestExecutor.shutdownNow()
         channel.setMethodCallHandler(null)
     }
 
@@ -544,8 +622,16 @@ class NativePlaybackController(
         nativePlayer: ExoPlayer,
         error: PlaybackException,
     ) {
+        val failureDetails = inspectPlaybackFailure(error)
         if (currentBvid.isEmpty() || currentCid <= 0L) {
-            reportError("原生播放器无法播放该视频：${error.errorCodeName}")
+            reportError(
+                buildFinalPlaybackErrorMessage(
+                    prefix = "原生播放器无法播放该视频",
+                    error = error,
+                    sources = latestPlaybackSources,
+                    failureDetails = failureDetails,
+                ),
+            )
             return
         }
         pendingStartPositionMs = nativePlayer.currentPosition.coerceAtLeast(0L)
@@ -554,7 +640,8 @@ class NativePlaybackController(
         val sources = latestPlaybackSources
         val candidateCount = sources?.let(::playbackCandidateCount) ?: 0
         val nextCandidateIndex = playbackSourceAttemptIndex + 1
-        if (sources != null && nextCandidateIndex < candidateCount) {
+        val shouldRefreshPlayurl = shouldRefreshPlayurlImmediately(failureDetails)
+        if (!shouldRefreshPlayurl && sources != null && nextCandidateIndex < candidateCount) {
             playbackSourceAttemptIndex = nextCandidateIndex
             playbackPhase = PHASE_LOADING
             playbackMessage = "当前线路不稳定，正在切换备用线路…"
@@ -574,12 +661,108 @@ class NativePlaybackController(
             playbackSourceAttemptIndex = 0
             latestPlaybackSources = null
             playbackPhase = PHASE_LOADING
-            playbackMessage = "播放线路已失效，正在刷新播放数据…"
+            playbackMessage = if (shouldRefreshPlayurl) {
+                "播放地址已失效，正在刷新播放数据…"
+            } else {
+                "播放线路已失效，正在刷新播放数据…"
+            }
             emitPlaybackState()
             requestPlaybackSources(currentBvid, currentCid, requestedQuality)
             return
         }
-        reportError("原生播放器多次重试后仍无法播放：${error.errorCodeName}")
+        reportError(
+            buildFinalPlaybackErrorMessage(
+                prefix = "原生播放器多次重试后仍无法播放",
+                error = error,
+                sources = sources,
+                failureDetails = failureDetails,
+            ),
+        )
+    }
+
+    /**
+     * 从有限长度的异常 cause 链中提取适合用户诊断的类型和 HTTP 状态。
+     *
+     * 只读取异常类别与状态码，绝不读取异常 message、响应体、URL、请求头或 Cookie。
+     */
+    private fun inspectPlaybackFailure(error: PlaybackException): PlaybackFailureDetails {
+        var current: Throwable? = error.cause
+        var deepestCause: Throwable? = current
+        var invalidResponse: HttpDataSource.InvalidResponseCodeException? = null
+        repeat(MAX_PLAYBACK_ERROR_CAUSE_DEPTH) {
+            val cause = current ?: return@repeat
+            if (cause is HttpDataSource.InvalidResponseCodeException && invalidResponse == null) {
+                invalidResponse = cause
+            }
+            deepestCause = cause
+            current = cause.cause?.takeIf { nestedCause -> nestedCause !== cause }
+        }
+        val diagnosticCause = invalidResponse ?: deepestCause
+        return PlaybackFailureDetails(
+            causeType = describePlaybackCauseType(diagnosticCause),
+            httpStatusCode = invalidResponse?.responseCode,
+        )
+    }
+
+    /** 把底层异常类别转为中文且脱敏的名称，避免异常文本把敏感请求资料带到页面。 */
+    private fun describePlaybackCauseType(cause: Throwable?): String {
+        return when (cause) {
+            is HttpDataSource.InvalidResponseCodeException -> "HTTP 响应状态异常（InvalidResponseCodeException）"
+            is java.net.SocketTimeoutException -> "网络读取超时（SocketTimeoutException）"
+            is java.net.ConnectException -> "网络连接异常（ConnectException）"
+            is java.io.EOFException -> "网络数据提前结束（EOFException）"
+            is java.io.IOException -> "网络输入输出异常（IOException）"
+            null -> "未提供底层原因"
+            else -> "播放器内部异常（${cause.javaClass.simpleName.ifBlank { "Unknown" }}）"
+        }
+    }
+
+    /** 判断明确过期或被服务器拒绝的媒体地址是否应跳过候选轮换并立即刷新 playurl。 */
+    private fun shouldRefreshPlayurlImmediately(failureDetails: PlaybackFailureDetails): Boolean {
+        return when (failureDetails.httpStatusCode) {
+            HTTP_STATUS_FORBIDDEN,
+            HTTP_STATUS_NOT_FOUND,
+            HTTP_STATUS_GONE,
+            -> true
+            else -> false
+        }
+    }
+
+    /** 构造最终错误提示，只展示脱敏原因、可诊断状态码和当前音视频候选序号。 */
+    private fun buildFinalPlaybackErrorMessage(
+        prefix: String,
+        error: PlaybackException,
+        sources: PlaybackSources?,
+        failureDetails: PlaybackFailureDetails,
+    ): String {
+        val httpStatusDescription = failureDetails.httpStatusCode?.let { statusCode ->
+            "；HTTP 状态码：$statusCode"
+        }.orEmpty()
+        return "$prefix：${error.errorCodeName}（诊断：底层原因类型：${failureDetails.causeType}" +
+            httpStatusDescription +
+            "；候选索引：${describePlaybackCandidateIndexes(sources)}）"
+    }
+
+    /** 返回当前实际选中的视频和音频候选序号，不显示任何媒体地址。 */
+    private fun describePlaybackCandidateIndexes(sources: PlaybackSources?): String {
+        if (sources == null) {
+            return "视频未知，音频未知"
+        }
+        return "视频 ${describeCurrentCandidateIndex(sources.videoUrls)}，" +
+            "音频 ${describeCurrentCandidateIndex(sources.audioUrls)}"
+    }
+
+    /** 按 `mediaUrlAt` 的回退规则计算当前真实使用的候选序号，空音轨明确标记为无。 */
+    private fun describeCurrentCandidateIndex(urls: List<String>): String {
+        if (urls.isEmpty()) {
+            return "无"
+        }
+        val actualIndex = if (playbackSourceAttemptIndex in urls.indices) {
+            playbackSourceAttemptIndex
+        } else {
+            0
+        }
+        return "${actualIndex + 1}/${urls.size}"
     }
 
     /** 返回本次音视频主备地址中需要尝试的最大线路数量。 */
@@ -612,6 +795,7 @@ class NativePlaybackController(
         ensureTexture()
         saveCurrentPlaybackProgress(force = true)
         invalidatePlaybackRequests()
+        clearSubtitleTrackSession()
         player?.stop()
         player?.clearMediaItems()
         currentBvid = bvid
@@ -775,6 +959,701 @@ class NativePlaybackController(
             return responseBody
         } finally {
             connection.disconnect()
+        }
+    }
+
+    /**
+     * 在独立后台线程读取字幕轨道，避免字幕网络慢时阻塞视频播放数据请求。
+     *
+     * 成功时只回传轨道编号、语言、名称和锁定状态；临时字幕地址始终留在原生内存。
+     */
+    private fun requestSubtitleTracks(
+        bvid: String,
+        cid: Long,
+        result: MethodChannel.Result,
+    ) {
+        runCatching {
+            overlayDataRequestExecutor.execute {
+                val trackResult = runCatching { loadSubtitleTracks(bvid, cid) }
+                mainHandler.post {
+                    trackResult.onSuccess(result::success).onFailure { error ->
+                        reportSubtitleOperationFailure(result, error)
+                    }
+                }
+            }
+        }.onFailure {
+            result.error("subtitle_unavailable", "字幕暂时无法读取，请稍后重试。", null)
+        }
+    }
+
+    /** 在独立后台线程读取一条已经由当前视频元数据确认的字幕轨道内容。 */
+    private fun requestSubtitleCues(
+        bvid: String,
+        cid: Long,
+        trackId: String,
+        result: MethodChannel.Result,
+    ) {
+        runCatching {
+            overlayDataRequestExecutor.execute {
+                val cueResult = runCatching { loadSubtitleCues(bvid, cid, trackId) }
+                mainHandler.post {
+                    cueResult.onSuccess(result::success).onFailure { error ->
+                        reportSubtitleOperationFailure(result, error)
+                    }
+                }
+            }
+        }.onFailure {
+            result.error("subtitle_unavailable", "字幕暂时无法读取，请稍后重试。", null)
+        }
+    }
+
+    /**
+     * 请求固定的 B 站播放器字幕元数据，并把可读轨道的临时地址保留在原生会话内。
+     *
+     * `is_lock=true` 的轨道只作为锁定状态回传，绝不会尝试读取内容或绕过权限。
+     */
+    private fun loadSubtitleTracks(bvid: String, cid: Long): Map<String, Any> {
+        val root = parseSubtitleJson(requestSubtitleMetadataJson(bvid, cid))
+        val code = root.optInt("code", -1)
+        if (code == SUBTITLE_LOGIN_REQUIRED_CODE) {
+            clearSubtitleTrackSession()
+            return subtitleTrackResult(
+                status = SUBTITLE_STATUS_LOGIN_REQUIRED,
+                message = "登录后可尝试读取字幕。",
+            )
+        }
+        if (code != 0) {
+            throw SubtitleOperationException(
+                "subtitle_service_error",
+                "字幕服务暂时不可用（错误码：$code）。",
+            )
+        }
+        val data = root.optJSONObject("data")
+            ?: throw SubtitleOperationException("subtitle_invalid_data", "字幕数据格式不正确。")
+        val subtitle = data.optJSONObject("subtitle")
+        val rawTracks = subtitle?.optJSONArray("subtitles")
+        val tracks = mutableListOf<SubtitleTrackOption>()
+        val readableTrackUrls = linkedMapOf<String, String>()
+        if (rawTracks != null) {
+            for (index in 0 until rawTracks.length()) {
+                if (tracks.size >= MAX_SUBTITLE_TRACKS) {
+                    break
+                }
+                val rawTrack = rawTracks.optJSONObject(index) ?: continue
+                val trackId = readSubtitleTrackId(rawTrack) ?: continue
+                if (tracks.any { track -> track.id == trackId }) {
+                    continue
+                }
+                val language = rawTrack.optString("lan").trim()
+                val label = limitSubtitleText(
+                    rawTrack.optString("lan_doc").trim().ifBlank {
+                        language.ifBlank { "未知语言" }
+                    },
+                    MAX_SUBTITLE_LABEL_CODE_POINTS,
+                )
+                val serviceLocked = rawTrack.optBoolean("is_lock", false)
+                val subtitleUrl = if (serviceLocked) {
+                    null
+                } else {
+                    normalizeSafeSubtitleUrl(rawTrack.optString("subtitle_url"))
+                }
+                val isLocked = serviceLocked || subtitleUrl == null
+                tracks.add(
+                    SubtitleTrackOption(
+                        id = trackId,
+                        language = language,
+                        label = label,
+                        isLocked = isLocked,
+                    ),
+                )
+                if (subtitleUrl != null) {
+                    readableTrackUrls[trackId] = subtitleUrl
+                }
+            }
+        }
+        subtitleTrackSession = SubtitleTrackSession(
+            bvid = bvid,
+            cid = cid,
+            readableTrackUrls = readableTrackUrls.toMap(),
+        )
+        if (readableTrackUrls.isNotEmpty()) {
+            return subtitleTrackResult(
+                status = SUBTITLE_STATUS_AVAILABLE,
+                tracks = tracks,
+            )
+        }
+        val needsLogin = data.optBoolean("need_login_subtitle", false)
+        return when {
+            needsLogin -> subtitleTrackResult(
+                status = SUBTITLE_STATUS_LOGIN_REQUIRED,
+                message = "登录后可尝试读取字幕。",
+                tracks = tracks,
+            )
+            tracks.isNotEmpty() -> subtitleTrackResult(
+                status = SUBTITLE_STATUS_LOCKED,
+                message = "此视频的字幕当前不可用。",
+                tracks = tracks,
+            )
+            else -> subtitleTrackResult(
+                status = SUBTITLE_STATUS_NONE,
+                message = "此视频没有可用字幕。",
+            )
+        }
+    }
+
+    /**
+     * 读取指定轨道的 JSON 字幕条目，并按数量、文本长度和时间范围进行原生侧限制。
+     *
+     * Flutter 只收到 `fromMs`、`toMs` 和 `content`，不会收到临时 CDN 地址或会话信息。
+     */
+    private fun loadSubtitleCues(
+        bvid: String,
+        cid: Long,
+        trackId: String,
+    ): Map<String, Any> {
+        val session = subtitleTrackSession
+        if (session == null || session.bvid != bvid || session.cid != cid) {
+            throw SubtitleOperationException(
+                "subtitle_track_not_loaded",
+                "请先读取当前视频的字幕轨道。",
+            )
+        }
+        val subtitleUrl = session.readableTrackUrls[trackId]
+            ?: throw SubtitleOperationException("subtitle_locked", "此字幕当前不可用。")
+        val root = parseSubtitleJson(requestSubtitleDocumentJson(subtitleUrl, bvid))
+        val rawCues = root.optJSONArray("body")
+        val cues = mutableListOf<Map<String, Any>>()
+        if (rawCues != null) {
+            for (index in 0 until rawCues.length()) {
+                if (cues.size >= MAX_SUBTITLE_CUES) {
+                    break
+                }
+                val rawCue = rawCues.optJSONObject(index) ?: continue
+                val fromMs = readSubtitleTimeMs(rawCue.opt("from")) ?: continue
+                val toMs = readSubtitleTimeMs(rawCue.opt("to")) ?: continue
+                val content = limitSubtitleText(
+                    rawCue.optString("content").trim(),
+                    MAX_SUBTITLE_CUE_CODE_POINTS,
+                )
+                if (toMs <= fromMs || content.isBlank()) {
+                    continue
+                }
+                cues.add(
+                    mapOf(
+                        "fromMs" to fromMs,
+                        "toMs" to toMs,
+                        "content" to content,
+                    ),
+                )
+            }
+        }
+        return if (cues.isEmpty()) {
+            subtitleCueResult(
+                status = SUBTITLE_STATUS_NONE,
+                message = "此字幕轨道没有可显示内容。",
+            )
+        } else {
+            subtitleCueResult(status = SUBTITLE_STATUS_AVAILABLE, cues = cues)
+        }
+    }
+
+    /** 使用固定的播放器元数据地址请求当前分P字幕信息，不允许调用方提供任意主机。 */
+    private fun requestSubtitleMetadataJson(bvid: String, cid: Long): String {
+        val endpoint = Uri.Builder()
+            .scheme("https")
+            .authority(PLAYBACK_API_HOST)
+            .appendPath("x")
+            .appendPath("player")
+            .appendPath("v2")
+            .appendQueryParameter("bvid", bvid)
+            .appendQueryParameter("cid", cid.toString())
+            .build()
+        return requestLimitedSubtitleJson(
+            endpoint = endpoint.toString(),
+            referer = buildVideoPageUrl(bvid).orEmpty(),
+            maximumBytes = MAX_SUBTITLE_METADATA_BYTES,
+            includeSessionCookie = true,
+        )
+    }
+
+    /** 请求已通过固定 CDN 主机校验的临时字幕 JSON，临时地址不会离开原生层。 */
+    private fun requestSubtitleDocumentJson(subtitleUrl: String, bvid: String): String {
+        return requestLimitedSubtitleJson(
+            endpoint = subtitleUrl,
+            referer = buildVideoPageUrl(bvid).orEmpty(),
+            maximumBytes = MAX_SUBTITLE_DOCUMENT_BYTES,
+            includeSessionCookie = false,
+        )
+    }
+
+    /**
+     * 以固定请求头读取小于上限的 JSON 响应，并仅在原生内存中短暂使用 WebView 会话。
+     *
+     * 该函数不记录请求头、Cookie、地址参数或响应正文，防止临时授权资料进入日志。
+     */
+    private fun requestLimitedSubtitleJson(
+        endpoint: String,
+        referer: String,
+        maximumBytes: Int,
+        includeSessionCookie: Boolean,
+    ): String {
+        val connection = URL(endpoint).openConnection() as? HttpsURLConnection
+            ?: throw SubtitleOperationException("subtitle_invalid_url", "字幕地址无效。")
+        try {
+            connection.requestMethod = "GET"
+            connection.connectTimeout = NETWORK_TIMEOUT_MS
+            connection.readTimeout = NETWORK_TIMEOUT_MS
+            connection.setRequestProperty("Accept", "application/json")
+            connection.setRequestProperty("Referer", referer)
+            connection.setRequestProperty("User-Agent", DESKTOP_USER_AGENT)
+            if (includeSessionCookie) {
+                readBilibiliCookieHeader().takeIf { cookie -> cookie.isNotBlank() }?.let { cookie ->
+                    connection.setRequestProperty("Cookie", cookie)
+                }
+            }
+            val statusCode = connection.responseCode
+            if (statusCode !in 200..299) {
+                throw SubtitleOperationException(
+                    "subtitle_network",
+                    "字幕服务暂时不可用（HTTP $statusCode）。",
+                )
+            }
+            val responseBody = connection.inputStream.use { stream ->
+                readLimitedUtf8Text(stream.readBytesWithLimit(maximumBytes))
+            }
+            if (responseBody.isBlank()) {
+                throw SubtitleOperationException("subtitle_invalid_data", "字幕数据为空。")
+            }
+            return responseBody
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    /** 将字节流复制到受限缓冲区；超过上限时立刻停止，避免异常字幕包耗尽内存。 */
+    private fun java.io.InputStream.readBytesWithLimit(maximumBytes: Int): ByteArray {
+        val buffer = ByteArray(SUBTITLE_RESPONSE_BUFFER_BYTES)
+        val output = ByteArrayOutputStream()
+        while (true) {
+            val read = read(buffer)
+            if (read < 0) {
+                break
+            }
+            if (output.size() + read > maximumBytes) {
+                throw SubtitleOperationException(
+                    "subtitle_too_large",
+                    "字幕内容过大，暂时无法读取。",
+                )
+            }
+            output.write(buffer, 0, read)
+        }
+        return output.toByteArray()
+    }
+
+    /** 将受限响应字节按 UTF-8 转成 JSON 文本；替换字符会在后续 JSON 解析中安全失败。 */
+    private fun readLimitedUtf8Text(bytes: ByteArray): String {
+        return String(bytes, Charsets.UTF_8)
+    }
+
+    /** 解析字幕 JSON，解析失败时只给出通用提示，不暴露服务端原文。 */
+    private fun parseSubtitleJson(responseText: String): JSONObject {
+        return try {
+            JSONObject(responseText)
+        } catch (_: Exception) {
+            throw SubtitleOperationException("subtitle_invalid_data", "字幕数据格式不正确。")
+        }
+    }
+
+    /** 从轨道字典取稳定 ID，兼容字符串和数值字段但拒绝空值与过长编号。 */
+    private fun readSubtitleTrackId(track: JSONObject): String? {
+        val rawId = track.optString("id_str").trim().ifBlank {
+            track.opt("id")?.toString()?.trim().orEmpty()
+        }
+        return rawId.takeIf { id ->
+            id.length <= MAX_SUBTITLE_TRACK_ID_LENGTH && SUBTITLE_TRACK_ID_PATTERN.matches(id)
+        }
+    }
+
+    /** 只接受协议相对或 HTTPS 的官方字幕 CDN 地址，避免服务端异常数据触发任意网络访问。 */
+    private fun normalizeSafeSubtitleUrl(rawUrl: String): String? {
+        val normalized = when {
+            rawUrl.startsWith("//") -> "https:$rawUrl"
+            rawUrl.startsWith("https://", ignoreCase = true) -> rawUrl
+            else -> return null
+        }
+        val uri = runCatching { Uri.parse(normalized) }.getOrNull() ?: return null
+        val host = uri.host?.lowercase(Locale.ROOT) ?: return null
+        if (!uri.scheme.equals("https", ignoreCase = true) || host != SUBTITLE_CDN_HOST) {
+            return null
+        }
+        return uri.toString()
+    }
+
+    /** 将接口中的秒级时间安全转换为毫秒，异常、负数和超长时长都会被拒绝。 */
+    private fun readSubtitleTimeMs(rawValue: Any?): Long? {
+        val seconds = when (rawValue) {
+            is Number -> rawValue.toDouble()
+            is String -> rawValue.toDoubleOrNull()
+            else -> null
+        } ?: return null
+        if (!seconds.isFinite() || seconds < 0.0 || seconds > MAX_SUBTITLE_DURATION_SECONDS) {
+            return null
+        }
+        return (seconds * 1000.0).toLong()
+    }
+
+    /** 按 Unicode 码点裁剪字幕文字，避免截断 emoji 并限制页面渲染压力。 */
+    private fun limitSubtitleText(value: String, maximumCodePoints: Int): String {
+        if (value.isBlank() || maximumCodePoints <= 0) {
+            return ""
+        }
+        val codePointCount = value.codePointCount(0, value.length)
+        if (codePointCount <= maximumCodePoints) {
+            return value
+        }
+        return value.substring(0, value.offsetByCodePoints(0, maximumCodePoints))
+    }
+
+    /** 构造不包含临时地址的字幕轨道响应，供 Flutter 菜单显示可用、锁定或空状态。 */
+    private fun subtitleTrackResult(
+        status: String,
+        message: String = "",
+        tracks: List<SubtitleTrackOption> = emptyList(),
+    ): Map<String, Any> {
+        return mapOf(
+            "status" to status,
+            "message" to message,
+            "tracks" to tracks.map { track ->
+                mapOf(
+                    "id" to track.id,
+                    "language" to track.language,
+                    "label" to track.label,
+                    "isLocked" to track.isLocked,
+                )
+            },
+        )
+    }
+
+    /** 构造不包含服务端地址和会话资料的字幕条目响应。 */
+    private fun subtitleCueResult(
+        status: String,
+        message: String = "",
+        cues: List<Map<String, Any>> = emptyList(),
+    ): Map<String, Any> {
+        return mapOf(
+            "status" to status,
+            "message" to message,
+            "cues" to cues,
+        )
+    }
+
+    /** 将字幕请求异常转换成稳定错误码和中文说明，避免 Throwable 原文泄露网络资料。 */
+    private fun reportSubtitleOperationFailure(result: MethodChannel.Result, error: Throwable) {
+        if (error is SubtitleOperationException) {
+            result.error(error.errorCode, error.message, null)
+        } else {
+            result.error("subtitle_unavailable", "字幕暂时无法读取，请稍后重试。", null)
+        }
+    }
+
+    /**
+     * 在受限后台队列读取一个六分钟弹幕段，避免高频预取影响播放数据请求。
+     *
+     * 请求只使用 BV、CID 和段号；用户会话仅在原生请求头中短暂使用，不会经过方法通道。
+     */
+    private fun requestDanmakuSegment(
+        bvid: String,
+        cid: Long,
+        segmentIndex: Int,
+        result: MethodChannel.Result,
+    ) {
+        runCatching {
+            overlayDataRequestExecutor.execute {
+                val segmentResult = runCatching {
+                    loadDanmakuSegment(bvid, cid, segmentIndex)
+                }
+                mainHandler.post {
+                    segmentResult.onSuccess(result::success).onFailure { error ->
+                        reportDanmakuOperationFailure(result, error)
+                    }
+                }
+            }
+        }.onFailure {
+            result.error("danmaku_unavailable", "弹幕暂时无法读取，请稍后重试。", null)
+        }
+    }
+
+    /** 读取固定 B 站分段接口的 Protobuf 数据，并转换成 Flutter 只需的四项展示字段。 */
+    private fun loadDanmakuSegment(
+        bvid: String,
+        cid: Long,
+        segmentIndex: Int,
+    ): Map<String, Any> {
+        val entries = parseDanmakuSegment(
+            requestDanmakuSegmentBytes(bvid, cid, segmentIndex),
+        )
+        return if (entries.isEmpty()) {
+            danmakuSegmentResult(
+                status = DANMAKU_STATUS_NONE,
+                segmentIndex = segmentIndex,
+                message = "当前六分钟片段没有可显示弹幕。",
+            )
+        } else {
+            danmakuSegmentResult(
+                status = DANMAKU_STATUS_AVAILABLE,
+                segmentIndex = segmentIndex,
+                entries = entries,
+            )
+        }
+    }
+
+    /**
+     * 请求固定的网页分段弹幕地址，不接受任意主机、路径或请求参数。
+     *
+     * 该接口返回 Protobuf；Cookie 仅留在本次 HTTPS 请求头，不会保存或回传给 Dart。
+     */
+    private fun requestDanmakuSegmentBytes(
+        bvid: String,
+        cid: Long,
+        segmentIndex: Int,
+    ): ByteArray {
+        val endpoint = Uri.Builder()
+            .scheme("https")
+            .authority(PLAYBACK_API_HOST)
+            .appendPath("x")
+            .appendPath("v2")
+            .appendPath("dm")
+            .appendPath("web")
+            .appendPath("seg.so")
+            .appendQueryParameter("type", "1")
+            .appendQueryParameter("oid", cid.toString())
+            .appendQueryParameter("segment_index", segmentIndex.toString())
+            .build()
+        val connection = URL(endpoint.toString()).openConnection() as? HttpsURLConnection
+            ?: throw DanmakuOperationException("danmaku_invalid_url", "弹幕地址无效。")
+        try {
+            connection.requestMethod = "GET"
+            connection.connectTimeout = NETWORK_TIMEOUT_MS
+            connection.readTimeout = NETWORK_TIMEOUT_MS
+            connection.setRequestProperty("Accept", "application/octet-stream")
+            connection.setRequestProperty("Accept-Encoding", "identity")
+            connection.setRequestProperty("Referer", buildVideoPageUrl(bvid).orEmpty())
+            connection.setRequestProperty("User-Agent", DESKTOP_USER_AGENT)
+            readBilibiliCookieHeader().takeIf { cookie -> cookie.isNotBlank() }?.let { cookie ->
+                connection.setRequestProperty("Cookie", cookie)
+            }
+            val statusCode = connection.responseCode
+            if (statusCode !in 200..299) {
+                throw DanmakuOperationException(
+                    "danmaku_network",
+                    "弹幕服务暂时不可用（HTTP $statusCode）。",
+                )
+            }
+            return connection.inputStream.use(::readDanmakuBytesWithLimit)
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    /** 将弹幕响应复制到受限缓冲区；超过上限时停止读取，避免单段异常数据耗尽内存。 */
+    private fun readDanmakuBytesWithLimit(stream: java.io.InputStream): ByteArray {
+        val buffer = ByteArray(DANMAKU_RESPONSE_BUFFER_BYTES)
+        val output = ByteArrayOutputStream()
+        while (true) {
+            val read = stream.read(buffer)
+            if (read < 0) {
+                break
+            }
+            if (output.size() + read > MAX_DANMAKU_SEGMENT_BYTES) {
+                throw DanmakuOperationException(
+                    "danmaku_too_large",
+                    "弹幕数据过大，暂时无法读取。",
+                )
+            }
+            output.write(buffer, 0, read)
+        }
+        return output.toByteArray()
+    }
+
+    /**
+     * 解析 `DmSegMobileReply` 的 repeated `elems` 字段，并容错跳过单条损坏弹幕。
+     *
+     * 不支持的顶层字段会按 Protobuf 线格式跳过；整个包结构损坏时才返回明确错误。
+     */
+    private fun parseDanmakuSegment(responseBytes: ByteArray): List<DanmakuElement> {
+        if (responseBytes.isEmpty()) {
+            return emptyList()
+        }
+        val cursor = ProtobufCursor(responseBytes)
+        val entries = mutableListOf<DanmakuElement>()
+        while (cursor.hasRemaining()) {
+            val tag = cursor.readVarint()
+            val fieldNumber = tag ushr 3
+            val wireType = (tag and PROTOBUF_WIRE_TYPE_MASK).toInt()
+            if (fieldNumber <= 0L) {
+                throw DanmakuOperationException("danmaku_invalid_data", "弹幕数据格式不正确。")
+            }
+            if (fieldNumber == DMSegMobileReply_ELEMS_FIELD_NUMBER.toLong() &&
+                wireType == PROTOBUF_LENGTH_DELIMITED_WIRE_TYPE
+            ) {
+                val elementBytes = cursor.readLengthDelimited()
+                val element = runCatching { parseDanmakuElement(elementBytes) }.getOrNull()
+                if (element != null && entries.size < MAX_DANMAKU_ENTRIES) {
+                    entries.add(element)
+                }
+            } else {
+                cursor.skipField(wireType)
+            }
+        }
+        return entries
+    }
+
+    /** 解析一条 `DanmakuElem`，只保留进度、内容、颜色和模式，其他字段全部跳过。 */
+    private fun parseDanmakuElement(elementBytes: ByteArray): DanmakuElement? {
+        val cursor = ProtobufCursor(elementBytes)
+        var progressMs: Long? = null
+        var content: String? = null
+        var color = DEFAULT_DANMAKU_COLOR
+        var mode = DEFAULT_DANMAKU_MODE
+        while (cursor.hasRemaining()) {
+            val tag = cursor.readVarint()
+            val fieldNumber = tag ushr 3
+            val wireType = (tag and PROTOBUF_WIRE_TYPE_MASK).toInt()
+            if (fieldNumber <= 0L) {
+                return null
+            }
+            when {
+                fieldNumber == DANMAKU_PROGRESS_FIELD_NUMBER.toLong() &&
+                    wireType == PROTOBUF_VARINT_WIRE_TYPE -> {
+                    progressMs = cursor.readVarint()
+                }
+                fieldNumber == DANMAKU_MODE_FIELD_NUMBER.toLong() &&
+                    wireType == PROTOBUF_VARINT_WIRE_TYPE -> {
+                    val rawMode = cursor.readVarint()
+                    if (rawMode in MIN_DANMAKU_MODE.toLong()..MAX_DANMAKU_MODE.toLong()) {
+                        mode = rawMode.toInt()
+                    }
+                }
+                fieldNumber == DANMAKU_COLOR_FIELD_NUMBER.toLong() &&
+                    wireType == PROTOBUF_VARINT_WIRE_TYPE -> {
+                    color = (cursor.readVarint() and DANMAKU_RGB_MASK).toInt()
+                }
+                fieldNumber == DANMAKU_CONTENT_FIELD_NUMBER.toLong() &&
+                    wireType == PROTOBUF_LENGTH_DELIMITED_WIRE_TYPE -> {
+                    content = limitDanmakuText(
+                        String(cursor.readLengthDelimited(), Charsets.UTF_8).trim(),
+                    )
+                }
+                else -> cursor.skipField(wireType)
+            }
+        }
+        val safeProgressMs = progressMs?.takeIf { progress ->
+            progress in 0L..MAX_DANMAKU_PROGRESS_MS
+        } ?: return null
+        val safeContent = content?.takeIf { value -> value.isNotBlank() } ?: return null
+        return DanmakuElement(
+            progressMs = safeProgressMs,
+            content = safeContent,
+            color = color,
+            mode = mode,
+        )
+    }
+
+    /** 按 Unicode 码点裁剪弹幕文本，避免单条异常长内容拖慢后续 Flutter 渲染。 */
+    private fun limitDanmakuText(value: String): String {
+        return limitSubtitleText(value, MAX_DANMAKU_CONTENT_CODE_POINTS)
+    }
+
+    /** 构造不包含原始 Protobuf、Cookie 或网络地址的单段弹幕响应。 */
+    private fun danmakuSegmentResult(
+        status: String,
+        segmentIndex: Int,
+        message: String = "",
+        entries: List<DanmakuElement> = emptyList(),
+    ): Map<String, Any> {
+        return mapOf(
+            "status" to status,
+            "message" to message,
+            "segmentIndex" to segmentIndex,
+            "entries" to entries.map { entry ->
+                mapOf(
+                    "progressMs" to entry.progressMs,
+                    "content" to entry.content,
+                    "color" to entry.color,
+                    "mode" to entry.mode,
+                )
+            },
+        )
+    }
+
+    /** 将弹幕请求异常转换成稳定错误码和中文说明，避免 Throwable 原文泄露网络资料。 */
+    private fun reportDanmakuOperationFailure(result: MethodChannel.Result, error: Throwable) {
+        if (error is DanmakuOperationException) {
+            result.error(error.errorCode, error.message, null)
+        } else {
+            result.error("danmaku_unavailable", "弹幕暂时无法读取，请稍后重试。", null)
+        }
+    }
+
+    /**
+     * 提供最小 Protobuf 游标，只解析弹幕所需的 varint 与长度字段并安全跳过未知字段。
+     *
+     * 该解析器不依赖额外第三方库，所有越界、长度溢出和非法 wire type 都会抛出可控异常。
+     */
+    private class ProtobufCursor(private val payload: ByteArray) {
+        private var position = 0
+
+        /** 返回当前缓冲区是否还有未读取字节。 */
+        fun hasRemaining(): Boolean = position < payload.size
+
+        /** 读取一个最多十字节的无符号 varint，截断或超长编码会被拒绝。 */
+        fun readVarint(): Long {
+            var value = 0L
+            var shift = 0
+            repeat(MAX_PROTOBUF_VARINT_BYTES) {
+                if (!hasRemaining()) {
+                    throw DanmakuOperationException("danmaku_invalid_data", "弹幕数据格式不正确。")
+                }
+                val currentByte = payload[position++].toInt() and 0xff
+                value = value or ((currentByte and PROTOBUF_VARINT_VALUE_MASK).toLong() shl shift)
+                if ((currentByte and PROTOBUF_VARINT_CONTINUATION_MASK) == 0) {
+                    return value
+                }
+                shift += PROTOBUF_VARINT_SHIFT_BITS
+            }
+            throw DanmakuOperationException("danmaku_invalid_data", "弹幕数据格式不正确。")
+        }
+
+        /** 读取一个长度分隔字段，并验证声明长度没有越过当前 Protobuf 包边界。 */
+        fun readLengthDelimited(): ByteArray {
+            val length = readVarint()
+            skipBytes(length)
+            val end = position
+            val start = end - length.toInt()
+            return payload.copyOfRange(start, end)
+        }
+
+        /** 根据 wire type 安全跳过一个未知字段，保证协议新增字段不会破坏当前解析。 */
+        fun skipField(wireType: Int) {
+            when (wireType) {
+                PROTOBUF_VARINT_WIRE_TYPE -> readVarint()
+                PROTOBUF_FIXED_64_WIRE_TYPE -> skipBytes(PROTOBUF_FIXED_64_BYTE_COUNT.toLong())
+                PROTOBUF_LENGTH_DELIMITED_WIRE_TYPE -> skipBytes(readVarint())
+                PROTOBUF_FIXED_32_WIRE_TYPE -> skipBytes(PROTOBUF_FIXED_32_BYTE_COUNT.toLong())
+                else -> throw DanmakuOperationException(
+                    "danmaku_invalid_data",
+                    "弹幕数据格式不正确。",
+                )
+            }
+        }
+
+        /** 向前移动指定字节数并验证长度、剩余空间和 Int 转换均安全。 */
+        private fun skipBytes(length: Long) {
+            val remaining = payload.size - position
+            if (length < 0L || length > remaining.toLong()) {
+                throw DanmakuOperationException("danmaku_invalid_data", "弹幕数据格式不正确。")
+            }
+            position += length.toInt()
         }
     }
 
@@ -1349,6 +2228,7 @@ class NativePlaybackController(
         playbackDataRefreshCount = 0
         playbackSourceAttemptIndex = 0
         latestPlaybackSources = null
+        clearSubtitleTrackSession()
         playbackPhase = PHASE_IDLE
         playbackMessage = null
         isInPictureInPicture = false
@@ -1358,6 +2238,11 @@ class NativePlaybackController(
     private fun releaseMediaCache() {
         runCatching { mediaCache?.release() }
         mediaCache = null
+    }
+
+    /** 清空旧视频的内存字幕地址，防止切P或离开播放页后继续请求过期资源。 */
+    private fun clearSubtitleTrackSession() {
+        subtitleTrackSession = null
     }
 
     /** 播放时保持屏幕常亮，暂停、结束或出错后恢复系统默认行为。 */
@@ -1430,6 +2315,12 @@ class NativePlaybackController(
         private const val MEDIA_READ_TIMEOUT_MS = 25_000
         private const val MEDIA_MINIMUM_RETRY_COUNT = 6
         private const val MAX_PLAYBACK_DATA_REFRESH_COUNT = 2
+        /** 只检查有限层级的 cause 链，避免异常链异常循环影响播放器错误处理。 */
+        private const val MAX_PLAYBACK_ERROR_CAUSE_DEPTH = 8
+        /** 这些状态明确表示当前媒体地址不可继续使用，应直接刷新 playurl。 */
+        private const val HTTP_STATUS_FORBIDDEN = 403
+        private const val HTTP_STATUS_NOT_FOUND = 404
+        private const val HTTP_STATUS_GONE = 410
         private const val BACKUP_SOURCE_RETRY_DELAY_MS = 450L
         private const val DEFAULT_TEXTURE_WIDTH = 1280
         private const val DEFAULT_TEXTURE_HEIGHT = 720
@@ -1448,10 +2339,55 @@ class NativePlaybackController(
         private const val PREFERRED_TRACK_SCORE = 1_000_000_000_000L
         private const val HEIGHT_SCORE_UNIT = 1_000_000L
         private const val PLAYBACK_API_HOST = "api.bilibili.com"
+        private const val SUBTITLE_CDN_HOST = "aisubtitle.hdslb.com"
+        private const val SUBTITLE_LOGIN_REQUIRED_CODE = -101
+        private const val SUBTITLE_STATUS_AVAILABLE = "available"
+        private const val SUBTITLE_STATUS_NONE = "none"
+        private const val SUBTITLE_STATUS_LOGIN_REQUIRED = "login_required"
+        private const val SUBTITLE_STATUS_LOCKED = "locked"
+        private const val MAX_SUBTITLE_TRACKS = 20
+        private const val MAX_SUBTITLE_CUES = 10_000
+        private const val MAX_SUBTITLE_LABEL_CODE_POINTS = 80
+        private const val MAX_SUBTITLE_CUE_CODE_POINTS = 400
+        private const val MAX_SUBTITLE_TRACK_ID_LENGTH = 32
+        private const val MAX_SUBTITLE_DURATION_SECONDS = 48.0 * 60.0 * 60.0
+        private const val MAX_SUBTITLE_METADATA_BYTES = 1 * 1024 * 1024
+        private const val MAX_SUBTITLE_DOCUMENT_BYTES = 4 * 1024 * 1024
+        private const val SUBTITLE_RESPONSE_BUFFER_BYTES = 8 * 1024
+        private const val DANMAKU_STATUS_AVAILABLE = "available"
+        private const val DANMAKU_STATUS_NONE = "none"
+        private const val MAX_DANMAKU_SEGMENT_INDEX = 1_000
+        private const val MAX_DANMAKU_ENTRIES = 6_000
+        private const val MAX_DANMAKU_CONTENT_CODE_POINTS = 200
+        private const val MAX_DANMAKU_SEGMENT_BYTES = 6 * 1024 * 1024
+        private const val DANMAKU_RESPONSE_BUFFER_BYTES = 8 * 1024
+        private const val MAX_DANMAKU_PROGRESS_MS = 48L * 60L * 60L * 1_000L
+        private const val DEFAULT_DANMAKU_COLOR = 0xFFFFFF
+        private const val DEFAULT_DANMAKU_MODE = 1
+        private const val MIN_DANMAKU_MODE = 1
+        private const val MAX_DANMAKU_MODE = 9
+        private const val DMSegMobileReply_ELEMS_FIELD_NUMBER = 1
+        private const val DANMAKU_PROGRESS_FIELD_NUMBER = 2
+        private const val DANMAKU_MODE_FIELD_NUMBER = 3
+        private const val DANMAKU_COLOR_FIELD_NUMBER = 5
+        private const val DANMAKU_CONTENT_FIELD_NUMBER = 7
+        private const val DANMAKU_RGB_MASK = 0xFFFFFFL
+        private const val PROTOBUF_WIRE_TYPE_MASK = 0x7L
+        private const val PROTOBUF_VARINT_WIRE_TYPE = 0
+        private const val PROTOBUF_FIXED_64_WIRE_TYPE = 1
+        private const val PROTOBUF_LENGTH_DELIMITED_WIRE_TYPE = 2
+        private const val PROTOBUF_FIXED_32_WIRE_TYPE = 5
+        private const val PROTOBUF_FIXED_64_BYTE_COUNT = 8
+        private const val PROTOBUF_FIXED_32_BYTE_COUNT = 4
+        private const val MAX_PROTOBUF_VARINT_BYTES = 10
+        private const val PROTOBUF_VARINT_VALUE_MASK = 0x7f
+        private const val PROTOBUF_VARINT_CONTINUATION_MASK = 0x80
+        private const val PROTOBUF_VARINT_SHIFT_BITS = 7
         private const val DESKTOP_USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
                 "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
         private val BVID_PATTERN = Regex("(?i)^BV[0-9A-Za-z]{10}$")
+        private val SUBTITLE_TRACK_ID_PATTERN = Regex("^[0-9]+$")
         /** 保存界面可选的全部缓存容量，避免 Flutter 与 Android 两端接受的配置不一致。 */
         private val SUPPORTED_MEDIA_CACHE_CAPACITIES = setOf(
             128L * 1024L * 1024L,

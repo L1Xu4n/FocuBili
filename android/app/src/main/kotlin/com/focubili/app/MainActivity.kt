@@ -11,6 +11,7 @@ import io.flutter.embedding.android.FlutterActivity
 class MainActivity : FlutterActivity() {
     private var nativePlaybackController: NativePlaybackController? = null
     private var bilibiliCookieController: BilibiliCookieController? = null
+    private var deviceStatusController: DeviceStatusController? = null
 
     /** Activity 创建时允许横屏内容延伸到刘海短边，确保视频按物理屏幕中心布局。 */
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -35,6 +36,10 @@ class MainActivity : FlutterActivity() {
             renderer = flutterEngine.renderer,
         )
         bilibiliCookieController = BilibiliCookieController(
+            messenger = flutterEngine.dartExecutor.binaryMessenger,
+        )
+        deviceStatusController = DeviceStatusController(
+            activity = this,
             messenger = flutterEngine.dartExecutor.binaryMessenger,
         )
     }
@@ -68,6 +73,8 @@ class MainActivity : FlutterActivity() {
         nativePlaybackController = null
         bilibiliCookieController?.dispose()
         bilibiliCookieController = null
+        deviceStatusController?.dispose()
+        deviceStatusController = null
         super.onDestroy()
     }
 }

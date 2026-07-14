@@ -124,6 +124,7 @@ class VideoPreview {
     required this.ownerName,
     required this.parts,
     this.duration = const Duration(minutes: 3, seconds: 32),
+    this.thumbnailUrl = '',
   });
 
   final String bvid;
@@ -133,6 +134,9 @@ class VideoPreview {
   final String title;
   final String ownerName;
   final Duration duration;
+
+  /// 视频封面地址，仅用于低流量缩略图展示；为空时页面显示本地占位图。
+  final String thumbnailUrl;
   final List<VideoPart> parts;
 
   /// 返回与默认 cid 对应的分P；接口数据不完整时回退到列表第一项。

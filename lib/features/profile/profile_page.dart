@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../../core/router/app_router.dart';
 import '../../services/bilibili_auth_service.dart';
+import 'favorite_folders_page.dart';
+import 'followed_creators_page.dart';
 import 'login_page.dart';
 
 /// 标识已登录账号菜单中可执行的安全会话操作。
@@ -189,6 +191,26 @@ class _ProfilePageState extends State<ProfilePage> {
       );
   }
 
+  /// 打开当前账号的只读收藏夹列表，页面会自行验证网页登录会话。
+  Future<void> _openFavoriteFolders() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        // 收藏夹页面构建函数只读取当前账号公开可见的收藏数据，不执行写操作。
+        builder: (BuildContext context) => const FavoriteFoldersPage(),
+      ),
+    );
+  }
+
+  /// 打开当前账号已关注的 UP 主列表，并明确其不是追番订阅功能。
+  Future<void> _openFollowedCreators() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        // 订阅页面构建函数只读取已关注 UP 主，不提供关注或取关按钮。
+        builder: (BuildContext context) => const FollowedCreatorsPage(),
+      ),
+    );
+  }
+
   /// 根据当前会话状态生成账号卡片标题，网络错误不会伪装成已退出登录。
   String _accountTitle() {
     switch (_session.status) {
@@ -363,9 +385,16 @@ class _ProfilePageState extends State<ProfilePage> {
                 Navigator.of(context).pushNamed(AppRoutes.watchHistory),
           ),
           _ProfileTile(
-            icon: Icons.favorite_outline_rounded,
+            icon: Icons.star_outline_rounded,
             title: '我的收藏',
-            onTap: () => _showComingSoon(context, '我的收藏'),
+            // 收藏入口函数打开真实收藏夹列表，具体会话错误由目标页面明确显示。
+            onTap: () => _openFavoriteFolders(),
+          ),
+          _ProfileTile(
+            icon: Icons.subscriptions_outlined,
+            title: '我的订阅',
+            // 订阅入口函数展示已关注 UP 主，避免和番剧追更概念混淆。
+            onTap: () => _openFollowedCreators(),
           ),
           _ProfileTile(
             icon: Icons.edit_note_rounded,

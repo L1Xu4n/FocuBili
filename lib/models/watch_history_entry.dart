@@ -8,6 +8,8 @@ class WatchHistoryEntry {
     required this.lastPartTitle,
     required this.lastPartPageNumber,
     required this.watchedAt,
+    this.thumbnailUrl = '',
+    this.lastPosition = Duration.zero,
   });
 
   /// 视频的 BV 号，用于合并同一支视频的多次观看记录。
@@ -28,6 +30,12 @@ class WatchHistoryEntry {
   /// 最近一次记录观看状态的本机时间。
   final DateTime watchedAt;
 
+  /// 视频封面地址，仅用于本机观看记录的缩略图展示。
+  final String thumbnailUrl;
+
+  /// 最近一次保存的当前分P播放位置，用于缩略图右下角的已观看时长。
+  final Duration lastPosition;
+
   /// 将这条记录转换为可写入 SharedPreferences 的最小 JSON 对象。
   Map<String, Object> toJson() {
     return <String, Object>{
@@ -37,6 +45,8 @@ class WatchHistoryEntry {
       'lastPartTitle': lastPartTitle,
       'lastPartPageNumber': lastPartPageNumber,
       'watchedAt': watchedAt.toUtc().toIso8601String(),
+      'thumbnailUrl': thumbnailUrl,
+      'lastPositionMs': lastPosition.inMilliseconds,
     };
   }
 
@@ -48,6 +58,8 @@ class WatchHistoryEntry {
     final Object? lastPartTitle = json['lastPartTitle'];
     final Object? lastPartPageNumber = json['lastPartPageNumber'];
     final Object? watchedAt = json['watchedAt'];
+    final Object? thumbnailUrl = json['thumbnailUrl'];
+    final Object? lastPositionMs = json['lastPositionMs'];
     if (bvid is! String ||
         title is! String ||
         ownerName is! String ||
@@ -61,7 +73,12 @@ class WatchHistoryEntry {
     final String normalizedTitle = title.trim();
     final String normalizedOwnerName = ownerName.trim();
     final String normalizedPartTitle = lastPartTitle.trim();
+    final String normalizedThumbnailUrl =
+        thumbnailUrl is String ? thumbnailUrl.trim() : '';
     final DateTime? parsedWatchedAt = DateTime.tryParse(watchedAt);
+    final int normalizedPositionMs = lastPositionMs is num
+        ? lastPositionMs.toInt().clamp(0, 24 * 60 * 60 * 1000).toInt()
+        : 0;
     if (normalizedBvid.isEmpty ||
         normalizedTitle.isEmpty ||
         normalizedOwnerName.isEmpty ||
@@ -78,6 +95,8 @@ class WatchHistoryEntry {
       lastPartTitle: normalizedPartTitle,
       lastPartPageNumber: lastPartPageNumber,
       watchedAt: parsedWatchedAt.toLocal(),
+      thumbnailUrl: normalizedThumbnailUrl,
+      lastPosition: Duration(milliseconds: normalizedPositionMs),
     );
   }
 
@@ -90,7 +109,9 @@ class WatchHistoryEntry {
         ownerName == other.ownerName &&
         lastPartTitle == other.lastPartTitle &&
         lastPartPageNumber == other.lastPartPageNumber &&
-        watchedAt == other.watchedAt;
+        watchedAt == other.watchedAt &&
+        thumbnailUrl == other.thumbnailUrl &&
+        lastPosition == other.lastPosition;
   }
 
   /// 返回与全部字段对应的哈希值，需与相等判断保持一致。
@@ -102,5 +123,7 @@ class WatchHistoryEntry {
         lastPartTitle,
         lastPartPageNumber,
         watchedAt,
+        thumbnailUrl,
+        lastPosition,
       );
 }

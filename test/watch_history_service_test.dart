@@ -6,12 +6,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/models/watch_history_entry.dart';
 import 'package:focubili/services/watch_history_service.dart';
 
-/// 创建测试专用的观看记录，便于聚焦验证本地存储行为。
+/// 创建带缩略图和观看位置的测试观看记录，便于聚焦验证本地存储行为。
 WatchHistoryEntry _entry({
   required String bvid,
   String title = '测试视频',
   int pageNumber = 1,
   DateTime? watchedAt,
+  String thumbnailUrl = 'https://i0.hdslb.com/bfs/archive/test-cover.jpg',
+  Duration lastPosition = const Duration(minutes: 1, seconds: 23),
 }) {
   return WatchHistoryEntry(
     bvid: bvid,
@@ -20,6 +22,8 @@ WatchHistoryEntry _entry({
     lastPartTitle: '第 $pageNumber P',
     lastPartPageNumber: pageNumber,
     watchedAt: watchedAt ?? DateTime(2026, 7, 15, 12),
+    thumbnailUrl: thumbnailUrl,
+    lastPosition: lastPosition,
   );
 }
 
@@ -46,12 +50,22 @@ void main() {
         title: '新标题',
         pageNumber: 2,
         watchedAt: DateTime(2026, 7, 15, 13),
+        thumbnailUrl: 'https://i0.hdslb.com/bfs/archive/new-cover.jpg',
+        lastPosition: const Duration(hours: 1, minutes: 2, seconds: 3),
       ),
     );
 
     expect(history, hasLength(1));
     expect(history.single.title, '新标题');
     expect(history.single.lastPartPageNumber, 2);
+    expect(
+      history.single.thumbnailUrl,
+      'https://i0.hdslb.com/bfs/archive/new-cover.jpg',
+    );
+    expect(
+      history.single.lastPosition,
+      const Duration(hours: 1, minutes: 2, seconds: 3),
+    );
 
     final List<Object?> saved =
         jsonDecode(preferences.getString('focubili_watch_history')!)
@@ -67,8 +81,37 @@ void main() {
         'lastPartTitle',
         'lastPartPageNumber',
         'watchedAt',
+        'thumbnailUrl',
+        'lastPositionMs',
       },
     );
+    expect(
+        item['thumbnailUrl'], 'https://i0.hdslb.com/bfs/archive/new-cover.jpg');
+    expect(item['lastPositionMs'], 3723000);
+  });
+
+  /// 验证旧版 JSON 没有新字段时仍可读取，并使用空封面和零进度兼容展示。
+  test('旧版记录缺少缩略图和观看位置时会安全回退', () async {
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'focubili_watch_history': jsonEncode(<Object?>[
+        <String, Object>{
+          'bvid': 'BVlegacy',
+          'title': '旧版记录',
+          'ownerName': '旧版 UP 主',
+          'lastPartTitle': '旧分P',
+          'lastPartPageNumber': 1,
+          'watchedAt': '2026-07-15T12:00:00.000Z',
+        },
+      ]),
+    });
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final WatchHistoryService service = _service(preferences);
+
+    final List<WatchHistoryEntry> history = await service.loadHistory();
+
+    expect(history, hasLength(1));
+    expect(history.single.thumbnailUrl, isEmpty);
+    expect(history.single.lastPosition, Duration.zero);
   });
 
   test('记录数量最多 50 条，且最新记录排在最前面', () async {

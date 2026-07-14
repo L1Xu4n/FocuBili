@@ -176,6 +176,7 @@ class BilibiliVideoInfoService implements BilibiliService {
       title: _readText(data['title'], '未命名视频'),
       ownerName: _readText(owner['name'], '未知 UP 主'),
       duration: initialPart.duration,
+      thumbnailUrl: _normalizeThumbnailUrl(_readText(data['pic'], '')),
       parts: parts,
     );
   }

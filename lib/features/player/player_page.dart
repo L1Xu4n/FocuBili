@@ -1,12 +1,16 @@
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../models/video_preview.dart';
 import '../../models/watch_history_entry.dart';
+import '../../services/device_status_service.dart';
 import '../../services/native_playback_service.dart';
+import '../../services/player_overlay_service.dart';
 import '../../services/watch_history_service.dart';
+import '../../models/player_overlay_data.dart';
 
 /// 标识一次竖向滑动正在调整亮度、音量，或因底部手势区而不做处理。
 enum _VerticalAdjustmentMode { none, brightness, volume }
@@ -16,6 +20,7 @@ enum _VideoFitMode { contain, cover, stretch }
 
 /// 标识全屏右上角“更多”菜单中可执行的本地播放器设置。
 enum _PlayerMoreMenuAction {
+  subtitles,
   decoderSettings,
   fitContain,
   fitCover,
@@ -30,11 +35,15 @@ class PlayerPage extends StatefulWidget {
     required this.video,
     this.playbackService,
     this.watchHistoryService,
+    this.deviceStatusService,
+    this.playerOverlayService,
   });
 
   final VideoPreview video;
   final PlaybackService? playbackService;
   final WatchHistoryService? watchHistoryService;
+  final DeviceStatusService? deviceStatusService;
+  final PlayerOverlayService? playerOverlayService;
 
   /// 创建播放器状态，保存播放、进度、控制层和全屏状态。
   @override
@@ -46,11 +55,19 @@ class _PlayerPageState extends State<PlayerPage> {
   static const Duration _controlsAutoHideDelay = Duration(seconds: 5);
   static const Duration _transientHintDuration = Duration(seconds: 3);
   static const Duration _resumeNoticeDuration = _transientHintDuration;
+  static const Duration _watchHistoryProgressSaveInterval = Duration(
+    seconds: 15,
+  );
   static const double _fullscreenBottomGestureExclusionHeight = 72;
   static const double _fullscreenTopGestureExclusionHeight = 56;
-  static const double _longPressSeekActivationDistance = 24;
-  static const double _longPressSeekSecondsPerLogicalPixel = 0.1;
-  static const Duration _longPressSeekMaximumOffset = Duration(seconds: 120);
+  static const double _horizontalSeekTravelWidthRatio = 0.75;
+  static const double _minimumHorizontalSeekRangeSeconds = 120;
+  static const double _maximumHorizontalSeekRangeSeconds = 600;
+  static const String _subtitleOffValue = '__focubili_subtitle_off__';
+  static const Duration _danmakuNextSegmentPreloadThreshold = Duration(
+    seconds: 30,
+  );
+  static const int _maximumCachedDanmakuSegments = 3;
   static const double _expandedPartItemHeight = 76;
   static const List<double> _playbackSpeeds = <double>[
     0.75,
@@ -62,6 +79,8 @@ class _PlayerPageState extends State<PlayerPage> {
 
   late final PlaybackService _playbackService;
   late final WatchHistoryService _watchHistoryService;
+  late final DeviceStatusService _deviceStatusService;
+  late final PlayerOverlayService _playerOverlayService;
   late VideoPart _currentPart;
   final ScrollController _partScrollController = ScrollController();
   StreamSubscription<PlaybackSnapshot>? _playbackSubscription;
@@ -77,6 +96,7 @@ class _PlayerPageState extends State<PlayerPage> {
   Timer? _controlsTimer;
   Timer? _seekFeedbackTimer;
   Timer? _resumeNoticeTimer;
+  Timer? _fullscreenStatusTimer;
   double _playbackSpeed = 1;
   int _currentQuality = 64;
   int? _pendingQualitySelection;
@@ -88,11 +108,14 @@ class _PlayerPageState extends State<PlayerPage> {
   bool _danmakuEnabled = false;
   _VideoFitMode _videoFitMode = _VideoFitMode.contain;
   bool _temporaryDoubleSpeedActive = false;
-  bool _longPressScrubbing = false;
+  bool _horizontalScrubbing = false;
   bool _isRetrying = false;
   double _speedBeforeLongPress = 1;
-  double _longPressStartProgress = 0;
-  double _longPressTargetProgress = 0;
+  double _horizontalScrubStartProgress = 0;
+  double _horizontalScrubTargetProgress = 0;
+  double _horizontalScrubStartX = 0;
+  double _horizontalSeekSecondsPerPixel = 0;
+  double _horizontalSeekMaximumOffsetSeconds = 0;
   int? _shownRestoredCid;
   double _brightness = 0.5;
   double _volume = 0.5;
@@ -101,6 +124,20 @@ class _PlayerPageState extends State<PlayerPage> {
   _VerticalAdjustmentMode _verticalAdjustmentMode =
       _VerticalAdjustmentMode.none;
   int? _recordedHistoryPartCid;
+  Duration _lastHistorySavedPosition = Duration.zero;
+  DateTime _fullscreenClock = DateTime.now();
+  int? _batteryPercent;
+  SubtitleTrackLoadResult? _subtitleTrackResult;
+  SubtitleTrack? _selectedSubtitleTrack;
+  List<SubtitleCue> _subtitleCues = const <SubtitleCue>[];
+  bool _subtitleTracksLoading = false;
+  bool _subtitleCuesLoading = false;
+  int _subtitleRequestToken = 0;
+  final Map<int, List<DanmakuEntry>> _danmakuSegments =
+      <int, List<DanmakuEntry>>{};
+  final Set<int> _loadingDanmakuSegments = <int>{};
+  final Set<int> _failedDanmakuSegments = <int>{};
+  int _danmakuRequestToken = 0;
 
   /// 判断原生播放器是否真的在播放，避免 Flutter 页面自己伪造播放状态。
   bool get _playing => _playbackSnapshot.isPlaying;
@@ -119,6 +156,10 @@ class _PlayerPageState extends State<PlayerPage> {
     _currentPart = widget.video.initialPart;
     _playbackService = widget.playbackService ?? NativePlaybackService();
     _watchHistoryService = widget.watchHistoryService ?? WatchHistoryService();
+    _deviceStatusService =
+        widget.deviceStatusService ?? const NativeDeviceStatusService();
+    _playerOverlayService =
+        widget.playerOverlayService ?? NativePlayerOverlayService();
     _playbackSubscription = _playbackService.states.listen(
       _applyPlaybackSnapshot,
     );
@@ -214,7 +255,7 @@ class _PlayerPageState extends State<PlayerPage> {
       _playbackSnapshot = snapshot;
       _isRetrying = false;
       if (!_isDraggingProgress &&
-          !_longPressScrubbing &&
+          !_horizontalScrubbing &&
           snapshot.duration > Duration.zero) {
         _progress = (snapshot.position.inMilliseconds /
                 snapshot.duration.inMilliseconds)
@@ -243,6 +284,10 @@ class _PlayerPageState extends State<PlayerPage> {
       _showResumeNotice(snapshot.restoredPosition);
     }
     _recordWatchHistoryWhenReady(snapshot);
+    _recordWatchHistoryProgressWhenNeeded(snapshot);
+    if (_danmakuEnabled && snapshot.phase == PlaybackPhase.ready) {
+      _ensureDanmakuSegmentsForPosition(snapshot.position);
+    }
     if (!snapshot.isPlaying || snapshot.isInPictureInPicture) {
       _stopControlsAutoHideTimer();
     } else if (_showControls && _controlsTimer == null) {
@@ -257,11 +302,42 @@ class _PlayerPageState extends State<PlayerPage> {
       return;
     }
     _recordedHistoryPartCid = _currentPart.cid;
-    unawaited(_saveCurrentWatchHistory());
+    unawaited(_saveCurrentWatchHistory(snapshot.position));
   }
 
-  /// 把当前视频及分P信息交给本机历史服务，写入失败时不影响正在播放的视频。
-  Future<void> _saveCurrentWatchHistory() async {
+  /// 每隔一小段实际播放进度或暂停后保存当前位置，避免历史进度每半秒写入一次。
+  void _recordWatchHistoryProgressWhenNeeded(PlaybackSnapshot snapshot) {
+    if (snapshot.phase != PlaybackPhase.ready ||
+        _recordedHistoryPartCid != _currentPart.cid) {
+      return;
+    }
+    final int positionDeltaMs = (snapshot.position.inMilliseconds -
+            _lastHistorySavedPosition.inMilliseconds)
+        .abs();
+    final bool crossedInterval =
+        positionDeltaMs >= _watchHistoryProgressSaveInterval.inMilliseconds;
+    final bool pausedAtNewPosition =
+        !snapshot.isPlaying && positionDeltaMs >= 1000;
+    if (!crossedInterval && !pausedAtNewPosition) {
+      return;
+    }
+    unawaited(_saveCurrentWatchHistory(snapshot.position));
+  }
+
+  /// 在离开或切换分P前补存有变化的位置，保证短时间观看也能出现在历史缩略图中。
+  void _flushCurrentWatchHistoryProgress() {
+    if (_recordedHistoryPartCid != _currentPart.cid ||
+        _playbackSnapshot.position == _lastHistorySavedPosition) {
+      return;
+    }
+    unawaited(_saveCurrentWatchHistory(_playbackSnapshot.position));
+  }
+
+  /// 把当前视频、分P、封面和播放位置交给本机历史服务，写入失败不影响播放。
+  Future<void> _saveCurrentWatchHistory(Duration position) async {
+    final Duration safePosition =
+        position.isNegative ? Duration.zero : position;
+    _lastHistorySavedPosition = safePosition;
     try {
       await _watchHistoryService.record(
         WatchHistoryEntry(
@@ -271,6 +347,8 @@ class _PlayerPageState extends State<PlayerPage> {
           lastPartTitle: _currentPart.title,
           lastPartPageNumber: _currentPart.pageNumber,
           watchedAt: DateTime.now(),
+          thumbnailUrl: widget.video.thumbnailUrl,
+          lastPosition: safePosition,
         ),
       );
     } catch (_) {
@@ -330,10 +408,12 @@ class _PlayerPageState extends State<PlayerPage> {
   /// 离开页面前取消重试状态、订阅和计时器，释放原生资源并恢复竖屏与系统栏。
   @override
   void dispose() {
+    _flushCurrentWatchHistoryProgress();
     _isRetrying = false;
     _controlsTimer?.cancel();
     _seekFeedbackTimer?.cancel();
     _resumeNoticeTimer?.cancel();
+    _fullscreenStatusTimer?.cancel();
     _partScrollController.dispose();
     unawaited(_playbackSubscription?.cancel() ?? Future<void>.value());
     unawaited(_playbackService.dispose());
@@ -395,7 +475,7 @@ class _PlayerPageState extends State<PlayerPage> {
         _playbackSnapshot.isInPictureInPicture ||
         _isDraggingProgress ||
         _temporaryDoubleSpeedActive ||
-        _longPressScrubbing) {
+        _horizontalScrubbing) {
       return;
     }
     _controlsTimer = Timer(_controlsAutoHideDelay, () {
@@ -405,7 +485,7 @@ class _PlayerPageState extends State<PlayerPage> {
           !_playbackSnapshot.isInPictureInPicture &&
           !_isDraggingProgress &&
           !_temporaryDoubleSpeedActive &&
-          !_longPressScrubbing) {
+          !_horizontalScrubbing) {
         setState(() {
           _showControls = false;
           _controlsTimer = null;
@@ -504,101 +584,135 @@ class _PlayerPageState extends State<PlayerPage> {
     }
   }
 
-  /// 长按正在播放的画面时记住原倍速，并准备二倍速或横向快捷跳转。
+  /// 长按正在播放的画面时记住原倍速，并临时切换为二倍速。
   void _startTemporaryDoubleSpeed(LongPressStartDetails details) {
-    if (!_playing || _temporaryDoubleSpeedActive || _longPressScrubbing) {
+    if (!_playing || _temporaryDoubleSpeedActive || _horizontalScrubbing) {
       return;
     }
     _speedBeforeLongPress = _playbackSpeed;
-    _longPressStartProgress = _progress;
-    _longPressTargetProgress = _progress;
     _stopControlsAutoHideTimer();
     setState(() {
       _temporaryDoubleSpeedActive = true;
-      _longPressScrubbing = false;
     });
     unawaited(_setTemporaryPlaybackSpeed(2));
   }
 
-  /// 长按后横向移动超过阈值时预览目标进度，且不在移动过程中频繁请求原生跳转。
-  void _updateTemporaryLongPress(LongPressMoveUpdateDetails details) {
-    if (!_temporaryDoubleSpeedActive && !_longPressScrubbing) {
+  /// 松开长按手势后恢复长按前的倍速，不改变当前播放进度。
+  void _stopTemporaryDoubleSpeed(LongPressEndDetails details) {
+    if (!_temporaryDoubleSpeedActive) {
       return;
     }
-    final double horizontalOffset = details.localOffsetFromOrigin.dx;
-    if (!_longPressScrubbing &&
-        horizontalOffset.abs() < _longPressSeekActivationDistance) {
+    final double speedToRestore = _speedBeforeLongPress;
+    setState(() {
+      _temporaryDoubleSpeedActive = false;
+    });
+    unawaited(_setTemporaryPlaybackSpeed(speedToRestore));
+    _restartControlsAutoHideTimer();
+  }
+
+  /// 长按被系统取消时恢复原倍速，避免手势竞争后残留二倍速状态。
+  void _cancelTemporaryLongPress() {
+    if (!_temporaryDoubleSpeedActive) {
+      return;
+    }
+    final double speedToRestore = _speedBeforeLongPress;
+    setState(() {
+      _temporaryDoubleSpeedActive = false;
+    });
+    unawaited(_setTemporaryPlaybackSpeed(speedToRestore));
+    _restartControlsAutoHideTimer();
+  }
+
+  /// 开始横向拖动时记录当前位置，并按视频时长和画面宽度计算自适应快进速度。
+  void _startHorizontalScrub(DragStartDetails details, Size playerSize) {
+    final double durationSeconds = _displayDuration.inMilliseconds / 1000;
+    if (_temporaryDoubleSpeedActive ||
+        durationSeconds <= 0 ||
+        playerSize.width <= 0) {
+      return;
+    }
+    _stopControlsAutoHideTimer();
+    final double seekRangeSeconds = (durationSeconds * 0.1)
+        .clamp(
+          _minimumHorizontalSeekRangeSeconds,
+          _maximumHorizontalSeekRangeSeconds,
+        )
+        .toDouble();
+    final double effectiveTravelWidth =
+        (playerSize.width * _horizontalSeekTravelWidthRatio)
+            .clamp(1, double.infinity)
+            .toDouble();
+    setState(() {
+      _horizontalScrubbing = true;
+      _horizontalScrubStartProgress = _progress;
+      _horizontalScrubTargetProgress = _progress;
+      _horizontalScrubStartX = details.localPosition.dx;
+      _horizontalSeekSecondsPerPixel = seekRangeSeconds / effectiveTravelWidth;
+      _horizontalSeekMaximumOffsetSeconds = seekRangeSeconds;
+      _showControls = true;
+    });
+  }
+
+  /// 拖动过程中只更新本地进度预览，松手前不会反复打断原生播放器。
+  void _updateHorizontalScrub(DragUpdateDetails details) {
+    if (!_horizontalScrubbing) {
       return;
     }
     final double durationSeconds = _displayDuration.inMilliseconds / 1000;
     if (durationSeconds <= 0) {
       return;
     }
-    final double maximumOffsetSeconds =
-        _longPressSeekMaximumOffset.inMilliseconds / 1000;
-    final double requestedOffsetSeconds =
-        (horizontalOffset * _longPressSeekSecondsPerLogicalPixel)
-            .clamp(-maximumOffsetSeconds, maximumOffsetSeconds)
+    final double offsetSeconds =
+        ((details.localPosition.dx - _horizontalScrubStartX) *
+                _horizontalSeekSecondsPerPixel)
+            .clamp(
+              -_horizontalSeekMaximumOffsetSeconds,
+              _horizontalSeekMaximumOffsetSeconds,
+            )
             .toDouble();
     final double targetSeconds =
-        (_longPressStartProgress * durationSeconds + requestedOffsetSeconds)
+        (_horizontalScrubStartProgress * durationSeconds + offsetSeconds)
             .clamp(0, durationSeconds)
             .toDouble();
-    final double targetProgress = targetSeconds / durationSeconds;
-    final bool startedScrubbing = !_longPressScrubbing;
     _seekFeedbackTimer?.cancel();
     setState(() {
-      _longPressScrubbing = true;
-      _temporaryDoubleSpeedActive = false;
-      _longPressTargetProgress = targetProgress;
-      _progress = targetProgress;
-      _showControls = true;
+      _horizontalScrubTargetProgress = targetSeconds / durationSeconds;
+      _progress = _horizontalScrubTargetProgress;
       _seekFeedback = '跳转至 ${_formatSeconds(targetSeconds.round())}';
     });
-    if (startedScrubbing) {
-      unawaited(_setTemporaryPlaybackSpeed(_speedBeforeLongPress));
-    }
   }
 
-  /// 松开长按手势后，普通长按恢复倍速；快捷跳转只提交一次最终目标位置。
-  void _stopTemporaryDoubleSpeed(LongPressEndDetails details) {
-    if (!_temporaryDoubleSpeedActive && !_longPressScrubbing) {
+  /// 横向拖动松手后只向原生播放器提交一次最终目标进度。
+  void _finishHorizontalScrub(DragEndDetails details) {
+    if (!_horizontalScrubbing) {
       return;
     }
-    final bool wasScrubbing = _longPressScrubbing;
-    final double speedToRestore = _speedBeforeLongPress;
-    final double targetProgress = _longPressTargetProgress;
-    setState(() {
-      _temporaryDoubleSpeedActive = false;
-      _longPressScrubbing = false;
-    });
-    if (wasScrubbing) {
-      unawaited(_seekToProgress(targetProgress));
-      _scheduleSeekFeedbackClear();
-    } else {
-      unawaited(_setTemporaryPlaybackSpeed(speedToRestore));
-    }
+    final double targetProgress = _horizontalScrubTargetProgress;
+    setState(() => _horizontalScrubbing = false);
+    unawaited(_seekToProgress(targetProgress));
+    _scheduleSeekFeedbackClear();
     _restartControlsAutoHideTimer();
   }
 
-  /// 手势被系统取消时恢复原倍速但不跳转，避免用户未松手时意外改变进度。
-  void _cancelTemporaryLongPress() {
-    if (!_temporaryDoubleSpeedActive && !_longPressScrubbing) {
+  /// 横向拖动被系统取消时回到拖动开始前的位置，且不请求原生跳转。
+  void _cancelHorizontalScrub() {
+    if (!_horizontalScrubbing) {
       return;
     }
-    final bool wasScrubbing = _longPressScrubbing;
-    final double speedToRestore = _speedBeforeLongPress;
-    setState(() {
-      _temporaryDoubleSpeedActive = false;
-      _longPressScrubbing = false;
-      _progress = _longPressStartProgress;
-      if (wasScrubbing) {
-        _seekFeedback = null;
-      }
-    });
     _seekFeedbackTimer?.cancel();
-    unawaited(_setTemporaryPlaybackSpeed(speedToRestore));
+    setState(() {
+      _horizontalScrubbing = false;
+      _progress = _horizontalScrubStartProgress;
+      _seekFeedback = null;
+    });
     _restartControlsAutoHideTimer();
+  }
+
+  /// 处理系统级指针取消，优先撤销横向预览和临时倍速，避免被识别为正常松手。
+  void _handlePlayerPointerCancel(PointerCancelEvent event) {
+    _cancelHorizontalScrub();
+    _cancelTemporaryLongPress();
+    _verticalAdjustmentMode = _VerticalAdjustmentMode.none;
   }
 
   /// 向原生播放器发送临时倍速，失败时恢复提示状态并显示原因。
@@ -669,6 +783,9 @@ class _PlayerPageState extends State<PlayerPage> {
     if (part.cid == _currentPart.cid) {
       return;
     }
+    _flushCurrentWatchHistoryProgress();
+    _clearSubtitlesForPart();
+    _clearDanmakuForPart();
     setState(() {
       _currentPart = part;
       _progress = 0;
@@ -677,6 +794,7 @@ class _PlayerPageState extends State<PlayerPage> {
     });
     _shownRestoredCid = null;
     _recordedHistoryPartCid = null;
+    _lastHistorySavedPosition = Duration.zero;
     _resumeNoticeTimer?.cancel();
     try {
       await _playbackService.openVideo(
@@ -762,7 +880,7 @@ class _PlayerPageState extends State<PlayerPage> {
     double topSystemInset,
     double bottomSystemInset,
   ) {
-    if (_temporaryDoubleSpeedActive || _longPressScrubbing) {
+    if (_temporaryDoubleSpeedActive || _horizontalScrubbing) {
       _verticalAdjustmentMode = _VerticalAdjustmentMode.none;
       return;
     }
@@ -1054,6 +1172,11 @@ class _PlayerPageState extends State<PlayerPage> {
         _fullscreen = nextFullscreen;
         _showControls = true;
       });
+      if (nextFullscreen) {
+        _startFullscreenStatusUpdates();
+      } else {
+        _stopFullscreenStatusUpdates();
+      }
       _restartControlsAutoHideTimer();
     }
     if (nextFullscreen) {
@@ -1067,6 +1190,85 @@ class _PlayerPageState extends State<PlayerPage> {
     } else {
       await _restoreSystemUi();
     }
+  }
+
+  /// 启动全屏顶部的本地时间和电量刷新；只在全屏期间每分钟读取一次以节省资源。
+  void _startFullscreenStatusUpdates() {
+    _stopFullscreenStatusUpdates();
+    _refreshFullscreenStatus();
+    _fullscreenStatusTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      _refreshFullscreenStatus();
+    });
+  }
+
+  /// 停止全屏设备状态定时器，避免退出播放页后仍保留页面回调。
+  void _stopFullscreenStatusUpdates() {
+    _fullscreenStatusTimer?.cancel();
+    _fullscreenStatusTimer = null;
+  }
+
+  /// 立即刷新显示时间，并异步读取 Android 提供的当前电量百分比。
+  void _refreshFullscreenStatus() {
+    if (!mounted || !_fullscreen) {
+      return;
+    }
+    setState(() => _fullscreenClock = DateTime.now());
+    unawaited(_refreshFullscreenBattery());
+  }
+
+  /// 读取电量后确认页面仍在全屏，再更新顶部小型状态栏的显示内容。
+  Future<void> _refreshFullscreenBattery() async {
+    final int? batteryPercent = await _deviceStatusService.loadBatteryPercent();
+    if (!mounted || !_fullscreen) {
+      return;
+    }
+    setState(() => _batteryPercent = batteryPercent);
+  }
+
+  /// 将当前本地时间格式化为全屏顶部状态栏使用的“时:分”文字。
+  String _formatFullscreenClock() {
+    return '${_fullscreenClock.hour.toString().padLeft(2, '0')}:'
+        '${_fullscreenClock.minute.toString().padLeft(2, '0')}';
+  }
+
+  /// 创建全屏标题上方的小型本地状态栏，显示时间和系统可用的电量百分比。
+  Widget _buildFullscreenStatusStrip() {
+    final String batteryText =
+        _batteryPercent == null ? '--' : '${_batteryPercent!}%';
+    return SizedBox(
+      key: const Key('fullscreen-device-status'),
+      height: 18,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Row(
+          children: <Widget>[
+            Text(
+              _formatFullscreenClock(),
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 11,
+                height: 1,
+              ),
+            ),
+            const Spacer(),
+            const Icon(
+              Icons.battery_full_rounded,
+              color: Colors.white70,
+              size: 13,
+            ),
+            const SizedBox(width: 3),
+            Text(
+              batteryText,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 11,
+                height: 1,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// 恢复普通竖屏与 edge-to-edge 系统栏设置。
@@ -1094,10 +1296,390 @@ class _PlayerPageState extends State<PlayerPage> {
     unawaited(_toggleFullscreen());
   }
 
-  /// 切换全屏弹幕按钮的视觉状态；实际弹幕数据接入记录在 TODO.md。
+  /// 切换全屏弹幕按钮，并在开启后按当前播放位置读取真实的六分钟弹幕片段。
   void _toggleDanmaku() {
-    setState(() => _danmakuEnabled = !_danmakuEnabled);
+    final bool nextEnabled = !_danmakuEnabled;
+    setState(() => _danmakuEnabled = nextEnabled);
+    if (nextEnabled) {
+      _failedDanmakuSegments.clear();
+      _ensureDanmakuSegmentsForPosition(_playbackSnapshot.position);
+    }
     _showPlayerControls();
+  }
+
+  /// 清理旧分P的弹幕内存与晚到请求，避免切P后在新视频上绘制旧视频文字。
+  void _clearDanmakuForPart() {
+    _danmakuRequestToken += 1;
+    _danmakuSegments.clear();
+    _loadingDanmakuSegments.clear();
+    _failedDanmakuSegments.clear();
+  }
+
+  /// 确保当前片段存在，并在接近六分钟边界时预取下一片段减少播放中的等待。
+  void _ensureDanmakuSegmentsForPosition(Duration position) {
+    if (!_danmakuEnabled || _playbackSnapshot.isInPictureInPicture) {
+      return;
+    }
+    final int currentSegment =
+        DanmakuSegmentLoadResult.segmentIndexForPosition(position);
+    unawaited(_loadDanmakuSegment(currentSegment));
+    final int positionInSegmentMilliseconds = position.inMilliseconds %
+        DanmakuSegmentLoadResult.segmentDuration.inMilliseconds;
+    final int remainingMilliseconds =
+        DanmakuSegmentLoadResult.segmentDuration.inMilliseconds -
+            positionInSegmentMilliseconds;
+    if (remainingMilliseconds <=
+        _danmakuNextSegmentPreloadThreshold.inMilliseconds) {
+      unawaited(_loadDanmakuSegment(currentSegment + 1));
+    }
+    _trimDanmakuSegments(currentSegment);
+  }
+
+  /// 请求一段真实弹幕并以片段编号缓存，失败只提示一次且不会重复刷接口。
+  Future<void> _loadDanmakuSegment(int segmentIndex) async {
+    if (!_danmakuEnabled ||
+        segmentIndex < 1 ||
+        segmentIndex > DanmakuSegmentLoadResult.maximumSegmentIndex ||
+        _danmakuSegments.containsKey(segmentIndex) ||
+        _loadingDanmakuSegments.contains(segmentIndex) ||
+        _failedDanmakuSegments.contains(segmentIndex)) {
+      return;
+    }
+    final int requestToken = _danmakuRequestToken;
+    _loadingDanmakuSegments.add(segmentIndex);
+    final DanmakuSegmentLoadResult result =
+        await _playerOverlayService.loadDanmakuSegment(
+      bvid: widget.video.bvid,
+      cid: _currentPart.cid,
+      segmentIndex: segmentIndex,
+    );
+    if (!mounted || requestToken != _danmakuRequestToken) {
+      return;
+    }
+    _loadingDanmakuSegments.remove(segmentIndex);
+    if (!_danmakuEnabled) {
+      return;
+    }
+    if (result.status == DanmakuLoadStatus.unavailable) {
+      _failedDanmakuSegments.add(segmentIndex);
+      _showTransientSnackBar(result.message);
+      return;
+    }
+    setState(() {
+      _danmakuSegments[result.segmentIndex] = result.entries;
+    });
+    _trimDanmakuSegments(
+      DanmakuSegmentLoadResult.segmentIndexForPosition(
+        _playbackSnapshot.position,
+      ),
+    );
+  }
+
+  /// 仅保留当前位置前后相邻的少量弹幕片段，防止长视频连续观看时内存持续增长。
+  void _trimDanmakuSegments(int currentSegment) {
+    if (_danmakuSegments.length <= _maximumCachedDanmakuSegments) {
+      return;
+    }
+    final List<int> removableSegments = _danmakuSegments.keys
+        .where((int index) => (index - currentSegment).abs() > 1)
+        .toList(growable: false);
+    for (final int index in removableSegments) {
+      _danmakuSegments.remove(index);
+    }
+    while (_danmakuSegments.length > _maximumCachedDanmakuSegments) {
+      final int oldestIndex = _danmakuSegments.keys.reduce(
+        (int left, int right) =>
+            (left - currentSegment).abs() >= (right - currentSegment).abs()
+                ? left
+                : right,
+      );
+      _danmakuSegments.remove(oldestIndex);
+    }
+  }
+
+  /// 返回当前六分钟片段的真实弹幕列表；未加载、为空或关闭弹幕时返回空列表。
+  List<DanmakuEntry> _currentDanmakuEntries() {
+    if (!_danmakuEnabled) {
+      return const <DanmakuEntry>[];
+    }
+    final int segmentIndex = DanmakuSegmentLoadResult.segmentIndexForPosition(
+      _playbackSnapshot.position,
+    );
+    return _danmakuSegments[segmentIndex] ?? const <DanmakuEntry>[];
+  }
+
+  /// 创建显示真实弹幕的不可点击画布，避免弹幕层阻挡控制栏和播放器手势。
+  Widget _buildDanmakuOverlay() {
+    if (!_danmakuEnabled || _playbackSnapshot.isInPictureInPicture) {
+      return const SizedBox.shrink();
+    }
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: Padding(
+          padding: EdgeInsets.only(
+            top: _fullscreen ? 84 : 8,
+            bottom: _showControls ? 76 : 4,
+          ),
+          child: RepaintBoundary(
+            child: SizedBox.expand(
+              child: CustomPaint(
+                key: const Key('danmaku-canvas'),
+                painter: _DanmakuPainter(
+                  entries: _currentDanmakuEntries(),
+                  position: _playbackSnapshot.position,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 清空旧分P的字幕和进行中的请求，避免切换分P后短暂显示错误字幕。
+  void _clearSubtitlesForPart() {
+    _subtitleRequestToken += 1;
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _subtitleTrackResult = null;
+      _selectedSubtitleTrack = null;
+      _subtitleCues = const <SubtitleCue>[];
+      _subtitleTracksLoading = false;
+      _subtitleCuesLoading = false;
+    });
+  }
+
+  /// 请求当前 BV 和分P可用的字幕轨道；结果只含文字元数据，不会包含字幕地址或 Cookie。
+  Future<void> _loadSubtitleTracks() async {
+    final int requestToken = ++_subtitleRequestToken;
+    if (mounted) {
+      setState(() => _subtitleTracksLoading = true);
+    }
+    final SubtitleTrackLoadResult result =
+        await _playerOverlayService.loadSubtitleTracks(
+      bvid: widget.video.bvid,
+      cid: _currentPart.cid,
+    );
+    if (!mounted || requestToken != _subtitleRequestToken) {
+      return;
+    }
+    setState(() {
+      _subtitleTracksLoading = false;
+      _subtitleTrackResult = result;
+    });
+  }
+
+  /// 打开字幕选择面板；首次点开时按需读取轨道，避免进入视频就自动下载全部字幕。
+  Future<void> _showSubtitleSelector() async {
+    _showPlayerControls();
+    if (_subtitleTrackResult == null && !_subtitleTracksLoading) {
+      await _loadSubtitleTracks();
+    }
+    if (!mounted) {
+      return;
+    }
+    if (_subtitleTracksLoading) {
+      _showTransientSnackBar('正在读取字幕轨道…');
+      return;
+    }
+    final SubtitleTrackLoadResult? result = _subtitleTrackResult;
+    if (result == null || result.status != SubtitleLoadStatus.available) {
+      _showTransientSnackBar(result?.message ?? '字幕暂时无法读取，请稍后重试。');
+      return;
+    }
+    final String? selectedTrackId = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (BuildContext sheetContext) {
+        return SafeArea(
+          top: false,
+          child: ListView(
+            shrinkWrap: true,
+            children: <Widget>[
+              const ListTile(
+                title: Text('字幕'),
+                subtitle: Text('字幕内容由当前视频提供，临时地址不会离开原生层。'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.subtitles_off_rounded),
+                title: const Text('关闭字幕'),
+                trailing: _selectedSubtitleTrack == null
+                    ? const Icon(Icons.check_rounded)
+                    : null,
+                // 关闭字幕函数只移除本页显示内容，不修改视频或账号数据。
+                onTap: () => Navigator.of(sheetContext).pop(_subtitleOffValue),
+              ),
+              for (final SubtitleTrack track in result.tracks)
+                ListTile(
+                  enabled: !track.isLocked,
+                  leading: Icon(
+                    track.isLocked
+                        ? Icons.lock_outline_rounded
+                        : Icons.subtitles_rounded,
+                  ),
+                  title: Text(track.label),
+                  subtitle: track.language.isEmpty
+                      ? (track.isLocked ? const Text('当前不可用') : null)
+                      : Text(track.language),
+                  trailing: _selectedSubtitleTrack?.id == track.id
+                      ? const Icon(Icons.check_rounded)
+                      : null,
+                  // 轨道选择函数只返回不敏感编号，真正字幕地址始终保留在 Android 内存。
+                  onTap: track.isLocked
+                      ? null
+                      : () => Navigator.of(sheetContext).pop(track.id),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+    if (!mounted || selectedTrackId == null) {
+      return;
+    }
+    if (selectedTrackId == _subtitleOffValue) {
+      _disableSubtitles();
+      return;
+    }
+    SubtitleTrack? selectedTrack;
+    for (final SubtitleTrack track in result.tracks) {
+      if (track.id == selectedTrackId) {
+        selectedTrack = track;
+        break;
+      }
+    }
+    if (selectedTrack != null) {
+      await _selectSubtitleTrack(selectedTrack);
+    }
+  }
+
+  /// 请求并启用一个用户选择的字幕轨道，失败时保留已经在显示的旧字幕。
+  Future<void> _selectSubtitleTrack(SubtitleTrack track) async {
+    if (track.isLocked) {
+      _showTransientSnackBar('此字幕当前不可用。');
+      return;
+    }
+    final int requestToken = ++_subtitleRequestToken;
+    setState(() => _subtitleCuesLoading = true);
+    final SubtitleCueLoadResult result =
+        await _playerOverlayService.loadSubtitleCues(
+      bvid: widget.video.bvid,
+      cid: _currentPart.cid,
+      trackId: track.id,
+    );
+    if (!mounted || requestToken != _subtitleRequestToken) {
+      return;
+    }
+    setState(() => _subtitleCuesLoading = false);
+    if (result.status != SubtitleLoadStatus.available || result.cues.isEmpty) {
+      _showTransientSnackBar(result.message);
+      return;
+    }
+    setState(() {
+      _selectedSubtitleTrack = track;
+      _subtitleCues = result.cues;
+    });
+    _showAdjustmentFeedback('字幕：${track.label}');
+    _scheduleSeekFeedbackClear();
+  }
+
+  /// 关闭当前字幕显示并撤销晚到的字幕请求，不改变播放器进度或原生播放状态。
+  void _disableSubtitles() {
+    _subtitleRequestToken += 1;
+    setState(() {
+      _selectedSubtitleTrack = null;
+      _subtitleCues = const <SubtitleCue>[];
+      _subtitleCuesLoading = false;
+    });
+  }
+
+  /// 从已经排序的字幕列表二分查找当前播放位置对应的一条字幕，避免每次状态刷新遍历全表。
+  SubtitleCue? _activeSubtitleCue() {
+    if (_selectedSubtitleTrack == null || _subtitleCues.isEmpty) {
+      return null;
+    }
+    final Duration position = _playbackSnapshot.position;
+    int lower = 0;
+    int upper = _subtitleCues.length;
+    while (lower < upper) {
+      final int middle = (lower + upper) ~/ 2;
+      if (_subtitleCues[middle].from <= position) {
+        lower = middle + 1;
+      } else {
+        upper = middle;
+      }
+    }
+    if (lower == 0) {
+      return null;
+    }
+    final SubtitleCue candidate = _subtitleCues[lower - 1];
+    return position < candidate.to ? candidate : null;
+  }
+
+  /// 创建紧贴控制栏上方的字幕显示层，控制栏展开时自动上移而不遮挡进度条。
+  Widget _buildSubtitleOverlay() {
+    if (_subtitleCuesLoading && !_playbackSnapshot.isInPictureInPicture) {
+      return const Positioned(
+        left: 24,
+        right: 24,
+        bottom: 112,
+        child: IgnorePointer(
+          child: Center(
+            child: Text(
+              '正在加载字幕…',
+              key: Key('subtitle-loading'),
+              style: TextStyle(color: Colors.white70, fontSize: 13),
+            ),
+          ),
+        ),
+      );
+    }
+    final SubtitleCue? cue = _activeSubtitleCue();
+    if (cue == null || _playbackSnapshot.isInPictureInPicture) {
+      return const SizedBox.shrink();
+    }
+    return Positioned(
+      left: 24,
+      right: 24,
+      bottom: _showControls ? 112 : 28,
+      child: IgnorePointer(
+        child: Semantics(
+          liveRegion: true,
+          label: '字幕：${cue.content}',
+          child: Center(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.62),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 5,
+                ),
+                child: Text(
+                  cue.content,
+                  key: const Key('active-subtitle'),
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    height: 1.28,
+                    shadows: <Shadow>[
+                      Shadow(color: Colors.black, blurRadius: 3),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   /// 对尚未实现的更多设置给出明确提示，避免用户误以为设置已经生效。
@@ -1115,6 +1697,9 @@ class _PlayerPageState extends State<PlayerPage> {
   /// 根据菜单操作切换画面比例，或提示解码设置仍需要后续原生能力支持。
   void _handleMoreSettingsSelection(_PlayerMoreMenuAction action) {
     switch (action) {
+      case _PlayerMoreMenuAction.subtitles:
+        unawaited(_showSubtitleSelector());
+        return;
       case _PlayerMoreMenuAction.decoderSettings:
         _showPendingPlayerSetting('解码设置');
         return;
@@ -1164,6 +1749,16 @@ class _PlayerPageState extends State<PlayerPage> {
         value: _PlayerMoreMenuAction.decoderSettings,
         child: Text('解码设置（待实现）'),
       ),
+      const PopupMenuItem<_PlayerMoreMenuAction>(
+        value: _PlayerMoreMenuAction.subtitles,
+        child: Row(
+          children: <Widget>[
+            Icon(Icons.subtitles_rounded),
+            SizedBox(width: 8),
+            Text('字幕'),
+          ],
+        ),
+      ),
       const PopupMenuDivider(),
       const PopupMenuItem<_PlayerMoreMenuAction>(
         enabled: false,
@@ -1180,11 +1775,6 @@ class _PlayerPageState extends State<PlayerPage> {
       _buildVideoFitModeMenuItem(
         action: _PlayerMoreMenuAction.fitStretch,
         mode: _VideoFitMode.stretch,
-      ),
-      const PopupMenuDivider(),
-      const PopupMenuItem<_PlayerMoreMenuAction>(
-        enabled: false,
-        child: Text('字幕与真实弹幕（待实现）'),
       ),
     ];
   }
@@ -1381,126 +1971,113 @@ class _PlayerPageState extends State<PlayerPage> {
         _playbackSnapshot.phase != PlaybackPhase.error;
     final Widget player = LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
-        return GestureDetector(
-          key: const Key('player-surface'),
-          behavior: HitTestBehavior.opaque,
-          // 画面单击函数只切换控制层，避免误触导致视频暂停。
-          onTap: enableSurfaceGestures ? _toggleControls : null,
-          // 双击落点记录函数为分区快进快退提供位置信息。
-          onDoubleTapDown:
-              enableSurfaceGestures ? _recordDoubleTapPosition : null,
-          // 双击处理函数依据画面宽度计算左中右分区。
-          onDoubleTap: enableSurfaceGestures
-              ? () => _handleDoubleTap(constraints.maxWidth)
-              : null,
-          // 长按开始函数先临时切换到二倍速，并记录快捷跳转的起点。
-          onLongPressStart:
-              enableSurfaceGestures ? _startTemporaryDoubleSpeed : null,
-          // 长按移动函数只在横向超过阈值后预览进度，避免与短距离移动冲突。
-          onLongPressMoveUpdate:
-              enableSurfaceGestures ? _updateTemporaryLongPress : null,
-          // 长按结束函数恢复原倍速或只提交一次最终进度跳转。
-          onLongPressEnd:
-              enableSurfaceGestures ? _stopTemporaryDoubleSpeed : null,
-          // 长按取消函数恢复界面状态且不提交未确认的进度。
-          onLongPressCancel:
-              enableSurfaceGestures ? _cancelTemporaryLongPress : null,
-          // 竖向手势开始函数判断左侧亮度、右侧音量和上下安全区排除。
-          onVerticalDragStart: enableSurfaceGestures
-              ? (DragStartDetails details) => _startVerticalAdjustment(
-                    details,
-                    constraints.biggest,
-                    MediaQuery.of(context).viewPadding.top,
-                    MediaQuery.of(context).viewPadding.bottom,
-                  )
-              : null,
-          // 竖向手势更新函数实时调整窗口亮度或媒体音量。
-          onVerticalDragUpdate: enableSurfaceGestures
-              ? (DragUpdateDetails details) =>
-                  _updateVerticalAdjustment(details, constraints.maxHeight)
-              : null,
-          // 竖向手势结束函数恢复控制栏自动隐藏计时。
-          onVerticalDragEnd:
-              enableSurfaceGestures ? _finishVerticalAdjustment : null,
-          child: ColoredBox(
-            color: Colors.black,
-            child: Stack(
-              fit: StackFit.expand,
-              children: <Widget>[
-                _buildVideoOutput(),
-                if (_temporaryDoubleSpeedActive)
-                  SafeArea(
-                    child: Align(
-                      alignment: Alignment.topCenter,
-                      child: Padding(
-                        padding: const EdgeInsets.only(top: 12),
+        return Listener(
+          // 指针被系统取消时优先撤销预览，避免取消事件被拖动识别器当作普通松手。
+          onPointerCancel: _handlePlayerPointerCancel,
+          child: GestureDetector(
+            key: const Key('player-surface'),
+            behavior: HitTestBehavior.opaque,
+            dragStartBehavior: DragStartBehavior.down,
+            // 画面单击函数只切换控制层，避免误触导致视频暂停。
+            onTap: enableSurfaceGestures ? _toggleControls : null,
+            // 双击落点记录函数为分区快进快退提供位置信息。
+            onDoubleTapDown:
+                enableSurfaceGestures ? _recordDoubleTapPosition : null,
+            // 双击处理函数依据画面宽度计算左中右分区。
+            onDoubleTap: enableSurfaceGestures
+                ? () => _handleDoubleTap(constraints.maxWidth)
+                : null,
+            // 长按开始函数仅临时切换到二倍速，横向快进由独立拖动手势负责。
+            onLongPressStart:
+                enableSurfaceGestures ? _startTemporaryDoubleSpeed : null,
+            // 长按结束函数恢复原倍速，不改变播放位置。
+            onLongPressEnd:
+                enableSurfaceGestures ? _stopTemporaryDoubleSpeed : null,
+            // 长按取消函数恢复界面状态且不提交未确认的进度。
+            onLongPressCancel:
+                enableSurfaceGestures ? _cancelTemporaryLongPress : null,
+            // 横向拖动开始函数立即进入进度预览，并计算当前视频对应的拖动速度。
+            onHorizontalDragStart: enableSurfaceGestures
+                ? (DragStartDetails details) =>
+                    _startHorizontalScrub(details, constraints.biggest)
+                : null,
+            // 横向拖动更新函数只刷新预览，避免频繁向原生播放器发送跳转命令。
+            onHorizontalDragUpdate:
+                enableSurfaceGestures ? _updateHorizontalScrub : null,
+            // 横向拖动结束函数一次性提交最终目标位置。
+            onHorizontalDragEnd:
+                enableSurfaceGestures ? _finishHorizontalScrub : null,
+            // 横向拖动取消函数恢复开始位置，避免系统手势造成误跳转。
+            onHorizontalDragCancel:
+                enableSurfaceGestures ? _cancelHorizontalScrub : null,
+            // 竖向手势开始函数判断左侧亮度、右侧音量和上下安全区排除。
+            onVerticalDragStart: enableSurfaceGestures
+                ? (DragStartDetails details) => _startVerticalAdjustment(
+                      details,
+                      constraints.biggest,
+                      MediaQuery.of(context).viewPadding.top,
+                      MediaQuery.of(context).viewPadding.bottom,
+                    )
+                : null,
+            // 竖向手势更新函数实时调整窗口亮度或媒体音量。
+            onVerticalDragUpdate: enableSurfaceGestures
+                ? (DragUpdateDetails details) =>
+                    _updateVerticalAdjustment(details, constraints.maxHeight)
+                : null,
+            // 竖向手势结束函数恢复控制栏自动隐藏计时。
+            onVerticalDragEnd:
+                enableSurfaceGestures ? _finishVerticalAdjustment : null,
+            child: ColoredBox(
+              color: Colors.black,
+              child: Stack(
+                fit: StackFit.expand,
+                children: <Widget>[
+                  _buildVideoOutput(),
+                  _buildDanmakuOverlay(),
+                  _buildSubtitleOverlay(),
+                  if (_temporaryDoubleSpeedActive)
+                    SafeArea(
+                      child: Align(
+                        alignment: Alignment.topCenter,
+                        child: Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: Colors.black54,
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: const Padding(
+                              padding: EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 7,
+                              ),
+                              child: Text(
+                                '二倍速中>>',
+                                key: Key('temporary-double-speed'),
+                                style: TextStyle(color: Colors.white),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  Center(
+                    child: IgnorePointer(
+                      child: AnimatedOpacity(
+                        opacity: _seekFeedback == null ? 0 : 1,
+                        duration: const Duration(milliseconds: 160),
                         child: DecoratedBox(
                           decoration: BoxDecoration(
                             color: Colors.black54,
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: const Padding(
-                            padding: EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 7,
-                            ),
-                            child: Text(
-                              '二倍速中>>',
-                              key: Key('temporary-double-speed'),
-                              style: TextStyle(color: Colors.white),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                Center(
-                  child: IgnorePointer(
-                    child: AnimatedOpacity(
-                      opacity: _seekFeedback == null ? 0 : 1,
-                      duration: const Duration(milliseconds: 160),
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          color: Colors.black54,
-                          borderRadius: BorderRadius.circular(24),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 18,
-                            vertical: 10,
-                          ),
-                          child: Text(
-                            _seekFeedback ?? '',
-                            style: const TextStyle(color: Colors.white),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                AnimatedPositioned(
-                  duration: const Duration(milliseconds: 180),
-                  curve: Curves.easeOut,
-                  left: 24,
-                  right: 24,
-                  bottom: _showControls ? 108 : 12,
-                  child: IgnorePointer(
-                    child: AnimatedOpacity(
-                      opacity: _resumeNotice == null ? 0 : 1,
-                      duration: const Duration(milliseconds: 180),
-                      child: Center(
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            color: Colors.black87,
-                            borderRadius: BorderRadius.circular(18),
+                            borderRadius: BorderRadius.circular(24),
                           ),
                           child: Padding(
                             padding: const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 8,
+                              horizontal: 18,
+                              vertical: 10,
                             ),
                             child: Text(
-                              _resumeNotice ?? '',
+                              _seekFeedback ?? '',
                               style: const TextStyle(color: Colors.white),
                             ),
                           ),
@@ -1508,254 +2085,306 @@ class _PlayerPageState extends State<PlayerPage> {
                       ),
                     ),
                   ),
-                ),
-                Align(
-                  alignment: Alignment.bottomCenter,
-                  child: IgnorePointer(
-                    child: AnimatedOpacity(
-                      opacity: !_showControls && !inPictureInPicture ? 1 : 0,
-                      duration: const Duration(milliseconds: 180),
-                      child: LinearProgressIndicator(
-                        key: const Key('mini-progress'),
-                        value: _progress,
-                        minHeight: 2,
-                        backgroundColor: Colors.white24,
-                        color: Theme.of(context).colorScheme.primary,
+                  AnimatedPositioned(
+                    duration: const Duration(milliseconds: 180),
+                    curve: Curves.easeOut,
+                    left: 24,
+                    right: 24,
+                    bottom: _showControls ? 108 : 12,
+                    child: IgnorePointer(
+                      child: AnimatedOpacity(
+                        opacity: _resumeNotice == null ? 0 : 1,
+                        duration: const Duration(milliseconds: 180),
+                        child: Center(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: Colors.black87,
+                              borderRadius: BorderRadius.circular(18),
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 8,
+                              ),
+                              child: Text(
+                                _resumeNotice ?? '',
+                                style: const TextStyle(color: Colors.white),
+                              ),
+                            ),
+                          ),
+                        ),
                       ),
                     ),
                   ),
-                ),
-                AnimatedOpacity(
-                  key: const Key('player-controls'),
-                  opacity: _showControls && !inPictureInPicture ? 1 : 0,
-                  duration: const Duration(milliseconds: 180),
-                  child: IgnorePointer(
-                    ignoring: !_showControls || inPictureInPicture,
-                    child: DecoratedBox(
-                      decoration: const BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: <Color>[
-                            Colors.black54,
-                            Colors.transparent,
-                            Colors.transparent,
-                            Colors.black87,
+                  Align(
+                    alignment: Alignment.bottomCenter,
+                    child: IgnorePointer(
+                      child: AnimatedOpacity(
+                        opacity: !_showControls && !inPictureInPicture ? 1 : 0,
+                        duration: const Duration(milliseconds: 180),
+                        child: LinearProgressIndicator(
+                          key: const Key('mini-progress'),
+                          value: _progress,
+                          minHeight: 2,
+                          backgroundColor: Colors.white24,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                      ),
+                    ),
+                  ),
+                  AnimatedOpacity(
+                    key: const Key('player-controls'),
+                    opacity: _showControls && !inPictureInPicture ? 1 : 0,
+                    duration: const Duration(milliseconds: 180),
+                    child: IgnorePointer(
+                      ignoring: !_showControls || inPictureInPicture,
+                      child: DecoratedBox(
+                        decoration: const BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: <Color>[
+                              Colors.black54,
+                              Colors.transparent,
+                              Colors.transparent,
+                              Colors.black87,
+                            ],
+                          ),
+                        ),
+                        child: Stack(
+                          children: <Widget>[
+                            Positioned(
+                              top: 0,
+                              left: 0,
+                              right: 0,
+                              height: _fullscreen ? 92 : 64,
+                              child: SafeArea(
+                                key: const Key('top-player-bar'),
+                                top: false,
+                                bottom: false,
+                                minimum: const EdgeInsets.only(
+                                  top: 4,
+                                  left: 4,
+                                  right: 16,
+                                ),
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: <Widget>[
+                                    if (_fullscreen)
+                                      _buildFullscreenStatusStrip(),
+                                    Expanded(
+                                      child: Row(
+                                        children: <Widget>[
+                                          IconButton(
+                                            // 返回按钮函数在全屏时先退出全屏，否则关闭播放器页面。
+                                            onPressed: _handleBackPressed,
+                                            icon: const Icon(
+                                              Icons.arrow_back_rounded,
+                                              color: Colors.white,
+                                            ),
+                                            tooltip: '返回',
+                                          ),
+                                          if (_fullscreen)
+                                            Expanded(
+                                              child: _AutoScrollingText(
+                                                text: widget.video.title,
+                                                style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 16,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                            ),
+                                          if (_fullscreen)
+                                            IconButton(
+                                              key: const Key(
+                                                  'picture-in-picture'),
+                                              // 画中画按钮函数调用 Android 原生小窗能力。
+                                              onPressed: () => unawaited(
+                                                  _enterPictureInPicture()),
+                                              icon: const Icon(
+                                                Icons
+                                                    .picture_in_picture_alt_rounded,
+                                                color: Colors.white,
+                                              ),
+                                              tooltip: '画中画',
+                                            ),
+                                          if (_fullscreen)
+                                            IconButton(
+                                              key: const Key('danmaku-toggle'),
+                                              // 弹幕按钮函数目前只保存开关状态，真实弹幕接入已记录到 TODO.md。
+                                              onPressed: _toggleDanmaku,
+                                              icon: Icon(
+                                                _danmakuEnabled
+                                                    ? Icons.subtitles_rounded
+                                                    : Icons
+                                                        .subtitles_off_rounded,
+                                                color: Colors.white,
+                                              ),
+                                              tooltip: _danmakuEnabled
+                                                  ? '关闭弹幕'
+                                                  : '开启弹幕',
+                                            ),
+                                          if (_fullscreen)
+                                            PopupMenuButton<
+                                                _PlayerMoreMenuAction>(
+                                              key: const Key(
+                                                  'more-settings-menu'),
+                                              tooltip: '更多选项',
+                                              icon: const Icon(
+                                                Icons.more_vert_rounded,
+                                                color: Colors.white,
+                                              ),
+                                              // 更多菜单选择函数只更新 Flutter 的本地画面布局，不改变解码或播放源。
+                                              onSelected:
+                                                  _handleMoreSettingsSelection,
+                                              // 更多菜单构建函数提供可勾选的画面比例，并保留未接入能力的待实现说明。
+                                              itemBuilder:
+                                                  (BuildContext context) =>
+                                                      _buildMoreSettingsMenu(),
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            Align(
+                              alignment: Alignment.bottomCenter,
+                              child: SafeArea(
+                                top: false,
+                                minimum: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: <Widget>[
+                                    SliderTheme(
+                                      data: SliderTheme.of(context).copyWith(
+                                        trackHeight: 2,
+                                        thumbShape: const RoundSliderThumbShape(
+                                          enabledThumbRadius: 5,
+                                        ),
+                                        overlayShape:
+                                            const RoundSliderOverlayShape(
+                                          overlayRadius: 12,
+                                        ),
+                                      ),
+                                      child: Slider(
+                                        value: _progress,
+                                        // 开始拖动函数暂停自动收起，便于精确调整进度。
+                                        onChangeStart: _startProgressDrag,
+                                        // 进度拖动函数只更新本地显示，不频繁打断原生播放。
+                                        onChanged: _updateProgressDrag,
+                                        // 结束拖动函数把最终位置交给原生播放器。
+                                        onChangeEnd: _finishProgressDrag,
+                                      ),
+                                    ),
+                                    Row(
+                                      children: <Widget>[
+                                        IconButton(
+                                          key: const Key('play-pause-button'),
+                                          // 左下角播放按钮函数向原生播放器发送播放或暂停命令。
+                                          onPressed: _togglePlayback,
+                                          icon: Icon(
+                                            _playing
+                                                ? Icons.pause_rounded
+                                                : Icons.play_arrow_rounded,
+                                            color: Colors.white,
+                                          ),
+                                          tooltip: _playing ? '暂停' : '播放',
+                                        ),
+                                        Text(
+                                          _formatProgress(),
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                        const Spacer(),
+                                        PopupMenuButton<double>(
+                                          key: const Key('speed-menu'),
+                                          initialValue: _playbackSpeed,
+                                          tooltip: '播放倍速',
+                                          // 倍速菜单选择函数把用户选择交给原生播放器。
+                                          onSelected: (double speed) =>
+                                              unawaited(
+                                            _changePlaybackSpeed(speed),
+                                          ),
+                                          // 倍速菜单构建函数生成固定且容易理解的五档速度。
+                                          itemBuilder: (BuildContext context) {
+                                            return _playbackSpeeds
+                                                .map(
+                                                  (double speed) =>
+                                                      PopupMenuItem<double>(
+                                                    key: Key('speed-$speed'),
+                                                    value: speed,
+                                                    child: Text(
+                                                      _formatSpeed(speed),
+                                                    ),
+                                                  ),
+                                                )
+                                                .toList(growable: false);
+                                          },
+                                          child: _buildControlMenuLabel(
+                                            _formatSpeed(_playbackSpeed),
+                                          ),
+                                        ),
+                                        PopupMenuButton<int>(
+                                          key: const Key('quality-menu'),
+                                          initialValue: _currentQuality,
+                                          tooltip: '清晰度',
+                                          // 清晰度菜单选择函数保留进度后重新请求播放源。
+                                          onSelected: (int quality) =>
+                                              unawaited(
+                                            _changeQuality(quality),
+                                          ),
+                                          // 清晰度菜单构建函数使用原生接口实际返回的档位。
+                                          itemBuilder: (BuildContext context) {
+                                            return _availableQualities
+                                                .map(
+                                                  (PlaybackQuality quality) =>
+                                                      PopupMenuItem<int>(
+                                                    key: Key(
+                                                      'quality-${quality.id}',
+                                                    ),
+                                                    value: quality.id,
+                                                    child: Text(quality.label),
+                                                  ),
+                                                )
+                                                .toList(growable: false);
+                                          },
+                                          child: _buildControlMenuLabel(
+                                            _currentQualityLabel(),
+                                          ),
+                                        ),
+                                        IconButton(
+                                          // 全屏按钮函数切换横屏沉浸状态。
+                                          onPressed: () =>
+                                              unawaited(_toggleFullscreen()),
+                                          icon: Icon(
+                                            _fullscreen
+                                                ? Icons.fullscreen_exit_rounded
+                                                : Icons.fullscreen_rounded,
+                                            color: Colors.white,
+                                          ),
+                                          tooltip:
+                                              _fullscreen ? '退出全屏' : '进入全屏',
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
                           ],
                         ),
                       ),
-                      child: Stack(
-                        children: <Widget>[
-                          Positioned(
-                            top: 0,
-                            left: 0,
-                            right: 0,
-                            height: 64,
-                            child: SafeArea(
-                              key: const Key('top-player-bar'),
-                              top: false,
-                              bottom: false,
-                              minimum: const EdgeInsets.only(
-                                top: 8,
-                                left: 4,
-                                right: 16,
-                              ),
-                              child: Row(
-                                children: <Widget>[
-                                  IconButton(
-                                    // 返回按钮函数在全屏时先退出全屏，否则关闭播放器页面。
-                                    onPressed: _handleBackPressed,
-                                    icon: const Icon(
-                                      Icons.arrow_back_rounded,
-                                      color: Colors.white,
-                                    ),
-                                    tooltip: '返回',
-                                  ),
-                                  if (_fullscreen)
-                                    Expanded(
-                                      child: _AutoScrollingText(
-                                        text: widget.video.title,
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                    ),
-                                  if (_fullscreen)
-                                    IconButton(
-                                      key: const Key('picture-in-picture'),
-                                      // 画中画按钮函数调用 Android 原生小窗能力。
-                                      onPressed: () =>
-                                          unawaited(_enterPictureInPicture()),
-                                      icon: const Icon(
-                                        Icons.picture_in_picture_alt_rounded,
-                                        color: Colors.white,
-                                      ),
-                                      tooltip: '画中画',
-                                    ),
-                                  if (_fullscreen)
-                                    IconButton(
-                                      key: const Key('danmaku-toggle'),
-                                      // 弹幕按钮函数目前只保存开关状态，真实弹幕接入已记录到 TODO.md。
-                                      onPressed: _toggleDanmaku,
-                                      icon: Icon(
-                                        _danmakuEnabled
-                                            ? Icons.subtitles_rounded
-                                            : Icons.subtitles_off_rounded,
-                                        color: Colors.white,
-                                      ),
-                                      tooltip:
-                                          _danmakuEnabled ? '关闭弹幕' : '开启弹幕',
-                                    ),
-                                  if (_fullscreen)
-                                    PopupMenuButton<_PlayerMoreMenuAction>(
-                                      key: const Key('more-settings-menu'),
-                                      tooltip: '更多选项',
-                                      icon: const Icon(
-                                        Icons.more_vert_rounded,
-                                        color: Colors.white,
-                                      ),
-                                      // 更多菜单选择函数只更新 Flutter 的本地画面布局，不改变解码或播放源。
-                                      onSelected: _handleMoreSettingsSelection,
-                                      // 更多菜单构建函数提供可勾选的画面比例，并保留未接入能力的待实现说明。
-                                      itemBuilder: (BuildContext context) =>
-                                          _buildMoreSettingsMenu(),
-                                    ),
-                                ],
-                              ),
-                            ),
-                          ),
-                          Align(
-                            alignment: Alignment.bottomCenter,
-                            child: SafeArea(
-                              top: false,
-                              minimum: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: <Widget>[
-                                  SliderTheme(
-                                    data: SliderTheme.of(context).copyWith(
-                                      trackHeight: 2,
-                                      thumbShape: const RoundSliderThumbShape(
-                                        enabledThumbRadius: 5,
-                                      ),
-                                      overlayShape:
-                                          const RoundSliderOverlayShape(
-                                        overlayRadius: 12,
-                                      ),
-                                    ),
-                                    child: Slider(
-                                      value: _progress,
-                                      // 开始拖动函数暂停自动收起，便于精确调整进度。
-                                      onChangeStart: _startProgressDrag,
-                                      // 进度拖动函数只更新本地显示，不频繁打断原生播放。
-                                      onChanged: _updateProgressDrag,
-                                      // 结束拖动函数把最终位置交给原生播放器。
-                                      onChangeEnd: _finishProgressDrag,
-                                    ),
-                                  ),
-                                  Row(
-                                    children: <Widget>[
-                                      IconButton(
-                                        key: const Key('play-pause-button'),
-                                        // 左下角播放按钮函数向原生播放器发送播放或暂停命令。
-                                        onPressed: _togglePlayback,
-                                        icon: Icon(
-                                          _playing
-                                              ? Icons.pause_rounded
-                                              : Icons.play_arrow_rounded,
-                                          color: Colors.white,
-                                        ),
-                                        tooltip: _playing ? '暂停' : '播放',
-                                      ),
-                                      Text(
-                                        _formatProgress(),
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                        ),
-                                      ),
-                                      const Spacer(),
-                                      PopupMenuButton<double>(
-                                        key: const Key('speed-menu'),
-                                        initialValue: _playbackSpeed,
-                                        tooltip: '播放倍速',
-                                        // 倍速菜单选择函数把用户选择交给原生播放器。
-                                        onSelected: (double speed) => unawaited(
-                                          _changePlaybackSpeed(speed),
-                                        ),
-                                        // 倍速菜单构建函数生成固定且容易理解的五档速度。
-                                        itemBuilder: (BuildContext context) {
-                                          return _playbackSpeeds
-                                              .map(
-                                                (double speed) =>
-                                                    PopupMenuItem<double>(
-                                                  key: Key('speed-$speed'),
-                                                  value: speed,
-                                                  child: Text(
-                                                    _formatSpeed(speed),
-                                                  ),
-                                                ),
-                                              )
-                                              .toList(growable: false);
-                                        },
-                                        child: _buildControlMenuLabel(
-                                          _formatSpeed(_playbackSpeed),
-                                        ),
-                                      ),
-                                      PopupMenuButton<int>(
-                                        key: const Key('quality-menu'),
-                                        initialValue: _currentQuality,
-                                        tooltip: '清晰度',
-                                        // 清晰度菜单选择函数保留进度后重新请求播放源。
-                                        onSelected: (int quality) => unawaited(
-                                          _changeQuality(quality),
-                                        ),
-                                        // 清晰度菜单构建函数使用原生接口实际返回的档位。
-                                        itemBuilder: (BuildContext context) {
-                                          return _availableQualities
-                                              .map(
-                                                (PlaybackQuality quality) =>
-                                                    PopupMenuItem<int>(
-                                                  key: Key(
-                                                    'quality-${quality.id}',
-                                                  ),
-                                                  value: quality.id,
-                                                  child: Text(quality.label),
-                                                ),
-                                              )
-                                              .toList(growable: false);
-                                        },
-                                        child: _buildControlMenuLabel(
-                                          _currentQualityLabel(),
-                                        ),
-                                      ),
-                                      IconButton(
-                                        // 全屏按钮函数切换横屏沉浸状态。
-                                        onPressed: () =>
-                                            unawaited(_toggleFullscreen()),
-                                        icon: Icon(
-                                          _fullscreen
-                                              ? Icons.fullscreen_exit_rounded
-                                              : Icons.fullscreen_rounded,
-                                          color: Colors.white,
-                                        ),
-                                        tooltip: _fullscreen ? '退出全屏' : '进入全屏',
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
                     ),
                   ),
-                ),
-                // 错误重试层放在控制栏之后，确保按钮不会被全屏控制栏的透明区域拦截点击。
-                _buildPlaybackHint(),
-              ],
+                  // 错误重试层放在控制栏之后，确保按钮不会被全屏控制栏的透明区域拦截点击。
+                  _buildPlaybackHint(),
+                ],
+              ),
             ),
           ),
         );
@@ -2162,5 +2791,135 @@ class _AutoScrollingTextState extends State<_AutoScrollingText>
         );
       },
     );
+  }
+}
+
+/// 在播放器画面上绘制当前时间段的真实弹幕，不参与命中测试或播放控制。
+class _DanmakuPainter extends CustomPainter {
+  static const Duration _scrollDisplayDuration = Duration(seconds: 8);
+  static const Duration _fixedDisplayDuration = Duration(seconds: 4);
+  static const double _laneHeight = 26;
+  static const int _maximumVisibleEntries = 80;
+
+  /// 创建基于播放位置重绘的弹幕画笔；传入的数据已经由原生和服务层限量校验。
+  _DanmakuPainter({required this.entries, required this.position});
+
+  final List<DanmakuEntry> entries;
+  final Duration position;
+
+  /// 逐条绘制当前可见的滚动、顶部固定和底部固定弹幕，并限制同屏最大数量。
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.isEmpty) {
+      return;
+    }
+    final int laneCount =
+        (size.height / _laneHeight).floor().clamp(1, 18).toInt();
+    int paintedEntries = 0;
+    for (final DanmakuEntry entry in entries) {
+      final Duration elapsed = position - entry.position;
+      if (elapsed.isNegative) {
+        continue;
+      }
+      final bool fixedEntry = entry.mode == 4 || entry.mode == 5;
+      final Duration visibleDuration =
+          fixedEntry ? _fixedDisplayDuration : _scrollDisplayDuration;
+      if (elapsed > visibleDuration ||
+          paintedEntries >= _maximumVisibleEntries) {
+        continue;
+      }
+      final TextPainter textPainter = TextPainter(
+        text: TextSpan(
+          text: entry.content,
+          style: TextStyle(
+            color: _colorForEntry(entry),
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
+            shadows: const <Shadow>[
+              Shadow(color: Colors.black, blurRadius: 2),
+            ],
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+        ellipsis: '…',
+      )..layout(maxWidth: size.width * 0.86);
+      final int lane = _laneForEntry(entry, laneCount);
+      final double y = _verticalOffsetForEntry(
+        entry: entry,
+        lane: lane,
+        laneCount: laneCount,
+        size: size,
+        textHeight: textPainter.height,
+      );
+      final double x = _horizontalOffsetForEntry(
+        entry: entry,
+        elapsed: elapsed,
+        size: size,
+        textWidth: textPainter.width,
+      );
+      textPainter.paint(canvas, Offset(x, y));
+      paintedEntries += 1;
+    }
+  }
+
+  /// 根据普通滚动、反向滚动和固定模式计算横坐标，使弹幕随真实播放时间同步移动。
+  double _horizontalOffsetForEntry({
+    required DanmakuEntry entry,
+    required Duration elapsed,
+    required Size size,
+    required double textWidth,
+  }) {
+    if (entry.mode == 4 || entry.mode == 5) {
+      return (size.width - textWidth) / 2;
+    }
+    final double progress =
+        elapsed.inMilliseconds / _scrollDisplayDuration.inMilliseconds;
+    final double travelDistance = size.width + textWidth;
+    if (entry.mode == 6) {
+      return -textWidth + progress * travelDistance;
+    }
+    return size.width - progress * travelDistance;
+  }
+
+  /// 根据模式和稳定车道编号计算纵坐标，顶部与底部固定弹幕分别留在画面两端。
+  double _verticalOffsetForEntry({
+    required DanmakuEntry entry,
+    required int lane,
+    required int laneCount,
+    required Size size,
+    required double textHeight,
+  }) {
+    final double maximumTop =
+        (size.height - textHeight).clamp(0, double.infinity).toDouble();
+    if (entry.mode == 4) {
+      return (size.height - (lane + 1) * _laneHeight)
+          .clamp(0, maximumTop)
+          .toDouble();
+    }
+    if (entry.mode == 5) {
+      return (lane * _laneHeight).clamp(0, maximumTop).toDouble();
+    }
+    final int scrollingLane = lane % laneCount;
+    return (scrollingLane * _laneHeight).clamp(0, maximumTop).toDouble();
+  }
+
+  /// 为同一条真实弹幕生成稳定车道，减少状态刷新时文字在画面中跳动。
+  int _laneForEntry(DanmakuEntry entry, int laneCount) {
+    final int seed =
+        entry.position.inMilliseconds ~/ 100 + entry.content.hashCode;
+    return seed.abs() % laneCount;
+  }
+
+  /// 把 B 站返回的 RGB 整数颜色转换为带不透明 Alpha 的 Flutter 颜色。
+  Color _colorForEntry(DanmakuEntry entry) {
+    return Color(0xFF000000 | (entry.color & 0xFFFFFF));
+  }
+
+  /// 只有时间轴或当前片段列表变化时才请求重绘，避免无关页面状态触发弹幕画布刷新。
+  @override
+  bool shouldRepaint(covariant _DanmakuPainter oldDelegate) {
+    return oldDelegate.position != position ||
+        !identical(oldDelegate.entries, entries);
   }
 }
