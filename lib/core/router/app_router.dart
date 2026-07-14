@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../features/player/player_page.dart';
 import '../../features/profile/cache_management_page.dart';
 import '../../features/profile/login_page.dart';
+import '../../features/profile/watch_history_page.dart';
 import '../../features/shell/main_shell.dart';
 import '../../models/video_preview.dart';
 
@@ -12,6 +13,7 @@ abstract final class AppRoutes {
   static const String player = '/player';
   static const String login = '/login';
   static const String cacheManagement = '/settings/cache';
+  static const String watchHistory = '/history';
 }
 
 /// 根据路由名称创建页面，是整个应用唯一的页面导航入口。
@@ -44,6 +46,12 @@ abstract final class AppRouter {
         return MaterialPageRoute<void>(
           // 缓存设置页构建函数创建只管理边播边缓存的独立设置页面。
           builder: (BuildContext context) => const CacheManagementPage(),
+          settings: settings,
+        );
+      case AppRoutes.watchHistory:
+        return MaterialPageRoute<void>(
+          // 观看记录页构建函数显示仅保存在当前设备上的最近观看视频。
+          builder: (BuildContext context) => const WatchHistoryPage(),
           settings: settings,
         );
       default:

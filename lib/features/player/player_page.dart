@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../models/video_preview.dart';
+import '../../models/watch_history_entry.dart';
 import '../../services/native_playback_service.dart';
+import '../../services/watch_history_service.dart';
 
 /// 标识一次竖向滑动正在调整亮度、音量，或因底部手势区而不做处理。
 enum _VerticalAdjustmentMode { none, brightness, volume }
@@ -22,10 +24,17 @@ enum _PlayerMoreMenuAction {
 
 /// 新架构的原生播放器页面，提供简洁的 App 风格控制层。
 class PlayerPage extends StatefulWidget {
-  const PlayerPage({super.key, required this.video, this.playbackService});
+  /// 创建播放器页面，并允许测试替换原生播放和本地观看记录服务。
+  const PlayerPage({
+    super.key,
+    required this.video,
+    this.playbackService,
+    this.watchHistoryService,
+  });
 
   final VideoPreview video;
   final PlaybackService? playbackService;
+  final WatchHistoryService? watchHistoryService;
 
   /// 创建播放器状态，保存播放、进度、控制层和全屏状态。
   @override
@@ -52,6 +61,7 @@ class _PlayerPageState extends State<PlayerPage> {
   ];
 
   late final PlaybackService _playbackService;
+  late final WatchHistoryService _watchHistoryService;
   late VideoPart _currentPart;
   final ScrollController _partScrollController = ScrollController();
   StreamSubscription<PlaybackSnapshot>? _playbackSubscription;
@@ -90,6 +100,7 @@ class _PlayerPageState extends State<PlayerPage> {
   double _verticalGestureDelta = 0;
   _VerticalAdjustmentMode _verticalAdjustmentMode =
       _VerticalAdjustmentMode.none;
+  int? _recordedHistoryPartCid;
 
   /// 判断原生播放器是否真的在播放，避免 Flutter 页面自己伪造播放状态。
   bool get _playing => _playbackSnapshot.isPlaying;
@@ -107,6 +118,7 @@ class _PlayerPageState extends State<PlayerPage> {
     super.initState();
     _currentPart = widget.video.initialPart;
     _playbackService = widget.playbackService ?? NativePlaybackService();
+    _watchHistoryService = widget.watchHistoryService ?? WatchHistoryService();
     _playbackSubscription = _playbackService.states.listen(
       _applyPlaybackSnapshot,
     );
@@ -182,7 +194,7 @@ class _PlayerPageState extends State<PlayerPage> {
       );
   }
 
-  /// 把 Android 推送的播放状态写入页面、结束重试忙碌状态，并在非拖动状态下同步真实进度。
+  /// 把 Android 推送的播放状态写入页面、记录就绪观看历史，并在非拖动状态下同步真实进度。
   void _applyPlaybackSnapshot(PlaybackSnapshot snapshot) {
     if (!mounted) {
       return;
@@ -230,10 +242,39 @@ class _PlayerPageState extends State<PlayerPage> {
       _shownRestoredCid = _currentPart.cid;
       _showResumeNotice(snapshot.restoredPosition);
     }
+    _recordWatchHistoryWhenReady(snapshot);
     if (!snapshot.isPlaying || snapshot.isInPictureInPicture) {
       _stopControlsAutoHideTimer();
     } else if (_showControls && _controlsTimer == null) {
       _restartControlsAutoHideTimer();
+    }
+  }
+
+  /// 仅在某个分P第一次进入就绪状态时记录观看历史，避免状态流重复写入。
+  void _recordWatchHistoryWhenReady(PlaybackSnapshot snapshot) {
+    if (snapshot.phase != PlaybackPhase.ready ||
+        _recordedHistoryPartCid == _currentPart.cid) {
+      return;
+    }
+    _recordedHistoryPartCid = _currentPart.cid;
+    unawaited(_saveCurrentWatchHistory());
+  }
+
+  /// 把当前视频及分P信息交给本机历史服务，写入失败时不影响正在播放的视频。
+  Future<void> _saveCurrentWatchHistory() async {
+    try {
+      await _watchHistoryService.record(
+        WatchHistoryEntry(
+          bvid: widget.video.bvid,
+          title: widget.video.title,
+          ownerName: widget.video.ownerName,
+          lastPartTitle: _currentPart.title,
+          lastPartPageNumber: _currentPart.pageNumber,
+          watchedAt: DateTime.now(),
+        ),
+      );
+    } catch (_) {
+      // 本地偏好设置异常不能中断播放器；后续换P或重新打开时仍会再次尝试保存。
     }
   }
 
@@ -623,7 +664,7 @@ class _PlayerPageState extends State<PlayerPage> {
       );
   }
 
-  /// 保存旧分P进度后打开新分P；原生层会自动读取新分P的历史位置。
+  /// 保存旧分P进度后打开新分P，并等待新分P就绪后更新同一 BV 号的观看记录。
   Future<void> _changePart(VideoPart part) async {
     if (part.cid == _currentPart.cid) {
       return;
@@ -635,6 +676,7 @@ class _PlayerPageState extends State<PlayerPage> {
       _resumeNotice = null;
     });
     _shownRestoredCid = null;
+    _recordedHistoryPartCid = null;
     _resumeNoticeTimer?.cancel();
     try {
       await _playbackService.openVideo(

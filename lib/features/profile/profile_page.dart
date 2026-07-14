@@ -358,7 +358,9 @@ class _ProfilePageState extends State<ProfilePage> {
           _ProfileTile(
             icon: Icons.history_rounded,
             title: '观看记录',
-            onTap: () => _showComingSoon(context, '观看记录'),
+            // 观看记录入口函数打开只保存在本机的视频观看历史页面。
+            onTap: () =>
+                Navigator.of(context).pushNamed(AppRoutes.watchHistory),
           ),
           _ProfileTile(
             icon: Icons.favorite_outline_rounded,

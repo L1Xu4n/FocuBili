@@ -9,9 +9,11 @@ import 'package:focubili/features/player/player_page.dart';
 import 'package:focubili/features/profile/login_page.dart';
 import 'package:focubili/features/search/search_page.dart';
 import 'package:focubili/models/video_preview.dart';
+import 'package:focubili/models/watch_history_entry.dart';
 import 'package:focubili/services/bilibili_service.dart';
 import 'package:focubili/services/native_playback_service.dart';
 import 'package:focubili/services/search_history_service.dart';
+import 'package:focubili/services/watch_history_service.dart';
 
 /// 记录视频详情请求地址并返回固定 JSON，验证服务解析时不依赖真实网络。
 class _RecordingJsonRequest {
@@ -97,7 +99,11 @@ class _SuggestionJsonRequest {
 /// 提供无 Android 平台依赖的播放器替身，让组件测试只检查 Flutter 控制层交互。
 class _FakePlaybackService implements PlaybackService {
   /// 创建用于播放器组件测试的无网络服务替身。
-  _FakePlaybackService({this.savedState, this.rejectQuality = false});
+  _FakePlaybackService({
+    this.savedState,
+    this.rejectQuality = false,
+    this.emitReadyOnOpen = true,
+  });
 
   final StreamController<PlaybackSnapshot> _states =
       StreamController<PlaybackSnapshot>.broadcast();
@@ -113,6 +119,7 @@ class _FakePlaybackService implements PlaybackService {
   Completer<void>? retryOpenCompleter;
   final SavedPlaybackState? savedState;
   final bool rejectQuality;
+  final bool emitReadyOnOpen;
   int pictureInPictureRequests = 0;
   int seekByRequests = 0;
   int seekToRequests = 0;
@@ -146,7 +153,9 @@ class _FakePlaybackService implements PlaybackService {
       await pendingRetry.future;
     }
     _quality = quality;
-    _emit();
+    if (emitReadyOnOpen) {
+      _emit();
+    }
   }
 
   /// 模拟原生播放器开始播放并推送新状态。
@@ -262,9 +271,29 @@ class _FakePlaybackService implements PlaybackService {
     _emit(phase: PlaybackPhase.loading, message: '正在准备播放…');
   }
 
+  /// 向播放器页面推送一次就绪快照，供观看记录只在真正可播放后写入的测试使用。
+  void emitReady() {
+    _emit();
+  }
+
   /// 关闭测试使用的状态流，模拟页面离开时释放播放器。
   @override
   Future<void> dispose() => _states.close();
+}
+
+/// 记录播放器请求的观看历史，避免组件测试依赖 SharedPreferences 真正写入磁盘。
+class _RecordingWatchHistoryService extends WatchHistoryService {
+  /// 创建只把写入内容保存在内存中的观看记录服务替身。
+  _RecordingWatchHistoryService();
+
+  final List<WatchHistoryEntry> recordedEntries = <WatchHistoryEntry>[];
+
+  /// 保存一份传入的记录副本，并返回当前测试可检查的内存记录列表。
+  @override
+  Future<List<WatchHistoryEntry>> record(WatchHistoryEntry entry) async {
+    recordedEntries.add(entry);
+    return List<WatchHistoryEntry>.unmodifiable(recordedEntries);
+  }
 }
 
 /// 创建包含两个分P的固定视频，供播放器多P切换组件测试使用。
@@ -459,6 +488,66 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('使用 Cookie 登录'), findsOneWidget);
     expect(find.text('需要包含 SESSDATA'), findsOneWidget);
+  });
+
+  /// 验证播放器只在真实就绪后写一次历史，并在切换分P后的下一次就绪更新同一视频。
+  testWidgets('播放器就绪后记录观看历史且分P切换后更新', (
+    WidgetTester tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final _FakePlaybackService playbackService = _FakePlaybackService(
+      emitReadyOnOpen: false,
+    );
+    final _RecordingWatchHistoryService historyService =
+        _RecordingWatchHistoryService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _createMultiPartVideo(),
+          playbackService: playbackService,
+          watchHistoryService: historyService,
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(historyService.recordedEntries, isEmpty);
+    playbackService.emitLoading();
+    playbackService.emitPlaybackError('网络暂时不可用');
+    await tester.pump();
+    await tester.pump();
+    expect(historyService.recordedEntries, isEmpty);
+
+    playbackService.emitReady();
+    await tester.pump();
+    await tester.pump();
+    expect(historyService.recordedEntries, hasLength(1));
+    expect(historyService.recordedEntries.single.lastPartPageNumber, 1);
+    playbackService.emitReady();
+    await tester.pump();
+    expect(historyService.recordedEntries, hasLength(1));
+
+    playbackService.emitPlaybackError('线路再次出错');
+    playbackService.emitReady();
+    await tester.pump();
+    await tester.pump();
+    expect(historyService.recordedEntries, hasLength(1));
+
+    await tester.tap(find.byKey(const Key('part-2')));
+    await tester.pump();
+    await tester.pump();
+    expect(historyService.recordedEntries, hasLength(1));
+    playbackService.emitReady();
+    await tester.pump();
+    await tester.pump();
+    expect(historyService.recordedEntries, hasLength(2));
+    expect(historyService.recordedEntries.last.bvid, 'BV1GJ411x7h7');
+    expect(historyService.recordedEntries.last.lastPartPageNumber, 2);
+    playbackService.emitReady();
+    await tester.pump();
+    expect(historyService.recordedEntries, hasLength(2));
   });
 
   /// 验证画面空白处单击只隐藏控制层，不会触发中央播放按钮。
