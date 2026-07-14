@@ -33,10 +33,12 @@ class WatchHistoryPage extends StatefulWidget {
 class _WatchHistoryPageState extends State<WatchHistoryPage> {
   late final WatchHistoryService _historyService;
   late final BilibiliService _bilibiliService;
+  final TextEditingController _searchController = TextEditingController();
   List<WatchHistoryEntry> _entries = const <WatchHistoryEntry>[];
   bool _isLoading = true;
   String? _loadError;
   String? _openingBvid;
+  String _searchQuery = '';
 
   /// 初始化可替换服务并在首次显示页面时读取设备本机记录。
   @override
@@ -45,6 +47,13 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
     _historyService = widget.historyService ?? WatchHistoryService();
     _bilibiliService = widget.bilibiliService ?? BilibiliVideoInfoService();
     _loadHistory();
+  }
+
+  /// 释放观看记录搜索输入控制器。
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   /// 从本机存储读取列表，并把读取失败转换为可重试的页面状态。
@@ -272,8 +281,8 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
   /// 构建缓存缩略图、网络失败占位图和右下角的已观看时长角标。
   Widget _buildHistoryThumbnail(WatchHistoryEntry entry) {
     return SizedBox(
-      width: 132,
-      height: 82,
+      width: 122,
+      height: 76,
       child: ClipRRect(
         borderRadius: BorderRadius.circular(10),
         child: Stack(
@@ -310,6 +319,43 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// 按标题、UP 主、分P标题或 BV 号筛选本机观看记录。
+  List<WatchHistoryEntry> _filteredEntries() {
+    final String query = _searchQuery.trim().toLowerCase();
+    if (query.isEmpty) {
+      return _entries;
+    }
+    return _entries
+        .where(
+          (WatchHistoryEntry entry) =>
+              entry.title.toLowerCase().contains(query) ||
+              entry.ownerName.toLowerCase().contains(query) ||
+              entry.lastPartTitle.toLowerCase().contains(query) ||
+              entry.bvid.toLowerCase().contains(query),
+        )
+        .toList(growable: false);
+  }
+
+  /// 创建本机观看记录搜索框，输入时即时筛选而不访问网络。
+  Widget _buildSearchField() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 2),
+      child: TextField(
+        key: const Key('watch-history-search'),
+        controller: _searchController,
+        onChanged: (String value) => setState(() => _searchQuery = value),
+        decoration: InputDecoration(
+          hintText: '搜索标题、UP 主、分P或 BV 号',
+          prefixIcon: const Icon(Icons.search_rounded),
+          isDense: true,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
         ),
       ),
     );
@@ -414,49 +460,93 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
     );
   }
 
-  /// 构建记录列表；点击卡片会先刷新详情，再向播放器传递 VideoPreview。
+  /// 构建自适应记录卡；封面使用固定比例，文字区域在窄屏也不会被 ListTile 挤坏。
   Widget _buildHistoryList() {
+    final List<WatchHistoryEntry> visibleEntries = _filteredEntries();
+    if (visibleEntries.isEmpty) {
+      return const Center(child: Text('没有匹配的观看记录'));
+    }
     return ListView.separated(
       key: const Key('watch-history-list'),
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-      itemCount: _entries.length,
+      itemCount: visibleEntries.length,
       separatorBuilder: (BuildContext context, int index) =>
           const SizedBox(height: 8),
       itemBuilder: (BuildContext context, int index) {
-        final WatchHistoryEntry entry = _entries[index];
+        final WatchHistoryEntry entry = visibleEntries[index];
         final bool isOpening = _openingBvid == entry.bvid;
         return Card(
           key: Key('watch-history-${entry.bvid}'),
-          child: ListTile(
-            isThreeLine: true,
-            leading: _buildHistoryThumbnail(entry),
-            title: Text(
-              entry.title,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-            subtitle: Text(
-              '${entry.ownerName}\n上次看至 P${entry.lastPartPageNumber} · '
-              '${entry.lastPartTitle}\n上次观看：${_formatWatchedAt(entry.watchedAt)}',
-              maxLines: 3,
-              overflow: TextOverflow.ellipsis,
-            ),
-            trailing: isOpening
-                ? const SizedBox.square(
-                    dimension: 24,
-                    child: Padding(
-                      padding: EdgeInsets.all(4),
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  )
-                : IconButton(
-                    tooltip: '移除记录',
-                    icon: const Icon(Icons.delete_outline_rounded),
-                    // 删除按钮函数先二次确认，再仅移除设备上的这一条记录。
-                    onPressed: () => _removeEntry(entry),
-                  ),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
             // 卡片点击函数查询最新公开详情，避免使用可能已失效的旧分P数据。
             onTap: isOpening ? null : () => _openEntry(entry),
+            child: Padding(
+              padding: const EdgeInsets.all(10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      _buildHistoryThumbnail(entry),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: <Widget>[
+                            Text(
+                              entry.title,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style:
+                                  const TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              entry.ownerName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (isOpening)
+                        const Padding(
+                          padding: EdgeInsets.all(10),
+                          child: SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        )
+                      else
+                        IconButton(
+                          tooltip: '移除记录',
+                          icon: const Icon(Icons.delete_outline_rounded),
+                          // 删除按钮函数先二次确认，再仅移除设备上的这一条记录。
+                          onPressed: () => _removeEntry(entry),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '上次看至 P${entry.lastPartPageNumber} · '
+                    '${entry.lastPartTitle}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    '上次观看：${_formatWatchedAt(entry.watchedAt)}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
           ),
         );
       },
@@ -478,6 +568,8 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
     return Column(
       children: <Widget>[
         _buildLocalOnlyNotice(),
+        if (!_isLoading && _loadError == null && _entries.isNotEmpty)
+          _buildSearchField(),
         Expanded(child: content),
       ],
     );

@@ -97,6 +97,8 @@ class _FakePublicContentService implements BilibiliPublicContentService {
   Future<CreatorContentPage<CreatorVideo>> loadVideos(
     int mid, {
     int page = 1,
+    String keyword = '',
+    CreatorVideoOrder order = CreatorVideoOrder.latest,
   }) async {
     return CreatorContentPage<CreatorVideo>(
       items: const <CreatorVideo>[

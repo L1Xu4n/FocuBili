@@ -482,7 +482,7 @@ class BilibiliAccountDataService {
       title: _readText(item['title'], '未命名收藏夹'),
       coverUrl: _normalizeHttpsUrl(_readText(item['cover'], '')),
       mediaCount: _readNonNegativeInt(item['media_count']) ?? 0,
-      isAvailable: (_readInteger(item['attr']) ?? 0) == 0,
+      isAvailable: (_readInteger(item['state'] ?? item['status']) ?? 0) >= 0,
     );
   }
 
@@ -596,10 +596,17 @@ class BilibiliAccountDataService {
 
   /// 只接受 HTTPS 或协议相对图片地址，避免界面加载不安全的 HTTP 资源。
   String _normalizeHttpsUrl(String value) {
-    if (value.startsWith('//')) {
-      return 'https:$value';
+    final String withScheme = value.startsWith('//') ? 'https:$value' : value;
+    final Uri? parsed = Uri.tryParse(withScheme);
+    final bool trustedHost = parsed != null &&
+        (parsed.host.endsWith('.hdslb.com') ||
+            parsed.host.endsWith('.biliimg.com'));
+    if (parsed == null || !trustedHost) {
+      return '';
     }
-    return value.startsWith('https://') ? value : '';
+    final Uri uri =
+        parsed.scheme == 'http' ? parsed.replace(scheme: 'https') : parsed;
+    return uri.scheme == 'https' ? uri.toString() : '';
   }
 
   /// 将 Unix 秒时间戳转换为本地时间；零、负数和异常值统一视为未知。

@@ -19,6 +19,13 @@ legacy_android/
 PROGRESS.md
 TODO.md
 FocuBili-功能思维导图.md
+progress.md
+todo.md
+*思维导图*.md
+*.xmind
+*.drawio
+*.mmd
+*.mm
 
 # 本机密钥、环境变量和临时日志不能提交。
 android/key.properties

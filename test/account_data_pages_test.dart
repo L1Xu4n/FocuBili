@@ -137,6 +137,8 @@ Widget _host(Widget child) {
 void main() {
   /// 验证收藏夹列表可进入内容页，且两个页面都从同一只读服务读取数据。
   testWidgets('收藏夹列表打开内容页', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(360, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     final BilibiliAccountDataService service = _accountService(
       (Uri endpoint) async {
         if (endpoint.path.contains('folder/created/list-all')) {
@@ -190,6 +192,7 @@ void main() {
 
     expect(find.byKey(const Key('favorite-videos-list')), findsOneWidget);
     expect(find.text('收藏视频'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   /// 验证可播放收藏视频会补查公开详情并跳转，失效视频不会触发详情查询。

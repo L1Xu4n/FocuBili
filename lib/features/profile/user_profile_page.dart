@@ -43,6 +43,7 @@ class _UserProfilePageState extends State<UserProfilePage>
   late final BilibiliService _videoService;
   late final TabController _tabController;
   final ScrollController _contentScrollController = ScrollController();
+  final TextEditingController _videoSearchController = TextEditingController();
   CreatorProfile? _profile;
   List<Object> _items = const <Object>[];
   _CreatorTab _selectedTab = _CreatorTab.videos;
@@ -54,6 +55,8 @@ class _UserProfilePageState extends State<UserProfilePage>
   String? _profileError;
   String? _contentError;
   String? _openingBvid;
+  String _videoKeyword = '';
+  CreatorVideoOrder _videoOrder = CreatorVideoOrder.latest;
 
   /// 初始化公开服务、标签控制器和滚动分页监听。
   @override
@@ -78,6 +81,7 @@ class _UserProfilePageState extends State<UserProfilePage>
     _contentScrollController
       ..removeListener(_loadMoreNearBottom)
       ..dispose();
+    _videoSearchController.dispose();
     super.dispose();
   }
 
@@ -173,7 +177,12 @@ class _UserProfilePageState extends State<UserProfilePage>
     switch (tab) {
       case _CreatorTab.videos:
         final CreatorContentPage<CreatorVideo> result =
-            await _publicContentService.loadVideos(widget.mid, page: page);
+            await _publicContentService.loadVideos(
+          widget.mid,
+          page: page,
+          keyword: _videoKeyword,
+          order: _videoOrder,
+        );
         return CreatorContentPage<Object>(
           items: result.items,
           page: result.page,
@@ -199,6 +208,86 @@ class _UserProfilePageState extends State<UserProfilePage>
           totalCount: result.totalCount,
         );
     }
+  }
+
+  /// 提交投稿关键词并从第一页重新查询，空关键词表示恢复全部投稿。
+  void _submitVideoSearch([String? value]) {
+    final String keyword = (value ?? _videoSearchController.text).trim();
+    if (keyword == _videoKeyword && !_loadingContent) {
+      return;
+    }
+    _videoKeyword = keyword;
+    _videoSearchController.value = TextEditingValue(
+      text: keyword,
+      selection: TextSelection.collapsed(offset: keyword.length),
+    );
+    FocusScope.of(context).unfocus();
+    unawaited(_loadFirstContentPage());
+  }
+
+  /// 切换投稿排序后重新请求第一页，保证“最多播放/最多收藏”由服务端完整排序。
+  void _selectVideoOrder(CreatorVideoOrder order) {
+    if (order == _videoOrder) {
+      return;
+    }
+    setState(() => _videoOrder = order);
+    unawaited(_loadFirstContentPage());
+  }
+
+  /// 创建投稿专用的搜索框和三种排序按钮，其他标签不额外占用空间。
+  Widget _buildVideoToolbar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          TextField(
+            key: const Key('creator-video-search'),
+            controller: _videoSearchController,
+            textInputAction: TextInputAction.search,
+            onSubmitted: _submitVideoSearch,
+            decoration: InputDecoration(
+              hintText: '搜索该 UP 主的投稿',
+              prefixIcon: const Icon(Icons.search_rounded),
+              suffixIcon: IconButton(
+                // 搜索按钮函数提交输入框中的投稿关键词。
+                onPressed: _submitVideoSearch,
+                icon: const Icon(Icons.arrow_forward_rounded),
+                tooltip: '搜索投稿',
+              ),
+              isDense: true,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            children: <Widget>[
+              ChoiceChip(
+                label: const Text('最新发布'),
+                selected: _videoOrder == CreatorVideoOrder.latest,
+                onSelected: (_) => _selectVideoOrder(CreatorVideoOrder.latest),
+              ),
+              ChoiceChip(
+                label: const Text('最多播放'),
+                selected: _videoOrder == CreatorVideoOrder.mostPlayed,
+                onSelected: (_) =>
+                    _selectVideoOrder(CreatorVideoOrder.mostPlayed),
+              ),
+              ChoiceChip(
+                label: const Text('最多收藏'),
+                selected: _videoOrder == CreatorVideoOrder.mostFavorited,
+                onSelected: (_) =>
+                    _selectVideoOrder(CreatorVideoOrder.mostFavorited),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
   /// 读取当前标签下一页并按业务主键去重合并。
@@ -812,6 +901,7 @@ class _UserProfilePageState extends State<UserProfilePage>
               Tab(text: '合集'),
             ],
           ),
+          if (_selectedTab == _CreatorTab.videos) _buildVideoToolbar(),
           Expanded(child: _buildContent()),
         ],
       ),

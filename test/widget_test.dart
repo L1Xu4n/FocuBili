@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -9,6 +10,7 @@ import 'package:focubili/features/player/player_page.dart';
 import 'package:focubili/features/profile/login_page.dart';
 import 'package:focubili/features/search/search_page.dart';
 import 'package:focubili/models/video_preview.dart';
+import 'package:focubili/models/video_shot_preview.dart';
 import 'package:focubili/models/watch_history_entry.dart';
 import 'package:focubili/services/bilibili_service.dart';
 import 'package:focubili/services/device_status_service.dart';
@@ -16,6 +18,7 @@ import 'package:focubili/services/native_playback_service.dart';
 import 'package:focubili/services/player_overlay_service.dart';
 import 'package:focubili/services/search_history_service.dart';
 import 'package:focubili/services/watch_history_service.dart';
+import 'package:focubili/services/video_shot_service.dart';
 import 'package:focubili/models/player_overlay_data.dart';
 
 /// 记录视频详情请求地址并返回固定 JSON，验证服务解析时不依赖真实网络。
@@ -25,6 +28,17 @@ class _RecordingJsonRequest {
   /// 保存服务请求的地址，并返回一份最小的公开视频详情响应。
   Future<String> call(Uri uri) async {
     requestedUri = uri;
+    if (uri.path == '/x/tag/archive/tags') {
+      return '''
+        {
+          "code": 0,
+          "data": [
+            {"tag_name": "地理"},
+            {"tag_name": "科普"}
+          ]
+        }
+      ''';
+    }
     return '''
       {
         "code": 0,
@@ -37,7 +51,7 @@ class _RecordingJsonRequest {
           "duration": 213,
           "desc": "这是一段真实简介",
           "pubdate": 1704067200,
-          "pic": "//i0.hdslb.com/main.jpg",
+          "pic": "http://i0.hdslb.com/main.jpg",
           "owner": {
             "mid": 7788,
             "name": "真实接口 UP 主",
@@ -72,7 +86,7 @@ class _RecordingJsonRequest {
                     "cid": 137649199,
                     "title": "合集第一支视频",
                     "arc": {
-                      "pic": "//i0.hdslb.com/one.jpg",
+                      "pic": "http://i0.hdslb.com/one.jpg",
                       "duration": 213,
                       "pubdate": 1704067200,
                       "stat": {"view": 100, "danmaku": 10}
@@ -84,7 +98,7 @@ class _RecordingJsonRequest {
                     "cid": 137649300,
                     "title": "合集第二支视频",
                     "arc": {
-                      "pic": "//i0.hdslb.com/two.jpg",
+                      "pic": "http://i0.hdslb.com/two.jpg",
                       "duration": 300,
                       "stat": {"view": 200, "danmaku": 20}
                     }
@@ -96,6 +110,60 @@ class _RecordingJsonRequest {
         }
       }
     ''';
+  }
+}
+
+/// 为合集切换测试返回第二支完整视频，其他能力保持空结果。
+class _CollectionSwitchVideoService implements BilibiliService {
+  int lookupRequests = 0;
+
+  /// 返回合集中的第二支完整视频并记录查询次数。
+  @override
+  Future<VideoPreview> lookupVideo(String input) async {
+    lookupRequests += 1;
+    return _createSecondCollectionVideo();
+  }
+
+  /// 合集切换测试不使用关键词搜索，因此返回空页。
+  @override
+  Future<VideoSearchPage> searchVideos(
+    String keyword, {
+    int page = 1,
+    VideoSearchFilter filter = const VideoSearchFilter(),
+  }) async {
+    return VideoSearchPage(
+      results: const <VideoSearchResult>[],
+      page: page,
+      totalPages: page,
+    );
+  }
+
+  /// 合集切换测试不使用搜索建议，因此返回空列表。
+  @override
+  Future<List<String>> suggestKeywords(String input) async {
+    return const <String>[];
+  }
+}
+
+/// 为横向拖动组件测试提供一张固定雪碧预览图。
+class _FakeVideoShotService implements VideoShotService {
+  int requests = 0;
+
+  /// 返回包含两个时间点的固定截图元数据。
+  @override
+  Future<VideoShotPreview?> loadPreview({
+    required String bvid,
+    required int cid,
+  }) async {
+    requests += 1;
+    return const VideoShotPreview(
+      imageUrls: <String>['https://i0.hdslb.com/test-sprite.jpg'],
+      sampleSeconds: <int>[0, 30],
+      columns: 2,
+      rows: 1,
+      frameWidth: 160,
+      frameHeight: 90,
+    );
   }
 }
 
@@ -539,6 +607,29 @@ VideoPreview _createCollectionVideo() {
   );
 }
 
+/// 创建合集第二支完整视频，使页面可在同一播放器内切换并返回第一支。
+VideoPreview _createSecondCollectionVideo() {
+  final VideoCollection collection = _createCollectionVideo().collection!;
+  return VideoPreview(
+    aid: 654321,
+    bvid: 'BV1Q541167Qg',
+    cid: 137649300,
+    title: '合集第二支完整视频',
+    ownerName: '合集UP主',
+    ownerMid: 7,
+    collection: collection,
+    duration: const Duration(minutes: 3),
+    parts: const <VideoPart>[
+      VideoPart(
+        pageNumber: 1,
+        cid: 137649300,
+        title: '第二支视频第一P',
+        duration: Duration(minutes: 3),
+      ),
+    ],
+  );
+}
+
 /// 验证应用能够显示首页、搜索入口和底部一级导航。
 void main() {
   /// 验证公开详情服务能解析 BV 号、标题、UP 主、时长和多P列表。
@@ -563,10 +654,19 @@ void main() {
     expect(video.aid, 123456);
     expect(video.ownerMid, 7788);
     expect(video.description, '这是一段真实简介');
+    expect(
+      video.thumbnailUrl,
+      'https://i0.hdslb.com/main.jpg@320w_200h_1c.webp',
+    );
     expect(video.stats.viewCount, 120000);
     expect(video.collection?.title, '独立视频合集');
     expect(video.collection?.entries, hasLength(2));
     expect(video.collection?.entries.last.bvid, 'BV1Q541167Qg');
+    expect(video.tags, <String>['地理', '科普']);
+    expect(
+      video.collection?.entries.last.thumbnailUrl,
+      'https://i0.hdslb.com/two.jpg@320w_200h_1c.webp',
+    );
   });
 
   /// 验证详情直达仍要求输入 BV 号，避免把关键词误当成视频编号。
@@ -950,10 +1050,106 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(find.byKey(const Key('part-selector-button')), findsNothing);
+    expect(
+      find.byKey(const Key('detail-part-selector-expand')),
+      findsOneWidget,
+    );
     await tester.tap(find.byKey(const Key('part-2')));
     await tester.pumpAndSettle();
 
     expect(service.openedCid, 137649200);
+  });
+
+  /// 验证全屏底栏选集会打开右侧双列面板，并能从面板切换分P。
+  testWidgets('全屏选集从右侧展开并切换分P', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final _FakePlaybackService service = _FakePlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _createMultiPartVideo(),
+          playbackService: service,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final IconButton fullscreenButton = tester.widget<IconButton>(
+      find.byWidgetPredicate(
+        (Widget widget) => widget is IconButton && widget.tooltip == '进入全屏',
+      ),
+    );
+    fullscreenButton.onPressed!();
+    await tester.pumpAndSettle();
+    tester
+        .widget<TextButton>(find.byKey(const Key('part-selector-button')))
+        .onPressed!();
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('fullscreen-part-selector')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('part-2')));
+    await tester.pumpAndSettle();
+    expect(service.openedCid, 137649200);
+    expect(find.byKey(const Key('fullscreen-part-selector')), findsNothing);
+  });
+
+  /// 验证播放器日期包含时间、长简介收起时省略，并能长按复制 BV 号。
+  testWidgets('视频信息显示时间省略长简介并复制BV', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    String? copiedText;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (
+      MethodCall call,
+    ) async {
+      if (call.method == 'Clipboard.setData') {
+        copiedText =
+            (call.arguments as Map<Object?, Object?>)['text'] as String?;
+      }
+      return null;
+    });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, null);
+    });
+    final String description = List<String>.filled(40, '这是一段很长的简介').join();
+    final VideoPreview video = VideoPreview(
+      aid: 123,
+      bvid: 'BV1GJ411x7h7',
+      cid: 137649199,
+      title: '详情交互测试',
+      ownerName: '测试UP',
+      description: description,
+      publishedAt: DateTime(2024, 1, 2, 3, 4),
+      parts: const <VideoPart>[
+        VideoPart(
+          pageNumber: 1,
+          cid: 137649199,
+          title: '第一P',
+          duration: Duration(minutes: 1),
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: video,
+          playbackService: _FakePlaybackService(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('2024-01-02 03:04'), findsOneWidget);
+    final Text descriptionText = tester.widget<Text>(find.text(description));
+    expect(descriptionText.maxLines, 3);
+    expect(descriptionText.overflow, TextOverflow.ellipsis);
+    await tester.longPress(find.byKey(const Key('copy-bvid')));
+    await tester.pump();
+    expect(copiedText, 'BV1GJ411x7h7');
+    expect(find.text('已复制 BV1GJ411x7h7'), findsOneWidget);
   });
 
   /// 验证播放页把单视频分P和多视频 UGC 合集放在不同区域，且不提供评论或发弹幕入口。
@@ -973,11 +1169,50 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('简介'), findsOneWidget);
-    expect(find.textContaining('分P · 当前 P1'), findsOneWidget);
+    expect(find.byKey(const Key('part-selector-button')), findsNothing);
+    expect(
+      find.byKey(const Key('detail-part-selector-expand')),
+      findsOneWidget,
+    );
     expect(find.byKey(const Key('video-collection-card')), findsOneWidget);
     expect(find.textContaining('合集 · 山河合集'), findsOneWidget);
     expect(find.text('评论'), findsNothing);
     expect(find.text('发弹幕'), findsNothing);
+  });
+
+  /// 验证合集视频复用当前播放器加载，并在返回时恢复切换前的视频而不退出页面。
+  testWidgets('合集切换不会卡住且返回上一支视频', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final _FakePlaybackService playbackService = _FakePlaybackService();
+    final _CollectionSwitchVideoService videoService =
+        _CollectionSwitchVideoService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _createCollectionVideo(),
+          playbackService: playbackService,
+          bilibiliService: videoService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const Key('collection-preview-BV1Q541167Qg')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(videoService.lookupRequests, 1);
+    expect(playbackService.openedCid, 137649300);
+    expect(find.text('合集第二支完整视频'), findsOneWidget);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+
+    expect(playbackService.openedCid, 137649199);
+    expect(find.text('合集中的当前视频'), findsOneWidget);
+    expect(find.byType(PlayerPage), findsOneWidget);
   });
 
   /// 验证进入视频页时会优先打开本机保存的第二P。
@@ -1025,6 +1260,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.textContaining('选集 · 共'), findsNothing);
+    expect(find.byKey(const Key('part-selector-button')), findsNothing);
     expect(find.textContaining('已跳转到上次分P'), findsNothing);
   });
 
@@ -1062,11 +1298,13 @@ void main() {
     WidgetTester tester,
   ) async {
     final _FakePlaybackService service = _FakePlaybackService();
+    final _FakeVideoShotService videoShotService = _FakeVideoShotService();
     await tester.pumpWidget(
       MaterialApp(
         home: PlayerPage(
           video: VideoPreview.placeholder(),
           playbackService: service,
+          videoShotService: videoShotService,
         ),
       ),
     );
@@ -1081,6 +1319,8 @@ void main() {
     expect(service.seekToRequests, 0);
     expect(service._speed, 1);
     expect(find.textContaining('跳转至'), findsOneWidget);
+    expect(videoShotService.requests, 1);
+    expect(find.byKey(const Key('video-shot-frame')), findsOneWidget);
 
     await gesture.up();
     await tester.pumpAndSettle();
@@ -1229,8 +1469,8 @@ void main() {
     expect(service.brightness, brightnessAfterMiddle);
   });
 
-  /// 验证超长分P标题使用独立两行竖向组件，展开选集后也不会触发布局异常。
-  testWidgets('分P超长标题在折叠和展开列表中保持可用', (
+  /// 验证超长分P标题在选集面板中使用独立两行竖向组件且不会布局溢出。
+  testWidgets('分P超长标题在选集面板中保持可用', (
     WidgetTester tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
@@ -1247,7 +1487,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.byKey(const Key('part-title-1')), findsOneWidget);
-    await tester.tap(find.text('展开'));
+    await tester.tap(find.byKey(const Key('detail-part-selector-expand')));
     await tester.pump(const Duration(seconds: 6));
     expect(find.byKey(const Key('part-title-1')), findsOneWidget);
     expect(tester.takeException(), isNull);

@@ -267,6 +267,48 @@ void main() {
     );
   });
 
+  /// 验证弹幕经过时间会跟随播放器倍速，二倍速一秒等于视频时间两秒。
+  test('弹幕时间轴跟随播放倍速', () {
+    final Duration position = DanmakuTimeline.advance(
+      positionAnchor: const Duration(seconds: 10),
+      realElapsed: const Duration(seconds: 1),
+      playbackSpeed: 2,
+    );
+
+    expect(position, const Duration(seconds: 12));
+  });
+
+  /// 验证宽屏弹幕在固定视频时长内从最右完整穿过到最左，不依赖固定像素速度。
+  test('弹幕在全屏宽度内完整穿越', () {
+    const double canvasWidth = 1920;
+    const double textWidth = 180;
+
+    expect(
+      DanmakuTimeline.horizontalOffset(
+        elapsed: Duration.zero,
+        canvasWidth: canvasWidth,
+        textWidth: textWidth,
+      ),
+      canvasWidth,
+    );
+    expect(
+      DanmakuTimeline.horizontalOffset(
+        elapsed: const Duration(milliseconds: 4500),
+        canvasWidth: canvasWidth,
+        textWidth: textWidth,
+      ),
+      (canvasWidth - textWidth) / 2,
+    );
+    expect(
+      DanmakuTimeline.horizontalOffset(
+        elapsed: DanmakuTimeline.scrollingTravelDuration,
+        canvasWidth: canvasWidth,
+        textWidth: textWidth,
+      ),
+      -textWidth,
+    );
+  });
+
   test('空弹幕片段会保留正常空状态而不会被误判为网络失败', () async {
     final NativePlayerOverlayService service = NativePlayerOverlayService(
       platformChannel: _FakePlayerOverlayPlatformChannel(

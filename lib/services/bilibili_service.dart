@@ -43,6 +43,7 @@ class BilibiliVideoInfoService implements BilibiliService {
   static const String _apiHost = 'api.bilibili.com';
   static const String _suggestHost = 's.search.bilibili.com';
   static const String _videoInfoPath = '/x/web-interface/view';
+  static const String _videoTagsPath = '/x/tag/archive/tags';
   static const String _videoSearchPath = '/x/web-interface/wbi/search/type';
   static const String _searchSuggestPath = '/main/suggest';
   static const String _desktopUserAgent =
@@ -71,7 +72,49 @@ class BilibiliVideoInfoService implements BilibiliService {
       <String, String>{'bvid': bvid},
     );
     final String responseText = await _requestJson(endpoint);
-    return _parseVideoInfo(responseText, bvid);
+    final VideoPreview video = _parseVideoInfo(responseText, bvid);
+    try {
+      final String tagResponse = await _requestJson(
+        Uri.https(
+          _apiHost,
+          _videoTagsPath,
+          <String, String>{'bvid': video.bvid},
+        ),
+      );
+      final List<String> tags = _parseVideoTags(tagResponse);
+      return tags.isEmpty ? video : video.withTags(tags);
+    } catch (_) {
+      // 标签属于附加资料，读取失败时仍然返回已经可播放的完整视频信息。
+      return video;
+    }
+  }
+
+  /// 解析视频标签接口并去重，损坏、空白或过长标签不会进入详情页。
+  List<String> _parseVideoTags(String responseText) {
+    final Object? decoded = jsonDecode(responseText);
+    if (decoded is! Map) {
+      return const <String>[];
+    }
+    final Map<Object?, Object?> root = Map<Object?, Object?>.from(decoded);
+    final int code = root['code'] is num
+        ? (root['code'] as num).toInt()
+        : (int.tryParse(root['code']?.toString() ?? '') ?? -1);
+    if (code != 0 || root['data'] is! List) {
+      return const <String>[];
+    }
+    final List<String> tags = <String>[];
+    final Set<String> seen = <String>{};
+    for (final Object? rawTag in root['data'] as List) {
+      final String tag = _readText(_readObject(rawTag)['tag_name'], '');
+      if (tag.isEmpty || tag.length > 30 || !seen.add(tag)) {
+        continue;
+      }
+      tags.add(tag);
+      if (tags.length >= 16) {
+        break;
+      }
+    }
+    return List<String>.unmodifiable(tags);
   }
 
   /// 请求关键词视频搜索接口，并把 HTML 标记和接口字段转换为轻量结果列表。
@@ -271,7 +314,12 @@ class BilibiliVideoInfoService implements BilibiliService {
         episode['title'] ?? arc['title'] ?? page['part'],
         '未命名视频',
       ),
-      thumbnailUrl: _normalizeThumbnailUrl(_readText(arc['pic'], '')),
+      thumbnailUrl: _normalizeThumbnailUrl(
+        _readText(
+          arc['pic'] ?? episode['pic'] ?? episode['cover'] ?? page['pic'],
+          '',
+        ),
+      ),
       duration: Duration(seconds: durationSeconds),
       publishedAt: _parseUnixTime(arc['pubdate']),
       stats: _parseVideoStats(arc['stat']),
@@ -487,14 +535,17 @@ class BilibiliVideoInfoService implements BilibiliService {
 
   /// 把可信 B 站图片域名统一为 HTTPS，头像保持原始比例而不追加封面裁切参数。
   String _normalizeImageUrl(String value) {
-    final String normalized = value.startsWith('//') ? 'https:$value' : value;
-    final Uri? uri = Uri.tryParse(normalized);
-    final bool trustedHost = uri != null &&
-        (uri.host.endsWith('.hdslb.com') || uri.host.endsWith('.biliimg.com'));
-    if (uri == null || uri.scheme != 'https' || !trustedHost) {
+    final String withScheme = value.startsWith('//') ? 'https:$value' : value;
+    final Uri? parsed = Uri.tryParse(withScheme);
+    final bool trustedHost = parsed != null &&
+        (parsed.host.endsWith('.hdslb.com') ||
+            parsed.host.endsWith('.biliimg.com'));
+    if (parsed == null || !trustedHost) {
       return '';
     }
-    return normalized;
+    final Uri uri =
+        parsed.scheme == 'http' ? parsed.replace(scheme: 'https') : parsed;
+    return uri.scheme == 'https' ? uri.toString() : '';
   }
 
   /// 把详情接口的 pages 数组转换为稳定的分P列表，并在缺失时补一条默认分P。

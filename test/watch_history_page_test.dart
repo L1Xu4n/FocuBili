@@ -184,6 +184,8 @@ Widget _buildTestApp({
 void main() {
   /// 验证页面展示本机范围说明、封面、观看位置、日期字段和空状态。
   testWidgets('显示本机说明、记录内容和空状态', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(360, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     const String thumbnailUrl =
         'https://i0.hdslb.com/bfs/archive/watch-history-cover.jpg';
     final _FakeWatchHistoryService historyService = _FakeWatchHistoryService(
@@ -219,6 +221,7 @@ void main() {
       ),
       findsOneWidget,
     );
+    expect(tester.takeException(), isNull);
 
     await tester.tap(find.byTooltip('移除记录'));
     await tester.pumpAndSettle();

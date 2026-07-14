@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
+
 import '../models/public_profile.dart';
 import '../models/video_preview.dart';
 import 'bilibili_service.dart';
@@ -17,6 +19,8 @@ abstract interface class BilibiliPublicContentService {
   Future<CreatorContentPage<CreatorVideo>> loadVideos(
     int mid, {
     int page = 1,
+    String keyword = '',
+    CreatorVideoOrder order = CreatorVideoOrder.latest,
   });
 
   /// 分页读取 UP 主的公开专栏摘要。
@@ -51,6 +55,74 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
       'AppleWebKit/537.36 (KHTML, like Gecko) '
       'Chrome/126.0.0.0 Safari/537.36';
   static final RegExp _bvidPattern = RegExp(r'^BV[0-9A-Za-z]{10}$');
+  static final RegExp _wbiFilenamePattern = RegExp(r'/([^/]+)\.[A-Za-z0-9]+$');
+  static final RegExp _wbiFilteredCharacters = RegExp(r"[!'()*]");
+  static const List<int> _wbiMixinKeyOrder = <int>[
+    46,
+    47,
+    18,
+    2,
+    53,
+    8,
+    23,
+    32,
+    15,
+    50,
+    10,
+    31,
+    58,
+    3,
+    45,
+    35,
+    27,
+    43,
+    5,
+    49,
+    33,
+    9,
+    42,
+    19,
+    29,
+    28,
+    14,
+    39,
+    12,
+    38,
+    41,
+    13,
+    37,
+    48,
+    7,
+    16,
+    24,
+    55,
+    40,
+    61,
+    26,
+    17,
+    0,
+    1,
+    60,
+    51,
+    30,
+    4,
+    22,
+    25,
+    54,
+    21,
+    56,
+    59,
+    6,
+    63,
+    57,
+    62,
+    11,
+    36,
+    20,
+    34,
+    44,
+    52,
+  ];
   final PublicContentJsonRequest _requestJson;
 
   /// 请求用户名片接口并解析头像、签名、认证、关注、粉丝和获赞数。
@@ -62,20 +134,64 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
       '/x/web-interface/card',
       <String, String>{'mid': mid.toString(), 'photo': 'true'},
     );
-    final Map<Object?, Object?> data = await _requestData(endpoint);
-    final Map<Object?, Object?> card = _readObject(data['card']);
-    final Map<Object?, Object?> official = _readObject(card['Official']);
+    try {
+      final Map<Object?, Object?> data = await _requestData(endpoint);
+      final Map<Object?, Object?> card = _readObject(data['card']);
+      if (card.isEmpty) {
+        throw const BilibiliLookupException('UP 主名片暂时没有返回资料。');
+      }
+      final Map<Object?, Object?> official = _readObject(card['Official']);
+      return CreatorProfile(
+        mid: _readPositiveInt(card['mid']) ?? mid,
+        name: _readText(card['name'], '未知 UP 主'),
+        avatarUrl: _normalizeImageUrl(_readText(card['face'], '')),
+        sign: _readText(card['sign'], ''),
+        officialDescription: _readText(official['desc'], ''),
+        followingCount: _readNonNegativeInt(card['attention']),
+        followerCount: _readNonNegativeInt(data['follower']),
+        likeCount: _readNonNegativeInt(data['like_num']),
+        videoCount: _readNonNegativeInt(data['archive_count']),
+        articleCount: _readNonNegativeInt(data['article_count']),
+      );
+    } on BilibiliLookupException catch (error) {
+      if (!_isTransientRiskControl(error) &&
+          !error.message.contains('没有返回资料')) {
+        rethrow;
+      }
+      return _loadProfileWithWbi(mid);
+    }
+  }
+
+  /// 使用签名空间资料接口和关系统计接口补齐受风控 UP 主的昵称、简介与粉丝数。
+  Future<CreatorProfile> _loadProfileWithWbi(int mid) async {
+    final String mixinKey = await _loadWbiMixinKey();
+    final Uri profileEndpoint = Uri.https(
+      _apiHost,
+      '/x/space/wbi/acc/info',
+      _signWbiParameters(<String, String>{'mid': mid.toString()}, mixinKey),
+    );
+    final Map<Object?, Object?> profile = await _requestData(profileEndpoint);
+    Map<Object?, Object?> relation = const <Object?, Object?>{};
+    try {
+      relation = await _requestData(
+        Uri.https(
+          _apiHost,
+          '/x/relation/stat',
+          <String, String>{'vmid': mid.toString()},
+        ),
+      );
+    } on BilibiliLookupException {
+      // 关系统计偶发风控时仍显示已经成功读取的基本资料。
+    }
+    final Map<Object?, Object?> official = _readObject(profile['official']);
     return CreatorProfile(
-      mid: _readPositiveInt(card['mid']) ?? mid,
-      name: _readText(card['name'], '未知 UP 主'),
-      avatarUrl: _normalizeImageUrl(_readText(card['face'], '')),
-      sign: _readText(card['sign'], ''),
+      mid: _readPositiveInt(profile['mid']) ?? mid,
+      name: _readText(profile['name'], '未知 UP 主'),
+      avatarUrl: _normalizeImageUrl(_readText(profile['face'], '')),
+      sign: _readText(profile['sign'], ''),
       officialDescription: _readText(official['desc'], ''),
-      followingCount: _readNonNegativeInt(card['attention']),
-      followerCount: _readNonNegativeInt(data['follower']),
-      likeCount: _readNonNegativeInt(data['like_num']),
-      videoCount: _readNonNegativeInt(data['archive_count']),
-      articleCount: _readNonNegativeInt(data['article_count']),
+      followingCount: _readNonNegativeInt(relation['following']),
+      followerCount: _readNonNegativeInt(relation['follower']),
     );
   }
 
@@ -84,9 +200,13 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
   Future<CreatorContentPage<CreatorVideo>> loadVideos(
     int mid, {
     int page = 1,
+    String keyword = '',
+    CreatorVideoOrder order = CreatorVideoOrder.latest,
   }) async {
     _requirePositiveId(mid, 'UP 主编号');
     final int safePage = _safePage(page);
+    final String safeKeyword = keyword.trim();
+    final String orderValue = _videoOrderParameter(order);
     final Uri endpoint = Uri.https(
       _apiHost,
       '/x/space/arc/search',
@@ -94,10 +214,24 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
         'mid': mid.toString(),
         'pn': safePage.toString(),
         'ps': '20',
-        'order': 'pubdate',
+        'order': orderValue,
+        if (safeKeyword.isNotEmpty) 'keyword': safeKeyword,
       },
     );
-    final Map<Object?, Object?> data = await _requestData(endpoint);
+    Map<Object?, Object?> data;
+    try {
+      data = await _requestData(endpoint);
+    } on BilibiliLookupException catch (error) {
+      if (!_isTransientRiskControl(error)) {
+        rethrow;
+      }
+      data = await _loadVideosWithWbi(
+        mid,
+        safePage,
+        keyword: safeKeyword,
+        order: order,
+      );
+    }
     final Map<Object?, Object?> list = _readObject(data['list']);
     final List<CreatorVideo> videos = _parseVideoList(list['vlist']);
     final int total = _readNonNegativeInt(_readObject(data['page'])['count']);
@@ -107,6 +241,117 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
       hasMore: safePage * 20 < total,
       totalCount: total,
     );
+  }
+
+  /// 判断请求是否命中可自动恢复的频率或风控错误，避免把永久错误反复重试。
+  bool _isTransientRiskControl(BilibiliLookupException error) {
+    return error.message.contains('错误码：-352') ||
+        error.message.contains('错误码：-779') ||
+        error.message.contains('错误码：-799') ||
+        error.message.contains('412');
+  }
+
+  /// 使用实时 WBI 密钥签名投稿请求，并对 -352、-779、412 做短暂自动重试。
+  Future<Map<Object?, Object?>> _loadVideosWithWbi(
+    int mid,
+    int safePage, {
+    required String keyword,
+    required CreatorVideoOrder order,
+  }) async {
+    BilibiliLookupException? lastError;
+    const List<Duration> retryDelays = <Duration>[
+      Duration.zero,
+      Duration(milliseconds: 220),
+      Duration(milliseconds: 520),
+    ];
+    for (final Duration delay in retryDelays) {
+      if (delay > Duration.zero) {
+        await Future<void>.delayed(delay);
+      }
+      try {
+        final String mixinKey = await _loadWbiMixinKey();
+        final Map<String, String> parameters = <String, String>{
+          'mid': mid.toString(),
+          'pn': safePage.toString(),
+          'ps': '20',
+          'order': _videoOrderParameter(order),
+          if (keyword.isNotEmpty) 'keyword': keyword,
+        };
+        final Uri endpoint = Uri.https(
+          _apiHost,
+          '/x/space/wbi/arc/search',
+          _signWbiParameters(parameters, mixinKey),
+        );
+        return await _requestData(endpoint);
+      } on BilibiliLookupException catch (error) {
+        lastError = error;
+        if (!_isTransientRiskControl(error)) {
+          rethrow;
+        }
+      }
+    }
+    throw lastError ?? const BilibiliLookupException('UP 主投稿暂时无法读取。');
+  }
+
+  /// 把页面选择的排序枚举转换成 B 站投稿接口使用的稳定参数。
+  String _videoOrderParameter(CreatorVideoOrder order) {
+    return switch (order) {
+      CreatorVideoOrder.latest => 'pubdate',
+      CreatorVideoOrder.mostPlayed => 'click',
+      CreatorVideoOrder.mostFavorited => 'stow',
+    };
+  }
+
+  /// 从导航接口读取当天 WBI 图片密钥；导航接口未登录码 -101 仍会携带公开密钥。
+  Future<String> _loadWbiMixinKey() async {
+    final Uri endpoint = Uri.https(_apiHost, '/x/web-interface/nav');
+    final String responseText = await _requestJson(endpoint);
+    final Object? decoded = jsonDecode(responseText);
+    if (decoded is! Map) {
+      throw const BilibiliLookupException('WBI 密钥接口返回的数据格式不正确。');
+    }
+    final Map<Object?, Object?> root = Map<Object?, Object?>.from(decoded);
+    final Map<Object?, Object?> data = _readObject(root['data']);
+    final Map<Object?, Object?> wbiImage = _readObject(data['wbi_img']);
+    final String imageKey = _wbiFilename(_readText(wbiImage['img_url'], ''));
+    final String subKey = _wbiFilename(_readText(wbiImage['sub_url'], ''));
+    final String rawKey = '$imageKey$subKey';
+    if (rawKey.length < 64) {
+      throw const BilibiliLookupException('WBI 密钥暂时不可用，请稍后重试。');
+    }
+    final StringBuffer mixed = StringBuffer();
+    for (final int index in _wbiMixinKeyOrder) {
+      if (index < rawKey.length) {
+        mixed.write(rawKey[index]);
+      }
+    }
+    return mixed.toString().substring(0, 32);
+  }
+
+  /// 从 WBI 图片地址中提取不含扩展名的文件名，用于生成混淆密钥。
+  String _wbiFilename(String url) {
+    return _wbiFilenamePattern.firstMatch(url)?.group(1) ?? '';
+  }
+
+  /// 为参数加入秒级时间戳并计算 w_rid，签名过程不会读取或保存用户 Cookie。
+  Map<String, String> _signWbiParameters(
+    Map<String, String> parameters,
+    String mixinKey,
+  ) {
+    final Map<String, String> values = Map<String, String>.from(parameters)
+      ..['wts'] = (DateTime.now().millisecondsSinceEpoch ~/ 1000).toString();
+    final List<String> keys = values.keys.toList(growable: false)..sort();
+    final String query = keys.map((String key) {
+      final String filteredValue = values[key]!.replaceAll(
+        _wbiFilteredCharacters,
+        '',
+      );
+      return '${Uri.encodeQueryComponent(key)}='
+          '${Uri.encodeQueryComponent(filteredValue)}';
+    }).join('&');
+    final String signature =
+        md5.convert(utf8.encode('$query$mixinKey')).toString();
+    return <String, String>{...values, 'w_rid': signature};
   }
 
   /// 请求公开专栏列表并保留标题、摘要、首图、时间和阅读量。
@@ -260,17 +505,42 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
           coverUrl: _normalizeThumbnailUrl(
             _readText(item['pic'] ?? item['cover'], ''),
           ),
-          duration: Duration(seconds: _readNonNegativeInt(item['duration'])),
+          duration: _parseVideoDuration(item['duration'] ?? item['length']),
           publishedAt: _readUnixTime(item['pubdate'] ?? item['created']),
           stats: VideoStats(
             viewCount: _readNonNegativeInt(stats['view'] ?? item['play']),
             danmakuCount:
                 _readNonNegativeInt(stats['danmaku'] ?? item['video_review']),
+            favoriteCount: _readNonNegativeInt(
+              stats['favorite'] ?? item['favorites'] ?? item['favorite'],
+            ),
           ),
         ),
       );
     }
     return videos;
+  }
+
+  /// 兼容秒数和“分:秒/时:分:秒”两种投稿时长格式，避免字符串被错误显示成 0:00。
+  Duration _parseVideoDuration(Object? value) {
+    final int? numericSeconds = _readInteger(value);
+    if (numericSeconds != null) {
+      return Duration(seconds: numericSeconds.clamp(0, 1 << 31).toInt());
+    }
+    final List<String> parts =
+        value?.toString().trim().split(':') ?? const <String>[];
+    if (parts.length < 2 || parts.length > 3) {
+      return Duration.zero;
+    }
+    int seconds = 0;
+    for (final String part in parts) {
+      final int? number = int.tryParse(part.trim());
+      if (number == null || number < 0) {
+        return Duration.zero;
+      }
+      seconds = seconds * 60 + number;
+    }
+    return Duration(seconds: seconds);
   }
 
   /// 从专栏接口项中解析文章摘要，编号无效时忽略该项。
@@ -307,7 +577,9 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
       id: id,
       ownerMid: _readPositiveInt(meta['mid']) ?? fallbackOwnerMid,
       title: _readText(meta['title'] ?? meta['name'], '未命名合集'),
-      coverUrl: _normalizeThumbnailUrl(_readText(meta['cover'], '')),
+      coverUrl: _normalizeThumbnailUrl(
+        _readText(meta['cover'] ?? item['cover'], ''),
+      ),
       description: _readText(meta['description'], ''),
       totalCount: _readNonNegativeInt(meta['total']),
       previewVideos: List<CreatorVideo>.unmodifiable(
@@ -370,15 +642,22 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
 
   /// 把可信 B 站图片地址统一为 HTTPS，不允许加载任意第三方图片域名。
   String _normalizeImageUrl(String value) {
-    final String normalized = value.startsWith('//') ? 'https:$value' : value;
-    final Uri? uri = Uri.tryParse(normalized);
-    if (uri == null ||
-        uri.scheme != 'https' ||
+    final String withScheme = value.startsWith('//') ? 'https:$value' : value;
+    final Uri? parsed = Uri.tryParse(withScheme);
+    final bool trustedHost = parsed != null &&
+        (parsed.host.endsWith('.hdslb.com') ||
+            parsed.host.endsWith('.biliimg.com'));
+    if (parsed == null || !trustedHost) {
+      return '';
+    }
+    final Uri uri =
+        parsed.scheme == 'http' ? parsed.replace(scheme: 'https') : parsed;
+    if (uri.scheme != 'https' ||
         (!uri.host.endsWith('.hdslb.com') &&
             !uri.host.endsWith('.biliimg.com'))) {
       return '';
     }
-    return normalized;
+    return uri.toString();
   }
 
   /// 为封面地址追加服务端缩略图参数，降低主页列表流量。

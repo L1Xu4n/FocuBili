@@ -36,10 +36,12 @@ class _SubscribedCollectionsPageState extends State<SubscribedCollectionsPage> {
   late final BilibiliPublicContentService _publicContentService;
   late final BilibiliService _videoService;
   final ScrollController _scrollController = ScrollController();
+  final TextEditingController _searchController = TextEditingController();
   List<SubscribedCollection> _collections = const <SubscribedCollection>[];
   AccountDataPage<SubscribedCollection>? _page;
   bool _loading = true;
   bool _loadingMore = false;
+  String _searchQuery = '';
 
   /// 初始化服务、滚动监听，并读取订阅合集第一页。
   @override
@@ -60,6 +62,7 @@ class _SubscribedCollectionsPageState extends State<SubscribedCollectionsPage> {
     _scrollController
       ..removeListener(_loadMoreNearBottom)
       ..dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -272,8 +275,46 @@ class _SubscribedCollectionsPageState extends State<SubscribedCollectionsPage> {
     );
   }
 
+  /// 按合集标题、UP 主昵称或简介筛选当前已加载的订阅合集。
+  List<SubscribedCollection> _filteredCollections() {
+    final String query = _searchQuery.trim().toLowerCase();
+    if (query.isEmpty) {
+      return _collections;
+    }
+    return _collections
+        .where(
+          (SubscribedCollection item) =>
+              item.title.toLowerCase().contains(query) ||
+              item.ownerName.toLowerCase().contains(query) ||
+              item.description.toLowerCase().contains(query),
+        )
+        .toList(growable: false);
+  }
+
+  /// 创建订阅合集搜索框，输入变化不会触发订阅关系写操作。
+  Widget _buildSearchField() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
+      child: TextField(
+        key: const Key('subscribed-collections-search'),
+        controller: _searchController,
+        onChanged: (String value) => setState(() => _searchQuery = value),
+        decoration: InputDecoration(
+          hintText: '搜索合集或 UP 主',
+          prefixIcon: const Icon(Icons.search_rounded),
+          isDense: true,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+        ),
+      ),
+    );
+  }
+
   /// 创建订阅合集卡片列表和自动分页底部加载器。
   Widget _buildList() {
+    final List<SubscribedCollection> visibleCollections =
+        _filteredCollections();
     return RefreshIndicator(
       // 下拉刷新函数重新读取第 1 页订阅合集。
       onRefresh: _loadFirstPage,
@@ -282,11 +323,17 @@ class _SubscribedCollectionsPageState extends State<SubscribedCollectionsPage> {
         controller: _scrollController,
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-        itemCount: _collections.length + 1,
+        itemCount: visibleCollections.length + 1,
         separatorBuilder: (BuildContext context, int index) =>
             const SizedBox(height: 10),
         itemBuilder: (BuildContext context, int index) {
-          if (index == _collections.length) {
+          if (index == visibleCollections.length) {
+            if (visibleCollections.isEmpty && _searchQuery.trim().isNotEmpty) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(vertical: 48),
+                child: Center(child: Text('没有匹配的订阅合集')),
+              );
+            }
             return _loadingMore
                 ? const Padding(
                     padding: EdgeInsets.all(16),
@@ -296,7 +343,7 @@ class _SubscribedCollectionsPageState extends State<SubscribedCollectionsPage> {
                   )
                 : const SizedBox(height: 8);
           }
-          final SubscribedCollection item = _collections[index];
+          final SubscribedCollection item = visibleCollections[index];
           return Card(
             key: Key('subscribed-collection-${item.id}'),
             margin: EdgeInsets.zero,
@@ -376,7 +423,12 @@ class _SubscribedCollectionsPageState extends State<SubscribedCollectionsPage> {
           ),
         ],
       ),
-      body: _buildBody(),
+      body: Column(
+        children: <Widget>[
+          _buildSearchField(),
+          Expanded(child: _buildBody()),
+        ],
+      ),
     );
   }
 }

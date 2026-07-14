@@ -37,11 +37,13 @@ class FavoriteVideosPage extends StatefulWidget {
 class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
   late final BilibiliAccountDataService _accountDataService;
   late final BilibiliService _bilibiliService;
+  final TextEditingController _searchController = TextEditingController();
   List<FavoriteVideo> _videos = const <FavoriteVideo>[];
   AccountDataPage<FavoriteVideo>? _page;
   bool _isLoading = true;
   bool _isLoadingMore = false;
   String? _openingBvid;
+  String _searchQuery = '';
 
   /// 创建页面服务并在首次进入时读取第 1 页收藏内容。
   @override
@@ -51,6 +53,13 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
         widget.accountDataService ?? BilibiliAccountDataService();
     _bilibiliService = widget.bilibiliService ?? BilibiliVideoInfoService();
     unawaited(_loadFirstPage());
+  }
+
+  /// 释放收藏内容搜索输入控制器。
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   /// 读取收藏夹第 1 页；刷新失败时保留原有已成功显示的视频列表。
@@ -341,8 +350,45 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
     );
   }
 
-  /// 创建收藏视频卡片列表，失效视频保持可见但不会触发公开详情查询。
+  /// 按标题、UP 主昵称或 BV 号筛选当前已经加载的收藏视频。
+  List<FavoriteVideo> _filteredVideos() {
+    final String query = _searchQuery.trim().toLowerCase();
+    if (query.isEmpty) {
+      return _videos;
+    }
+    return _videos
+        .where(
+          (FavoriteVideo video) =>
+              video.title.toLowerCase().contains(query) ||
+              video.ownerName.toLowerCase().contains(query) ||
+              video.bvid.toLowerCase().contains(query),
+        )
+        .toList(growable: false);
+  }
+
+  /// 创建收藏内容搜索框，输入变化只筛选本页内存数据。
+  Widget _buildSearchField() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
+      child: TextField(
+        key: const Key('favorite-videos-search'),
+        controller: _searchController,
+        onChanged: (String value) => setState(() => _searchQuery = value),
+        decoration: InputDecoration(
+          hintText: '搜索视频标题、UP 主或 BV 号',
+          prefixIcon: const Icon(Icons.search_rounded),
+          isDense: true,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 创建自适应收藏视频卡片列表，避免宽封面和尾部图标在窄屏挤压标题。
   Widget _buildVideoList() {
+    final List<FavoriteVideo> visibleVideos = _filteredVideos();
     return RefreshIndicator(
       // 下拉刷新函数只重新读取第 1 页，不会写入收藏夹或账号数据。
       onRefresh: _loadFirstPage,
@@ -350,50 +396,74 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
         key: const Key('favorite-videos-list'),
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-        itemCount: _videos.length + 1,
+        itemCount: visibleVideos.length + 1,
         separatorBuilder: (BuildContext context, int index) =>
             const SizedBox(height: 8),
         itemBuilder: (BuildContext context, int index) {
-          if (index == _videos.length) {
+          if (index == visibleVideos.length) {
+            if (visibleVideos.isEmpty && _searchQuery.trim().isNotEmpty) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(vertical: 48),
+                child: Center(child: Text('没有匹配的收藏视频')),
+              );
+            }
             return _buildLoadMoreFooter();
           }
-          final FavoriteVideo video = _videos[index];
+          final FavoriteVideo video = visibleVideos[index];
           final bool isOpening = _openingBvid == video.bvid;
           return Card(
             key: Key('favorite-video-${video.bvid}'),
-            child: ListTile(
-              enabled: video.isAvailable,
-              isThreeLine: true,
-              leading: _buildThumbnail(video),
-              title: Text(
-                video.title,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-              subtitle: Text(
-                video.isAvailable
-                    ? '${video.ownerName} · ${_formatDuration(video.duration)}'
-                    : '${video.ownerName} · 视频已失效，暂不可播放',
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-              trailing: isOpening
-                  ? const SizedBox.square(
-                      dimension: 24,
-                      child: Padding(
-                        padding: EdgeInsets.all(4),
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                    )
-                  : Icon(
-                      video.isAvailable
-                          ? Icons.play_circle_outline_rounded
-                          : Icons.block_rounded,
-                    ),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
               // 视频点击函数仅在条目可播放时补齐详情并进入播放器。
               onTap: !video.isAvailable || isOpening
                   ? null
                   : () => _openVideo(video),
+              child: Padding(
+                padding: const EdgeInsets.all(10),
+                child: Row(
+                  children: <Widget>[
+                    _buildThumbnail(video),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text(
+                            video.title,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            video.isAvailable
+                                ? video.ownerName
+                                : '${video.ownerName} · 视频已失效，暂不可播放',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (isOpening)
+                      const Padding(
+                        padding: EdgeInsets.all(8),
+                        child: SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    else
+                      Icon(
+                        video.isAvailable
+                            ? Icons.play_circle_outline_rounded
+                            : Icons.block_rounded,
+                      ),
+                  ],
+                ),
+              ),
             ),
           );
         },
@@ -436,7 +506,12 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
           ),
         ],
       ),
-      body: _buildBody(),
+      body: Column(
+        children: <Widget>[
+          _buildSearchField(),
+          Expanded(child: _buildBody()),
+        ],
+      ),
     );
   }
 }

@@ -32,8 +32,11 @@ class FavoriteFoldersPage extends StatefulWidget {
 class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
   late final BilibiliAccountDataService _accountDataService;
   late final BilibiliService _bilibiliService;
+  final TextEditingController _searchController = TextEditingController();
+  final Map<int, String> _fallbackCoverUrls = <int, String>{};
   AccountDataPage<FavoriteFolder>? _page;
   bool _isLoading = true;
+  String _searchQuery = '';
 
   /// 初始化注入服务并在用户进入本页时读取一次自己的收藏夹列表。
   @override
@@ -43,6 +46,13 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
         widget.accountDataService ?? BilibiliAccountDataService();
     _bilibiliService = widget.bilibiliService ?? BilibiliVideoInfoService();
     unawaited(_loadFolders());
+  }
+
+  /// 释放收藏夹搜索输入控制器。
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   /// 读取当前账号收藏夹列表；刷新失败时保留已成功显示的收藏夹。
@@ -64,6 +74,53 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
     });
     if (keepPreviousList) {
       _showMessage(result.message ?? '刷新收藏夹失败，请稍后重试。');
+    } else if (result.isSuccess) {
+      unawaited(_backfillMissingFolderCovers(result.items));
+    }
+  }
+
+  /// 从每个无封面收藏夹的首个视频补出列表封面，并限制每批三个账号请求。
+  Future<void> _backfillMissingFolderCovers(
+    List<FavoriteFolder> folders,
+  ) async {
+    final List<FavoriteFolder> missing = folders
+        .where(
+          (FavoriteFolder folder) =>
+              folder.coverUrl.isEmpty &&
+              folder.mediaCount > 0 &&
+              !_fallbackCoverUrls.containsKey(folder.mediaId),
+        )
+        .toList(growable: false);
+    for (int offset = 0; offset < missing.length; offset += 3) {
+      final int end = (offset + 3).clamp(0, missing.length).toInt();
+      final List<MapEntry<int, String>?> covers = await Future.wait(
+        missing.sublist(offset, end).map(
+          // 首视频封面查询函数只读取收藏夹第一页，不改变账号收藏数据。
+          (FavoriteFolder folder) async {
+            final AccountDataPage<FavoriteVideo> page =
+                await _accountDataService.loadFavoriteVideos(folder.mediaId);
+            if (!page.isSuccess) {
+              return null;
+            }
+            for (final FavoriteVideo video in page.items) {
+              if (video.coverUrl.isNotEmpty) {
+                return MapEntry<int, String>(folder.mediaId, video.coverUrl);
+              }
+            }
+            return null;
+          },
+        ),
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        for (final MapEntry<int, String>? cover in covers) {
+          if (cover != null) {
+            _fallbackCoverUrls[cover.key] = cover.value;
+          }
+        }
+      });
     }
   }
 
@@ -99,6 +156,9 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
 
   /// 创建收藏夹封面、加载失败占位图和内容数量角标。
   Widget _buildFolderCover(FavoriteFolder folder) {
+    final String coverUrl = folder.coverUrl.isNotEmpty
+        ? folder.coverUrl
+        : (_fallbackCoverUrls[folder.mediaId] ?? '');
     return SizedBox(
       width: 112,
       height: 70,
@@ -107,11 +167,11 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
         child: Stack(
           fit: StackFit.expand,
           children: <Widget>[
-            if (folder.coverUrl.isEmpty)
+            if (coverUrl.isEmpty)
               _buildCoverPlaceholder()
             else
               CachedNetworkImage(
-                imageUrl: folder.coverUrl,
+                imageUrl: coverUrl,
                 httpHeaders: const <String, String>{
                   'Referer': 'https://www.bilibili.com/',
                 },
@@ -134,6 +194,39 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
               child: _buildCountBadge('${folder.mediaCount} 个视频'),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// 按收藏夹名称筛选当前已加载列表，搜索不触发额外账号请求。
+  List<FavoriteFolder> _filteredFolders(List<FavoriteFolder> folders) {
+    final String query = _searchQuery.trim().toLowerCase();
+    if (query.isEmpty) {
+      return folders;
+    }
+    return folders
+        .where(
+          (FavoriteFolder folder) => folder.title.toLowerCase().contains(query),
+        )
+        .toList(growable: false);
+  }
+
+  /// 创建收藏夹名称搜索框，并在输入时即时刷新本地筛选结果。
+  Widget _buildSearchField() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
+      child: TextField(
+        key: const Key('favorite-folders-search'),
+        controller: _searchController,
+        onChanged: (String value) => setState(() => _searchQuery = value),
+        decoration: InputDecoration(
+          hintText: '搜索收藏夹',
+          prefixIcon: const Icon(Icons.search_rounded),
+          isDense: true,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
         ),
       ),
     );
@@ -228,7 +321,7 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
     );
   }
 
-  /// 创建收藏夹卡片列表；点击一个正常收藏夹将进入其内容页。
+  /// 创建自适应收藏夹卡片列表，固定封面比例并为窄屏标题保留完整弹性空间。
   Widget _buildFolderList(List<FavoriteFolder> folders) {
     return RefreshIndicator(
       // 下拉刷新函数只重新读取收藏夹列表，不新增、删除或修改收藏夹。
@@ -244,24 +337,44 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
           final FavoriteFolder folder = folders[index];
           return Card(
             key: Key('favorite-folder-${folder.mediaId}'),
-            child: ListTile(
-              enabled: folder.isAvailable,
-              leading: _buildFolderCover(folder),
-              title: Text(
-                folder.title,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-              subtitle: Text(
-                folder.isAvailable ? '${folder.mediaCount} 个视频' : '收藏夹已失效',
-              ),
-              trailing: Icon(
-                folder.isAvailable
-                    ? Icons.chevron_right_rounded
-                    : Icons.block_rounded,
-              ),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
               // 收藏夹点击函数只打开内容页，不会改变任何收藏夹数据。
-              onTap: () => _openFolder(folder),
+              onTap: folder.isAvailable ? () => _openFolder(folder) : null,
+              child: Padding(
+                padding: const EdgeInsets.all(10),
+                child: Row(
+                  children: <Widget>[
+                    _buildFolderCover(folder),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text(
+                            folder.title,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            folder.isAvailable
+                                ? '${folder.mediaCount} 个视频'
+                                : '收藏夹已失效',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                    Icon(
+                      folder.isAvailable
+                          ? Icons.chevron_right_rounded
+                          : Icons.block_rounded,
+                    ),
+                  ],
+                ),
+              ),
             ),
           );
         },
@@ -286,7 +399,11 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
     if (page.isEmpty) {
       return _buildEmptyState();
     }
-    return _buildFolderList(page.items);
+    final List<FavoriteFolder> folders = _filteredFolders(page.items);
+    if (folders.isEmpty && _searchQuery.trim().isNotEmpty) {
+      return const Center(child: Text('没有匹配的收藏夹'));
+    }
+    return _buildFolderList(folders);
   }
 
   /// 创建收藏夹页标题、刷新入口和随加载状态变化的内容区域。
@@ -304,7 +421,12 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
           ),
         ],
       ),
-      body: _buildBody(),
+      body: Column(
+        children: <Widget>[
+          _buildSearchField(),
+          Expanded(child: _buildBody()),
+        ],
+      ),
     );
   }
 }

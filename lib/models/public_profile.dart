@@ -1,5 +1,8 @@
 import 'video_preview.dart';
 
+/// 表示 UP 主投稿列表的服务端排序方式。
+enum CreatorVideoOrder { latest, mostPlayed, mostFavorited }
+
 /// 保存公开 UP 主主页头部需要的资料和只读统计。
 class CreatorProfile {
   /// 创建公开主页资料；未返回的统计保持为零。

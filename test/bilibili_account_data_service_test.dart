@@ -137,9 +137,9 @@ void main() {
               {
                 "id": 1001,
                 "title": "学习收藏",
-                "cover": "//i0.hdslb.com/folder.jpg",
+                "cover": "http://i0.hdslb.com/folder.jpg",
                 "media_count": 3,
-                "attr": 0
+                "attr": 23
               },
               {"id": 0, "title": "非法收藏夹"}
             ]
@@ -157,6 +157,7 @@ void main() {
     expect(result.items, hasLength(1));
     expect(result.items.single.mediaId, 1001);
     expect(result.items.single.coverUrl, 'https://i0.hdslb.com/folder.jpg');
+    expect(result.items.single.isAvailable, isTrue);
     expect(api.endpoints.single.path, '/x/v3/fav/folder/created/list-all');
     expect(api.endpoints.single.queryParameters['up_mid'], '42');
     expect(api.receivedCookies, <String>['SESSDATA=test-session']);
@@ -178,7 +179,7 @@ void main() {
               {
                 "bvid": "BV1GJ411x7h7",
                 "title": "正常视频",
-                "cover": "https://i0.hdslb.com/video.jpg",
+                "cover": "http://i0.hdslb.com/video.jpg",
                 "duration": 90,
                 "page": 2,
                 "upper": {"name": "测试UP"},
@@ -208,6 +209,7 @@ void main() {
     expect(result.totalCount, 45);
     expect(result.items, hasLength(2));
     expect(result.items.first.duration, const Duration(seconds: 90));
+    expect(result.items.first.coverUrl, 'https://i0.hdslb.com/video.jpg');
     expect(result.items.first.partCount, 2);
     expect(result.items.first.isAvailable, isTrue);
     expect(result.items.last.bvid, 'BV1Q541167Qg');
@@ -340,7 +342,7 @@ void main() {
                 "id": 1001,
                 "type": 21,
                 "title": "山河合集",
-                "cover": "//i0.hdslb.com/collection.jpg",
+                "cover": "http://i0.hdslb.com/collection.jpg",
                 "intro": "多支独立视频",
                 "media_count": 9,
                 "view_count": 1234,
@@ -370,6 +372,10 @@ void main() {
     expect(result.items.single.title, '山河合集');
     expect(result.items.single.ownerMid, 7);
     expect(result.items.single.videoCount, 9);
+    expect(
+      result.items.single.coverUrl,
+      'https://i0.hdslb.com/collection.jpg',
+    );
     expect(api.endpoints.single.path, '/x/v3/fav/folder/collected/list');
     expect(api.endpoints.single.queryParameters['up_mid'], '99');
     expect(api.endpoints.single.queryParameters['pn'], '1');

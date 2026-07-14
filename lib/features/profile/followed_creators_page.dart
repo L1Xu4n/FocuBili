@@ -34,10 +34,12 @@ class _FollowedCreatorsPageState extends State<FollowedCreatorsPage> {
   late final BilibiliAccountDataService _accountDataService;
   late final BilibiliPublicContentService _publicContentService;
   late final BilibiliService _videoService;
+  final TextEditingController _searchController = TextEditingController();
   List<FollowedCreator> _creators = const <FollowedCreator>[];
   AccountDataPage<FollowedCreator>? _page;
   bool _isLoading = true;
   bool _isLoadingMore = false;
+  String _searchQuery = '';
 
   /// 初始化服务并在进入页面时读取已关注 UP 主的第 1 页。
   @override
@@ -49,6 +51,13 @@ class _FollowedCreatorsPageState extends State<FollowedCreatorsPage> {
         widget.publicContentService ?? BilibiliHttpPublicContentService();
     _videoService = widget.videoService ?? BilibiliVideoInfoService();
     unawaited(_loadFirstPage());
+  }
+
+  /// 释放我的关注搜索输入控制器。
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   /// 打开已关注 UP 主的公开主页，不执行关注或取关操作。
@@ -188,18 +197,121 @@ class _FollowedCreatorsPageState extends State<FollowedCreatorsPage> {
     );
   }
 
-  /// 将 UP 主认证和签名组合为简短副标题，字段为空时提供稳定默认说明。
-  String _creatorDescription(FollowedCreator creator) {
-    if (creator.officialDescription.isNotEmpty && creator.sign.isNotEmpty) {
-      return '${creator.officialDescription}\n${creator.sign}';
+  /// 按昵称、UID、认证或签名筛选当前已加载的关注列表。
+  List<FollowedCreator> _filteredCreators() {
+    final String query = _searchQuery.trim().toLowerCase();
+    if (query.isEmpty) {
+      return _creators;
     }
-    if (creator.officialDescription.isNotEmpty) {
-      return creator.officialDescription;
-    }
-    if (creator.sign.isNotEmpty) {
-      return creator.sign;
-    }
-    return '已关注 UP 主';
+    return _creators
+        .where(
+          (FollowedCreator creator) =>
+              creator.name.toLowerCase().contains(query) ||
+              creator.mid.toString().contains(query) ||
+              creator.officialDescription.toLowerCase().contains(query) ||
+              creator.sign.toLowerCase().contains(query),
+        )
+        .toList(growable: false);
+  }
+
+  /// 创建关注列表搜索框，输入时只筛选已加载资料。
+  Widget _buildSearchField() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
+      child: TextField(
+        key: const Key('followed-creators-search'),
+        controller: _searchController,
+        onChanged: (String value) => setState(() => _searchQuery = value),
+        decoration: InputDecoration(
+          hintText: '搜索昵称、UID、认证或签名',
+          prefixIcon: const Icon(Icons.search_rounded),
+          isDense: true,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 创建信息层级更清晰的关注卡片，分别展示昵称、UID、认证和签名。
+  Widget _buildCreatorCard(FollowedCreator creator) {
+    return Card(
+      key: Key('followed-creator-${creator.mid}'),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        // UP 主卡点击函数打开只读公开主页。
+        onTap: () => unawaited(_openCreator(creator)),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: <Widget>[
+              _buildAvatar(creator),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Row(
+                      children: <Widget>[
+                        Flexible(
+                          child: Text(
+                            creator.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        if (creator.officialDescription.isNotEmpty) ...<Widget>[
+                          const SizedBox(width: 5),
+                          Icon(
+                            Icons.verified_rounded,
+                            size: 17,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      'UID：${creator.mid}',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    if (creator.officialDescription.isNotEmpty) ...<Widget>[
+                      const SizedBox(height: 4),
+                      Text(
+                        creator.officialDescription,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.primary,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                    if (creator.sign.isNotEmpty) ...<Widget>[
+                      const SizedBox(height: 4),
+                      Text(
+                        creator.sign,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 6),
+              const Icon(Icons.chevron_right_rounded),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   /// 创建所有账号数据失败状态的说明和重试入口，避免以空关注列表掩盖错误。
@@ -294,6 +406,7 @@ class _FollowedCreatorsPageState extends State<FollowedCreatorsPage> {
 
   /// 创建已关注 UP 主卡片列表和分页底部入口，不提供任何写关系控件。
   Widget _buildCreatorList() {
+    final List<FollowedCreator> visibleCreators = _filteredCreators();
     return RefreshIndicator(
       // 下拉刷新函数只重新读取第 1 页关注数据，不改变账号关注关系。
       onRefresh: _loadFirstPage,
@@ -301,34 +414,20 @@ class _FollowedCreatorsPageState extends State<FollowedCreatorsPage> {
         key: const Key('followed-creators-list'),
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-        itemCount: _creators.length + 1,
+        itemCount: visibleCreators.length + 1,
         separatorBuilder: (BuildContext context, int index) =>
             const SizedBox(height: 8),
         itemBuilder: (BuildContext context, int index) {
-          if (index == _creators.length) {
+          if (index == visibleCreators.length) {
+            if (visibleCreators.isEmpty && _searchQuery.trim().isNotEmpty) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(vertical: 48),
+                child: Center(child: Text('没有匹配的已关注 UP 主')),
+              );
+            }
             return _buildLoadMoreFooter();
           }
-          final FollowedCreator creator = _creators[index];
-          return Card(
-            key: Key('followed-creator-${creator.mid}'),
-            child: ListTile(
-              isThreeLine: true,
-              leading: _buildAvatar(creator),
-              title: Text(
-                creator.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              subtitle: Text(
-                _creatorDescription(creator),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-              trailing: const Icon(Icons.person_outline_rounded),
-              // UP 主卡点击函数打开只读公开主页。
-              onTap: () => unawaited(_openCreator(creator)),
-            ),
-          );
+          return _buildCreatorCard(visibleCreators[index]);
         },
       ),
     );
@@ -369,7 +468,12 @@ class _FollowedCreatorsPageState extends State<FollowedCreatorsPage> {
           ),
         ],
       ),
-      body: _buildBody(),
+      body: Column(
+        children: <Widget>[
+          _buildSearchField(),
+          Expanded(child: _buildBody()),
+        ],
+      ),
     );
   }
 }

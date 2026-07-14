@@ -356,6 +356,39 @@ class DanmakuEntry {
   }
 }
 
+/// 提供与屏幕宽度和播放倍速无关的弹幕时间轴换算，保证横竖屏行为一致。
+abstract final class DanmakuTimeline {
+  /// 一条滚动弹幕从完整进入右侧到完整离开左侧所占的视频时间。
+  static const Duration scrollingTravelDuration = Duration(seconds: 9);
+
+  /// 把真实经过时间乘播放倍速后加到原生锚点，得到当前弹幕视频时间。
+  static Duration advance({
+    required Duration positionAnchor,
+    required Duration realElapsed,
+    required double playbackSpeed,
+  }) {
+    final double safeSpeed = playbackSpeed.clamp(0.1, 4).toDouble();
+    final int videoElapsedMicroseconds =
+        (realElapsed.inMicroseconds * safeSpeed).round();
+    return positionAnchor + Duration(microseconds: videoElapsedMicroseconds);
+  }
+
+  /// 按固定视频时长计算滚动横坐标，使任意画布宽度都能完整穿越而不是停在半屏。
+  static double horizontalOffset({
+    required Duration elapsed,
+    required double canvasWidth,
+    required double textWidth,
+    bool reverse = false,
+  }) {
+    final double travelProgress =
+        (elapsed.inMicroseconds / scrollingTravelDuration.inMicroseconds)
+            .clamp(0, 1)
+            .toDouble();
+    final double distance = (canvasWidth + textWidth) * travelProgress;
+    return reverse ? -textWidth + distance : canvasWidth - distance;
+  }
+}
+
 /// 保存按六分钟分页读取的弹幕结果，不包含 Protobuf、Cookie 或请求地址。
 class DanmakuSegmentLoadResult {
   /// 创建播放器可缓存或直接显示的一段只读弹幕数据。

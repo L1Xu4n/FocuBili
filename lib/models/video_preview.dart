@@ -209,6 +209,7 @@ class VideoPreview {
     this.publishedAt,
     this.stats = const VideoStats(),
     this.collection,
+    this.tags = const <String>[],
   });
 
   final int aid;
@@ -224,11 +225,33 @@ class VideoPreview {
   final DateTime? publishedAt;
   final VideoStats stats;
   final VideoCollection? collection;
+  final List<String> tags;
   final Duration duration;
 
   /// 视频封面地址，仅用于低流量缩略图展示；为空时页面显示本地占位图。
   final String thumbnailUrl;
   final List<VideoPart> parts;
+
+  /// 返回仅替换标签的新视频对象，保持其余播放编号、分P和统计完全不变。
+  VideoPreview withTags(List<String> values) {
+    return VideoPreview(
+      aid: aid,
+      bvid: bvid,
+      cid: cid,
+      title: title,
+      ownerName: ownerName,
+      ownerMid: ownerMid,
+      ownerAvatarUrl: ownerAvatarUrl,
+      description: description,
+      publishedAt: publishedAt,
+      stats: stats,
+      collection: collection,
+      tags: List<String>.unmodifiable(values),
+      duration: duration,
+      thumbnailUrl: thumbnailUrl,
+      parts: parts,
+    );
+  }
 
   /// 返回与默认 cid 对应的分P；接口数据不完整时回退到列表第一项。
   VideoPart get initialPart {

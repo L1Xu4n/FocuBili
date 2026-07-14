@@ -42,11 +42,12 @@ class _FakePublicContentRequest {
                   {
                     "bvid": "BV1GJ411x7h7",
                     "title": "公开投稿",
-                    "pic": "//i0.hdslb.com/video.jpg",
-                    "duration": 120,
+                    "pic": "http://i0.hdslb.com/video.jpg",
+                    "duration": "2:05",
                     "created": 1704067200,
                     "play": 100,
-                    "video_review": 10
+                    "video_review": 10,
+                    "favorites": 22
                   }
                 ]
               }
@@ -84,7 +85,7 @@ class _FakePublicContentRequest {
                       "season_id": 900,
                       "mid": 7,
                       "title": "山河合集",
-                      "cover": "https://archive.biliimg.com/cover.jpg",
+                      "cover": "http://archive.biliimg.com/cover.jpg",
                       "description": "多支独立视频",
                       "total": 9
                     },
@@ -116,7 +117,7 @@ class _FakePublicContentRequest {
                 {
                   "bvid": "BV1Q541167Qg",
                   "title": "合集第二支视频",
-                  "pic": "//i0.hdslb.com/second.jpg",
+                  "pic": "http://i0.hdslb.com/second.jpg",
                   "duration": 300,
                   "pubdate": 1704067200,
                   "stat": {"view": 200, "danmaku": 20}
@@ -127,6 +128,142 @@ class _FakePublicContentRequest {
         ''';
       default:
         throw StateError('未处理的测试路径：${endpoint.path}');
+    }
+  }
+}
+
+/// 模拟旧投稿接口被限流后，依次返回 WBI 密钥和签名投稿数据。
+class _WbiFallbackRequest {
+  final List<Uri> endpoints = <Uri>[];
+
+  /// 按请求路径返回限流、公开密钥或成功投稿响应，并记录签名参数供断言。
+  Future<String> call(Uri endpoint) async {
+    endpoints.add(endpoint);
+    switch (endpoint.path) {
+      case '/x/space/arc/search':
+        return '{"code":-779,"message":"请求过于频繁"}';
+      case '/x/web-interface/nav':
+        return '''
+          {
+            "code": -101,
+            "data": {
+              "wbi_img": {
+                "img_url": "https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png",
+                "sub_url": "https://i0.hdslb.com/bfs/wbi/4932caff0ff746eab6f01bf08b70ac45.png"
+              }
+            }
+          }
+        ''';
+      case '/x/space/wbi/arc/search':
+        return '''
+          {
+            "code": 0,
+            "data": {
+              "page": {"count": 1},
+              "list": {
+                "vlist": [
+                  {
+                    "bvid": "BV1GJ411x7h7",
+                    "title": "WBI 投稿",
+                    "pic": "http://i0.hdslb.com/wbi-video.jpg",
+                    "duration": 60
+                  }
+                ]
+              }
+            }
+          }
+        ''';
+      default:
+        throw StateError('未处理的 WBI 测试路径：${endpoint.path}');
+    }
+  }
+}
+
+/// 模拟 WBI 投稿第一次仍命中 -352、第二次自动恢复的短暂风控。
+class _WbiRetryRequest {
+  int wbiAttempts = 0;
+
+  /// 按请求阶段返回风控、WBI 密钥和最终成功投稿。
+  Future<String> call(Uri endpoint) async {
+    switch (endpoint.path) {
+      case '/x/space/arc/search':
+        return '{"code":-352,"message":"风控校验失败"}';
+      case '/x/web-interface/nav':
+        return '''
+          {
+            "code": -101,
+            "data": {
+              "wbi_img": {
+                "img_url": "https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png",
+                "sub_url": "https://i0.hdslb.com/bfs/wbi/4932caff0ff746eab6f01bf08b70ac45.png"
+              }
+            }
+          }
+        ''';
+      case '/x/space/wbi/arc/search':
+        wbiAttempts += 1;
+        if (wbiAttempts == 1) {
+          return '{"code":-352,"message":"风控校验失败"}';
+        }
+        return '''
+          {
+            "code": 0,
+            "data": {
+              "page": {"count": 1},
+              "list": {
+                "vlist": [
+                  {
+                    "bvid": "BV1GJ411x7h7",
+                    "title": "重试成功投稿",
+                    "duration": "1:30"
+                  }
+                ]
+              }
+            }
+          }
+        ''';
+      default:
+        throw StateError('未处理的重试测试路径：${endpoint.path}');
+    }
+  }
+}
+
+/// 模拟旧名片被风控后由 WBI 基本资料和关系统计接口补齐主页。
+class _ProfileFallbackRequest {
+  /// 按请求路径返回受限名片、WBI 密钥、基本资料和粉丝统计。
+  Future<String> call(Uri endpoint) async {
+    switch (endpoint.path) {
+      case '/x/web-interface/card':
+        return '{"code":-352,"message":"风控校验失败"}';
+      case '/x/web-interface/nav':
+        return '''
+          {
+            "code": -101,
+            "data": {
+              "wbi_img": {
+                "img_url": "https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png",
+                "sub_url": "https://i0.hdslb.com/bfs/wbi/4932caff0ff746eab6f01bf08b70ac45.png"
+              }
+            }
+          }
+        ''';
+      case '/x/space/wbi/acc/info':
+        return '''
+          {
+            "code": 0,
+            "data": {
+              "mid": 7,
+              "name": "WBI UP主",
+              "face": "//i0.hdslb.com/wbi-avatar.jpg",
+              "sign": "WBI 简介",
+              "official": {"desc": "WBI 认证"}
+            }
+          }
+        ''';
+      case '/x/relation/stat':
+        return '{"code":0,"data":{"following":12,"follower":3456}}';
+      default:
+        throw StateError('未处理的资料降级路径：${endpoint.path}');
     }
   }
 }
@@ -160,6 +297,13 @@ void main() {
 
     expect(videos.items.single.bvid, 'BV1GJ411x7h7');
     expect(videos.items.single.stats.viewCount, 100);
+    expect(videos.items.single.stats.favoriteCount, 22);
+    expect(
+        videos.items.single.duration, const Duration(minutes: 2, seconds: 5));
+    expect(
+      videos.items.single.coverUrl,
+      'https://i0.hdslb.com/video.jpg@480w_270h_1c.webp',
+    );
     expect(videos.hasMore, isTrue);
     expect(articles.items.single.title, '公开专栏');
     expect(articles.items.single.viewCount, 66);
@@ -178,11 +322,84 @@ void main() {
 
     expect(collections.items, hasLength(1));
     expect(collections.items.single.title, '山河合集');
+    expect(
+      collections.items.single.coverUrl,
+      'https://archive.biliimg.com/cover.jpg@480w_270h_1c.webp',
+    );
     expect(collections.items.single.previewVideos.single.bvid, 'BV1GJ411x7h7');
     expect(entries.items.single.bvid, 'BV1Q541167Qg');
+    expect(
+      entries.items.single.coverUrl,
+      'https://i0.hdslb.com/second.jpg@480w_270h_1c.webp',
+    );
     expect(
       request.endpoints.last.queryParameters['season_id'],
       '900',
     );
+  });
+
+  /// 验证旧投稿接口命中 -779 后会自动获取 WBI 密钥并带签名重试。
+  test('投稿限流后使用WBI签名接口降级', () async {
+    final _WbiFallbackRequest request = _WbiFallbackRequest();
+    final BilibiliHttpPublicContentService service =
+        BilibiliHttpPublicContentService(requestJson: request.call);
+
+    final CreatorContentPage<CreatorVideo> videos = await service.loadVideos(7);
+
+    expect(videos.items.single.title, 'WBI 投稿');
+    expect(
+      request.endpoints.map((Uri endpoint) => endpoint.path),
+      <String>[
+        '/x/space/arc/search',
+        '/x/web-interface/nav',
+        '/x/space/wbi/arc/search',
+      ],
+    );
+    final Uri signedEndpoint = request.endpoints.last;
+    expect(signedEndpoint.queryParameters['wts'], isNotEmpty);
+    expect(signedEndpoint.queryParameters['w_rid'], hasLength(32));
+  });
+
+  /// 验证投稿关键词和最多收藏排序参数会同时发送给服务端。
+  test('投稿支持关键词搜索和最多收藏排序', () async {
+    final _FakePublicContentRequest request = _FakePublicContentRequest();
+    final BilibiliHttpPublicContentService service =
+        BilibiliHttpPublicContentService(requestJson: request.call);
+
+    await service.loadVideos(
+      7,
+      keyword: '地理 科普',
+      order: CreatorVideoOrder.mostFavorited,
+    );
+
+    expect(request.endpoints.single.queryParameters['keyword'], '地理 科普');
+    expect(request.endpoints.single.queryParameters['order'], 'stow');
+  });
+
+  /// 验证 -352 在 WBI 接口短暂出现时会自动重试而不要求用户手动刷新。
+  test('投稿遇到-352会自动重试', () async {
+    final _WbiRetryRequest request = _WbiRetryRequest();
+    final BilibiliHttpPublicContentService service =
+        BilibiliHttpPublicContentService(requestJson: request.call);
+
+    final CreatorContentPage<CreatorVideo> videos = await service.loadVideos(7);
+
+    expect(request.wbiAttempts, 2);
+    expect(videos.items.single.title, '重试成功投稿');
+    expect(
+        videos.items.single.duration, const Duration(minutes: 1, seconds: 30));
+  });
+
+  /// 验证旧名片风控时仍能通过公开 WBI 资料接口显示简介和粉丝数。
+  test('用户资料风控后使用WBI资料降级', () async {
+    final _ProfileFallbackRequest request = _ProfileFallbackRequest();
+    final BilibiliHttpPublicContentService service =
+        BilibiliHttpPublicContentService(requestJson: request.call);
+
+    final CreatorProfile profile = await service.loadProfile(7);
+
+    expect(profile.name, 'WBI UP主');
+    expect(profile.sign, 'WBI 简介');
+    expect(profile.followerCount, 3456);
   });
 }
