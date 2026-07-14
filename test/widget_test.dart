@@ -107,6 +107,10 @@ class _FakePlaybackService implements PlaybackService {
   double _speed = 1;
   int _quality = 64;
   int? openedCid;
+  int openVideoRequests = 0;
+  final List<int> openedCids = <int>[];
+  final List<int> openedQualities = <int>[];
+  Completer<void>? retryOpenCompleter;
   final SavedPlaybackState? savedState;
   final bool rejectQuality;
   int pictureInPictureRequests = 0;
@@ -123,14 +127,24 @@ class _FakePlaybackService implements PlaybackService {
   @override
   Future<int?> initialize() async => null;
 
-  /// 模拟打开视频完成，并发送可用于进度条的总时长。
+  /// 模拟打开视频完成，记录分P和清晰度，并在需要时等待测试控制的重试请求。
   @override
   Future<void> openVideo(
     VideoPreview video, {
     VideoPart? part,
     int quality = 64,
   }) async {
-    openedCid = (part ?? video.initialPart).cid;
+    final VideoPart targetPart = part ?? video.initialPart;
+    openVideoRequests += 1;
+    openedCid = targetPart.cid;
+    openedCids.add(targetPart.cid);
+    openedQualities.add(quality);
+    final Completer<void>? pendingRetry = retryOpenCompleter;
+    if (openVideoRequests > 1 &&
+        pendingRetry != null &&
+        !pendingRetry.isCompleted) {
+      await pendingRetry.future;
+    }
     _quality = quality;
     _emit();
   }
@@ -219,11 +233,11 @@ class _FakePlaybackService implements PlaybackService {
     volume = value;
   }
 
-  /// 向测试页面广播当前假播放器状态。
-  void _emit() {
+  /// 向测试页面广播指定阶段的假播放器状态，默认模拟可正常播放的就绪状态。
+  void _emit({PlaybackPhase phase = PlaybackPhase.ready, String? message}) {
     _states.add(
       PlaybackSnapshot(
-        phase: PlaybackPhase.ready,
+        phase: phase,
         isPlaying: _isPlaying,
         position: _position,
         duration: _duration,
@@ -233,8 +247,19 @@ class _FakePlaybackService implements PlaybackService {
           PlaybackQuality(id: 64, label: '高清 720P'),
           PlaybackQuality(id: 32, label: '清晰 480P'),
         ],
+        message: message,
       ),
     );
+  }
+
+  /// 向播放器页面推送一条错误快照，供重试按钮相关组件测试使用。
+  void emitPlaybackError(String message) {
+    _emit(phase: PlaybackPhase.error, message: message);
+  }
+
+  /// 向播放器页面推送加载快照，验证加载提示不会暴露可点击的重试入口。
+  void emitLoading() {
+    _emit(phase: PlaybackPhase.loading, message: '正在准备播放…');
   }
 
   /// 关闭测试使用的状态流，模拟页面离开时释放播放器。
@@ -556,6 +581,83 @@ void main() {
     await tester.pump();
 
     expect(find.textContaining('可能未开通大会员'), findsOneWidget);
+  });
+
+  /// 验证播放错误显示重试入口，重复点击只会发起一次请求且保留当前分P与清晰度。
+  testWidgets('播放错误重试只请求一次并保留分P和清晰度', (
+    WidgetTester tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final _FakePlaybackService service = _FakePlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _createMultiPartVideo(),
+          playbackService: service,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('part-2')));
+    await tester.pumpAndSettle();
+    final PopupMenuButton<int> qualityMenu = tester.widget(
+      find.byKey(const Key('quality-menu')),
+    );
+    qualityMenu.onSelected!(32);
+    await tester.pumpAndSettle();
+
+    final int requestsBeforeRetry = service.openVideoRequests;
+    final Completer<void> pendingRetry = Completer<void>();
+    service.retryOpenCompleter = pendingRetry;
+    service.emitPlaybackError('网络暂时不可用');
+    await tester.pump();
+    // 广播流会在下一轮事件循环通知页面，再额外绘制一帧以接收错误状态。
+    await tester.pump();
+
+    final Finder retryButton = find.byKey(const Key('retry-playback'));
+    expect(find.byKey(const Key('playback-error')), findsOneWidget);
+    expect(retryButton, findsOneWidget);
+    expect(find.text('网络暂时不可用'), findsOneWidget);
+    expect(tester.widget<OutlinedButton>(retryButton).onPressed, isNotNull);
+
+    await tester.tap(retryButton);
+    await tester.pump();
+    await tester.tap(retryButton);
+    await tester.pump();
+
+    expect(service.openVideoRequests, requestsBeforeRetry + 1);
+    expect(service.openedCids.last, 137649200);
+    expect(service.openedQualities.last, 32);
+    expect(find.text('网络暂时不可用'), findsOneWidget);
+    expect(tester.widget<OutlinedButton>(retryButton).onPressed, isNull);
+
+    pendingRetry.complete();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('retry-playback')), findsNothing);
+  });
+
+  /// 验证加载提示不提供重试按钮，避免未结束的加载请求被重复发起。
+  testWidgets('播放加载时不显示可点击重试按钮', (WidgetTester tester) async {
+    final _FakePlaybackService service = _FakePlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: service,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    service.emitLoading();
+    await tester.pump();
+    // 同上：等待异步状态流被播放器页面写入 State。
+    await tester.pump();
+
+    expect(find.text('正在准备播放…'), findsOneWidget);
+    expect(find.byKey(const Key('retry-playback')), findsNothing);
   });
 
   /// 验证播放器下方的两行选集能切换到第二P的 cid。

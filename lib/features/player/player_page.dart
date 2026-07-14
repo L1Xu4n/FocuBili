@@ -79,6 +79,7 @@ class _PlayerPageState extends State<PlayerPage> {
   _VideoFitMode _videoFitMode = _VideoFitMode.contain;
   bool _temporaryDoubleSpeedActive = false;
   bool _longPressScrubbing = false;
+  bool _isRetrying = false;
   double _speedBeforeLongPress = 1;
   double _longPressStartProgress = 0;
   double _longPressTargetProgress = 0;
@@ -181,7 +182,7 @@ class _PlayerPageState extends State<PlayerPage> {
       );
   }
 
-  /// 把 Android 推送的播放状态写入页面，并在非拖动状态下同步真实进度。
+  /// 把 Android 推送的播放状态写入页面、结束重试忙碌状态，并在非拖动状态下同步真实进度。
   void _applyPlaybackSnapshot(PlaybackSnapshot snapshot) {
     if (!mounted) {
       return;
@@ -199,6 +200,7 @@ class _PlayerPageState extends State<PlayerPage> {
         !snapshot.isInPictureInPicture;
     setState(() {
       _playbackSnapshot = snapshot;
+      _isRetrying = false;
       if (!_isDraggingProgress &&
           !_longPressScrubbing &&
           snapshot.duration > Duration.zero) {
@@ -264,9 +266,30 @@ class _PlayerPageState extends State<PlayerPage> {
     _stopControlsAutoHideTimer();
   }
 
-  /// 离开页面前取消订阅和计时器、释放原生资源并恢复竖屏与系统栏。
+  /// 再次请求当前视频、当前分P和当前清晰度，等待原生快照决定是否替换原错误提示。
+  Future<void> _retryPlayback() async {
+    if (_isRetrying || !mounted) {
+      return;
+    }
+    setState(() => _isRetrying = true);
+    try {
+      await _playbackService.openVideo(
+        widget.video,
+        part: _currentPart,
+        quality: _currentQuality,
+      );
+    } catch (_) {
+      if (mounted) {
+        // 重试调用本身失败时保留旧错误，方便用户继续判断并再次尝试。
+        setState(() => _isRetrying = false);
+      }
+    }
+  }
+
+  /// 离开页面前取消重试状态、订阅和计时器，释放原生资源并恢复竖屏与系统栏。
   @override
   void dispose() {
+    _isRetrying = false;
     _controlsTimer?.cancel();
     _seekFeedbackTimer?.cancel();
     _resumeNoticeTimer?.cancel();
@@ -1243,7 +1266,7 @@ class _PlayerPageState extends State<PlayerPage> {
     );
   }
 
-  /// 创建加载或错误提示，确保播放数据变化和权限限制不会只留下黑屏。
+  /// 创建加载或错误提示；错误时允许重试，加载提示自身保持不可点击。
   Widget _buildPlaybackHint() {
     final PlaybackPhase phase = _playbackSnapshot.phase;
     final String? message = _playbackSnapshot.message;
@@ -1251,77 +1274,118 @@ class _PlayerPageState extends State<PlayerPage> {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(28),
-          child: Text(
-            message ?? '无法播放此视频。',
-            key: const Key('playback-error'),
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: Colors.white),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Text(
+                message ?? '无法播放此视频。',
+                key: const Key('playback-error'),
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white),
+              ),
+              const SizedBox(height: 14),
+              OutlinedButton.icon(
+                key: const Key('retry-playback'),
+                onPressed:
+                    _isRetrying ? null : () => unawaited(_retryPlayback()),
+                icon: _isRetrying
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.refresh_rounded),
+                label: Text(_isRetrying ? '正在重试…' : '重试播放'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  side: const BorderSide(color: Colors.white70),
+                ),
+              ),
+            ],
           ),
         ),
       );
     }
     if (phase == PlaybackPhase.loading) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            const CircularProgressIndicator(color: Colors.white),
-            const SizedBox(height: 14),
-            Text(
-              message ?? '正在准备播放…',
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white),
-            ),
-          ],
+      return IgnorePointer(
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              const CircularProgressIndicator(color: Colors.white),
+              const SizedBox(height: 14),
+              Text(
+                message ?? '正在准备播放…',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white),
+              ),
+            ],
+          ),
         ),
       );
     }
     return const SizedBox.shrink();
   }
 
-  /// 创建播放器画面、手势、控制层以及非全屏时的视频信息区域。
+  /// 创建播放器画面、手势、可点击错误重试层、控制层以及非全屏时的视频信息区域。
   @override
   Widget build(BuildContext context) {
     final bool inPictureInPicture = _playbackSnapshot.isInPictureInPicture;
+    // 错误时关闭底层画面手势，避免父级单击手势抢走“重试播放”按钮的点击。
+    final bool enableSurfaceGestures =
+        _playbackSnapshot.phase != PlaybackPhase.error;
     final Widget player = LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         return GestureDetector(
           key: const Key('player-surface'),
           behavior: HitTestBehavior.opaque,
           // 画面单击函数只切换控制层，避免误触导致视频暂停。
-          onTap: _toggleControls,
+          onTap: enableSurfaceGestures ? _toggleControls : null,
           // 双击落点记录函数为分区快进快退提供位置信息。
-          onDoubleTapDown: _recordDoubleTapPosition,
+          onDoubleTapDown:
+              enableSurfaceGestures ? _recordDoubleTapPosition : null,
           // 双击处理函数依据画面宽度计算左中右分区。
-          onDoubleTap: () => _handleDoubleTap(constraints.maxWidth),
+          onDoubleTap: enableSurfaceGestures
+              ? () => _handleDoubleTap(constraints.maxWidth)
+              : null,
           // 长按开始函数先临时切换到二倍速，并记录快捷跳转的起点。
-          onLongPressStart: _startTemporaryDoubleSpeed,
+          onLongPressStart:
+              enableSurfaceGestures ? _startTemporaryDoubleSpeed : null,
           // 长按移动函数只在横向超过阈值后预览进度，避免与短距离移动冲突。
-          onLongPressMoveUpdate: _updateTemporaryLongPress,
+          onLongPressMoveUpdate:
+              enableSurfaceGestures ? _updateTemporaryLongPress : null,
           // 长按结束函数恢复原倍速或只提交一次最终进度跳转。
-          onLongPressEnd: _stopTemporaryDoubleSpeed,
+          onLongPressEnd:
+              enableSurfaceGestures ? _stopTemporaryDoubleSpeed : null,
           // 长按取消函数恢复界面状态且不提交未确认的进度。
-          onLongPressCancel: _cancelTemporaryLongPress,
+          onLongPressCancel:
+              enableSurfaceGestures ? _cancelTemporaryLongPress : null,
           // 竖向手势开始函数判断左侧亮度、右侧音量和上下安全区排除。
-          onVerticalDragStart: (DragStartDetails details) =>
-              _startVerticalAdjustment(
-            details,
-            constraints.biggest,
-            MediaQuery.of(context).viewPadding.top,
-            MediaQuery.of(context).viewPadding.bottom,
-          ),
+          onVerticalDragStart: enableSurfaceGestures
+              ? (DragStartDetails details) => _startVerticalAdjustment(
+                    details,
+                    constraints.biggest,
+                    MediaQuery.of(context).viewPadding.top,
+                    MediaQuery.of(context).viewPadding.bottom,
+                  )
+              : null,
           // 竖向手势更新函数实时调整窗口亮度或媒体音量。
-          onVerticalDragUpdate: (DragUpdateDetails details) =>
-              _updateVerticalAdjustment(details, constraints.maxHeight),
+          onVerticalDragUpdate: enableSurfaceGestures
+              ? (DragUpdateDetails details) =>
+                  _updateVerticalAdjustment(details, constraints.maxHeight)
+              : null,
           // 竖向手势结束函数恢复控制栏自动隐藏计时。
-          onVerticalDragEnd: _finishVerticalAdjustment,
+          onVerticalDragEnd:
+              enableSurfaceGestures ? _finishVerticalAdjustment : null,
           child: ColoredBox(
             color: Colors.black,
             child: Stack(
               fit: StackFit.expand,
               children: <Widget>[
                 _buildVideoOutput(),
-                IgnorePointer(child: _buildPlaybackHint()),
                 if (_temporaryDoubleSpeedActive)
                   SafeArea(
                     child: Align(
@@ -1647,6 +1711,8 @@ class _PlayerPageState extends State<PlayerPage> {
                     ),
                   ),
                 ),
+                // 错误重试层放在控制栏之后，确保按钮不会被全屏控制栏的透明区域拦截点击。
+                _buildPlaybackHint(),
               ],
             ),
           ),
