@@ -259,7 +259,7 @@ void main() {
   });
 
   /// 验证订阅页明确说明已关注 UP 主，并可通过加载更多追加下一页内容。
-  testWidgets('订阅页加载更多已关注UP主', (WidgetTester tester) async {
+  testWidgets('关注页加载更多已关注UP主', (WidgetTester tester) async {
     final BilibiliAccountDataService service = _accountService(
       (Uri endpoint) async {
         final String page = endpoint.queryParameters['pn'] ?? '1';
@@ -295,7 +295,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('我的订阅（已关注 UP 主）'), findsOneWidget);
+    expect(find.text('我的关注'), findsOneWidget);
     expect(find.text('第一页UP'), findsOneWidget);
     await tester.tap(find.byKey(const Key('followed-creators-load-more')));
     await tester.pumpAndSettle();

@@ -5,6 +5,7 @@ import '../../services/bilibili_auth_service.dart';
 import 'favorite_folders_page.dart';
 import 'followed_creators_page.dart';
 import 'login_page.dart';
+import 'subscribed_collections_page.dart';
 
 /// 标识已登录账号菜单中可执行的安全会话操作。
 enum _AccountMenuAction { switchAccount, logout }
@@ -201,12 +202,22 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
-  /// 打开当前账号已关注的 UP 主列表，并明确其不是追番订阅功能。
+  /// 打开当前账号已关注的 UP 主列表，与订阅合集保持独立入口。
   Future<void> _openFollowedCreators() async {
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        // 订阅页面构建函数只读取已关注 UP 主，不提供关注或取关按钮。
+        // 关注页面构建函数只读取已关注 UP 主，不提供关注或取关按钮。
         builder: (BuildContext context) => const FollowedCreatorsPage(),
+      ),
+    );
+  }
+
+  /// 打开当前账号订阅的 UGC 合集列表，不混入已关注 UP 主。
+  Future<void> _openSubscribedCollections() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        // 订阅页面构建函数只读取 UGC 合集，不执行取消订阅等写操作。
+        builder: (BuildContext context) => const SubscribedCollectionsPage(),
       ),
     );
   }
@@ -393,7 +404,13 @@ class _ProfilePageState extends State<ProfilePage> {
           _ProfileTile(
             icon: Icons.subscriptions_outlined,
             title: '我的订阅',
-            // 订阅入口函数展示已关注 UP 主，避免和番剧追更概念混淆。
+            // 订阅入口函数只展示由多支独立视频组成的 UGC 合集。
+            onTap: () => _openSubscribedCollections(),
+          ),
+          _ProfileTile(
+            icon: Icons.people_outline_rounded,
+            title: '我的关注',
+            // 关注入口函数只展示当前账号已关注的 UP 主。
             onTap: () => _openFollowedCreators(),
           ),
           _ProfileTile(

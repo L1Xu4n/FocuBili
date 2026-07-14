@@ -170,14 +170,111 @@ class BilibiliVideoInfoService implements BilibiliService {
       // 默认 cid 不在列表中时使用第一P，避免接口局部字段不一致导致页面崩溃。
       orElse: () => parts.first,
     );
+    final String resolvedBvid = data['bvid'] as String? ?? requestedBvid;
     return VideoPreview(
-      bvid: data['bvid'] as String? ?? requestedBvid,
+      aid: _readInteger(data['aid']),
+      bvid: resolvedBvid,
       cid: initialPart.cid,
       title: _readText(data['title'], '未命名视频'),
       ownerName: _readText(owner['name'], '未知 UP 主'),
+      ownerMid: _readInteger(owner['mid']),
+      ownerAvatarUrl: _normalizeImageUrl(_readText(owner['face'], '')),
+      description: _readText(data['desc'], ''),
+      publishedAt: _parseUnixTime(data['pubdate']),
+      stats: _parseVideoStats(data['stat']),
+      collection: _parseVideoCollection(data['ugc_season'], resolvedBvid),
       duration: initialPart.duration,
       thumbnailUrl: _normalizeThumbnailUrl(_readText(data['pic'], '')),
       parts: parts,
+    );
+  }
+
+  /// 解析公开统计对象，并把异常或负数字段统一收敛为零。
+  VideoStats _parseVideoStats(Object? value) {
+    final Map<Object?, Object?> stats = _readObject(value);
+    return VideoStats(
+      viewCount: _readInteger(stats['view']),
+      danmakuCount: _readInteger(stats['danmaku']),
+      replyCount: _readInteger(stats['reply']),
+      favoriteCount: _readInteger(stats['favorite'] ?? stats['fav']),
+      coinCount: _readInteger(stats['coin']),
+      shareCount: _readInteger(stats['share']),
+      likeCount: _readInteger(stats['like']),
+    );
+  }
+
+  /// 解析视频详情中的 UGC 合集，并保持合集条目与单视频分P为两套独立模型。
+  VideoCollection? _parseVideoCollection(Object? value, String currentBvid) {
+    final Map<Object?, Object?> collection = _readObject(value);
+    final int collectionId = _readInteger(collection['id']);
+    if (collectionId <= 0) {
+      return null;
+    }
+    final List<VideoCollectionEntry> entries = <VideoCollectionEntry>[];
+    final Object? rawSections = collection['sections'];
+    if (rawSections is List) {
+      for (final Object? rawSection in rawSections) {
+        final Object? rawEpisodes = _readObject(rawSection)['episodes'];
+        if (rawEpisodes is! List) {
+          continue;
+        }
+        for (final Object? rawEpisode in rawEpisodes) {
+          final VideoCollectionEntry? entry = _parseCollectionEntry(rawEpisode);
+          if (entry != null &&
+              !entries.any(
+                (VideoCollectionEntry item) => item.bvid == entry.bvid,
+              )) {
+            entries.add(entry);
+          }
+        }
+      }
+    }
+    if (entries.isEmpty ||
+        !entries.any(
+          (VideoCollectionEntry entry) => entry.bvid == currentBvid,
+        )) {
+      return null;
+    }
+    return VideoCollection(
+      id: collectionId,
+      title: _readText(collection['title'], '未命名合集'),
+      description: _readText(collection['intro'], ''),
+      coverUrl: _normalizeThumbnailUrl(_readText(collection['cover'], '')),
+      ownerMid: _readInteger(collection['mid']),
+      totalCount: _readInteger(collection['ep_count']).clamp(
+        entries.length,
+        1 << 31,
+      ),
+      stats: _parseVideoStats(collection['stat']),
+      entries: List<VideoCollectionEntry>.unmodifiable(entries),
+    );
+  }
+
+  /// 将 UGC 合集中的 episode 转成可点击视频卡片，缺少 BV 或 cid 时忽略该项。
+  VideoCollectionEntry? _parseCollectionEntry(Object? value) {
+    final Map<Object?, Object?> episode = _readObject(value);
+    final Map<Object?, Object?> arc = _readObject(episode['arc']);
+    final Map<Object?, Object?> page = _readObject(episode['page']);
+    final String bvid = _readText(episode['bvid'], '');
+    final int cid = _readInteger(episode['cid'] ?? page['cid']);
+    if (!_bvidPattern.hasMatch(bvid) || cid <= 0) {
+      return null;
+    }
+    final int durationSeconds = _readInteger(
+      arc['duration'] ?? page['duration'],
+    );
+    return VideoCollectionEntry(
+      aid: _readInteger(episode['aid'] ?? arc['aid']),
+      bvid: bvid,
+      cid: cid,
+      title: _readText(
+        episode['title'] ?? arc['title'] ?? page['part'],
+        '未命名视频',
+      ),
+      thumbnailUrl: _normalizeThumbnailUrl(_readText(arc['pic'], '')),
+      duration: Duration(seconds: durationSeconds),
+      publishedAt: _parseUnixTime(arc['pubdate']),
+      stats: _parseVideoStats(arc['stat']),
     );
   }
 
@@ -378,17 +475,26 @@ class BilibiliVideoInfoService implements BilibiliService {
 
   /// 把封面地址转换为 HTTPS，并让 B 站图片 CDN 直接返回低流量 WebP 缩略图。
   String _normalizeThumbnailUrl(String value) {
-    final String normalized = value.startsWith('//') ? 'https:$value' : value;
-    final Uri? uri = Uri.tryParse(normalized);
-    if (uri == null ||
-        uri.scheme != 'https' ||
-        !uri.host.endsWith('.hdslb.com')) {
+    final String normalized = _normalizeImageUrl(value);
+    if (normalized.isEmpty) {
       return '';
     }
     if (normalized.contains('@')) {
       return normalized;
     }
     return '$normalized@320w_200h_1c.webp';
+  }
+
+  /// 把可信 B 站图片域名统一为 HTTPS，头像保持原始比例而不追加封面裁切参数。
+  String _normalizeImageUrl(String value) {
+    final String normalized = value.startsWith('//') ? 'https:$value' : value;
+    final Uri? uri = Uri.tryParse(normalized);
+    final bool trustedHost = uri != null &&
+        (uri.host.endsWith('.hdslb.com') || uri.host.endsWith('.biliimg.com'));
+    if (uri == null || uri.scheme != 'https' || !trustedHost) {
+      return '';
+    }
+    return normalized;
   }
 
   /// 把详情接口的 pages 数组转换为稳定的分P列表，并在缺失时补一条默认分P。

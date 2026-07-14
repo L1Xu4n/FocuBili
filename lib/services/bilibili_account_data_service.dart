@@ -105,7 +105,7 @@ class AuthBackedAccountSessionProvider
   }
 }
 
-/// 读取收藏夹、收藏内容和已关注 UP 主的只读服务，不包含任何账号写操作。
+/// 读取收藏夹、订阅合集和已关注 UP 主的只读服务，不包含任何账号写操作。
 class BilibiliAccountDataService {
   /// 创建账号数据服务；默认只接入现有官方网页登录 Cookie 会话。
   BilibiliAccountDataService({
@@ -120,6 +120,8 @@ class BilibiliAccountDataService {
       '/x/v3/fav/folder/created/list-all';
   static const String _favoriteResourcesPath = '/x/v3/fav/resource/list';
   static const String _followingsPath = '/x/relation/followings';
+  static const String _subscribedCollectionsPath =
+      '/x/v3/fav/folder/collected/list';
   static final RegExp _bvidPattern = RegExp(r'^BV[0-9A-Za-z]{10}$');
   static final RegExp _sessionCookiePattern = RegExp(
     r'(^|;\s*)SESSDATA=([^;]+)',
@@ -279,6 +281,62 @@ class BilibiliAccountDataService {
         totalCount != null ? safePage * 50 < totalCount : creators.length == 50;
     return AccountDataPage<FollowedCreator>.success(
       items: creators,
+      page: safePage,
+      hasMore: hasMore,
+      totalCount: totalCount,
+    );
+  }
+
+  /// 分页读取当前账号订阅的 UGC 合集，并排除普通收藏夹与已关注 UP 主。
+  Future<AccountDataPage<SubscribedCollection>> loadSubscribedCollections({
+    int page = 1,
+  }) async {
+    final int safePage = _safePage(page);
+    final _AccountReadSession session = await _openReadSession();
+    final AccountDataPage<SubscribedCollection>? sessionFailure =
+        _sessionFailurePage<SubscribedCollection>(session, page: safePage);
+    if (sessionFailure != null) {
+      return sessionFailure;
+    }
+    final Uri endpoint = Uri.https(
+      _apiHost,
+      _subscribedCollectionsPath,
+      <String, String>{
+        'up_mid': session.account!.mid.toString(),
+        'pn': safePage.toString(),
+        'ps': '20',
+        'platform': 'web',
+      },
+    );
+    final _AccountApiResult response = await _request(endpoint, session);
+    final AccountDataPage<SubscribedCollection>? responseFailure =
+        _responseFailurePage<SubscribedCollection>(response, page: safePage);
+    if (responseFailure != null) {
+      return responseFailure;
+    }
+    final Map<Object?, Object?>? data = _asObject(response.root!['data']);
+    if (data == null) {
+      return AccountDataPage<SubscribedCollection>.missingData(page: safePage);
+    }
+    final Object? rawList = data['list'];
+    if (rawList != null && rawList is! List) {
+      return AccountDataPage<SubscribedCollection>.malformedData(
+        page: safePage,
+      );
+    }
+    final List<SubscribedCollection> collections = <SubscribedCollection>[];
+    for (final Object? item in rawList as List? ?? const <Object?>[]) {
+      final SubscribedCollection? collection = _parseSubscribedCollection(item);
+      if (collection != null) {
+        collections.add(collection);
+      }
+    }
+    final int? totalCount = _readNonNegativeInt(data['count']);
+    final bool hasMore = totalCount != null
+        ? safePage * 20 < totalCount
+        : (rawList?.length ?? 0) == 20;
+    return AccountDataPage<SubscribedCollection>.success(
+      items: collections,
       page: safePage,
       hasMore: hasMore,
       totalCount: totalCount,
@@ -473,6 +531,29 @@ class BilibiliAccountDataService {
       sign: _readText(item['sign'], ''),
       officialDescription: _readText(officialVerify['desc'], ''),
       followedAt: _readUnixTime(item['mtime']),
+    );
+  }
+
+  /// 从订阅列表解析 type=21 的 UGC 合集；普通收藏夹 type=11 会被明确排除。
+  SubscribedCollection? _parseSubscribedCollection(Object? value) {
+    final Map<Object?, Object?>? item = _asObject(value);
+    final int? id = _readPositiveInt(item?['id']);
+    final int? type = _readInteger(item?['type']);
+    if (item == null || id == null || type != 21) {
+      return null;
+    }
+    final Map<Object?, Object?> upper =
+        _asObject(item['upper']) ?? const <Object?, Object?>{};
+    return SubscribedCollection(
+      id: id,
+      title: _readText(item['title'], '未命名合集'),
+      coverUrl: _normalizeHttpsUrl(_readText(item['cover'], '')),
+      description: _readText(item['intro'], ''),
+      ownerMid: _readPositiveInt(upper['mid'] ?? item['mid']) ?? 0,
+      ownerName: _readText(upper['name'], '未知 UP 主'),
+      ownerAvatarUrl: _normalizeHttpsUrl(_readText(upper['face'], '')),
+      videoCount: _readNonNegativeInt(item['media_count']) ?? 0,
+      viewCount: _readNonNegativeInt(item['view_count']) ?? 0,
     );
   }
 

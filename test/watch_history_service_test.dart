@@ -114,6 +114,44 @@ void main() {
     expect(history.single.lastPosition, Duration.zero);
   });
 
+  /// 验证补封面只修改目标空字段，不移动记录或覆盖原观看日期与进度。
+  test('批量补齐旧记录封面会保留顺序和观看状态', () async {
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final WatchHistoryService service = _service(preferences);
+    final WatchHistoryEntry oldEntry = _entry(
+      bvid: 'BVold',
+      thumbnailUrl: '',
+      watchedAt: DateTime(2026, 7, 15, 8),
+      lastPosition: const Duration(minutes: 12),
+    );
+    final WatchHistoryEntry completeEntry = _entry(
+      bvid: 'BVcomplete',
+      thumbnailUrl: 'https://i0.hdslb.com/bfs/archive/complete.jpg',
+      watchedAt: DateTime(2026, 7, 15, 7),
+    );
+    await service.record(completeEntry);
+    await service.record(oldEntry);
+
+    final List<WatchHistoryEntry> updated = await service.backfillThumbnails(
+      <String, String>{
+        'BVold': 'https://i0.hdslb.com/bfs/archive/backfilled.jpg',
+        'BVcomplete': 'https://i0.hdslb.com/bfs/archive/replacement.jpg',
+      },
+    );
+
+    expect(
+      updated.map((WatchHistoryEntry entry) => entry.bvid),
+      <String>['BVold', 'BVcomplete'],
+    );
+    expect(
+      updated.first.thumbnailUrl,
+      'https://i0.hdslb.com/bfs/archive/backfilled.jpg',
+    );
+    expect(updated.first.watchedAt, oldEntry.watchedAt);
+    expect(updated.first.lastPosition, const Duration(minutes: 12));
+    expect(updated.last.thumbnailUrl, completeEntry.thumbnailUrl);
+  });
+
   test('记录数量最多 50 条，且最新记录排在最前面', () async {
     final SharedPreferences preferences = await SharedPreferences.getInstance();
     final WatchHistoryService service = _service(preferences);

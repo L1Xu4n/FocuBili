@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
@@ -63,6 +65,7 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
         _entries = entries;
         _isLoading = false;
       });
+      unawaited(_backfillMissingThumbnails(entries));
     } catch (_) {
       if (!mounted) {
         return;
@@ -72,6 +75,53 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
         _isLoading = false;
         _loadError = '读取本机观看记录失败，请稍后重试。';
       });
+    }
+  }
+
+  /// 以每批最多两个公开详情请求补齐旧记录封面，失败时保留原记录且不阻塞页面显示。
+  Future<void> _backfillMissingThumbnails(
+    List<WatchHistoryEntry> entries,
+  ) async {
+    final List<WatchHistoryEntry> missingEntries = entries
+        .where((WatchHistoryEntry entry) => entry.thumbnailUrl.isEmpty)
+        .toList(growable: false);
+    if (missingEntries.isEmpty) {
+      return;
+    }
+    final Map<String, String> thumbnailUrls = <String, String>{};
+    for (int offset = 0; offset < missingEntries.length; offset += 2) {
+      final int end = (offset + 2).clamp(0, missingEntries.length).toInt();
+      final List<MapEntry<String, String>?> results = await Future.wait(
+        missingEntries.sublist(offset, end).map(_lookupMissingThumbnail),
+      );
+      for (final MapEntry<String, String>? result in results) {
+        if (result != null) {
+          thumbnailUrls[result.key] = result.value;
+        }
+      }
+    }
+    if (!mounted || thumbnailUrls.isEmpty) {
+      return;
+    }
+    final List<WatchHistoryEntry> updated =
+        await _historyService.backfillThumbnails(thumbnailUrls);
+    if (mounted) {
+      setState(() => _entries = updated);
+    }
+  }
+
+  /// 查询一条旧记录的公开视频详情并返回 BV 与封面；无封面或网络失败时返回空值。
+  Future<MapEntry<String, String>?> _lookupMissingThumbnail(
+    WatchHistoryEntry entry,
+  ) async {
+    try {
+      final VideoPreview video = await _bilibiliService.lookupVideo(entry.bvid);
+      if (video.thumbnailUrl.isEmpty) {
+        return null;
+      }
+      return MapEntry<String, String>(entry.bvid, video.thumbnailUrl);
+    } catch (_) {
+      return null;
     }
   }
 
@@ -236,6 +286,8 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
                 imageUrl: entry.thumbnailUrl,
                 httpHeaders: const <String, String>{
                   'Referer': 'https://www.bilibili.com/',
+                  'User-Agent':
+                      'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36',
                 },
                 fit: BoxFit.cover,
                 memCacheWidth: 320,

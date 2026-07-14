@@ -14,6 +14,83 @@ class VideoPart {
   final Duration duration;
 }
 
+/// 保存视频或合集条目的公开互动统计，只用于只读展示。
+class VideoStats {
+  /// 创建一组公开统计；接口缺失字段时对应数值保持为零。
+  const VideoStats({
+    this.viewCount = 0,
+    this.danmakuCount = 0,
+    this.replyCount = 0,
+    this.favoriteCount = 0,
+    this.coinCount = 0,
+    this.shareCount = 0,
+    this.likeCount = 0,
+  });
+
+  final int viewCount;
+  final int danmakuCount;
+  final int replyCount;
+  final int favoriteCount;
+  final int coinCount;
+  final int shareCount;
+  final int likeCount;
+}
+
+/// 表示 UGC 合集中的一支独立视频，不与单支视频内部的分P混用。
+class VideoCollectionEntry {
+  /// 创建合集视频卡片所需的编号、封面、时长和公开统计。
+  const VideoCollectionEntry({
+    required this.bvid,
+    required this.cid,
+    required this.title,
+    required this.thumbnailUrl,
+    required this.duration,
+    this.aid = 0,
+    this.publishedAt,
+    this.stats = const VideoStats(),
+  });
+
+  final int aid;
+  final String bvid;
+  final int cid;
+  final String title;
+  final String thumbnailUrl;
+  final Duration duration;
+  final DateTime? publishedAt;
+  final VideoStats stats;
+}
+
+/// 表示由多支不同视频组成的 UGC 合集，与 VideoPart 的单视频分P概念分离。
+class VideoCollection {
+  /// 创建合集资料以及按服务端顺序排列的视频条目。
+  const VideoCollection({
+    required this.id,
+    required this.title,
+    required this.entries,
+    this.description = '',
+    this.coverUrl = '',
+    this.ownerMid = 0,
+    this.totalCount = 0,
+    this.stats = const VideoStats(),
+  });
+
+  final int id;
+  final String title;
+  final String description;
+  final String coverUrl;
+  final int ownerMid;
+  final int totalCount;
+  final VideoStats stats;
+  final List<VideoCollectionEntry> entries;
+
+  /// 返回当前 BV 号在合集中的零起始位置，找不到时返回 -1。
+  int indexOfBvid(String bvid) {
+    return entries.indexWhere(
+      (VideoCollectionEntry entry) => entry.bvid == bvid,
+    );
+  }
+}
+
 /// 表示关键词搜索返回的一条轻量结果，点击后再查询完整分P信息。
 class VideoSearchResult {
   /// 创建包含 BV 号、标题、作者、时长和封面地址的搜索结果。
@@ -125,14 +202,28 @@ class VideoPreview {
     required this.parts,
     this.duration = const Duration(minutes: 3, seconds: 32),
     this.thumbnailUrl = '',
+    this.aid = 0,
+    this.ownerMid = 0,
+    this.ownerAvatarUrl = '',
+    this.description = '',
+    this.publishedAt,
+    this.stats = const VideoStats(),
+    this.collection,
   });
 
+  final int aid;
   final String bvid;
 
   /// 标识当前视频分P的编号，原生层用它请求对应的播放数据。
   final int cid;
   final String title;
   final String ownerName;
+  final int ownerMid;
+  final String ownerAvatarUrl;
+  final String description;
+  final DateTime? publishedAt;
+  final VideoStats stats;
+  final VideoCollection? collection;
   final Duration duration;
 
   /// 视频封面地址，仅用于低流量缩略图展示；为空时页面显示本地占位图。

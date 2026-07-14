@@ -5,14 +5,24 @@ import 'package:flutter/material.dart';
 
 import '../../models/account_collection.dart';
 import '../../services/bilibili_account_data_service.dart';
+import '../../services/bilibili_public_content_service.dart';
+import '../../services/bilibili_service.dart';
+import 'user_profile_page.dart';
 
-/// 展示当前账号已关注的 UP 主；“订阅”在此页面明确指已关注创作者而非追番。
+/// “我的关注”只展示当前账号已关注的 UP 主，不与订阅合集混用。
 class FollowedCreatorsPage extends StatefulWidget {
   /// 创建可注入只读账号数据服务的已关注 UP 主页面。
-  const FollowedCreatorsPage({super.key, this.accountDataService});
+  const FollowedCreatorsPage({
+    super.key,
+    this.accountDataService,
+    this.publicContentService,
+    this.videoService,
+  });
 
   /// 可选的只读账号服务，未传入时使用默认的当前 WebView 会话服务。
   final BilibiliAccountDataService? accountDataService;
+  final BilibiliPublicContentService? publicContentService;
+  final BilibiliService? videoService;
 
   /// 创建管理首次加载、翻页和刷新状态的页面状态对象。
   @override
@@ -22,6 +32,8 @@ class FollowedCreatorsPage extends StatefulWidget {
 /// 管理已关注 UP 主的只读分页加载，页面不提供关注、取关或分组操作。
 class _FollowedCreatorsPageState extends State<FollowedCreatorsPage> {
   late final BilibiliAccountDataService _accountDataService;
+  late final BilibiliPublicContentService _publicContentService;
+  late final BilibiliService _videoService;
   List<FollowedCreator> _creators = const <FollowedCreator>[];
   AccountDataPage<FollowedCreator>? _page;
   bool _isLoading = true;
@@ -33,7 +45,26 @@ class _FollowedCreatorsPageState extends State<FollowedCreatorsPage> {
     super.initState();
     _accountDataService =
         widget.accountDataService ?? BilibiliAccountDataService();
+    _publicContentService =
+        widget.publicContentService ?? BilibiliHttpPublicContentService();
+    _videoService = widget.videoService ?? BilibiliVideoInfoService();
     unawaited(_loadFirstPage());
+  }
+
+  /// 打开已关注 UP 主的公开主页，不执行关注或取关操作。
+  Future<void> _openCreator(FollowedCreator creator) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        // 用户主页构建函数复用当前公开内容与视频详情服务。
+        builder: (BuildContext context) => UserProfilePage(
+          mid: creator.mid,
+          initialName: creator.name,
+          initialAvatarUrl: creator.avatarUrl,
+          publicContentService: _publicContentService,
+          videoService: _videoService,
+        ),
+      ),
+    );
   }
 
   /// 读取第 1 页已关注 UP 主；刷新失败时不清空已有成功结果。
@@ -294,6 +325,8 @@ class _FollowedCreatorsPageState extends State<FollowedCreatorsPage> {
                 overflow: TextOverflow.ellipsis,
               ),
               trailing: const Icon(Icons.person_outline_rounded),
+              // UP 主卡点击函数打开只读公开主页。
+              onTap: () => unawaited(_openCreator(creator)),
             ),
           );
         },
@@ -321,12 +354,12 @@ class _FollowedCreatorsPageState extends State<FollowedCreatorsPage> {
     return _buildCreatorList();
   }
 
-  /// 创建明确说明“订阅”含义的标题、刷新入口和动态内容区域。
+  /// 创建明确的“我的关注”标题、刷新入口和 UP 主列表。
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('我的订阅（已关注 UP 主）'),
+        title: const Text('我的关注'),
         actions: <Widget>[
           IconButton(
             // 刷新按钮函数只读取已关注 UP 主，不会执行任何关系写操作。

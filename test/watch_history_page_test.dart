@@ -17,7 +17,8 @@ WatchHistoryEntry _entry({
   String title = '本机保存的视频标题',
   int part = 2,
   DateTime? watchedAt,
-  String thumbnailUrl = '',
+  String thumbnailUrl =
+      'https://i0.hdslb.com/bfs/archive/existing-history-cover.jpg',
   Duration lastPosition = Duration.zero,
 }) {
   return WatchHistoryEntry(
@@ -46,6 +47,7 @@ class _FakeWatchHistoryService extends WatchHistoryService {
   final Completer<List<WatchHistoryEntry>>? pendingLoad;
   final List<String> removeRequests = <String>[];
   bool clearRequested = false;
+  Map<String, String> backfilledThumbnails = const <String, String>{};
 
   /// 返回测试配置的列表、异常或尚未完成的加载 Future。
   @override
@@ -75,6 +77,23 @@ class _FakeWatchHistoryService extends WatchHistoryService {
     clearRequested = true;
     _entries = const <WatchHistoryEntry>[];
     return _entries;
+  }
+
+  /// 模拟旧记录封面批量补写，并保持测试列表顺序与其他字段不变。
+  @override
+  Future<List<WatchHistoryEntry>> backfillThumbnails(
+    Map<String, String> thumbnailUrls,
+  ) async {
+    backfilledThumbnails = Map<String, String>.from(thumbnailUrls);
+    _entries = _entries
+        .map(
+          (WatchHistoryEntry entry) => entry.thumbnailUrl.isEmpty &&
+                  thumbnailUrls.containsKey(entry.bvid)
+              ? entry.copyWith(thumbnailUrl: thumbnailUrls[entry.bvid])
+              : entry,
+        )
+        .toList(growable: false);
+    return List<WatchHistoryEntry>.unmodifiable(_entries);
   }
 }
 
@@ -209,6 +228,46 @@ void main() {
     expect(historyService.removeRequests, <String>['BV1GJ411x7h7']);
     expect(find.text('还没有本机观看记录'), findsOneWidget);
     expect(find.textContaining('仅保存在本机'), findsOneWidget);
+  });
+
+  /// 验证升级前没有封面的记录会受控补查详情，并把封面写回本机服务和当前列表。
+  testWidgets('旧观看记录会自动补齐缺失缩略图', (WidgetTester tester) async {
+    const String thumbnailUrl =
+        'https://i0.hdslb.com/bfs/archive/backfilled-history-cover.jpg';
+    final _FakeWatchHistoryService historyService = _FakeWatchHistoryService(
+      <WatchHistoryEntry>[_entry(thumbnailUrl: '')],
+    );
+    final VideoPreview preview = VideoPreview(
+      bvid: VideoPreview.placeholder().bvid,
+      cid: VideoPreview.placeholder().cid,
+      title: VideoPreview.placeholder().title,
+      ownerName: VideoPreview.placeholder().ownerName,
+      thumbnailUrl: thumbnailUrl,
+      parts: VideoPreview.placeholder().parts,
+    );
+    final _FakeBilibiliService bilibiliService =
+        _FakeBilibiliService(preview: preview);
+
+    await tester.pumpWidget(
+      _buildTestApp(
+        historyService: historyService,
+        bilibiliService: bilibiliService,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(bilibiliService.lookupRequests, <String>['BV1GJ411x7h7']);
+    expect(
+      historyService.backfilledThumbnails,
+      <String, String>{'BV1GJ411x7h7': thumbnailUrl},
+    );
+    expect(
+      find.byWidgetPredicate(
+        (Widget widget) =>
+            widget is CachedNetworkImage && widget.imageUrl == thumbnailUrl,
+      ),
+      findsOneWidget,
+    );
   });
 
   /// 验证清空操作必须确认，确认后只清空页面注入的本机服务。

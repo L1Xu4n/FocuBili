@@ -324,6 +324,58 @@ void main() {
     expect(api.endpoints.single.queryParameters['ps'], '50');
   });
 
+  /// 验证“我的订阅”只保留 type=21 的 UGC 合集，不把普通收藏夹当成合集。
+  test('订阅列表只解析UGC合集并与关注分开', () async {
+    final _FakeSessionProvider session = _FakeSessionProvider(
+      state: _activeSession(mid: 99),
+    );
+    final _RecordingAccountDataApi api = _RecordingAccountDataApi(
+      (Uri _) async => _ok('''
+        {
+          "code": 0,
+          "data": {
+            "count": 25,
+            "list": [
+              {
+                "id": 1001,
+                "type": 21,
+                "title": "山河合集",
+                "cover": "//i0.hdslb.com/collection.jpg",
+                "intro": "多支独立视频",
+                "media_count": 9,
+                "view_count": 1234,
+                "upper": {
+                  "mid": 7,
+                  "name": "测试UP",
+                  "face": "//i0.hdslb.com/face.jpg"
+                }
+              },
+              {
+                "id": 1002,
+                "type": 11,
+                "title": "普通收藏夹"
+              }
+            ]
+          }
+        }
+      '''),
+    );
+
+    final AccountDataPage<SubscribedCollection> result =
+        await _service(session, api).loadSubscribedCollections();
+
+    expect(result.status, AccountDataLoadStatus.success);
+    expect(result.hasMore, isTrue);
+    expect(result.items, hasLength(1));
+    expect(result.items.single.title, '山河合集');
+    expect(result.items.single.ownerMid, 7);
+    expect(result.items.single.videoCount, 9);
+    expect(api.endpoints.single.path, '/x/v3/fav/folder/collected/list');
+    expect(api.endpoints.single.queryParameters['up_mid'], '99');
+    expect(api.endpoints.single.queryParameters['pn'], '1');
+    expect(api.endpoints.single.queryParameters['ps'], '20');
+  });
+
   /// 验证无效收藏夹编号和会话突然缺少有效 SESSDATA 都会阻止网络请求。
   test('无效参数或缺失有效会话Cookie时阻止请求', () async {
     final _FakeSessionProvider invalidIdSession = _FakeSessionProvider(

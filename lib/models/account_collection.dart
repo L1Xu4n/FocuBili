@@ -265,3 +265,29 @@ class FollowedCreator {
   /// 关注时间，服务未给出或无法解析时为 null。
   final DateTime? followedAt;
 }
+
+/// 表示当前账号订阅的一项 UGC 合集，不与关注的 UP 主混在同一列表。
+class SubscribedCollection {
+  /// 创建订阅合集卡片需要的编号、封面、作者和视频数量。
+  const SubscribedCollection({
+    required this.id,
+    required this.title,
+    required this.coverUrl,
+    required this.description,
+    required this.ownerMid,
+    required this.ownerName,
+    required this.ownerAvatarUrl,
+    required this.videoCount,
+    required this.viewCount,
+  });
+
+  final int id;
+  final String title;
+  final String coverUrl;
+  final String description;
+  final int ownerMid;
+  final String ownerName;
+  final String ownerAvatarUrl;
+  final int videoCount;
+  final int viewCount;
+}

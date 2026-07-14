@@ -49,6 +49,37 @@ class WatchHistoryService {
     return List<WatchHistoryEntry>.unmodifiable(updated);
   }
 
+  /// 为旧版遗留的空封面记录批量补写安全缩略图，同时保持原顺序、观看时间和进度不变。
+  Future<List<WatchHistoryEntry>> backfillThumbnails(
+    Map<String, String> thumbnailUrls,
+  ) async {
+    final Map<String, String> normalizedUrls = <String, String>{};
+    thumbnailUrls.forEach((String bvid, String url) {
+      final String normalizedBvid = bvid.trim();
+      final String normalizedUrl = url.trim();
+      if (normalizedBvid.isNotEmpty && normalizedUrl.isNotEmpty) {
+        normalizedUrls[normalizedBvid] = normalizedUrl;
+      }
+    });
+    if (normalizedUrls.isEmpty) {
+      return loadHistory();
+    }
+    final List<WatchHistoryEntry> existing = await loadHistory();
+    bool changed = false;
+    final List<WatchHistoryEntry> updated = existing.map((entry) {
+      final String? thumbnailUrl = normalizedUrls[entry.bvid];
+      if (entry.thumbnailUrl.isNotEmpty || thumbnailUrl == null) {
+        return entry;
+      }
+      changed = true;
+      return entry.copyWith(thumbnailUrl: thumbnailUrl);
+    }).toList(growable: false);
+    if (changed) {
+      await _writeEntries(updated);
+    }
+    return List<WatchHistoryEntry>.unmodifiable(updated);
+  }
+
   /// 移除指定 BV 号的本机观看记录，并返回移除后的记录列表。
   Future<List<WatchHistoryEntry>> remove(String bvid) async {
     final String normalizedBvid = bvid.trim();

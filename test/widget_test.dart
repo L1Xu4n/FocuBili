@@ -30,15 +30,69 @@ class _RecordingJsonRequest {
         "code": 0,
         "message": "0",
         "data": {
+          "aid": 123456,
           "bvid": "BV1GJ411x7h7",
           "cid": 137649199,
           "title": "真实接口标题",
           "duration": 213,
-          "owner": {"name": "真实接口 UP 主"},
+          "desc": "这是一段真实简介",
+          "pubdate": 1704067200,
+          "pic": "//i0.hdslb.com/main.jpg",
+          "owner": {
+            "mid": 7788,
+            "name": "真实接口 UP 主",
+            "face": "//i0.hdslb.com/avatar.jpg"
+          },
+          "stat": {
+            "view": 120000,
+            "danmaku": 321,
+            "reply": 45,
+            "favorite": 67,
+            "coin": 89,
+            "share": 12,
+            "like": 345
+          },
           "pages": [
             {"page": 1, "cid": 137649199, "part": "第一P", "duration": 120},
             {"page": 2, "cid": 137649200, "part": "第二P", "duration": 93}
-          ]
+          ],
+          "ugc_season": {
+            "id": 9900,
+            "title": "独立视频合集",
+            "intro": "合集简介",
+            "cover": "https://archive.biliimg.com/collection.jpg",
+            "mid": 7788,
+            "ep_count": 2,
+            "sections": [
+              {
+                "episodes": [
+                  {
+                    "aid": 123456,
+                    "bvid": "BV1GJ411x7h7",
+                    "cid": 137649199,
+                    "title": "合集第一支视频",
+                    "arc": {
+                      "pic": "//i0.hdslb.com/one.jpg",
+                      "duration": 213,
+                      "pubdate": 1704067200,
+                      "stat": {"view": 100, "danmaku": 10}
+                    }
+                  },
+                  {
+                    "aid": 654321,
+                    "bvid": "BV1Q541167Qg",
+                    "cid": 137649300,
+                    "title": "合集第二支视频",
+                    "arc": {
+                      "pic": "//i0.hdslb.com/two.jpg",
+                      "duration": 300,
+                      "stat": {"view": 200, "danmaku": 20}
+                    }
+                  }
+                ]
+              }
+            ]
+          }
         }
       }
     ''';
@@ -210,6 +264,7 @@ class _FakePlaybackService implements PlaybackService {
   /// 模拟原生播放器切换清晰度并推送新状态。
   @override
   Future<void> selectQuality(int quality) async {
+    _emit(phase: PlaybackPhase.loading, currentQuality: quality);
     if (!rejectQuality) {
       _quality = quality;
     }
@@ -248,7 +303,11 @@ class _FakePlaybackService implements PlaybackService {
   }
 
   /// 向测试页面广播指定阶段的假播放器状态，默认模拟可正常播放的就绪状态。
-  void _emit({PlaybackPhase phase = PlaybackPhase.ready, String? message}) {
+  void _emit({
+    PlaybackPhase phase = PlaybackPhase.ready,
+    String? message,
+    int? currentQuality,
+  }) {
     _states.add(
       PlaybackSnapshot(
         phase: phase,
@@ -256,7 +315,7 @@ class _FakePlaybackService implements PlaybackService {
         position: _position,
         duration: duration,
         speed: _speed,
-        currentQuality: _quality,
+        currentQuality: currentQuality ?? _quality,
         availableQualities: const <PlaybackQuality>[
           PlaybackQuality(id: 64, label: '高清 720P'),
           PlaybackQuality(id: 32, label: '清晰 480P'),
@@ -423,6 +482,63 @@ VideoPreview _createLongTitleVideo() {
   );
 }
 
+/// 创建同时具有两个分P和两支独立合集视频的测试详情，用于验证概念不会混淆。
+VideoPreview _createCollectionVideo() {
+  return const VideoPreview(
+    aid: 123456,
+    bvid: 'BV1GJ411x7h7',
+    cid: 137649199,
+    title: '合集中的当前视频',
+    ownerName: '合集UP主',
+    ownerMid: 7,
+    description: '这是一段视频简介。',
+    stats: VideoStats(
+      viewCount: 120000,
+      danmakuCount: 321,
+      likeCount: 345,
+      coinCount: 89,
+      favoriteCount: 67,
+      shareCount: 12,
+    ),
+    collection: VideoCollection(
+      id: 900,
+      title: '山河合集',
+      ownerMid: 7,
+      totalCount: 2,
+      entries: <VideoCollectionEntry>[
+        VideoCollectionEntry(
+          bvid: 'BV1GJ411x7h7',
+          cid: 137649199,
+          title: '合集第一支视频',
+          thumbnailUrl: '',
+          duration: Duration(minutes: 2),
+        ),
+        VideoCollectionEntry(
+          bvid: 'BV1Q541167Qg',
+          cid: 137649300,
+          title: '合集第二支视频',
+          thumbnailUrl: '',
+          duration: Duration(minutes: 3),
+        ),
+      ],
+    ),
+    parts: <VideoPart>[
+      VideoPart(
+        pageNumber: 1,
+        cid: 137649199,
+        title: '第一P',
+        duration: Duration(minutes: 1),
+      ),
+      VideoPart(
+        pageNumber: 2,
+        cid: 137649200,
+        title: '第二P',
+        duration: Duration(minutes: 1),
+      ),
+    ],
+  );
+}
+
 /// 验证应用能够显示首页、搜索入口和底部一级导航。
 void main() {
   /// 验证公开详情服务能解析 BV 号、标题、UP 主、时长和多P列表。
@@ -444,6 +560,13 @@ void main() {
     expect(video.duration, const Duration(seconds: 120));
     expect(video.parts.length, 2);
     expect(video.parts.last.title, '第二P');
+    expect(video.aid, 123456);
+    expect(video.ownerMid, 7788);
+    expect(video.description, '这是一段真实简介');
+    expect(video.stats.viewCount, 120000);
+    expect(video.collection?.title, '独立视频合集');
+    expect(video.collection?.entries, hasLength(2));
+    expect(video.collection?.entries.last.bvid, 'BV1Q541167Qg');
   });
 
   /// 验证详情直达仍要求输入 BV 号，避免把关键词误当成视频编号。
@@ -704,6 +827,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(service._quality, 32);
+    expect(find.byKey(const Key('player-floating-notice')), findsNothing);
   });
 
   /// 验证服务端回退到原画质时，页面明确提示大会员或账号权限原因。
@@ -730,6 +854,8 @@ void main() {
     await tester.pump();
 
     expect(find.textContaining('可能未开通大会员'), findsOneWidget);
+    expect(find.byKey(const Key('player-floating-notice')), findsOneWidget);
+    expect(find.byType(SnackBar), findsNothing);
   });
 
   /// 验证播放错误显示重试入口，重复点击只会发起一次请求且保留当前分P与清晰度。
@@ -828,6 +954,30 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(service.openedCid, 137649200);
+  });
+
+  /// 验证播放页把单视频分P和多视频 UGC 合集放在不同区域，且不提供评论或发弹幕入口。
+  testWidgets('播放页区分分P和UGC合集', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final _FakePlaybackService playbackService = _FakePlaybackService();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _createCollectionVideo(),
+          playbackService: playbackService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('简介'), findsOneWidget);
+    expect(find.textContaining('分P · 当前 P1'), findsOneWidget);
+    expect(find.byKey(const Key('video-collection-card')), findsOneWidget);
+    expect(find.textContaining('合集 · 山河合集'), findsOneWidget);
+    expect(find.text('评论'), findsNothing);
+    expect(find.text('发弹幕'), findsNothing);
   });
 
   /// 验证进入视频页时会优先打开本机保存的第二P。

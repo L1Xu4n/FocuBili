@@ -36,6 +36,24 @@ class WatchHistoryEntry {
   /// 最近一次保存的当前分P播放位置，用于缩略图右下角的已观看时长。
   final Duration lastPosition;
 
+  /// 复制当前记录并只替换指定展示字段，补封面时不会改变原来的观看时间和进度。
+  WatchHistoryEntry copyWith({
+    String? thumbnailUrl,
+    Duration? lastPosition,
+    DateTime? watchedAt,
+  }) {
+    return WatchHistoryEntry(
+      bvid: bvid,
+      title: title,
+      ownerName: ownerName,
+      lastPartTitle: lastPartTitle,
+      lastPartPageNumber: lastPartPageNumber,
+      watchedAt: watchedAt ?? this.watchedAt,
+      thumbnailUrl: thumbnailUrl ?? this.thumbnailUrl,
+      lastPosition: lastPosition ?? this.lastPosition,
+    );
+  }
+
   /// 将这条记录转换为可写入 SharedPreferences 的最小 JSON 对象。
   Map<String, Object> toJson() {
     return <String, Object>{
