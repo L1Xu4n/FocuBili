@@ -7,6 +7,7 @@ import android.app.RemoteAction
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.drawable.Icon
 import android.media.AudioManager
 import android.net.Uri
@@ -17,6 +18,7 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.util.Rational
 import android.view.Surface
+import android.view.PixelCopy
 import android.webkit.CookieManager
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -49,6 +51,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileOutputStream
 import java.lang.ref.WeakReference
 import java.net.URL
 import java.util.Locale
@@ -305,6 +308,9 @@ class NativePlaybackController(
                 val aspectRatio = call.argument<Number>("aspectRatio")?.toDouble()
                     ?: videoAspectRatio.toDouble()
                 enterPictureInPicture(aspectRatio, result)
+            }
+            "captureCurrentFrame" -> {
+                captureCurrentVideoFrame(result)
             }
             "getMediaCacheStatus" -> {
                 handleMediaCacheOperation(result, ::readMediaCacheStatus)
@@ -779,6 +785,72 @@ class NativePlaybackController(
         videoSurface = Surface(entry.surfaceTexture())
         player?.setVideoSurface(videoSurface)
         return entry.id()
+    }
+
+    /** 使用 PixelCopy 把当前视频 Surface 保存为应用私有 JPEG，供时间点笔记插入画面。 */
+    private fun captureCurrentVideoFrame(result: MethodChannel.Result) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            result.error("frame_capture_unsupported", "当前 Android 版本不支持截取视频画面。", null)
+            return
+        }
+        val surface = videoSurface
+        val videoSize = player?.videoSize
+        if (surface == null || !surface.isValid || videoSize == null ||
+            videoSize.width <= 0 || videoSize.height <= 0
+        ) {
+            result.error("frame_capture_unavailable", "视频画面还没有准备好，请稍后再试。", null)
+            return
+        }
+        val maximumWidth = 1280
+        val scale = minOf(1.0, maximumWidth.toDouble() / videoSize.width.toDouble())
+        val width = maxOf(2, (videoSize.width * scale).toInt())
+        val height = maxOf(2, (videoSize.height * scale).toInt())
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        PixelCopy.request(
+            surface,
+            bitmap,
+            { copyResult ->
+                if (copyResult != PixelCopy.SUCCESS) {
+                    bitmap.recycle()
+                    result.error(
+                        "frame_capture_failed",
+                        "无法读取当前视频画面，请继续播放后再试。",
+                        copyResult,
+                    )
+                    return@request
+                }
+                playbackRequestExecutor.execute {
+                    try {
+                        val directory = File(activity.filesDir, "video_note_frames")
+                        if (!directory.exists() && !directory.mkdirs()) {
+                            throw IllegalStateException("无法创建笔记画面目录。")
+                        }
+                        val safeBvid = currentBvid.replace(Regex("[^0-9A-Za-z]"), "_")
+                        val output = File(
+                            directory,
+                            "${safeBvid}_${System.currentTimeMillis()}.jpg",
+                        )
+                        FileOutputStream(output).use { stream ->
+                            if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 90, stream)) {
+                                throw IllegalStateException("无法压缩当前视频画面。")
+                            }
+                        }
+                        bitmap.recycle()
+                        mainHandler.post { result.success(output.absolutePath) }
+                    } catch (error: Throwable) {
+                        bitmap.recycle()
+                        mainHandler.post {
+                            result.error(
+                                "frame_capture_failed",
+                                error.message ?: "保存当前视频画面失败。",
+                                null,
+                            )
+                        }
+                    }
+                }
+            },
+            mainHandler,
+        )
     }
 
     /** 保存旧分P、重置播放器，并请求新分P所选清晰度的 DASH 地址。 */

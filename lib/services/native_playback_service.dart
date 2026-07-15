@@ -221,6 +221,9 @@ abstract interface class PlaybackService {
   /// 请求 Android 将当前播放页面切换为系统画中画窗口。
   Future<bool> enterPictureInPicture(double aspectRatio);
 
+  /// 把原生视频 Surface 的当前画面保存到应用私有目录并返回绝对路径。
+  Future<String?> captureCurrentFrame();
+
   /// 释放 Android 播放器、后台播放数据请求和 Flutter 订阅需要的资源。
   Future<void> dispose();
 }
@@ -386,6 +389,16 @@ class NativePlaybackService implements PlaybackService {
       <String, Object?>{'aspectRatio': aspectRatio},
     );
     return result == true;
+  }
+
+  /// 请求 Android 使用 PixelCopy 截取当前视频画面，失败时返回空值。
+  @override
+  Future<String?> captureCurrentFrame() async {
+    final Object? result = await _invokeResult('captureCurrentFrame');
+    if (result is! String || result.trim().isEmpty) {
+      return null;
+    }
+    return result.trim();
   }
 
   /// 调用需要返回值的 Android 方法，并在服务释放后返回空值。

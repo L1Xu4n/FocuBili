@@ -10,6 +10,7 @@ import 'package:focubili/features/player/player_page.dart';
 import 'package:focubili/features/profile/login_page.dart';
 import 'package:focubili/features/search/search_page.dart';
 import 'package:focubili/models/video_preview.dart';
+import 'package:focubili/models/video_note.dart';
 import 'package:focubili/models/video_shot_preview.dart';
 import 'package:focubili/models/watch_history_entry.dart';
 import 'package:focubili/services/bilibili_service.dart';
@@ -19,6 +20,7 @@ import 'package:focubili/services/player_overlay_service.dart';
 import 'package:focubili/services/search_history_service.dart';
 import 'package:focubili/services/watch_history_service.dart';
 import 'package:focubili/services/video_shot_service.dart';
+import 'package:focubili/services/video_note_service.dart';
 import 'package:focubili/models/player_overlay_data.dart';
 
 /// 记录视频详情请求地址并返回固定 JSON，验证服务解析时不依赖真实网络。
@@ -44,7 +46,7 @@ class _RecordingJsonRequest {
         "code": 0,
         "message": "0",
         "data": {
-          "aid": 123456,
+          "aid": 116916878313252,
           "bvid": "BV1GJ411x7h7",
           "cid": 137649199,
           "title": "真实接口标题",
@@ -53,7 +55,7 @@ class _RecordingJsonRequest {
           "pubdate": 1704067200,
           "pic": "http://i0.hdslb.com/main.jpg",
           "owner": {
-            "mid": 7788,
+            "mid": 3546574294616231,
             "name": "真实接口 UP 主",
             "face": "//i0.hdslb.com/avatar.jpg"
           },
@@ -250,6 +252,9 @@ class _FakePlaybackService implements PlaybackService {
   int pictureInPictureRequests = 0;
   int seekByRequests = 0;
   int seekToRequests = 0;
+  int frameCaptureRequests = 0;
+  final List<Duration> frameCapturePositions = <Duration>[];
+  final List<int?> frameCaptureCids = <int?>[];
   double brightness = 0.5;
   double volume = 0.5;
 
@@ -344,6 +349,15 @@ class _FakePlaybackService implements PlaybackService {
   Future<bool> enterPictureInPicture(double aspectRatio) async {
     pictureInPictureRequests += 1;
     return true;
+  }
+
+  /// 记录截图时真实分P和播放位置，并返回测试用的固定本机路径。
+  @override
+  Future<String?> captureCurrentFrame() async {
+    frameCaptureRequests += 1;
+    frameCapturePositions.add(_position);
+    frameCaptureCids.add(openedCid);
+    return 'C:\\fake-video-note-frame.jpg';
   }
 
   /// 返回测试预先设置的最后观看分P和进度。
@@ -552,7 +566,7 @@ VideoPreview _createLongTitleVideo() {
 
 /// 创建同时具有两个分P和两支独立合集视频的测试详情，用于验证概念不会混淆。
 VideoPreview _createCollectionVideo() {
-  return const VideoPreview(
+  return VideoPreview(
     aid: 123456,
     bvid: 'BV1GJ411x7h7',
     cid: 137649199,
@@ -560,7 +574,7 @@ VideoPreview _createCollectionVideo() {
     ownerName: '合集UP主',
     ownerMid: 7,
     description: '这是一段视频简介。',
-    stats: VideoStats(
+    stats: const VideoStats(
       viewCount: 120000,
       danmakuCount: 321,
       likeCount: 345,
@@ -572,32 +586,45 @@ VideoPreview _createCollectionVideo() {
       id: 900,
       title: '山河合集',
       ownerMid: 7,
-      totalCount: 2,
+      totalCount: 8,
       entries: <VideoCollectionEntry>[
         VideoCollectionEntry(
           bvid: 'BV1GJ411x7h7',
           cid: 137649199,
           title: '合集第一支视频',
           thumbnailUrl: '',
-          duration: Duration(minutes: 2),
+          duration: const Duration(minutes: 2),
+          publishedAt: DateTime(2024, 1, 2),
         ),
         VideoCollectionEntry(
           bvid: 'BV1Q541167Qg',
           cid: 137649300,
           title: '合集第二支视频',
           thumbnailUrl: '',
-          duration: Duration(minutes: 3),
+          duration: const Duration(minutes: 3),
+          publishedAt: DateTime(2024, 1, 3),
+        ),
+        ...List<VideoCollectionEntry>.generate(
+          6,
+          (int index) => VideoCollectionEntry(
+            bvid: 'BV1TestLong${index + 3}',
+            cid: 137649301 + index,
+            title: '合集第${index + 3}支视频',
+            thumbnailUrl: '',
+            duration: Duration(minutes: index + 4),
+            publishedAt: DateTime(2024, 1, index + 4),
+          ),
         ),
       ],
     ),
     parts: <VideoPart>[
-      VideoPart(
+      const VideoPart(
         pageNumber: 1,
         cid: 137649199,
         title: '第一P',
         duration: Duration(minutes: 1),
       ),
-      VideoPart(
+      const VideoPart(
         pageNumber: 2,
         cid: 137649200,
         title: '第二P',
@@ -632,8 +659,8 @@ VideoPreview _createSecondCollectionVideo() {
 
 /// 验证应用能够显示首页、搜索入口和底部一级导航。
 void main() {
-  /// 验证公开详情服务能解析 BV 号、标题、UP 主、时长和多P列表。
-  test('公开视频详情服务能解析 BV 链接', () async {
+  /// 验证公开详情服务能解析 BV 号、大编号、UP 主、时长和多P列表。
+  test('公开视频详情服务能解析 BV 链接和大编号', () async {
     final _RecordingJsonRequest requester = _RecordingJsonRequest();
     final BilibiliVideoInfoService service = BilibiliVideoInfoService(
       requestJson: requester.call,
@@ -651,8 +678,8 @@ void main() {
     expect(video.duration, const Duration(seconds: 120));
     expect(video.parts.length, 2);
     expect(video.parts.last.title, '第二P');
-    expect(video.aid, 123456);
-    expect(video.ownerMid, 7788);
+    expect(video.aid, 116916878313252);
+    expect(video.ownerMid, 3546574294616231);
     expect(video.description, '这是一段真实简介');
     expect(
       video.thumbnailUrl,
@@ -855,6 +882,37 @@ void main() {
 
     expect(tester.widget<AnimatedOpacity>(controls).opacity, 0);
     expect(find.byTooltip('播放'), findsOneWidget);
+  });
+
+  /// 验证竖屏播放器右上角提供常用控制，并会随着详情页上滑连续收起至接近零高度。
+  testWidgets('竖屏播放器显示右上角控制并随页面滚动收起', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(450, 700));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _createCollectionVideo(),
+          playbackService: _FakePlaybackService(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final Finder playerSurface = find.byKey(const Key('player-surface'));
+    final Finder pageScroll = find.byKey(const Key('collapsing-player-scroll'));
+    final double initialHeight = tester.getSize(playerSurface).height;
+    expect(find.byKey(const Key('picture-in-picture')), findsOneWidget);
+    expect(find.byKey(const Key('danmaku-toggle')), findsOneWidget);
+    expect(find.byKey(const Key('more-settings-menu')), findsOneWidget);
+
+    await tester.drag(pageScroll, const Offset(0, -120));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(playerSurface).height, lessThan(initialHeight));
+
+    await tester.drag(pageScroll, const Offset(0, -600));
+    await tester.pumpAndSettle();
+    expect(playerSurface, findsNothing);
+    expect(tester.takeException(), isNull);
   });
 
   /// 验证画面右侧双击会触发五秒快进手势。
@@ -1175,9 +1233,312 @@ void main() {
       findsOneWidget,
     );
     expect(find.byKey(const Key('video-collection-card')), findsOneWidget);
+    final ListView collectionPreviewList = tester.widget<ListView>(
+      find.byKey(const Key('collection-preview-list')),
+    );
+    expect(collectionPreviewList.scrollDirection, Axis.horizontal);
+    expect(find.text('2024-01-02'), findsOneWidget);
+    expect(
+      find.byKey(const Key('collection-title-BV1GJ411x7h7')),
+      findsOneWidget,
+    );
     expect(find.textContaining('合集 · 山河合集'), findsOneWidget);
+    await tester.drag(
+      find.byKey(const Key('collection-preview-list')),
+      const Offset(-2400, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('collection-preview-BV1TestLong8')),
+      findsOneWidget,
+    );
     expect(find.text('评论'), findsNothing);
     expect(find.text('发弹幕'), findsNothing);
+  });
+
+  /// 验证合集展开面板可以搜索、排序，并一键回到当前播放视频。
+  testWidgets('合集展开面板支持搜索排序和定位', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _createCollectionVideo(),
+          playbackService: _FakePlaybackService(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('video-collection-card')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('collection-search-field')), findsOneWidget);
+    expect(find.byKey(const Key('collection-sort-button')), findsOneWidget);
+    expect(find.byKey(const Key('collection-locate-current')), findsOneWidget);
+
+    await tester.enterText(
+      find.byKey(const Key('collection-search-field')),
+      '第8支',
+    );
+    await tester.pumpAndSettle();
+    final Finder sheetList = find.byKey(const Key('collection-sheet-list'));
+    expect(
+      find.descendant(of: sheetList, matching: find.text('合集第8支视频')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: sheetList, matching: find.text('合集第二支视频')),
+      findsNothing,
+    );
+
+    await tester.tap(find.byKey(const Key('collection-locate-current')));
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(of: sheetList, matching: find.text('合集第一支视频')),
+      findsOneWidget,
+    );
+  });
+
+  /// 验证竖屏笔记面板固定播放器，并保存标题、正文、时间点和可选当前画面。
+  testWidgets('竖屏时间点笔记固定播放器并保存到本机', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final VideoNoteService noteService = VideoNoteService(
+      preferencesLoader: () async => preferences,
+    );
+    final _FakePlaybackService playbackService = _FakePlaybackService();
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _createCollectionVideo(),
+          playbackService: playbackService,
+          videoNoteService: noteService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('portrait-note-button')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('portrait-video-notes-panel')), findsOneWidget);
+    expect(find.byKey(const Key('collapsing-player-scroll')), findsNothing);
+    final TextField portraitTitleField = tester.widget<TextField>(
+      find.byKey(const Key('note-title-field')),
+    );
+    expect(portraitTitleField.decoration?.border, InputBorder.none);
+    final GestureDetector activePlayerSurface = tester.widget<GestureDetector>(
+      find.byKey(const Key('player-surface')),
+    );
+    expect(activePlayerSurface.onTap, isNotNull);
+    final IconButton activePlayButton = tester.widget<IconButton>(
+      find.byKey(const Key('play-pause-button')),
+    );
+    expect(activePlayButton.onPressed, isNotNull);
+    activePlayButton.onPressed!();
+    await tester.pump();
+    expect(playbackService._isPlaying, isTrue);
+    final Rect playerBeforeDrag =
+        tester.getRect(find.byKey(const Key('player-surface')));
+
+    await tester.drag(
+      find.byKey(const Key('portrait-video-notes-panel')),
+      const Offset(0, -500),
+    );
+    await tester.pump();
+    final Rect playerAfterDrag =
+        tester.getRect(find.byKey(const Key('player-surface')));
+    expect(playerAfterDrag, playerBeforeDrag);
+
+    await tester.enterText(
+      find.byKey(const Key('note-title-field')),
+      '关键观点',
+    );
+    await tester.enterText(
+      find.byKey(const Key('note-body-field')),
+      '这是正文内容。',
+    );
+    // 模拟写笔记期间视频继续播放，截图仍应回到新建笔记时锁定的 00:00。
+    await playbackService.seekTo(const Duration(seconds: 75));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('include-current-frame')));
+    await tester.tap(find.byKey(const Key('save-video-note')));
+    await tester.pumpAndSettle();
+
+    final List<VideoNote> notes = await noteService.loadNotes();
+    expect(notes, hasLength(1));
+    expect(notes.single.title, '关键观点');
+    expect(notes.single.body, '这是正文内容。');
+    expect(notes.single.framePath, 'C:\\fake-video-note-frame.jpg');
+    expect(playbackService.frameCaptureRequests, 1);
+    expect(playbackService.frameCapturePositions, <Duration>[Duration.zero]);
+    expect(playbackService.frameCaptureCids, <int?>[137649199]);
+    expect(playbackService._position, const Duration(seconds: 75));
+    expect(playbackService._isPlaying, isTrue);
+
+    await tester.tap(find.byKey(const Key('delete-video-note')));
+    await tester.pumpAndSettle();
+    expect(find.text('确定删除“关键观点”吗？此操作无法撤销。'), findsOneWidget);
+    expect(await noteService.loadNotes(), hasLength(1));
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(await noteService.loadNotes(), hasLength(1));
+  });
+
+  /// 验证全屏右侧笔记按钮打开半透明笔记本，并能从左侧列表跳转时间点。
+  testWidgets('全屏时间点笔记显示半透明列表并跳转进度', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final VideoNoteService noteService = VideoNoteService(
+      preferencesLoader: () async => preferences,
+    );
+    final DateTime now = DateTime(2026, 7, 15, 19, 1);
+    await noteService.saveNote(
+      VideoNote(
+        id: 'fullscreen-note',
+        bvid: 'BV1GJ411x7h7',
+        videoTitle: '合集中的当前视频',
+        ownerName: '合集UP主',
+        partCid: 137649199,
+        partPageNumber: 1,
+        partTitle: '第一P',
+        title: '这是一条很长很长需要自动滚动显示的笔记标题',
+        body: '全屏笔记正文',
+        createdAt: now,
+        updatedAt: now,
+        position: const Duration(seconds: 42),
+      ),
+    );
+    final _FakePlaybackService playbackService = _FakePlaybackService();
+    await tester.binding.setSurfaceSize(const Size(920, 2000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _createCollectionVideo(),
+          playbackService: playbackService,
+          videoNoteService: noteService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final IconButton fullscreenButton = tester.widget<IconButton>(
+      find.byWidgetPredicate(
+        (Widget widget) => widget is IconButton && widget.tooltip == '进入全屏',
+      ),
+    );
+    fullscreenButton.onPressed!();
+    await tester.binding.setSurfaceSize(const Size(2000, 920));
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(find.byKey(const Key('fullscreen-note-button')), findsOneWidget);
+    final GestureDetector fullscreenSurface = tester.widget<GestureDetector>(
+      find.byKey(const Key('player-surface')),
+    );
+    fullscreenSurface.onTap!();
+    await tester.pump();
+    expect(find.byKey(const Key('fullscreen-note-button')), findsNothing);
+    tester
+        .widget<GestureDetector>(find.byKey(const Key('player-surface')))
+        .onTap!();
+    await tester.pump();
+    expect(find.byKey(const Key('fullscreen-note-button')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('fullscreen-note-button')));
+    await tester.pumpAndSettle();
+    expect(
+        find.byKey(const Key('fullscreen-video-notes-panel')), findsOneWidget);
+    expect(find.byKey(const Key('fullscreen-video-note-list')), findsOneWidget);
+    final Material panelMaterial = tester.widget<Material>(
+      find.byKey(const Key('fullscreen-video-notes-material')),
+    );
+    expect(panelMaterial.color!.alpha, lessThan(255));
+    final AnimatedSlide openedPanelSlide = tester.widget<AnimatedSlide>(
+      find.byKey(const Key('fullscreen-video-notes-slide')),
+    );
+    expect(openedPanelSlide.offset, Offset.zero);
+    expect(openedPanelSlide.duration, const Duration(milliseconds: 280));
+    final double compactHeaderTop =
+        tester.getTopLeft(find.byKey(const Key('compact-note-header'))).dy;
+    final double panelTop = tester
+        .getTopLeft(find.byKey(const Key('fullscreen-video-notes-material')))
+        .dy;
+    expect(compactHeaderTop - panelTop, lessThan(14));
+    final TextField fullscreenTitleField = tester.widget<TextField>(
+      find.byKey(const Key('note-title-field')),
+    );
+    expect(fullscreenTitleField.decoration?.border, InputBorder.none);
+    expect(fullscreenTitleField.decoration?.filled, isFalse);
+    expect(fullscreenTitleField.style?.fontWeight, FontWeight.w900);
+    final TextField fullscreenBodyField = tester.widget<TextField>(
+      find.byKey(const Key('note-body-field')),
+    );
+    expect(fullscreenBodyField.decoration?.border, InputBorder.none);
+    expect(fullscreenBodyField.decoration?.filled, isFalse);
+
+    tester
+        .widget<IconButton>(
+          find.byKey(const Key('collapse-fullscreen-note-list')),
+        )
+        .onPressed!();
+    await tester.pump();
+    expect(find.byKey(const Key('fullscreen-video-note-list')), findsNothing);
+    expect(
+        find.byKey(const Key('expand-fullscreen-note-list')), findsOneWidget);
+    tester
+        .widget<IconButton>(
+            find.byKey(const Key('expand-fullscreen-note-list')))
+        .onPressed!();
+    await tester.pump();
+    expect(find.byKey(const Key('fullscreen-video-note-list')), findsOneWidget);
+
+    final InkWell noteEntry = tester.widget<InkWell>(
+      find.byKey(const Key('fullscreen-video-note-fullscreen-note')),
+    );
+    noteEntry.onTap!();
+    await tester.pump();
+    expect(playbackService.seekToRequests, 1);
+    expect(find.text('视频位置：00:42'), findsOneWidget);
+
+    await tester.binding.handlePopRoute();
+    await tester.pump();
+    expect(
+        find.byKey(const Key('fullscreen-video-notes-panel')), findsOneWidget);
+    final AnimatedSlide closingPanelSlide = tester.widget<AnimatedSlide>(
+      find.byKey(const Key('fullscreen-video-notes-slide')),
+    );
+    expect(closingPanelSlide.offset.dx, greaterThan(1));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byKey(const Key('fullscreen-video-notes-panel')), findsNothing);
+    expect(find.byTooltip('退出全屏'), findsOneWidget);
+  });
+
+  /// 验证从笔记详情进入播放器时，外部指定分P和时间点优先于本机观看记录。
+  testWidgets('播放器优先打开笔记指定分P和时间点', (WidgetTester tester) async {
+    final _FakePlaybackService playbackService = _FakePlaybackService(
+      savedState: const SavedPlaybackState(
+        cid: 137649199,
+        pageNumber: 1,
+        position: Duration(seconds: 8),
+      ),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _createCollectionVideo(),
+          playbackService: playbackService,
+          initialPartCid: 137649200,
+          initialPosition: const Duration(seconds: 42),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(playbackService.openedCid, 137649200);
+    expect(playbackService.seekToRequests, 1);
+    expect(playbackService._position, const Duration(seconds: 42));
   });
 
   /// 验证合集视频复用当前播放器加载，并在返回时恢复切换前的视频而不退出页面。

@@ -5,7 +5,10 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../features/common/watch_history_badge.dart';
+import '../../features/notes/video_note_composer.dart';
 import '../../features/profile/user_profile_page.dart';
+import '../../models/video_note.dart';
 import '../../models/video_preview.dart';
 import '../../models/video_shot_preview.dart';
 import '../../models/watch_history_entry.dart';
@@ -16,22 +19,25 @@ import '../../services/bilibili_public_content_service.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/watch_history_service.dart';
 import '../../services/video_shot_service.dart';
+import '../../services/video_note_service.dart';
 import '../../models/player_overlay_data.dart';
 
 /// 标识一次竖向滑动正在调整亮度、音量，或因底部手势区而不做处理。
 enum _VerticalAdjustmentMode { none, brightness, volume }
 
-/// 标识全屏视频画面应保留比例、裁切填充，还是按屏幕比例拉伸。
+/// 标识播放器画面应保留比例、裁切填充，还是按容器比例拉伸。
 enum _VideoFitMode { contain, cover, stretch }
 
-/// 标识全屏右上角“更多”菜单中可执行的本地播放器设置。
+/// 标识播放器右上角“更多”菜单中可执行的本地播放器设置。
 enum _PlayerMoreMenuAction {
   subtitles,
-  decoderSettings,
   fitContain,
   fitCover,
   fitStretch,
 }
+
+/// 标识合集展开列表的四种本地排序方式，不改变服务端原始合集顺序。
+enum _CollectionEntryOrder { original, newest, oldest, mostPlayed }
 
 /// 新架构的原生播放器页面，提供简洁的 App 风格控制层。
 class PlayerPage extends StatefulWidget {
@@ -46,6 +52,9 @@ class PlayerPage extends StatefulWidget {
     this.bilibiliService,
     this.publicContentService,
     this.videoShotService,
+    this.videoNoteService,
+    this.initialPartCid,
+    this.initialPosition,
   });
 
   final VideoPreview video;
@@ -56,6 +65,9 @@ class PlayerPage extends StatefulWidget {
   final BilibiliService? bilibiliService;
   final BilibiliPublicContentService? publicContentService;
   final VideoShotService? videoShotService;
+  final VideoNoteService? videoNoteService;
+  final int? initialPartCid;
+  final Duration? initialPosition;
 
   /// 创建播放器状态，保存播放、进度、控制层和全屏状态。
   @override
@@ -68,6 +80,9 @@ class _PlayerPageState extends State<PlayerPage>
   static const Duration _controlsAutoHideDelay = Duration(seconds: 5);
   static const Duration _transientHintDuration = Duration(seconds: 3);
   static const Duration _resumeNoticeDuration = _transientHintDuration;
+  static const Duration _notesPanelAnimationDuration = Duration(
+    milliseconds: 280,
+  );
   static const Duration _watchHistoryProgressSaveInterval = Duration(
     seconds: 15,
   );
@@ -97,10 +112,15 @@ class _PlayerPageState extends State<PlayerPage>
   late final BilibiliService _bilibiliService;
   late final BilibiliPublicContentService _publicContentService;
   late final VideoShotService _videoShotService;
+  late final VideoNoteService _videoNoteService;
   late VideoPreview _activeVideo;
   late VideoPart _currentPart;
   final List<VideoPreview> _collectionVideoBackStack = <VideoPreview>[];
   final ScrollController _partScrollController = ScrollController();
+  final ScrollController _collectionPreviewScrollController =
+      ScrollController();
+  final TextEditingController _noteTitleController = TextEditingController();
+  final TextEditingController _noteBodyController = TextEditingController();
   StreamSubscription<PlaybackSnapshot>? _playbackSubscription;
   PlaybackSnapshot _playbackSnapshot = const PlaybackSnapshot();
   int? _textureId;
@@ -116,6 +136,7 @@ class _PlayerPageState extends State<PlayerPage>
   Timer? _resumeNoticeTimer;
   Timer? _playerNoticeTimer;
   Timer? _fullscreenStatusTimer;
+  Timer? _notesPanelAnimationTimer;
   double _playbackSpeed = 1;
   int _currentQuality = 64;
   int? _pendingQualitySelection;
@@ -167,6 +188,21 @@ class _PlayerPageState extends State<PlayerPage>
   late final AnimationController _danmakuFrameController;
   final _DanmakuLanePlanner _danmakuLanePlanner = _DanmakuLanePlanner();
   Duration _danmakuPositionAnchor = Duration.zero;
+  List<VideoNote> _currentVideoNotes = const <VideoNote>[];
+  VideoNote? _editingVideoNote;
+  Duration _notePosition = Duration.zero;
+  int _notePartCid = 0;
+  bool _notesOpen = false;
+  bool _notesOverlayMounted = false;
+  bool _notesLoading = false;
+  bool _noteSaving = false;
+  bool _includeCurrentFrame = false;
+  String? _noteFramePath;
+  bool _fullscreenNoteListCollapsed = false;
+  Duration? _pendingInitialPosition;
+  Map<String, WatchHistoryEntry> _watchHistoryByBvid =
+      const <String, WatchHistoryEntry>{};
+  String? _locatedCollectionPreviewBvid;
 
   /// 判断原生播放器是否真的在播放，避免 Flutter 页面自己伪造播放状态。
   bool get _playing => _playbackSnapshot.isPlaying;
@@ -188,6 +224,7 @@ class _PlayerPageState extends State<PlayerPage>
     );
     _activeVideo = widget.video;
     _currentPart = _activeVideo.initialPart;
+    _notePartCid = _currentPart.cid;
     _playbackService = widget.playbackService ?? NativePlaybackService();
     _watchHistoryService = widget.watchHistoryService ?? WatchHistoryService();
     _deviceStatusService =
@@ -201,10 +238,27 @@ class _PlayerPageState extends State<PlayerPage>
         (widget.playbackService == null
             ? BilibiliVideoShotService()
             : const EmptyVideoShotService());
+    _videoNoteService = widget.videoNoteService ?? VideoNoteService();
+    _pendingInitialPosition = widget.initialPosition;
     _playbackSubscription = _playbackService.states.listen(
       _applyPlaybackSnapshot,
     );
+    unawaited(_loadWatchHistoryBadges());
     unawaited(_initializeNativePlayback());
+  }
+
+  /// 读取本机观看记录并按 BV 号索引，供合集封面显示“上次看过”。
+  Future<void> _loadWatchHistoryBadges() async {
+    final List<WatchHistoryEntry> entries =
+        await _watchHistoryService.loadHistory();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _watchHistoryByBvid = <String, WatchHistoryEntry>{
+        for (final WatchHistoryEntry entry in entries) entry.bvid: entry,
+      };
+    });
   }
 
   /// 请求 Android 创建 Media3 视频纹理，再直接请求公开视频的播放数据。
@@ -214,9 +268,10 @@ class _PlayerPageState extends State<PlayerPage>
           await _playbackService.loadSavedPlaybackState(_activeVideo.bvid);
       final SystemPlaybackLevels levels =
           await _playbackService.getSystemPlaybackLevels();
-      final VideoPart restoredPart = _findSavedPart(savedState);
-      final bool restoredPartMatched =
-          savedState != null && restoredPart.cid == savedState.cid;
+      final VideoPart restoredPart = _findInitialPart(savedState);
+      final bool restoredPartMatched = widget.initialPartCid == null &&
+          savedState != null &&
+          restoredPart.cid == savedState.cid;
       if (!mounted) {
         return;
       }
@@ -261,6 +316,19 @@ class _PlayerPageState extends State<PlayerPage>
     return _activeVideo.initialPart;
   }
 
+  /// 优先定位外部笔记指定的分P，没有指定或编号失效时再恢复本机观看分P。
+  VideoPart _findInitialPart(SavedPlaybackState? savedState) {
+    final int? requestedCid = widget.initialPartCid;
+    if (requestedCid != null) {
+      for (final VideoPart part in _activeVideo.parts) {
+        if (part.cid == requestedCid) {
+          return part;
+        }
+      }
+    }
+    return _findSavedPart(savedState);
+  }
+
   /// 使用系统风格提示告知用户已经定位到上次观看的分P。
   void _showPartRestoreSnackBar(int pageNumber) {
     if (!mounted) {
@@ -281,9 +349,16 @@ class _PlayerPageState extends State<PlayerPage>
     if (!mounted) {
       return;
     }
-    final bool shouldShowResumeNotice = snapshot.phase == PlaybackPhase.ready &&
+    final Duration? requestedInitialPosition = _pendingInitialPosition;
+    final bool shouldSeekToInitialPosition = requestedInitialPosition != null &&
+        snapshot.phase == PlaybackPhase.ready;
+    final bool shouldShowResumeNotice = requestedInitialPosition == null &&
+        snapshot.phase == PlaybackPhase.ready &&
         snapshot.restoredPosition > Duration.zero &&
         _shownRestoredCid != _currentPart.cid;
+    if (shouldSeekToInitialPosition) {
+      _pendingInitialPosition = null;
+    }
     final int? pendingQuality = _pendingQualitySelection;
     final bool sawQualityLoading = pendingQuality != null &&
         (_qualitySelectionSawLoading ||
@@ -333,8 +408,12 @@ class _PlayerPageState extends State<PlayerPage>
       _shownRestoredCid = _currentPart.cid;
       _showResumeNotice(snapshot.restoredPosition);
     }
-    _recordWatchHistoryWhenReady(snapshot);
-    _recordWatchHistoryProgressWhenNeeded(snapshot);
+    if (shouldSeekToInitialPosition) {
+      unawaited(_seekToRequestedInitialPosition(requestedInitialPosition));
+    } else {
+      _recordWatchHistoryWhenReady(snapshot);
+      _recordWatchHistoryProgressWhenNeeded(snapshot);
+    }
     if (_danmakuEnabled && snapshot.phase == PlaybackPhase.ready) {
       _ensureDanmakuSegmentsForPosition(snapshot.position);
     }
@@ -342,6 +421,22 @@ class _PlayerPageState extends State<PlayerPage>
       _stopControlsAutoHideTimer();
     } else if (_showControls && _controlsTimer == null) {
       _restartControlsAutoHideTimer();
+    }
+  }
+
+  /// 在播放器首次就绪后跳转到笔记要求的时间点，失败时保留可操作的播放页面。
+  Future<void> _seekToRequestedInitialPosition(Duration position) async {
+    try {
+      await _playbackService.seekTo(position);
+      if (mounted) {
+        _showTransientSnackBar(
+          '已跳转到笔记位置：${formatVideoNotePosition(position)}',
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        _showTransientSnackBar('视频已打开，但暂时无法跳转到笔记时间点。');
+      }
     }
   }
 
@@ -389,18 +484,25 @@ class _PlayerPageState extends State<PlayerPage>
         position.isNegative ? Duration.zero : position;
     _lastHistorySavedPosition = safePosition;
     try {
-      await _watchHistoryService.record(
-        WatchHistoryEntry(
-          bvid: _activeVideo.bvid,
-          title: _activeVideo.title,
-          ownerName: _activeVideo.ownerName,
-          lastPartTitle: _currentPart.title,
-          lastPartPageNumber: _currentPart.pageNumber,
-          watchedAt: DateTime.now(),
-          thumbnailUrl: _activeVideo.thumbnailUrl,
-          lastPosition: safePosition,
-        ),
+      final WatchHistoryEntry entry = WatchHistoryEntry(
+        bvid: _activeVideo.bvid,
+        title: _activeVideo.title,
+        ownerName: _activeVideo.ownerName,
+        lastPartTitle: _currentPart.title,
+        lastPartPageNumber: _currentPart.pageNumber,
+        watchedAt: DateTime.now(),
+        thumbnailUrl: _activeVideo.thumbnailUrl,
+        lastPosition: safePosition,
       );
+      final List<WatchHistoryEntry> updated =
+          await _watchHistoryService.record(entry);
+      if (mounted) {
+        setState(() {
+          _watchHistoryByBvid = <String, WatchHistoryEntry>{
+            for (final WatchHistoryEntry item in updated) item.bvid: item,
+          };
+        });
+      }
     } catch (_) {
       // 本地偏好设置异常不能中断播放器；后续换P或重新打开时仍会再次尝试保存。
     }
@@ -465,8 +567,12 @@ class _PlayerPageState extends State<PlayerPage>
     _resumeNoticeTimer?.cancel();
     _playerNoticeTimer?.cancel();
     _fullscreenStatusTimer?.cancel();
+    _notesPanelAnimationTimer?.cancel();
     _danmakuFrameController.dispose();
     _partScrollController.dispose();
+    _collectionPreviewScrollController.dispose();
+    _noteTitleController.dispose();
+    _noteBodyController.dispose();
     unawaited(_playbackSubscription?.cancel() ?? Future<void>.value());
     unawaited(_playbackService.dispose());
     unawaited(_restoreSystemUi());
@@ -1449,9 +1555,11 @@ class _PlayerPageState extends State<PlayerPage>
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   }
 
-  /// 处理顶部返回按钮：全屏时先退出全屏，合集切换后先回到上一支视频。
+  /// 处理顶部返回按钮：先关闭笔记，再退出全屏或返回上一支合集视频。
   void _handleBackPressed() {
-    if (_fullscreen) {
+    if (_notesOpen) {
+      _closeVideoNotes();
+    } else if (_fullscreen) {
       unawaited(_toggleFullscreen());
     } else if (_collectionVideoBackStack.isNotEmpty) {
       unawaited(_restorePreviousCollectionVideo());
@@ -1460,12 +1568,14 @@ class _PlayerPageState extends State<PlayerPage>
     }
   }
 
-  /// 接收系统返回结果：依次处理全屏和合集内部返回，最后才允许离开播放页。
+  /// 接收系统返回结果：依次关闭笔记、全屏和合集内部页面，再允许离开播放页。
   void _handlePopInvoked(bool didPop) {
     if (didPop) {
       return;
     }
-    if (_fullscreen) {
+    if (_notesOpen) {
+      _closeVideoNotes();
+    } else if (_fullscreen) {
       unawaited(_toggleFullscreen());
     } else if (_collectionVideoBackStack.isNotEmpty) {
       unawaited(_restorePreviousCollectionVideo());
@@ -1906,26 +2016,11 @@ class _PlayerPageState extends State<PlayerPage>
     );
   }
 
-  /// 对尚未实现的更多设置给出明确提示，避免用户误以为设置已经生效。
-  void _showPendingPlayerSetting(String setting) {
-    _showAdjustmentFeedback('$setting将在后续版本实现');
-    _seekFeedbackTimer?.cancel();
-    _seekFeedbackTimer = Timer(_transientHintDuration, () {
-      if (mounted) {
-        setState(() => _seekFeedback = null);
-      }
-    });
-    _restartControlsAutoHideTimer();
-  }
-
-  /// 根据菜单操作切换画面比例，或提示解码设置仍需要后续原生能力支持。
+  /// 根据菜单操作打开字幕选择或切换播放器画面比例。
   void _handleMoreSettingsSelection(_PlayerMoreMenuAction action) {
     switch (action) {
       case _PlayerMoreMenuAction.subtitles:
         unawaited(_showSubtitleSelector());
-        return;
-      case _PlayerMoreMenuAction.decoderSettings:
-        _showPendingPlayerSetting('解码设置');
         return;
       case _PlayerMoreMenuAction.fitContain:
         _changeVideoFitMode(_VideoFitMode.contain);
@@ -1939,7 +2034,7 @@ class _PlayerPageState extends State<PlayerPage>
     }
   }
 
-  /// 保存用户选择的全屏画面比例，并用三秒提示确认该设置已经只作用于渲染层。
+  /// 保存用户选择的画面比例，并用三秒提示确认该设置只作用于渲染层。
   void _changeVideoFitMode(_VideoFitMode mode) {
     if (_videoFitMode != mode) {
       setState(() => _videoFitMode = mode);
@@ -1966,13 +2061,9 @@ class _PlayerPageState extends State<PlayerPage>
     }
   }
 
-  /// 构建“更多”菜单，勾选当前画面比例，并明确标注尚未接入的播放器能力。
+  /// 构建“更多”菜单，提供真实可用的字幕选择和画面比例设置。
   List<PopupMenuEntry<_PlayerMoreMenuAction>> _buildMoreSettingsMenu() {
     return <PopupMenuEntry<_PlayerMoreMenuAction>>[
-      const PopupMenuItem<_PlayerMoreMenuAction>(
-        value: _PlayerMoreMenuAction.decoderSettings,
-        child: Text('解码设置（待实现）'),
-      ),
       const PopupMenuItem<_PlayerMoreMenuAction>(
         value: _PlayerMoreMenuAction.subtitles,
         child: Row(
@@ -2051,7 +2142,7 @@ class _PlayerPageState extends State<PlayerPage>
       );
   }
 
-  /// 创建原生 Texture 视频画面：普通页面保持原有填充策略，全屏时应用用户选择的比例模式。
+  /// 创建原生 Texture 视频画面，并在横竖屏中统一应用用户选择的比例模式。
   Widget _buildVideoOutput() {
     final int? textureId = _textureId;
     if (textureId != null) {
@@ -2061,14 +2152,7 @@ class _PlayerPageState extends State<PlayerPage>
       final Widget texture = RepaintBoundary(
         child: Texture(textureId: textureId),
       );
-      if (_fullscreen) {
-        return _buildFullscreenVideoOutput(texture, aspectRatio);
-      }
-      return _buildScaledVideoOutput(
-        texture: texture,
-        aspectRatio: aspectRatio,
-        fit: BoxFit.cover,
-      );
+      return _buildFittedVideoOutput(texture, aspectRatio);
     }
     return Center(
       child: Icon(
@@ -2081,8 +2165,8 @@ class _PlayerPageState extends State<PlayerPage>
     );
   }
 
-  /// 按当前全屏画面比例模式返回保留黑边、裁切填充或拉伸后的 Texture 布局。
-  Widget _buildFullscreenVideoOutput(Widget texture, double aspectRatio) {
+  /// 按当前画面比例模式返回保留黑边、裁切填充或拉伸后的 Texture 布局。
+  Widget _buildFittedVideoOutput(Widget texture, double aspectRatio) {
     switch (_videoFitMode) {
       case _VideoFitMode.contain:
         return Center(
@@ -2217,6 +2301,308 @@ class _PlayerPageState extends State<PlayerPage>
     }
   }
 
+  /// 读取当前 BV 的全部笔记，并按视频时间点更新播放器内列表。
+  Future<void> _loadCurrentVideoNotes() async {
+    try {
+      final List<VideoNote> notes =
+          await _videoNoteService.loadNotesForVideo(_activeVideo.bvid);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _currentVideoNotes = notes;
+        _notesLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _notesLoading = false);
+      _showTransientSnackBar('暂时无法读取本机笔记。');
+    }
+  }
+
+  /// 打开笔记工作区，并为新笔记锁定按钮按下时的视频位置。
+  Future<void> _openVideoNotes() async {
+    _stopControlsAutoHideTimer();
+    _notesPanelAnimationTimer?.cancel();
+    if (_fullscreen) {
+      setState(() {
+        _notesOverlayMounted = true;
+        _notesOpen = false;
+        _notesLoading = true;
+        _showControls = true;
+        _fullscreenNoteListCollapsed = false;
+      });
+      // 下一帧打开函数让面板先在屏幕右侧完成布局，再平滑滑入可见区域。
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _notesOverlayMounted) {
+          setState(() => _notesOpen = true);
+        }
+      });
+    } else {
+      setState(() {
+        _notesOverlayMounted = false;
+        _notesOpen = true;
+        _notesLoading = true;
+        _showControls = true;
+        _fullscreenNoteListCollapsed = false;
+      });
+    }
+    _startNewVideoNote();
+    await _loadCurrentVideoNotes();
+    _restartControlsAutoHideTimer();
+  }
+
+  /// 清空编辑器并把当前真实播放位置作为下一条笔记的时间点。
+  void _startNewVideoNote() {
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _editingVideoNote = null;
+      _noteTitleController.clear();
+      _noteBodyController.clear();
+      _notePosition = _playbackSnapshot.position;
+      _notePartCid = _currentPart.cid;
+      _includeCurrentFrame = false;
+      _noteFramePath = null;
+    });
+  }
+
+  /// 关闭播放器内笔记工作区；全屏时等待右滑动画完成后再移除面板。
+  void _closeVideoNotes() {
+    if (!_notesOpen && !_notesOverlayMounted) {
+      return;
+    }
+    _notesPanelAnimationTimer?.cancel();
+    setState(() {
+      _notesOpen = false;
+      _noteSaving = false;
+      _showControls = true;
+      _fullscreenNoteListCollapsed = false;
+    });
+    if (_fullscreen && _notesOverlayMounted) {
+      _notesPanelAnimationTimer = Timer(_notesPanelAnimationDuration, () {
+        if (mounted && !_notesOpen) {
+          setState(() => _notesOverlayMounted = false);
+        }
+      });
+    } else if (_notesOverlayMounted) {
+      setState(() => _notesOverlayMounted = false);
+    }
+    _restartControlsAutoHideTimer();
+  }
+
+  /// 按 CID 查找笔记锁定的分P；旧数据缺失时退回当前分P。
+  VideoPart _findVideoNotePart(int cid) {
+    for (final VideoPart part in _activeVideo.parts) {
+      if (part.cid == cid) {
+        return part;
+      }
+    }
+    return _currentPart;
+  }
+
+  /// 选择已有笔记，填入编辑器并让播放器跳转到该笔记的时间点。
+  Future<void> _selectVideoNote(VideoNote note) async {
+    final VideoPart targetPart = _findVideoNotePart(note.partCid);
+    setState(() {
+      _editingVideoNote = note;
+      _noteTitleController.text = note.title;
+      _noteBodyController.text = note.body;
+      _notePosition = note.position;
+      _notePartCid = targetPart.cid;
+      _includeCurrentFrame = note.framePath != null;
+      _noteFramePath = note.framePath;
+    });
+    try {
+      if (targetPart.cid != _currentPart.cid) {
+        await _changePart(targetPart);
+      }
+      await _playbackService.seekTo(note.position);
+    } catch (_) {
+      if (mounted) {
+        _showTransientSnackBar('暂时无法跳转到这个笔记的时间点。');
+      }
+    }
+  }
+
+  /// 更新“插入当前画面”选择，取消时只影响本次保存，不立即删除旧文件。
+  void _setIncludeCurrentFrame(bool selected) {
+    setState(() => _includeCurrentFrame = selected);
+  }
+
+  /// 等待原生播放器把目标时间点真正渲染到 Surface，再执行截图。
+  Future<void> _waitForNoteFramePosition(Duration target) async {
+    for (int attempt = 0; attempt < 30; attempt += 1) {
+      final int difference =
+          (_playbackSnapshot.position - target).inMilliseconds.abs();
+      if (_playbackSnapshot.phase == PlaybackPhase.ready && difference <= 350) {
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+  }
+
+  /// 暂停并跳到笔记锁定的分P和时间点截图，完成后恢复用户原来的播放位置。
+  Future<String?> _captureFrameAtNotePosition() async {
+    final VideoPart returnPart = _currentPart;
+    final Duration returnPosition = _playbackSnapshot.position;
+    final bool shouldResume = _playing;
+    final VideoPart targetPart = _findVideoNotePart(_notePartCid);
+    if (shouldResume) {
+      await _playbackService.pause();
+    }
+    try {
+      if (targetPart.cid != _currentPart.cid) {
+        await _changePart(targetPart);
+        await _playbackService.pause();
+      }
+      await _playbackService.seekTo(_notePosition);
+      await _waitForNoteFramePosition(_notePosition);
+      return await _playbackService.captureCurrentFrame();
+    } finally {
+      if (returnPart.cid != _currentPart.cid) {
+        await _changePart(returnPart);
+        await _playbackService.pause();
+      }
+      await _playbackService.seekTo(returnPosition);
+      if (shouldResume) {
+        await _playbackService.play();
+      }
+    }
+  }
+
+  /// 保存标题、正文、自动记录时间、视频位置和可选画面，再刷新当前视频笔记。
+  Future<void> _saveVideoNote() async {
+    final String title = _noteTitleController.text.trim();
+    if (title.isEmpty) {
+      _showTransientSnackBar('请先填写笔记标题。');
+      return;
+    }
+    setState(() => _noteSaving = true);
+    String? framePath = _includeCurrentFrame ? _noteFramePath : null;
+    try {
+      if (_includeCurrentFrame && framePath == null) {
+        framePath = await _captureFrameAtNotePosition();
+        if (framePath == null) {
+          throw PlatformException(
+            code: 'frame_capture_failed',
+            message: '没有取得当前视频画面。',
+          );
+        }
+      }
+      final DateTime now = DateTime.now();
+      final VideoNote? existing = _editingVideoNote;
+      final VideoPart notePart = _findVideoNotePart(_notePartCid);
+      final VideoNote note = existing == null
+          ? VideoNote(
+              id: '${_activeVideo.bvid}-${now.microsecondsSinceEpoch}',
+              bvid: _activeVideo.bvid,
+              videoTitle: _activeVideo.title,
+              ownerName: _activeVideo.ownerName,
+              partCid: notePart.cid,
+              partPageNumber: notePart.pageNumber,
+              partTitle: notePart.title,
+              title: title,
+              body: _noteBodyController.text.trim(),
+              createdAt: now,
+              updatedAt: now,
+              position: _notePosition,
+              videoCoverUrl: _activeVideo.thumbnailUrl,
+              framePath: framePath,
+            )
+          : existing.copyWith(
+              title: title,
+              body: _noteBodyController.text.trim(),
+              updatedAt: now,
+              position: _notePosition,
+              framePath: framePath,
+              clearFrame: !_includeCurrentFrame,
+            );
+      await _videoNoteService.saveNote(note);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _editingVideoNote = note;
+        _noteFramePath = note.framePath;
+        _noteSaving = false;
+        _notesLoading = true;
+      });
+      await _loadCurrentVideoNotes();
+      if (mounted) {
+        _showTransientSnackBar('笔记已保存到本机。');
+      }
+    } on PlatformException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _noteSaving = false);
+      _showTransientSnackBar(error.message ?? '截取当前视频画面失败。');
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _noteSaving = false);
+      _showTransientSnackBar('保存笔记失败，请稍后再试。');
+    }
+  }
+
+  /// 删除正在编辑的笔记及其画面文件，并回到新的当前时间点草稿。
+  Future<void> _deleteEditingVideoNote() async {
+    final VideoNote? note = _editingVideoNote;
+    if (note == null) {
+      return;
+    }
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) => AlertDialog(
+        title: const Text('删除笔记'),
+        content: Text('确定删除“${note.title}”吗？此操作无法撤销。'),
+        actions: <Widget>[
+          TextButton(
+            // 取消删除函数关闭确认框并保留播放器中的笔记。
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            // 确认删除函数把决定返回播放器，再由本机服务清理笔记和截图。
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+    setState(() => _noteSaving = true);
+    try {
+      await _videoNoteService.deleteNote(note.id);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _noteSaving = false;
+        _notesLoading = true;
+      });
+      _startNewVideoNote();
+      await _loadCurrentVideoNotes();
+      if (mounted) {
+        _showTransientSnackBar('笔记已删除。');
+      }
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _noteSaving = false);
+      _showTransientSnackBar('删除笔记失败，请稍后再试。');
+    }
+  }
+
   /// 创建低流量缓存封面或头像，失败时显示固定占位图标。
   Widget _buildDetailImage(
     String url, {
@@ -2287,6 +2673,7 @@ class _PlayerPageState extends State<PlayerPage>
           initialAvatarUrl: _activeVideo.ownerAvatarUrl,
           publicContentService: _publicContentService,
           videoService: _bilibiliService,
+          watchHistoryService: _watchHistoryService,
         ),
       ),
     );
@@ -2319,6 +2706,7 @@ class _PlayerPageState extends State<PlayerPage>
 
   /// 复用现有纹理打开另一支视频，并完整重置旧视频的分P、字幕、弹幕和历史状态。
   Future<void> _switchActiveVideo(VideoPreview video) async {
+    _notesPanelAnimationTimer?.cancel();
     _flushCurrentWatchHistoryProgress();
     await _playbackService.pause();
     final SavedPlaybackState? savedState =
@@ -2354,6 +2742,19 @@ class _PlayerPageState extends State<PlayerPage>
       _partSelectorExpanded = false;
       _descriptionExpanded = false;
       _resumeNotice = null;
+      _notesOpen = false;
+      _notesLoading = false;
+      _noteSaving = false;
+      _currentVideoNotes = const <VideoNote>[];
+      _editingVideoNote = null;
+      _noteTitleController.clear();
+      _noteBodyController.clear();
+      _notePartCid = targetPart.cid;
+      _includeCurrentFrame = false;
+      _noteFramePath = null;
+      _fullscreenNoteListCollapsed = false;
+      _notesOverlayMounted = false;
+      _locatedCollectionPreviewBvid = null;
     });
     _shownRestoredCid = null;
     _recordedHistoryPartCid = null;
@@ -2480,85 +2881,21 @@ class _PlayerPageState extends State<PlayerPage>
 
   /// 打开当前合集的底部列表，让用户在同一播放器内选择其他独立视频。
   Future<void> _showCollectionSheet(VideoCollection collection) async {
-    await showModalBottomSheet<void>(
+    final VideoCollectionEntry? selected =
+        await showModalBottomSheet<VideoCollectionEntry>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (BuildContext sheetContext) {
-        return SafeArea(
-          child: FractionallySizedBox(
-            heightFactor: 0.78,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-                  child: Text(
-                    '合集 · ${collection.title}',
-                    style: Theme.of(sheetContext)
-                        .textTheme
-                        .titleMedium
-                        ?.copyWith(fontWeight: FontWeight.w700),
-                  ),
-                ),
-                Expanded(
-                  child: ListView.separated(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-                    itemCount: collection.entries.length,
-                    separatorBuilder: (BuildContext context, int index) =>
-                        const SizedBox(height: 8),
-                    itemBuilder: (BuildContext context, int index) {
-                      final VideoCollectionEntry entry =
-                          collection.entries[index];
-                      final bool current = entry.bvid == _activeVideo.bvid;
-                      return ListTile(
-                        key: Key('collection-sheet-${entry.bvid}'),
-                        selected: current,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        leading: ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: _buildDetailImage(
-                            entry.thumbnailUrl,
-                            width: 96,
-                            height: 58,
-                            fit: BoxFit.cover,
-                            placeholderIcon: Icons.video_library_outlined,
-                          ),
-                        ),
-                        title: Text(
-                          entry.title,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        subtitle: Text(
-                          current
-                              ? '正在播放'
-                              : '${_formatCount(entry.stats.viewCount)}播放',
-                        ),
-                        trailing: Icon(
-                          current
-                              ? Icons.graphic_eq_rounded
-                              : Icons.play_arrow_rounded,
-                        ),
-                        // 合集条目点击函数关闭面板并替换到选中的独立视频。
-                        onTap: current
-                            ? null
-                            : () {
-                                Navigator.of(sheetContext).pop();
-                                unawaited(_openCollectionVideo(entry));
-                              },
-                      );
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+      // 合集面板构建函数提供搜索、排序、当前位置与本机观看标记。
+      builder: (BuildContext sheetContext) => _CollectionPickerSheet(
+        collection: collection,
+        currentBvid: _activeVideo.bvid,
+        watchHistoryByBvid: _watchHistoryByBvid,
+      ),
     );
+    if (selected != null && mounted && selected.bvid != _activeVideo.bvid) {
+      await _openCollectionVideo(selected);
+    }
   }
 
   /// 创建只读互动统计项，不伪装未实现的点赞、投币或收藏写操作。
@@ -2677,11 +3014,217 @@ class _PlayerPageState extends State<PlayerPage>
     );
   }
 
-  /// 创建当前视频所属 UGC 合集卡片和前六支独立视频预览。
+  /// 将合集视频时长格式化为分秒或时分秒，供封面右下角紧凑显示。
+  String _formatCollectionDuration(Duration duration) {
+    final int seconds = duration.inSeconds.clamp(0, 1 << 31).toInt();
+    final int hours = seconds ~/ 3600;
+    final int minutes = (seconds % 3600) ~/ 60;
+    final int rest = seconds % 60;
+    return hours > 0
+        ? '$hours:${minutes.toString().padLeft(2, '0')}:${rest.toString().padLeft(2, '0')}'
+        : '$minutes:${rest.toString().padLeft(2, '0')}';
+  }
+
+  /// 将合集条目的发布日期格式化为年月日，日期缺失时返回稳定占位文字。
+  String _formatCollectionPublishedDate(DateTime? value) {
+    if (value == null) {
+      return '日期未知';
+    }
+    final DateTime local = value.toLocal();
+    return '${local.year}-'
+        '${local.month.toString().padLeft(2, '0')}-'
+        '${local.day.toString().padLeft(2, '0')}';
+  }
+
+  /// 在合集预览首次出现或切换视频后，把横向列表平滑定位到当前视频。
+  void _scheduleCollectionPreviewLocation(VideoCollection collection) {
+    final String currentBvid = _activeVideo.bvid;
+    if (_locatedCollectionPreviewBvid == currentBvid) {
+      return;
+    }
+    final int currentIndex = collection.indexOfBvid(currentBvid);
+    if (currentIndex < 0) {
+      return;
+    }
+    _locatedCollectionPreviewBvid = currentBvid;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_collectionPreviewScrollController.hasClients) {
+        _locatedCollectionPreviewBvid = null;
+        return;
+      }
+      final ScrollPosition position =
+          _collectionPreviewScrollController.position;
+      final double target =
+          (currentIndex * 340.0).clamp(0, position.maxScrollExtent).toDouble();
+      if ((position.pixels - target).abs() < 1) {
+        return;
+      }
+      _collectionPreviewScrollController.animateTo(
+        target,
+        duration: const Duration(milliseconds: 320),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
+  /// 创建一条横向合集视频预览，封面、标题和统计密度参考移动端视频列表。
+  Widget _buildCollectionPreviewRow(VideoCollectionEntry entry) {
+    final bool current = entry.bvid == _activeVideo.bvid;
+    final bool opening = _openingCollectionBvid == entry.bvid;
+    final WatchHistoryEntry? watchHistory = _watchHistoryByBvid[entry.bvid];
+    final ColorScheme colors = Theme.of(context).colorScheme;
+    return Material(
+      color: current
+          ? colors.primaryContainer.withOpacity(0.32)
+          : Colors.transparent,
+      borderRadius: BorderRadius.circular(12),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        key: Key('collection-preview-${entry.bvid}'),
+        // 合集视频行点击函数在当前播放器中切换到所选视频。
+        onTap: current || opening
+            ? null
+            : () => unawaited(_openCollectionVideo(entry)),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: Stack(
+                  children: <Widget>[
+                    _buildDetailImage(
+                      entry.thumbnailUrl,
+                      width: 156,
+                      height: 88,
+                      fit: BoxFit.cover,
+                      placeholderIcon: Icons.video_library_outlined,
+                    ),
+                    if (watchHistory != null && !current)
+                      Positioned(
+                        left: 5,
+                        top: 5,
+                        child: WatchHistoryBadge(
+                          entry: watchHistory,
+                          showPosition: false,
+                        ),
+                      ),
+                    Positioned(
+                      right: 5,
+                      bottom: 5,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: Colors.black87,
+                          borderRadius: BorderRadius.circular(5),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 5,
+                            vertical: 2,
+                          ),
+                          child: Text(
+                            _formatCollectionDuration(entry.duration),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    if (current)
+                      const Positioned.fill(
+                        child: ColoredBox(
+                          color: Colors.black45,
+                          child: Center(
+                            child: Text(
+                              '正在播放',
+                              style: TextStyle(color: Colors.white),
+                            ),
+                          ),
+                        ),
+                      )
+                    else if (opening)
+                      const Positioned.fill(
+                        child: ColoredBox(
+                          color: Colors.black38,
+                          child: Center(
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: SizedBox(
+                  height: 88,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      _PartTitleMarquee(
+                        key: Key('collection-title-${entry.bvid}'),
+                        text: entry.title,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          height: 1.25,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        _formatCollectionPublishedDate(entry.publishedAt),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const Spacer(),
+                      Row(
+                        children: <Widget>[
+                          Icon(
+                            Icons.play_circle_outline_rounded,
+                            size: 15,
+                            color: colors.onSurfaceVariant,
+                          ),
+                          const SizedBox(width: 3),
+                          Text(
+                            _formatCount(entry.stats.viewCount),
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                          const SizedBox(width: 12),
+                          Icon(
+                            Icons.subtitles_outlined,
+                            size: 15,
+                            color: colors.onSurfaceVariant,
+                          ),
+                          const SizedBox(width: 3),
+                          Text(
+                            _formatCount(entry.stats.danmakuCount),
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 4),
+              const Icon(Icons.more_vert_rounded, size: 20),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 创建当前视频所属 UGC 合集入口和横向滑动的视频预览，恢复原来的紧凑布局。
   Widget _buildCollectionPanel(VideoCollection collection) {
     final int currentIndex = collection.indexOfBvid(_activeVideo.bvid);
-    final List<VideoCollectionEntry> preview =
-        collection.entries.take(6).toList(growable: false);
+    _scheduleCollectionPreviewLocation(collection);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
@@ -2718,82 +3261,369 @@ class _PlayerPageState extends State<PlayerPage>
             ),
           ),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
         SizedBox(
-          height: 126,
+          height: 100,
           child: ListView.separated(
+            key: const Key('collection-preview-list'),
+            controller: _collectionPreviewScrollController,
             scrollDirection: Axis.horizontal,
-            itemCount: preview.length,
+            cacheExtent: 680,
+            itemCount: collection.entries.length,
+            // 分隔函数为相邻合集预览保留固定的横向间距。
             separatorBuilder: (BuildContext context, int index) =>
                 const SizedBox(width: 10),
-            itemBuilder: (BuildContext context, int index) {
-              final VideoCollectionEntry entry = preview[index];
-              final bool current = entry.bvid == _activeVideo.bvid;
-              final bool opening = _openingCollectionBvid == entry.bvid;
-              return SizedBox(
-                width: 164,
-                child: Card(
-                  margin: EdgeInsets.zero,
-                  clipBehavior: Clip.antiAlias,
-                  child: InkWell(
-                    key: Key('collection-preview-${entry.bvid}'),
-                    // 预览卡点击函数替换到选中的独立视频。
-                    onTap: current || opening
-                        ? null
-                        : () => unawaited(_openCollectionVideo(entry)),
+            // 构建函数复用带封面与统计的预览行，并限制成可横向滑动的紧凑卡片。
+            itemBuilder: (BuildContext context, int index) => SizedBox(
+              width: 330,
+              child: _buildCollectionPreviewRow(collection.entries[index]),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 创建播放器笔记编辑器，并把保存、删除、画面选择等操作连接到本机服务。
+  Widget _buildVideoNoteComposer({required bool compact}) {
+    return VideoNoteComposer(
+      titleController: _noteTitleController,
+      bodyController: _noteBodyController,
+      position: _notePosition,
+      createdAt: _editingVideoNote?.createdAt,
+      includeFrame: _includeCurrentFrame,
+      framePath: _noteFramePath,
+      saving: _noteSaving,
+      onIncludeFrameChanged: _setIncludeCurrentFrame,
+      // 保存函数自动写入记录时间、视频时间点和用户选择的当前画面。
+      onSave: () => unawaited(_saveVideoNote()),
+      onNew: _startNewVideoNote,
+      onClose: _closeVideoNotes,
+      onDelete: _editingVideoNote == null
+          ? null
+          : () => unawaited(_deleteEditingVideoNote()),
+      compact: compact,
+      borderless: true,
+    );
+  }
+
+  /// 创建竖屏笔记顶部的横向时间点列表，点按后跳转视频并编辑该笔记。
+  Widget _buildPortraitVideoNoteStrip() {
+    if (_notesLoading) {
+      return const SizedBox(
+        height: 52,
+        child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+      );
+    }
+    if (_currentVideoNotes.isEmpty) {
+      return const SizedBox(
+        height: 52,
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Text('这个视频还没有笔记，先写下第一条吧。'),
+        ),
+      );
+    }
+    return SizedBox(
+      height: 56,
+      child: ListView.separated(
+        key: const Key('portrait-video-note-list'),
+        scrollDirection: Axis.horizontal,
+        itemCount: _currentVideoNotes.length,
+        // 分隔函数给横向笔记卡片保留稳定间距。
+        separatorBuilder: (BuildContext context, int index) =>
+            const SizedBox(width: 8),
+        // 构建函数显示笔记标题与视频时间点，并标出当前编辑项。
+        itemBuilder: (BuildContext context, int index) {
+          final VideoNote note = _currentVideoNotes[index];
+          final bool selected = note.id == _editingVideoNote?.id;
+          return SizedBox(
+            width: 146,
+            child: Card(
+              margin: EdgeInsets.zero,
+              color: selected
+                  ? Theme.of(context).colorScheme.primaryContainer
+                  : null,
+              child: InkWell(
+                key: Key('portrait-video-note-${note.id}'),
+                borderRadius: BorderRadius.circular(12),
+                // 竖屏笔记卡点击函数跳转到笔记位置并填入编辑器。
+                onTap: () => unawaited(_selectVideoNote(note)),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 9,
+                    vertical: 6,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        note.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        formatVideoNotePosition(note.position),
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// 创建播放器下方的竖屏笔记工作区，打开后页面不再使用可折叠播放器。
+  Widget _buildPortraitVideoNotesPanel() {
+    return Material(
+      key: const Key('portrait-video-notes-panel'),
+      color: Theme.of(context).colorScheme.surface,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+        child: Column(
+          children: <Widget>[
+            _buildPortraitVideoNoteStrip(),
+            const SizedBox(height: 5),
+            Expanded(
+              child: SingleChildScrollView(
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                child: _buildVideoNoteComposer(compact: false),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 创建全屏笔记本左侧的竖向笔记列表，标题溢出时自动横向滚动。
+  Widget _buildFullscreenVideoNoteList() {
+    if (_notesLoading) {
+      return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+    }
+    if (_currentVideoNotes.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(12),
+          child: Text('暂无笔记'),
+        ),
+      );
+    }
+    return ListView.separated(
+      key: const Key('fullscreen-video-note-list'),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      itemCount: _currentVideoNotes.length,
+      // 分隔函数给全屏笔记时间线保留紧凑间距。
+      separatorBuilder: (BuildContext context, int index) =>
+          const SizedBox(height: 6),
+      // 构建函数显示可自动滚动的标题和视频时间点，并支持点击跳转。
+      itemBuilder: (BuildContext context, int index) {
+        final VideoNote note = _currentVideoNotes[index];
+        final bool selected = note.id == _editingVideoNote?.id;
+        final ColorScheme colors = Theme.of(context).colorScheme;
+        return Material(
+          color:
+              selected ? colors.primary.withOpacity(0.18) : Colors.transparent,
+          borderRadius: BorderRadius.circular(9),
+          child: InkWell(
+            key: Key('fullscreen-video-note-${note.id}'),
+            borderRadius: BorderRadius.circular(9),
+            // 全屏笔记点击函数跳转到对应视频位置并载入标题、正文和画面。
+            onTap: () => unawaited(_selectVideoNote(note)),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
+              child: Row(
+                children: <Widget>[
+                  Container(
+                    width: 3,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      color: selected ? colors.primary : colors.outlineVariant,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
-                        Stack(
-                          alignment: Alignment.center,
-                          children: <Widget>[
-                            _buildDetailImage(
-                              entry.thumbnailUrl,
-                              width: 164,
-                              height: 88,
-                              fit: BoxFit.cover,
-                              placeholderIcon: Icons.video_library_outlined,
+                        SizedBox(
+                          height: 18,
+                          child: _AutoScrollingText(
+                            text: note.title,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
                             ),
-                            if (current)
-                              const DecoratedBox(
-                                decoration:
-                                    BoxDecoration(color: Colors.black54),
-                                child: Padding(
-                                  padding: EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 4,
-                                  ),
-                                  child: Text(
-                                    '正在播放',
-                                    style: TextStyle(color: Colors.white),
-                                  ),
-                                ),
-                              )
-                            else if (opening)
-                              const CircularProgressIndicator(
-                                color: Colors.white,
-                                strokeWidth: 2,
-                              ),
-                          ],
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(8, 5, 8, 0),
-                          child: Text(
-                            entry.title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 12),
                           ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          formatVideoNotePosition(note.position),
+                          style: Theme.of(context).textTheme.labelSmall,
                         ),
                       ],
                     ),
                   ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// 收起或展开全屏笔记列表，让用户按需要把横向空间让给正文编辑器。
+  void _toggleFullscreenNoteList() {
+    setState(() {
+      _fullscreenNoteListCollapsed = !_fullscreenNoteListCollapsed;
+    });
+  }
+
+  /// 创建更宽且紧凑的半透明全屏笔记本，为无边框正文保留主要编辑空间。
+  Widget _buildFullscreenVideoNotesPanel(double playerWidth) {
+    return Positioned(
+      key: const Key('fullscreen-video-notes-panel'),
+      top: 10,
+      right: 10,
+      bottom: 10,
+      width: playerWidth * 0.64,
+      child: AnimatedSlide(
+        key: const Key('fullscreen-video-notes-slide'),
+        offset: _notesOpen ? Offset.zero : const Offset(1.08, 0),
+        duration: _notesPanelAnimationDuration,
+        curve: _notesOpen ? Curves.easeOutCubic : Curves.easeInCubic,
+        child: Material(
+          key: const Key('fullscreen-video-notes-material'),
+          elevation: 18,
+          color: Theme.of(context).colorScheme.surface.withOpacity(0.9),
+          borderRadius: BorderRadius.circular(18),
+          clipBehavior: Clip.antiAlias,
+          child: SafeArea(
+            top: false,
+            left: false,
+            right: false,
+            bottom: false,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                SizedBox(
+                  width: _fullscreenNoteListCollapsed ? 46 : playerWidth * 0.17,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      if (_fullscreenNoteListCollapsed) ...<Widget>[
+                        const SizedBox(height: 6),
+                        IconButton(
+                          key: const Key('expand-fullscreen-note-list'),
+                          // 展开按钮函数恢复左侧笔记标题和时间点列表。
+                          onPressed: _toggleFullscreenNoteList,
+                          icon: const Icon(Icons.chevron_right_rounded),
+                          tooltip: '展开笔记列表',
+                        ),
+                        Text(
+                          '${_currentVideoNotes.length}',
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.labelSmall,
+                        ),
+                      ] else ...<Widget>[
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(5, 6, 8, 3),
+                          child: Row(
+                            children: <Widget>[
+                              IconButton(
+                                key: const Key('collapse-fullscreen-note-list'),
+                                // 收起按钮函数仅保留一条窄边栏，为标题和正文增加空间。
+                                onPressed: _toggleFullscreenNoteList,
+                                visualDensity: VisualDensity.compact,
+                                constraints: const BoxConstraints.tightFor(
+                                  width: 32,
+                                  height: 32,
+                                ),
+                                padding: EdgeInsets.zero,
+                                iconSize: 20,
+                                icon: const Icon(Icons.chevron_left_rounded),
+                                tooltip: '收起笔记列表',
+                              ),
+                              const SizedBox(width: 3),
+                              Expanded(
+                                child: Text(
+                                  '笔记',
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .titleSmall
+                                      ?.copyWith(fontWeight: FontWeight.w800),
+                                ),
+                              ),
+                              Text(
+                                '${_currentVideoNotes.length}',
+                                style: Theme.of(context).textTheme.labelSmall,
+                              ),
+                            ],
+                          ),
+                        ),
+                        Expanded(child: _buildFullscreenVideoNoteList()),
+                      ],
+                    ],
+                  ),
                 ),
-              );
-            },
+                VerticalDivider(
+                  width: 1,
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                ),
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+                    keyboardDismissBehavior:
+                        ScrollViewKeyboardDismissBehavior.onDrag,
+                    child: _buildVideoNoteComposer(compact: true),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
-      ],
+      ),
+    );
+  }
+
+  /// 创建全屏右侧中部的半透明记笔记按钮，打开后由半屏笔记本替代。
+  Widget _buildFullscreenVideoNoteButton() {
+    return Positioned(
+      key: const Key('fullscreen-note-button'),
+      right: 12,
+      top: 0,
+      bottom: 0,
+      child: Center(
+        child: Material(
+          color: Colors.black.withOpacity(0.58),
+          borderRadius: BorderRadius.circular(22),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(22),
+            // 全屏记笔记按钮函数打开工作区并锁定当前播放时间点。
+            onTap: () => unawaited(_openVideoNotes()),
+            child: const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Icon(Icons.edit_note_rounded, color: Colors.white, size: 20),
+                  SizedBox(width: 5),
+                  Text('记笔记', style: TextStyle(color: Colors.white)),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -2832,10 +3662,10 @@ class _PlayerPageState extends State<PlayerPage>
     );
   }
 
-  /// 创建接近参考图的播放页简介区，并在普通竖屏保留原有的详情页分P列表。
+  /// 创建可放入统一页面滚动中的简介区，并在普通竖屏保留分P和合集内容。
   Widget _buildNonFullscreenDetails() {
     final VideoCollection? collection = _activeVideo.collection;
-    return SingleChildScrollView(
+    return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 28),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2848,6 +3678,14 @@ class _PlayerPageState extends State<PlayerPage>
                 style: Theme.of(context).textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.w800,
                     ),
+              ),
+              const Spacer(),
+              TextButton.icon(
+                key: const Key('portrait-note-button'),
+                // 竖屏记笔记按钮函数在播放器下方打开编辑区，并固定播放器高度。
+                onPressed: () => unawaited(_openVideoNotes()),
+                icon: const Icon(Icons.edit_note_rounded, size: 20),
+                label: const Text('记笔记'),
               ),
             ],
           ),
@@ -2867,6 +3705,25 @@ class _PlayerPageState extends State<PlayerPage>
           _buildOwnerPanel(),
         ],
       ),
+    );
+  }
+
+  /// 创建播放器与详情共用的竖向滚动，向上滑动时按距离连续压缩播放器直到完全隐藏。
+  Widget _buildCollapsingPlayerBody({
+    required Widget player,
+    required double playerHeight,
+  }) {
+    return CustomScrollView(
+      key: const Key('collapsing-player-scroll'),
+      slivers: <Widget>[
+        SliverPersistentHeader(
+          delegate: _CollapsingPlayerHeaderDelegate(
+            maximumHeight: playerHeight,
+            child: player,
+          ),
+        ),
+        SliverToBoxAdapter(child: _buildNonFullscreenDetails()),
+      ],
     );
   }
 
@@ -2919,8 +3776,8 @@ class _PlayerPageState extends State<PlayerPage>
             // 横向拖动取消函数恢复开始位置，避免系统手势造成误跳转。
             onHorizontalDragCancel:
                 enableSurfaceGestures ? _cancelHorizontalScrub : null,
-            // 竖向手势开始函数判断左侧亮度、右侧音量和上下安全区排除。
-            onVerticalDragStart: enableSurfaceGestures
+            // 全屏竖向手势开始函数判断左侧亮度、右侧音量和上下安全区；竖屏把手势交给页面滚动。
+            onVerticalDragStart: _fullscreen && enableSurfaceGestures
                 ? (DragStartDetails details) => _startVerticalAdjustment(
                       details,
                       constraints.biggest,
@@ -2928,14 +3785,15 @@ class _PlayerPageState extends State<PlayerPage>
                       MediaQuery.of(context).viewPadding.bottom,
                     )
                 : null,
-            // 竖向手势更新函数实时调整窗口亮度或媒体音量。
-            onVerticalDragUpdate: enableSurfaceGestures
+            // 全屏竖向手势更新函数实时调整窗口亮度或媒体音量。
+            onVerticalDragUpdate: _fullscreen && enableSurfaceGestures
                 ? (DragUpdateDetails details) =>
                     _updateVerticalAdjustment(details, constraints.maxHeight)
                 : null,
-            // 竖向手势结束函数恢复控制栏自动隐藏计时。
-            onVerticalDragEnd:
-                enableSurfaceGestures ? _finishVerticalAdjustment : null,
+            // 全屏竖向手势结束函数恢复控制栏自动隐藏计时。
+            onVerticalDragEnd: _fullscreen && enableSurfaceGestures
+                ? _finishVerticalAdjustment
+                : null,
             child: ColoredBox(
               color: Colors.black,
               child: Stack(
@@ -3119,53 +3977,51 @@ class _PlayerPageState extends State<PlayerPage>
                                                 ),
                                               ),
                                             ),
-                                          if (_fullscreen)
-                                            _buildCompactPlayerIconButton(
+                                          if (!_fullscreen) const Spacer(),
+                                          _buildCompactPlayerIconButton(
+                                            key:
+                                                const Key('picture-in-picture'),
+                                            // 画中画按钮函数调用 Android 原生小窗能力。
+                                            onPressed: () => unawaited(
+                                                _enterPictureInPicture()),
+                                            icon: Icons
+                                                .picture_in_picture_alt_rounded,
+                                            tooltip: '画中画',
+                                          ),
+                                          _buildCompactPlayerIconButton(
+                                            key: const Key('danmaku-toggle'),
+                                            // 弹幕按钮函数开启或关闭当前分P的真实弹幕绘制与预取。
+                                            onPressed: _toggleDanmaku,
+                                            icon: _danmakuEnabled
+                                                ? Icons.subtitles_rounded
+                                                : Icons.subtitles_off_rounded,
+                                            tooltip: _danmakuEnabled
+                                                ? '关闭弹幕'
+                                                : '开启弹幕',
+                                          ),
+                                          SizedBox(
+                                            width: 38,
+                                            height: 38,
+                                            child: PopupMenuButton<
+                                                _PlayerMoreMenuAction>(
                                               key: const Key(
-                                                  'picture-in-picture'),
-                                              // 画中画按钮函数调用 Android 原生小窗能力。
-                                              onPressed: () => unawaited(
-                                                  _enterPictureInPicture()),
-                                              icon: Icons
-                                                  .picture_in_picture_alt_rounded,
-                                              tooltip: '画中画',
-                                            ),
-                                          if (_fullscreen)
-                                            _buildCompactPlayerIconButton(
-                                              key: const Key('danmaku-toggle'),
-                                              // 弹幕按钮函数开启或关闭当前分P的真实弹幕绘制与预取。
-                                              onPressed: _toggleDanmaku,
-                                              icon: _danmakuEnabled
-                                                  ? Icons.subtitles_rounded
-                                                  : Icons.subtitles_off_rounded,
-                                              tooltip: _danmakuEnabled
-                                                  ? '关闭弹幕'
-                                                  : '开启弹幕',
-                                            ),
-                                          if (_fullscreen)
-                                            SizedBox(
-                                              width: 38,
-                                              height: 38,
-                                              child: PopupMenuButton<
-                                                  _PlayerMoreMenuAction>(
-                                                key: const Key(
-                                                    'more-settings-menu'),
-                                                tooltip: '更多选项',
-                                                padding: EdgeInsets.zero,
-                                                iconSize: 22,
-                                                icon: const Icon(
-                                                  Icons.more_vert_rounded,
-                                                  color: Colors.white,
-                                                ),
-                                                // 更多菜单选择函数只更新 Flutter 的本地画面布局，不改变解码或播放源。
-                                                onSelected:
-                                                    _handleMoreSettingsSelection,
-                                                // 更多菜单构建函数提供可勾选的画面比例，并保留未接入能力的待实现说明。
-                                                itemBuilder: (BuildContext
-                                                        context) =>
-                                                    _buildMoreSettingsMenu(),
+                                                  'more-settings-menu'),
+                                              tooltip: '更多选项',
+                                              padding: EdgeInsets.zero,
+                                              iconSize: 22,
+                                              icon: const Icon(
+                                                Icons.more_vert_rounded,
+                                                color: Colors.white,
                                               ),
+                                              // 更多菜单选择函数更新字幕或 Flutter 画面比例，不改变播放源。
+                                              onSelected:
+                                                  _handleMoreSettingsSelection,
+                                              // 更多菜单构建函数只展示已经真实接入的选项。
+                                              itemBuilder:
+                                                  (BuildContext context) =>
+                                                      _buildMoreSettingsMenu(),
                                             ),
+                                          ),
                                         ],
                                       ),
                                     ),
@@ -3333,6 +4189,14 @@ class _PlayerPageState extends State<PlayerPage>
                         child: _buildExpandedPartSelector(),
                       ),
                     ),
+                  if (_fullscreen &&
+                      !_notesOpen &&
+                      !_partSelectorExpanded &&
+                      _showControls &&
+                      !inPictureInPicture)
+                    _buildFullscreenVideoNoteButton(),
+                  if (_fullscreen && _notesOverlayMounted)
+                    _buildFullscreenVideoNotesPanel(constraints.maxWidth),
                   // 错误重试层放在控制栏之后，确保按钮不会被全屏控制栏的透明区域拦截点击。
                   _buildPlaybackHint(),
                 ],
@@ -3353,6 +4217,37 @@ class _PlayerPageState extends State<PlayerPage>
         : (screenSize.width / aspectRatio)
             .clamp(180, screenSize.height * 0.62)
             .toDouble();
+    final Widget pageBody;
+    if (fullscreenLayout) {
+      pageBody = SizedBox.expand(child: player);
+    } else if (_notesOpen) {
+      pageBody = Column(
+        children: <Widget>[
+          SizedBox(
+            width: double.infinity,
+            height: playerHeight,
+            child: player,
+          ),
+          Expanded(child: _buildPortraitVideoNotesPanel()),
+        ],
+      );
+    } else if (_partSelectorExpanded) {
+      pageBody = Column(
+        children: <Widget>[
+          SizedBox(
+            width: double.infinity,
+            height: playerHeight,
+            child: player,
+          ),
+          Expanded(child: _buildExpandedPartSelector()),
+        ],
+      );
+    } else {
+      pageBody = _buildCollapsingPlayerBody(
+        player: player,
+        playerHeight: playerHeight,
+      );
+    }
     final Scaffold pageScaffold = Scaffold(
       backgroundColor: fullscreenLayout ? Colors.black : null,
       body: SafeArea(
@@ -3360,29 +4255,459 @@ class _PlayerPageState extends State<PlayerPage>
         left: !fullscreenLayout,
         right: !fullscreenLayout,
         bottom: false,
-        child: Column(
-          children: <Widget>[
-            SizedBox(
-              width: double.infinity,
-              height: playerHeight,
-              child: player,
-            ),
-            if (!fullscreenLayout)
-              Expanded(
-                child: _partSelectorExpanded
-                    ? _buildExpandedPartSelector()
-                    : _buildNonFullscreenDetails(),
-              ),
-          ],
-        ),
+        child: pageBody,
       ),
     );
     return PopScope(
-      canPop: !_fullscreen && _collectionVideoBackStack.isEmpty,
+      canPop: !_notesOpen && !_fullscreen && _collectionVideoBackStack.isEmpty,
       // 系统返回函数保证先退出全屏或返回上一支合集视频，再离开页面。
       onPopInvoked: _handlePopInvoked,
       child: pageScaffold,
     );
+  }
+}
+
+/// 让播放器随详情页滚动连续改变高度，收起后不保留占位空间。
+/// 展示完整合集，并在本机完成搜索、排序和当前视频定位。
+class _CollectionPickerSheet extends StatefulWidget {
+  /// 创建合集选择器；观看记录仅用于封面标记，不会改变合集数据。
+  const _CollectionPickerSheet({
+    required this.collection,
+    required this.currentBvid,
+    required this.watchHistoryByBvid,
+  });
+
+  final VideoCollection collection;
+  final String currentBvid;
+  final Map<String, WatchHistoryEntry> watchHistoryByBvid;
+
+  /// 创建保存搜索文字、排序选项和滚动位置的面板状态。
+  @override
+  State<_CollectionPickerSheet> createState() => _CollectionPickerSheetState();
+}
+
+/// 管理合集展开面板的过滤、排序和当前位置滚动。
+class _CollectionPickerSheetState extends State<_CollectionPickerSheet> {
+  static const double _entryExtent = 76;
+  final TextEditingController _searchController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+  _CollectionEntryOrder _order = _CollectionEntryOrder.original;
+  String _keyword = '';
+
+  /// 面板出现后自动滚到当前播放视频，避免长合集总是从第一条开始。
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _locateCurrent(animated: false);
+    });
+  }
+
+  /// 释放搜索输入框和列表滚动控制器，避免关闭面板后继续占用资源。
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  /// 根据关键词筛选标题或 BV 号，再复制排序，绝不修改原始合集列表。
+  List<VideoCollectionEntry> _visibleEntries() {
+    final String normalizedKeyword = _keyword.trim().toLowerCase();
+    final List<VideoCollectionEntry> entries =
+        widget.collection.entries.where((VideoCollectionEntry entry) {
+      if (normalizedKeyword.isEmpty) {
+        return true;
+      }
+      return entry.title.toLowerCase().contains(normalizedKeyword) ||
+          entry.bvid.toLowerCase().contains(normalizedKeyword);
+    }).toList(growable: true);
+    switch (_order) {
+      case _CollectionEntryOrder.original:
+        break;
+      case _CollectionEntryOrder.newest:
+        entries.sort(_compareNewest);
+        break;
+      case _CollectionEntryOrder.oldest:
+        entries.sort(_compareOldest);
+        break;
+      case _CollectionEntryOrder.mostPlayed:
+        entries.sort(
+          (VideoCollectionEntry left, VideoCollectionEntry right) =>
+              right.stats.viewCount.compareTo(left.stats.viewCount),
+        );
+        break;
+    }
+    return entries;
+  }
+
+  /// 按发布时间从新到旧比较；缺少日期的条目放到列表末尾。
+  int _compareNewest(
+    VideoCollectionEntry left,
+    VideoCollectionEntry right,
+  ) {
+    if (left.publishedAt == null && right.publishedAt == null) {
+      return 0;
+    }
+    if (left.publishedAt == null) {
+      return 1;
+    }
+    if (right.publishedAt == null) {
+      return -1;
+    }
+    return right.publishedAt!.compareTo(left.publishedAt!);
+  }
+
+  /// 按发布时间从旧到新比较；缺少日期的条目仍放到列表末尾。
+  int _compareOldest(
+    VideoCollectionEntry left,
+    VideoCollectionEntry right,
+  ) {
+    if (left.publishedAt == null && right.publishedAt == null) {
+      return 0;
+    }
+    if (left.publishedAt == null) {
+      return 1;
+    }
+    if (right.publishedAt == null) {
+      return -1;
+    }
+    return left.publishedAt!.compareTo(right.publishedAt!);
+  }
+
+  /// 更新搜索关键词并立即刷新结果，不发送网络请求。
+  void _updateKeyword(String value) {
+    setState(() => _keyword = value);
+  }
+
+  /// 清空搜索条件，并让当前视频重新出现在可见结果中。
+  void _clearSearch() {
+    _searchController.clear();
+    setState(() => _keyword = '');
+  }
+
+  /// 切换本地排序方式，并保持搜索结果继续可用。
+  void _changeOrder(_CollectionEntryOrder order) {
+    setState(() => _order = order);
+  }
+
+  /// 清除可能挡住当前项的搜索词，再滚动到当前播放视频。
+  void _locateCurrent({bool animated = true}) {
+    if (_keyword.isNotEmpty) {
+      _clearSearch();
+    }
+    final List<VideoCollectionEntry> entries = _visibleEntries();
+    final int index = entries.indexWhere(
+      (VideoCollectionEntry entry) => entry.bvid == widget.currentBvid,
+    );
+    if (index < 0) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) {
+        return;
+      }
+      final ScrollPosition position = _scrollController.position;
+      final double target =
+          (index * _entryExtent).clamp(0, position.maxScrollExtent).toDouble();
+      if (animated) {
+        _scrollController.animateTo(
+          target,
+          duration: const Duration(milliseconds: 320),
+          curve: Curves.easeOutCubic,
+        );
+      } else {
+        _scrollController.jumpTo(target);
+      }
+    });
+  }
+
+  /// 返回排序菜单中对初学者友好的中文名称。
+  String _orderLabel(_CollectionEntryOrder order) {
+    switch (order) {
+      case _CollectionEntryOrder.original:
+        return '合集顺序';
+      case _CollectionEntryOrder.newest:
+        return '最新发布';
+      case _CollectionEntryOrder.oldest:
+        return '最早发布';
+      case _CollectionEntryOrder.mostPlayed:
+        return '最多播放';
+    }
+  }
+
+  /// 将公开视频统计压缩为万或亿，避免副标题被数字挤满。
+  String _formatCount(int value) {
+    if (value >= 100000000) {
+      return '${(value / 100000000).toStringAsFixed(1)}亿';
+    }
+    if (value >= 10000) {
+      return '${(value / 10000).toStringAsFixed(1)}万';
+    }
+    return value.toString();
+  }
+
+  /// 将封面时长格式化成分秒或时分秒。
+  String _formatDuration(Duration duration) {
+    final int seconds = duration.inSeconds.clamp(0, 1 << 31).toInt();
+    final int hours = seconds ~/ 3600;
+    final int minutes = (seconds % 3600) ~/ 60;
+    final int rest = seconds % 60;
+    return hours > 0
+        ? '$hours:${minutes.toString().padLeft(2, '0')}:${rest.toString().padLeft(2, '0')}'
+        : '$minutes:${rest.toString().padLeft(2, '0')}';
+  }
+
+  /// 创建固定比例封面，加载失败时显示视频占位图标而不撑坏列表。
+  Widget _buildThumbnail(VideoCollectionEntry entry, bool current) {
+    final WatchHistoryEntry? history = widget.watchHistoryByBvid[entry.bvid];
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: Stack(
+        children: <Widget>[
+          if (entry.thumbnailUrl.isEmpty)
+            const SizedBox(
+              width: 96,
+              height: 54,
+              child: ColoredBox(
+                color: Colors.black26,
+                child: Icon(Icons.video_library_outlined),
+              ),
+            )
+          else
+            CachedNetworkImage(
+              imageUrl: entry.thumbnailUrl,
+              width: 96,
+              height: 54,
+              fit: BoxFit.cover,
+              errorWidget: (BuildContext context, String url, Object error) =>
+                  const SizedBox(
+                width: 96,
+                height: 54,
+                child: ColoredBox(
+                  color: Colors.black26,
+                  child: Icon(Icons.broken_image_outlined),
+                ),
+              ),
+            ),
+          if (history != null && !current)
+            Positioned(
+              left: 3,
+              top: 3,
+              child: WatchHistoryBadge(
+                entry: history,
+                showPosition: false,
+              ),
+            ),
+          Positioned(
+            right: 3,
+            bottom: 3,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.black87,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                child: Text(
+                  _formatDuration(entry.duration),
+                  style: const TextStyle(color: Colors.white, fontSize: 9),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 创建单条合集视频，点击后把选择结果交回播放器页面。
+  Widget _buildEntry(VideoCollectionEntry entry) {
+    final bool current = entry.bvid == widget.currentBvid;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Material(
+        color: current
+            ? Theme.of(context).colorScheme.primaryContainer.withOpacity(0.45)
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(12),
+        clipBehavior: Clip.antiAlias,
+        child: ListTile(
+          key: Key('collection-sheet-${entry.bvid}'),
+          dense: true,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+          leading: _buildThumbnail(entry, current),
+          title: Text(
+            entry.title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          subtitle: Text(
+            current ? '正在播放' : '${_formatCount(entry.stats.viewCount)}播放',
+            maxLines: 1,
+          ),
+          trailing: Icon(
+            current ? Icons.graphic_eq_rounded : Icons.play_arrow_rounded,
+          ),
+          // 条目点击函数关闭合集面板，并把所选视频返回给播放器切换。
+          onTap: current ? null : () => Navigator.of(context).pop(entry),
+        ),
+      ),
+    );
+  }
+
+  /// 创建带标题、搜索框、排序按钮、定位按钮和惰性长列表的合集面板。
+  @override
+  Widget build(BuildContext context) {
+    final List<VideoCollectionEntry> entries = _visibleEntries();
+    return SafeArea(
+      child: FractionallySizedBox(
+        heightFactor: 0.84,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: Text(
+                      '合集 · ${widget.collection.title}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context)
+                          .textTheme
+                          .titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                  Text('${entries.length}/${widget.collection.entries.length}'),
+                  IconButton(
+                    key: const Key('collection-locate-current'),
+                    tooltip: '定位到正在播放',
+                    // 定位按钮函数会清空搜索，并滚动到当前播放视频。
+                    onPressed: _locateCurrent,
+                    icon: const Icon(Icons.my_location_rounded),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: TextField(
+                      key: const Key('collection-search-field'),
+                      controller: _searchController,
+                      onChanged: _updateKeyword,
+                      decoration: InputDecoration(
+                        hintText: '搜索标题或 BV 号',
+                        prefixIcon: const Icon(Icons.search_rounded),
+                        suffixIcon: _keyword.isEmpty
+                            ? null
+                            : IconButton(
+                                // 清空按钮函数恢复完整合集结果。
+                                onPressed: _clearSearch,
+                                icon: const Icon(Icons.close_rounded),
+                              ),
+                        isDense: true,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  PopupMenuButton<_CollectionEntryOrder>(
+                    key: const Key('collection-sort-button'),
+                    tooltip: '排序',
+                    initialValue: _order,
+                    // 排序选择函数只重新排列当前面板，不修改合集本身。
+                    onSelected: _changeOrder,
+                    itemBuilder: (BuildContext context) =>
+                        _CollectionEntryOrder.values
+                            .map(
+                              (_CollectionEntryOrder order) =>
+                                  PopupMenuItem<_CollectionEntryOrder>(
+                                value: order,
+                                child: Text(_orderLabel(order)),
+                              ),
+                            )
+                            .toList(growable: false),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 12,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          const Icon(Icons.sort_rounded),
+                          const SizedBox(width: 5),
+                          Text(_orderLabel(_order)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: entries.isEmpty
+                    ? const Center(child: Text('没有找到匹配的视频'))
+                    : Scrollbar(
+                        controller: _scrollController,
+                        child: ListView.builder(
+                          key: const Key('collection-sheet-list'),
+                          controller: _scrollController,
+                          itemExtent: _entryExtent,
+                          itemCount: entries.length,
+                          // 长列表构建函数只创建屏幕附近的条目，781 条也能继续滑动。
+                          itemBuilder: (BuildContext context, int index) =>
+                              _buildEntry(entries[index]),
+                        ),
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CollapsingPlayerHeaderDelegate extends SliverPersistentHeaderDelegate {
+  /// 创建最大高度固定、最小高度为零的播放器折叠头。
+  const _CollapsingPlayerHeaderDelegate({
+    required this.maximumHeight,
+    required this.child,
+  });
+
+  final double maximumHeight;
+  final Widget child;
+
+  /// 返回完全收起后的高度，使详情内容能够占满整个屏幕。
+  @override
+  double get minExtent => 0;
+
+  /// 返回播放器初始展开高度，由真实视频比例和屏幕尺寸共同决定。
+  @override
+  double get maxExtent => maximumHeight;
+
+  /// 按当前 Sliver 高度裁切并重排播放器，形成连续收起效果。
+  @override
+  Widget build(
+    BuildContext context,
+    double shrinkOffset,
+    bool overlapsContent,
+  ) {
+    return ClipRect(child: SizedBox.expand(child: child));
+  }
+
+  /// 仅在播放器高度或实例变化时重新创建折叠布局。
+  @override
+  bool shouldRebuild(covariant _CollapsingPlayerHeaderDelegate oldDelegate) {
+    return maximumHeight != oldDelegate.maximumHeight ||
+        child != oldDelegate.child;
   }
 }
 

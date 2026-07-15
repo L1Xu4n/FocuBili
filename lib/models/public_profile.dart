@@ -39,6 +39,7 @@ class CreatorVideo {
     required this.title,
     required this.coverUrl,
     required this.duration,
+    this.partCount = 1,
     this.publishedAt,
     this.stats = const VideoStats(),
   });
@@ -47,6 +48,7 @@ class CreatorVideo {
   final String title;
   final String coverUrl;
   final Duration duration;
+  final int partCount;
   final DateTime? publishedAt;
   final VideoStats stats;
 }

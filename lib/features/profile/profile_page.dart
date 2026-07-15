@@ -180,18 +180,6 @@ class _ProfilePageState extends State<ProfilePage> {
       );
   }
 
-  /// 对尚未迁移的账号功能显示轻量提示，避免用户误以为操作已提交。
-  void _showComingSoon(BuildContext context, String feature) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text('$feature 将在后续版本接入'),
-          duration: const Duration(seconds: 3),
-        ),
-      );
-  }
-
   /// 打开当前账号的只读收藏夹列表，页面会自行验证网页登录会话。
   Future<void> _openFavoriteFolders() async {
     await Navigator.of(context).push<void>(
@@ -416,7 +404,8 @@ class _ProfilePageState extends State<ProfilePage> {
           _ProfileTile(
             icon: Icons.edit_note_rounded,
             title: '时间点笔记',
-            onTap: () => _showComingSoon(context, '时间点笔记'),
+            // 时间点笔记入口函数打开本机笔记的统一查看与管理页面。
+            onTap: () => Navigator.of(context).pushNamed(AppRoutes.videoNotes),
           ),
           _ProfileTile(
             icon: Icons.settings_outlined,

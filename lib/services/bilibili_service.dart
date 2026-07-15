@@ -215,12 +215,12 @@ class BilibiliVideoInfoService implements BilibiliService {
     );
     final String resolvedBvid = data['bvid'] as String? ?? requestedBvid;
     return VideoPreview(
-      aid: _readInteger(data['aid']),
+      aid: _readIdentifier(data['aid']),
       bvid: resolvedBvid,
       cid: initialPart.cid,
       title: _readText(data['title'], '未命名视频'),
       ownerName: _readText(owner['name'], '未知 UP 主'),
-      ownerMid: _readInteger(owner['mid']),
+      ownerMid: _readIdentifier(owner['mid']),
       ownerAvatarUrl: _normalizeImageUrl(_readText(owner['face'], '')),
       description: _readText(data['desc'], ''),
       publishedAt: _parseUnixTime(data['pubdate']),
@@ -249,7 +249,7 @@ class BilibiliVideoInfoService implements BilibiliService {
   /// 解析视频详情中的 UGC 合集，并保持合集条目与单视频分P为两套独立模型。
   VideoCollection? _parseVideoCollection(Object? value, String currentBvid) {
     final Map<Object?, Object?> collection = _readObject(value);
-    final int collectionId = _readInteger(collection['id']);
+    final int collectionId = _readIdentifier(collection['id']);
     if (collectionId <= 0) {
       return null;
     }
@@ -283,7 +283,7 @@ class BilibiliVideoInfoService implements BilibiliService {
       title: _readText(collection['title'], '未命名合集'),
       description: _readText(collection['intro'], ''),
       coverUrl: _normalizeThumbnailUrl(_readText(collection['cover'], '')),
-      ownerMid: _readInteger(collection['mid']),
+      ownerMid: _readIdentifier(collection['mid']),
       totalCount: _readInteger(collection['ep_count']).clamp(
         entries.length,
         1 << 31,
@@ -299,7 +299,7 @@ class BilibiliVideoInfoService implements BilibiliService {
     final Map<Object?, Object?> arc = _readObject(episode['arc']);
     final Map<Object?, Object?> page = _readObject(episode['page']);
     final String bvid = _readText(episode['bvid'], '');
-    final int cid = _readInteger(episode['cid'] ?? page['cid']);
+    final int cid = _readIdentifier(episode['cid'] ?? page['cid']);
     if (!_bvidPattern.hasMatch(bvid) || cid <= 0) {
       return null;
     }
@@ -307,7 +307,7 @@ class BilibiliVideoInfoService implements BilibiliService {
       arc['duration'] ?? page['duration'],
     );
     return VideoCollectionEntry(
-      aid: _readInteger(episode['aid'] ?? arc['aid']),
+      aid: _readIdentifier(episode['aid'] ?? arc['aid']),
       bvid: bvid,
       cid: cid,
       title: _readText(
@@ -482,6 +482,13 @@ class BilibiliVideoInfoService implements BilibiliService {
     }
     return int.tryParse(value?.toString() ?? '')?.clamp(0, 1 << 31).toInt() ??
         0;
+  }
+
+  /// 将 aid、cid、mid 等可能超过 32 位的编号完整转换为非负整数，避免错误截断成 2147483648。
+  int _readIdentifier(Object? value) {
+    final int? number =
+        value is num ? value.toInt() : int.tryParse(value?.toString() ?? '');
+    return number == null || number < 0 ? 0 : number;
   }
 
   /// 将 Unix 秒级时间戳转换为本地时间，无效内容返回 null。
