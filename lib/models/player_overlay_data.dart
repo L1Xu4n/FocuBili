@@ -379,9 +379,14 @@ abstract final class DanmakuTimeline {
     required double canvasWidth,
     required double textWidth,
     bool reverse = false,
+    Duration travelDuration = scrollingTravelDuration,
   }) {
+    // 调用方可传入用户配置的完整穿屏时长；异常非正值安全回退为默认九秒。
+    final Duration safeTravelDuration = travelDuration > Duration.zero
+        ? travelDuration
+        : scrollingTravelDuration;
     final double travelProgress =
-        (elapsed.inMicroseconds / scrollingTravelDuration.inMicroseconds)
+        (elapsed.inMicroseconds / safeTravelDuration.inMicroseconds)
             .clamp(0, 1)
             .toDouble();
     final double distance = (canvasWidth + textWidth) * travelProgress;

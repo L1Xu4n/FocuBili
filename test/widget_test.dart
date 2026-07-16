@@ -15,6 +15,7 @@ import 'package:focubili/models/video_shot_preview.dart';
 import 'package:focubili/models/watch_history_entry.dart';
 import 'package:focubili/services/bilibili_service.dart';
 import 'package:focubili/services/device_status_service.dart';
+import 'package:focubili/services/danmaku_preferences_service.dart';
 import 'package:focubili/services/native_playback_service.dart';
 import 'package:focubili/services/player_overlay_service.dart';
 import 'package:focubili/services/search_history_service.dart';
@@ -2118,6 +2119,35 @@ void main() {
     await tester.pump();
 
     expect(service.pictureInPictureRequests, 1);
+  });
+
+  /// 验证播放器“更多设置”可打开弹幕面板，开关变化会立即持久化到当前用户配置。
+  testWidgets('弹幕设置入口立即应用并持久化开关', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final DanmakuPreferencesService preferencesService =
+        DanmakuPreferencesService();
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: _FakePlaybackService(),
+          danmakuPreferencesService: preferencesService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('more-settings-menu')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('danmaku-settings-menu-item')));
+    await tester.pumpAndSettle();
+    expect(find.text('屏蔽关键词'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('danmaku-settings-enabled')));
+    await tester.pumpAndSettle();
+    expect((await preferencesService.load()).enabled, isTrue);
   });
 
   /// 验证搜索记录保存在本地，并将重复内容移动到最前面。
