@@ -13,11 +13,7 @@ import 'video_note_detail_page.dart';
 /// 在“我的”页面统一搜索、查看和删除保存在本机的时间点笔记。
 class VideoNotesPage extends StatefulWidget {
   /// 创建笔记管理页；测试可以注入内存笔记服务和公开视频查询服务。
-  const VideoNotesPage({
-    super.key,
-    this.noteService,
-    this.videoService,
-  });
+  const VideoNotesPage({super.key, this.noteService, this.videoService});
 
   final VideoNoteService? noteService;
   final BilibiliService? videoService;
@@ -60,17 +56,19 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
     if (keyword.isEmpty) {
       return _notes;
     }
-    return _notes.where((VideoNote note) {
-      final String searchable = <String>[
-        note.title,
-        note.body,
-        note.videoTitle,
-        note.ownerName,
-        note.bvid,
-        note.partTitle,
-      ].join('\n').toLowerCase();
-      return searchable.contains(keyword);
-    }).toList(growable: false);
+    return _notes
+        .where((VideoNote note) {
+          final String searchable = <String>[
+            note.title,
+            note.body,
+            note.videoTitle,
+            note.ownerName,
+            note.bvid,
+            note.partTitle,
+          ].join('\n').toLowerCase();
+          return searchable.contains(keyword);
+        })
+        .toList(growable: false);
   }
 
   /// 重新读取全部笔记，并在展示列表后异步补齐旧笔记缺少的视频封面。
@@ -116,9 +114,7 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
       }
       final List<VideoNote> matching = sourceNotes
           .where((VideoNote note) => note.bvid == bvid)
-          .map(
-            (VideoNote note) => note.copyWith(videoCoverUrl: coverUrl),
-          )
+          .map((VideoNote note) => note.copyWith(videoCoverUrl: coverUrl))
           .toList(growable: false);
       for (final VideoNote updated in matching) {
         await _noteService.saveNote(updated);
@@ -207,7 +203,7 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
   Widget _buildVideoCover(VideoNote note) {
     final ColorScheme colors = Theme.of(context).colorScheme;
     final Widget placeholder = Container(
-      color: colors.surfaceVariant,
+      color: colors.surfaceContainerHighest,
       alignment: Alignment.center,
       child: const Icon(Icons.ondemand_video_rounded),
     );
@@ -261,7 +257,7 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
                             vertical: 3,
                           ),
                           decoration: BoxDecoration(
-                            color: Colors.black.withOpacity(0.72),
+                            color: Colors.black.withValues(alpha: 0.72),
                             borderRadius: BorderRadius.circular(6),
                           ),
                           child: Text(
@@ -325,15 +321,15 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
                 },
                 itemBuilder: (BuildContext context) =>
                     const <PopupMenuEntry<String>>[
-                  PopupMenuItem<String>(
-                    value: 'delete',
-                    child: ListTile(
-                      dense: true,
-                      leading: Icon(Icons.delete_outline_rounded),
-                      title: Text('删除笔记'),
-                    ),
-                  ),
-                ],
+                      PopupMenuItem<String>(
+                        value: 'delete',
+                        child: ListTile(
+                          dense: true,
+                          leading: Icon(Icons.delete_outline_rounded),
+                          title: Text('删除笔记'),
+                        ),
+                      ),
+                    ],
               ),
             ],
           ),
@@ -363,7 +359,7 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
                 tooltip: '清空搜索',
               ),
         filled: true,
-        fillColor: colors.surfaceVariant.withOpacity(0.7),
+        fillColor: colors.surfaceContainerHighest.withValues(alpha: 0.7),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(18),
           borderSide: BorderSide.none,

@@ -14,8 +14,9 @@ abstract final class AppTheme {
       statusBarBrightness: isLight ? Brightness.light : Brightness.dark,
       systemNavigationBarColor: Colors.transparent,
       systemNavigationBarDividerColor: Colors.transparent,
-      systemNavigationBarIconBrightness:
-          isLight ? Brightness.dark : Brightness.light,
+      systemNavigationBarIconBrightness: isLight
+          ? Brightness.dark
+          : Brightness.light,
     );
   }
 
@@ -39,14 +40,14 @@ abstract final class AppTheme {
       useMaterial3: true,
       colorScheme: colors,
       scaffoldBackgroundColor: colors.surface,
-      cardTheme: CardTheme(
+      cardTheme: CardThemeData(
         elevation: 0,
-        color: colors.surfaceVariant.withOpacity(0.45),
+        color: colors.surfaceContainerHighest.withValues(alpha: 0.45),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: colors.surfaceVariant.withOpacity(0.45),
+        fillColor: colors.surfaceContainerHighest.withValues(alpha: 0.45),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(18),
           borderSide: BorderSide.none,

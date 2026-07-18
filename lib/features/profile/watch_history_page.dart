@@ -65,8 +65,8 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
       });
     }
     try {
-      final List<WatchHistoryEntry> entries =
-          await _historyService.loadHistory();
+      final List<WatchHistoryEntry> entries = await _historyService
+          .loadHistory();
       if (!mounted) {
         return;
       }
@@ -112,8 +112,8 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
     if (!mounted || thumbnailUrls.isEmpty) {
       return;
     }
-    final List<WatchHistoryEntry> updated =
-        await _historyService.backfillThumbnails(thumbnailUrls);
+    final List<WatchHistoryEntry> updated = await _historyService
+        .backfillThumbnails(thumbnailUrls);
     if (mounted) {
       setState(() => _entries = updated);
     }
@@ -188,8 +188,9 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
       return;
     }
     try {
-      final List<WatchHistoryEntry> entries =
-          await _historyService.remove(entry.bvid);
+      final List<WatchHistoryEntry> entries = await _historyService.remove(
+        entry.bvid,
+      );
       if (!mounted) {
         return;
       }
@@ -237,8 +238,9 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
         return;
       }
       setState(() => _openingBvid = null);
-      final String message =
-          error is BilibiliLookupException ? error.message : '无法打开该视频，请稍后重试。';
+      final String message = error is BilibiliLookupException
+          ? error.message
+          : '无法打开该视频，请稍后重试。';
       _showMessage(message);
     }
   }
@@ -248,10 +250,7 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          duration: const Duration(seconds: 3),
-        ),
+        SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
       );
   }
 
@@ -304,11 +303,7 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
                 fadeInDuration: const Duration(milliseconds: 120),
                 placeholder: (BuildContext context, String url) =>
                     _buildThumbnailPlaceholder(),
-                errorWidget: (
-                  BuildContext context,
-                  String url,
-                  Object error,
-                ) =>
+                errorWidget: (BuildContext context, String url, Object error) =>
                     _buildThumbnailPlaceholder(),
               ),
             Positioned(
@@ -353,9 +348,7 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
           hintText: '搜索标题、UP 主、分P或 BV 号',
           prefixIcon: const Icon(Icons.search_rounded),
           isDense: true,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
         ),
       ),
     );
@@ -364,7 +357,7 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
   /// 创建无法获得封面时使用的低干扰本地占位图。
   Widget _buildThumbnailPlaceholder() {
     return ColoredBox(
-      color: Theme.of(context).colorScheme.surfaceVariant,
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
       child: const Center(
         child: Icon(Icons.play_arrow_rounded, color: Colors.black45),
       ),
@@ -375,7 +368,7 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
   Widget _buildThumbnailBadge(String text) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.72),
+        color: Colors.black.withValues(alpha: 0.72),
         borderRadius: BorderRadius.circular(4),
       ),
       child: Padding(
@@ -399,9 +392,7 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
           children: <Widget>[
             Icon(Icons.devices_other_rounded),
             SizedBox(width: 10),
-            Expanded(
-              child: Text('仅保存在本机，不与 B 站账号或云端观看历史同步。'),
-            ),
+            Expanded(child: Text('仅保存在本机，不与 B 站账号或云端观看历史同步。')),
           ],
         ),
       ),
@@ -499,8 +490,9 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
                               entry.title,
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
-                              style:
-                                  const TextStyle(fontWeight: FontWeight.w700),
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
                             const SizedBox(height: 6),
                             Text(

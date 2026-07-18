@@ -4,6 +4,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
 
 import '../../features/common/watch_history_badge.dart';
@@ -103,13 +104,7 @@ class _PlayerPageState extends State<PlayerPage>
   );
   static const int _maximumCachedDanmakuSegments = 3;
   static const double _expandedPartItemHeight = 76;
-  static const List<double> _playbackSpeeds = <double>[
-    0.75,
-    1,
-    1.25,
-    1.5,
-    2,
-  ];
+  static const List<double> _playbackSpeeds = <double>[0.75, 1, 1.25, 1.5, 2];
 
   late final PlaybackService _playbackService;
   late final WatchHistoryService _watchHistoryService;
@@ -246,7 +241,8 @@ class _PlayerPageState extends State<PlayerPage>
     _bilibiliService = widget.bilibiliService ?? BilibiliVideoInfoService();
     _publicContentService =
         widget.publicContentService ?? BilibiliHttpPublicContentService();
-    _videoShotService = widget.videoShotService ??
+    _videoShotService =
+        widget.videoShotService ??
         (widget.playbackService == null
             ? BilibiliVideoShotService()
             : const EmptyVideoShotService());
@@ -264,8 +260,8 @@ class _PlayerPageState extends State<PlayerPage>
 
   /// 启动时恢复全局弹幕配置；旧用户或读取失败由服务返回默认值，页面仍可正常播放。
   Future<void> _loadDanmakuPreferences() async {
-    final DanmakuPreferences preferences =
-        await _danmakuPreferencesService.load();
+    final DanmakuPreferences preferences = await _danmakuPreferencesService
+        .load();
     if (!mounted || _danmakuPreferencesChangedByUser) {
       return;
     }
@@ -279,8 +275,8 @@ class _PlayerPageState extends State<PlayerPage>
 
   /// 读取本机观看记录并按 BV 号索引，供合集封面显示“上次看过”。
   Future<void> _loadWatchHistoryBadges() async {
-    final List<WatchHistoryEntry> entries =
-        await _watchHistoryService.loadHistory();
+    final List<WatchHistoryEntry> entries = await _watchHistoryService
+        .loadHistory();
     if (!mounted) {
       return;
     }
@@ -294,12 +290,13 @@ class _PlayerPageState extends State<PlayerPage>
   /// 请求 Android 创建 Media3 视频纹理，再直接请求公开视频的播放数据。
   Future<void> _initializeNativePlayback() async {
     try {
-      final SavedPlaybackState? savedState =
-          await _playbackService.loadSavedPlaybackState(_activeVideo.bvid);
-      final SystemPlaybackLevels levels =
-          await _playbackService.getSystemPlaybackLevels();
+      final SavedPlaybackState? savedState = await _playbackService
+          .loadSavedPlaybackState(_activeVideo.bvid);
+      final SystemPlaybackLevels levels = await _playbackService
+          .getSystemPlaybackLevels();
       final VideoPart restoredPart = _findInitialPart(savedState);
-      final bool restoredPartMatched = widget.initialPartCid == null &&
+      final bool restoredPartMatched =
+          widget.initialPartCid == null &&
           savedState != null &&
           restoredPart.cid == savedState.cid;
       if (!mounted) {
@@ -380,9 +377,11 @@ class _PlayerPageState extends State<PlayerPage>
       return;
     }
     final Duration? requestedInitialPosition = _pendingInitialPosition;
-    final bool shouldSeekToInitialPosition = requestedInitialPosition != null &&
+    final bool shouldSeekToInitialPosition =
+        requestedInitialPosition != null &&
         snapshot.phase == PlaybackPhase.ready;
-    final bool shouldShowResumeNotice = requestedInitialPosition == null &&
+    final bool shouldShowResumeNotice =
+        requestedInitialPosition == null &&
         snapshot.phase == PlaybackPhase.ready &&
         snapshot.restoredPosition > Duration.zero &&
         _shownRestoredCid != _currentPart.cid;
@@ -390,17 +389,21 @@ class _PlayerPageState extends State<PlayerPage>
       _pendingInitialPosition = null;
     }
     final int? pendingQuality = _pendingQualitySelection;
-    final bool sawQualityLoading = pendingQuality != null &&
+    final bool sawQualityLoading =
+        pendingQuality != null &&
         (_qualitySelectionSawLoading ||
             snapshot.phase == PlaybackPhase.loading);
-    final bool qualitySelectionFinished = pendingQuality != null &&
+    final bool qualitySelectionFinished =
+        pendingQuality != null &&
         sawQualityLoading &&
         (snapshot.phase == PlaybackPhase.ready ||
             snapshot.phase == PlaybackPhase.error);
-    final bool qualitySelectionFailed = qualitySelectionFinished &&
+    final bool qualitySelectionFailed =
+        qualitySelectionFinished &&
         (snapshot.phase == PlaybackPhase.error ||
             snapshot.currentQuality != pendingQuality);
-    final bool leftPictureInPicture = _playbackSnapshot.isInPictureInPicture &&
+    final bool leftPictureInPicture =
+        _playbackSnapshot.isInPictureInPicture &&
         !snapshot.isInPictureInPicture;
     setState(() {
       _playbackSnapshot = snapshot;
@@ -408,10 +411,11 @@ class _PlayerPageState extends State<PlayerPage>
       if (!_isDraggingProgress &&
           !_horizontalScrubbing &&
           snapshot.duration > Duration.zero) {
-        _progress = (snapshot.position.inMilliseconds /
-                snapshot.duration.inMilliseconds)
-            .clamp(0, 1)
-            .toDouble();
+        _progress =
+            (snapshot.position.inMilliseconds /
+                    snapshot.duration.inMilliseconds)
+                .clamp(0, 1)
+                .toDouble();
       }
       _playbackSpeed = snapshot.speed;
       _currentQuality = snapshot.currentQuality;
@@ -459,9 +463,7 @@ class _PlayerPageState extends State<PlayerPage>
     try {
       await _playbackService.seekTo(position);
       if (mounted) {
-        _showTransientSnackBar(
-          '已跳转到笔记位置：${formatVideoNotePosition(position)}',
-        );
+        _showTransientSnackBar('已跳转到笔记位置：${formatVideoNotePosition(position)}');
       }
     } catch (_) {
       if (mounted) {
@@ -486,9 +488,10 @@ class _PlayerPageState extends State<PlayerPage>
         _recordedHistoryPartCid != _currentPart.cid) {
       return;
     }
-    final int positionDeltaMs = (snapshot.position.inMilliseconds -
-            _lastHistorySavedPosition.inMilliseconds)
-        .abs();
+    final int positionDeltaMs =
+        (snapshot.position.inMilliseconds -
+                _lastHistorySavedPosition.inMilliseconds)
+            .abs();
     final bool crossedInterval =
         positionDeltaMs >= _watchHistoryProgressSaveInterval.inMilliseconds;
     final bool pausedAtNewPosition =
@@ -510,8 +513,9 @@ class _PlayerPageState extends State<PlayerPage>
 
   /// 把当前视频、分P、封面和播放位置交给本机历史服务，写入失败不影响播放。
   Future<void> _saveCurrentWatchHistory(Duration position) async {
-    final Duration safePosition =
-        position.isNegative ? Duration.zero : position;
+    final Duration safePosition = position.isNegative
+        ? Duration.zero
+        : position;
     _lastHistorySavedPosition = safePosition;
     try {
       final WatchHistoryEntry entry = WatchHistoryEntry(
@@ -524,8 +528,9 @@ class _PlayerPageState extends State<PlayerPage>
         thumbnailUrl: _activeVideo.thumbnailUrl,
         lastPosition: safePosition,
       );
-      final List<WatchHistoryEntry> updated =
-          await _watchHistoryService.record(entry);
+      final List<WatchHistoryEntry> updated = await _watchHistoryService.record(
+        entry,
+      );
       if (mounted) {
         setState(() {
           _watchHistoryByBvid = <String, WatchHistoryEntry>{
@@ -995,8 +1000,9 @@ class _PlayerPageState extends State<PlayerPage>
     if (!mounted) {
       return;
     }
-    final String suffix =
-        details == null || details.trim().isEmpty ? '' : '（${details.trim()}）';
+    final String suffix = details == null || details.trim().isEmpty
+        ? ''
+        : '（${details.trim()}）';
     _showPlayerNotice('画质切换失败：可能未开通大会员或当前账号无此画质权限$suffix');
   }
 
@@ -1191,8 +1197,8 @@ class _PlayerPageState extends State<PlayerPage>
         : _VerticalAdjustmentMode.volume;
     _verticalGestureStartLevel =
         _verticalAdjustmentMode == _VerticalAdjustmentMode.brightness
-            ? _brightness
-            : _volume;
+        ? _brightness
+        : _volume;
     _verticalGestureDelta = 0;
     _showPlayerControls();
   }
@@ -1269,9 +1275,9 @@ class _PlayerPageState extends State<PlayerPage>
           children: <Widget>[
             Text(
               '选集 · 共 ${parts.length} 集',
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
             ),
             const Spacer(),
             TextButton.icon(
@@ -1415,7 +1421,9 @@ class _PlayerPageState extends State<PlayerPage>
     final bool selected = part.cid == _currentPart.cid;
     final ColorScheme colors = Theme.of(context).colorScheme;
     return Material(
-      color: selected ? colors.primaryContainer : colors.surfaceVariant,
+      color: selected
+          ? colors.primaryContainer
+          : colors.surfaceContainerHighest,
       borderRadius: BorderRadius.circular(10),
       child: InkWell(
         key: Key('part-${part.pageNumber}'),
@@ -1474,12 +1482,10 @@ class _PlayerPageState extends State<PlayerPage>
       _restartControlsAutoHideTimer();
     }
     if (nextFullscreen) {
-      await SystemChrome.setPreferredOrientations(
-        <DeviceOrientation>[
-          DeviceOrientation.landscapeLeft,
-          DeviceOrientation.landscapeRight,
-        ],
-      );
+      await SystemChrome.setPreferredOrientations(<DeviceOrientation>[
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
       await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     } else {
       await _restoreSystemUi();
@@ -1531,8 +1537,9 @@ class _PlayerPageState extends State<PlayerPage>
 
   /// 创建全屏标题上方的小型本地状态栏，显示时间和系统可用的电量百分比。
   Widget _buildFullscreenStatusStrip() {
-    final String batteryText =
-        _batteryPercent == null ? '--' : '${_batteryPercent!}%';
+    final String batteryText = _batteryPercent == null
+        ? '--'
+        : '${_batteryPercent!}%';
     return SizedBox(
       key: const Key('fullscreen-device-status'),
       height: 15,
@@ -1579,9 +1586,9 @@ class _PlayerPageState extends State<PlayerPage>
 
   /// 恢复普通竖屏与 edge-to-edge 系统栏设置。
   Future<void> _restoreSystemUi() async {
-    await SystemChrome.setPreferredOrientations(
-      <DeviceOrientation>[DeviceOrientation.portraitUp],
-    );
+    await SystemChrome.setPreferredOrientations(<DeviceOrientation>[
+      DeviceOrientation.portraitUp,
+    ]);
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   }
 
@@ -1599,7 +1606,7 @@ class _PlayerPageState extends State<PlayerPage>
   }
 
   /// 接收系统返回结果：依次关闭笔记、全屏和合集内部页面，再允许离开播放页。
-  void _handlePopInvoked(bool didPop) {
+  void _handlePopInvoked(bool didPop, Object? result) {
     if (didPop) {
       return;
     }
@@ -1688,9 +1695,10 @@ class _PlayerPageState extends State<PlayerPage>
     if (!_danmakuFrameController.isAnimating) {
       return _danmakuPositionAnchor;
     }
-    final int realElapsedMicroseconds = (_danmakuFrameController.value *
-            _danmakuFrameController.duration!.inMicroseconds)
-        .round();
+    final int realElapsedMicroseconds =
+        (_danmakuFrameController.value *
+                _danmakuFrameController.duration!.inMicroseconds)
+            .round();
     return DanmakuTimeline.advance(
       positionAnchor: _danmakuPositionAnchor,
       realElapsed: Duration(microseconds: realElapsedMicroseconds),
@@ -1730,14 +1738,16 @@ class _PlayerPageState extends State<PlayerPage>
     if (!_danmakuEnabled || _playbackSnapshot.isInPictureInPicture) {
       return;
     }
-    final int currentSegment =
-        DanmakuSegmentLoadResult.segmentIndexForPosition(position);
+    final int currentSegment = DanmakuSegmentLoadResult.segmentIndexForPosition(
+      position,
+    );
     unawaited(_loadDanmakuSegment(currentSegment));
-    final int positionInSegmentMilliseconds = position.inMilliseconds %
+    final int positionInSegmentMilliseconds =
+        position.inMilliseconds %
         DanmakuSegmentLoadResult.segmentDuration.inMilliseconds;
     final int remainingMilliseconds =
         DanmakuSegmentLoadResult.segmentDuration.inMilliseconds -
-            positionInSegmentMilliseconds;
+        positionInSegmentMilliseconds;
     if (remainingMilliseconds <=
         _danmakuNextSegmentPreloadThreshold.inMilliseconds) {
       unawaited(_loadDanmakuSegment(currentSegment + 1));
@@ -1757,12 +1767,12 @@ class _PlayerPageState extends State<PlayerPage>
     }
     final int requestToken = _danmakuRequestToken;
     _loadingDanmakuSegments.add(segmentIndex);
-    final DanmakuSegmentLoadResult result =
-        await _playerOverlayService.loadDanmakuSegment(
-      bvid: _activeVideo.bvid,
-      cid: _currentPart.cid,
-      segmentIndex: segmentIndex,
-    );
+    final DanmakuSegmentLoadResult result = await _playerOverlayService
+        .loadDanmakuSegment(
+          bvid: _activeVideo.bvid,
+          cid: _currentPart.cid,
+          segmentIndex: segmentIndex,
+        );
     if (!mounted || requestToken != _danmakuRequestToken) {
       return;
     }
@@ -1778,8 +1788,9 @@ class _PlayerPageState extends State<PlayerPage>
     setState(() {
       // 屏蔽在进入缓存和车道规划队列前完成，命中的条目不会隐藏后仍占用轨道。
       _danmakuSegments[result.segmentIndex] = result.entries
-          .where((DanmakuEntry entry) =>
-              !_danmakuPreferences.blocks(entry.content))
+          .where(
+            (DanmakuEntry entry) => !_danmakuPreferences.blocks(entry.content),
+          )
           .toList(growable: false);
     });
     _trimDanmakuSegments(
@@ -1804,8 +1815,8 @@ class _PlayerPageState extends State<PlayerPage>
       final int oldestIndex = _danmakuSegments.keys.reduce(
         (int left, int right) =>
             (left - currentSegment).abs() >= (right - currentSegment).abs()
-                ? left
-                : right,
+            ? left
+            : right,
       );
       _danmakuSegments.remove(oldestIndex);
     }
@@ -1869,11 +1880,8 @@ class _PlayerPageState extends State<PlayerPage>
     if (mounted) {
       setState(() => _subtitleTracksLoading = true);
     }
-    final SubtitleTrackLoadResult result =
-        await _playerOverlayService.loadSubtitleTracks(
-      bvid: _activeVideo.bvid,
-      cid: _currentPart.cid,
-    );
+    final SubtitleTrackLoadResult result = await _playerOverlayService
+        .loadSubtitleTracks(bvid: _activeVideo.bvid, cid: _currentPart.cid);
     if (!mounted || requestToken != _subtitleRequestToken) {
       return;
     }
@@ -1975,12 +1983,12 @@ class _PlayerPageState extends State<PlayerPage>
     }
     final int requestToken = ++_subtitleRequestToken;
     setState(() => _subtitleCuesLoading = true);
-    final SubtitleCueLoadResult result =
-        await _playerOverlayService.loadSubtitleCues(
-      bvid: _activeVideo.bvid,
-      cid: _currentPart.cid,
-      trackId: track.id,
-    );
+    final SubtitleCueLoadResult result = await _playerOverlayService
+        .loadSubtitleCues(
+          bvid: _activeVideo.bvid,
+          cid: _currentPart.cid,
+          trackId: track.id,
+        );
     if (!mounted || requestToken != _subtitleRequestToken) {
       return;
     }
@@ -2063,7 +2071,7 @@ class _PlayerPageState extends State<PlayerPage>
           child: Center(
             child: DecoratedBox(
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.62),
+                color: Colors.black.withValues(alpha: 0.62),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Padding(
@@ -2209,9 +2217,8 @@ class _PlayerPageState extends State<PlayerPage>
                         min: DanmakuPreferences.minScrollDurationSeconds,
                         max: DanmakuPreferences.maxScrollDurationSeconds,
                         divisions: 17,
-                        onChanged: (double item) => update(
-                          value.copyWith(scrollDurationSeconds: item),
-                        ),
+                        onChanged: (double item) =>
+                            update(value.copyWith(scrollDurationSeconds: item)),
                       ),
                       TextField(
                         key: const Key('danmaku-blocked-keywords'),
@@ -2311,11 +2318,13 @@ class _PlayerPageState extends State<PlayerPage>
       const PopupMenuItem<_PlayerMoreMenuAction>(
         key: Key('danmaku-settings-menu-item'),
         value: _PlayerMoreMenuAction.danmakuSettings,
-        child: Row(children: <Widget>[
-          Icon(Icons.tune_rounded),
-          SizedBox(width: 8),
-          Text('弹幕设置'),
-        ]),
+        child: Row(
+          children: <Widget>[
+            Icon(Icons.tune_rounded),
+            SizedBox(width: 8),
+            Text('弹幕设置'),
+          ],
+        ),
       ),
       const PopupMenuDivider(),
       const PopupMenuItem<_PlayerMoreMenuAction>(
@@ -2356,8 +2365,9 @@ class _PlayerPageState extends State<PlayerPage>
         ? _playbackSnapshot.videoAspectRatio
         : 16 / 9;
     try {
-      final bool entered =
-          await _playbackService.enterPictureInPicture(aspectRatio);
+      final bool entered = await _playbackService.enterPictureInPicture(
+        aspectRatio,
+      );
       if (!mounted) {
         return;
       }
@@ -2469,8 +2479,9 @@ class _PlayerPageState extends State<PlayerPage>
               const SizedBox(height: 14),
               OutlinedButton.icon(
                 key: const Key('retry-playback'),
-                onPressed:
-                    _isRetrying ? null : () => unawaited(_retryPlayback()),
+                onPressed: _isRetrying
+                    ? null
+                    : () => unawaited(_retryPlayback()),
                 icon: _isRetrying
                     ? const SizedBox(
                         width: 16,
@@ -2547,8 +2558,9 @@ class _PlayerPageState extends State<PlayerPage>
   /// 读取当前 BV 的全部笔记，并按视频时间点更新播放器内列表。
   Future<void> _loadCurrentVideoNotes() async {
     try {
-      final List<VideoNote> notes =
-          await _videoNoteService.loadNotesForVideo(_activeVideo.bvid);
+      final List<VideoNote> notes = await _videoNoteService.loadNotesForVideo(
+        _activeVideo.bvid,
+      );
       if (!mounted) {
         return;
       }
@@ -2679,8 +2691,9 @@ class _PlayerPageState extends State<PlayerPage>
   /// 等待原生播放器把目标时间点真正渲染到 Surface，再执行截图。
   Future<void> _waitForNoteFramePosition(Duration target) async {
     for (int attempt = 0; attempt < 30; attempt += 1) {
-      final int difference =
-          (_playbackSnapshot.position - target).inMilliseconds.abs();
+      final int difference = (_playbackSnapshot.position - target)
+          .inMilliseconds
+          .abs();
       if (_playbackSnapshot.phase == PlaybackPhase.ready && difference <= 350) {
         await Future<void>.delayed(const Duration(milliseconds: 80));
         return;
@@ -2855,11 +2868,7 @@ class _PlayerPageState extends State<PlayerPage>
     IconData placeholderIcon = Icons.image_outlined,
   }) {
     if (url.isEmpty) {
-      return _buildDetailImagePlaceholder(
-        width,
-        height,
-        placeholderIcon,
-      );
+      return _buildDetailImagePlaceholder(width, height, placeholderIcon);
     }
     return CachedNetworkImage(
       imageUrl: url,
@@ -2888,7 +2897,7 @@ class _PlayerPageState extends State<PlayerPage>
       width: width,
       height: height,
       child: ColoredBox(
-        color: Theme.of(context).colorScheme.surfaceVariant,
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
         child: Icon(icon),
       ),
     );
@@ -2952,8 +2961,8 @@ class _PlayerPageState extends State<PlayerPage>
     _notesPanelAnimationTimer?.cancel();
     _flushCurrentWatchHistoryProgress();
     await _playbackService.pause();
-    final SavedPlaybackState? savedState =
-        await _playbackService.loadSavedPlaybackState(video.bvid);
+    final SavedPlaybackState? savedState = await _playbackService
+        .loadSavedPlaybackState(video.bvid);
     VideoPart targetPart = video.initialPart;
     if (savedState != null) {
       for (final VideoPart part in video.parts) {
@@ -3059,8 +3068,9 @@ class _PlayerPageState extends State<PlayerPage>
           (_displayDuration.inMilliseconds * _horizontalScrubTargetProgress)
               .round(),
     );
-    final VideoShotFrame? frame =
-        _horizontalScrubbing ? _videoShotPreview?.frameFor(target) : null;
+    final VideoShotFrame? frame = _horizontalScrubbing
+        ? _videoShotPreview?.frameFor(target)
+        : null;
     return Center(
       child: IgnorePointer(
         child: AnimatedOpacity(
@@ -3126,16 +3136,16 @@ class _PlayerPageState extends State<PlayerPage>
   Future<void> _showCollectionSheet(VideoCollection collection) async {
     final VideoCollectionEntry? selected =
         await showModalBottomSheet<VideoCollectionEntry>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      // 合集面板构建函数提供搜索、排序、当前位置与本机观看标记。
-      builder: (BuildContext sheetContext) => _CollectionPickerSheet(
-        collection: collection,
-        currentBvid: _activeVideo.bvid,
-        watchHistoryByBvid: _watchHistoryByBvid,
-      ),
-    );
+          context: context,
+          isScrollControlled: true,
+          showDragHandle: true,
+          // 合集面板构建函数提供搜索、排序、当前位置与本机观看标记。
+          builder: (BuildContext sheetContext) => _CollectionPickerSheet(
+            collection: collection,
+            currentBvid: _activeVideo.bvid,
+            watchHistoryByBvid: _watchHistoryByBvid,
+          ),
+        );
     if (selected != null && mounted && selected.bvid != _activeVideo.bvid) {
       await _openCollectionVideo(selected);
     }
@@ -3168,9 +3178,9 @@ class _PlayerPageState extends State<PlayerPage>
       children: <Widget>[
         Text(
           _activeVideo.title,
-          style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                fontWeight: FontWeight.w800,
-              ),
+          style: Theme.of(
+            context,
+          ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
         ),
         const SizedBox(height: 10),
         Wrap(
@@ -3214,9 +3224,8 @@ class _PlayerPageState extends State<PlayerPage>
           const SizedBox(height: 12),
           InkWell(
             // 简介点击函数在两行摘要和完整文字之间切换。
-            onTap: () => setState(
-              () => _descriptionExpanded = !_descriptionExpanded,
-            ),
+            onTap: () =>
+                setState(() => _descriptionExpanded = !_descriptionExpanded),
             child: Text(
               _activeVideo.description,
               maxLines: _descriptionExpanded ? null : 3,
@@ -3246,10 +3255,16 @@ class _PlayerPageState extends State<PlayerPage>
         Row(
           children: <Widget>[
             _buildReadOnlyStat(
-                Icons.thumb_up_alt_outlined, '点赞', stats.likeCount),
+              Icons.thumb_up_alt_outlined,
+              '点赞',
+              stats.likeCount,
+            ),
             _buildReadOnlyStat(Icons.paid_outlined, '投币', stats.coinCount),
             _buildReadOnlyStat(
-                Icons.star_border_rounded, '收藏', stats.favoriteCount),
+              Icons.star_border_rounded,
+              '收藏',
+              stats.favoriteCount,
+            ),
             _buildReadOnlyStat(Icons.share_outlined, '分享', stats.shareCount),
           ],
         ),
@@ -3297,8 +3312,9 @@ class _PlayerPageState extends State<PlayerPage>
       }
       final ScrollPosition position =
           _collectionPreviewScrollController.position;
-      final double target =
-          (currentIndex * 340.0).clamp(0, position.maxScrollExtent).toDouble();
+      final double target = (currentIndex * 340.0)
+          .clamp(0, position.maxScrollExtent)
+          .toDouble();
       if ((position.pixels - target).abs() < 1) {
         return;
       }
@@ -3318,7 +3334,7 @@ class _PlayerPageState extends State<PlayerPage>
     final ColorScheme colors = Theme.of(context).colorScheme;
     return Material(
       color: current
-          ? colors.primaryContainer.withOpacity(0.32)
+          ? colors.primaryContainer.withValues(alpha: 0.32)
           : Colors.transparent,
       borderRadius: BorderRadius.circular(12),
       clipBehavior: Clip.antiAlias,
@@ -3508,10 +3524,10 @@ class _PlayerPageState extends State<PlayerPage>
         SizedBox(
           height: 100,
           child: ListView.separated(
+            scrollCacheExtent: const ScrollCacheExtent.pixels(680),
             key: const Key('collection-preview-list'),
             controller: _collectionPreviewScrollController,
             scrollDirection: Axis.horizontal,
-            cacheExtent: 680,
             itemCount: collection.entries.length,
             // 分隔函数为相邻合集预览保留固定的横向间距。
             separatorBuilder: (BuildContext context, int index) =>
@@ -3653,10 +3669,7 @@ class _PlayerPageState extends State<PlayerPage>
     }
     if (_currentVideoNotes.isEmpty) {
       return const Center(
-        child: Padding(
-          padding: EdgeInsets.all(12),
-          child: Text('暂无笔记'),
-        ),
+        child: Padding(padding: EdgeInsets.all(12), child: Text('暂无笔记')),
       );
     }
     return ListView.separated(
@@ -3672,8 +3685,9 @@ class _PlayerPageState extends State<PlayerPage>
         final bool selected = note.id == _editingVideoNote?.id;
         final ColorScheme colors = Theme.of(context).colorScheme;
         return Material(
-          color:
-              selected ? colors.primary.withOpacity(0.18) : Colors.transparent,
+          color: selected
+              ? colors.primary.withValues(alpha: 0.18)
+              : Colors.transparent,
           borderRadius: BorderRadius.circular(9),
           child: InkWell(
             key: Key('fullscreen-video-note-${note.id}'),
@@ -3747,7 +3761,7 @@ class _PlayerPageState extends State<PlayerPage>
         child: Material(
           key: const Key('fullscreen-video-notes-material'),
           elevation: 18,
-          color: Theme.of(context).colorScheme.surface.withOpacity(0.9),
+          color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.9),
           borderRadius: BorderRadius.circular(18),
           clipBehavior: Clip.antiAlias,
           child: SafeArea(
@@ -3800,9 +3814,7 @@ class _PlayerPageState extends State<PlayerPage>
                               Expanded(
                                 child: Text(
                                   '笔记',
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .titleSmall
+                                  style: Theme.of(context).textTheme.titleSmall
                                       ?.copyWith(fontWeight: FontWeight.w800),
                                 ),
                               ),
@@ -3847,7 +3859,7 @@ class _PlayerPageState extends State<PlayerPage>
       bottom: 0,
       child: Center(
         child: Material(
-          color: Colors.black.withOpacity(0.58),
+          color: Colors.black.withValues(alpha: 0.58),
           borderRadius: BorderRadius.circular(22),
           child: InkWell(
             borderRadius: BorderRadius.circular(22),
@@ -3918,9 +3930,9 @@ class _PlayerPageState extends State<PlayerPage>
             children: <Widget>[
               Text(
                 '简介',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w800,
-                    ),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
               ),
               const Spacer(),
               TextButton.icon(
@@ -3977,7 +3989,7 @@ class _PlayerPageState extends State<PlayerPage>
     // 错误或选集展开时关闭底层画面手势，避免父级手势抢走重试与选集按钮点击。
     final bool enableSurfaceGestures =
         _playbackSnapshot.phase != PlaybackPhase.error &&
-            !_partSelectorExpanded;
+        !_partSelectorExpanded;
     final Widget player = LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         return Listener(
@@ -3990,48 +4002,55 @@ class _PlayerPageState extends State<PlayerPage>
             // 画面单击函数只切换控制层，避免误触导致视频暂停。
             onTap: enableSurfaceGestures ? _toggleControls : null,
             // 双击落点记录函数为分区快进快退提供位置信息。
-            onDoubleTapDown:
-                enableSurfaceGestures ? _recordDoubleTapPosition : null,
+            onDoubleTapDown: enableSurfaceGestures
+                ? _recordDoubleTapPosition
+                : null,
             // 双击处理函数依据画面宽度计算左中右分区。
             onDoubleTap: enableSurfaceGestures
                 ? () => _handleDoubleTap(constraints.maxWidth)
                 : null,
             // 长按开始函数仅临时切换到二倍速，横向快进由独立拖动手势负责。
-            onLongPressStart:
-                enableSurfaceGestures ? _startTemporaryDoubleSpeed : null,
+            onLongPressStart: enableSurfaceGestures
+                ? _startTemporaryDoubleSpeed
+                : null,
             // 长按结束函数恢复原倍速，不改变播放位置。
-            onLongPressEnd:
-                enableSurfaceGestures ? _stopTemporaryDoubleSpeed : null,
+            onLongPressEnd: enableSurfaceGestures
+                ? _stopTemporaryDoubleSpeed
+                : null,
             // 长按取消函数恢复界面状态且不提交未确认的进度。
-            onLongPressCancel:
-                enableSurfaceGestures ? _cancelTemporaryLongPress : null,
+            onLongPressCancel: enableSurfaceGestures
+                ? _cancelTemporaryLongPress
+                : null,
             // 横向拖动开始函数立即进入进度预览，并计算当前视频对应的拖动速度。
             onHorizontalDragStart: enableSurfaceGestures
                 ? (DragStartDetails details) =>
-                    _startHorizontalScrub(details, constraints.biggest)
+                      _startHorizontalScrub(details, constraints.biggest)
                 : null,
             // 横向拖动更新函数只刷新预览，避免频繁向原生播放器发送跳转命令。
-            onHorizontalDragUpdate:
-                enableSurfaceGestures ? _updateHorizontalScrub : null,
+            onHorizontalDragUpdate: enableSurfaceGestures
+                ? _updateHorizontalScrub
+                : null,
             // 横向拖动结束函数一次性提交最终目标位置。
-            onHorizontalDragEnd:
-                enableSurfaceGestures ? _finishHorizontalScrub : null,
+            onHorizontalDragEnd: enableSurfaceGestures
+                ? _finishHorizontalScrub
+                : null,
             // 横向拖动取消函数恢复开始位置，避免系统手势造成误跳转。
-            onHorizontalDragCancel:
-                enableSurfaceGestures ? _cancelHorizontalScrub : null,
+            onHorizontalDragCancel: enableSurfaceGestures
+                ? _cancelHorizontalScrub
+                : null,
             // 全屏竖向手势开始函数判断左侧亮度、右侧音量和上下安全区；竖屏把手势交给页面滚动。
             onVerticalDragStart: _fullscreen && enableSurfaceGestures
                 ? (DragStartDetails details) => _startVerticalAdjustment(
-                      details,
-                      constraints.biggest,
-                      MediaQuery.of(context).viewPadding.top,
-                      MediaQuery.of(context).viewPadding.bottom,
-                    )
+                    details,
+                    constraints.biggest,
+                    MediaQuery.of(context).viewPadding.top,
+                    MediaQuery.of(context).viewPadding.bottom,
+                  )
                 : null,
             // 全屏竖向手势更新函数实时调整窗口亮度或媒体音量。
             onVerticalDragUpdate: _fullscreen && enableSurfaceGestures
                 ? (DragUpdateDetails details) =>
-                    _updateVerticalAdjustment(details, constraints.maxHeight)
+                      _updateVerticalAdjustment(details, constraints.maxHeight)
                 : null,
             // 全屏竖向手势结束函数恢复控制栏自动隐藏计时。
             onVerticalDragEnd: _fullscreen && enableSurfaceGestures
@@ -4119,7 +4138,7 @@ class _PlayerPageState extends State<PlayerPage>
                                 ? null
                                 : const Key('player-floating-notice'),
                             decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.82),
+                              color: Colors.black.withValues(alpha: 0.82),
                               borderRadius: BorderRadius.circular(16),
                             ),
                             child: Padding(
@@ -4222,11 +4241,13 @@ class _PlayerPageState extends State<PlayerPage>
                                             ),
                                           if (!_fullscreen) const Spacer(),
                                           _buildCompactPlayerIconButton(
-                                            key:
-                                                const Key('picture-in-picture'),
+                                            key: const Key(
+                                              'picture-in-picture',
+                                            ),
                                             // 画中画按钮函数调用 Android 原生小窗能力。
                                             onPressed: () => unawaited(
-                                                _enterPictureInPicture()),
+                                              _enterPictureInPicture(),
+                                            ),
                                             icon: Icons
                                                 .picture_in_picture_alt_rounded,
                                             tooltip: '画中画',
@@ -4245,10 +4266,10 @@ class _PlayerPageState extends State<PlayerPage>
                                           SizedBox(
                                             width: 38,
                                             height: 38,
-                                            child: PopupMenuButton<
-                                                _PlayerMoreMenuAction>(
+                                            child: PopupMenuButton<_PlayerMoreMenuAction>(
                                               key: const Key(
-                                                  'more-settings-menu'),
+                                                'more-settings-menu',
+                                              ),
                                               tooltip: '更多选项',
                                               padding: EdgeInsets.zero,
                                               iconSize: 22,
@@ -4288,8 +4309,8 @@ class _PlayerPageState extends State<PlayerPage>
                                         ),
                                         overlayShape:
                                             const RoundSliderOverlayShape(
-                                          overlayRadius: 8,
-                                        ),
+                                              overlayRadius: 8,
+                                            ),
                                       ),
                                       child: SizedBox(
                                         height: 15,
@@ -4337,22 +4358,22 @@ class _PlayerPageState extends State<PlayerPage>
                                               // 清晰度菜单选择函数保留进度后重新请求播放源。
                                               onSelected: (int quality) =>
                                                   unawaited(
-                                                _changeQuality(quality),
-                                              ),
+                                                    _changeQuality(quality),
+                                                  ),
                                               // 清晰度菜单构建函数使用原生接口实际返回的档位。
-                                              itemBuilder:
-                                                  (BuildContext context) {
+                                              itemBuilder: (BuildContext context) {
                                                 return _availableQualities
                                                     .map(
-                                                      (PlaybackQuality
-                                                              quality) =>
-                                                          PopupMenuItem<int>(
+                                                      (
+                                                        PlaybackQuality quality,
+                                                      ) => PopupMenuItem<int>(
                                                         key: Key(
                                                           'quality-${quality.id}',
                                                         ),
                                                         value: quality.id,
-                                                        child:
-                                                            Text(quality.label),
+                                                        child: Text(
+                                                          quality.label,
+                                                        ),
                                                       ),
                                                     )
                                                     .toList(growable: false);
@@ -4372,25 +4393,32 @@ class _PlayerPageState extends State<PlayerPage>
                                               // 倍速菜单选择函数把用户选择交给原生播放器。
                                               onSelected: (double speed) =>
                                                   unawaited(
-                                                _changePlaybackSpeed(speed),
-                                              ),
+                                                    _changePlaybackSpeed(speed),
+                                                  ),
                                               // 倍速菜单构建函数生成固定且容易理解的五档速度。
                                               itemBuilder:
                                                   (BuildContext context) {
-                                                return _playbackSpeeds
-                                                    .map(
-                                                      (double speed) =>
-                                                          PopupMenuItem<double>(
-                                                        key:
-                                                            Key('speed-$speed'),
-                                                        value: speed,
-                                                        child: Text(
-                                                          _formatSpeed(speed),
-                                                        ),
-                                                      ),
-                                                    )
-                                                    .toList(growable: false);
-                                              },
+                                                    return _playbackSpeeds
+                                                        .map(
+                                                          (double speed) =>
+                                                              PopupMenuItem<
+                                                                double
+                                                              >(
+                                                                key: Key(
+                                                                  'speed-$speed',
+                                                                ),
+                                                                value: speed,
+                                                                child: Text(
+                                                                  _formatSpeed(
+                                                                    speed,
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                        )
+                                                        .toList(
+                                                          growable: false,
+                                                        );
+                                                  },
                                               child: _buildControlMenuLabel(
                                                 _formatSpeed(_playbackSpeed),
                                               ),
@@ -4398,14 +4426,14 @@ class _PlayerPageState extends State<PlayerPage>
                                           ),
                                           _buildCompactPlayerIconButton(
                                             // 全屏按钮函数切换横屏沉浸状态。
-                                            onPressed: () => unawaited(
-                                              _toggleFullscreen(),
-                                            ),
+                                            onPressed: () =>
+                                                unawaited(_toggleFullscreen()),
                                             icon: _fullscreen
                                                 ? Icons.fullscreen_exit_rounded
                                                 : Icons.fullscreen_rounded,
-                                            tooltip:
-                                                _fullscreen ? '退出全屏' : '进入全屏',
+                                            tooltip: _fullscreen
+                                                ? '退出全屏'
+                                                : '进入全屏',
                                           ),
                                         ],
                                       ),
@@ -4458,30 +4486,22 @@ class _PlayerPageState extends State<PlayerPage>
     final double playerHeight = fullscreenLayout
         ? screenSize.height
         : (screenSize.width / aspectRatio)
-            .clamp(180, screenSize.height * 0.62)
-            .toDouble();
+              .clamp(180, screenSize.height * 0.62)
+              .toDouble();
     final Widget pageBody;
     if (fullscreenLayout) {
       pageBody = SizedBox.expand(child: player);
     } else if (_notesOpen) {
       pageBody = Column(
         children: <Widget>[
-          SizedBox(
-            width: double.infinity,
-            height: playerHeight,
-            child: player,
-          ),
+          SizedBox(width: double.infinity, height: playerHeight, child: player),
           Expanded(child: _buildPortraitVideoNotesPanel()),
         ],
       );
     } else if (_partSelectorExpanded) {
       pageBody = Column(
         children: <Widget>[
-          SizedBox(
-            width: double.infinity,
-            height: playerHeight,
-            child: player,
-          ),
+          SizedBox(width: double.infinity, height: playerHeight, child: player),
           Expanded(child: _buildExpandedPartSelector()),
         ],
       );
@@ -4504,7 +4524,7 @@ class _PlayerPageState extends State<PlayerPage>
     return PopScope(
       canPop: !_notesOpen && !_fullscreen && _collectionVideoBackStack.isEmpty,
       // 系统返回函数保证先退出全屏或返回上一支合集视频，再离开页面。
-      onPopInvoked: _handlePopInvoked,
+      onPopInvokedWithResult: _handlePopInvoked,
       child: pageScaffold,
     );
   }
@@ -4557,14 +4577,15 @@ class _CollectionPickerSheetState extends State<_CollectionPickerSheet> {
   /// 根据关键词筛选标题或 BV 号，再复制排序，绝不修改原始合集列表。
   List<VideoCollectionEntry> _visibleEntries() {
     final String normalizedKeyword = _keyword.trim().toLowerCase();
-    final List<VideoCollectionEntry> entries =
-        widget.collection.entries.where((VideoCollectionEntry entry) {
-      if (normalizedKeyword.isEmpty) {
-        return true;
-      }
-      return entry.title.toLowerCase().contains(normalizedKeyword) ||
-          entry.bvid.toLowerCase().contains(normalizedKeyword);
-    }).toList(growable: true);
+    final List<VideoCollectionEntry> entries = widget.collection.entries
+        .where((VideoCollectionEntry entry) {
+          if (normalizedKeyword.isEmpty) {
+            return true;
+          }
+          return entry.title.toLowerCase().contains(normalizedKeyword) ||
+              entry.bvid.toLowerCase().contains(normalizedKeyword);
+        })
+        .toList(growable: true);
     switch (_order) {
       case _CollectionEntryOrder.original:
         break;
@@ -4585,10 +4606,7 @@ class _CollectionPickerSheetState extends State<_CollectionPickerSheet> {
   }
 
   /// 按发布时间从新到旧比较；缺少日期的条目放到列表末尾。
-  int _compareNewest(
-    VideoCollectionEntry left,
-    VideoCollectionEntry right,
-  ) {
+  int _compareNewest(VideoCollectionEntry left, VideoCollectionEntry right) {
     if (left.publishedAt == null && right.publishedAt == null) {
       return 0;
     }
@@ -4602,10 +4620,7 @@ class _CollectionPickerSheetState extends State<_CollectionPickerSheet> {
   }
 
   /// 按发布时间从旧到新比较；缺少日期的条目仍放到列表末尾。
-  int _compareOldest(
-    VideoCollectionEntry left,
-    VideoCollectionEntry right,
-  ) {
+  int _compareOldest(VideoCollectionEntry left, VideoCollectionEntry right) {
     if (left.publishedAt == null && right.publishedAt == null) {
       return 0;
     }
@@ -4651,8 +4666,9 @@ class _CollectionPickerSheetState extends State<_CollectionPickerSheet> {
         return;
       }
       final ScrollPosition position = _scrollController.position;
-      final double target =
-          (index * _entryExtent).clamp(0, position.maxScrollExtent).toDouble();
+      final double target = (index * _entryExtent)
+          .clamp(0, position.maxScrollExtent)
+          .toDouble();
       if (animated) {
         _scrollController.animateTo(
           target,
@@ -4725,22 +4741,19 @@ class _CollectionPickerSheetState extends State<_CollectionPickerSheet> {
               fit: BoxFit.cover,
               errorWidget: (BuildContext context, String url, Object error) =>
                   const SizedBox(
-                width: 96,
-                height: 54,
-                child: ColoredBox(
-                  color: Colors.black26,
-                  child: Icon(Icons.broken_image_outlined),
-                ),
-              ),
+                    width: 96,
+                    height: 54,
+                    child: ColoredBox(
+                      color: Colors.black26,
+                      child: Icon(Icons.broken_image_outlined),
+                    ),
+                  ),
             ),
           if (history != null && !current)
             Positioned(
               left: 3,
               top: 3,
-              child: WatchHistoryBadge(
-                entry: history,
-                showPosition: false,
-              ),
+              child: WatchHistoryBadge(entry: history, showPosition: false),
             ),
           Positioned(
             right: 3,
@@ -4771,7 +4784,9 @@ class _CollectionPickerSheetState extends State<_CollectionPickerSheet> {
       padding: const EdgeInsets.only(bottom: 4),
       child: Material(
         color: current
-            ? Theme.of(context).colorScheme.primaryContainer.withOpacity(0.45)
+            ? Theme.of(
+                context,
+              ).colorScheme.primaryContainer.withValues(alpha: 0.45)
             : Colors.transparent,
         borderRadius: BorderRadius.circular(12),
         clipBehavior: Clip.antiAlias,
@@ -4818,10 +4833,9 @@ class _CollectionPickerSheetState extends State<_CollectionPickerSheet> {
                       '合集 · ${widget.collection.title}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context)
-                          .textTheme
-                          .titleMedium
-                          ?.copyWith(fontWeight: FontWeight.w700),
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                   Text('${entries.length}/${widget.collection.entries.length}'),
@@ -4866,16 +4880,16 @@ class _CollectionPickerSheetState extends State<_CollectionPickerSheet> {
                     initialValue: _order,
                     // 排序选择函数只重新排列当前面板，不修改合集本身。
                     onSelected: _changeOrder,
-                    itemBuilder: (BuildContext context) =>
-                        _CollectionEntryOrder.values
-                            .map(
-                              (_CollectionEntryOrder order) =>
-                                  PopupMenuItem<_CollectionEntryOrder>(
+                    itemBuilder: (BuildContext context) => _CollectionEntryOrder
+                        .values
+                        .map(
+                          (_CollectionEntryOrder order) =>
+                              PopupMenuItem<_CollectionEntryOrder>(
                                 value: order,
                                 child: Text(_orderLabel(order)),
                               ),
-                            )
-                            .toList(growable: false),
+                        )
+                        .toList(growable: false),
                     child: Padding(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 10,
@@ -4979,11 +4993,7 @@ class _DetailMeta extends StatelessWidget {
 /// 在固定两行高度内竖向循环标题，避免超长分P名称被横向截断。
 class _PartTitleMarquee extends StatefulWidget {
   /// 创建一个会在两行内容溢出时自动竖向滚动的分P标题。
-  const _PartTitleMarquee({
-    super.key,
-    required this.text,
-    required this.style,
-  });
+  const _PartTitleMarquee({super.key, required this.text, required this.style});
 
   final String text;
   final TextStyle style;
@@ -5054,8 +5064,10 @@ class _PartTitleMarqueeState extends State<_PartTitleMarquee>
       if (!mounted || !_elementActive || _animationSignature != signature) {
         return;
       }
-      final int milliseconds =
-          (travelDistance / 18 * 1000).round().clamp(5000, 28000).toInt();
+      final int milliseconds = (travelDistance / 18 * 1000)
+          .round()
+          .clamp(5000, 28000)
+          .toInt();
       _controller
         ..duration = Duration(milliseconds: milliseconds)
         ..repeat();
@@ -5226,8 +5238,10 @@ class _AutoScrollingTextState extends State<_AutoScrollingText>
       if (!mounted || !_elementActive || _animationSignature != signature) {
         return;
       }
-      final int milliseconds =
-          (travelDistance / 28 * 1000).round().clamp(4200, 18000).toInt();
+      final int milliseconds = (travelDistance / 28 * 1000)
+          .round()
+          .clamp(4200, 18000)
+          .toInt();
       _controller
         ..duration = Duration(milliseconds: milliseconds)
         ..repeat();
@@ -5397,22 +5411,20 @@ class _DanmakuLanePlanner {
         continue;
       }
       if (entry.mode == 4 || entry.mode == 5) {
-        final List<int> fixedLanes =
-            entry.mode == 4 ? bottomFixedLaneFreeAt : topFixedLaneFreeAt;
+        final List<int> fixedLanes = entry.mode == 4
+            ? bottomFixedLaneFreeAt
+            : topFixedLaneFreeAt;
         fixedLanes[lane] = startedAt + 4000;
       } else {
-        final int minimumGapMilliseconds = ((textWidth + 28) /
-                (size.width + textWidth) *
-                (preferences.scrollDurationSeconds * 1000))
-            .ceil();
+        final int minimumGapMilliseconds =
+            ((textWidth + 28) /
+                    (size.width + textWidth) *
+                    (preferences.scrollDurationSeconds * 1000))
+                .ceil();
         scrollingLaneFreeAt[lane] = startedAt + minimumGapMilliseconds;
       }
       items.add(
-        _DanmakuLayoutItem(
-          entry: entry,
-          lane: lane,
-          textWidth: textWidth,
-        ),
+        _DanmakuLayoutItem(entry: entry, lane: lane, textWidth: textWidth),
       );
     }
     _cachedEntries = entries;
@@ -5478,13 +5490,11 @@ class _DanmakuPainter extends CustomPainter {
 
   /// 按配置生成绘制样式；字号单位为 Flutter 逻辑像素，透明度限制在 20% 至 100%。
   static TextStyle textStyleFor(DanmakuPreferences preferences) => TextStyle(
-        color: Colors.white.withOpacity(preferences.opacity),
-        fontSize: preferences.fontSize,
-        fontWeight: FontWeight.w600,
-        shadows: const <Shadow>[
-          Shadow(color: Colors.black, blurRadius: 2),
-        ],
-      );
+    color: Colors.white.withValues(alpha: preferences.opacity),
+    fontSize: preferences.fontSize,
+    fontWeight: FontWeight.w600,
+    shadows: const <Shadow>[Shadow(color: Colors.black, blurRadius: 2)],
+  );
 
   /// 创建使用逐帧控制器重绘的弹幕画笔，原生播放器状态只负责校准时间锚点。
   _DanmakuPainter({
@@ -5522,8 +5532,11 @@ class _DanmakuPainter extends CustomPainter {
       return;
     }
     final Duration position = _currentPosition();
-    final List<_DanmakuLayoutItem> items =
-        lanePlanner.plan(entries, size, preferences);
+    final List<_DanmakuLayoutItem> items = lanePlanner.plan(
+      entries,
+      size,
+      preferences,
+    );
     final int firstCandidate = _firstCandidateIndex(
       items,
       position - const Duration(seconds: 14),
@@ -5548,8 +5561,10 @@ class _DanmakuPainter extends CustomPainter {
         text: TextSpan(
           text: item.entry.content,
           style: textStyleFor(preferences).copyWith(
-              color:
-                  _colorForEntry(item.entry).withOpacity(preferences.opacity)),
+            color: _colorForEntry(
+              item.entry,
+            ).withValues(alpha: preferences.opacity),
+          ),
         ),
         textDirection: TextDirection.ltr,
         maxLines: 1,
@@ -5567,10 +5582,7 @@ class _DanmakuPainter extends CustomPainter {
   }
 
   /// 使用二分查找跳过远早于当前时间的条目，降低长弹幕片段的逐帧遍历开销。
-  int _firstCandidateIndex(
-    List<_DanmakuLayoutItem> items,
-    Duration threshold,
-  ) {
+  int _firstCandidateIndex(List<_DanmakuLayoutItem> items, Duration threshold) {
     int lower = 0;
     int upper = items.length;
     while (lower < upper) {
@@ -5599,7 +5611,8 @@ class _DanmakuPainter extends CustomPainter {
       textWidth: item.textWidth,
       reverse: item.entry.mode == 6,
       travelDuration: Duration(
-          milliseconds: (preferences.scrollDurationSeconds * 1000).round()),
+        milliseconds: (preferences.scrollDurationSeconds * 1000).round(),
+      ),
     );
   }
 

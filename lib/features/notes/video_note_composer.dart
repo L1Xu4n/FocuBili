@@ -62,8 +62,9 @@ class VideoNoteComposer extends StatelessWidget {
   /// 创建全屏使用的单行紧凑头部，把标题、时间和操作压缩到同一行。
   Widget _buildCompactHeader(BuildContext context) {
     final TextTheme textTheme = Theme.of(context).textTheme;
-    final String recordedText =
-        createdAt == null ? '保存时记录' : formatVideoNoteDateTime(createdAt!);
+    final String recordedText = createdAt == null
+        ? '保存时记录'
+        : formatVideoNoteDateTime(createdAt!);
     return Row(
       key: const Key('compact-note-header'),
       children: <Widget>[
@@ -126,8 +127,9 @@ class VideoNoteComposer extends StatelessWidget {
   /// 创建竖屏使用的完整头部，分两行显示操作与自动记录信息。
   Widget _buildRegularHeader(BuildContext context) {
     final TextTheme textTheme = Theme.of(context).textTheme;
-    final String recordedText =
-        createdAt == null ? '保存时自动填写' : formatVideoNoteDateTime(createdAt!);
+    final String recordedText = createdAt == null
+        ? '保存时自动填写'
+        : formatVideoNoteDateTime(createdAt!);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
@@ -187,7 +189,7 @@ class VideoNoteComposer extends StatelessWidget {
             const SizedBox(width: 8),
             DecoratedBox(
               decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceVariant,
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
                 borderRadius: BorderRadius.circular(999),
               ),
               child: Padding(
@@ -229,19 +231,18 @@ class VideoNoteComposer extends StatelessWidget {
               key: const Key('note-frame-preview'),
               fit: BoxFit.contain,
               // 画面文件读取失败函数保留明确提示，文字笔记仍然可以继续保存。
-              errorBuilder: (
-                BuildContext context,
-                Object error,
-                StackTrace? stackTrace,
-              ) {
-                return Container(
-                  width: compact ? 210 : 280,
-                  height: compact ? 70 : 96,
-                  alignment: Alignment.center,
-                  color: Theme.of(context).colorScheme.surfaceVariant,
-                  child: const Text('已保存的画面文件不存在'),
-                );
-              },
+              errorBuilder:
+                  (BuildContext context, Object error, StackTrace? stackTrace) {
+                    return Container(
+                      width: compact ? 210 : 280,
+                      height: compact ? 70 : 96,
+                      alignment: Alignment.center,
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.surfaceContainerHighest,
+                      child: const Text('已保存的画面文件不存在'),
+                    );
+                  },
             ),
           ),
         ),
@@ -253,8 +254,9 @@ class VideoNoteComposer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final TextTheme textTheme = Theme.of(context).textTheme;
-    final InputBorder fieldBorder =
-        borderless ? InputBorder.none : const OutlineInputBorder();
+    final InputBorder fieldBorder = borderless
+        ? InputBorder.none
+        : const OutlineInputBorder();
     final EdgeInsetsGeometry fieldPadding = borderless
         ? const EdgeInsets.symmetric(vertical: 6)
         : const EdgeInsets.symmetric(horizontal: 12, vertical: 14);
@@ -299,8 +301,9 @@ class VideoNoteComposer extends StatelessWidget {
           minLines: borderless ? (compact ? 4 : 3) : (compact ? 3 : 4),
           maxLines: borderless ? (compact ? 9 : 7) : (compact ? 5 : 8),
           maxLength: 6000,
-          style:
-              borderless ? textTheme.bodyLarge?.copyWith(height: 1.45) : null,
+          style: borderless
+              ? textTheme.bodyLarge?.copyWith(height: 1.45)
+              : null,
           decoration: InputDecoration(
             labelText: borderless ? null : '正文',
             hintText: '写下此刻的想法…',
@@ -443,8 +446,10 @@ class _VideoNoteOverflowMarqueeState extends State<_VideoNoteOverflowMarquee>
       if (!mounted || !_elementActive || _animationSignature != signature) {
         return;
       }
-      final int milliseconds =
-          (travelDistance / 26 * 1000).round().clamp(4200, 18000).toInt();
+      final int milliseconds = (travelDistance / 26 * 1000)
+          .round()
+          .clamp(4200, 18000)
+          .toInt();
       _controller
         ..duration = Duration(milliseconds: milliseconds)
         ..repeat();

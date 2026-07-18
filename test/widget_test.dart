@@ -322,8 +322,9 @@ class _FakePlaybackService implements PlaybackService {
   Future<void> seekTo(Duration position) async {
     seekToRequests += 1;
     _position = Duration(
-      milliseconds:
-          position.inMilliseconds.clamp(0, duration.inMilliseconds).toInt(),
+      milliseconds: position.inMilliseconds
+          .clamp(0, duration.inMilliseconds)
+          .toInt(),
     );
     _emit();
   }
@@ -474,8 +475,7 @@ class _FakePlayerOverlayService implements PlayerOverlayService {
   Future<SubtitleTrackLoadResult> loadSubtitleTracks({
     required String bvid,
     required int cid,
-  }) async =>
-      tracksResult;
+  }) async => tracksResult;
 
   /// 返回测试配置的字幕条目，不接触临时字幕地址或 Cookie。
   @override
@@ -483,8 +483,7 @@ class _FakePlayerOverlayService implements PlayerOverlayService {
     required String bvid,
     required int cid,
     required String trackId,
-  }) async =>
-      cuesResult;
+  }) async => cuesResult;
 
   /// 页面当前字幕测试不加载弹幕，因此返回空片段以满足叠加服务的完整接口。
   @override
@@ -721,8 +720,10 @@ void main() {
     expect(requester.requestedUri?.queryParameters['keyword'], '编程');
     expect(results, hasLength(1));
     expect(results.single.title, '学习编程');
-    expect(results.single.duration,
-        const Duration(hours: 1, minutes: 2, seconds: 3));
+    expect(
+      results.single.duration,
+      const Duration(hours: 1, minutes: 2, seconds: 3),
+    );
     expect(
       results.single.thumbnailUrl,
       'https://i0.hdslb.com/test.jpg@320w_200h_1c.webp',
@@ -802,9 +803,7 @@ void main() {
   });
 
   /// 验证播放器只在真实就绪后写一次历史，并在切换分P后的下一次就绪更新同一视频。
-  testWidgets('播放器就绪后记录观看历史且分P切换后更新', (
-    WidgetTester tester,
-  ) async {
+  testWidgets('播放器就绪后记录观看历史且分P切换后更新', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final _FakePlaybackService playbackService = _FakePlaybackService(
@@ -928,10 +927,13 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final Rect playerBounds =
-        tester.getRect(find.byKey(const Key('player-surface')));
-    final Offset rightTap =
-        Offset(playerBounds.right - 12, playerBounds.center.dy);
+    final Rect playerBounds = tester.getRect(
+      find.byKey(const Key('player-surface')),
+    );
+    final Offset rightTap = Offset(
+      playerBounds.right - 12,
+      playerBounds.center.dy,
+    );
     await tester.tapAt(rightTap);
     await tester.pump(const Duration(milliseconds: 80));
     await tester.tapAt(rightTap);
@@ -1018,9 +1020,7 @@ void main() {
   });
 
   /// 验证播放错误显示重试入口，重复点击只会发起一次请求且保留当前分P与清晰度。
-  testWidgets('播放错误重试只请求一次并保留分P和清晰度', (
-    WidgetTester tester,
-  ) async {
+  testWidgets('播放错误重试只请求一次并保留分P和清晰度', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final _FakePlaybackService service = _FakePlaybackService();
@@ -1161,14 +1161,14 @@ void main() {
     String? copiedText;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(SystemChannels.platform, (
-      MethodCall call,
-    ) async {
-      if (call.method == 'Clipboard.setData') {
-        copiedText =
-            (call.arguments as Map<Object?, Object?>)['text'] as String?;
-      }
-      return null;
-    });
+          MethodCall call,
+        ) async {
+          if (call.method == 'Clipboard.setData') {
+            copiedText =
+                (call.arguments as Map<Object?, Object?>)['text'] as String?;
+          }
+          return null;
+        });
     addTearDown(() {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(SystemChannels.platform, null);
@@ -1193,10 +1193,7 @@ void main() {
     );
     await tester.pumpWidget(
       MaterialApp(
-        home: PlayerPage(
-          video: video,
-          playbackService: _FakePlaybackService(),
-        ),
+        home: PlayerPage(video: video, playbackService: _FakePlaybackService()),
       ),
     );
     await tester.pumpAndSettle();
@@ -1341,26 +1338,22 @@ void main() {
     activePlayButton.onPressed!();
     await tester.pump();
     expect(playbackService._isPlaying, isTrue);
-    final Rect playerBeforeDrag =
-        tester.getRect(find.byKey(const Key('player-surface')));
+    final Rect playerBeforeDrag = tester.getRect(
+      find.byKey(const Key('player-surface')),
+    );
 
     await tester.drag(
       find.byKey(const Key('portrait-video-notes-panel')),
       const Offset(0, -500),
     );
     await tester.pump();
-    final Rect playerAfterDrag =
-        tester.getRect(find.byKey(const Key('player-surface')));
+    final Rect playerAfterDrag = tester.getRect(
+      find.byKey(const Key('player-surface')),
+    );
     expect(playerAfterDrag, playerBeforeDrag);
 
-    await tester.enterText(
-      find.byKey(const Key('note-title-field')),
-      '关键观点',
-    );
-    await tester.enterText(
-      find.byKey(const Key('note-body-field')),
-      '这是正文内容。',
-    );
+    await tester.enterText(find.byKey(const Key('note-title-field')), '关键观点');
+    await tester.enterText(find.byKey(const Key('note-body-field')), '这是正文内容。');
     // 模拟写笔记期间视频继续播放，截图仍应回到新建笔记时锁定的 00:00。
     await playbackService.seekTo(const Duration(seconds: 75));
     await tester.pump();
@@ -1450,19 +1443,22 @@ void main() {
     await tester.tap(find.byKey(const Key('fullscreen-note-button')));
     await tester.pumpAndSettle();
     expect(
-        find.byKey(const Key('fullscreen-video-notes-panel')), findsOneWidget);
+      find.byKey(const Key('fullscreen-video-notes-panel')),
+      findsOneWidget,
+    );
     expect(find.byKey(const Key('fullscreen-video-note-list')), findsOneWidget);
     final Material panelMaterial = tester.widget<Material>(
       find.byKey(const Key('fullscreen-video-notes-material')),
     );
-    expect(panelMaterial.color!.alpha, lessThan(255));
+    expect(panelMaterial.color!.a, lessThan(1.0));
     final AnimatedSlide openedPanelSlide = tester.widget<AnimatedSlide>(
       find.byKey(const Key('fullscreen-video-notes-slide')),
     );
     expect(openedPanelSlide.offset, Offset.zero);
     expect(openedPanelSlide.duration, const Duration(milliseconds: 280));
-    final double compactHeaderTop =
-        tester.getTopLeft(find.byKey(const Key('compact-note-header'))).dy;
+    final double compactHeaderTop = tester
+        .getTopLeft(find.byKey(const Key('compact-note-header')))
+        .dy;
     final double panelTop = tester
         .getTopLeft(find.byKey(const Key('fullscreen-video-notes-material')))
         .dy;
@@ -1487,10 +1483,13 @@ void main() {
     await tester.pump();
     expect(find.byKey(const Key('fullscreen-video-note-list')), findsNothing);
     expect(
-        find.byKey(const Key('expand-fullscreen-note-list')), findsOneWidget);
+      find.byKey(const Key('expand-fullscreen-note-list')),
+      findsOneWidget,
+    );
     tester
         .widget<IconButton>(
-            find.byKey(const Key('expand-fullscreen-note-list')))
+          find.byKey(const Key('expand-fullscreen-note-list')),
+        )
         .onPressed!();
     await tester.pump();
     expect(find.byKey(const Key('fullscreen-video-note-list')), findsOneWidget);
@@ -1506,7 +1505,9 @@ void main() {
     await tester.binding.handlePopRoute();
     await tester.pump();
     expect(
-        find.byKey(const Key('fullscreen-video-notes-panel')), findsOneWidget);
+      find.byKey(const Key('fullscreen-video-notes-panel')),
+      findsOneWidget,
+    );
     final AnimatedSlide closingPanelSlide = tester.widget<AnimatedSlide>(
       find.byKey(const Key('fullscreen-video-notes-slide')),
     );
@@ -1560,9 +1561,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(
-      find.byKey(const Key('collection-preview-BV1Q541167Qg')),
-    );
+    await tester.tap(find.byKey(const Key('collection-preview-BV1Q541167Qg')));
     await tester.pumpAndSettle();
 
     expect(videoService.lookupRequests, 1);
@@ -1656,9 +1655,7 @@ void main() {
   });
 
   /// 验证横向拖动无需等待长按即可预览，并只在松手时提交一次进度跳转。
-  testWidgets('横向拖动立即预览并一次性跳转进度', (
-    WidgetTester tester,
-  ) async {
+  testWidgets('横向拖动立即预览并一次性跳转进度', (WidgetTester tester) async {
     final _FakePlaybackService service = _FakePlaybackService();
     final _FakeVideoShotService videoShotService = _FakeVideoShotService();
     await tester.pumpWidget(
@@ -1693,9 +1690,7 @@ void main() {
   });
 
   /// 验证长视频横向拖动会按时长提高速度，但单次跳转仍限制在十分钟内。
-  testWidgets('长视频横向拖动使用自适应速度并限制最大范围', (
-    WidgetTester tester,
-  ) async {
+  testWidgets('长视频横向拖动使用自适应速度并限制最大范围', (WidgetTester tester) async {
     final _FakePlaybackService service = _FakePlaybackService(
       duration: const Duration(hours: 4),
     );
@@ -1748,9 +1743,7 @@ void main() {
   });
 
   /// 验证暂停时控制栏不会因旧计时器自动隐藏，继续播放后才恢复五秒自动收起。
-  testWidgets('暂停时控制栏保持显示，播放时才自动隐藏', (
-    WidgetTester tester,
-  ) async {
+  testWidgets('暂停时控制栏保持显示，播放时才自动隐藏', (WidgetTester tester) async {
     final _FakePlaybackService service = _FakePlaybackService();
     await tester.pumpWidget(
       MaterialApp(
@@ -1773,9 +1766,7 @@ void main() {
   });
 
   /// 验证全屏上下安全区内的竖滑不会调节亮度，而中间区域仍可正常调节。
-  testWidgets('全屏竖滑会避开顶部和底部系统手势区', (
-    WidgetTester tester,
-  ) async {
+  testWidgets('全屏竖滑会避开顶部和底部系统手势区', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final _FakePlaybackService service = _FakePlaybackService();
@@ -1832,9 +1823,7 @@ void main() {
   });
 
   /// 验证超长分P标题在选集面板中使用独立两行竖向组件且不会布局溢出。
-  testWidgets('分P超长标题在选集面板中保持可用', (
-    WidgetTester tester,
-  ) async {
+  testWidgets('分P超长标题在选集面板中保持可用', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
@@ -2011,9 +2000,7 @@ void main() {
   });
 
   /// 验证弹幕开关会按当前时间轴请求真实六分钟片段，并创建不拦截手势的绘制画布。
-  testWidgets('播放器可以加载并绘制当前片段的真实弹幕', (
-    WidgetTester tester,
-  ) async {
+  testWidgets('播放器可以加载并绘制当前片段的真实弹幕', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final _FakePlayerOverlayService overlayService = _FakePlayerOverlayService(
@@ -2068,9 +2055,9 @@ void main() {
       MaterialApp(
         builder: (BuildContext context, Widget? child) {
           return MediaQuery(
-            data: MediaQuery.of(context).copyWith(
-              viewInsets: const EdgeInsets.only(bottom: 280),
-            ),
+            data: MediaQuery.of(
+              context,
+            ).copyWith(viewInsets: const EdgeInsets.only(bottom: 280)),
             child: child!,
           );
         },

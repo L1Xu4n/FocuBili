@@ -177,8 +177,9 @@ class _SearchPageState extends State<SearchPage> {
       }
       final List<String> history = await _historyService.addHistory(input);
       final bool opensDirectly = _bvidPattern.hasMatch(input);
-      final VideoPreview? directResult =
-          opensDirectly ? await _service.lookupVideo(input) : null;
+      final VideoPreview? directResult = opensDirectly
+          ? await _service.lookupVideo(input)
+          : null;
       final VideoSearchPage? searchPage = opensDirectly
           ? null
           : await _service.searchVideos(input, page: 1, filter: _filter);
@@ -223,8 +224,9 @@ class _SearchPageState extends State<SearchPage> {
       if (!mounted) {
         return;
       }
-      final Set<String> existingBvids =
-          _searchResults.map((VideoSearchResult result) => result.bvid).toSet();
+      final Set<String> existingBvids = _searchResults
+          .map((VideoSearchResult result) => result.bvid)
+          .toSet();
       setState(() {
         _searchResults = <VideoSearchResult>[
           ..._searchResults,
@@ -336,10 +338,7 @@ class _SearchPageState extends State<SearchPage> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          duration: const Duration(seconds: 3),
-        ),
+        SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
       );
   }
 
@@ -428,8 +427,8 @@ class _SearchPageState extends State<SearchPage> {
   /// 打开参考图样式的筛选面板，并在用户确认后重新搜索。
   Future<void> _openFilterSheet() async {
     VideoSearchFilter editingFilter = _filter;
-    final VideoSearchFilter? selectedFilter =
-        await showModalBottomSheet<VideoSearchFilter>(
+    final VideoSearchFilter?
+    selectedFilter = await showModalBottomSheet<VideoSearchFilter>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -486,22 +485,24 @@ class _SearchPageState extends State<SearchPage> {
                     Wrap(
                       spacing: 8,
                       runSpacing: 4,
-                      children: _categories.map((_SearchCategory category) {
-                        return ChoiceChip(
-                          label: Text(category.label),
-                          selected: editingFilter.categoryId == category.id,
-                          // 分区选择函数更新筛选面板中的临时内容分区。
-                          onSelected: (_) {
-                            setModalState(() {
-                              editingFilter = editingFilter.copyWith(
-                                categoryId: category.id,
-                                categoryLabel: category.label,
-                                clearCategory: category.id == null,
-                              );
-                            });
-                          },
-                        );
-                      }).toList(growable: false),
+                      children: _categories
+                          .map((_SearchCategory category) {
+                            return ChoiceChip(
+                              label: Text(category.label),
+                              selected: editingFilter.categoryId == category.id,
+                              // 分区选择函数更新筛选面板中的临时内容分区。
+                              onSelected: (_) {
+                                setModalState(() {
+                                  editingFilter = editingFilter.copyWith(
+                                    categoryId: category.id,
+                                    categoryLabel: category.label,
+                                    clearCategory: category.id == null,
+                                  );
+                                });
+                              },
+                            );
+                          })
+                          .toList(growable: false),
                     ),
                     const SizedBox(height: 24),
                     Row(
@@ -563,14 +564,16 @@ class _SearchPageState extends State<SearchPage> {
         Wrap(
           spacing: 8,
           runSpacing: 4,
-          children: values.map((T value) {
-            return ChoiceChip(
-              label: Text(labelBuilder(value)),
-              selected: value == selectedValue,
-              // 筛选标签函数把选中的枚举值交给调用方更新临时条件。
-              onSelected: (_) => onSelected(value),
-            );
-          }).toList(growable: false),
+          children: values
+              .map((T value) {
+                return ChoiceChip(
+                  label: Text(labelBuilder(value)),
+                  selected: value == selectedValue,
+                  // 筛选标签函数把选中的枚举值交给调用方更新临时条件。
+                  onSelected: (_) => onSelected(value),
+                );
+              })
+              .toList(growable: false),
         ),
       ],
     );
@@ -734,12 +737,7 @@ class _SearchPageState extends State<SearchPage> {
       children: <Widget>[
         _buildResultArea(),
         if (_searchFocusNode.hasFocus && _suggestions.isNotEmpty)
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: _buildSuggestions(),
-          ),
+          Positioned(top: 0, left: 0, right: 0, child: _buildSuggestions()),
       ],
     );
   }
@@ -930,10 +928,7 @@ class _SearchPageState extends State<SearchPage> {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              _buildSearchThumbnail(
-                result,
-                episodeCountText: episodeCountText,
-              ),
+              _buildSearchThumbnail(result, episodeCountText: episodeCountText),
               const SizedBox(width: 10),
               Expanded(
                 child: SizedBox(
@@ -960,8 +955,10 @@ class _SearchPageState extends State<SearchPage> {
                       ),
                       Row(
                         children: <Widget>[
-                          const Icon(Icons.play_circle_outline_rounded,
-                              size: 16),
+                          const Icon(
+                            Icons.play_circle_outline_rounded,
+                            size: 16,
+                          ),
                           const SizedBox(width: 3),
                           Text(
                             _formatCount(result.playCount),
@@ -1041,7 +1038,7 @@ class _SearchPageState extends State<SearchPage> {
   /// 创建封面加载过程中的低流量本地占位底图。
   Widget _buildThumbnailPlaceholder(BuildContext context, String url) {
     return ColoredBox(
-      color: Theme.of(context).colorScheme.surfaceVariant,
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
       child: const Center(
         child: Icon(Icons.image_outlined, color: Colors.black38),
       ),
@@ -1051,7 +1048,7 @@ class _SearchPageState extends State<SearchPage> {
   /// 创建封面加载失败时使用的本地播放图标。
   Widget _buildThumbnailError(BuildContext context, String url, Object error) {
     return ColoredBox(
-      color: Theme.of(context).colorScheme.surfaceVariant,
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
       child: const Center(child: Icon(Icons.play_arrow_rounded)),
     );
   }
@@ -1060,7 +1057,7 @@ class _SearchPageState extends State<SearchPage> {
   Widget _buildThumbnailBadge(String text) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.72),
+        color: Colors.black.withValues(alpha: 0.72),
         borderRadius: BorderRadius.circular(4),
       ),
       child: Padding(

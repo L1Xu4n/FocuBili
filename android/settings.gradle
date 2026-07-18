@@ -23,8 +23,8 @@ pluginManagement {
 
 plugins {
     id "dev.flutter.flutter-plugin-loader" version "1.0.0"
-    // 使用支持当前 Android Studio Java 21 运行环境的 Android Gradle 插件版本。
-    id "com.android.application" version "8.2.2" apply false
+    // 与 compileSdk 36 和 Gradle 8.14 配套的 Android Gradle 插件版本。
+    id "com.android.application" version "8.11.1" apply false
 }
 
 include ":app"

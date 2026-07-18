@@ -60,8 +60,8 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
     if (mounted) {
       setState(() => _isLoading = true);
     }
-    final AccountDataPage<FavoriteFolder> result =
-        await _accountDataService.loadFavoriteFolders();
+    final AccountDataPage<FavoriteFolder> result = await _accountDataService
+        .loadFavoriteFolders();
     if (!mounted) {
       return;
     }
@@ -147,10 +147,7 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          duration: const Duration(seconds: 3),
-        ),
+        SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
       );
   }
 
@@ -181,11 +178,7 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
                 fadeInDuration: const Duration(milliseconds: 120),
                 placeholder: (BuildContext context, String url) =>
                     _buildCoverPlaceholder(),
-                errorWidget: (
-                  BuildContext context,
-                  String url,
-                  Object error,
-                ) =>
+                errorWidget: (BuildContext context, String url, Object error) =>
                     _buildCoverPlaceholder(),
               ),
             Positioned(
@@ -224,9 +217,7 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
           hintText: '搜索收藏夹',
           prefixIcon: const Icon(Icons.search_rounded),
           isDense: true,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
         ),
       ),
     );
@@ -235,7 +226,7 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
   /// 创建收藏夹没有封面或封面加载失败时的本地占位图。
   Widget _buildCoverPlaceholder() {
     return ColoredBox(
-      color: Theme.of(context).colorScheme.surfaceVariant,
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
       child: const Center(
         child: Icon(Icons.star_outline_rounded, color: Colors.black45),
       ),
@@ -246,7 +237,7 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
   Widget _buildCountBadge(String text) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.72),
+        color: Colors.black.withValues(alpha: 0.72),
         borderRadius: BorderRadius.circular(4),
       ),
       child: Padding(
@@ -389,9 +380,7 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
     }
     final AccountDataPage<FavoriteFolder>? page = _page;
     if (page == null) {
-      return _buildStatusState(
-        AccountDataPage<FavoriteFolder>.unavailable(),
-      );
+      return _buildStatusState(AccountDataPage<FavoriteFolder>.unavailable());
     }
     if (!page.isSuccess) {
       return _buildStatusState(page);

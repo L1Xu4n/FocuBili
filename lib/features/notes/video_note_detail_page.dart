@@ -11,11 +11,12 @@ import '../../services/video_note_service.dart';
 import 'video_note_composer.dart';
 
 /// 允许测试替换播放器目标页，同时保留视频、分P和时间点三项跳转参数。
-typedef VideoNotePlayerBuilder = Widget Function(
-  VideoPreview video,
-  int initialPartCid,
-  Duration initialPosition,
-);
+typedef VideoNotePlayerBuilder =
+    Widget Function(
+      VideoPreview video,
+      int initialPartCid,
+      Duration initialPosition,
+    );
 
 /// 在独立页面中阅读和编辑一条时间点笔记，并在正文末尾展示可选视频截图。
 class VideoNoteDetailPage extends StatefulWidget {
@@ -180,7 +181,7 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
   }
 
   /// 处理系统和顶部返回操作，脏数据必须确认后才真正退出页面。
-  Future<void> _handlePopInvoked(bool didPop) async {
+  Future<void> _handlePopInvoked(bool didPop, Object? result) async {
     if (didPop || _allowPop) {
       return;
     }
@@ -219,11 +220,8 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
       if (!mounted) {
         return;
       }
-      final Widget destination = widget.playerBuilder?.call(
-            video,
-            part.cid,
-            _note.position,
-          ) ??
+      final Widget destination =
+          widget.playerBuilder?.call(video, part.cid, _note.position) ??
           PlayerPage(
             video: video,
             bilibiliService: _videoService,
@@ -264,7 +262,7 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
     if (_note.videoCoverUrl.isEmpty) {
       return Container(
         key: const Key('note-detail-cover-placeholder'),
-        color: colors.surfaceVariant,
+        color: colors.surfaceContainerHighest,
         alignment: Alignment.center,
         child: const Icon(Icons.ondemand_video_rounded),
       );
@@ -275,17 +273,17 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
       fit: BoxFit.cover,
       // 封面加载函数使用轻量进度指示，不阻塞笔记正文阅读。
       placeholder: (BuildContext context, String url) => Container(
-        color: colors.surfaceVariant,
+        color: colors.surfaceContainerHighest,
         alignment: Alignment.center,
         child: const CircularProgressIndicator(strokeWidth: 2),
       ),
       // 封面错误函数回退到视频图标，避免网络问题破坏详情页结构。
       errorWidget: (BuildContext context, String url, Object error) =>
           Container(
-        color: colors.surfaceVariant,
-        alignment: Alignment.center,
-        child: const Icon(Icons.broken_image_outlined),
-      ),
+            color: colors.surfaceContainerHighest,
+            alignment: Alignment.center,
+            child: const Icon(Icons.broken_image_outlined),
+          ),
     );
   }
 
@@ -304,17 +302,14 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
           children: <Widget>[
             Text(
               '视频截图',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w800,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
             ),
             const Spacer(),
             const Icon(Icons.open_in_full_rounded, size: 18),
             const SizedBox(width: 6),
-            Text(
-              '点击放大',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
+            Text('点击放大', style: Theme.of(context).textTheme.bodySmall),
           ],
         ),
         const SizedBox(height: 12),
@@ -337,17 +332,18 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
                   File(framePath),
                   fit: BoxFit.contain,
                   // 截图错误函数显示明确说明，仍保留笔记的文字内容。
-                  errorBuilder: (
-                    BuildContext context,
-                    Object error,
-                    StackTrace? stackTrace,
-                  ) {
-                    return const SizedBox(
-                      width: 280,
-                      height: 180,
-                      child: Center(child: Text('截图文件不存在')),
-                    );
-                  },
+                  errorBuilder:
+                      (
+                        BuildContext context,
+                        Object error,
+                        StackTrace? stackTrace,
+                      ) {
+                        return const SizedBox(
+                          width: 280,
+                          height: 180,
+                          child: Center(child: Text('截图文件不存在')),
+                        );
+                      },
                 ),
               ),
             ),
@@ -365,7 +361,7 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
     return PopScope(
       canPop: _allowPop || !_hasUnsavedChanges,
       // 返回处理函数在有未保存修改时先显示确认提示。
-      onPopInvoked: _handlePopInvoked,
+      onPopInvokedWithResult: _handlePopInvoked,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('笔记详情'),
@@ -401,7 +397,7 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
           children: <Widget>[
             Material(
               key: const Key('note-video-source-card'),
-              color: colors.surfaceVariant.withOpacity(0.7),
+              color: colors.surfaceContainerHighest.withValues(alpha: 0.7),
               borderRadius: BorderRadius.circular(16),
               clipBehavior: Clip.antiAlias,
               child: InkWell(
@@ -544,7 +540,7 @@ class _NoteMetadataChip extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
         decoration: BoxDecoration(
-          color: colors.surfaceVariant.withOpacity(0.72),
+          color: colors.surfaceContainerHighest.withValues(alpha: 0.72),
           borderRadius: BorderRadius.circular(999),
         ),
         child: Row(
@@ -598,18 +594,19 @@ class VideoNoteFrameViewerPage extends StatelessWidget {
                       File(framePath),
                       fit: BoxFit.contain,
                       // 全屏截图错误函数在文件缺失时显示说明并保留返回能力。
-                      errorBuilder: (
-                        BuildContext context,
-                        Object error,
-                        StackTrace? stackTrace,
-                      ) {
-                        return const Center(
-                          child: Text(
-                            '截图文件不存在',
-                            style: TextStyle(color: Colors.white),
-                          ),
-                        );
-                      },
+                      errorBuilder:
+                          (
+                            BuildContext context,
+                            Object error,
+                            StackTrace? stackTrace,
+                          ) {
+                            return const Center(
+                              child: Text(
+                                '截图文件不存在',
+                                style: TextStyle(color: Colors.white),
+                              ),
+                            );
+                          },
                     ),
                   ),
                 );

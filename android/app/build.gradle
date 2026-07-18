@@ -24,10 +24,10 @@ if (flutterVersionName == null) {
 
 android {
     namespace "com.focubili.app"
-    // Media3 1.5 需要 Android API 35；仅提高编译 API，不改变用户设备的最低支持版本。
-    compileSdkVersion 35
-    // WebView 插件要求 NDK 25.1；固定版本避免不同电脑使用 Flutter 默认值时产生警告。
-    ndkVersion "25.1.8937393"
+    // 当前 Android 插件需要 API 36；仅提高编译 API，不改变用户设备的最低支持版本。
+    compileSdkVersion 36
+    // 当前 Android 插件共同要求 NDK 28.2；固定版本避免不同电脑使用 Flutter 默认值时产生警告。
+    ndkVersion "28.2.13676358"
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
@@ -47,8 +47,8 @@ android {
         applicationId "com.focubili.app"
         // You can update the following values to match your application needs.
         // For more information, see: https://docs.flutter.dev/deployment/android#reviewing-the-gradle-build-configuration.
-        // Media3 播放器最低支持 Android 5.0（API 21）。
-        minSdkVersion 21
+        // Flutter 3.44 的 Android 基线为 API 24；Media3 虽支持 API 21，也不能降低 Flutter 的最低版本。
+        minSdkVersion flutter.minSdkVersion
         targetSdkVersion flutter.targetSdkVersion
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName

@@ -67,8 +67,8 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
     if (mounted) {
       setState(() => _isLoading = true);
     }
-    final AccountDataPage<FavoriteVideo> result =
-        await _accountDataService.loadFavoriteVideos(widget.folder.mediaId);
+    final AccountDataPage<FavoriteVideo> result = await _accountDataService
+        .loadFavoriteVideos(widget.folder.mediaId);
     if (!mounted) {
       return;
     }
@@ -98,11 +98,8 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
       return;
     }
     setState(() => _isLoadingMore = true);
-    final AccountDataPage<FavoriteVideo> result =
-        await _accountDataService.loadFavoriteVideos(
-      widget.folder.mediaId,
-      page: currentPage.page + 1,
-    );
+    final AccountDataPage<FavoriteVideo> result = await _accountDataService
+        .loadFavoriteVideos(widget.folder.mediaId, page: currentPage.page + 1);
     if (!mounted) {
       return;
     }
@@ -122,8 +119,9 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
     List<FavoriteVideo> current,
     List<FavoriteVideo> incoming,
   ) {
-    final Set<String> bvids =
-        current.map((FavoriteVideo video) => video.bvid).toSet();
+    final Set<String> bvids = current
+        .map((FavoriteVideo video) => video.bvid)
+        .toSet();
     final List<FavoriteVideo> merged = <FavoriteVideo>[...current];
     for (final FavoriteVideo video in incoming) {
       if (bvids.add(video.bvid)) {
@@ -140,8 +138,9 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
     }
     setState(() => _openingBvid = video.bvid);
     try {
-      final VideoPreview preview =
-          await _bilibiliService.lookupVideo(video.bvid);
+      final VideoPreview preview = await _bilibiliService.lookupVideo(
+        video.bvid,
+      );
       if (!mounted) {
         return;
       }
@@ -165,10 +164,7 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          duration: const Duration(seconds: 3),
-        ),
+        SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
       );
   }
 
@@ -209,11 +205,7 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
                 fadeInDuration: const Duration(milliseconds: 120),
                 placeholder: (BuildContext context, String url) =>
                     _buildThumbnailPlaceholder(),
-                errorWidget: (
-                  BuildContext context,
-                  String url,
-                  Object error,
-                ) =>
+                errorWidget: (BuildContext context, String url, Object error) =>
                     _buildThumbnailPlaceholder(),
               ),
             Positioned(
@@ -236,7 +228,7 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
   /// 创建封面地址缺失或加载失败时使用的本地占位图。
   Widget _buildThumbnailPlaceholder() {
     return ColoredBox(
-      color: Theme.of(context).colorScheme.surfaceVariant,
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
       child: const Center(
         child: Icon(Icons.play_arrow_rounded, color: Colors.black45),
       ),
@@ -247,7 +239,7 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
   Widget _buildThumbnailBadge(String text) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.72),
+        color: Colors.black.withValues(alpha: 0.72),
         borderRadius: BorderRadius.circular(4),
       ),
       child: Padding(
@@ -378,9 +370,7 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
           hintText: '搜索视频标题、UP 主或 BV 号',
           prefixIcon: const Icon(Icons.search_rounded),
           isDense: true,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
         ),
       ),
     );
@@ -478,9 +468,7 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
     }
     final AccountDataPage<FavoriteVideo>? page = _page;
     if (page == null) {
-      return _buildStatusState(
-        AccountDataPage<FavoriteVideo>.unavailable(),
-      );
+      return _buildStatusState(AccountDataPage<FavoriteVideo>.unavailable());
     }
     if (!page.isSuccess) {
       return _buildStatusState(page);

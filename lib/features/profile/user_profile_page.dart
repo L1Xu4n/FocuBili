@@ -91,8 +91,8 @@ class _UserProfilePageState extends State<UserProfilePage>
 
   /// 读取本机观看记录并按 BV 号建立索引，让投稿封面能快速判断是否看过。
   Future<void> _loadWatchHistory() async {
-    final List<WatchHistoryEntry> entries =
-        await _watchHistoryService.loadHistory();
+    final List<WatchHistoryEntry> entries = await _watchHistoryService
+        .loadHistory();
     if (!mounted) {
       return;
     }
@@ -144,8 +144,9 @@ class _UserProfilePageState extends State<UserProfilePage>
       });
     }
     try {
-      final CreatorProfile profile =
-          await _publicContentService.loadProfile(widget.mid);
+      final CreatorProfile profile = await _publicContentService.loadProfile(
+        widget.mid,
+      );
       if (!mounted) {
         return;
       }
@@ -177,8 +178,10 @@ class _UserProfilePageState extends State<UserProfilePage>
       });
     }
     try {
-      final CreatorContentPage<Object> result =
-          await _loadContentPage(requestedTab, 1);
+      final CreatorContentPage<Object> result = await _loadContentPage(
+        requestedTab,
+        1,
+      );
       if (!mounted || requestedTab != _selectedTab) {
         return;
       }
@@ -209,11 +212,11 @@ class _UserProfilePageState extends State<UserProfilePage>
       case _CreatorTab.videos:
         final CreatorContentPage<CreatorVideo> result =
             await _publicContentService.loadVideos(
-          widget.mid,
-          page: page,
-          keyword: _videoKeyword,
-          order: _videoOrder,
-        );
+              widget.mid,
+              page: page,
+              keyword: _videoKeyword,
+              order: _videoOrder,
+            );
         return CreatorContentPage<Object>(
           items: result.items,
           page: result.page,
@@ -296,9 +299,9 @@ class _UserProfilePageState extends State<UserProfilePage>
             children: <Widget>[
               Text(
                 '共${_totalCount > 0 ? _totalCount : _items.length}投稿',
-                style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
               ),
               const Spacer(),
               PopupMenuButton<CreatorVideoOrder>(
@@ -313,9 +316,9 @@ class _UserProfilePageState extends State<UserProfilePage>
                       .map(
                         (CreatorVideoOrder order) =>
                             PopupMenuItem<CreatorVideoOrder>(
-                          value: order,
-                          child: Text(_videoOrderLabel(order)),
-                        ),
+                              value: order,
+                              child: Text(_videoOrderLabel(order)),
+                            ),
                       )
                       .toList(growable: false);
                 },
@@ -379,8 +382,10 @@ class _UserProfilePageState extends State<UserProfilePage>
     final _CreatorTab requestedTab = _selectedTab;
     setState(() => _loadingMore = true);
     try {
-      final CreatorContentPage<Object> result =
-          await _loadContentPage(requestedTab, _page + 1);
+      final CreatorContentPage<Object> result = await _loadContentPage(
+        requestedTab,
+        _page + 1,
+      );
       if (!mounted || requestedTab != _selectedTab) {
         return;
       }
@@ -405,8 +410,9 @@ class _UserProfilePageState extends State<UserProfilePage>
     List<Object> incoming,
     _CreatorTab tab,
   ) {
-    final Set<String> keys =
-        current.map((Object item) => _contentKey(item, tab)).toSet();
+    final Set<String> keys = current
+        .map((Object item) => _contentKey(item, tab))
+        .toSet();
     return List<Object>.unmodifiable(<Object>[
       ...current,
       ...incoming.where((Object item) => keys.add(_contentKey(item, tab))),
@@ -446,8 +452,8 @@ class _UserProfilePageState extends State<UserProfilePage>
   bool _isVideoDisplayed(String bvid) {
     return _selectedTab == _CreatorTab.videos &&
         _items.whereType<CreatorVideo>().any(
-              (CreatorVideo item) => item.bvid == bvid,
-            );
+          (CreatorVideo item) => item.bvid == bvid,
+        );
   }
 
   /// 在最多两个并发请求的限制内依次补查投稿详情，避免同时请求整屏视频。
@@ -497,10 +503,7 @@ class _UserProfilePageState extends State<UserProfilePage>
       if (!mounted) {
         return;
       }
-      await Navigator.of(context).pushNamed(
-        AppRoutes.player,
-        arguments: video,
-      );
+      await Navigator.of(context).pushNamed(AppRoutes.player, arguments: video);
       await _loadWatchHistory();
     } catch (error) {
       if (mounted) {
@@ -540,10 +543,7 @@ class _UserProfilePageState extends State<UserProfilePage>
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          duration: const Duration(seconds: 3),
-        ),
+        SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
       );
   }
 
@@ -606,16 +606,12 @@ class _UserProfilePageState extends State<UserProfilePage>
   }
 
   /// 创建远程图片加载中或失败时的固定尺寸占位。
-  Widget _buildImagePlaceholder(
-    double width,
-    double height,
-    IconData icon,
-  ) {
+  Widget _buildImagePlaceholder(double width, double height, IconData icon) {
     return SizedBox(
       width: width,
       height: height,
       child: ColoredBox(
-        color: Theme.of(context).colorScheme.surfaceVariant,
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
         child: Icon(icon),
       ),
     );
@@ -708,8 +704,8 @@ class _UserProfilePageState extends State<UserProfilePage>
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w800,
-                      ),
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
               ),
               const SizedBox(width: 8),
@@ -770,12 +766,15 @@ class _UserProfilePageState extends State<UserProfilePage>
     final int partCount = _partCountFor(item);
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
-        final double thumbnailWidth =
-            (constraints.maxWidth * 0.42).clamp(148, 196).toDouble();
-        final double thumbnailHeight =
-            (thumbnailWidth * 9 / 16).clamp(92, 112).toDouble();
-        final Color onSurfaceVariant =
-            Theme.of(context).colorScheme.onSurfaceVariant;
+        final double thumbnailWidth = (constraints.maxWidth * 0.42)
+            .clamp(148, 196)
+            .toDouble();
+        final double thumbnailHeight = (thumbnailWidth * 9 / 16)
+            .clamp(92, 112)
+            .toDouble();
+        final Color onSurfaceVariant = Theme.of(
+          context,
+        ).colorScheme.onSurfaceVariant;
         return Material(
           color: Colors.transparent,
           borderRadius: BorderRadius.circular(12),
@@ -1027,8 +1026,10 @@ class _UserProfilePageState extends State<UserProfilePage>
                       ),
                       child: Text(
                         '${item.totalCount} 支视频',
-                        style:
-                            const TextStyle(color: Colors.white, fontSize: 11),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                        ),
                       ),
                     ),
                   ),
@@ -1078,13 +1079,11 @@ class _UserProfilePageState extends State<UserProfilePage>
     }
     if (_items.isEmpty) {
       return Center(
-        child: Text(
-          switch (_selectedTab) {
-            _CreatorTab.videos => '暂无公开投稿',
-            _CreatorTab.articles => '暂无公开专栏',
-            _CreatorTab.collections => '暂无公开合集',
-          },
-        ),
+        child: Text(switch (_selectedTab) {
+          _CreatorTab.videos => '暂无公开投稿',
+          _CreatorTab.articles => '暂无公开专栏',
+          _CreatorTab.collections => '暂无公开合集',
+        }),
       );
     }
     if (_selectedTab == _CreatorTab.articles) {
@@ -1167,26 +1166,20 @@ class _UserProfilePageState extends State<UserProfilePage>
   /// 创建带可折叠资料头的公开主页，滚动后固定顶栏和内容标签并扩大视频区域。
   @override
   Widget build(BuildContext context) {
-    final String title = _profile?.name ??
+    final String title =
+        _profile?.name ??
         (widget.initialName.isEmpty ? '用户主页' : widget.initialName);
     return Scaffold(
       body: NestedScrollView(
         key: const Key('creator-profile-scroll'),
-        headerSliverBuilder: (
-          BuildContext context,
-          bool innerBoxIsScrolled,
-        ) {
+        headerSliverBuilder: (BuildContext context, bool innerBoxIsScrolled) {
           return <Widget>[
             SliverAppBar(
               key: const Key('creator-profile-app-bar'),
               pinned: true,
               expandedHeight: 285,
               forceElevated: innerBoxIsScrolled,
-              title: Text(
-                title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
+              title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
               actions: <Widget>[
                 if (_selectedTab == _CreatorTab.videos)
                   IconButton(

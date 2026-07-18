@@ -8,7 +8,7 @@ import '../../services/media_cache_service.dart';
 class CacheManagementPage extends StatefulWidget {
   /// 创建可注入缓存服务的页面，测试时可传入不依赖 Android 的假服务。
   const CacheManagementPage({super.key, MediaCacheService? service})
-      : _service = service;
+    : _service = service;
 
   final MediaCacheService? _service;
 
@@ -123,10 +123,7 @@ class _CacheManagementPageState extends State<CacheManagementPage> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          duration: const Duration(seconds: 3),
-        ),
+        SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
       );
   }
 
@@ -165,7 +162,7 @@ class _CacheManagementPageState extends State<CacheManagementPage> {
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: DropdownButtonFormField<int>(
-          value: status.capacityBytes,
+          initialValue: status.capacityBytes,
           decoration: const InputDecoration(
             labelText: '缓存上限',
             border: OutlineInputBorder(),
@@ -239,8 +236,9 @@ class _CacheManagementPageState extends State<CacheManagementPage> {
         actions: <Widget>[
           IconButton(
             // 刷新按钮函数只重新读取用量，不会修改缓存内容。
-            onPressed:
-                _loading || _mutating ? null : () => unawaited(_loadStatus()),
+            onPressed: _loading || _mutating
+                ? null
+                : () => unawaited(_loadStatus()),
             icon: const Icon(Icons.refresh_rounded),
             tooltip: '刷新缓存状态',
           ),
