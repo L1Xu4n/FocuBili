@@ -6,10 +6,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:focubili/app.dart';
+import 'package:focubili/features/focus/focus_timer_controller.dart';
 import 'package:focubili/features/player/player_page.dart';
 import 'package:focubili/features/profile/login_page.dart';
 import 'package:focubili/features/search/search_page.dart';
 import 'package:focubili/models/video_preview.dart';
+import 'package:focubili/models/focus_session.dart';
 import 'package:focubili/models/video_note.dart';
 import 'package:focubili/models/video_shot_preview.dart';
 import 'package:focubili/models/watch_history_entry.dart';
@@ -18,7 +20,9 @@ import 'package:focubili/services/device_status_service.dart';
 import 'package:focubili/services/danmaku_preferences_service.dart';
 import 'package:focubili/services/native_playback_service.dart';
 import 'package:focubili/services/player_overlay_service.dart';
+import 'package:focubili/services/playback_preferences_service.dart';
 import 'package:focubili/services/search_history_service.dart';
+import 'package:focubili/services/first_launch_service.dart';
 import 'package:focubili/services/watch_history_service.dart';
 import 'package:focubili/services/video_shot_service.dart';
 import 'package:focubili/services/video_note_service.dart';
@@ -52,7 +56,12 @@ class _RecordingJsonRequest {
           "cid": 137649199,
           "title": "真实接口标题",
           "duration": 213,
-          "desc": "这是一段真实简介",
+          "desc": "这是一段@真实简介\\nhttps://example.com/course！",
+          "desc_v2": [
+            {"raw_text": "这是一段", "type": 2, "biz_id": 0},
+            {"raw_text": "@真实简介", "type": 1, "biz_id": 778899},
+            {"raw_text": "\\nhttps://example.com/course！", "type": 2, "biz_id": 0}
+          ],
           "pubdate": 1704067200,
           "pic": "http://i0.hdslb.com/main.jpg",
           "owner": {
@@ -251,6 +260,7 @@ class _FakePlaybackService implements PlaybackService {
   final bool rejectQuality;
   final bool emitReadyOnOpen;
   int pictureInPictureRequests = 0;
+  int pauseRequests = 0;
   int seekByRequests = 0;
   int seekToRequests = 0;
   int frameCaptureRequests = 0;
@@ -301,6 +311,7 @@ class _FakePlaybackService implements PlaybackService {
   /// 模拟原生播放器暂停并推送新状态。
   @override
   Future<void> pause() async {
+    pauseRequests += 1;
     _isPlaying = false;
     _emit();
   }
@@ -680,7 +691,13 @@ void main() {
     expect(video.parts.last.title, '第二P');
     expect(video.aid, 116916878313252);
     expect(video.ownerMid, 3546574294616231);
-    expect(video.description, '这是一段真实简介');
+    expect(video.description, '这是一段@真实简介\nhttps://example.com/course！');
+    expect(video.descriptionSegments, hasLength(5));
+    expect(video.descriptionSegments[1].text, '@真实简介');
+    expect(video.descriptionSegments[1].mentionedMid, 778899);
+    expect(video.descriptionSegments[3].text, 'https://example.com/course');
+    expect(video.descriptionSegments[3].linkUri?.host, 'example.com');
+    expect(video.descriptionSegments.last.text, '！');
     expect(
       video.thumbnailUrl,
       'https://i0.hdslb.com/main.jpg@320w_200h_1c.webp',
@@ -778,6 +795,10 @@ void main() {
   });
 
   testWidgets('新框架首页可以正常启动', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      FirstLaunchService.agreementAcceptedKey: true,
+      FirstLaunchService.loginGuideShownKey: true,
+    });
     await tester.pumpWidget(const FocuBiliApp());
     await tester.pumpAndSettle();
 
@@ -964,6 +985,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(service._speed, 1.5);
+    speedMenu.onSelected!(3);
+    await tester.pumpAndSettle();
+    expect(service._speed, 3);
   });
 
   /// 验证清晰度菜单能把选中的质量编号传给原生播放器。
@@ -1110,6 +1134,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('part-selector-button')), findsNothing);
+    expect(find.byKey(const Key('previous-part-button')), findsOneWidget);
+    expect(find.byKey(const Key('next-part-button')), findsOneWidget);
     expect(
       find.byKey(const Key('detail-part-selector-expand')),
       findsOneWidget,
@@ -1118,6 +1144,44 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(service.openedCid, 137649200);
+  });
+
+  /// 验证首页创建的任务只在用户确认关联且当前分P实际播放后开始计时。
+  testWidgets('播放器确认关联首页专注并跟随真实播放状态', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final FocusTimerController controller = FocusTimerController(
+      tickInterval: const Duration(days: 1),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await controller.startFocus(
+      goal: '关联当前课程',
+      duration: const Duration(minutes: 25),
+      startImmediately: false,
+    );
+    final _FakePlaybackService service = _FakePlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _createMultiPartVideo(),
+          playbackService: service,
+          focusTimerController: controller,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('是否将“关联当前课程”关联'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('confirm-focus-video-association')));
+    await tester.pumpAndSettle();
+    expect(controller.activeSession?.sourceBvid, _createMultiPartVideo().bvid);
+    expect(controller.activeSession?.status, FocusSessionStatus.paused);
+    expect(find.textContaining('已关联视频：'), findsOneWidget);
+
+    await service.play();
+    await tester.pump();
+    expect(controller.activeSession?.status, FocusSessionStatus.running);
   });
 
   /// 验证全屏底栏选集会打开右侧双列面板，并能从面板切换分P。
@@ -1142,9 +1206,19 @@ void main() {
     );
     fullscreenButton.onPressed!();
     await tester.pumpAndSettle();
+    final Rect partSelectorRect = tester.getRect(
+      find.byKey(const Key('part-selector-button')),
+    );
+    final Rect qualityMenuRect = tester.getRect(
+      find.byKey(const Key('quality-menu')),
+    );
+    expect(
+      (partSelectorRect.center.dy - qualityMenuRect.center.dy).abs(),
+      lessThan(1),
+    );
     tester
-        .widget<TextButton>(find.byKey(const Key('part-selector-button')))
-        .onPressed!();
+        .widget<InkWell>(find.byKey(const Key('part-selector-button')))
+        .onTap!();
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('fullscreen-part-selector')), findsOneWidget);
@@ -1199,13 +1273,97 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('2024-01-02 03:04'), findsOneWidget);
-    final Text descriptionText = tester.widget<Text>(find.text(description));
+    final Text descriptionText = tester.widget<Text>(
+      find.byKey(const Key('video-description')),
+    );
     expect(descriptionText.maxLines, 3);
     expect(descriptionText.overflow, TextOverflow.ellipsis);
+    expect(find.text('展开'), findsOneWidget);
     await tester.longPress(find.byKey(const Key('copy-bvid')));
     await tester.pump();
     expect(copiedText, 'BV1GJ411x7h7');
     expect(find.text('已复制 BV1GJ411x7h7'), findsOneWidget);
+  });
+
+  /// 验证结构化简介把 @UP 和链接标蓝，且外链必须确认风险后才交给默认浏览器启动器。
+  testWidgets('视频简介提及可点击且外链先确认风险', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final Uri externalUri = Uri.parse('https://example.com/course');
+    Uri? launchedUri;
+    final VideoPreview video = VideoPreview(
+      bvid: 'BV1GJ411x7h7',
+      cid: 137649199,
+      title: '结构化简介测试',
+      ownerName: '测试UP',
+      description: '欢迎@课程老师，资料：https://example.com/course',
+      descriptionSegments: <VideoDescriptionSegment>[
+        const VideoDescriptionSegment(text: '欢迎'),
+        const VideoDescriptionSegment(text: '@课程老师', mentionedMid: 778899),
+        const VideoDescriptionSegment(text: '，资料：'),
+        VideoDescriptionSegment(
+          text: externalUri.toString(),
+          linkUri: externalUri,
+        ),
+      ],
+      parts: const <VideoPart>[
+        VideoPart(
+          pageNumber: 1,
+          cid: 137649199,
+          title: '第一P',
+          duration: Duration(minutes: 1),
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: video,
+          playbackService: _FakePlaybackService(),
+          externalLinkLauncher: (Uri uri) async {
+            launchedUri = uri;
+            return true;
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final Finder mention = find.byKey(const Key('description-mention-778899'));
+    final Finder link = find.byKey(Key('description-link-$externalUri'));
+    expect(mention, findsOneWidget);
+    expect(link, findsOneWidget);
+    expect(
+      tester
+          .widget<Text>(
+            find.descendant(of: mention, matching: find.byType(Text)),
+          )
+          .style
+          ?.color,
+      isNotNull,
+    );
+    expect(
+      tester
+          .widget<Text>(find.descendant(of: link, matching: find.byType(Text)))
+          .style
+          ?.decoration,
+      TextDecoration.underline,
+    );
+
+    await tester.tap(link);
+    await tester.pumpAndSettle();
+    expect(find.text('即将打开外部链接'), findsOneWidget);
+    expect(find.textContaining('内容和安全性'), findsOneWidget);
+    expect(launchedUri, isNull);
+    await tester.tap(find.byKey(const Key('cancel-external-link')));
+    await tester.pumpAndSettle();
+    expect(launchedUri, isNull);
+
+    await tester.tap(link);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('confirm-external-link')));
+    await tester.pumpAndSettle();
+    expect(launchedUri, externalUri);
   });
 
   /// 验证播放页把单视频分P和多视频 UGC 合集放在不同区域，且不提供评论或发弹幕入口。
@@ -1543,6 +1701,29 @@ void main() {
     expect(playbackService._position, const Duration(seconds: 42));
   });
 
+  /// 验证专注记录跳转使用专注文案，不再错误显示为笔记位置。
+  testWidgets('播放器显示专注记录跳转位置', (WidgetTester tester) async {
+    final _FakePlaybackService playbackService = _FakePlaybackService(
+      duration: const Duration(minutes: 25),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _createCollectionVideo(),
+          playbackService: playbackService,
+          initialPartCid: 137649200,
+          initialPosition: const Duration(minutes: 15),
+          initialPositionSource: PlayerInitialPositionSource.focus,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(playbackService._position, const Duration(minutes: 15));
+    expect(find.text('已跳转到专注位置：15:00'), findsOneWidget);
+    expect(find.textContaining('笔记位置'), findsNothing);
+  });
+
   /// 验证合集视频复用当前播放器加载，并在返回时恢复切换前的视频而不退出页面。
   testWidgets('合集切换不会卡住且返回上一支视频', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
@@ -1625,8 +1806,8 @@ void main() {
     expect(find.textContaining('已跳转到上次分P'), findsNothing);
   });
 
-  /// 验证播放中长按画面会临时使用二倍速，松手后恢复原速度。
-  testWidgets('长按播放画面临时切换二倍速', (WidgetTester tester) async {
+  /// 验证播放中长按画面会临时使用三倍速，松手后恢复原速度。
+  testWidgets('长按播放画面临时切换三倍速', (WidgetTester tester) async {
     final _FakePlaybackService service = _FakePlaybackService();
     await tester.pumpWidget(
       MaterialApp(
@@ -1645,13 +1826,13 @@ void main() {
     final TestGesture gesture = await tester.startGesture(playerBounds.center);
     await tester.pump(const Duration(milliseconds: 650));
 
-    expect(service._speed, 2);
-    expect(find.text('二倍速中>>'), findsOneWidget);
+    expect(service._speed, 3);
+    expect(find.text('三倍速中>>'), findsOneWidget);
 
     await gesture.up();
     await tester.pump();
     expect(service._speed, 1);
-    expect(find.text('二倍速中>>'), findsNothing);
+    expect(find.text('三倍速中>>'), findsNothing);
   });
 
   /// 验证横向拖动无需等待长按即可预览，并只在松手时提交一次进度跳转。
@@ -1909,16 +2090,28 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  /// 验证全屏标题上方显示小型时间与电量栏，且不依赖系统安全区推挤布局。
-  testWidgets('全屏顶部显示时间和电量', (WidgetTester tester) async {
+  /// 验证全屏顶部同排显示长目标、剩余时间、本地时间和电量，长目标会进入循环滚动。
+  testWidgets('全屏顶部显示专注目标时间和电量', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final FocusTimerController focusController = FocusTimerController(
+      tickInterval: const Duration(days: 1),
+    );
+    addTearDown(focusController.dispose);
+    await focusController.initialize();
+    const String longGoal = '完成今天最重要的Flutter专注计时功能';
+    await focusController.startFocus(
+      goal: longGoal,
+      duration: const Duration(minutes: 25),
+    );
     await tester.pumpWidget(
       MaterialApp(
         home: PlayerPage(
           video: VideoPreview.placeholder(),
           playbackService: _FakePlaybackService(),
           deviceStatusService: const _FakeDeviceStatusService(73),
+          focusTimerController: focusController,
         ),
       ),
     );
@@ -1929,15 +2122,85 @@ void main() {
       ),
     );
     fullscreenButton.onPressed!();
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 300));
     await tester.pump();
 
     expect(find.byKey(const Key('fullscreen-device-status')), findsOneWidget);
     expect(find.text('73%'), findsOneWidget);
+    expect(find.byKey(const Key('fullscreen-focus-status')), findsOneWidget);
+    expect(find.byKey(const Key('fullscreen-focus-remaining')), findsOneWidget);
+    expect(
+      tester.getSize(find.byKey(const Key('fullscreen-focus-goal'))).width,
+      lessThanOrEqualTo(120),
+    );
+    final Text focusRemaining = tester.widget<Text>(
+      find.byKey(const Key('fullscreen-focus-remaining')),
+    );
+    expect(focusRemaining.data, matches(RegExp(r'^\d{2}:\d{2}$')));
+    expect(find.text(longGoal), findsNWidgets(2));
     expect(
       tester.getTopLeft(find.byKey(const Key('fullscreen-device-status'))).dy,
       lessThan(24),
     );
+    final double focusY = tester
+        .getCenter(find.byKey(const Key('fullscreen-focus-status')))
+        .dy;
+    expect(
+      tester.getCenter(find.byKey(const Key('fullscreen-local-clock'))).dy,
+      closeTo(focusY, 2),
+    );
+    expect(
+      tester.getCenter(find.byKey(const Key('fullscreen-battery'))).dy,
+      closeTo(focusY, 2),
+    );
+    await focusController.endFocusEarly();
+    await tester.pump();
+  });
+
+  /// 验证播放器可以打开专注控制面板，并在专注结束时暂停真实播放服务。
+  testWidgets('播放器管理专注并在结束时自动暂停', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final FocusTimerController focusController = FocusTimerController(
+      tickInterval: const Duration(days: 1),
+    );
+    addTearDown(focusController.dispose);
+    await focusController.initialize();
+    await focusController.startFocus(
+      goal: '完成播放器专注联动',
+      duration: const Duration(minutes: 25),
+    );
+    final _FakePlaybackService playbackService = _FakePlaybackService();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: playbackService,
+          focusTimerController: focusController,
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byKey(const Key('player-focus-button')), findsOneWidget);
+    final IconButton focusButton = tester.widget<IconButton>(
+      find.byKey(const Key('player-focus-button')),
+    );
+    focusButton.onPressed!();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('player-focus-active')), findsOneWidget);
+    await tester.tap(find.byTooltip('关闭'));
+    await tester.pumpAndSettle();
+
+    await playbackService.play();
+    await tester.pump();
+    await focusController.endFocusEarly();
+    await tester.pump();
+
+    expect(playbackService.pauseRequests, 1);
+    expect(find.text('专注已结束，视频已暂停'), findsOneWidget);
   });
 
   /// 验证全屏更多菜单可选择真实字幕轨道，并在播放画面中显示当前时间段的文字。
@@ -2069,11 +2332,13 @@ void main() {
     await tester.enterText(find.byType(TextField), '星');
     await tester.pump(const Duration(milliseconds: 100));
 
-    final Rect fieldRect = tester.getRect(find.byType(TextField));
+    final Rect modeSelectorRect = tester.getRect(
+      find.byKey(const Key('search-mode-selector')),
+    );
     final Rect resultRect = tester.getRect(
       find.byKey(const Key('search-result-overlay')),
     );
-    expect(resultRect.top - fieldRect.bottom, lessThanOrEqualTo(1));
+    expect(resultRect.top - modeSelectorRect.bottom, lessThanOrEqualTo(1));
     expect(tester.takeException(), isNull);
   });
 
@@ -2140,6 +2405,112 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byTooltip('关闭弹幕'), findsOneWidget);
     expect((await preferencesService.load()).enabled, isTrue);
+  });
+
+  /// 验证全屏锁定后只有解锁按钮可操作，其他控制层完全隐藏且不接收触摸。
+  testWidgets('全屏锁定隐藏其他播放器按钮', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: _FakePlaybackService(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    tester
+        .widget<IconButton>(
+          find.byWidgetPredicate(
+            (Widget widget) => widget is IconButton && widget.tooltip == '进入全屏',
+          ),
+        )
+        .onPressed!();
+    await tester.pumpAndSettle();
+
+    final Finder lockButton = find.byKey(const Key('fullscreen-controls-lock'));
+    tester
+        .widget<IconButton>(
+          find.descendant(of: lockButton, matching: find.byType(IconButton)),
+        )
+        .onPressed!();
+    await tester.pump();
+
+    final AnimatedOpacity controls = tester.widget<AnimatedOpacity>(
+      find.byKey(const Key('player-controls')),
+    );
+    expect(controls.opacity, 0);
+    expect((controls.child! as IgnorePointer).ignoring, isTrue);
+    expect(find.byTooltip('解锁播放器'), findsOneWidget);
+  });
+
+  /// 验证全屏边缘的横向拖动属于系统导航安全区，不会提交视频回退。
+  testWidgets('全屏横滑避开左右系统导航安全区', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final _FakePlaybackService service = _FakePlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: service,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    tester
+        .widget<IconButton>(
+          find.byWidgetPredicate(
+            (Widget widget) => widget is IconButton && widget.tooltip == '进入全屏',
+          ),
+        )
+        .onPressed!();
+    await tester.pumpAndSettle();
+    final Rect surface = tester.getRect(
+      find.byKey(const Key('player-surface')),
+    );
+
+    await tester.dragFrom(
+      Offset(surface.left + 8, surface.center.dy),
+      const Offset(180, 0),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(service.seekToRequests, 0);
+    expect(service._position, Duration.zero);
+  });
+
+  /// 验证关闭双击快进后，右侧双击也只会切换播放而不快进。
+  testWidgets('关闭双击快进后双击任意位置切换播放', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    const PlaybackPreferencesService preferencesService =
+        PlaybackPreferencesService();
+    await preferencesService.saveDoubleTapSeekEnabled(false);
+    final _FakePlaybackService service = _FakePlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: service,
+          playbackPreferencesService: preferencesService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final Rect surface = tester.getRect(
+      find.byKey(const Key('player-surface')),
+    );
+    final Offset rightSide = Offset(surface.right - 24, surface.center.dy);
+
+    await tester.tapAt(rightSide);
+    await tester.pump(const Duration(milliseconds: 60));
+    await tester.tapAt(rightSide);
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(service._isPlaying, isTrue);
+    expect(service.seekByRequests, 0);
+    expect(service._position, Duration.zero);
   });
 
   /// 验证搜索记录保存在本地，并将重复内容移动到最前面。

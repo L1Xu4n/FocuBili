@@ -107,15 +107,15 @@ class PlaybackSnapshot {
     final Object? rawQualities = values['qualities'];
     final List<PlaybackQuality> qualities = rawQualities is List
         ? rawQualities
-            .whereType<Map>()
-            .map(
-              // 清晰度转换函数把平台 Map 隔离为稳定的 Dart 类型。
-              (Map<Object?, Object?> item) => PlaybackQuality.fromPlatformMap(
-                Map<Object?, Object?>.from(item),
-              ),
-            )
-            .where((PlaybackQuality quality) => quality.id > 0)
-            .toList(growable: false)
+              .whereType<Map>()
+              .map(
+                // 清晰度转换函数把平台 Map 隔离为稳定的 Dart 类型。
+                (Map<Object?, Object?> item) => PlaybackQuality.fromPlatformMap(
+                  Map<Object?, Object?>.from(item),
+                ),
+              )
+              .where((PlaybackQuality quality) => quality.id > 0)
+              .toList(growable: false)
         : const <PlaybackQuality>[];
     return PlaybackSnapshot(
       phase: PlaybackPhase.values.firstWhere(
@@ -279,18 +279,15 @@ class NativePlaybackService implements PlaybackService {
     if (quality <= 0) {
       throw ArgumentError.value(quality, 'quality', '需要有效的清晰度编号。');
     }
-    await _invokeVoid(
-      'open',
-      <String, Object?>{
-        'bvid': video.bvid.trim(),
-        'cid': targetPart.cid,
-        'pageNumber': targetPart.pageNumber,
-        'quality': quality,
-        'title': video.title,
-        'partTitle': targetPart.title,
-        'ownerName': video.ownerName,
-      },
-    );
+    await _invokeVoid('open', <String, Object?>{
+      'bvid': video.bvid.trim(),
+      'cid': targetPart.cid,
+      'pageNumber': targetPart.pageNumber,
+      'quality': quality,
+      'title': video.title,
+      'partTitle': targetPart.title,
+      'ownerName': video.ownerName,
+    });
   }
 
   /// 向 Android 原生播放器发送继续播放命令。
@@ -366,19 +363,17 @@ class NativePlaybackService implements PlaybackService {
   /// 检查亮度比例后交给 Android 当前播放窗口。
   @override
   Future<void> setScreenBrightness(double brightness) {
-    return _invokeVoid(
-      'setScreenBrightness',
-      <String, Object?>{'value': brightness.clamp(0.01, 1)},
-    );
+    return _invokeVoid('setScreenBrightness', <String, Object?>{
+      'value': brightness.clamp(0.01, 1),
+    });
   }
 
   /// 检查音量比例后交给 Android 媒体音量通道。
   @override
   Future<void> setMediaVolume(double volume) {
-    return _invokeVoid(
-      'setMediaVolume',
-      <String, Object?>{'value': volume.clamp(0, 1)},
-    );
+    return _invokeVoid('setMediaVolume', <String, Object?>{
+      'value': volume.clamp(0, 1),
+    });
   }
 
   /// 把当前视频宽高比发送给 Android，并返回系统是否成功进入画中画。

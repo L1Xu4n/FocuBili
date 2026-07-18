@@ -32,7 +32,7 @@ class EmptyVideoShotService implements VideoShotService {
 class BilibiliVideoShotService implements VideoShotService {
   /// 创建正式预览服务；测试可注入固定 JSON 请求。
   BilibiliVideoShotService({JsonRequest? requestJson})
-      : _requestJson = requestJson ?? _requestPublicJson;
+    : _requestJson = requestJson ?? _requestPublicJson;
 
   static const String _apiHost = 'api.bilibili.com';
   static const String _path = '/x/player/videoshot';
@@ -51,15 +51,11 @@ class BilibiliVideoShotService implements VideoShotService {
     }
     try {
       final String responseText = await _requestJson(
-        Uri.https(
-          _apiHost,
-          _path,
-          <String, String>{
-            'bvid': bvid,
-            'cid': cid.toString(),
-            'index': '1',
-          },
-        ),
+        Uri.https(_apiHost, _path, <String, String>{
+          'bvid': bvid,
+          'cid': cid.toString(),
+          'index': '1',
+        }),
       );
       final Object? decoded = jsonDecode(responseText);
       if (decoded is! Map || (decoded['code'] as num?)?.toInt() != 0) {
@@ -102,8 +98,9 @@ class BilibiliVideoShotService implements VideoShotService {
 
   /// 读取大于零的整数，非法字段返回零。
   int _readPositiveInt(Object? value) {
-    final int? number =
-        value is num ? value.toInt() : int.tryParse(value?.toString() ?? '');
+    final int? number = value is num
+        ? value.toInt()
+        : int.tryParse(value?.toString() ?? '');
     return number == null || number <= 0 ? 0 : number;
   }
 
@@ -112,13 +109,17 @@ class BilibiliVideoShotService implements VideoShotService {
     if (value is! List) {
       return const <int>[];
     }
-    final List<int> indexes = value
-        .map((Object? item) =>
-            item is num ? item.toInt() : int.tryParse(item?.toString() ?? ''))
-        .whereType<int>()
-        .where((int item) => item >= 0)
-        .toList(growable: true)
-      ..sort();
+    final List<int> indexes =
+        value
+            .map(
+              (Object? item) => item is num
+                  ? item.toInt()
+                  : int.tryParse(item?.toString() ?? ''),
+            )
+            .whereType<int>()
+            .where((int item) => item >= 0)
+            .toList(growable: true)
+          ..sort();
     return indexes;
   }
 

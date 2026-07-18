@@ -11,7 +11,7 @@ typedef VideoNotePreferencesLoader = Future<SharedPreferences> Function();
 class VideoNoteService {
   /// 创建时间点笔记服务；测试可注入内存偏好设置读取器。
   VideoNoteService({VideoNotePreferencesLoader? preferencesLoader})
-      : _preferencesLoader = preferencesLoader ?? SharedPreferences.getInstance;
+    : _preferencesLoader = preferencesLoader ?? SharedPreferences.getInstance;
 
   static const String storageKey = 'video_timepoint_notes_v1';
   static const int maximumEntries = 500;
@@ -79,8 +79,9 @@ class VideoNoteService {
           right.updatedAt.compareTo(left.updatedAt),
     );
     final List<VideoNote> limited = notes.take(maximumEntries).toList();
-    final Set<String> retainedIds =
-        limited.map((VideoNote item) => item.id).toSet();
+    final Set<String> retainedIds = limited
+        .map((VideoNote item) => item.id)
+        .toSet();
     final List<String?> removedFrames = notes
         .where((VideoNote item) => !retainedIds.contains(item.id))
         .map((VideoNote item) => item.framePath)
@@ -108,9 +109,9 @@ class VideoNoteService {
       preferences.getString(storageKey),
     );
     final VideoNote? removed = notes.cast<VideoNote?>().firstWhere(
-          (VideoNote? item) => item?.id == normalizedId,
-          orElse: () => null,
-        );
+      (VideoNote? item) => item?.id == normalizedId,
+      orElse: () => null,
+    );
     notes.removeWhere((VideoNote item) => item.id == normalizedId);
     await preferences.setString(
       storageKey,

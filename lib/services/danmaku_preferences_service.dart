@@ -11,7 +11,7 @@ typedef DanmakuPreferencesLoader = Future<SharedPreferences> Function();
 class DanmakuPreferencesService {
   /// 创建服务；生产环境读取真实 SharedPreferences，测试可注入内存实例或失败读取器。
   DanmakuPreferencesService({DanmakuPreferencesLoader? preferencesLoader})
-      : _preferencesLoader = preferencesLoader ?? SharedPreferences.getInstance;
+    : _preferencesLoader = preferencesLoader ?? SharedPreferences.getInstance;
 
   static const String storageKey = 'focubili_danmaku_preferences_v1';
   final DanmakuPreferencesLoader _preferencesLoader;
@@ -26,9 +26,7 @@ class DanmakuPreferencesService {
       }
       final Object? decoded = jsonDecode(raw);
       return decoded is Map
-          ? DanmakuPreferences.fromJson(
-              Map<String, dynamic>.from(decoded),
-            )
+          ? DanmakuPreferences.fromJson(Map<String, dynamic>.from(decoded))
           : DanmakuPreferences();
     } catch (_) {
       return DanmakuPreferences();

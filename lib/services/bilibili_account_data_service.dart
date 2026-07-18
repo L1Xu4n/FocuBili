@@ -25,17 +25,14 @@ class BilibiliAccountDataResponse {
 /// 抽象账号数据的只读 GET 请求，测试时可替换为不访问网络的假实现。
 abstract interface class BilibiliAccountDataApi {
   /// 使用当前会话临时读取一个固定账号数据地址，不执行任何写操作。
-  Future<BilibiliAccountDataResponse> get(
-    Uri endpoint,
-    String cookieHeader,
-  );
+  Future<BilibiliAccountDataResponse> get(Uri endpoint, String cookieHeader);
 }
 
 /// 使用 Dart HttpClient 请求 B 站只读账号数据接口的默认网络实现。
 class BilibiliHttpAccountDataApi implements BilibiliAccountDataApi {
   /// 创建网络客户端；测试可提供受控的 HttpClient 工厂。
   BilibiliHttpAccountDataApi({HttpClient Function()? clientFactory})
-      : _clientFactory = clientFactory ?? HttpClient.new;
+    : _clientFactory = clientFactory ?? HttpClient.new;
 
   static const String _desktopUserAgent =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -52,8 +49,9 @@ class BilibiliHttpAccountDataApi implements BilibiliAccountDataApi {
   ) async {
     final HttpClient client = _clientFactory();
     try {
-      final HttpClientRequest request =
-          await client.getUrl(endpoint).timeout(const Duration(seconds: 15));
+      final HttpClientRequest request = await client
+          .getUrl(endpoint)
+          .timeout(const Duration(seconds: 15));
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
       request.headers.set(HttpHeaders.cookieHeader, cookieHeader);
       request.headers.set(HttpHeaders.userAgentHeader, _desktopUserAgent);
@@ -62,8 +60,8 @@ class BilibiliHttpAccountDataApi implements BilibiliAccountDataApi {
         'https://www.bilibili.com/',
       );
       final HttpClientResponse response = await request.close().timeout(
-            const Duration(seconds: 15),
-          );
+        const Duration(seconds: 15),
+      );
       return BilibiliAccountDataResponse(
         statusCode: response.statusCode,
         body: await response.transform(utf8.decoder).join(),
@@ -88,7 +86,7 @@ class AuthBackedAccountSessionProvider
     implements BilibiliAccountSessionProvider {
   /// 创建复用现有官方网页登录会话的适配器，不保存 Cookie 副本。
   AuthBackedAccountSessionProvider({BilibiliAuthService? authService})
-      : _authService = authService ?? BilibiliAuthService();
+    : _authService = authService ?? BilibiliAuthService();
 
   final BilibiliAuthService _authService;
 
@@ -111,9 +109,8 @@ class BilibiliAccountDataService {
   BilibiliAccountDataService({
     BilibiliAccountSessionProvider? sessionProvider,
     BilibiliAccountDataApi? api,
-  })  : _sessionProvider =
-            sessionProvider ?? AuthBackedAccountSessionProvider(),
-        _api = api ?? BilibiliHttpAccountDataApi();
+  }) : _sessionProvider = sessionProvider ?? AuthBackedAccountSessionProvider(),
+       _api = api ?? BilibiliHttpAccountDataApi();
 
   static const String _apiHost = 'api.bilibili.com';
   static const String _favoriteFoldersPath =
@@ -192,19 +189,16 @@ class BilibiliAccountDataService {
     if (sessionFailure != null) {
       return sessionFailure;
     }
-    final Uri endpoint = Uri.https(
-      _apiHost,
-      _favoriteResourcesPath,
-      <String, String>{
-        'media_id': mediaId.toString(),
-        'platform': 'web',
-        'pn': safePage.toString(),
-        'ps': '20',
-        'order': 'mtime',
-        'type': '0',
-        'tid': '0',
-      },
-    );
+    final Uri endpoint =
+        Uri.https(_apiHost, _favoriteResourcesPath, <String, String>{
+          'media_id': mediaId.toString(),
+          'platform': 'web',
+          'pn': safePage.toString(),
+          'ps': '20',
+          'order': 'mtime',
+          'type': '0',
+          'tid': '0',
+        });
     final _AccountApiResult response = await _request(endpoint, session);
     final AccountDataPage<FavoriteVideo>? responseFailure =
         _responseFailurePage<FavoriteVideo>(response, page: safePage);
@@ -245,16 +239,12 @@ class BilibiliAccountDataService {
     if (sessionFailure != null) {
       return sessionFailure;
     }
-    final Uri endpoint = Uri.https(
-      _apiHost,
-      _followingsPath,
-      <String, String>{
-        'vmid': session.account!.mid.toString(),
-        'pn': safePage.toString(),
-        'ps': '50',
-        'order': 'desc',
-      },
-    );
+    final Uri endpoint = Uri.https(_apiHost, _followingsPath, <String, String>{
+      'vmid': session.account!.mid.toString(),
+      'pn': safePage.toString(),
+      'ps': '50',
+      'order': 'desc',
+    });
     final _AccountApiResult response = await _request(endpoint, session);
     final AccountDataPage<FollowedCreator>? responseFailure =
         _responseFailurePage<FollowedCreator>(response, page: safePage);
@@ -277,8 +267,9 @@ class BilibiliAccountDataService {
       }
     }
     final int? totalCount = _readNonNegativeInt(data['total']);
-    final bool hasMore =
-        totalCount != null ? safePage * 50 < totalCount : creators.length == 50;
+    final bool hasMore = totalCount != null
+        ? safePage * 50 < totalCount
+        : creators.length == 50;
     return AccountDataPage<FollowedCreator>.success(
       items: creators,
       page: safePage,
@@ -298,16 +289,13 @@ class BilibiliAccountDataService {
     if (sessionFailure != null) {
       return sessionFailure;
     }
-    final Uri endpoint = Uri.https(
-      _apiHost,
-      _subscribedCollectionsPath,
-      <String, String>{
-        'up_mid': session.account!.mid.toString(),
-        'pn': safePage.toString(),
-        'ps': '20',
-        'platform': 'web',
-      },
-    );
+    final Uri endpoint =
+        Uri.https(_apiHost, _subscribedCollectionsPath, <String, String>{
+          'up_mid': session.account!.mid.toString(),
+          'pn': safePage.toString(),
+          'ps': '20',
+          'platform': 'web',
+        });
     final _AccountApiResult response = await _request(endpoint, session);
     final AccountDataPage<SubscribedCollection>? responseFailure =
         _responseFailurePage<SubscribedCollection>(response, page: safePage);
@@ -346,8 +334,8 @@ class BilibiliAccountDataService {
   /// 检查现有会话后才读取临时 Cookie，确保无登录时绝不发起账号数据请求。
   Future<_AccountReadSession> _openReadSession() async {
     try {
-      final BilibiliSessionState state =
-          await _sessionProvider.loadCurrentSession();
+      final BilibiliSessionState state = await _sessionProvider
+          .loadCurrentSession();
       switch (state.status) {
         case BilibiliSessionStatus.signedOut:
           return const _AccountReadSession.signedOut();
@@ -598,14 +586,16 @@ class BilibiliAccountDataService {
   String _normalizeHttpsUrl(String value) {
     final String withScheme = value.startsWith('//') ? 'https:$value' : value;
     final Uri? parsed = Uri.tryParse(withScheme);
-    final bool trustedHost = parsed != null &&
+    final bool trustedHost =
+        parsed != null &&
         (parsed.host.endsWith('.hdslb.com') ||
             parsed.host.endsWith('.biliimg.com'));
     if (parsed == null || !trustedHost) {
       return '';
     }
-    final Uri uri =
-        parsed.scheme == 'http' ? parsed.replace(scheme: 'https') : parsed;
+    final Uri uri = parsed.scheme == 'http'
+        ? parsed.replace(scheme: 'https')
+        : parsed;
     return uri.scheme == 'https' ? uri.toString() : '';
   }
 
@@ -661,33 +651,33 @@ class _AccountReadSession {
   const _AccountReadSession.ready({
     required this.account,
     required this.cookieHeader,
-  })  : status = _AccountReadSessionStatus.ready,
-        assert(account != null),
-        assert(cookieHeader != null);
+  }) : status = _AccountReadSessionStatus.ready,
+       assert(account != null),
+       assert(cookieHeader != null);
 
   /// 创建没有登录会话时的私有上下文。
   const _AccountReadSession.signedOut()
-      : status = _AccountReadSessionStatus.signedOut,
-        account = null,
-        cookieHeader = null;
+    : status = _AccountReadSessionStatus.signedOut,
+      account = null,
+      cookieHeader = null;
 
   /// 创建会话已过期时的私有上下文。
   const _AccountReadSession.expired()
-      : status = _AccountReadSessionStatus.expired,
-        account = null,
-        cookieHeader = null;
+    : status = _AccountReadSessionStatus.expired,
+      account = null,
+      cookieHeader = null;
 
   /// 创建读取登录状态失败时的私有上下文。
   const _AccountReadSession.networkError()
-      : status = _AccountReadSessionStatus.networkError,
-        account = null,
-        cookieHeader = null;
+    : status = _AccountReadSessionStatus.networkError,
+      account = null,
+      cookieHeader = null;
 
   /// 创建账号资料不完整时的私有上下文，阻止任何网络请求。
   const _AccountReadSession.unavailable()
-      : status = _AccountReadSessionStatus.unavailable,
-        account = null,
-        cookieHeader = null;
+    : status = _AccountReadSessionStatus.unavailable,
+      account = null,
+      cookieHeader = null;
 
   /// 当前会话是否能够继续发起固定的只读账号数据请求。
   final _AccountReadSessionStatus status;
@@ -724,32 +714,32 @@ enum _AccountApiResultStatus {
 class _AccountApiResult {
   /// 创建成功响应并保存待调用方读取的 JSON 根对象。
   const _AccountApiResult.success(this.root)
-      : status = _AccountApiResultStatus.success;
+    : status = _AccountApiResultStatus.success;
 
   /// 创建 B 站明确拒绝登录时的响应状态。
   const _AccountApiResult.expired()
-      : status = _AccountApiResultStatus.expired,
-        root = null;
+    : status = _AccountApiResultStatus.expired,
+      root = null;
 
   /// 创建网络暂时不可用时的响应状态。
   const _AccountApiResult.networkError()
-      : status = _AccountApiResultStatus.networkError,
-        root = null;
+    : status = _AccountApiResultStatus.networkError,
+      root = null;
 
   /// 创建访问权限不足时的响应状态。
   const _AccountApiResult.permissionDenied()
-      : status = _AccountApiResultStatus.permissionDenied,
-        root = null;
+    : status = _AccountApiResultStatus.permissionDenied,
+      root = null;
 
   /// 创建服务器业务错误时的响应状态。
   const _AccountApiResult.unavailable()
-      : status = _AccountApiResultStatus.unavailable,
-        root = null;
+    : status = _AccountApiResultStatus.unavailable,
+      root = null;
 
   /// 创建数据结构无法安全解析时的响应状态。
   const _AccountApiResult.malformedData()
-      : status = _AccountApiResultStatus.malformedData,
-        root = null;
+    : status = _AccountApiResultStatus.malformedData,
+      root = null;
 
   /// 响应分类，供服务方法映射为公开页面状态。
   final _AccountApiResultStatus status;

@@ -11,7 +11,7 @@ typedef WatchHistoryPreferencesLoader = Future<SharedPreferences> Function();
 class WatchHistoryService {
   /// 创建观看记录服务；未传入读取器时使用真实的 SharedPreferences。
   WatchHistoryService({WatchHistoryPreferencesLoader? preferencesLoader})
-      : _preferencesLoader = preferencesLoader ?? SharedPreferences.getInstance;
+    : _preferencesLoader = preferencesLoader ?? SharedPreferences.getInstance;
 
   static const String _storageKey = 'focubili_watch_history';
 
@@ -66,14 +66,16 @@ class WatchHistoryService {
     }
     final List<WatchHistoryEntry> existing = await loadHistory();
     bool changed = false;
-    final List<WatchHistoryEntry> updated = existing.map((entry) {
-      final String? thumbnailUrl = normalizedUrls[entry.bvid];
-      if (entry.thumbnailUrl.isNotEmpty || thumbnailUrl == null) {
-        return entry;
-      }
-      changed = true;
-      return entry.copyWith(thumbnailUrl: thumbnailUrl);
-    }).toList(growable: false);
+    final List<WatchHistoryEntry> updated = existing
+        .map((entry) {
+          final String? thumbnailUrl = normalizedUrls[entry.bvid];
+          if (entry.thumbnailUrl.isNotEmpty || thumbnailUrl == null) {
+            return entry;
+          }
+          changed = true;
+          return entry.copyWith(thumbnailUrl: thumbnailUrl);
+        })
+        .toList(growable: false);
     if (changed) {
       await _writeEntries(updated);
     }

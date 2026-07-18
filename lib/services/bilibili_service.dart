@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../models/video_preview.dart';
+import '../models/user_search.dart';
 
 /// 定义可替换的 JSON 请求函数，方便测试时不用真的访问网络。
 typedef JsonRequest = Future<String> Function(Uri uri);
@@ -34,11 +35,22 @@ abstract interface class BilibiliService {
   Future<List<String>> suggestKeywords(String input);
 }
 
+/// 定义独立的用户搜索能力，避免要求所有旧视频服务测试替身同步实现新方法。
+abstract interface class BilibiliUserSearchService {
+  /// 按关键词和筛选条件读取一页公开用户资料。
+  Future<UserSearchPage> searchUsers(
+    String keyword, {
+    int page = 1,
+    UserSearchFilter filter = const UserSearchFilter(),
+  });
+}
+
 /// 使用公开视频详情接口查询标题、UP 主和时长，不读取或保存用户 Cookie。
-class BilibiliVideoInfoService implements BilibiliService {
+class BilibiliVideoInfoService
+    implements BilibiliService, BilibiliUserSearchService {
   /// 创建服务；测试可传入自定义请求函数，正式 App 默认使用 HTTPS 请求。
   BilibiliVideoInfoService({JsonRequest? requestJson})
-      : _requestJson = requestJson ?? _requestPublicJson;
+    : _requestJson = requestJson ?? _requestPublicJson;
 
   static const String _apiHost = 'api.bilibili.com';
   static const String _suggestHost = 's.search.bilibili.com';
@@ -66,20 +78,16 @@ class BilibiliVideoInfoService implements BilibiliService {
         '没有找到有效的 BV 号。请粘贴类似 BV1GJ411x7h7 的编号或 B 站视频链接。',
       );
     }
-    final Uri endpoint = Uri.https(
-      _apiHost,
-      _videoInfoPath,
-      <String, String>{'bvid': bvid},
-    );
+    final Uri endpoint = Uri.https(_apiHost, _videoInfoPath, <String, String>{
+      'bvid': bvid,
+    });
     final String responseText = await _requestJson(endpoint);
     final VideoPreview video = _parseVideoInfo(responseText, bvid);
     try {
       final String tagResponse = await _requestJson(
-        Uri.https(
-          _apiHost,
-          _videoTagsPath,
-          <String, String>{'bvid': video.bvid},
-        ),
+        Uri.https(_apiHost, _videoTagsPath, <String, String>{
+          'bvid': video.bvid,
+        }),
       );
       final List<String> tags = _parseVideoTags(tagResponse);
       return tags.isEmpty ? video : video.withTags(tags);
@@ -140,11 +148,7 @@ class BilibiliVideoInfoService implements BilibiliService {
       query['tids'] = filter.categoryId.toString();
     }
     _appendPublishedRange(query, filter.publishedRange);
-    final Uri endpoint = Uri.https(
-      _apiHost,
-      _videoSearchPath,
-      query,
-    );
+    final Uri endpoint = Uri.https(_apiHost, _videoSearchPath, query);
     final String responseText = await _requestJson(endpoint);
     return _parseVideoSearchPage(responseText, safePage);
   }
@@ -163,6 +167,106 @@ class BilibiliVideoInfoService implements BilibiliService {
     );
     final String responseText = await _requestJson(endpoint);
     return _parseSearchSuggestions(responseText);
+  }
+
+  /// 请求 B 站公开用户搜索，并保留头像、粉丝、等级和认证等公开字段。
+  @override
+  Future<UserSearchPage> searchUsers(
+    String keyword, {
+    int page = 1,
+    UserSearchFilter filter = const UserSearchFilter(),
+  }) async {
+    final String normalizedKeyword = keyword.trim();
+    if (normalizedKeyword.isEmpty) {
+      throw const BilibiliLookupException('请输入要搜索的用户名。');
+    }
+    final int safePage = page.clamp(1, 50).toInt();
+    final Uri endpoint = Uri.https(_apiHost, _videoSearchPath, <String, String>{
+      'search_type': 'bili_user',
+      'keyword': normalizedKeyword,
+      'page': safePage.toString(),
+      'order': _userSearchOrderValue(filter.order),
+      'user_type': _userSearchTypeValue(filter.type).toString(),
+    });
+    final String responseText = await _requestJson(endpoint);
+    return _parseUserSearchPage(responseText, safePage);
+  }
+
+  /// 把用户排序枚举转换为公开搜索接口接受的参数值。
+  String _userSearchOrderValue(UserSearchOrder order) {
+    return switch (order) {
+      UserSearchOrder.defaultOrder => 'totalrank',
+      UserSearchOrder.fansDescending => 'fans',
+      UserSearchOrder.fansAscending => 'fans_asc',
+      UserSearchOrder.levelDescending => 'level',
+      UserSearchOrder.levelAscending => 'level_asc',
+    };
+  }
+
+  /// 把用户类型枚举转换为公开搜索接口接受的数字。
+  int _userSearchTypeValue(UserSearchType type) {
+    return switch (type) {
+      UserSearchType.all => 0,
+      UserSearchType.uploader => 1,
+      UserSearchType.normal => 2,
+      UserSearchType.certified => 3,
+    };
+  }
+
+  /// 校验并解析用户搜索分页，过滤缺少有效 MID 的异常结果。
+  UserSearchPage _parseUserSearchPage(String responseText, int requestedPage) {
+    final Object? decoded = jsonDecode(responseText);
+    if (decoded is! Map) {
+      throw const BilibiliLookupException('用户搜索接口返回的数据格式不正确。');
+    }
+    final Map<Object?, Object?> root = Map<Object?, Object?>.from(decoded);
+    final int code = _readInteger(root['code']);
+    if (code != 0) {
+      final String message = _readText(root['message'], '用户搜索失败');
+      throw BilibiliLookupException('$message（错误码：$code）。');
+    }
+    final Map<Object?, Object?> data = _readObject(root['data']);
+    final List<UserSearchResult> results = <UserSearchResult>[];
+    final Object? rawResults = data['result'];
+    if (rawResults is List) {
+      for (final Object? rawResult in rawResults) {
+        final Map<Object?, Object?> item = _readObject(rawResult);
+        final int mid = _readIdentifier(item['mid']);
+        if (mid <= 0) {
+          continue;
+        }
+        final Map<Object?, Object?> official = _readObject(
+          item['official_verify'],
+        );
+        final String certification = _stripHtml(
+          _readText(official['desc'] ?? item['official_desc'], ''),
+        );
+        results.add(
+          UserSearchResult(
+            mid: mid,
+            name: _stripHtml(_readText(item['uname'], '未知用户')),
+            avatarUrl: _normalizeImageUrl(_readText(item['upic'], '')),
+            signature: _stripHtml(_readText(item['usign'], '')),
+            followerCount: _readInteger(item['fans']),
+            videoCount: _readInteger(item['videos']),
+            level: _readInteger(item['level']),
+            isUploader: _readInteger(item['is_upuser']) == 1,
+            certification: certification,
+          ),
+        );
+      }
+    }
+    final int resolvedPage = _readInteger(data['page']).clamp(1, 50).toInt();
+    final int totalPages = _readInteger(
+      data['numPages'] ?? data['num_pages'],
+    ).clamp(resolvedPage, 50).toInt();
+    return UserSearchPage(
+      results: List<UserSearchResult>.unmodifiable(results),
+      page: resolvedPage == 1 && requestedPage > 1
+          ? requestedPage
+          : resolvedPage,
+      totalPages: totalPages,
+    );
   }
 
   /// 从输入文字或链接中取出 BV 号，并统一前缀大小写以减少粘贴时的常见错误。
@@ -214,6 +318,14 @@ class BilibiliVideoInfoService implements BilibiliService {
       orElse: () => parts.first,
     );
     final String resolvedBvid = data['bvid'] as String? ?? requestedBvid;
+    final String rawDescription = _readText(data['desc'], '');
+    final List<VideoDescriptionSegment> descriptionSegments =
+        _parseDescriptionSegments(data['desc_v2'], rawDescription);
+    final String resolvedDescription = rawDescription.isNotEmpty
+        ? rawDescription
+        : descriptionSegments
+              .map((VideoDescriptionSegment segment) => segment.text)
+              .join();
     return VideoPreview(
       aid: _readIdentifier(data['aid']),
       bvid: resolvedBvid,
@@ -222,7 +334,8 @@ class BilibiliVideoInfoService implements BilibiliService {
       ownerName: _readText(owner['name'], '未知 UP 主'),
       ownerMid: _readIdentifier(owner['mid']),
       ownerAvatarUrl: _normalizeImageUrl(_readText(owner['face'], '')),
-      description: _readText(data['desc'], ''),
+      description: resolvedDescription,
+      descriptionSegments: descriptionSegments,
       publishedAt: _parseUnixTime(data['pubdate']),
       stats: _parseVideoStats(data['stat']),
       collection: _parseVideoCollection(data['ugc_season'], resolvedBvid),
@@ -230,6 +343,113 @@ class BilibiliVideoInfoService implements BilibiliService {
       thumbnailUrl: _normalizeThumbnailUrl(_readText(data['pic'], '')),
       parts: parts,
     );
+  }
+
+  /// 解析结构化简介；以完整 desc 为正文、desc_v2 为提及元数据，并额外识别 HTTP(S) 链接。
+  List<VideoDescriptionSegment> _parseDescriptionSegments(
+    Object? value,
+    String fallbackDescription,
+  ) {
+    final List<VideoDescriptionSegment> segments = <VideoDescriptionSegment>[];
+    final List<VideoDescriptionSegment> mentions = <VideoDescriptionSegment>[];
+    if (value is List) {
+      for (final Object? rawSegment in value) {
+        final Map<Object?, Object?> segment = _readObject(rawSegment);
+        final String text = _readText(segment['raw_text'], '');
+        if (text.isEmpty) {
+          continue;
+        }
+        final int mentionedMid = _readIdentifier(segment['biz_id']);
+        final int type = _readInteger(segment['type']);
+        if (mentionedMid > 0 && (type == 1 || text.startsWith('@'))) {
+          mentions.add(
+            VideoDescriptionSegment(text: text, mentionedMid: mentionedMid),
+          );
+        }
+      }
+    }
+
+    if (fallbackDescription.isNotEmpty) {
+      int cursor = 0;
+      for (final VideoDescriptionSegment mention in mentions) {
+        final int mentionStart = fallbackDescription.indexOf(
+          mention.text,
+          cursor,
+        );
+        if (mentionStart < 0) {
+          continue;
+        }
+        _appendDescriptionTextSegments(
+          segments,
+          fallbackDescription.substring(cursor, mentionStart),
+        );
+        segments.add(mention);
+        cursor = mentionStart + mention.text.length;
+      }
+      _appendDescriptionTextSegments(
+        segments,
+        fallbackDescription.substring(cursor),
+      );
+    } else if (value is List) {
+      // 极少数接口只返回 desc_v2；此时按原始片段顺序重建正文，避免简介入口被整个隐藏。
+      for (final Object? rawSegment in value) {
+        final Map<Object?, Object?> segment = _readObject(rawSegment);
+        final String text = _readText(segment['raw_text'], '');
+        if (text.isEmpty) {
+          continue;
+        }
+        final int mentionedMid = _readIdentifier(segment['biz_id']);
+        final int type = _readInteger(segment['type']);
+        if (mentionedMid > 0 && (type == 1 || text.startsWith('@'))) {
+          segments.add(
+            VideoDescriptionSegment(text: text, mentionedMid: mentionedMid),
+          );
+        } else {
+          _appendDescriptionTextSegments(segments, text);
+        }
+      }
+    }
+    return List<VideoDescriptionSegment>.unmodifiable(segments);
+  }
+
+  /// 把普通简介文字拆成文本和 URL 片段；句末中英文标点不算作链接的一部分。
+  void _appendDescriptionTextSegments(
+    List<VideoDescriptionSegment> output,
+    String text,
+  ) {
+    if (text.isEmpty) {
+      return;
+    }
+    final RegExp urlPattern = RegExp(
+      r'https?://[^\s<>\u3000]+',
+      caseSensitive: false,
+    );
+    const String trailingPunctuation = '.,!?;:"\'，。！？；：、）)]}》】」』';
+    int cursor = 0;
+    for (final RegExpMatch match in urlPattern.allMatches(text)) {
+      int linkEnd = match.end;
+      while (linkEnd > match.start &&
+          trailingPunctuation.contains(text[linkEnd - 1])) {
+        linkEnd -= 1;
+      }
+      final String linkText = text.substring(match.start, linkEnd);
+      final Uri? uri = Uri.tryParse(linkText);
+      if (uri == null ||
+          uri.host.isEmpty ||
+          (uri.scheme != 'http' && uri.scheme != 'https')) {
+        continue;
+      }
+      if (match.start > cursor) {
+        output.add(
+          VideoDescriptionSegment(text: text.substring(cursor, match.start)),
+        );
+      }
+      output.add(VideoDescriptionSegment(text: linkText, linkUri: uri));
+      cursor = linkEnd;
+    }
+    if (cursor < text.length) {
+      output.add(VideoDescriptionSegment(text: text.substring(cursor)));
+    }
   }
 
   /// 解析公开统计对象，并把异常或负数字段统一收敛为零。
@@ -284,10 +504,9 @@ class BilibiliVideoInfoService implements BilibiliService {
       description: _readText(collection['intro'], ''),
       coverUrl: _normalizeThumbnailUrl(_readText(collection['cover'], '')),
       ownerMid: _readIdentifier(collection['mid']),
-      totalCount: _readInteger(collection['ep_count']).clamp(
-        entries.length,
-        1 << 31,
-      ),
+      totalCount: _readInteger(
+        collection['ep_count'],
+      ).clamp(entries.length, 1 << 31),
       stats: _parseVideoStats(collection['stat']),
       entries: List<VideoCollectionEntry>.unmodifiable(entries),
     );
@@ -328,7 +547,9 @@ class BilibiliVideoInfoService implements BilibiliService {
 
   /// 解析关键词搜索 JSON，过滤无 BV 号条目并保留服务端分页信息。
   VideoSearchPage _parseVideoSearchPage(
-      String responseText, int requestedPage) {
+    String responseText,
+    int requestedPage,
+  ) {
     final Object? decoded = jsonDecode(responseText);
     if (decoded is! Map) {
       throw const BilibiliLookupException('视频搜索接口返回的数据格式不正确。');
@@ -379,8 +600,9 @@ class BilibiliVideoInfoService implements BilibiliService {
       );
     }
     final int page = _readInteger(data['page']).clamp(1, 50).toInt();
-    final int totalPages =
-        _readInteger(data['numPages']).clamp(page, 50).toInt();
+    final int totalPages = _readInteger(
+      data['numPages'],
+    ).clamp(page, 50).toInt();
     return VideoSearchPage(
       results: List<VideoSearchResult>.unmodifiable(results),
       page: page == 1 && requestedPage > 1 ? requestedPage : page,
@@ -406,8 +628,9 @@ class BilibiliVideoInfoService implements BilibiliService {
         continue;
       }
       final Map<Object?, Object?> tag = Map<Object?, Object?>.from(rawTag);
-      final String value =
-          _stripHtml(_readText(tag['value'] ?? tag['term'], ''));
+      final String value = _stripHtml(
+        _readText(tag['value'] ?? tag['term'], ''),
+      );
       if (value.isNotEmpty) {
         suggestions.add(value);
       }
@@ -486,8 +709,9 @@ class BilibiliVideoInfoService implements BilibiliService {
 
   /// 将 aid、cid、mid 等可能超过 32 位的编号完整转换为非负整数，避免错误截断成 2147483648。
   int _readIdentifier(Object? value) {
-    final int? number =
-        value is num ? value.toInt() : int.tryParse(value?.toString() ?? '');
+    final int? number = value is num
+        ? value.toInt()
+        : int.tryParse(value?.toString() ?? '');
     return number == null || number < 0 ? 0 : number;
   }
 
@@ -497,8 +721,10 @@ class BilibiliVideoInfoService implements BilibiliService {
     if (seconds <= 0) {
       return null;
     }
-    return DateTime.fromMillisecondsSinceEpoch(seconds * 1000, isUtc: true)
-        .toLocal();
+    return DateTime.fromMillisecondsSinceEpoch(
+      seconds * 1000,
+      isUtc: true,
+    ).toLocal();
   }
 
   /// 删除搜索标题中的高亮 HTML，并还原常见实体字符。
@@ -544,14 +770,16 @@ class BilibiliVideoInfoService implements BilibiliService {
   String _normalizeImageUrl(String value) {
     final String withScheme = value.startsWith('//') ? 'https:$value' : value;
     final Uri? parsed = Uri.tryParse(withScheme);
-    final bool trustedHost = parsed != null &&
+    final bool trustedHost =
+        parsed != null &&
         (parsed.host.endsWith('.hdslb.com') ||
             parsed.host.endsWith('.biliimg.com'));
     if (parsed == null || !trustedHost) {
       return '';
     }
-    final Uri uri =
-        parsed.scheme == 'http' ? parsed.replace(scheme: 'https') : parsed;
+    final Uri uri = parsed.scheme == 'http'
+        ? parsed.replace(scheme: 'https')
+        : parsed;
     return uri.scheme == 'https' ? uri.toString() : '';
   }
 

@@ -18,9 +18,9 @@ void main() {
   test('读取有效电量百分比', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (MethodCall call) async {
-      expect(call.method, 'getBatteryPercent');
-      return 73;
-    });
+          expect(call.method, 'getBatteryPercent');
+          return 73;
+        });
 
     expect(await const NativeDeviceStatusService().loadBatteryPercent(), 73);
   });
@@ -31,6 +31,8 @@ void main() {
         .setMockMethodCallHandler(channel, (MethodCall call) async => 120);
 
     expect(
-        await const NativeDeviceStatusService().loadBatteryPercent(), isNull);
+      await const NativeDeviceStatusService().loadBatteryPercent(),
+      isNull,
+    );
   });
 }

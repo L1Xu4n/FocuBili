@@ -69,7 +69,7 @@ abstract interface class MediaCacheService {
 class NativeMediaCacheService implements MediaCacheService {
   /// 创建使用 Android 原生播放器通道的缓存管理服务。
   NativeMediaCacheService({MethodChannel? channel})
-      : _channel = channel ?? _defaultChannel;
+    : _channel = channel ?? _defaultChannel;
 
   static const MethodChannel _defaultChannel = MethodChannel(
     'com.focubili.app/playback',
@@ -92,10 +92,9 @@ class NativeMediaCacheService implements MediaCacheService {
         '请选择支持的视频缓存上限。',
       );
     }
-    return _readStatus(
-      'setMediaCacheCapacity',
-      <String, Object?>{'capacityBytes': capacityBytes},
-    );
+    return _readStatus('setMediaCacheCapacity', <String, Object?>{
+      'capacityBytes': capacityBytes,
+    });
   }
 
   /// 请求 Android 删除全部边播边缓存，播放中时由原生层返回 cache_busy。
@@ -126,10 +125,7 @@ class NativeMediaCacheService implements MediaCacheService {
         error.message ?? '视频缓存暂时无法操作，请稍后重试。',
       );
     } on MissingPluginException {
-      throw const MediaCacheException(
-        'cache_unavailable',
-        '当前设备暂不支持视频缓存管理。',
-      );
+      throw const MediaCacheException('cache_unavailable', '当前设备暂不支持视频缓存管理。');
     }
   }
 }

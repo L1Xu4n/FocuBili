@@ -58,8 +58,8 @@ abstract interface class PlayerOverlayService {
 class NativePlayerOverlayService implements PlayerOverlayService {
   /// 创建叠加数据服务；测试可传入内存通道，生产环境使用 Android 原生通道。
   NativePlayerOverlayService({PlayerOverlayPlatformChannel? platformChannel})
-      : _platformChannel = platformChannel ??
-            const MethodChannelPlayerOverlayPlatformChannel();
+    : _platformChannel =
+          platformChannel ?? const MethodChannelPlayerOverlayPlatformChannel();
 
   static final RegExp _bvidPattern = RegExp(
     r'^BV[0-9A-Za-z]{10}$',
@@ -115,10 +115,7 @@ class NativePlayerOverlayService implements PlayerOverlayService {
     try {
       final Object? result = await _platformChannel.invokeMethod(
         'loadSubtitleCues',
-        <String, Object?>{
-          ...arguments,
-          'trackId': normalizedTrackId,
-        },
+        <String, Object?>{...arguments, 'trackId': normalizedTrackId},
       );
       if (result is! Map) {
         return const SubtitleCueLoadResult.unavailable();
@@ -129,9 +126,7 @@ class NativePlayerOverlayService implements PlayerOverlayService {
     } on PlatformException catch (error) {
       return _cueResultFromPlatformError(error);
     } on MissingPluginException {
-      return const SubtitleCueLoadResult.unavailable(
-        message: '当前设备暂不支持读取字幕。',
-      );
+      return const SubtitleCueLoadResult.unavailable(message: '当前设备暂不支持读取字幕。');
     } catch (_) {
       return const SubtitleCueLoadResult.unavailable();
     }
@@ -148,22 +143,15 @@ class NativePlayerOverlayService implements PlayerOverlayService {
     if (arguments == null ||
         segmentIndex < 1 ||
         segmentIndex > DanmakuSegmentLoadResult.maximumSegmentIndex) {
-      return const DanmakuSegmentLoadResult.unavailable(
-        message: '弹幕请求参数无效。',
-      );
+      return const DanmakuSegmentLoadResult.unavailable(message: '弹幕请求参数无效。');
     }
     try {
       final Object? result = await _platformChannel.invokeMethod(
         'loadDanmakuSegment',
-        <String, Object?>{
-          ...arguments,
-          'segmentIndex': segmentIndex,
-        },
+        <String, Object?>{...arguments, 'segmentIndex': segmentIndex},
       );
       if (result is! Map) {
-        return DanmakuSegmentLoadResult.unavailable(
-          segmentIndex: segmentIndex,
-        );
+        return DanmakuSegmentLoadResult.unavailable(segmentIndex: segmentIndex);
       }
       return DanmakuSegmentLoadResult.fromPlatformMap(
         Map<Object?, Object?>.from(result),
@@ -191,7 +179,8 @@ class NativePlayerOverlayService implements PlayerOverlayService {
 
   /// 把原生轨道错误转为页面可显示的状态，且不使用错误详情中的敏感内容。
   SubtitleTrackLoadResult _trackResultFromPlatformError(
-      PlatformException error) {
+    PlatformException error,
+  ) {
     switch (error.code) {
       case 'subtitle_login_required':
         return const SubtitleTrackLoadResult.loginRequired();

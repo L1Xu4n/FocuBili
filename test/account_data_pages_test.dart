@@ -24,11 +24,7 @@ class _TestSessionProvider implements BilibiliAccountSessionProvider {
   Future<BilibiliSessionState> loadCurrentSession() async {
     return state ??
         const BilibiliSessionState.active(
-          BilibiliAccount(
-            mid: 42,
-            name: '测试账号',
-            avatarUrl: '',
-          ),
+          BilibiliAccount(mid: 42, name: '测试账号', avatarUrl: ''),
         );
   }
 
@@ -47,10 +43,7 @@ class _CallbackAccountDataApi implements BilibiliAccountDataApi {
 
   /// 记录页面服务的请求地址后返回回调结果，不发起真实网络请求。
   @override
-  Future<BilibiliAccountDataResponse> get(
-    Uri endpoint,
-    String cookieHeader,
-  ) {
+  Future<BilibiliAccountDataResponse> get(Uri endpoint, String cookieHeader) {
     endpoints.add(endpoint);
     return _handler(endpoint);
   }
@@ -123,9 +116,8 @@ Widget _host(Widget child) {
       if (settings.name == AppRoutes.player) {
         return MaterialPageRoute<void>(
           // 测试播放器路由构建函数只确认导航参数已被页面正确发送。
-          builder: (BuildContext context) => const Scaffold(
-            body: Center(child: Text('播放器路由已打开')),
-          ),
+          builder: (BuildContext context) =>
+              const Scaffold(body: Center(child: Text('播放器路由已打开'))),
         );
       }
       return null;
@@ -139,10 +131,11 @@ void main() {
   testWidgets('收藏夹列表打开内容页', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(360, 800));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final BilibiliAccountDataService service = _accountService(
-      (Uri endpoint) async {
-        if (endpoint.path.contains('folder/created/list-all')) {
-          return _ok('''
+    final BilibiliAccountDataService service = _accountService((
+      Uri endpoint,
+    ) async {
+      if (endpoint.path.contains('folder/created/list-all')) {
+        return _ok('''
             {
               "code": 0,
               "data": {
@@ -152,8 +145,8 @@ void main() {
               }
             }
           ''');
-        }
-        return _ok('''
+      }
+      return _ok('''
           {
             "code": 0,
             "data": {
@@ -172,8 +165,7 @@ void main() {
             }
           }
         ''');
-      },
-    );
+    });
 
     await tester.pumpWidget(
       _host(
@@ -197,11 +189,12 @@ void main() {
 
   /// 验证可播放收藏视频会补查公开详情并跳转，失效视频不会触发详情查询。
   testWidgets('收藏视频加载更多并仅打开可播放项', (WidgetTester tester) async {
-    final BilibiliAccountDataService service = _accountService(
-      (Uri endpoint) async {
-        final String page = endpoint.queryParameters['pn'] ?? '1';
-        if (page == '1') {
-          return _ok('''
+    final BilibiliAccountDataService service = _accountService((
+      Uri endpoint,
+    ) async {
+      final String page = endpoint.queryParameters['pn'] ?? '1';
+      if (page == '1') {
+        return _ok('''
             {
               "code": 0,
               "data": {
@@ -213,8 +206,8 @@ void main() {
               }
             }
           ''');
-        }
-        return _ok('''
+      }
+      return _ok('''
           {
             "code": 0,
             "data": {
@@ -225,8 +218,7 @@ void main() {
             }
           }
         ''');
-      },
-    );
+    });
     final _RecordingVideoService videoService = _RecordingVideoService();
     const FavoriteFolder folder = FavoriteFolder(
       mediaId: 1001,
@@ -263,11 +255,12 @@ void main() {
 
   /// 验证订阅页明确说明已关注 UP 主，并可通过加载更多追加下一页内容。
   testWidgets('关注页加载更多已关注UP主', (WidgetTester tester) async {
-    final BilibiliAccountDataService service = _accountService(
-      (Uri endpoint) async {
-        final String page = endpoint.queryParameters['pn'] ?? '1';
-        if (page == '1') {
-          return _ok('''
+    final BilibiliAccountDataService service = _accountService((
+      Uri endpoint,
+    ) async {
+      final String page = endpoint.queryParameters['pn'] ?? '1';
+      if (page == '1') {
+        return _ok('''
             {
               "code": 0,
               "data": {
@@ -278,8 +271,8 @@ void main() {
               }
             }
           ''');
-        }
-        return _ok('''
+      }
+      return _ok('''
           {
             "code": 0,
             "data": {
@@ -290,8 +283,7 @@ void main() {
             }
           }
         ''');
-      },
-    );
+    });
 
     await tester.pumpWidget(
       _host(FollowedCreatorsPage(accountDataService: service)),

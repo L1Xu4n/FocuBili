@@ -70,23 +70,23 @@ void main() {
     final List<Object?> saved =
         jsonDecode(preferences.getString('focubili_watch_history')!)
             as List<Object?>;
-    final Map<String, dynamic> item =
-        Map<String, dynamic>.from(saved.single! as Map<String, dynamic>);
-    expect(
-      item.keys.toSet(),
-      <String>{
-        'bvid',
-        'title',
-        'ownerName',
-        'lastPartTitle',
-        'lastPartPageNumber',
-        'watchedAt',
-        'thumbnailUrl',
-        'lastPositionMs',
-      },
+    final Map<String, dynamic> item = Map<String, dynamic>.from(
+      saved.single! as Map<String, dynamic>,
     );
+    expect(item.keys.toSet(), <String>{
+      'bvid',
+      'title',
+      'ownerName',
+      'lastPartTitle',
+      'lastPartPageNumber',
+      'watchedAt',
+      'thumbnailUrl',
+      'lastPositionMs',
+    });
     expect(
-        item['thumbnailUrl'], 'https://i0.hdslb.com/bfs/archive/new-cover.jpg');
+      item['thumbnailUrl'],
+      'https://i0.hdslb.com/bfs/archive/new-cover.jpg',
+    );
     expect(item['lastPositionMs'], 3723000);
   });
 
@@ -132,17 +132,16 @@ void main() {
     await service.record(completeEntry);
     await service.record(oldEntry);
 
-    final List<WatchHistoryEntry> updated = await service.backfillThumbnails(
-      <String, String>{
-        'BVold': 'https://i0.hdslb.com/bfs/archive/backfilled.jpg',
-        'BVcomplete': 'https://i0.hdslb.com/bfs/archive/replacement.jpg',
-      },
-    );
+    final List<WatchHistoryEntry> updated = await service
+        .backfillThumbnails(<String, String>{
+          'BVold': 'https://i0.hdslb.com/bfs/archive/backfilled.jpg',
+          'BVcomplete': 'https://i0.hdslb.com/bfs/archive/replacement.jpg',
+        });
 
-    expect(
-      updated.map((WatchHistoryEntry entry) => entry.bvid),
-      <String>['BVold', 'BVcomplete'],
-    );
+    expect(updated.map((WatchHistoryEntry entry) => entry.bvid), <String>[
+      'BVold',
+      'BVcomplete',
+    ]);
     expect(
       updated.first.thumbnailUrl,
       'https://i0.hdslb.com/bfs/archive/backfilled.jpg',
@@ -214,8 +213,9 @@ void main() {
     await service.record(_entry(bvid: 'BVfirst'));
     await service.record(_entry(bvid: 'BVsecond'));
 
-    final List<WatchHistoryEntry> afterRemove =
-        await service.remove('BVsecond');
+    final List<WatchHistoryEntry> afterRemove = await service.remove(
+      'BVsecond',
+    );
 
     expect(afterRemove.map((WatchHistoryEntry item) => item.bvid), <String>[
       'BVfirst',

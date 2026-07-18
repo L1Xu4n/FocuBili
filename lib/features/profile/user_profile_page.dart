@@ -23,6 +23,8 @@ class UserProfilePage extends StatefulWidget {
     required this.mid,
     this.initialName = '',
     this.initialAvatarUrl = '',
+    this.initialSign = '',
+    this.initialOfficialDescription = '',
     this.publicContentService,
     this.videoService,
     this.watchHistoryService,
@@ -31,6 +33,8 @@ class UserProfilePage extends StatefulWidget {
   final int mid;
   final String initialName;
   final String initialAvatarUrl;
+  final String initialSign;
+  final String initialOfficialDescription;
   final BilibiliPublicContentService? publicContentService;
   final BilibiliService? videoService;
   final WatchHistoryService? watchHistoryService;
@@ -67,6 +71,7 @@ class _UserProfilePageState extends State<UserProfilePage>
   CreatorVideoOrder _videoOrder = CreatorVideoOrder.latest;
   int _totalCount = 0;
   bool _videoSearchExpanded = false;
+  bool _profileSignExpanded = false;
   Map<String, WatchHistoryEntry> _watchHistoryByBvid =
       const <String, WatchHistoryEntry>{};
   final Queue<CreatorVideo> _partCountLookupQueue = Queue<CreatorVideo>();
@@ -653,6 +658,13 @@ class _UserProfilePageState extends State<UserProfilePage>
     final String avatarUrl = profile?.avatarUrl.isNotEmpty == true
         ? profile!.avatarUrl
         : widget.initialAvatarUrl;
+    final String officialDescription =
+        profile?.officialDescription.isNotEmpty == true
+        ? profile!.officialDescription
+        : widget.initialOfficialDescription;
+    final String sign = profile?.sign.isNotEmpty == true
+        ? profile!.sign
+        : widget.initialSign;
     return Padding(
       key: const Key('creator-profile-header'),
       padding: const EdgeInsets.fromLTRB(18, 8, 18, 10),
@@ -715,23 +727,32 @@ class _UserProfilePageState extends State<UserProfilePage>
               ),
             ],
           ),
-          if (profile?.officialDescription.isNotEmpty == true) ...<Widget>[
-            const SizedBox(height: 3),
-            Text(
-              profile!.officialDescription,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: Theme.of(context).colorScheme.primary),
+          if (officialDescription.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 5),
+            Row(
+              key: const Key('creator-certification'),
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Icon(
+                  Icons.verified_rounded,
+                  size: 17,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+                const SizedBox(width: 5),
+                Expanded(
+                  child: Text(
+                    '认证：$officialDescription',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ],
-          if (profile?.sign.isNotEmpty == true) ...<Widget>[
+          if (sign.isNotEmpty) ...<Widget>[
             const SizedBox(height: 4),
-            Text(
-              profile!.sign,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
+            _buildExpandableProfileSign(sign),
           ],
           if (_profileError != null) ...<Widget>[
             const SizedBox(height: 4),
@@ -756,6 +777,75 @@ class _UserProfilePageState extends State<UserProfilePage>
         ],
       ),
     );
+  }
+
+  /// 创建最多两行的 UP 简介；真实溢出时提供展开和收起，不再静默隐藏后半段。
+  Widget _buildExpandableProfileSign(String sign) {
+    final TextStyle style =
+        Theme.of(context).textTheme.bodySmall ?? const TextStyle();
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final TextPainter painter = TextPainter(
+          text: TextSpan(text: sign, style: style),
+          textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context),
+          maxLines: 2,
+        )..layout(maxWidth: constraints.maxWidth);
+        final bool exceedsTwoLines = painter.didExceedMaxLines;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              sign,
+              key: const Key('creator-profile-sign'),
+              maxLines: _profileSignExpanded ? null : 2,
+              overflow: _profileSignExpanded
+                  ? TextOverflow.visible
+                  : TextOverflow.ellipsis,
+              style: style,
+            ),
+            if (exceedsTwoLines || _profileSignExpanded)
+              TextButton(
+                key: const Key('toggle-creator-profile-sign'),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  minimumSize: const Size(0, 30),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                onPressed: () => setState(
+                  () => _profileSignExpanded = !_profileSignExpanded,
+                ),
+                child: Text(_profileSignExpanded ? '收起简介' : '展开简介'),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// 按展开后的真实简介高度扩大 Sliver，确保完整文字不会被标签栏裁掉。
+  double _profileHeaderExpandedHeight(BuildContext context) {
+    final String sign = _profile?.sign.isNotEmpty == true
+        ? _profile!.sign
+        : widget.initialSign;
+    if (sign.isEmpty) {
+      return 300;
+    }
+    // FlexibleSpace 还会扣除系统状态栏、工具栏和 TabBar；380 可容纳头像、认证、两行简介与展开按钮。
+    const double collapsedHeight = 380;
+    if (!_profileSignExpanded) {
+      return collapsedHeight;
+    }
+    final TextStyle style =
+        Theme.of(context).textTheme.bodySmall ?? const TextStyle();
+    final TextPainter painter = TextPainter(
+      text: TextSpan(text: sign, style: style),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+    )..layout(maxWidth: MediaQuery.sizeOf(context).width - 36);
+    final double twoLineHeight = painter.preferredLineHeight * 2;
+    return collapsedHeight +
+        (painter.height - twoLineHeight).clamp(0, double.infinity);
   }
 
   /// 创建横向投稿列表项，左侧使用 16:9 封面，右侧显示标题、日期和公开统计。
@@ -1177,7 +1267,7 @@ class _UserProfilePageState extends State<UserProfilePage>
             SliverAppBar(
               key: const Key('creator-profile-app-bar'),
               pinned: true,
-              expandedHeight: 285,
+              expandedHeight: _profileHeaderExpandedHeight(context),
               forceElevated: innerBoxIsScrolled,
               title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
               actions: <Widget>[

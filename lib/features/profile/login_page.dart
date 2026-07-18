@@ -11,10 +11,7 @@ enum _LoginMode { phone, password, cookie }
 /// 提供登录方式选择，并把账号密码与验证码交给 B 站官方页面处理。
 class LoginPage extends StatefulWidget {
   /// 创建登录页面；账号切换时可在首帧后直接打开官方网页登录。
-  const LoginPage({
-    super.key,
-    this.openOfficialLoginOnStart = false,
-  });
+  const LoginPage({super.key, this.openOfficialLoginOnStart = false});
 
   /// 表示此页是否由“切换账号”打开，并应优先进入 B 站官方网页登录。
   final bool openOfficialLoginOnStart;
@@ -131,9 +128,7 @@ class _LoginPageState extends State<LoginPage> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          const Text(
-            '仅粘贴你自己账号的 Cookie。内容只写入本应用的 WebView 会话容器。',
-          ),
+          const Text('仅粘贴你自己账号的 Cookie。内容只写入本应用的 WebView 会话容器。'),
           const SizedBox(height: 14),
           TextField(
             controller: _cookieController,
@@ -322,8 +317,8 @@ class _OfficialWebLoginPageState extends State<_OfficialWebLoginPage> {
     }
     _checking = true;
     try {
-      final BilibiliSessionState session =
-          await _authService.loadCurrentSession();
+      final BilibiliSessionState session = await _authService
+          .loadCurrentSession();
       if (mounted && session.isActive) {
         await _completeOfficialLogin(session.account!);
       } else if (mounted &&

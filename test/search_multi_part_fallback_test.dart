@@ -64,9 +64,9 @@ class _SearchFallbackService implements BilibiliService {
     Map<String, VideoPreview>? previews,
     Set<String>? failingBvids,
     Map<String, Completer<VideoPreview>>? pendingLookups,
-  })  : _previews = previews ?? <String, VideoPreview>{},
-        _failingBvids = failingBvids ?? <String>{},
-        _pendingLookups = pendingLookups ?? <String, Completer<VideoPreview>>{};
+  }) : _previews = previews ?? <String, VideoPreview>{},
+       _failingBvids = failingBvids ?? <String>{},
+       _pendingLookups = pendingLookups ?? <String, Completer<VideoPreview>>{};
 
   final List<VideoSearchResult> results;
   final Map<String, VideoPreview> _previews;
@@ -149,9 +149,7 @@ void main() {
       failingBvids: <String>{failureBvid},
     );
 
-    await tester.pumpWidget(
-      MaterialApp(home: SearchPage(service: service)),
-    );
+    await tester.pumpWidget(MaterialApp(home: SearchPage(service: service)));
     await _submitKeywordSearch(tester, '测试关键词');
     await tester.pumpAndSettle();
 
@@ -163,20 +161,23 @@ void main() {
       containsAllInOrder(<String>[multiPartBvid, singlePartBvid, failureBvid]),
     );
     expect(service.lookupRequests, isNot(contains(serverBvid)));
-    expect(service.lookupRequests.where((String bvid) => bvid == failureBvid),
-        hasLength(1));
     expect(
-      find.byKey(const Key('search-BV1GJ411x7hA')),
-      findsOneWidget,
+      service.lookupRequests.where((String bvid) => bvid == failureBvid),
+      hasLength(1),
     );
+    expect(find.byKey(const Key('search-BV1GJ411x7hA')), findsOneWidget);
     expect(tester.takeException(), isNull);
 
     await _submitKeywordSearch(tester, '再次搜索');
     await tester.pumpAndSettle();
-    expect(service.lookupRequests.where((String bvid) => bvid == multiPartBvid),
-        hasLength(1));
-    expect(service.lookupRequests.where((String bvid) => bvid == failureBvid),
-        hasLength(1));
+    expect(
+      service.lookupRequests.where((String bvid) => bvid == multiPartBvid),
+      hasLength(1),
+    );
+    expect(
+      service.lookupRequests.where((String bvid) => bvid == failureBvid),
+      hasLength(1),
+    );
   });
 
   /// 验证多个可见卡片的详情补查最多同时运行两条请求。
@@ -189,10 +190,10 @@ void main() {
     const String thirdBvid = 'BV1GJ411x7hD';
     final Map<String, Completer<VideoPreview>> pendingLookups =
         <String, Completer<VideoPreview>>{
-      firstBvid: Completer<VideoPreview>(),
-      secondBvid: Completer<VideoPreview>(),
-      thirdBvid: Completer<VideoPreview>(),
-    };
+          firstBvid: Completer<VideoPreview>(),
+          secondBvid: Completer<VideoPreview>(),
+          thirdBvid: Completer<VideoPreview>(),
+        };
     final _SearchFallbackService service = _SearchFallbackService(
       results: <VideoSearchResult>[
         _searchResult(bvid: firstBvid, title: '第一条多P视频'),
@@ -202,9 +203,7 @@ void main() {
       pendingLookups: pendingLookups,
     );
 
-    await tester.pumpWidget(
-      MaterialApp(home: SearchPage(service: service)),
-    );
+    await tester.pumpWidget(MaterialApp(home: SearchPage(service: service)));
     await _submitKeywordSearch(tester, '并发测试');
     await tester.pump();
 

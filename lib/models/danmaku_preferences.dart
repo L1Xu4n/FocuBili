@@ -11,8 +11,12 @@ class DanmakuPreferences {
   }) {
     return DanmakuPreferences._(
       enabled: enabled,
-      opacity:
-          _normalizeDouble(opacity, defaultOpacity, minOpacity, maxOpacity),
+      opacity: _normalizeDouble(
+        opacity,
+        defaultOpacity,
+        minOpacity,
+        maxOpacity,
+      ),
       fontSize: _normalizeDouble(
         fontSize,
         defaultFontSize,
@@ -65,8 +69,9 @@ class DanmakuPreferences {
   factory DanmakuPreferences.fromJson(Map<String, dynamic> json) {
     final Object? rawKeywords = json['blockedKeywords'];
     return DanmakuPreferences(
-      enabled:
-          json['enabled'] is bool ? json['enabled'] as bool : defaultEnabled,
+      enabled: json['enabled'] is bool
+          ? json['enabled'] as bool
+          : defaultEnabled,
       opacity: _readDouble(json['opacity'], defaultOpacity),
       fontSize: _readDouble(json['fontSize'], defaultFontSize),
       laneCount: _readInteger(json['laneCount'], defaultLaneCount),
@@ -82,13 +87,13 @@ class DanmakuPreferences {
 
   /// 输出仅包含 JSON 基础类型的稳定字典；滚动速度的单位是“完整穿屏所需视频秒数”。
   Map<String, dynamic> toJson() => <String, dynamic>{
-        'enabled': enabled,
-        'opacity': opacity,
-        'fontSize': fontSize,
-        'laneCount': laneCount,
-        'scrollDurationSeconds': scrollDurationSeconds,
-        'blockedKeywords': blockedKeywords,
-      };
+    'enabled': enabled,
+    'opacity': opacity,
+    'fontSize': fontSize,
+    'laneCount': laneCount,
+    'scrollDurationSeconds': scrollDurationSeconds,
+    'blockedKeywords': blockedKeywords,
+  };
 
   /// 复制部分字段并再次执行边界归一化，供设置界面每次操作后立即生成安全配置。
   DanmakuPreferences copyWith({
@@ -98,16 +103,14 @@ class DanmakuPreferences {
     int? laneCount,
     double? scrollDurationSeconds,
     List<String>? blockedKeywords,
-  }) =>
-      DanmakuPreferences(
-        enabled: enabled ?? this.enabled,
-        opacity: opacity ?? this.opacity,
-        fontSize: fontSize ?? this.fontSize,
-        laneCount: laneCount ?? this.laneCount,
-        scrollDurationSeconds:
-            scrollDurationSeconds ?? this.scrollDurationSeconds,
-        blockedKeywords: blockedKeywords ?? this.blockedKeywords,
-      );
+  }) => DanmakuPreferences(
+    enabled: enabled ?? this.enabled,
+    opacity: opacity ?? this.opacity,
+    fontSize: fontSize ?? this.fontSize,
+    laneCount: laneCount ?? this.laneCount,
+    scrollDurationSeconds: scrollDurationSeconds ?? this.scrollDurationSeconds,
+    blockedKeywords: blockedKeywords ?? this.blockedKeywords,
+  );
 
   /// 规范屏蔽词：去除首尾空格、忽略空项，并按小写结果去重；保留首次输入的显示形式。
   static List<String> normalizeKeywords(Iterable<String> keywords) {
@@ -126,7 +129,8 @@ class DanmakuPreferences {
   bool blocks(String content) {
     final String normalizedContent = content.toLowerCase();
     return blockedKeywords.any(
-        (String keyword) => normalizedContent.contains(keyword.toLowerCase()));
+      (String keyword) => normalizedContent.contains(keyword.toLowerCase()),
+    );
   }
 
   /// 把 JSON 数字或数字字符串转成 double；无法解析时使用对应字段默认值，后续工厂还会检查有限值和范围。
@@ -145,6 +149,5 @@ class DanmakuPreferences {
     double fallback,
     double minimum,
     double maximum,
-  ) =>
-      value.isFinite ? value.clamp(minimum, maximum).toDouble() : fallback;
+  ) => value.isFinite ? value.clamp(minimum, maximum).toDouble() : fallback;
 }

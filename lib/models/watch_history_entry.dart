@@ -91,8 +91,9 @@ class WatchHistoryEntry {
     final String normalizedTitle = title.trim();
     final String normalizedOwnerName = ownerName.trim();
     final String normalizedPartTitle = lastPartTitle.trim();
-    final String normalizedThumbnailUrl =
-        thumbnailUrl is String ? thumbnailUrl.trim() : '';
+    final String normalizedThumbnailUrl = thumbnailUrl is String
+        ? thumbnailUrl.trim()
+        : '';
     final DateTime? parsedWatchedAt = DateTime.tryParse(watchedAt);
     final int normalizedPositionMs = lastPositionMs is num
         ? lastPositionMs.toInt().clamp(0, 24 * 60 * 60 * 1000).toInt()
@@ -135,13 +136,13 @@ class WatchHistoryEntry {
   /// 返回与全部字段对应的哈希值，需与相等判断保持一致。
   @override
   int get hashCode => Object.hash(
-        bvid,
-        title,
-        ownerName,
-        lastPartTitle,
-        lastPartPageNumber,
-        watchedAt,
-        thumbnailUrl,
-        lastPosition,
-      );
+    bvid,
+    title,
+    ownerName,
+    lastPartTitle,
+    lastPartPageNumber,
+    watchedAt,
+    thumbnailUrl,
+    lastPosition,
+  );
 }

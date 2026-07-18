@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/features/notes/video_note_detail_page.dart';
 import 'package:focubili/features/notes/video_note_composer.dart';
 import 'package:focubili/features/notes/video_notes_page.dart';
+import 'package:focubili/features/notes/video_note_share_preview.dart';
 import 'package:focubili/models/video_note.dart';
 import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/services/bilibili_service.dart';
@@ -140,10 +141,7 @@ void main() {
     await service.saveNote(_createPageNote());
     await tester.pumpWidget(
       MaterialApp(
-        home: VideoNotesPage(
-          noteService: service,
-          videoService: videoService,
-        ),
+        home: VideoNotesPage(noteService: service, videoService: videoService),
       ),
     );
     await tester.pumpAndSettle();
@@ -198,6 +196,34 @@ void main() {
     expect(await service.loadNotes(), isEmpty);
   });
 
+  /// 验证右上角使用明确“导出”文字，进入选择后同时提供保存和分享文件。
+  testWidgets('笔记列表导出入口支持多选后保存或分享文件', (WidgetTester tester) async {
+    final VideoNoteService service = await _createPageNoteService();
+    await service.saveNote(_createPageNote());
+    await tester.pumpWidget(
+      MaterialApp(home: VideoNotesPage(noteService: service)),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.widgetWithText(TextButton, '导出'), findsOneWidget);
+    expect(find.byIcon(Icons.checklist_rounded), findsNothing);
+    await tester.tap(find.byKey(const Key('select-video-notes')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('导出文件'), findsOneWidget);
+    expect(find.text('分享文件'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('managed-video-note-managed-note')));
+    await tester.pump();
+    final OutlinedButton exportButton = tester.widget<OutlinedButton>(
+      find.byKey(const Key('save-selected-video-notes')),
+    );
+    final FilledButton shareButton = tester.widget<FilledButton>(
+      find.byKey(const Key('share-selected-video-notes')),
+    );
+    expect(exportButton.onPressed, isNotNull);
+    expect(shareButton.onPressed, isNotNull);
+  });
+
   /// 验证旧版本笔记会用公开视频资料补齐视频封面并写回本机。
   testWidgets('旧笔记会自动补齐视频封面', (WidgetTester tester) async {
     final VideoNoteService service = await _createPageNoteService();
@@ -207,10 +233,7 @@ void main() {
     await service.saveNote(_createPageNote());
     await tester.pumpWidget(
       MaterialApp(
-        home: VideoNotesPage(
-          noteService: service,
-          videoService: videoService,
-        ),
+        home: VideoNotesPage(noteService: service, videoService: videoService),
       ),
     );
     await tester.pumpAndSettle();
@@ -245,8 +268,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final Finder frameSection =
-        find.byKey(const Key('note-detail-frame-section'));
+    final Finder frameSection = find.byKey(
+      const Key('note-detail-frame-section'),
+    );
     expect(frameSection, findsOneWidget);
     final Image frameImage = tester.widget<Image>(
       find.descendant(of: frameSection, matching: find.byType(Image)).first,
@@ -278,6 +302,45 @@ void main() {
     expect(find.text('笔记详情'), findsOneWidget);
   });
 
+  /// 验证详情右上角会生成包含来源、正文、时间点、截图和字数的自适应长图。
+  testWidgets('详情页可预览包含截图和完整正文的笔记分享长图', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(500, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final VideoNoteService service = await _createPageNoteService();
+    final File frame = File('assets/icon/focubili_icon.png').absolute;
+    final String longBody = List<String>.filled(
+      80,
+      '这是一段不会在分享图中被截断的笔记正文。',
+    ).join('\n');
+    await tester.pumpWidget(
+      MaterialApp(
+        home: VideoNoteDetailPage(
+          note: _createPageNote(framePath: frame.path).copyWith(body: longBody),
+          noteService: service,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('share-note-from-detail')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('笔记分享预览'), findsOneWidget);
+    expect(find.byType(VideoNoteShareCard), findsOneWidget);
+    expect(find.text('BV · BV1GJ411x7h7'), findsOneWidget);
+    expect(find.text('时间点 · 01:02'), findsOneWidget);
+    expect(find.text('统一管理测试视频'), findsWidgets);
+    expect(find.byKey(const Key('video-note-share-frame')), findsOneWidget);
+    expect(
+      find.text('笔记 ${videoNoteCharacterCount(longBody)} 字'),
+      findsOneWidget,
+    );
+    expect(
+      tester.getSize(find.byKey(const Key('video-note-share-card'))).height,
+      greaterThan(1200),
+    );
+  });
+
   /// 验证视频来源卡会传递正确分P和时间点，未保存退出时必须确认。
   testWidgets('详情来源可跳转对应分P时间点且退出前提醒保存', (WidgetTester tester) async {
     final VideoNoteService service = await _createPageNoteService();
@@ -291,18 +354,19 @@ void main() {
           noteService: service,
           videoService: videoService,
           // 测试播放器构建函数记录详情页传来的分P和时间点，不启动原生播放器。
-          playerBuilder: (
-            VideoPreview video,
-            int initialPartCid,
-            Duration initialPosition,
-          ) {
-            openedCid = initialPartCid;
-            openedPosition = initialPosition;
-            return const Scaffold(
-              key: Key('test-note-player-destination'),
-              body: Text('播放器目标页'),
-            );
-          },
+          playerBuilder:
+              (
+                VideoPreview video,
+                int initialPartCid,
+                Duration initialPosition,
+              ) {
+                openedCid = initialPartCid;
+                openedPosition = initialPosition;
+                return const Scaffold(
+                  key: Key('test-note-player-destination'),
+                  body: Text('播放器目标页'),
+                );
+              },
         ),
       ),
     );

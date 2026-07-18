@@ -22,7 +22,9 @@ class _FakePublicContentService implements BilibiliPublicContentService {
       mid: mid,
       name: '测试UP主',
       avatarUrl: '',
-      sign: '主页签名',
+      sign:
+          '这是一段用于验证展开行为的超长主页简介，包含课程方向、更新计划、资料说明和更多不能被静默隐藏的文字。'
+          '这里继续补充课程适合人群、每周更新时间、配套练习获取方式、常见问题和联系说明，保证简介在手机宽度下真实超过两行。',
       officialDescription: '官方认证',
       followingCount: 12,
       followerCount: 34567,
@@ -38,12 +40,7 @@ class _FakePublicContentService implements BilibiliPublicContentService {
   }) async {
     return CreatorContentPage<CreatorArticle>(
       items: const <CreatorArticle>[
-        CreatorArticle(
-          id: 88,
-          title: '测试专栏',
-          summary: '专栏摘要',
-          coverUrl: '',
-        ),
+        CreatorArticle(id: 88, title: '测试专栏', summary: '专栏摘要', coverUrl: ''),
       ],
       page: page,
       hasMore: false,
@@ -254,6 +251,8 @@ Widget _host(Widget child) {
 void main() {
   /// 验证用户主页只有投稿、专栏和合集标签，不出现消息入口。
   testWidgets('用户主页显示投稿专栏合集且不显示消息', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(450, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
       _host(
         UserProfilePage(
@@ -266,6 +265,17 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('测试UP主'), findsWidgets);
+    expect(find.text('认证：官方认证'), findsOneWidget);
+    expect(find.byKey(const Key('creator-certification')), findsOneWidget);
+    final Finder profileSign = find.byKey(const Key('creator-profile-sign'));
+    expect(tester.widget<Text>(profileSign).maxLines, 2);
+    expect(find.text('展开简介'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('toggle-creator-profile-sign')));
+    await tester.pumpAndSettle();
+    expect(tester.widget<Text>(profileSign).maxLines, isNull);
+    expect(find.text('收起简介'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('toggle-creator-profile-sign')));
+    await tester.pumpAndSettle();
     expect(find.text('投稿'), findsOneWidget);
     expect(find.text('专栏'), findsOneWidget);
     expect(find.text('合集'), findsOneWidget);
@@ -357,14 +367,16 @@ void main() {
     final Finder title = find.byKey(
       const Key('creator-video-title-BV1GJ411x7h7'),
     );
-    final NestedScrollViewState scrollState =
-        tester.state<NestedScrollViewState>(
-      find.byKey(const Key('creator-profile-scroll')),
-    );
+    final NestedScrollViewState scrollState = tester
+        .state<NestedScrollViewState>(
+          find.byKey(const Key('creator-profile-scroll')),
+        );
     expect(header, findsOneWidget);
     expect(scrollState.outerController.offset, 0);
     expect(
-        tester.getRect(thumbnail).right, lessThan(tester.getRect(title).left));
+      tester.getRect(thumbnail).right,
+      lessThan(tester.getRect(title).left),
+    );
 
     await tester.drag(
       find.byKey(const Key('creator-video-list')),

@@ -68,10 +68,14 @@ flutter {
 }
 
 dependencies {
+    // Media3 统一使用 1.10.1，修复旧版提取器、回退和播放状态中的多项崩溃问题。
+    def media3Version = "1.10.1"
     // 使用 Android 官方 Media3 播放 DASH 的独立音视频轨道。
-    implementation "androidx.media3:media3-exoplayer:1.5.1"
+    implementation "androidx.media3:media3-exoplayer:$media3Version"
     // 为边播边缓存提供本地索引数据库，并让缓存可按容量自动淘汰旧数据。
-    implementation "androidx.media3:media3-database:1.5.1"
+    implementation "androidx.media3:media3-database:$media3Version"
     // 将同一个播放器状态暴露给 Android 控制中心、耳机和系统媒体按钮。
-    implementation "androidx.media3:media3-session:1.5.1"
+    implementation "androidx.media3:media3-session:$media3Version"
+    // 原生轨道策略使用本地 JVM 单元测试覆盖，不启动模拟器即可回归。
+    testImplementation "junit:junit:4.13.2"
 }

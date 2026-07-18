@@ -1,22 +1,33 @@
 import 'dart:async';
 
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../models/video_note.dart';
 import '../../models/video_preview.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/video_note_service.dart';
+import '../../services/video_note_export_service.dart';
+import '../../services/video_note_share_service.dart';
 import 'video_note_composer.dart';
 import 'video_note_detail_page.dart';
 
 /// 在“我的”页面统一搜索、查看和删除保存在本机的时间点笔记。
 class VideoNotesPage extends StatefulWidget {
   /// 创建笔记管理页；测试可以注入内存笔记服务和公开视频查询服务。
-  const VideoNotesPage({super.key, this.noteService, this.videoService});
+  const VideoNotesPage({
+    super.key,
+    this.noteService,
+    this.videoService,
+    this.exportService = const VideoNoteExportService(),
+    this.shareService = const VideoNoteShareService(),
+  });
 
   final VideoNoteService? noteService;
   final BilibiliService? videoService;
+  final VideoNoteExportService exportService;
+  final VideoNoteShareService shareService;
 
   /// 创建负责读取、搜索和管理本地笔记的页面状态。
   @override
@@ -32,6 +43,9 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
   bool _loading = true;
   String? _errorMessage;
   String _query = '';
+  final Set<String> _selectedNoteIds = <String>{};
+  bool _selectionMode = false;
+  bool _exporting = false;
 
   /// 初始化本机笔记服务、公开视频服务和搜索输入控制器，再读取笔记。
   @override
@@ -155,6 +169,160 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
     setState(() => _query = '');
   }
 
+  /// 进入选择模式并选中长按的第一条笔记。
+  void _startSelection(VideoNote note) {
+    setState(() {
+      _selectionMode = true;
+      _selectedNoteIds.add(note.id);
+    });
+  }
+
+  /// 切换一条笔记的选中状态；最后一条取消后仍保留选择模式供继续挑选。
+  void _toggleNoteSelection(VideoNote note) {
+    setState(() {
+      if (!_selectedNoteIds.add(note.id)) {
+        _selectedNoteIds.remove(note.id);
+      }
+    });
+  }
+
+  /// 选中当前搜索结果里的全部笔记，避免误把隐藏结果一起导出。
+  void _selectAllVisibleNotes() {
+    setState(() {
+      _selectionMode = true;
+      _selectedNoteIds.addAll(_filteredNotes.map((VideoNote note) => note.id));
+    });
+  }
+
+  /// 退出选择模式并清空所有临时选择，不修改任何笔记数据。
+  void _leaveSelectionMode() {
+    setState(() {
+      _selectionMode = false;
+      _selectedNoteIds.clear();
+    });
+  }
+
+  /// 打开格式选择面板，并把用户选择交给统一导出流程。
+  Future<void> _chooseExportFormat({required bool share}) async {
+    if (_selectedNoteIds.isEmpty || _exporting) {
+      return;
+    }
+    final VideoNoteExportFormat? format =
+        await showModalBottomSheet<VideoNoteExportFormat>(
+          context: context,
+          showDragHandle: true,
+          builder: (BuildContext context) => SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  ListTile(
+                    leading: const Icon(Icons.description_outlined),
+                    title: const Text('导出为 Markdown'),
+                    subtitle: const Text('适合 Obsidian、Notion 等笔记软件读取'),
+                    // Markdown 选择函数只返回格式，生成和保存由外层统一处理。
+                    onTap: () => Navigator.of(
+                      context,
+                    ).pop(VideoNoteExportFormat.markdown),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.data_object_rounded),
+                    title: const Text('导出为 JSON'),
+                    subtitle: const Text('保留焦点哔哩字段，便于后续回导'),
+                    // JSON 选择函数只返回格式，避免底部面板直接执行耗时文件操作。
+                    onTap: () =>
+                        Navigator.of(context).pop(VideoNoteExportFormat.json),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+    if (format != null && mounted) {
+      if (share) {
+        await _shareSelectedNotes(format);
+      } else {
+        await _exportSelectedNotes(format);
+      }
+    }
+  }
+
+  /// 生成与导出相同的笔记文件，并交给系统分享面板选择目标 App。
+  Future<void> _shareSelectedNotes(VideoNoteExportFormat format) async {
+    final List<VideoNote> selectedNotes = _notes
+        .where((VideoNote note) => _selectedNoteIds.contains(note.id))
+        .toList(growable: false);
+    if (selectedNotes.isEmpty) {
+      return;
+    }
+    setState(() => _exporting = true);
+    try {
+      final VideoNoteExportPackage package = await widget.exportService
+          .buildPackage(selectedNotes, format);
+      await widget.shareService.shareExportPackage(package);
+      if (!mounted) {
+        return;
+      }
+      _leaveSelectionMode();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('笔记文件分享失败，请稍后重试。')));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _exporting = false);
+      }
+    }
+  }
+
+  /// 生成导出文件并调用系统“另存为”；取消选择位置不会误报成功。
+  Future<void> _exportSelectedNotes(VideoNoteExportFormat format) async {
+    final List<VideoNote> selectedNotes = _notes
+        .where((VideoNote note) => _selectedNoteIds.contains(note.id))
+        .toList(growable: false);
+    if (selectedNotes.isEmpty) {
+      return;
+    }
+    setState(() => _exporting = true);
+    try {
+      final VideoNoteExportPackage package = await widget.exportService
+          .buildPackage(selectedNotes, format);
+      final String? savedPath = await FilePicker.saveFile(
+        dialogTitle: '保存焦点哔哩笔记',
+        fileName: package.fileName,
+        type: FileType.custom,
+        allowedExtensions: <String>[package.extension],
+        bytes: package.bytes,
+      );
+      if (!mounted || savedPath == null) {
+        return;
+      }
+      _leaveSelectionMode();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            package.imageCount > 0
+                ? '已导出 ${package.noteCount} 条笔记和 ${package.imageCount} 张图片。'
+                : '已导出 ${package.noteCount} 条笔记。',
+          ),
+        ),
+      );
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('笔记导出失败，请检查存储位置后重试。')));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _exporting = false);
+      }
+    }
+  }
+
   /// 把用户带到独立笔记详情页，并在返回后重新读取可能修改的数据。
   Future<void> _openNote(VideoNote note) async {
     await Navigator.of(context).push<bool>(
@@ -232,13 +400,25 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
-        // 笔记卡点击函数进入独立详情页，不再弹出底部编辑窗口。
-        onTap: () => _openNote(note),
+        // 笔记卡点击函数在选择模式切换选中状态，否则进入独立详情页。
+        onTap: _selectionMode
+            ? () => _toggleNoteSelection(note)
+            : () => _openNote(note),
+        // 笔记卡长按函数进入批量选择模式并选中当前笔记。
+        onLongPress: () => _startSelection(note),
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
+              if (_selectionMode) ...<Widget>[
+                Checkbox(
+                  value: _selectedNoteIds.contains(note.id),
+                  // 复选框函数与整张卡片共享相同选择逻辑。
+                  onChanged: (_) => _toggleNoteSelection(note),
+                ),
+                const SizedBox(width: 4),
+              ],
               ClipRRect(
                 borderRadius: BorderRadius.circular(10),
                 child: SizedBox(
@@ -310,27 +490,28 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
                   ),
                 ),
               ),
-              PopupMenuButton<String>(
-                key: Key('managed-video-note-menu-${note.id}'),
-                tooltip: '笔记操作',
-                // 菜单选择函数把删除操作交给带确认框的统一删除流程。
-                onSelected: (String value) {
-                  if (value == 'delete') {
-                    _deleteNote(note);
-                  }
-                },
-                itemBuilder: (BuildContext context) =>
-                    const <PopupMenuEntry<String>>[
-                      PopupMenuItem<String>(
-                        value: 'delete',
-                        child: ListTile(
-                          dense: true,
-                          leading: Icon(Icons.delete_outline_rounded),
-                          title: Text('删除笔记'),
+              if (!_selectionMode)
+                PopupMenuButton<String>(
+                  key: Key('managed-video-note-menu-${note.id}'),
+                  tooltip: '笔记操作',
+                  // 菜单选择函数把删除操作交给带确认框的统一删除流程。
+                  onSelected: (String value) {
+                    if (value == 'delete') {
+                      _deleteNote(note);
+                    }
+                  },
+                  itemBuilder: (BuildContext context) =>
+                      const <PopupMenuEntry<String>>[
+                        PopupMenuItem<String>(
+                          value: 'delete',
+                          child: ListTile(
+                            dense: true,
+                            leading: Icon(Icons.delete_outline_rounded),
+                            title: Text('删除笔记'),
+                          ),
                         ),
-                      ),
-                    ],
-              ),
+                      ],
+                ),
             ],
           ),
         ),
@@ -396,6 +577,50 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
               textAlign: TextAlign.center,
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// 选择模式下在底部同时提供保存文件和分享文件，避免两个动作隐藏在菜单里。
+  Widget _buildSelectionActions() {
+    final bool enabled = _selectedNoteIds.isNotEmpty && !_exporting;
+    return SafeArea(
+      top: false,
+      child: Material(
+        elevation: 10,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+          child: Row(
+            children: <Widget>[
+              Expanded(
+                child: OutlinedButton.icon(
+                  key: const Key('save-selected-video-notes'),
+                  onPressed: enabled
+                      ? () => _chooseExportFormat(share: false)
+                      : null,
+                  icon: const Icon(Icons.download_outlined),
+                  label: const Text('导出文件'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: FilledButton.icon(
+                  key: const Key('share-selected-video-notes'),
+                  onPressed: enabled
+                      ? () => _chooseExportFormat(share: true)
+                      : null,
+                  icon: _exporting
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.ios_share_rounded),
+                  label: Text(_exporting ? '处理中…' : '分享文件'),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -469,17 +694,45 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
     }
     return Scaffold(
       appBar: AppBar(
-        title: const Text('时间点笔记'),
+        leading: _selectionMode
+            ? IconButton(
+                // 选择模式关闭函数放弃临时勾选并回到普通浏览。
+                onPressed: _leaveSelectionMode,
+                icon: const Icon(Icons.close_rounded),
+                tooltip: '取消选择',
+              )
+            : null,
+        title: Text(
+          _selectionMode ? '已选择 ${_selectedNoteIds.length} 条' : '时间点笔记',
+        ),
         actions: <Widget>[
-          IconButton(
-            // 顶部刷新函数重新同步本机笔记列表。
-            onPressed: _loadNotes,
-            icon: const Icon(Icons.refresh_rounded),
-            tooltip: '刷新',
-          ),
+          if (_selectionMode) ...<Widget>[
+            IconButton(
+              // 全选按钮函数只勾选当前搜索结果中的可见笔记。
+              onPressed: _selectAllVisibleNotes,
+              icon: const Icon(Icons.select_all_rounded),
+              tooltip: '全选当前结果',
+            ),
+          ] else ...<Widget>[
+            TextButton(
+              key: const Key('select-video-notes'),
+              // “导出”文字按钮进入批量选择模式，避免含义不明的清单图标。
+              onPressed: _notes.isEmpty
+                  ? null
+                  : () => setState(() => _selectionMode = true),
+              child: const Text('导出'),
+            ),
+            IconButton(
+              // 顶部刷新函数重新同步本机笔记列表。
+              onPressed: _loadNotes,
+              icon: const Icon(Icons.refresh_rounded),
+              tooltip: '刷新',
+            ),
+          ],
         ],
       ),
       body: body,
+      bottomNavigationBar: _selectionMode ? _buildSelectionActions() : null,
     );
   }
 }

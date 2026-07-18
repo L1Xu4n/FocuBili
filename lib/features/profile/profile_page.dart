@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/router/app_router.dart';
 import '../../services/bilibili_auth_service.dart';
+import '../../services/app_update_service.dart';
 import 'favorite_folders_page.dart';
 import 'followed_creators_page.dart';
 import 'login_page.dart';
@@ -39,8 +40,8 @@ class _ProfilePageState extends State<ProfilePage> {
       setState(() => _loadingAccount = true);
     }
     try {
-      final BilibiliSessionState session =
-          await _authService.loadCurrentSession();
+      final BilibiliSessionState session = await _authService
+          .loadCurrentSession();
       if (mounted) {
         setState(() {
           _session = session;
@@ -69,9 +70,8 @@ class _ProfilePageState extends State<ProfilePage> {
       result = await Navigator.of(context).push<BilibiliAccount>(
         MaterialPageRoute<BilibiliAccount>(
           // 账号切换构建函数让用户先进入官方网页登录，密码与验证码不会经过 App。
-          builder: (BuildContext context) => const LoginPage(
-            openOfficialLoginOnStart: true,
-          ),
+          builder: (BuildContext context) =>
+              const LoginPage(openOfficialLoginOnStart: true),
         ),
       );
     } else {
@@ -173,10 +173,7 @@ class _ProfilePageState extends State<ProfilePage> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          duration: const Duration(seconds: 3),
-        ),
+        SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
       );
   }
 
@@ -259,15 +256,15 @@ class _ProfilePageState extends State<ProfilePage> {
           onSelected: _handleAccountMenuAction,
           itemBuilder: (BuildContext context) =>
               const <PopupMenuEntry<_AccountMenuAction>>[
-            PopupMenuItem<_AccountMenuAction>(
-              value: _AccountMenuAction.switchAccount,
-              child: Text('切换账号'),
-            ),
-            PopupMenuItem<_AccountMenuAction>(
-              value: _AccountMenuAction.logout,
-              child: Text('退出登录'),
-            ),
-          ],
+                PopupMenuItem<_AccountMenuAction>(
+                  value: _AccountMenuAction.switchAccount,
+                  child: Text('切换账号'),
+                ),
+                PopupMenuItem<_AccountMenuAction>(
+                  value: _AccountMenuAction.logout,
+                  child: Text('退出登录'),
+                ),
+              ],
           tooltip: '账号操作',
         );
       case BilibiliSessionStatus.expired:
@@ -341,6 +338,7 @@ class _ProfilePageState extends State<ProfilePage> {
   /// 创建登录状态卡片以及历史、收藏、笔记和设置入口。
   @override
   Widget build(BuildContext context) {
+    final bool hasUpdate = AppUpdateScope.maybeOf(context)?.hasUpdate ?? false;
     return Scaffold(
       appBar: AppBar(title: const Text('我的')),
       body: ListView(
@@ -408,11 +406,20 @@ class _ProfilePageState extends State<ProfilePage> {
             onTap: () => Navigator.of(context).pushNamed(AppRoutes.videoNotes),
           ),
           _ProfileTile(
+            icon: Icons.insights_rounded,
+            title: '专注数据',
+            // 专注数据入口函数打开本机看板、筛选和统一记录管理页面。
+            onTap: () =>
+                Navigator.of(context).pushNamed(AppRoutes.focusStatistics),
+          ),
+          _ProfileTile(
             icon: Icons.settings_outlined,
             title: '设置',
-            // 设置入口函数进入目前已实现的视频缓存管理页。
-            onTap: () =>
-                Navigator.of(context).pushNamed(AppRoutes.cacheManagement),
+            showBadge: hasUpdate,
+            // 设置入口函数进入个性化设置页，其中仍保留独立缓存管理入口。
+            onTap: () => Navigator.of(
+              context,
+            ).pushNamed(AppRoutes.personalizationSettings),
           ),
         ],
       ),
@@ -427,11 +434,13 @@ class _ProfileTile extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.onTap,
+    this.showBadge = false,
   });
 
   final IconData icon;
   final String title;
   final VoidCallback onTap;
+  final bool showBadge;
 
   /// 创建带圆角卡片、图标和箭头的单个入口。
   @override
@@ -440,7 +449,24 @@ class _ProfileTile extends StatelessWidget {
       child: ListTile(
         leading: Icon(icon),
         title: Text(title),
-        trailing: const Icon(Icons.chevron_right_rounded),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            if (showBadge) ...<Widget>[
+              Container(
+                key: const Key('profile-settings-update-dot'),
+                width: 9,
+                height: 9,
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.error,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 8),
+            ],
+            const Icon(Icons.chevron_right_rounded),
+          ],
+        ),
         onTap: onTap,
       ),
     );

@@ -87,7 +87,8 @@ class _FakeWatchHistoryService extends WatchHistoryService {
     backfilledThumbnails = Map<String, String>.from(thumbnailUrls);
     _entries = _entries
         .map(
-          (WatchHistoryEntry entry) => entry.thumbnailUrl.isEmpty &&
+          (WatchHistoryEntry entry) =>
+              entry.thumbnailUrl.isEmpty &&
                   thumbnailUrls.containsKey(entry.bvid)
               ? entry.copyWith(thumbnailUrl: thumbnailUrls[entry.bvid])
               : entry,
@@ -188,14 +189,13 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     const String thumbnailUrl =
         'https://i0.hdslb.com/bfs/archive/watch-history-cover.jpg';
-    final _FakeWatchHistoryService historyService = _FakeWatchHistoryService(
-      <WatchHistoryEntry>[
-        _entry(
-          thumbnailUrl: thumbnailUrl,
-          lastPosition: const Duration(hours: 1, minutes: 2, seconds: 3),
-        ),
-      ],
-    );
+    final _FakeWatchHistoryService historyService =
+        _FakeWatchHistoryService(<WatchHistoryEntry>[
+          _entry(
+            thumbnailUrl: thumbnailUrl,
+            lastPosition: const Duration(hours: 1, minutes: 2, seconds: 3),
+          ),
+        ]);
     final _FakeBilibiliService bilibiliService = _FakeBilibiliService(
       preview: VideoPreview.placeholder(),
     );
@@ -248,8 +248,9 @@ void main() {
       thumbnailUrl: thumbnailUrl,
       parts: VideoPreview.placeholder().parts,
     );
-    final _FakeBilibiliService bilibiliService =
-        _FakeBilibiliService(preview: preview);
+    final _FakeBilibiliService bilibiliService = _FakeBilibiliService(
+      preview: preview,
+    );
 
     await tester.pumpWidget(
       _buildTestApp(
@@ -260,10 +261,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(bilibiliService.lookupRequests, <String>['BV1GJ411x7h7']);
-    expect(
-      historyService.backfilledThumbnails,
-      <String, String>{'BV1GJ411x7h7': thumbnailUrl},
-    );
+    expect(historyService.backfilledThumbnails, <String, String>{
+      'BV1GJ411x7h7': thumbnailUrl,
+    });
     expect(
       find.byWidgetPredicate(
         (Widget widget) =>
@@ -275,8 +275,9 @@ void main() {
 
   /// 验证清空操作必须确认，确认后只清空页面注入的本机服务。
   testWidgets('清空全部本机记录需要确认', (WidgetTester tester) async {
-    final _FakeWatchHistoryService historyService =
-        _FakeWatchHistoryService(<WatchHistoryEntry>[_entry()]);
+    final _FakeWatchHistoryService historyService = _FakeWatchHistoryService(
+      <WatchHistoryEntry>[_entry()],
+    );
     final _FakeBilibiliService bilibiliService = _FakeBilibiliService(
       preview: VideoPreview.placeholder(),
     );
@@ -302,10 +303,12 @@ void main() {
   testWidgets('点击本机记录会查询详情并进入播放器', (WidgetTester tester) async {
     final WatchHistoryEntry entry = _entry();
     final VideoPreview preview = VideoPreview.placeholder();
-    final _FakeWatchHistoryService historyService =
-        _FakeWatchHistoryService(<WatchHistoryEntry>[entry]);
-    final _FakeBilibiliService bilibiliService =
-        _FakeBilibiliService(preview: preview);
+    final _FakeWatchHistoryService historyService = _FakeWatchHistoryService(
+      <WatchHistoryEntry>[entry],
+    );
+    final _FakeBilibiliService bilibiliService = _FakeBilibiliService(
+      preview: preview,
+    );
     final _RecordingNavigatorObserver observer = _RecordingNavigatorObserver();
 
     await tester.pumpWidget(
@@ -326,8 +329,9 @@ void main() {
 
   /// 验证查询失败时不删除记录，并显示持续三秒的错误提示。
   testWidgets('查询失败会保留记录并显示三秒提示', (WidgetTester tester) async {
-    final _FakeWatchHistoryService historyService =
-        _FakeWatchHistoryService(<WatchHistoryEntry>[_entry()]);
+    final _FakeWatchHistoryService historyService = _FakeWatchHistoryService(
+      <WatchHistoryEntry>[_entry()],
+    );
     final _FakeBilibiliService bilibiliService = _FakeBilibiliService(
       error: const BilibiliLookupException('测试查询失败'),
     );

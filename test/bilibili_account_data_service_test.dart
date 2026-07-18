@@ -45,10 +45,7 @@ class _RecordingAccountDataApi implements BilibiliAccountDataApi {
 
   /// 记录服务构造的请求后交给测试回调，不会把 Cookie 写入磁盘或日志。
   @override
-  Future<BilibiliAccountDataResponse> get(
-    Uri endpoint,
-    String cookieHeader,
-  ) {
+  Future<BilibiliAccountDataResponse> get(Uri endpoint, String cookieHeader) {
     endpoints.add(endpoint);
     receivedCookies.add(cookieHeader);
     return _handler(endpoint);
@@ -90,8 +87,10 @@ void main() {
       (Uri _) async => throw StateError('不应请求网络'),
     );
 
-    final AccountDataPage<FavoriteFolder> result =
-        await _service(session, api).loadFavoriteFolders();
+    final AccountDataPage<FavoriteFolder> result = await _service(
+      session,
+      api,
+    ).loadFavoriteFolders();
 
     expect(result.status, AccountDataLoadStatus.signedOut);
     expect(api.endpoints, isEmpty);
@@ -110,10 +109,14 @@ void main() {
       state: const BilibiliSessionState.networkError(),
     );
 
-    final AccountDataPage<FavoriteFolder> expired =
-        await _service(expiredSession, api).loadFavoriteFolders();
-    final AccountDataPage<FavoriteFolder> offline =
-        await _service(offlineSession, api).loadFavoriteFolders();
+    final AccountDataPage<FavoriteFolder> expired = await _service(
+      expiredSession,
+      api,
+    ).loadFavoriteFolders();
+    final AccountDataPage<FavoriteFolder> offline = await _service(
+      offlineSession,
+      api,
+    ).loadFavoriteFolders();
 
     expect(expired.status, AccountDataLoadStatus.expired);
     expect(offline.status, AccountDataLoadStatus.networkError);
@@ -148,8 +151,10 @@ void main() {
       '''),
     );
 
-    final AccountDataPage<FavoriteFolder> result =
-        await _service(session, api).loadFavoriteFolders();
+    final AccountDataPage<FavoriteFolder> result = await _service(
+      session,
+      api,
+    ).loadFavoriteFolders();
 
     expect(result.status, AccountDataLoadStatus.success);
     expect(result.isEmpty, isFalse);
@@ -200,8 +205,10 @@ void main() {
       '''),
     );
 
-    final AccountDataPage<FavoriteVideo> result =
-        await _service(session, api).loadFavoriteVideos(1001, page: 2);
+    final AccountDataPage<FavoriteVideo> result = await _service(
+      session,
+      api,
+    ).loadFavoriteVideos(1001, page: 2);
 
     expect(result.status, AccountDataLoadStatus.success);
     expect(result.page, 2);
@@ -310,8 +317,10 @@ void main() {
       '''),
     );
 
-    final AccountDataPage<FollowedCreator> result =
-        await _service(session, api).loadFollowedCreators();
+    final AccountDataPage<FollowedCreator> result = await _service(
+      session,
+      api,
+    ).loadFollowedCreators();
 
     expect(result.status, AccountDataLoadStatus.success);
     expect(result.totalCount, 51);
@@ -363,8 +372,10 @@ void main() {
       '''),
     );
 
-    final AccountDataPage<SubscribedCollection> result =
-        await _service(session, api).loadSubscribedCollections();
+    final AccountDataPage<SubscribedCollection> result = await _service(
+      session,
+      api,
+    ).loadSubscribedCollections();
 
     expect(result.status, AccountDataLoadStatus.success);
     expect(result.hasMore, isTrue);
@@ -372,10 +383,7 @@ void main() {
     expect(result.items.single.title, '山河合集');
     expect(result.items.single.ownerMid, 7);
     expect(result.items.single.videoCount, 9);
-    expect(
-      result.items.single.coverUrl,
-      'https://i0.hdslb.com/collection.jpg',
-    );
+    expect(result.items.single.coverUrl, 'https://i0.hdslb.com/collection.jpg');
     expect(api.endpoints.single.path, '/x/v3/fav/folder/collected/list');
     expect(api.endpoints.single.queryParameters['up_mid'], '99');
     expect(api.endpoints.single.queryParameters['pn'], '1');

@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 0.2.2+4
+version: 1.0.0+5
 
 environment:
   # Flutter 3.44 随附 Dart 3.12；明确下限可避免旧工具链误用新的依赖锁定结果。
@@ -31,11 +31,19 @@ environment:
 # versions available, run `flutter pub outdated`.
 dependencies:
   # 以下版本已在 Flutter 3.44.6 下完成解析、测试和 Android 构建验证。
+  archive: ^4.0.9
   cached_network_image: ^3.4.1
   crypto: ^3.0.7
+  file_picker: ^11.0.2
   flutter:
     sdk: flutter
+  # 8.3.1 兼容项目当前 AGP 8.11.1；9+ 要求 AGP 8.12.1/Kotlin 2.2。
+  package_info_plus: ^8.3.1
+  path_provider: ^2.1.6
+  # 11.1.0 使用新的 SharePlus API，并兼容项目当前 AGP 8.11.1；12+ 要求 AGP 8.12.1/Kotlin 2.2。
+  share_plus: ^11.1.0
   shared_preferences: ^2.5.5
+  url_launcher: ^6.3.2
   webview_flutter: ^4.14.1
 
 
@@ -64,6 +72,8 @@ flutter:
   # 保留应用图标源文件，便于 Flutter 页面或其他平台后续复用。
   assets:
     - assets/icon/focubili_icon.png
+    # 鼓励语料单独保存，后续可直接编辑文案而无需修改 Dart 逻辑。
+    - assets/data/focus_encouragements.json
 
   # To add assets to your application, add an assets section, like this:
   # assets:

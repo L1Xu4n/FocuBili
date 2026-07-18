@@ -14,11 +14,12 @@ import 'bilibili_service.dart';
 typedef PublicContentJsonRequest = Future<String> Function(Uri endpoint);
 
 /// 定义可携带现有会话和精确来源页的请求函数，测试时可以确认 Cookie 不会被丢弃。
-typedef PublicContentSessionJsonRequest = Future<String> Function(
-  Uri endpoint, {
-  required String cookieHeader,
-  required String referer,
-});
+typedef PublicContentSessionJsonRequest =
+    Future<String> Function(
+      Uri endpoint, {
+      required String cookieHeader,
+      required String referer,
+    });
 
 /// 定义用户主页及 UGC 合集需要的只读公开内容能力。
 abstract interface class BilibiliPublicContentService {
@@ -60,14 +61,16 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
     PublicContentJsonRequest? requestJson,
     PublicContentSessionJsonRequest? requestSessionJson,
     BilibiliCookieStore? cookieStore,
-  })  : _requestJson = requestJson ?? _requestPublicJson,
-        _requestSessionJson = requestSessionJson ??
-            (requestJson == null
-                ? _requestPublicSessionJson
-                : _adaptInjectedRequest(requestJson)),
-        _cookieStore = cookieStore ?? const PlatformBilibiliCookieStore(),
-        _skipPlatformCookie = cookieStore == null &&
-            (requestJson != null || requestSessionJson != null);
+  }) : _requestJson = requestJson ?? _requestPublicJson,
+       _requestSessionJson =
+           requestSessionJson ??
+           (requestJson == null
+               ? _requestPublicSessionJson
+               : _adaptInjectedRequest(requestJson)),
+       _cookieStore = cookieStore ?? const PlatformBilibiliCookieStore(),
+       _skipPlatformCookie =
+           cookieStore == null &&
+           (requestJson != null || requestSessionJson != null);
 
   static const String _apiHost = 'api.bilibili.com';
   static const String _desktopUserAgent =
@@ -217,9 +220,7 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
     int mid, {
     required String cookieHeader,
   }) async {
-    final String mixinKey = await _loadWbiMixinKey(
-      cookieHeader: cookieHeader,
-    );
+    final String mixinKey = await _loadWbiMixinKey(cookieHeader: cookieHeader);
     final Map<String, String> parameters = <String, String>{
       'mid': mid.toString(),
       'token': '',
@@ -241,11 +242,9 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
     Map<Object?, Object?> relation = const <Object?, Object?>{};
     try {
       relation = await _requestSpaceData(
-        Uri.https(
-          _apiHost,
-          '/x/relation/stat',
-          <String, String>{'vmid': mid.toString()},
-        ),
+        Uri.https(_apiHost, '/x/relation/stat', <String, String>{
+          'vmid': mid.toString(),
+        }),
         mid: mid,
         cookieHeader: cookieHeader,
         section: 'dynamic',
@@ -259,10 +258,7 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
       name: _readText(profile['name'], '未知 UP 主'),
       avatarUrl: _normalizeImageUrl(_readText(profile['face'], '')),
       sign: _readText(profile['sign'], ''),
-      officialDescription: _readText(
-        official['desc'] ?? official['title'],
-        '',
-      ),
+      officialDescription: _readText(official['desc'] ?? official['title'], ''),
       followingCount: _readNonNegativeInt(relation['following']),
       followerCount: _readNonNegativeInt(relation['follower']),
     );
@@ -337,9 +333,7 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
     required CreatorVideoOrder order,
     required String cookieHeader,
   }) async {
-    final String mixinKey = await _loadWbiMixinKey(
-      cookieHeader: cookieHeader,
-    );
+    final String mixinKey = await _loadWbiMixinKey(cookieHeader: cookieHeader);
     final Map<String, String> parameters = <String, String>{
       'mid': mid.toString(),
       'pn': safePage.toString(),
@@ -358,11 +352,7 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
       '/x/space/wbi/arc/search',
       _signWbiParameters(parameters, mixinKey),
     );
-    return _requestSpaceData(
-      endpoint,
-      mid: mid,
-      cookieHeader: cookieHeader,
-    );
+    return _requestSpaceData(endpoint, mid: mid, cookieHeader: cookieHeader);
   }
 
   /// 在 WBI 投稿仍被风控时只尝试一次旧接口，不进行会加重封禁的快速循环重试。
@@ -373,22 +363,15 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
     required CreatorVideoOrder order,
     required String cookieHeader,
   }) {
-    final Uri endpoint = Uri.https(
-      _apiHost,
-      '/x/space/arc/search',
-      <String, String>{
-        'mid': mid.toString(),
-        'pn': safePage.toString(),
-        'ps': '20',
-        'order': _videoOrderParameter(order),
-        if (keyword.isNotEmpty) 'keyword': keyword,
-      },
-    );
-    return _requestSpaceData(
-      endpoint,
-      mid: mid,
-      cookieHeader: cookieHeader,
-    );
+    final Uri endpoint =
+        Uri.https(_apiHost, '/x/space/arc/search', <String, String>{
+          'mid': mid.toString(),
+          'pn': safePage.toString(),
+          'ps': '20',
+          'order': _videoOrderParameter(order),
+          if (keyword.isNotEmpty) 'keyword': keyword,
+        });
+    return _requestSpaceData(endpoint, mid: mid, cookieHeader: cookieHeader);
   }
 
   /// 把页面选择的排序枚举转换成 B 站投稿接口使用的稳定参数。
@@ -443,16 +426,19 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
     final Map<String, String> values = Map<String, String>.from(parameters)
       ..['wts'] = (DateTime.now().millisecondsSinceEpoch ~/ 1000).toString();
     final List<String> keys = values.keys.toList(growable: false)..sort();
-    final String query = keys.map((String key) {
-      final String filteredValue = values[key]!.replaceAll(
-        _wbiFilteredCharacters,
-        '',
-      );
-      return '${Uri.encodeQueryComponent(key)}='
-          '${Uri.encodeQueryComponent(filteredValue)}';
-    }).join('&');
-    final String signature =
-        md5.convert(utf8.encode('$query$mixinKey')).toString();
+    final String query = keys
+        .map((String key) {
+          final String filteredValue = values[key]!.replaceAll(
+            _wbiFilteredCharacters,
+            '',
+          );
+          return '${Uri.encodeQueryComponent(key)}='
+              '${Uri.encodeQueryComponent(filteredValue)}';
+        })
+        .join('&');
+    final String signature = md5
+        .convert(utf8.encode('$query$mixinKey'))
+        .toString();
     return <String, String>{...values, 'w_rid': signature};
   }
 
@@ -484,16 +470,13 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
   }) async {
     _requirePositiveId(mid, 'UP 主编号');
     final int safePage = _safePage(page);
-    final Uri endpoint = Uri.https(
-      _apiHost,
-      '/x/space/article',
-      <String, String>{
-        'mid': mid.toString(),
-        'pn': safePage.toString(),
-        'ps': '20',
-        'sort': 'publish_time',
-      },
-    );
+    final Uri endpoint =
+        Uri.https(_apiHost, '/x/space/article', <String, String>{
+          'mid': mid.toString(),
+          'pn': safePage.toString(),
+          'ps': '20',
+          'sort': 'publish_time',
+        });
     final Map<Object?, Object?> data = await _requestData(endpoint);
     final List<CreatorArticle> articles = <CreatorArticle>[];
     final Object? rawArticles = data['articles'];
@@ -539,8 +522,10 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
     final Object? rawCollections = lists['seasons_list'];
     if (rawCollections is List) {
       for (final Object? rawCollection in rawCollections) {
-        final CreatorCollection? collection =
-            _parseCollection(rawCollection, mid);
+        final CreatorCollection? collection = _parseCollection(
+          rawCollection,
+          mid,
+        );
         if (collection != null) {
           collections.add(collection);
         }
@@ -667,8 +652,9 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
           publishedAt: _readUnixTime(item['pubdate'] ?? item['created']),
           stats: VideoStats(
             viewCount: _readNonNegativeInt(stats['view'] ?? item['play']),
-            danmakuCount:
-                _readNonNegativeInt(stats['danmaku'] ?? item['video_review']),
+            danmakuCount: _readNonNegativeInt(
+              stats['danmaku'] ?? item['video_review'],
+            ),
             favoriteCount: _readNonNegativeInt(
               stats['favorite'] ?? item['favorites'] ?? item['favorite'],
             ),
@@ -813,22 +799,26 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
     final int? seconds = _readPositiveInt(value);
     return seconds == null
         ? null
-        : DateTime.fromMillisecondsSinceEpoch(seconds * 1000, isUtc: true)
-            .toLocal();
+        : DateTime.fromMillisecondsSinceEpoch(
+            seconds * 1000,
+            isUtc: true,
+          ).toLocal();
   }
 
   /// 把可信 B 站图片地址统一为 HTTPS，不允许加载任意第三方图片域名。
   String _normalizeImageUrl(String value) {
     final String withScheme = value.startsWith('//') ? 'https:$value' : value;
     final Uri? parsed = Uri.tryParse(withScheme);
-    final bool trustedHost = parsed != null &&
+    final bool trustedHost =
+        parsed != null &&
         (parsed.host.endsWith('.hdslb.com') ||
             parsed.host.endsWith('.biliimg.com'));
     if (parsed == null || !trustedHost) {
       return '';
     }
-    final Uri uri =
-        parsed.scheme == 'http' ? parsed.replace(scheme: 'https') : parsed;
+    final Uri uri = parsed.scheme == 'http'
+        ? parsed.replace(scheme: 'https')
+        : parsed;
     if (uri.scheme != 'https' ||
         (!uri.host.endsWith('.hdslb.com') &&
             !uri.host.endsWith('.biliimg.com'))) {
@@ -848,10 +838,7 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
 
   /// 发出不带 Cookie 的公开 HTTPS 请求，并把常见网络错误转换为可读提示。
   static Future<String> _requestPublicJson(Uri endpoint) async {
-    return _sendPublicJson(
-      endpoint,
-      referer: 'https://space.bilibili.com/',
-    );
+    return _sendPublicJson(endpoint, referer: 'https://space.bilibili.com/');
   }
 
   /// 发出携带现有会话的投稿请求；Cookie 仅进入请求头，不会被打印或保存。

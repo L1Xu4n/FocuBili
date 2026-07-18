@@ -394,15 +394,17 @@ void main() {
         BilibiliHttpPublicContentService(requestJson: request.call);
 
     final CreatorContentPage<CreatorVideo> videos = await service.loadVideos(7);
-    final CreatorContentPage<CreatorArticle> articles =
-        await service.loadArticles(7);
+    final CreatorContentPage<CreatorArticle> articles = await service
+        .loadArticles(7);
 
     expect(videos.items.single.bvid, 'BV1GJ411x7h7');
     expect(videos.items.single.stats.viewCount, 100);
     expect(videos.items.single.stats.favoriteCount, 22);
     expect(videos.items.single.partCount, 748);
     expect(
-        videos.items.single.duration, const Duration(minutes: 2, seconds: 5));
+      videos.items.single.duration,
+      const Duration(minutes: 2, seconds: 5),
+    );
     expect(
       videos.items.single.coverUrl,
       'https://i0.hdslb.com/video.jpg@480w_270h_1c.webp',
@@ -418,10 +420,10 @@ void main() {
     final BilibiliHttpPublicContentService service =
         BilibiliHttpPublicContentService(requestJson: request.call);
 
-    final CreatorContentPage<CreatorCollection> collections =
-        await service.loadCollections(7);
-    final CreatorContentPage<CreatorVideo> entries =
-        await service.loadCollectionVideos(7, 900);
+    final CreatorContentPage<CreatorCollection> collections = await service
+        .loadCollections(7);
+    final CreatorContentPage<CreatorVideo> entries = await service
+        .loadCollectionVideos(7, 900);
 
     expect(collections.items, hasLength(1));
     expect(collections.items.single.title, '山河合集');
@@ -435,10 +437,7 @@ void main() {
       entries.items.single.coverUrl,
       'https://i0.hdslb.com/second.jpg@480w_270h_1c.webp',
     );
-    expect(
-      request.endpoints.last.queryParameters['season_id'],
-      '900',
-    );
+    expect(request.endpoints.last.queryParameters['season_id'], '900');
   });
 
   /// 验证投稿优先使用 WBI 签名接口，不先访问容易触发 -799 的旧接口。
@@ -450,13 +449,10 @@ void main() {
     final CreatorContentPage<CreatorVideo> videos = await service.loadVideos(7);
 
     expect(videos.items.single.title, 'WBI 投稿');
-    expect(
-      request.endpoints.map((Uri endpoint) => endpoint.path),
-      <String>[
-        '/x/web-interface/nav',
-        '/x/space/wbi/arc/search',
-      ],
-    );
+    expect(request.endpoints.map((Uri endpoint) => endpoint.path), <String>[
+      '/x/web-interface/nav',
+      '/x/space/wbi/arc/search',
+    ]);
     final Uri signedEndpoint = request.endpoints.last;
     expect(signedEndpoint.queryParameters['wts'], isNotEmpty);
     expect(signedEndpoint.queryParameters['w_rid'], hasLength(32));
@@ -496,7 +492,9 @@ void main() {
     expect(request.legacyAttempts, 1);
     expect(videos.items.single.title, '旧接口降级成功');
     expect(
-        videos.items.single.duration, const Duration(minutes: 1, seconds: 30));
+      videos.items.single.duration,
+      const Duration(minutes: 1, seconds: 30),
+    );
   });
 
   /// 验证投稿 WBI 密钥和列表请求都复用现有会话，且列表来源页包含真实 UP 主编号。
@@ -505,9 +503,9 @@ void main() {
     final _SessionAwareRequest request = _SessionAwareRequest();
     final BilibiliHttpPublicContentService service =
         BilibiliHttpPublicContentService(
-      requestSessionJson: request.call,
-      cookieStore: _FakeCookieStore(cookie),
-    );
+          requestSessionJson: request.call,
+          cookieStore: _FakeCookieStore(cookie),
+        );
 
     final CreatorContentPage<CreatorVideo> videos = await service.loadVideos(7);
 
@@ -515,10 +513,7 @@ void main() {
     expect(request.cookieHeaders, everyElement(cookie));
     expect(request.referers.first, 'https://www.bilibili.com/');
     expect(request.referers.last, 'https://space.bilibili.com/7/video');
-    expect(
-      request.endpoints.last.queryParameters['web_location'],
-      '333.1387',
-    );
+    expect(request.endpoints.last.queryParameters['web_location'], '333.1387');
   });
 
   /// 验证资料 WBI 降级全过程复用现有会话，并使用 PiliPlus 同款动态页来源。
@@ -528,9 +523,9 @@ void main() {
     final _SessionAwareRequest request = _SessionAwareRequest();
     final BilibiliHttpPublicContentService service =
         BilibiliHttpPublicContentService(
-      requestSessionJson: request.call,
-      cookieStore: _FakeCookieStore(cookie),
-    );
+          requestSessionJson: request.call,
+          cookieStore: _FakeCookieStore(cookie),
+        );
 
     final CreatorProfile profile = await service.loadProfile(largeMid);
 

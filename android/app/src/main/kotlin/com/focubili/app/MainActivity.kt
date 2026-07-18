@@ -4,6 +4,7 @@ import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
+import androidx.annotation.NonNull
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.android.FlutterActivity
 
@@ -12,6 +13,7 @@ class MainActivity : FlutterActivity() {
     private var nativePlaybackController: NativePlaybackController? = null
     private var bilibiliCookieController: BilibiliCookieController? = null
     private var deviceStatusController: DeviceStatusController? = null
+    private var focusNotificationController: FocusNotificationController? = null
 
     /** Activity 创建时允许横屏内容延伸到刘海短边，确保视频按物理屏幕中心布局。 */
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -42,6 +44,22 @@ class MainActivity : FlutterActivity() {
             activity = this,
             messenger = flutterEngine.dartExecutor.binaryMessenger,
         )
+        focusNotificationController = FocusNotificationController(
+            activity = this,
+            messenger = flutterEngine.dartExecutor.binaryMessenger,
+        )
+    }
+
+    /** 把 Android 13 通知权限结果交给专注通知控制器，再保留 Flutter 默认处理。 */
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        @NonNull permissions: Array<out String>,
+        @NonNull grantResults: IntArray,
+    ) {
+        if (focusNotificationController?.onRequestPermissionsResult(requestCode, grantResults) == true) {
+            return
+        }
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
     }
 
     /** App 回到前台时恢复此前主动播放的原生视频。 */
@@ -75,6 +93,8 @@ class MainActivity : FlutterActivity() {
         bilibiliCookieController = null
         deviceStatusController?.dispose()
         deviceStatusController = null
+        focusNotificationController?.dispose()
+        focusNotificationController = null
         super.onDestroy()
     }
 }

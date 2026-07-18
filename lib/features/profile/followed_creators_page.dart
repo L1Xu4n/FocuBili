@@ -69,6 +69,8 @@ class _FollowedCreatorsPageState extends State<FollowedCreatorsPage> {
           mid: creator.mid,
           initialName: creator.name,
           initialAvatarUrl: creator.avatarUrl,
+          initialSign: creator.sign,
+          initialOfficialDescription: creator.officialDescription,
           publicContentService: _publicContentService,
           videoService: _videoService,
         ),
@@ -81,8 +83,8 @@ class _FollowedCreatorsPageState extends State<FollowedCreatorsPage> {
     if (mounted) {
       setState(() => _isLoading = true);
     }
-    final AccountDataPage<FollowedCreator> result =
-        await _accountDataService.loadFollowedCreators();
+    final AccountDataPage<FollowedCreator> result = await _accountDataService
+        .loadFollowedCreators();
     if (!mounted) {
       return;
     }
@@ -112,10 +114,8 @@ class _FollowedCreatorsPageState extends State<FollowedCreatorsPage> {
       return;
     }
     setState(() => _isLoadingMore = true);
-    final AccountDataPage<FollowedCreator> result =
-        await _accountDataService.loadFollowedCreators(
-      page: currentPage.page + 1,
-    );
+    final AccountDataPage<FollowedCreator> result = await _accountDataService
+        .loadFollowedCreators(page: currentPage.page + 1);
     if (!mounted) {
       return;
     }
@@ -135,8 +135,9 @@ class _FollowedCreatorsPageState extends State<FollowedCreatorsPage> {
     List<FollowedCreator> current,
     List<FollowedCreator> incoming,
   ) {
-    final Set<int> mids =
-        current.map((FollowedCreator creator) => creator.mid).toSet();
+    final Set<int> mids = current
+        .map((FollowedCreator creator) => creator.mid)
+        .toSet();
     final List<FollowedCreator> merged = <FollowedCreator>[...current];
     for (final FollowedCreator creator in incoming) {
       if (mids.add(creator.mid)) {
@@ -151,20 +152,14 @@ class _FollowedCreatorsPageState extends State<FollowedCreatorsPage> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          duration: const Duration(seconds: 3),
-        ),
+        SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
       );
   }
 
   /// 创建 UP 主头像、网络失败占位图和固定尺寸裁切效果。
   Widget _buildAvatar(FollowedCreator creator) {
     if (creator.avatarUrl.isEmpty) {
-      return const CircleAvatar(
-        radius: 26,
-        child: Icon(Icons.person_rounded),
-      );
+      return const CircleAvatar(radius: 26, child: Icon(Icons.person_rounded));
     }
     return CircleAvatar(
       radius: 26,
@@ -226,9 +221,7 @@ class _FollowedCreatorsPageState extends State<FollowedCreatorsPage> {
           hintText: '搜索昵称、UID、认证或签名',
           prefixIcon: const Icon(Icons.search_rounded),
           isDense: true,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
         ),
       ),
     );
@@ -440,9 +433,7 @@ class _FollowedCreatorsPageState extends State<FollowedCreatorsPage> {
     }
     final AccountDataPage<FollowedCreator>? page = _page;
     if (page == null) {
-      return _buildStatusState(
-        AccountDataPage<FollowedCreator>.unavailable(),
-      );
+      return _buildStatusState(AccountDataPage<FollowedCreator>.unavailable());
     }
     if (!page.isSuccess) {
       return _buildStatusState(page);

@@ -53,8 +53,10 @@ void main() {
     expect(value.opacity, DanmakuPreferences.minOpacity);
     expect(value.fontSize, DanmakuPreferences.maxFontSize);
     expect(value.laneCount, DanmakuPreferences.minLaneCount);
-    expect(value.scrollDurationSeconds,
-        DanmakuPreferences.maxScrollDurationSeconds);
+    expect(
+      value.scrollDurationSeconds,
+      DanmakuPreferences.maxScrollDurationSeconds,
+    );
   });
 
   /// 验证 NaN 和无穷值不会进入滑块或绘制逻辑，而是恢复各字段默认值。

@@ -111,8 +111,8 @@ class _SubscribedCollectionsPageState extends State<SubscribedCollectionsPage> {
     setState(() => _loadingMore = true);
     final AccountDataPage<SubscribedCollection> result =
         await _accountDataService.loadSubscribedCollections(
-      page: current.page + 1,
-    );
+          page: current.page + 1,
+        );
     if (!mounted) {
       return;
     }
@@ -132,8 +132,9 @@ class _SubscribedCollectionsPageState extends State<SubscribedCollectionsPage> {
     List<SubscribedCollection> current,
     List<SubscribedCollection> incoming,
   ) {
-    final Set<int> ids =
-        current.map((SubscribedCollection item) => item.id).toSet();
+    final Set<int> ids = current
+        .map((SubscribedCollection item) => item.id)
+        .toSet();
     return List<SubscribedCollection>.unmodifiable(<SubscribedCollection>[
       ...current,
       ...incoming.where((SubscribedCollection item) => ids.add(item.id)),
@@ -173,10 +174,7 @@ class _SubscribedCollectionsPageState extends State<SubscribedCollectionsPage> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          duration: const Duration(seconds: 3),
-        ),
+        SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
       );
   }
 
@@ -218,8 +216,7 @@ class _SubscribedCollectionsPageState extends State<SubscribedCollectionsPage> {
   Widget _buildStatus(AccountDataPage<SubscribedCollection> page) {
     final IconData icon = switch (page.status) {
       AccountDataLoadStatus.signedOut ||
-      AccountDataLoadStatus.expired =>
-        Icons.login_rounded,
+      AccountDataLoadStatus.expired => Icons.login_rounded,
       AccountDataLoadStatus.networkError => Icons.wifi_off_rounded,
       AccountDataLoadStatus.permissionDenied => Icons.lock_outline_rounded,
       _ => Icons.error_outline_rounded,
@@ -303,9 +300,7 @@ class _SubscribedCollectionsPageState extends State<SubscribedCollectionsPage> {
           hintText: '搜索合集或 UP 主',
           prefixIcon: const Icon(Icons.search_rounded),
           isDense: true,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
         ),
       ),
     );
@@ -395,9 +390,7 @@ class _SubscribedCollectionsPageState extends State<SubscribedCollectionsPage> {
     }
     final AccountDataPage<SubscribedCollection>? page = _page;
     if (page == null) {
-      return _buildStatus(
-        AccountDataPage<SubscribedCollection>.unavailable(),
-      );
+      return _buildStatus(AccountDataPage<SubscribedCollection>.unavailable());
     }
     if (!page.isSuccess) {
       return _buildStatus(page);

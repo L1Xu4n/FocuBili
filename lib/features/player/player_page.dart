@@ -8,6 +8,10 @@ import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
 
 import '../../features/common/watch_history_badge.dart';
+import '../../features/focus/focus_timer_controller.dart';
+import '../../features/focus/focus_timer_scope.dart';
+import '../../features/focus/focus_interruption_dialog.dart';
+import '../../features/focus/player_focus_sheet.dart';
 import '../../features/notes/video_note_composer.dart';
 import '../../features/profile/user_profile_page.dart';
 import '../../models/video_note.dart';
@@ -15,6 +19,7 @@ import '../../models/video_preview.dart';
 import '../../models/video_shot_preview.dart';
 import '../../models/watch_history_entry.dart';
 import '../../services/device_status_service.dart';
+import '../../services/external_link_service.dart';
 import '../../services/native_playback_service.dart';
 import '../../services/player_overlay_service.dart';
 import '../../services/bilibili_public_content_service.dart';
@@ -24,7 +29,15 @@ import '../../services/video_shot_service.dart';
 import '../../services/video_note_service.dart';
 import '../../models/player_overlay_data.dart';
 import '../../models/danmaku_preferences.dart';
+import '../../models/focus_session.dart';
+import '../../models/playback_preferences.dart';
 import '../../services/danmaku_preferences_service.dart';
+import '../../services/playback_preferences_service.dart';
+import 'widgets/player_control_widgets.dart';
+
+part 'player_collection_sheet.dart';
+part 'player_layout_widgets.dart';
+part 'player_danmaku_rendering.dart';
 
 /// 标识一次竖向滑动正在调整亮度、音量，或因底部手势区而不做处理。
 enum _VerticalAdjustmentMode { none, brightness, volume }
@@ -44,6 +57,9 @@ enum _PlayerMoreMenuAction {
 /// 标识合集展开列表的四种本地排序方式，不改变服务端原始合集顺序。
 enum _CollectionEntryOrder { original, newest, oldest, mostPlayed }
 
+/// 标识播放器首次跳转来自笔记还是专注记录，以显示准确提示文案。
+enum PlayerInitialPositionSource { note, focus }
+
 /// 新架构的原生播放器页面，提供简洁的 App 风格控制层。
 class PlayerPage extends StatefulWidget {
   /// 创建播放器页面，并允许测试替换原生播放和本地观看记录服务。
@@ -59,8 +75,12 @@ class PlayerPage extends StatefulWidget {
     this.videoShotService,
     this.videoNoteService,
     this.danmakuPreferencesService,
+    this.playbackPreferencesService,
+    this.focusTimerController,
+    this.externalLinkLauncher,
     this.initialPartCid,
     this.initialPosition,
+    this.initialPositionSource = PlayerInitialPositionSource.note,
   });
 
   final VideoPreview video;
@@ -73,8 +93,12 @@ class PlayerPage extends StatefulWidget {
   final VideoShotService? videoShotService;
   final VideoNoteService? videoNoteService;
   final DanmakuPreferencesService? danmakuPreferencesService;
+  final PlaybackPreferencesService? playbackPreferencesService;
+  final FocusTimerController? focusTimerController;
+  final ExternalLinkLauncher? externalLinkLauncher;
   final int? initialPartCid;
   final Duration? initialPosition;
+  final PlayerInitialPositionSource initialPositionSource;
 
   /// 创建播放器状态，保存播放、进度、控制层和全屏状态。
   @override
@@ -83,7 +107,7 @@ class PlayerPage extends StatefulWidget {
 
 /// 管理原生视频纹理、播放状态、手势、控制层和系统全屏状态。
 class _PlayerPageState extends State<PlayerPage>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   static const Duration _controlsAutoHideDelay = Duration(seconds: 5);
   static const Duration _transientHintDuration = Duration(seconds: 3);
   static const Duration _resumeNoticeDuration = _transientHintDuration;
@@ -95,6 +119,7 @@ class _PlayerPageState extends State<PlayerPage>
   );
   static const double _fullscreenBottomGestureExclusionHeight = 72;
   static const double _fullscreenTopGestureExclusionHeight = 56;
+  static const double _fullscreenHorizontalGestureSideExclusionWidth = 48;
   static const double _horizontalSeekTravelWidthRatio = 0.75;
   static const double _minimumHorizontalSeekRangeSeconds = 120;
   static const double _maximumHorizontalSeekRangeSeconds = 600;
@@ -104,7 +129,14 @@ class _PlayerPageState extends State<PlayerPage>
   );
   static const int _maximumCachedDanmakuSegments = 3;
   static const double _expandedPartItemHeight = 76;
-  static const List<double> _playbackSpeeds = <double>[0.75, 1, 1.25, 1.5, 2];
+  static const List<double> _playbackSpeeds = <double>[
+    0.75,
+    1,
+    1.25,
+    1.5,
+    2,
+    3,
+  ];
 
   late final PlaybackService _playbackService;
   late final WatchHistoryService _watchHistoryService;
@@ -126,6 +158,11 @@ class _PlayerPageState extends State<PlayerPage>
   PlaybackSnapshot _playbackSnapshot = const PlaybackSnapshot();
   int? _textureId;
   bool _fullscreen = false;
+  bool _controlsLocked = false;
+  bool _fullscreenEnteredByOrientation = false;
+  bool _suppressAutoFullscreenUntilPortrait = false;
+  bool _restoreOrientationChoicesOnPortrait = false;
+  bool _orientationSyncScheduled = false;
   bool _showControls = true;
   bool _isDraggingProgress = false;
   double _progress = 0;
@@ -152,7 +189,7 @@ class _PlayerPageState extends State<PlayerPage>
   bool _danmakuPreferencesChangedByUser = false;
   bool _danmakuPersistenceWarningShown = false;
   _VideoFitMode _videoFitMode = _VideoFitMode.contain;
-  bool _temporaryDoubleSpeedActive = false;
+  bool _temporarySpeedActive = false;
   bool _horizontalScrubbing = false;
   bool _isRetrying = false;
   bool _descriptionExpanded = false;
@@ -207,6 +244,18 @@ class _PlayerPageState extends State<PlayerPage>
       const <String, WatchHistoryEntry>{};
   String? _locatedCollectionPreviewBvid;
   late final DanmakuPreferencesService _danmakuPreferencesService;
+  late final PlaybackPreferencesService _playbackPreferencesService;
+  PlaybackPreferences _playbackPreferences = const PlaybackPreferences();
+  FocusTimerController? _boundFocusController;
+  String? _observedFocusSessionId;
+  FocusSessionStatus? _observedFocusStatus;
+  String? _lastFocusPlaybackBvid;
+  int? _lastFocusPlaybackPartCid;
+  bool? _lastFocusPlaybackPlaying;
+  String? _dismissedAssociationCandidate;
+  bool _associationPromptOpen = false;
+  bool _leaveRequestInProgress = false;
+  bool _allowRoutePop = false;
 
   /// 返回配置中的弹幕开关，统一旧播放器代码和持久化模型之间的状态来源。
   bool get _danmakuEnabled => _danmakuPreferences.enabled;
@@ -225,6 +274,7 @@ class _PlayerPageState extends State<PlayerPage>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _danmakuFrameController = AnimationController(
       vsync: this,
       duration: const Duration(hours: 1),
@@ -249,13 +299,189 @@ class _PlayerPageState extends State<PlayerPage>
     _videoNoteService = widget.videoNoteService ?? VideoNoteService();
     _danmakuPreferencesService =
         widget.danmakuPreferencesService ?? DanmakuPreferencesService();
+    _playbackPreferencesService =
+        widget.playbackPreferencesService ?? const PlaybackPreferencesService();
     _pendingInitialPosition = widget.initialPosition;
     _playbackSubscription = _playbackService.states.listen(
       _applyPlaybackSnapshot,
     );
     unawaited(_loadWatchHistoryBadges());
     unawaited(_loadDanmakuPreferences());
+    unawaited(_loadPlaybackPreferences());
+    if (widget.playbackService == null) {
+      unawaited(_allowPlayerOrientations());
+    }
     unawaited(_initializeNativePlayback());
+  }
+
+  /// 绑定应用级专注控制器，使从首页或播放器发起的专注都能触发结束联动。
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _bindFocusController(
+      widget.focusTimerController ?? FocusTimerScope.maybeOf(context),
+    );
+    _scheduleOrientationSync();
+  }
+
+  /// 设备尺寸或旋转发生变化时，在下一帧根据横竖屏同步播放器全屏状态。
+  @override
+  void didChangeMetrics() {
+    _scheduleOrientationSync();
+  }
+
+  /// 播放页存活期间允许手机自由转向，离开页面时会重新恢复应用的竖屏约束。
+  Future<void> _allowPlayerOrientations() async {
+    await SystemChrome.setPreferredOrientations(<DeviceOrientation>[
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
+  }
+
+  /// 把多次系统尺寸变化合并到一帧处理，避免旋转动画中反复进出全屏。
+  void _scheduleOrientationSync() {
+    if (widget.playbackService != null || _orientationSyncScheduled) {
+      return;
+    }
+    _orientationSyncScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _orientationSyncScheduled = false;
+      _syncFullscreenWithOrientation();
+    });
+  }
+
+  /// 横屏自动进入全屏、竖屏退出自动全屏；笔记打开时不自动改变布局。
+  void _syncFullscreenWithOrientation() {
+    if (!mounted) {
+      return;
+    }
+    final Orientation orientation = MediaQuery.orientationOf(context);
+    if (orientation == Orientation.portrait) {
+      _suppressAutoFullscreenUntilPortrait = false;
+      if (_restoreOrientationChoicesOnPortrait) {
+        _restoreOrientationChoicesOnPortrait = false;
+        unawaited(_allowPlayerOrientations());
+      }
+      if (_fullscreen && _fullscreenEnteredByOrientation) {
+        unawaited(
+          _setFullscreen(
+            false,
+            updateOrientation: false,
+            enteredByOrientation: true,
+          ),
+        );
+      }
+      return;
+    }
+    if (!_fullscreen && !_notesOpen && !_suppressAutoFullscreenUntilPortrait) {
+      unawaited(
+        _setFullscreen(
+          true,
+          updateOrientation: false,
+          enteredByOrientation: true,
+        ),
+      );
+    }
+  }
+
+  /// 读取设备里保存的双击手势偏好；读取异常时继续使用默认开启状态。
+  Future<void> _loadPlaybackPreferences() async {
+    try {
+      final PlaybackPreferences preferences = await _playbackPreferencesService
+          .load();
+      if (mounted) {
+        setState(() => _playbackPreferences = preferences);
+      }
+    } catch (_) {
+      // 本地配置损坏不影响视频播放，默认配置已经是可用的安全回退。
+    }
+  }
+
+  /// 测试或父组件更换注入控制器时，解绑旧实例并监听新实例。
+  @override
+  void didUpdateWidget(covariant PlayerPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.focusTimerController != widget.focusTimerController) {
+      _bindFocusController(
+        widget.focusTimerController ?? FocusTimerScope.maybeOf(context),
+      );
+    }
+  }
+
+  /// 切换播放器正在监听的专注控制器，并保存当前活动记录编号。
+  void _bindFocusController(FocusTimerController? controller) {
+    if (identical(_boundFocusController, controller)) {
+      return;
+    }
+    _boundFocusController?.removeListener(_handleFocusStateChanged);
+    _boundFocusController = controller;
+    _observedFocusSessionId = controller?.activeSession?.id;
+    _observedFocusStatus = controller?.activeSession?.status;
+    controller?.addListener(_handleFocusStateChanged);
+    if (controller != null) {
+      _syncFocusPlaybackState(_playbackSnapshot);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(_maybePromptFocusAssociation());
+      });
+    }
+  }
+
+  /// 监听专注状态；自然完成或提前结束时自动暂停当前视频。
+  void _handleFocusStateChanged() {
+    final FocusTimerController? controller = _boundFocusController;
+    if (controller == null) {
+      return;
+    }
+    final FocusSession? active = controller.activeSession;
+    if (active != null) {
+      final bool visualStateChanged =
+          _observedFocusSessionId != active.id ||
+          _observedFocusStatus != active.status;
+      _observedFocusSessionId = active.id;
+      _observedFocusStatus = active.status;
+      if (visualStateChanged && mounted) {
+        setState(() {});
+      }
+      if (!active.hasVideoAssociation) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          unawaited(_maybePromptFocusAssociation());
+        });
+      }
+      return;
+    }
+    final String? previousSessionId = _observedFocusSessionId;
+    final FocusSession? finished = controller.lastFinishedSession;
+    _observedFocusSessionId = null;
+    _observedFocusStatus = null;
+    if (previousSessionId == null || finished?.id != previousSessionId) {
+      return;
+    }
+    unawaited(_handleFinishedFocus(finished!));
+  }
+
+  /// 保存刚结束任务的真实播放帧和进度，再暂停视频并显示结束提示。
+  Future<void> _handleFinishedFocus(FocusSession finished) async {
+    if (_playing) {
+      await _setPlaybackActive(false);
+    }
+    if (finished.sourceBvid == _activeVideo.bvid &&
+        finished.sourcePartCid == _currentPart.cid) {
+      await _boundFocusController?.updateFinishedLastSeen(
+        sessionId: finished.id,
+        framePath: await _captureFocusFrame(),
+        position: _playbackSnapshot.position,
+      );
+    }
+    if (!mounted) {
+      return;
+    }
+    _showPlayerNotice(
+      finished.status == FocusSessionStatus.completed
+          ? '专注完成，视频已暂停'
+          : '专注已结束，视频已暂停',
+    );
+    setState(() {});
   }
 
   /// 启动时恢复全局弹幕配置；旧用户或读取失败由服务返回默认值，页面仍可正常播放。
@@ -456,18 +682,138 @@ class _PlayerPageState extends State<PlayerPage>
     } else if (_showControls && _controlsTimer == null) {
       _restartControlsAutoHideTimer();
     }
+    _syncFocusPlaybackState(snapshot);
+    if (snapshot.phase == PlaybackPhase.ready) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(_maybePromptFocusAssociation());
+      });
+    }
   }
 
-  /// 在播放器首次就绪后跳转到笔记要求的时间点，失败时保留可操作的播放页面。
+  /// 只在播放状态、BV 或分P真正变化时同步专注控制器，避免重复写本机存储。
+  void _syncFocusPlaybackState(PlaybackSnapshot snapshot) {
+    final FocusTimerController? controller = _boundFocusController;
+    if (controller == null) {
+      return;
+    }
+    final bool actuallyPlaying =
+        snapshot.isPlaying && snapshot.phase == PlaybackPhase.ready;
+    if (_lastFocusPlaybackBvid == _activeVideo.bvid &&
+        _lastFocusPlaybackPartCid == _currentPart.cid &&
+        _lastFocusPlaybackPlaying == actuallyPlaying) {
+      return;
+    }
+    _lastFocusPlaybackBvid = _activeVideo.bvid;
+    _lastFocusPlaybackPartCid = _currentPart.cid;
+    _lastFocusPlaybackPlaying = actuallyPlaying;
+    unawaited(
+      controller.updatePlaybackState(
+        bvid: _activeVideo.bvid,
+        partCid: _currentPart.cid,
+        isPlaying: actuallyPlaying,
+      ),
+    );
+  }
+
+  /// 为首页创建且尚未关联的任务询问是否绑定当前真实视频分P。
+  Future<void> _maybePromptFocusAssociation() async {
+    final FocusTimerController? controller = _boundFocusController;
+    final FocusSession? session = controller?.activeSession;
+    final String candidate = '${_activeVideo.bvid}:${_currentPart.cid}';
+    if (!mounted ||
+        controller == null ||
+        session == null ||
+        !session.isActive ||
+        session.hasVideoAssociation ||
+        _playbackSnapshot.phase != PlaybackPhase.ready ||
+        _associationPromptOpen ||
+        _dismissedAssociationCandidate == candidate ||
+        ModalRoute.of(context)?.isCurrent != true) {
+      return;
+    }
+    _associationPromptOpen = true;
+    final bool? confirmed = await showFocusVideoAssociationSheet(
+      context,
+      goal: session.goal,
+      videoTitle: _activeVideo.title,
+      partPageNumber: _currentPart.pageNumber,
+      partTitle: _currentPart.title,
+    );
+    _associationPromptOpen = false;
+    if (!mounted || controller.activeSession?.id != session.id) {
+      return;
+    }
+    if (confirmed == true) {
+      final String? framePath = await _captureFocusFrame();
+      await controller.associateVideo(
+        bvid: _activeVideo.bvid,
+        videoTitle: _activeVideo.title,
+        partCid: _currentPart.cid,
+        partPageNumber: _currentPart.pageNumber,
+        partTitle: _currentPart.title,
+        isPlaying: _playing,
+        framePath: framePath,
+        position: _playbackSnapshot.position,
+      );
+      _dismissedAssociationCandidate = null;
+      if (mounted) {
+        _showPlayerNotice(
+          '已关联视频：${_activeVideo.title}（P${_currentPart.pageNumber} ${_currentPart.title}）',
+        );
+      }
+      return;
+    }
+    _dismissedAssociationCandidate = candidate;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          content: Text('我们将在新的视频提示你关联'),
+          duration: Duration(seconds: 3),
+        ),
+      );
+  }
+
+  /// 尝试保存原生播放器当前画面，失败时仍允许关联和退出。
+  Future<String?> _captureFocusFrame() async {
+    try {
+      return await _playbackService.captureCurrentFrame();
+    } on Object {
+      return null;
+    }
+  }
+
+  /// 保存当前关联视频的最后画面和播放位置，供首页“上次看到”Pin 展示。
+  Future<void> _saveFocusLastSeen() async {
+    final FocusTimerController? controller = _boundFocusController;
+    final FocusSession? session = controller?.activeSession;
+    if (controller == null ||
+        session == null ||
+        session.sourceBvid != _activeVideo.bvid ||
+        session.sourcePartCid != _currentPart.cid) {
+      return;
+    }
+    await controller.updateLastSeen(
+      framePath: await _captureFocusFrame(),
+      position: _playbackSnapshot.position,
+    );
+  }
+
+  /// 在播放器首次就绪后跳转到笔记或专注记录要求的时间点，并显示对应来源文案。
   Future<void> _seekToRequestedInitialPosition(Duration position) async {
+    final bool fromFocus =
+        widget.initialPositionSource == PlayerInitialPositionSource.focus;
+    final String sourceLabel = fromFocus ? '专注位置' : '笔记位置';
     try {
       await _playbackService.seekTo(position);
       if (mounted) {
-        _showTransientSnackBar('已跳转到笔记位置：${formatVideoNotePosition(position)}');
+        _showTransientSnackBar(
+          '已跳转到$sourceLabel：${formatVideoNotePosition(position)}',
+        );
       }
     } catch (_) {
       if (mounted) {
-        _showTransientSnackBar('视频已打开，但暂时无法跳转到笔记时间点。');
+        _showTransientSnackBar('视频已打开，但暂时无法跳转到$sourceLabel。');
       }
     }
   }
@@ -595,7 +941,19 @@ class _PlayerPageState extends State<PlayerPage>
   /// 离开页面前取消重试状态、订阅和计时器，释放原生资源并恢复竖屏与系统栏。
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _flushCurrentWatchHistoryProgress();
+    final FocusTimerController? focusController = _boundFocusController;
+    focusController?.removeListener(_handleFocusStateChanged);
+    if (focusController != null) {
+      unawaited(
+        focusController.updatePlaybackState(
+          bvid: _activeVideo.bvid,
+          partCid: _currentPart.cid,
+          isPlaying: false,
+        ),
+      );
+    }
     _isRetrying = false;
     _controlsTimer?.cancel();
     _seekFeedbackTimer?.cancel();
@@ -637,6 +995,9 @@ class _PlayerPageState extends State<PlayerPage>
 
   /// 响应画面单击：只显示或隐藏控制层，不直接改变播放状态。
   void _toggleControls() {
+    if (_controlsLocked) {
+      return;
+    }
     if (_showControls) {
       _hideControls();
     } else {
@@ -646,6 +1007,9 @@ class _PlayerPageState extends State<PlayerPage>
 
   /// 显示控制层并在播放状态下重新开始自动收起倒计时。
   void _showPlayerControls() {
+    if (_controlsLocked) {
+      return;
+    }
     if (!_showControls) {
       setState(() => _showControls = true);
     }
@@ -667,7 +1031,7 @@ class _PlayerPageState extends State<PlayerPage>
         !_playing ||
         _playbackSnapshot.isInPictureInPicture ||
         _isDraggingProgress ||
-        _temporaryDoubleSpeedActive ||
+        _temporarySpeedActive ||
         _horizontalScrubbing) {
       return;
     }
@@ -677,7 +1041,7 @@ class _PlayerPageState extends State<PlayerPage>
           _playing &&
           !_playbackSnapshot.isInPictureInPicture &&
           !_isDraggingProgress &&
-          !_temporaryDoubleSpeedActive &&
+          !_temporarySpeedActive &&
           !_horizontalScrubbing) {
         setState(() {
           _showControls = false;
@@ -700,8 +1064,12 @@ class _PlayerPageState extends State<PlayerPage>
     _lastDoubleTapPosition = details.localPosition;
   }
 
-  /// 根据双击位置执行左侧快退五秒、右侧快进五秒或中间播放暂停。
+  /// 根据个性化设置执行分区快进快退，或把任意区域双击改成播放暂停。
   void _handleDoubleTap(double playerWidth) {
+    if (!_playbackPreferences.enableDoubleTapSeek) {
+      _togglePlayback();
+      return;
+    }
     final double tapX = _lastDoubleTapPosition?.dx ?? playerWidth / 2;
     if (tapX < playerWidth * 0.35) {
       _seekBy(-5, showFeedback: true);
@@ -778,49 +1146,73 @@ class _PlayerPageState extends State<PlayerPage>
     }
   }
 
-  /// 长按正在播放的画面时记住原倍速，并临时切换为二倍速。
-  void _startTemporaryDoubleSpeed(LongPressStartDetails details) {
-    if (!_playing || _temporaryDoubleSpeedActive || _horizontalScrubbing) {
+  /// 长按正在播放的画面时记住原倍速，并临时切换为三倍速。
+  void _startTemporaryTripleSpeed(LongPressStartDetails details) {
+    if (!_playing || _temporarySpeedActive || _horizontalScrubbing) {
       return;
     }
     _speedBeforeLongPress = _playbackSpeed;
     _stopControlsAutoHideTimer();
     setState(() {
-      _temporaryDoubleSpeedActive = true;
+      _temporarySpeedActive = true;
     });
-    unawaited(_setTemporaryPlaybackSpeed(2));
+    unawaited(_setTemporaryPlaybackSpeed(3));
   }
 
   /// 松开长按手势后恢复长按前的倍速，不改变当前播放进度。
-  void _stopTemporaryDoubleSpeed(LongPressEndDetails details) {
-    if (!_temporaryDoubleSpeedActive) {
+  void _stopTemporaryTripleSpeed(LongPressEndDetails details) {
+    if (!_temporarySpeedActive) {
       return;
     }
     final double speedToRestore = _speedBeforeLongPress;
     setState(() {
-      _temporaryDoubleSpeedActive = false;
+      _temporarySpeedActive = false;
     });
     unawaited(_setTemporaryPlaybackSpeed(speedToRestore));
     _restartControlsAutoHideTimer();
   }
 
-  /// 长按被系统取消时恢复原倍速，避免手势竞争后残留二倍速状态。
+  /// 长按被系统取消时恢复原倍速，避免手势竞争后残留三倍速状态。
   void _cancelTemporaryLongPress() {
-    if (!_temporaryDoubleSpeedActive) {
+    if (!_temporarySpeedActive) {
       return;
     }
     final double speedToRestore = _speedBeforeLongPress;
     setState(() {
-      _temporaryDoubleSpeedActive = false;
+      _temporarySpeedActive = false;
     });
     unawaited(_setTemporaryPlaybackSpeed(speedToRestore));
     _restartControlsAutoHideTimer();
   }
 
   /// 开始横向拖动时记录当前位置，并按视频时长和画面宽度计算自适应快进速度。
-  void _startHorizontalScrub(DragStartDetails details, Size playerSize) {
+  void _startHorizontalScrub(
+    DragStartDetails details,
+    Size playerSize,
+    EdgeInsets systemPadding,
+  ) {
     final double durationSeconds = _displayDuration.inMilliseconds / 1000;
-    if (_temporaryDoubleSpeedActive ||
+    final double protectedSideWidth =
+        (_fullscreenHorizontalGestureSideExclusionWidth + systemPadding.left)
+            .clamp(0, playerSize.width / 3)
+            .toDouble();
+    final double protectedRightWidth =
+        (_fullscreenHorizontalGestureSideExclusionWidth + systemPadding.right)
+            .clamp(0, playerSize.width / 3)
+            .toDouble();
+    final double protectedBottomHeight =
+        (_fullscreenBottomGestureExclusionHeight + systemPadding.bottom)
+            .clamp(0, playerSize.height / 3)
+            .toDouble();
+    final bool startsInFullscreenSafetyZone =
+        _fullscreen &&
+        (details.localPosition.dx <= protectedSideWidth ||
+            details.localPosition.dx >=
+                playerSize.width - protectedRightWidth ||
+            details.localPosition.dy >=
+                playerSize.height - protectedBottomHeight);
+    if (_temporarySpeedActive ||
+        startsInFullscreenSafetyZone ||
         durationSeconds <= 0 ||
         playerSize.width <= 0) {
       return;
@@ -947,12 +1339,12 @@ class _PlayerPageState extends State<PlayerPage>
       }
     } on PlatformException catch (error) {
       if (mounted) {
-        setState(() => _temporaryDoubleSpeedActive = false);
+        setState(() => _temporarySpeedActive = false);
       }
       _showPlaybackError('无法临时切换倍速：${error.message ?? error.code}');
     } catch (error) {
       if (mounted) {
-        setState(() => _temporaryDoubleSpeedActive = false);
+        setState(() => _temporarySpeedActive = false);
       }
       _showPlaybackError('无法临时切换倍速：$error');
     }
@@ -1025,6 +1417,12 @@ class _PlayerPageState extends State<PlayerPage>
       }
       return;
     }
+    await _saveFocusLastSeen();
+    await _boundFocusController?.updatePlaybackState(
+      bvid: _activeVideo.bvid,
+      partCid: _currentPart.cid,
+      isPlaying: false,
+    );
     _flushCurrentWatchHistoryProgress();
     _clearSubtitlesForPart();
     _clearDanmakuForPart();
@@ -1040,6 +1438,9 @@ class _PlayerPageState extends State<PlayerPage>
     _recordedHistoryPartCid = null;
     _lastHistorySavedPosition = Duration.zero;
     _resumeNoticeTimer?.cancel();
+    _lastFocusPlaybackBvid = null;
+    _lastFocusPlaybackPartCid = null;
+    _lastFocusPlaybackPlaying = null;
     try {
       await _playbackService.openVideo(
         _activeVideo,
@@ -1050,6 +1451,27 @@ class _PlayerPageState extends State<PlayerPage>
       _showPlaybackError('无法切换分P：${error.message ?? error.code}');
     } catch (error) {
       _showPlaybackError('无法切换分P：$error');
+    }
+  }
+
+  /// 返回当前分P在视频分P列表中的位置。
+  int get _currentPartIndex => _activeVideo.parts.indexWhere(
+    (VideoPart part) => part.cid == _currentPart.cid,
+  );
+
+  /// 切换到当前分P的上一集；已是第一集时保持禁用。
+  void _playPreviousPart() {
+    final int index = _currentPartIndex;
+    if (index > 0) {
+      unawaited(_changePart(_activeVideo.parts[index - 1]));
+    }
+  }
+
+  /// 切换到当前分P的下一集；已是最后一集时保持禁用。
+  void _playNextPart() {
+    final int index = _currentPartIndex;
+    if (index >= 0 && index < _activeVideo.parts.length - 1) {
+      unawaited(_changePart(_activeVideo.parts[index + 1]));
     }
   }
 
@@ -1109,63 +1531,6 @@ class _PlayerPageState extends State<PlayerPage>
     return 'Q$_currentQuality';
   }
 
-  /// 创建播放器底部菜单使用的白色紧凑文字标签。
-  Widget _buildControlMenuLabel(String text) {
-    return SizedBox(
-      height: 34,
-      child: Center(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 5),
-          child: Text(
-            text,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 11,
-              height: 1,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// 创建播放器上下栏共用的紧凑图标按钮，缩小视觉占位但保留清晰的点击区域。
-  Widget _buildCompactPlayerIconButton({
-    Key? key,
-    required VoidCallback onPressed,
-    required IconData icon,
-    required String tooltip,
-  }) {
-    return IconButton(
-      key: key,
-      onPressed: onPressed,
-      icon: Icon(icon, color: Colors.white),
-      tooltip: tooltip,
-      iconSize: 20,
-      padding: EdgeInsets.zero,
-      constraints: const BoxConstraints.tightFor(width: 34, height: 34),
-    );
-  }
-
-  /// 创建仅在全屏多分P视频出现的底栏“选集”按钮，普通竖屏改用详情列表。
-  Widget _buildPartSelectorControl() {
-    if (!_fullscreen || _activeVideo.parts.length <= 1) {
-      return const SizedBox.shrink();
-    }
-    return TextButton(
-      key: const Key('part-selector-button'),
-      // 选集按钮函数只在横屏显示右侧双列面板。
-      onPressed: _openPartSelector,
-      style: TextButton.styleFrom(
-        foregroundColor: Colors.white,
-        minimumSize: const Size(38, 34),
-        padding: const EdgeInsets.symmetric(horizontal: 4),
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      ),
-      child: const Text('选集', style: TextStyle(fontSize: 11)),
-    );
-  }
-
   /// 根据手指起点选择左侧亮度或右侧音量，并避开全屏顶部与底部系统手势区。
   void _startVerticalAdjustment(
     DragStartDetails details,
@@ -1173,7 +1538,7 @@ class _PlayerPageState extends State<PlayerPage>
     double topSystemInset,
     double bottomSystemInset,
   ) {
-    if (_temporaryDoubleSpeedActive || _horizontalScrubbing) {
+    if (_temporarySpeedActive || _horizontalScrubbing) {
       _verticalAdjustmentMode = _VerticalAdjustmentMode.none;
       return;
     }
@@ -1465,34 +1830,72 @@ class _PlayerPageState extends State<PlayerPage>
     );
   }
 
-  /// 进入或退出沉浸横屏，并同步播放器布局和控制层状态。
+  /// 响应全屏按钮；手动退出时先要求设备回到竖屏，再重新允许后续自动旋转。
   Future<void> _toggleFullscreen() async {
     final bool nextFullscreen = !_fullscreen;
-    _reanchorDanmakuForViewportChange();
-    if (mounted) {
-      setState(() {
-        _fullscreen = nextFullscreen;
-        _showControls = true;
-      });
-      if (nextFullscreen) {
-        _startFullscreenStatusUpdates();
-      } else {
-        _stopFullscreenStatusUpdates();
-      }
-      _restartControlsAutoHideTimer();
+    if (!nextFullscreen) {
+      _suppressAutoFullscreenUntilPortrait = true;
+      _restoreOrientationChoicesOnPortrait = true;
     }
+    await _setFullscreen(nextFullscreen);
+  }
+
+  /// 统一切换全屏布局，并区分按钮触发和设备旋转触发的方向控制行为。
+  Future<void> _setFullscreen(
+    bool nextFullscreen, {
+    bool updateOrientation = true,
+    bool enteredByOrientation = false,
+  }) async {
+    if (!mounted || _fullscreen == nextFullscreen) {
+      return;
+    }
+    _reanchorDanmakuForViewportChange();
+    setState(() {
+      _fullscreen = nextFullscreen;
+      _fullscreenEnteredByOrientation = nextFullscreen && enteredByOrientation;
+      _controlsLocked = nextFullscreen ? _controlsLocked : false;
+      _showControls = true;
+    });
     if (nextFullscreen) {
-      await SystemChrome.setPreferredOrientations(<DeviceOrientation>[
-        DeviceOrientation.landscapeLeft,
-        DeviceOrientation.landscapeRight,
-      ]);
-      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+      _startFullscreenStatusUpdates();
     } else {
+      _stopFullscreenStatusUpdates();
+    }
+    _restartControlsAutoHideTimer();
+    if (nextFullscreen) {
+      if (updateOrientation) {
+        await SystemChrome.setPreferredOrientations(<DeviceOrientation>[
+          DeviceOrientation.landscapeLeft,
+          DeviceOrientation.landscapeRight,
+        ]);
+      }
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    } else if (updateOrientation) {
       await _restoreSystemUi();
+    } else {
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     }
     await WidgetsBinding.instance.endOfFrame;
     if (mounted) {
       _reanchorDanmakuForViewportChange();
+    }
+  }
+
+  /// 锁定或解锁全屏控制层；锁定后仅保留左侧解锁按钮并停用画面手势。
+  void _toggleControlsLock() {
+    if (!_fullscreen) {
+      return;
+    }
+    _stopControlsAutoHideTimer();
+    setState(() {
+      _controlsLocked = !_controlsLocked;
+      _showControls = !_controlsLocked;
+      if (_controlsLocked) {
+        _partSelectorExpanded = false;
+      }
+    });
+    if (!_controlsLocked) {
+      _restartControlsAutoHideTimer();
     }
   }
 
@@ -1529,59 +1932,59 @@ class _PlayerPageState extends State<PlayerPage>
     setState(() => _batteryPercent = batteryPercent);
   }
 
-  /// 将当前本地时间格式化为全屏顶部状态栏使用的“时:分”文字。
-  String _formatFullscreenClock() {
-    return '${_fullscreenClock.hour.toString().padLeft(2, '0')}:'
-        '${_fullscreenClock.minute.toString().padLeft(2, '0')}';
+  /// 计算当前分P尚未播放的时长，并限制在专注模块允许的 1 到 180 分钟内。
+  Duration _currentPartFocusDuration() {
+    final int remainingMilliseconds =
+        _displayDuration.inMilliseconds -
+        _playbackSnapshot.position.inMilliseconds;
+    return Duration(
+      milliseconds: remainingMilliseconds.clamp(
+        FocusTimerController.minimumDuration.inMilliseconds,
+        FocusTimerController.maximumDuration.inMilliseconds,
+      ),
+    );
   }
 
-  /// 创建全屏标题上方的小型本地状态栏，显示时间和系统可用的电量百分比。
-  Widget _buildFullscreenStatusStrip() {
-    final String batteryText = _batteryPercent == null
-        ? '--'
-        : '${_batteryPercent!}%';
-    return SizedBox(
-      key: const Key('fullscreen-device-status'),
-      height: 15,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10),
-        child: Stack(
-          alignment: Alignment.center,
-          children: <Widget>[
-            Text(
-              _formatFullscreenClock(),
-              style: const TextStyle(
-                color: Colors.white70,
-                fontSize: 10,
-                height: 1,
-              ),
-            ),
-            Positioned(
-              right: 0,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  const Icon(
-                    Icons.battery_full_rounded,
-                    color: Colors.white70,
-                    size: 12,
-                  ),
-                  const SizedBox(width: 2),
-                  Text(
-                    batteryText,
-                    style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 10,
-                      height: 1,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
+  /// 打开播放器专注面板，提供当前分P计划及活动计时控制。
+  Future<void> _openPlayerFocusSheet() async {
+    final FocusTimerController? controller = _boundFocusController;
+    if (controller == null) {
+      _showPlayerNotice('专注控制器尚未准备好');
+      return;
+    }
+    _showPlayerControls();
+    _stopControlsAutoHideTimer();
+    final String? framePath = await _captureFocusFrame();
+    if (!mounted) {
+      return;
+    }
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (BuildContext sheetContext) => FractionallySizedBox(
+        heightFactor:
+            MediaQuery.orientationOf(sheetContext) == Orientation.landscape
+            ? 0.92
+            : 0.78,
+        child: PlayerFocusSheet(
+          controller: controller,
+          defaultGoal: '看完 ${_currentPart.title}',
+          partRemainingDuration: _currentPartFocusDuration(),
+          bvid: _activeVideo.bvid,
+          videoTitle: _activeVideo.title,
+          partCid: _currentPart.cid,
+          partPageNumber: _currentPart.pageNumber,
+          partTitle: _currentPart.title,
+          videoIsPlaying: _playing,
+          sourceFramePath: framePath,
+          sourcePosition: _playbackSnapshot.position,
         ),
       ),
     );
+    if (mounted) {
+      _restartControlsAutoHideTimer();
+    }
   }
 
   /// 恢复普通竖屏与 edge-to-edge 系统栏设置。
@@ -1594,15 +1997,48 @@ class _PlayerPageState extends State<PlayerPage>
 
   /// 处理顶部返回按钮：先关闭笔记，再退出全屏或返回上一支合集视频。
   void _handleBackPressed() {
-    if (_notesOpen) {
+    if (_controlsLocked) {
+      _toggleControlsLock();
+    } else if (_notesOpen) {
       _closeVideoNotes();
     } else if (_fullscreen) {
       unawaited(_toggleFullscreen());
     } else if (_collectionVideoBackStack.isNotEmpty) {
       unawaited(_restorePreviousCollectionVideo());
     } else {
-      Navigator.of(context).pop();
+      unawaited(_requestLeavePlayer());
     }
+  }
+
+  /// 离开关联视频前鼓励继续；坚持退出时保存画面、原因并保持任务可继续。
+  Future<void> _requestLeavePlayer() async {
+    if (_leaveRequestInProgress || !mounted) {
+      return;
+    }
+    _leaveRequestInProgress = true;
+    final FocusTimerController? controller = _boundFocusController;
+    final FocusSession? session = controller?.activeSession;
+    bool mayLeave = true;
+    if (controller != null &&
+        session != null &&
+        session.isActive &&
+        session.sourceBvid == _activeVideo.bvid &&
+        session.sourcePartCid == _currentPart.cid) {
+      mayLeave = await showFocusInterruptionFlow(
+        context,
+        controller: controller,
+        kind: FocusInterruptionKind.playerExit,
+      );
+      if (mayLeave) {
+        await _saveFocusLastSeen();
+      }
+    }
+    _leaveRequestInProgress = false;
+    if (!mounted || !mayLeave) {
+      return;
+    }
+    setState(() => _allowRoutePop = true);
+    Navigator.of(context).pop();
   }
 
   /// 接收系统返回结果：依次关闭笔记、全屏和合集内部页面，再允许离开播放页。
@@ -1610,12 +2046,16 @@ class _PlayerPageState extends State<PlayerPage>
     if (didPop) {
       return;
     }
-    if (_notesOpen) {
+    if (_controlsLocked) {
+      _toggleControlsLock();
+    } else if (_notesOpen) {
       _closeVideoNotes();
     } else if (_fullscreen) {
       unawaited(_toggleFullscreen());
     } else if (_collectionVideoBackStack.isNotEmpty) {
       unawaited(_restorePreviousCollectionVideo());
+    } else {
+      unawaited(_requestLeavePlayer());
     }
   }
 
@@ -2647,6 +3087,7 @@ class _PlayerPageState extends State<PlayerPage>
       setState(() => _notesOverlayMounted = false);
     }
     _restartControlsAutoHideTimer();
+    _scheduleOrientationSync();
   }
 
   /// 按 CID 查找笔记锁定的分P；旧数据缺失时退回当前分P。
@@ -2958,6 +3399,12 @@ class _PlayerPageState extends State<PlayerPage>
 
   /// 复用现有纹理打开另一支视频，并完整重置旧视频的分P、字幕、弹幕和历史状态。
   Future<void> _switchActiveVideo(VideoPreview video) async {
+    await _saveFocusLastSeen();
+    await _boundFocusController?.updatePlaybackState(
+      bvid: _activeVideo.bvid,
+      partCid: _currentPart.cid,
+      isPlaying: false,
+    );
     _notesPanelAnimationTimer?.cancel();
     _flushCurrentWatchHistoryProgress();
     await _playbackService.pause();
@@ -3012,6 +3459,9 @@ class _PlayerPageState extends State<PlayerPage>
     _recordedHistoryPartCid = null;
     _lastHistorySavedPosition = Duration.zero;
     _resumeNoticeTimer?.cancel();
+    _lastFocusPlaybackBvid = null;
+    _lastFocusPlaybackPartCid = null;
+    _lastFocusPlaybackPlaying = null;
     await _playbackService.openVideo(
       video,
       part: targetPart,
@@ -3222,18 +3672,7 @@ class _PlayerPageState extends State<PlayerPage>
         ),
         if (_activeVideo.description.isNotEmpty) ...<Widget>[
           const SizedBox(height: 12),
-          InkWell(
-            // 简介点击函数在两行摘要和完整文字之间切换。
-            onTap: () =>
-                setState(() => _descriptionExpanded = !_descriptionExpanded),
-            child: Text(
-              _activeVideo.description,
-              maxLines: _descriptionExpanded ? null : 3,
-              overflow: _descriptionExpanded
-                  ? TextOverflow.visible
-                  : TextOverflow.ellipsis,
-            ),
-          ),
+          _buildExpandableDescription(),
         ],
         if (_activeVideo.tags.isNotEmpty) ...<Widget>[
           const SizedBox(height: 12),
@@ -3270,6 +3709,188 @@ class _PlayerPageState extends State<PlayerPage>
         ),
       ],
     );
+  }
+
+  /// 创建最多三行的简介；确实溢出时才显示蓝色展开文字，并保留 @UP 点击能力。
+  Widget _buildExpandableDescription() {
+    final TextStyle style =
+        Theme.of(context).textTheme.bodyMedium ?? const TextStyle();
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final TextPainter painter = TextPainter(
+          text: TextSpan(text: _activeVideo.description, style: style),
+          textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context),
+          maxLines: 3,
+        )..layout(maxWidth: constraints.maxWidth);
+        final bool exceedsThreeLines = painter.didExceedMaxLines;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text.rich(
+              TextSpan(style: style, children: _buildDescriptionSpans(style)),
+              key: const Key('video-description'),
+              maxLines: _descriptionExpanded ? null : 3,
+              overflow: _descriptionExpanded
+                  ? TextOverflow.visible
+                  : TextOverflow.ellipsis,
+            ),
+            if (exceedsThreeLines || _descriptionExpanded)
+              TextButton(
+                key: const Key('toggle-video-description'),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  minimumSize: const Size(0, 32),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                // 展开按钮函数只改变简介行数，不影响播放器或页面滚动位置。
+                onPressed: () => setState(
+                  () => _descriptionExpanded = !_descriptionExpanded,
+                ),
+                child: Text(_descriptionExpanded ? '收起' : '展开'),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// 把普通简介、结构化 @UP 和 HTTP(S) 地址转换为富文本及可点击入口。
+  List<InlineSpan> _buildDescriptionSpans(TextStyle baseStyle) {
+    final List<VideoDescriptionSegment> segments =
+        _activeVideo.descriptionSegments.isEmpty
+        ? <VideoDescriptionSegment>[
+            VideoDescriptionSegment(text: _activeVideo.description),
+          ]
+        : _activeVideo.descriptionSegments;
+    return segments
+        .map((VideoDescriptionSegment segment) {
+          if (segment.isLink) {
+            return WidgetSpan(
+              alignment: PlaceholderAlignment.baseline,
+              baseline: TextBaseline.alphabetic,
+              child: InkWell(
+                key: Key('description-link-${segment.linkUri}'),
+                // 外链点击函数先展示风险确认，不会直接把用户带离应用。
+                onTap: () => unawaited(_confirmAndOpenDescriptionLink(segment)),
+                child: Text(
+                  segment.text,
+                  style: baseStyle.copyWith(
+                    color: Theme.of(context).colorScheme.primary,
+                    decoration: TextDecoration.underline,
+                    decorationColor: Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+              ),
+            );
+          }
+          if (!segment.isMention) {
+            return TextSpan(text: segment.text);
+          }
+          return WidgetSpan(
+            alignment: PlaceholderAlignment.baseline,
+            baseline: TextBaseline.alphabetic,
+            child: InkWell(
+              key: Key('description-mention-${segment.mentionedMid}'),
+              // UP 提及点击函数使用接口提供的 MID 打开对应公开主页。
+              onTap: () => unawaited(_openDescriptionMention(segment)),
+              child: Text(
+                segment.text,
+                style: baseStyle.copyWith(
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+              ),
+            ),
+          );
+        })
+        .toList(growable: false);
+  }
+
+  /// 打开简介中被提及 UP 主的公开主页，昵称只作为加载前的占位标题。
+  Future<void> _openDescriptionMention(VideoDescriptionSegment segment) async {
+    final int? mid = segment.mentionedMid;
+    if (mid == null || mid <= 0) {
+      return;
+    }
+    final bool shouldResume = _playing;
+    if (shouldResume) {
+      await _playbackService.pause();
+    }
+    if (!mounted) {
+      return;
+    }
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        // 用户主页构建函数把 @ 文本去掉后作为初始昵称，随后由公开接口校正。
+        builder: (BuildContext context) => UserProfilePage(
+          mid: mid,
+          initialName: segment.text.replaceFirst('@', '').trim(),
+          publicContentService: _publicContentService,
+          videoService: _bilibiliService,
+          watchHistoryService: _watchHistoryService,
+        ),
+      ),
+    );
+    if (mounted && shouldResume && !_playing) {
+      await _playbackService.play();
+    }
+  }
+
+  /// 展示明确的离开应用风险说明，用户确认后才调用可注入的系统浏览器启动器。
+  Future<void> _confirmAndOpenDescriptionLink(
+    VideoDescriptionSegment segment,
+  ) async {
+    final Uri? uri = segment.linkUri;
+    if (uri == null || !segment.isLink) {
+      return;
+    }
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) => AlertDialog(
+        title: const Text('即将打开外部链接'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            const Text('外部网站的内容和安全性不由焦点哔哩控制，请确认链接可信后再继续。'),
+            const SizedBox(height: 12),
+            SelectableText(
+              uri.toString(),
+              key: const Key('external-link-risk-uri'),
+              style: TextStyle(
+                color: Theme.of(dialogContext).colorScheme.primary,
+              ),
+            ),
+          ],
+        ),
+        actions: <Widget>[
+          TextButton(
+            key: const Key('cancel-external-link'),
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const Key('confirm-external-link'),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('继续访问'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+    bool opened = false;
+    try {
+      opened = await (widget.externalLinkLauncher ?? launchExternalLink)(uri);
+    } catch (_) {
+      opened = false;
+    }
+    if (!opened && mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('无法打开默认浏览器，请稍后重试。')));
+    }
   }
 
   /// 将合集视频时长格式化为分秒或时分秒，供封面右下角紧凑显示。
@@ -3989,7 +4610,8 @@ class _PlayerPageState extends State<PlayerPage>
     // 错误或选集展开时关闭底层画面手势，避免父级手势抢走重试与选集按钮点击。
     final bool enableSurfaceGestures =
         _playbackSnapshot.phase != PlaybackPhase.error &&
-        !_partSelectorExpanded;
+        !_partSelectorExpanded &&
+        !_controlsLocked;
     final Widget player = LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         return Listener(
@@ -4009,13 +4631,13 @@ class _PlayerPageState extends State<PlayerPage>
             onDoubleTap: enableSurfaceGestures
                 ? () => _handleDoubleTap(constraints.maxWidth)
                 : null,
-            // 长按开始函数仅临时切换到二倍速，横向快进由独立拖动手势负责。
+            // 长按开始函数仅临时切换到三倍速，横向快进由独立拖动手势负责。
             onLongPressStart: enableSurfaceGestures
-                ? _startTemporaryDoubleSpeed
+                ? _startTemporaryTripleSpeed
                 : null,
             // 长按结束函数恢复原倍速，不改变播放位置。
             onLongPressEnd: enableSurfaceGestures
-                ? _stopTemporaryDoubleSpeed
+                ? _stopTemporaryTripleSpeed
                 : null,
             // 长按取消函数恢复界面状态且不提交未确认的进度。
             onLongPressCancel: enableSurfaceGestures
@@ -4023,8 +4645,11 @@ class _PlayerPageState extends State<PlayerPage>
                 : null,
             // 横向拖动开始函数立即进入进度预览，并计算当前视频对应的拖动速度。
             onHorizontalDragStart: enableSurfaceGestures
-                ? (DragStartDetails details) =>
-                      _startHorizontalScrub(details, constraints.biggest)
+                ? (DragStartDetails details) => _startHorizontalScrub(
+                    details,
+                    constraints.biggest,
+                    MediaQuery.viewPaddingOf(context),
+                  )
                 : null,
             // 横向拖动更新函数只刷新预览，避免频繁向原生播放器发送跳转命令。
             onHorizontalDragUpdate: enableSurfaceGestures
@@ -4064,7 +4689,7 @@ class _PlayerPageState extends State<PlayerPage>
                   _buildVideoOutput(),
                   _buildDanmakuOverlay(),
                   _buildSubtitleOverlay(),
-                  if (_temporaryDoubleSpeedActive)
+                  if (_temporarySpeedActive)
                     SafeArea(
                       child: Align(
                         alignment: Alignment.topCenter,
@@ -4081,8 +4706,8 @@ class _PlayerPageState extends State<PlayerPage>
                                 vertical: 7,
                               ),
                               child: Text(
-                                '二倍速中>>',
-                                key: Key('temporary-double-speed'),
+                                '三倍速中>>',
+                                key: Key('temporary-triple-speed'),
                                 style: TextStyle(color: Colors.white),
                               ),
                             ),
@@ -4180,10 +4805,16 @@ class _PlayerPageState extends State<PlayerPage>
                   ),
                   AnimatedOpacity(
                     key: const Key('player-controls'),
-                    opacity: _showControls && !inPictureInPicture ? 1 : 0,
+                    opacity:
+                        _showControls && !_controlsLocked && !inPictureInPicture
+                        ? 1
+                        : 0,
                     duration: const Duration(milliseconds: 180),
                     child: IgnorePointer(
-                      ignoring: !_showControls || inPictureInPicture,
+                      ignoring:
+                          !_showControls ||
+                          _controlsLocked ||
+                          inPictureInPicture,
                       child: DecoratedBox(
                         decoration: const BoxDecoration(
                           gradient: LinearGradient(
@@ -4218,11 +4849,17 @@ class _PlayerPageState extends State<PlayerPage>
                                       CrossAxisAlignment.stretch,
                                   children: <Widget>[
                                     if (_fullscreen)
-                                      _buildFullscreenStatusStrip(),
+                                      _FullscreenDeviceStatus(
+                                        focusController:
+                                            widget.focusTimerController ??
+                                            FocusTimerScope.maybeOf(context),
+                                        clock: _fullscreenClock,
+                                        batteryPercent: _batteryPercent,
+                                      ),
                                     Expanded(
                                       child: Row(
                                         children: <Widget>[
-                                          _buildCompactPlayerIconButton(
+                                          PlayerCompactIconButton(
                                             // 返回按钮函数在全屏时先退出全屏，否则关闭播放器页面。
                                             onPressed: _handleBackPressed,
                                             icon: Icons.arrow_back_rounded,
@@ -4240,7 +4877,30 @@ class _PlayerPageState extends State<PlayerPage>
                                               ),
                                             ),
                                           if (!_fullscreen) const Spacer(),
-                                          _buildCompactPlayerIconButton(
+                                          if (_boundFocusController != null)
+                                            PlayerCompactIconButton(
+                                              key: const Key(
+                                                'player-focus-button',
+                                              ),
+                                              // 专注按钮函数打开播放器内开始、暂停、续时和结束面板。
+                                              onPressed: () => unawaited(
+                                                _openPlayerFocusSheet(),
+                                              ),
+                                              icon:
+                                                  _observedFocusStatus ==
+                                                      FocusSessionStatus.paused
+                                                  ? Icons.pause_circle_outline
+                                                  : _observedFocusSessionId ==
+                                                        null
+                                                  ? Icons.timer_outlined
+                                                  : Icons.timer_rounded,
+                                              tooltip:
+                                                  _observedFocusSessionId ==
+                                                      null
+                                                  ? '开始专注'
+                                                  : '管理专注',
+                                            ),
+                                          PlayerCompactIconButton(
                                             key: const Key(
                                               'picture-in-picture',
                                             ),
@@ -4252,7 +4912,7 @@ class _PlayerPageState extends State<PlayerPage>
                                                 .picture_in_picture_alt_rounded,
                                             tooltip: '画中画',
                                           ),
-                                          _buildCompactPlayerIconButton(
+                                          PlayerCompactIconButton(
                                             key: const Key('danmaku-toggle'),
                                             // 弹幕按钮函数开启或关闭当前分P的真实弹幕绘制与预取。
                                             onPressed: _toggleDanmaku,
@@ -4297,6 +4957,7 @@ class _PlayerPageState extends State<PlayerPage>
                               alignment: Alignment.bottomCenter,
                               child: SafeArea(
                                 top: false,
+                                bottom: _fullscreen,
                                 minimum: const EdgeInsets.fromLTRB(4, 0, 4, 2),
                                 child: Column(
                                   mainAxisSize: MainAxisSize.min,
@@ -4329,7 +4990,7 @@ class _PlayerPageState extends State<PlayerPage>
                                       height: 34,
                                       child: Row(
                                         children: <Widget>[
-                                          _buildCompactPlayerIconButton(
+                                          PlayerCompactIconButton(
                                             key: const Key('play-pause-button'),
                                             // 左下角播放按钮函数向原生播放器发送播放或暂停命令。
                                             onPressed: _togglePlayback,
@@ -4338,6 +4999,37 @@ class _PlayerPageState extends State<PlayerPage>
                                                 : Icons.play_arrow_rounded,
                                             tooltip: _playing ? '暂停' : '播放',
                                           ),
+                                          if (_activeVideo.parts.length >
+                                              1) ...<Widget>[
+                                            PlayerCompactIconButton(
+                                              key: const Key(
+                                                'previous-part-button',
+                                              ),
+                                              // 上一集函数切换到当前分P之前的一集。
+                                              onPressed: _currentPartIndex > 0
+                                                  ? _playPreviousPart
+                                                  : () {},
+                                              icon: Icons.skip_previous_rounded,
+                                              tooltip: '上一集',
+                                            ),
+                                            PlayerCompactIconButton(
+                                              key: const Key(
+                                                'next-part-button',
+                                              ),
+                                              // 下一集函数切换到当前分P之后的一集。
+                                              onPressed:
+                                                  _currentPartIndex >= 0 &&
+                                                      _currentPartIndex <
+                                                          _activeVideo
+                                                                  .parts
+                                                                  .length -
+                                                              1
+                                                  ? _playNextPart
+                                                  : () {},
+                                              icon: Icons.skip_next_rounded,
+                                              tooltip: '下一集',
+                                            ),
+                                          ],
                                           const SizedBox(width: 2),
                                           Text(
                                             _formatProgress(),
@@ -4347,7 +5039,15 @@ class _PlayerPageState extends State<PlayerPage>
                                             ),
                                           ),
                                           const Spacer(),
-                                          _buildPartSelectorControl(),
+                                          if (_fullscreen &&
+                                              _activeVideo.parts.length > 1)
+                                            PlayerPartSelectorButton(
+                                              key: const Key(
+                                                'part-selector-button',
+                                              ),
+                                              // 选集按钮函数只在横屏显示右侧双列面板。
+                                              onPressed: _openPartSelector,
+                                            ),
                                           SizedBox(
                                             height: 34,
                                             child: PopupMenuButton<int>(
@@ -4378,8 +5078,8 @@ class _PlayerPageState extends State<PlayerPage>
                                                     )
                                                     .toList(growable: false);
                                               },
-                                              child: _buildControlMenuLabel(
-                                                _currentQualityLabel(),
+                                              child: PlayerControlLabel(
+                                                text: _currentQualityLabel(),
                                               ),
                                             ),
                                           ),
@@ -4395,7 +5095,7 @@ class _PlayerPageState extends State<PlayerPage>
                                                   unawaited(
                                                     _changePlaybackSpeed(speed),
                                                   ),
-                                              // 倍速菜单构建函数生成固定且容易理解的五档速度。
+                                              // 倍速菜单构建函数生成包含三倍速的六档速度。
                                               itemBuilder:
                                                   (BuildContext context) {
                                                     return _playbackSpeeds
@@ -4419,12 +5119,14 @@ class _PlayerPageState extends State<PlayerPage>
                                                           growable: false,
                                                         );
                                                   },
-                                              child: _buildControlMenuLabel(
-                                                _formatSpeed(_playbackSpeed),
+                                              child: PlayerControlLabel(
+                                                text: _formatSpeed(
+                                                  _playbackSpeed,
+                                                ),
                                               ),
                                             ),
                                           ),
-                                          _buildCompactPlayerIconButton(
+                                          PlayerCompactIconButton(
                                             // 全屏按钮函数切换横屏沉浸状态。
                                             onPressed: () =>
                                                 unawaited(_toggleFullscreen()),
@@ -4461,9 +5163,38 @@ class _PlayerPageState extends State<PlayerPage>
                       ),
                     ),
                   if (_fullscreen &&
+                      !inPictureInPicture &&
+                      (_controlsLocked || _showControls))
+                    Positioned(
+                      key: const Key('fullscreen-controls-lock'),
+                      left: 8,
+                      top: constraints.maxHeight / 2 - 22,
+                      child: SafeArea(
+                        right: false,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: Colors.black54,
+                            borderRadius: BorderRadius.circular(22),
+                          ),
+                          child: IconButton(
+                            // 锁定按钮函数隐藏或恢复其他播放器按钮和画面手势。
+                            onPressed: _toggleControlsLock,
+                            icon: Icon(
+                              _controlsLocked
+                                  ? Icons.lock_rounded
+                                  : Icons.lock_open_rounded,
+                              color: Colors.white,
+                            ),
+                            tooltip: _controlsLocked ? '解锁播放器' : '锁定播放器',
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (_fullscreen &&
                       !_notesOpen &&
                       !_partSelectorExpanded &&
                       _showControls &&
+                      !_controlsLocked &&
                       !inPictureInPicture)
                     _buildFullscreenVideoNoteButton(),
                   if (_fullscreen && _notesOverlayMounted)
@@ -4522,1112 +5253,10 @@ class _PlayerPageState extends State<PlayerPage>
       ),
     );
     return PopScope(
-      canPop: !_notesOpen && !_fullscreen && _collectionVideoBackStack.isEmpty,
+      canPop: _allowRoutePop,
       // 系统返回函数保证先退出全屏或返回上一支合集视频，再离开页面。
       onPopInvokedWithResult: _handlePopInvoked,
       child: pageScaffold,
     );
-  }
-}
-
-/// 让播放器随详情页滚动连续改变高度，收起后不保留占位空间。
-/// 展示完整合集，并在本机完成搜索、排序和当前视频定位。
-class _CollectionPickerSheet extends StatefulWidget {
-  /// 创建合集选择器；观看记录仅用于封面标记，不会改变合集数据。
-  const _CollectionPickerSheet({
-    required this.collection,
-    required this.currentBvid,
-    required this.watchHistoryByBvid,
-  });
-
-  final VideoCollection collection;
-  final String currentBvid;
-  final Map<String, WatchHistoryEntry> watchHistoryByBvid;
-
-  /// 创建保存搜索文字、排序选项和滚动位置的面板状态。
-  @override
-  State<_CollectionPickerSheet> createState() => _CollectionPickerSheetState();
-}
-
-/// 管理合集展开面板的过滤、排序和当前位置滚动。
-class _CollectionPickerSheetState extends State<_CollectionPickerSheet> {
-  static const double _entryExtent = 76;
-  final TextEditingController _searchController = TextEditingController();
-  final ScrollController _scrollController = ScrollController();
-  _CollectionEntryOrder _order = _CollectionEntryOrder.original;
-  String _keyword = '';
-
-  /// 面板出现后自动滚到当前播放视频，避免长合集总是从第一条开始。
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _locateCurrent(animated: false);
-    });
-  }
-
-  /// 释放搜索输入框和列表滚动控制器，避免关闭面板后继续占用资源。
-  @override
-  void dispose() {
-    _searchController.dispose();
-    _scrollController.dispose();
-    super.dispose();
-  }
-
-  /// 根据关键词筛选标题或 BV 号，再复制排序，绝不修改原始合集列表。
-  List<VideoCollectionEntry> _visibleEntries() {
-    final String normalizedKeyword = _keyword.trim().toLowerCase();
-    final List<VideoCollectionEntry> entries = widget.collection.entries
-        .where((VideoCollectionEntry entry) {
-          if (normalizedKeyword.isEmpty) {
-            return true;
-          }
-          return entry.title.toLowerCase().contains(normalizedKeyword) ||
-              entry.bvid.toLowerCase().contains(normalizedKeyword);
-        })
-        .toList(growable: true);
-    switch (_order) {
-      case _CollectionEntryOrder.original:
-        break;
-      case _CollectionEntryOrder.newest:
-        entries.sort(_compareNewest);
-        break;
-      case _CollectionEntryOrder.oldest:
-        entries.sort(_compareOldest);
-        break;
-      case _CollectionEntryOrder.mostPlayed:
-        entries.sort(
-          (VideoCollectionEntry left, VideoCollectionEntry right) =>
-              right.stats.viewCount.compareTo(left.stats.viewCount),
-        );
-        break;
-    }
-    return entries;
-  }
-
-  /// 按发布时间从新到旧比较；缺少日期的条目放到列表末尾。
-  int _compareNewest(VideoCollectionEntry left, VideoCollectionEntry right) {
-    if (left.publishedAt == null && right.publishedAt == null) {
-      return 0;
-    }
-    if (left.publishedAt == null) {
-      return 1;
-    }
-    if (right.publishedAt == null) {
-      return -1;
-    }
-    return right.publishedAt!.compareTo(left.publishedAt!);
-  }
-
-  /// 按发布时间从旧到新比较；缺少日期的条目仍放到列表末尾。
-  int _compareOldest(VideoCollectionEntry left, VideoCollectionEntry right) {
-    if (left.publishedAt == null && right.publishedAt == null) {
-      return 0;
-    }
-    if (left.publishedAt == null) {
-      return 1;
-    }
-    if (right.publishedAt == null) {
-      return -1;
-    }
-    return left.publishedAt!.compareTo(right.publishedAt!);
-  }
-
-  /// 更新搜索关键词并立即刷新结果，不发送网络请求。
-  void _updateKeyword(String value) {
-    setState(() => _keyword = value);
-  }
-
-  /// 清空搜索条件，并让当前视频重新出现在可见结果中。
-  void _clearSearch() {
-    _searchController.clear();
-    setState(() => _keyword = '');
-  }
-
-  /// 切换本地排序方式，并保持搜索结果继续可用。
-  void _changeOrder(_CollectionEntryOrder order) {
-    setState(() => _order = order);
-  }
-
-  /// 清除可能挡住当前项的搜索词，再滚动到当前播放视频。
-  void _locateCurrent({bool animated = true}) {
-    if (_keyword.isNotEmpty) {
-      _clearSearch();
-    }
-    final List<VideoCollectionEntry> entries = _visibleEntries();
-    final int index = entries.indexWhere(
-      (VideoCollectionEntry entry) => entry.bvid == widget.currentBvid,
-    );
-    if (index < 0) {
-      return;
-    }
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_scrollController.hasClients) {
-        return;
-      }
-      final ScrollPosition position = _scrollController.position;
-      final double target = (index * _entryExtent)
-          .clamp(0, position.maxScrollExtent)
-          .toDouble();
-      if (animated) {
-        _scrollController.animateTo(
-          target,
-          duration: const Duration(milliseconds: 320),
-          curve: Curves.easeOutCubic,
-        );
-      } else {
-        _scrollController.jumpTo(target);
-      }
-    });
-  }
-
-  /// 返回排序菜单中对初学者友好的中文名称。
-  String _orderLabel(_CollectionEntryOrder order) {
-    switch (order) {
-      case _CollectionEntryOrder.original:
-        return '合集顺序';
-      case _CollectionEntryOrder.newest:
-        return '最新发布';
-      case _CollectionEntryOrder.oldest:
-        return '最早发布';
-      case _CollectionEntryOrder.mostPlayed:
-        return '最多播放';
-    }
-  }
-
-  /// 将公开视频统计压缩为万或亿，避免副标题被数字挤满。
-  String _formatCount(int value) {
-    if (value >= 100000000) {
-      return '${(value / 100000000).toStringAsFixed(1)}亿';
-    }
-    if (value >= 10000) {
-      return '${(value / 10000).toStringAsFixed(1)}万';
-    }
-    return value.toString();
-  }
-
-  /// 将封面时长格式化成分秒或时分秒。
-  String _formatDuration(Duration duration) {
-    final int seconds = duration.inSeconds.clamp(0, 1 << 31).toInt();
-    final int hours = seconds ~/ 3600;
-    final int minutes = (seconds % 3600) ~/ 60;
-    final int rest = seconds % 60;
-    return hours > 0
-        ? '$hours:${minutes.toString().padLeft(2, '0')}:${rest.toString().padLeft(2, '0')}'
-        : '$minutes:${rest.toString().padLeft(2, '0')}';
-  }
-
-  /// 创建固定比例封面，加载失败时显示视频占位图标而不撑坏列表。
-  Widget _buildThumbnail(VideoCollectionEntry entry, bool current) {
-    final WatchHistoryEntry? history = widget.watchHistoryByBvid[entry.bvid];
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(8),
-      child: Stack(
-        children: <Widget>[
-          if (entry.thumbnailUrl.isEmpty)
-            const SizedBox(
-              width: 96,
-              height: 54,
-              child: ColoredBox(
-                color: Colors.black26,
-                child: Icon(Icons.video_library_outlined),
-              ),
-            )
-          else
-            CachedNetworkImage(
-              imageUrl: entry.thumbnailUrl,
-              width: 96,
-              height: 54,
-              fit: BoxFit.cover,
-              errorWidget: (BuildContext context, String url, Object error) =>
-                  const SizedBox(
-                    width: 96,
-                    height: 54,
-                    child: ColoredBox(
-                      color: Colors.black26,
-                      child: Icon(Icons.broken_image_outlined),
-                    ),
-                  ),
-            ),
-          if (history != null && !current)
-            Positioned(
-              left: 3,
-              top: 3,
-              child: WatchHistoryBadge(entry: history, showPosition: false),
-            ),
-          Positioned(
-            right: 3,
-            bottom: 3,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: Colors.black87,
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                child: Text(
-                  _formatDuration(entry.duration),
-                  style: const TextStyle(color: Colors.white, fontSize: 9),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// 创建单条合集视频，点击后把选择结果交回播放器页面。
-  Widget _buildEntry(VideoCollectionEntry entry) {
-    final bool current = entry.bvid == widget.currentBvid;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: Material(
-        color: current
-            ? Theme.of(
-                context,
-              ).colorScheme.primaryContainer.withValues(alpha: 0.45)
-            : Colors.transparent,
-        borderRadius: BorderRadius.circular(12),
-        clipBehavior: Clip.antiAlias,
-        child: ListTile(
-          key: Key('collection-sheet-${entry.bvid}'),
-          dense: true,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-          leading: _buildThumbnail(entry, current),
-          title: Text(
-            entry.title,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-          ),
-          subtitle: Text(
-            current ? '正在播放' : '${_formatCount(entry.stats.viewCount)}播放',
-            maxLines: 1,
-          ),
-          trailing: Icon(
-            current ? Icons.graphic_eq_rounded : Icons.play_arrow_rounded,
-          ),
-          // 条目点击函数关闭合集面板，并把所选视频返回给播放器切换。
-          onTap: current ? null : () => Navigator.of(context).pop(entry),
-        ),
-      ),
-    );
-  }
-
-  /// 创建带标题、搜索框、排序按钮、定位按钮和惰性长列表的合集面板。
-  @override
-  Widget build(BuildContext context) {
-    final List<VideoCollectionEntry> entries = _visibleEntries();
-    return SafeArea(
-      child: FractionallySizedBox(
-        heightFactor: 0.84,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Row(
-                children: <Widget>[
-                  Expanded(
-                    child: Text(
-                      '合集 · ${widget.collection.title}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  Text('${entries.length}/${widget.collection.entries.length}'),
-                  IconButton(
-                    key: const Key('collection-locate-current'),
-                    tooltip: '定位到正在播放',
-                    // 定位按钮函数会清空搜索，并滚动到当前播放视频。
-                    onPressed: _locateCurrent,
-                    icon: const Icon(Icons.my_location_rounded),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 6),
-              Row(
-                children: <Widget>[
-                  Expanded(
-                    child: TextField(
-                      key: const Key('collection-search-field'),
-                      controller: _searchController,
-                      onChanged: _updateKeyword,
-                      decoration: InputDecoration(
-                        hintText: '搜索标题或 BV 号',
-                        prefixIcon: const Icon(Icons.search_rounded),
-                        suffixIcon: _keyword.isEmpty
-                            ? null
-                            : IconButton(
-                                // 清空按钮函数恢复完整合集结果。
-                                onPressed: _clearSearch,
-                                icon: const Icon(Icons.close_rounded),
-                              ),
-                        isDense: true,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  PopupMenuButton<_CollectionEntryOrder>(
-                    key: const Key('collection-sort-button'),
-                    tooltip: '排序',
-                    initialValue: _order,
-                    // 排序选择函数只重新排列当前面板，不修改合集本身。
-                    onSelected: _changeOrder,
-                    itemBuilder: (BuildContext context) => _CollectionEntryOrder
-                        .values
-                        .map(
-                          (_CollectionEntryOrder order) =>
-                              PopupMenuItem<_CollectionEntryOrder>(
-                                value: order,
-                                child: Text(_orderLabel(order)),
-                              ),
-                        )
-                        .toList(growable: false),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 12,
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: <Widget>[
-                          const Icon(Icons.sort_rounded),
-                          const SizedBox(width: 5),
-                          Text(_orderLabel(_order)),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Expanded(
-                child: entries.isEmpty
-                    ? const Center(child: Text('没有找到匹配的视频'))
-                    : Scrollbar(
-                        controller: _scrollController,
-                        child: ListView.builder(
-                          key: const Key('collection-sheet-list'),
-                          controller: _scrollController,
-                          itemExtent: _entryExtent,
-                          itemCount: entries.length,
-                          // 长列表构建函数只创建屏幕附近的条目，781 条也能继续滑动。
-                          itemBuilder: (BuildContext context, int index) =>
-                              _buildEntry(entries[index]),
-                        ),
-                      ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _CollapsingPlayerHeaderDelegate extends SliverPersistentHeaderDelegate {
-  /// 创建最大高度固定、最小高度为零的播放器折叠头。
-  const _CollapsingPlayerHeaderDelegate({
-    required this.maximumHeight,
-    required this.child,
-  });
-
-  final double maximumHeight;
-  final Widget child;
-
-  /// 返回完全收起后的高度，使详情内容能够占满整个屏幕。
-  @override
-  double get minExtent => 0;
-
-  /// 返回播放器初始展开高度，由真实视频比例和屏幕尺寸共同决定。
-  @override
-  double get maxExtent => maximumHeight;
-
-  /// 按当前 Sliver 高度裁切并重排播放器，形成连续收起效果。
-  @override
-  Widget build(
-    BuildContext context,
-    double shrinkOffset,
-    bool overlapsContent,
-  ) {
-    return ClipRect(child: SizedBox.expand(child: child));
-  }
-
-  /// 仅在播放器高度或实例变化时重新创建折叠布局。
-  @override
-  bool shouldRebuild(covariant _CollapsingPlayerHeaderDelegate oldDelegate) {
-    return maximumHeight != oldDelegate.maximumHeight ||
-        child != oldDelegate.child;
-  }
-}
-
-/// 在视频简介区紧凑显示一个图标和一段公开元数据。
-class _DetailMeta extends StatelessWidget {
-  /// 创建不可点击的只读详情元数据。
-  const _DetailMeta({required this.icon, required this.text});
-
-  final IconData icon;
-  final String text;
-
-  /// 创建水平排列的图标与文字。
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: <Widget>[
-        Icon(icon, size: 16),
-        const SizedBox(width: 4),
-        Text(text, style: Theme.of(context).textTheme.bodySmall),
-      ],
-    );
-  }
-}
-
-/// 在固定两行高度内竖向循环标题，避免超长分P名称被横向截断。
-class _PartTitleMarquee extends StatefulWidget {
-  /// 创建一个会在两行内容溢出时自动竖向滚动的分P标题。
-  const _PartTitleMarquee({super.key, required this.text, required this.style});
-
-  final String text;
-  final TextStyle style;
-
-  /// 创建分P标题滚动组件的状态对象。
-  @override
-  State<_PartTitleMarquee> createState() => _PartTitleMarqueeState();
-}
-
-/// 测量两行标题的实际溢出高度，并管理竖向循环动画的生命周期。
-class _PartTitleMarqueeState extends State<_PartTitleMarquee>
-    with SingleTickerProviderStateMixin {
-  static const double _textGap = 12;
-  late final AnimationController _controller;
-  double _travelDistance = 0;
-  String? _animationSignature;
-  bool _elementActive = true;
-
-  /// 创建竖向标题动画控制器，只有内容超过两行时才会启动。
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(vsync: this);
-  }
-
-  /// 当标题文字或样式变化时清除旧的测量结果，等待下一帧重新判断溢出。
-  @override
-  void didUpdateWidget(covariant _PartTitleMarquee oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.text != widget.text || oldWidget.style != widget.style) {
-      _stopAnimation();
-    }
-  }
-
-  /// 组件重新进入树时重新允许动画在布局完成后启动。
-  @override
-  void activate() {
-    super.activate();
-    _elementActive = true;
-  }
-
-  /// 列表回收组件时停止动画，防止失活状态继续触发框架刷新。
-  @override
-  void deactivate() {
-    _elementActive = false;
-    _controller.stop();
-    _animationSignature = null;
-    super.deactivate();
-  }
-
-  /// 停止并清空旧动画状态，供短标题或新标题重新测量。
-  void _stopAnimation() {
-    _controller.stop();
-    _controller.reset();
-    _animationSignature = null;
-    _travelDistance = 0;
-  }
-
-  /// 在布局完成后按实际竖向距离启动匀速循环，避免在 build 中直接改变动画状态。
-  void _scheduleAnimation(double travelDistance) {
-    final String signature = '${widget.text}:$travelDistance:${widget.style}';
-    if (_animationSignature == signature) {
-      return;
-    }
-    _animationSignature = signature;
-    _travelDistance = travelDistance;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_elementActive || _animationSignature != signature) {
-        return;
-      }
-      final int milliseconds = (travelDistance / 18 * 1000)
-          .round()
-          .clamp(5000, 28000)
-          .toInt();
-      _controller
-        ..duration = Duration(milliseconds: milliseconds)
-        ..repeat();
-    });
-  }
-
-  /// 释放动画控制器，避免分P列表销毁后仍占用动画资源。
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  /// 构建静态两行标题，或构建两份文字组成的无缝竖向循环标题。
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) {
-        if (!constraints.hasBoundedWidth) {
-          return Text(
-            widget.text,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: widget.style,
-          );
-        }
-        final TextPainter visiblePainter = TextPainter(
-          text: TextSpan(text: widget.text, style: widget.style),
-          maxLines: 2,
-          textDirection: Directionality.of(context),
-          textScaler: MediaQuery.textScalerOf(context),
-        )..layout(maxWidth: constraints.maxWidth);
-        if (!visiblePainter.didExceedMaxLines) {
-          if (_animationSignature != null) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted && _elementActive) {
-                _stopAnimation();
-              }
-            });
-          }
-          return Text(
-            widget.text,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: widget.style,
-          );
-        }
-        final TextPainter completePainter = TextPainter(
-          text: TextSpan(text: widget.text, style: widget.style),
-          textDirection: Directionality.of(context),
-          textScaler: MediaQuery.textScalerOf(context),
-        )..layout(maxWidth: constraints.maxWidth);
-        final double travelDistance =
-            completePainter.height - visiblePainter.height + _textGap;
-        _scheduleAnimation(travelDistance);
-        return SizedBox(
-          width: constraints.maxWidth,
-          height: visiblePainter.height,
-          child: ClipRect(
-            child: AnimatedBuilder(
-              animation: _controller,
-              // 动画构建函数在两行裁剪区域内竖向移动两份完整标题，实现循环阅读。
-              builder: (BuildContext context, Widget? child) {
-                final double offset = _travelDistance * _controller.value;
-                return Stack(
-                  clipBehavior: Clip.none,
-                  children: <Widget>[
-                    Positioned(
-                      top: -offset,
-                      left: 0,
-                      right: 0,
-                      child: SizedBox(
-                        width: constraints.maxWidth,
-                        child: Text(widget.text, style: widget.style),
-                      ),
-                    ),
-                    Positioned(
-                      top: completePainter.height + _textGap - offset,
-                      left: 0,
-                      right: 0,
-                      child: SizedBox(
-                        width: constraints.maxWidth,
-                        child: Text(widget.text, style: widget.style),
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-/// 在可用宽度不足时自动横向滚动标题，短标题保持静止。
-class _AutoScrollingText extends StatefulWidget {
-  /// 创建一条只在溢出时启动滚动动画的单行文字。
-  const _AutoScrollingText({required this.text, required this.style});
-
-  final String text;
-  final TextStyle style;
-
-  /// 创建自动滚动文字的动画状态。
-  @override
-  State<_AutoScrollingText> createState() => _AutoScrollingTextState();
-}
-
-/// 测量标题宽度并管理循环横移距离与动画生命周期。
-class _AutoScrollingTextState extends State<_AutoScrollingText>
-    with SingleTickerProviderStateMixin {
-  static const double _textGap = 36;
-  late final AnimationController _controller;
-  double _travelDistance = 0;
-  String? _animationSignature;
-  bool _elementActive = true;
-
-  /// 创建标题滚动动画控制器，动画只在文字溢出后才启动。
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(vsync: this);
-  }
-
-  /// 标题内容变化时重置旧动画，等待下一次布局重新测量。
-  @override
-  void didUpdateWidget(covariant _AutoScrollingText oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.text != widget.text || oldWidget.style != widget.style) {
-      _stopAnimation();
-    }
-  }
-
-  /// 标题重新回到组件树时恢复活动标记，允许下一次布局重新启动动画。
-  @override
-  void activate() {
-    super.activate();
-    _elementActive = true;
-  }
-
-  /// 全屏旋转暂时移除标题时立即停止动画，防止失活组件继续触发框架重建。
-  @override
-  void deactivate() {
-    _elementActive = false;
-    _controller.stop();
-    _animationSignature = null;
-    super.deactivate();
-  }
-
-  /// 停止并清空当前横向滚动状态，供短标题或新标题重新计算。
-  void _stopAnimation() {
-    _controller.stop();
-    _controller.reset();
-    _animationSignature = null;
-    _travelDistance = 0;
-  }
-
-  /// 在本帧布局完成后按标题长度启动匀速循环滚动。
-  void _scheduleAnimation(double travelDistance) {
-    final String signature = '${widget.text}:$travelDistance';
-    if (_animationSignature == signature) {
-      return;
-    }
-    _animationSignature = signature;
-    _travelDistance = travelDistance;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_elementActive || _animationSignature != signature) {
-        return;
-      }
-      final int milliseconds = (travelDistance / 28 * 1000)
-          .round()
-          .clamp(4200, 18000)
-          .toInt();
-      _controller
-        ..duration = Duration(milliseconds: milliseconds)
-        ..repeat();
-    });
-  }
-
-  /// 释放动画控制器，避免离开全屏后继续消耗刷新资源。
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  /// 测量文字是否溢出，并构建静态标题或无缝循环的双份标题。
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) {
-        final TextPainter painter = TextPainter(
-          text: TextSpan(text: widget.text, style: widget.style),
-          maxLines: 1,
-          textDirection: Directionality.of(context),
-          textScaler: MediaQuery.textScalerOf(context),
-        )..layout();
-        if (!constraints.hasBoundedWidth ||
-            painter.width <= constraints.maxWidth) {
-          if (_animationSignature != null) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted && _elementActive) {
-                _stopAnimation();
-              }
-            });
-          }
-          return Text(
-            widget.text,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: widget.style,
-          );
-        }
-        _scheduleAnimation(painter.width + _textGap);
-        return SizedBox(
-          width: constraints.maxWidth,
-          height: painter.height,
-          child: ClipRect(
-            child: AnimatedBuilder(
-              animation: _controller,
-              // 动画构建函数在固定尺寸画布中移动两份标题，避免无限约束和横向溢出。
-              builder: (BuildContext context, Widget? child) {
-                final double offset = _travelDistance * _controller.value;
-                return Stack(
-                  clipBehavior: Clip.none,
-                  children: <Widget>[
-                    Positioned(
-                      left: -offset,
-                      top: 0,
-                      child: Text(
-                        widget.text,
-                        maxLines: 1,
-                        style: widget.style,
-                      ),
-                    ),
-                    Positioned(
-                      left: painter.width + _textGap - offset,
-                      top: 0,
-                      child: Text(
-                        widget.text,
-                        maxLines: 1,
-                        style: widget.style,
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-/// 保存一条已经完成车道规划的弹幕，绘制阶段不再重复测量文字或争抢车道。
-class _DanmakuLayoutItem {
-  /// 创建包含原始弹幕、物理车道和已测量文字宽度的渲染项。
-  const _DanmakuLayoutItem({
-    required this.entry,
-    required this.lane,
-    required this.textWidth,
-  });
-
-  final DanmakuEntry entry;
-  final int lane;
-  final double textWidth;
-}
-
-/// 缓存当前弹幕片段在指定画布尺寸下的车道规划，减少逐帧布局运算。
-class _DanmakuLanePlanner {
-  List<DanmakuEntry>? _cachedEntries;
-  Size? _cachedSize;
-  DanmakuPreferences? _cachedPreferences;
-  List<_DanmakuLayoutItem> _cachedItems = const <_DanmakuLayoutItem>[];
-
-  /// 清除旧分P或旧尺寸的规划结果，确保新视频不会复用错误车道。
-  void clear() {
-    _cachedEntries = null;
-    _cachedSize = null;
-    _cachedPreferences = null;
-    _cachedItems = const <_DanmakuLayoutItem>[];
-  }
-
-  /// 按时间顺序为弹幕寻找空闲车道；没有空闲车道时丢弃该条，避免文字叠成一团。
-  List<_DanmakuLayoutItem> plan(
-    List<DanmakuEntry> entries,
-    Size size,
-    DanmakuPreferences preferences,
-  ) {
-    if (identical(_cachedEntries, entries) &&
-        _cachedSize == size &&
-        identical(_cachedPreferences, preferences)) {
-      return _cachedItems;
-    }
-    final double laneHeight = preferences.fontSize + 9;
-    final int laneCount = (size.height / laneHeight)
-        .floor()
-        .clamp(1, preferences.laneCount)
-        .toInt();
-    final List<int> scrollingLaneFreeAt = List<int>.filled(laneCount, 0);
-    final List<int> topFixedLaneFreeAt = List<int>.filled(laneCount, 0);
-    final List<int> bottomFixedLaneFreeAt = List<int>.filled(laneCount, 0);
-    final List<DanmakuEntry> ordered = List<DanmakuEntry>.from(entries)
-      ..sort(
-        (DanmakuEntry left, DanmakuEntry right) =>
-            left.position.compareTo(right.position),
-      );
-    final List<_DanmakuLayoutItem> items = <_DanmakuLayoutItem>[];
-    for (final DanmakuEntry entry in ordered) {
-      final double textWidth = _measureTextWidth(
-        entry.content,
-        size.width,
-        preferences,
-      );
-      final int startedAt = entry.position.inMilliseconds;
-      final int lane;
-      if (entry.mode == 5) {
-        lane = _findFixedLane(
-          laneFreeAt: topFixedLaneFreeAt,
-          startedAt: startedAt,
-          fromBottom: false,
-        );
-      } else if (entry.mode == 4) {
-        lane = _findFixedLane(
-          laneFreeAt: bottomFixedLaneFreeAt,
-          startedAt: startedAt,
-          fromBottom: true,
-        );
-      } else {
-        final int preferredLane =
-            (startedAt ~/ 100 + entry.content.hashCode).abs() % laneCount;
-        lane = _findScrollingLane(
-          laneFreeAt: scrollingLaneFreeAt,
-          startedAt: startedAt,
-          preferredLane: preferredLane,
-        );
-      }
-      if (lane < 0) {
-        continue;
-      }
-      if (entry.mode == 4 || entry.mode == 5) {
-        final List<int> fixedLanes = entry.mode == 4
-            ? bottomFixedLaneFreeAt
-            : topFixedLaneFreeAt;
-        fixedLanes[lane] = startedAt + 4000;
-      } else {
-        final int minimumGapMilliseconds =
-            ((textWidth + 28) /
-                    (size.width + textWidth) *
-                    (preferences.scrollDurationSeconds * 1000))
-                .ceil();
-        scrollingLaneFreeAt[lane] = startedAt + minimumGapMilliseconds;
-      }
-      items.add(
-        _DanmakuLayoutItem(entry: entry, lane: lane, textWidth: textWidth),
-      );
-    }
-    _cachedEntries = entries;
-    _cachedSize = size;
-    _cachedPreferences = preferences;
-    _cachedItems = List<_DanmakuLayoutItem>.unmodifiable(items);
-    return _cachedItems;
-  }
-
-  /// 测量单行弹幕的真实宽度并限制极端长文本，保证移动速度与碰撞判断一致。
-  double _measureTextWidth(
-    String text,
-    double canvasWidth,
-    DanmakuPreferences preferences,
-  ) {
-    final TextPainter painter = TextPainter(
-      text: TextSpan(
-        text: text,
-        style: _DanmakuPainter.textStyleFor(preferences),
-      ),
-      textDirection: TextDirection.ltr,
-      maxLines: 1,
-      ellipsis: '…',
-    )..layout(maxWidth: canvasWidth * 0.92);
-    return painter.width;
-  }
-
-  /// 从期望车道开始循环寻找尾部已经离开起点的滚动弹幕车道。
-  int _findScrollingLane({
-    required List<int> laneFreeAt,
-    required int startedAt,
-    required int preferredLane,
-  }) {
-    for (int offset = 0; offset < laneFreeAt.length; offset += 1) {
-      final int lane = (preferredLane + offset) % laneFreeAt.length;
-      if (laneFreeAt[lane] <= startedAt) {
-        return lane;
-      }
-    }
-    return -1;
-  }
-
-  /// 从顶部或底部寻找空闲固定弹幕车道，四秒内被占用的车道不会重复使用。
-  int _findFixedLane({
-    required List<int> laneFreeAt,
-    required int startedAt,
-    required bool fromBottom,
-  }) {
-    for (int offset = 0; offset < laneFreeAt.length; offset += 1) {
-      final int lane = fromBottom ? laneFreeAt.length - 1 - offset : offset;
-      if (laneFreeAt[lane] <= startedAt) {
-        return lane;
-      }
-    }
-    return -1;
-  }
-}
-
-/// 在整个播放器画面上平滑绘制真实弹幕，不受上下控制栏的布局内边距影响。
-class _DanmakuPainter extends CustomPainter {
-  static const Duration _fixedDisplayDuration = Duration(seconds: 4);
-  static const int _maximumVisibleEntries = 48;
-
-  /// 按配置生成绘制样式；字号单位为 Flutter 逻辑像素，透明度限制在 20% 至 100%。
-  static TextStyle textStyleFor(DanmakuPreferences preferences) => TextStyle(
-    color: Colors.white.withValues(alpha: preferences.opacity),
-    fontSize: preferences.fontSize,
-    fontWeight: FontWeight.w600,
-    shadows: const <Shadow>[Shadow(color: Colors.black, blurRadius: 2)],
-  );
-
-  /// 创建使用逐帧控制器重绘的弹幕画笔，原生播放器状态只负责校准时间锚点。
-  _DanmakuPainter({
-    required this.entries,
-    required this.positionAnchor,
-    required this.playbackSpeed,
-    required this.frameController,
-    required this.lanePlanner,
-    required this.preferences,
-  }) : super(repaint: frameController);
-
-  final List<DanmakuEntry> entries;
-  final Duration positionAnchor;
-  final double playbackSpeed;
-  final AnimationController frameController;
-  final _DanmakuLanePlanner lanePlanner;
-  final DanmakuPreferences preferences;
-
-  /// 将帧间真实时间乘当前倍速后加到播放器锚点，使弹幕与倍速播放保持同一时间轴。
-  Duration _currentPosition() {
-    final int realElapsedMicroseconds =
-        (frameController.value * frameController.duration!.inMicroseconds)
-            .round();
-    return DanmakuTimeline.advance(
-      positionAnchor: positionAnchor,
-      realElapsed: Duration(microseconds: realElapsedMicroseconds),
-      playbackSpeed: playbackSpeed,
-    );
-  }
-
-  /// 绘制当前可见弹幕；车道无空间的高密度条目已经在规划阶段被安全丢弃。
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (size.isEmpty || entries.isEmpty) {
-      return;
-    }
-    final Duration position = _currentPosition();
-    final List<_DanmakuLayoutItem> items = lanePlanner.plan(
-      entries,
-      size,
-      preferences,
-    );
-    final int firstCandidate = _firstCandidateIndex(
-      items,
-      position - const Duration(seconds: 14),
-    );
-    int paintedEntries = 0;
-    for (int index = firstCandidate; index < items.length; index += 1) {
-      final _DanmakuLayoutItem item = items[index];
-      if (item.entry.position > position ||
-          paintedEntries >= _maximumVisibleEntries) {
-        break;
-      }
-      final Duration elapsed = position - item.entry.position;
-      final double x = _horizontalOffsetForItem(item, elapsed, size.width);
-      if (x > size.width || x + item.textWidth < 0) {
-        continue;
-      }
-      if ((item.entry.mode == 4 || item.entry.mode == 5) &&
-          elapsed > _fixedDisplayDuration) {
-        continue;
-      }
-      final TextPainter textPainter = TextPainter(
-        text: TextSpan(
-          text: item.entry.content,
-          style: textStyleFor(preferences).copyWith(
-            color: _colorForEntry(
-              item.entry,
-            ).withValues(alpha: preferences.opacity),
-          ),
-        ),
-        textDirection: TextDirection.ltr,
-        maxLines: 1,
-        ellipsis: '…',
-      )..layout(maxWidth: size.width * 0.92);
-      final double maximumTop = (size.height - textPainter.height)
-          .clamp(0, double.infinity)
-          .toDouble();
-      final double y = (item.lane * (preferences.fontSize + 9))
-          .clamp(0, maximumTop)
-          .toDouble();
-      textPainter.paint(canvas, Offset(x, y));
-      paintedEntries += 1;
-    }
-  }
-
-  /// 使用二分查找跳过远早于当前时间的条目，降低长弹幕片段的逐帧遍历开销。
-  int _firstCandidateIndex(List<_DanmakuLayoutItem> items, Duration threshold) {
-    int lower = 0;
-    int upper = items.length;
-    while (lower < upper) {
-      final int middle = (lower + upper) ~/ 2;
-      if (items[middle].entry.position < threshold) {
-        lower = middle + 1;
-      } else {
-        upper = middle;
-      }
-    }
-    return lower;
-  }
-
-  /// 按固定视频时长让弹幕完整穿过整个画布，横屏再宽也不会只挤在左半边。
-  double _horizontalOffsetForItem(
-    _DanmakuLayoutItem item,
-    Duration elapsed,
-    double canvasWidth,
-  ) {
-    if (item.entry.mode == 4 || item.entry.mode == 5) {
-      return (canvasWidth - item.textWidth) / 2;
-    }
-    return DanmakuTimeline.horizontalOffset(
-      elapsed: elapsed,
-      canvasWidth: canvasWidth,
-      textWidth: item.textWidth,
-      reverse: item.entry.mode == 6,
-      travelDuration: Duration(
-        milliseconds: (preferences.scrollDurationSeconds * 1000).round(),
-      ),
-    );
-  }
-
-  /// 把 B 站返回的 RGB 整数颜色转换为带不透明 Alpha 的 Flutter 颜色。
-  Color _colorForEntry(DanmakuEntry entry) {
-    return Color(0xFF000000 | (entry.color & 0xFFFFFF));
-  }
-
-  /// 当片段列表或原生时间锚点改变时重绘；连续移动由动画控制器直接驱动。
-  @override
-  bool shouldRepaint(covariant _DanmakuPainter oldDelegate) {
-    return oldDelegate.positionAnchor != positionAnchor ||
-        oldDelegate.playbackSpeed != playbackSpeed ||
-        !identical(oldDelegate.preferences, preferences) ||
-        !identical(oldDelegate.entries, entries) ||
-        oldDelegate.lanePlanner != lanePlanner;
   }
 }

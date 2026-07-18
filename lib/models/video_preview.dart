@@ -123,7 +123,7 @@ enum VideoSearchOrder {
   mostPlayed,
   newest,
   mostDanmaku,
-  mostFavorited
+  mostFavorited,
 }
 
 /// 定义关键词视频搜索的发布日期范围。
@@ -135,7 +135,7 @@ enum VideoDurationRange {
   underTenMinutes,
   tenToThirtyMinutes,
   thirtyToSixtyMinutes,
-  overSixtyMinutes
+  overSixtyMinutes,
 }
 
 /// 保存搜索筛选条件，默认不限制日期、时长和内容分区。
@@ -191,6 +191,28 @@ class VideoSearchPage {
   bool get hasMore => page < totalPages;
 }
 
+/// 表示视频简介的一段文字；提及 UP 主时同时保存可导航的用户 MID。
+class VideoDescriptionSegment {
+  /// 创建简介片段；普通文字不附加目标，@ 提及保存用户编号，链接保存完整 HTTPS 地址。
+  const VideoDescriptionSegment({
+    required this.text,
+    this.mentionedMid,
+    this.linkUri,
+  }) : assert(mentionedMid == null || linkUri == null, '简介片段不能同时是用户提及和外部链接。');
+
+  final String text;
+  final int? mentionedMid;
+  final Uri? linkUri;
+
+  /// 判断该片段是不是能够点击进入用户主页的 UP 主提及。
+  bool get isMention => mentionedMid != null && mentionedMid! > 0;
+
+  /// 判断该片段是不是需要风险确认后交给系统浏览器的 HTTP(S) 链接。
+  bool get isLink =>
+      linkUri != null &&
+      (linkUri!.scheme == 'http' || linkUri!.scheme == 'https');
+}
+
 /// 页面之间传递的视频信息，包含 BV 号、默认分P以及完整分P列表。
 class VideoPreview {
   /// 创建一支可由原生播放器打开并切换分P的视频详情。
@@ -206,6 +228,7 @@ class VideoPreview {
     this.ownerMid = 0,
     this.ownerAvatarUrl = '',
     this.description = '',
+    this.descriptionSegments = const <VideoDescriptionSegment>[],
     this.publishedAt,
     this.stats = const VideoStats(),
     this.collection,
@@ -222,6 +245,7 @@ class VideoPreview {
   final int ownerMid;
   final String ownerAvatarUrl;
   final String description;
+  final List<VideoDescriptionSegment> descriptionSegments;
   final DateTime? publishedAt;
   final VideoStats stats;
   final VideoCollection? collection;
@@ -243,6 +267,7 @@ class VideoPreview {
       ownerMid: ownerMid,
       ownerAvatarUrl: ownerAvatarUrl,
       description: description,
+      descriptionSegments: descriptionSegments,
       publishedAt: publishedAt,
       stats: stats,
       collection: collection,
@@ -263,12 +288,7 @@ class VideoPreview {
     if (parts.isNotEmpty) {
       return parts.first;
     }
-    return VideoPart(
-      pageNumber: 1,
-      cid: cid,
-      title: title,
-      duration: duration,
-    );
+    return VideoPart(pageNumber: 1, cid: cid, title: title, duration: duration);
   }
 
   /// 返回用于框架演示的默认视频，不执行任何网络请求。

@@ -51,10 +51,7 @@ void main() {
   test('保存并按视频时间点读取笔记', () async {
     final VideoNoteService service = await _createService();
     await service.saveNote(
-      _createNote(
-        id: 'later-position',
-        position: const Duration(seconds: 80),
-      ),
+      _createNote(id: 'later-position', position: const Duration(seconds: 80)),
     );
     await service.saveNote(
       _createNote(
@@ -68,8 +65,9 @@ void main() {
     );
 
     final List<VideoNote> allNotes = await service.loadNotes();
-    final List<VideoNote> videoNotes =
-        await service.loadNotesForVideo('BV1GJ411x7h7');
+    final List<VideoNote> videoNotes = await service.loadNotesForVideo(
+      'BV1GJ411x7h7',
+    );
 
     expect(allNotes, hasLength(3));
     expect(allNotes.first.id, 'earlier-position');
@@ -121,8 +119,9 @@ void main() {
         await directory.delete(recursive: true);
       }
     });
-    final File frame =
-        File('${directory.path}${Platform.pathSeparator}frame.jpg');
+    final File frame = File(
+      '${directory.path}${Platform.pathSeparator}frame.jpg',
+    );
     await frame.writeAsBytes(<int>[1, 2, 3]);
     await service.saveNote(_createNote(framePath: frame.path));
 

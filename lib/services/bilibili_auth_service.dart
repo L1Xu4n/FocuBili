@@ -44,26 +44,25 @@ class BilibiliSessionState {
 
   /// 创建本机没有登录 Cookie 时使用的未登录结果。
   const BilibiliSessionState.signedOut()
-      : status = BilibiliSessionStatus.signedOut,
-        account = null,
-        message = null;
+    : status = BilibiliSessionStatus.signedOut,
+      account = null,
+      message = null;
 
   /// 创建官方接口已经确认登录成功时使用的结果。
   const BilibiliSessionState.active(this.account)
-      : status = BilibiliSessionStatus.active,
-        message = null;
+    : status = BilibiliSessionStatus.active,
+      message = null;
 
   /// 创建 Cookie 存在但官方接口明确拒绝登录时使用的过期结果。
-  const BilibiliSessionState.expired({
-    this.message = '登录已过期，请重新登录。',
-  })  : status = BilibiliSessionStatus.expired,
-        account = null;
+  const BilibiliSessionState.expired({this.message = '登录已过期，请重新登录。'})
+    : status = BilibiliSessionStatus.expired,
+      account = null;
 
   /// 创建暂时无法验证会话时使用的结果，保留 Cookie 供稍后重试。
   const BilibiliSessionState.networkError({
     this.message = '暂时无法读取登录状态，请检查网络后重试。',
-  })  : status = BilibiliSessionStatus.networkError,
-        account = null;
+  }) : status = BilibiliSessionStatus.networkError,
+       account = null;
 
   final BilibiliSessionStatus status;
   final BilibiliAccount? account;
@@ -89,10 +88,7 @@ class BilibiliAuthException implements Exception {
 /// 表示账号状态接口的一次 HTTP 响应，便于服务层解析和单元测试替换网络。
 class BilibiliNavResponse {
   /// 创建包含状态码和 JSON 正文的账号状态接口响应。
-  const BilibiliNavResponse({
-    required this.statusCode,
-    required this.body,
-  });
+  const BilibiliNavResponse({required this.statusCode, required this.body});
 
   final int statusCode;
   final String body;
@@ -121,9 +117,7 @@ class PlatformBilibiliCookieStore implements BilibiliCookieStore {
   /// 创建使用 FocuBili Android 登录通道的 Cookie 存储实现。
   const PlatformBilibiliCookieStore();
 
-  static const MethodChannel _channel = MethodChannel(
-    'com.focubili.app/auth',
-  );
+  static const MethodChannel _channel = MethodChannel('com.focubili.app/auth');
 
   /// 从 Android WebView 的 B 站域读取 Cookie，不在 Dart 中持久化副本。
   @override
@@ -135,10 +129,9 @@ class PlatformBilibiliCookieStore implements BilibiliCookieStore {
   /// 调用原生原子替换操作，只在新 Cookie 已被官方验证后保存。
   @override
   Future<void> replaceCookies(String cookieHeader) {
-    return _channel.invokeMethod<void>(
-      'replaceCookies',
-      <String, Object?>{'cookie': cookieHeader},
-    );
+    return _channel.invokeMethod<void>('replaceCookies', <String, Object?>{
+      'cookie': cookieHeader,
+    });
   }
 
   /// 调用原生仅清理 B 站域 Cookie 的操作，用于退出和切换账号。
@@ -152,7 +145,7 @@ class PlatformBilibiliCookieStore implements BilibiliCookieStore {
 class BilibiliHttpAuthApi implements BilibiliAuthApi {
   /// 创建使用官方账号状态地址的网络客户端。
   BilibiliHttpAuthApi({HttpClient Function()? clientFactory})
-      : _clientFactory = clientFactory ?? HttpClient.new;
+    : _clientFactory = clientFactory ?? HttpClient.new;
 
   static final Uri _accountEndpoint = Uri.https(
     'api.bilibili.com',
@@ -192,11 +185,9 @@ class BilibiliHttpAuthApi implements BilibiliAuthApi {
 /// 验证 B 站会话、导入已验证 Cookie，并且永不保存多账号或密码资料。
 class BilibiliAuthService {
   /// 创建可替换网络和 Cookie 容器的登录服务，默认使用 Android 与真实官方接口。
-  BilibiliAuthService({
-    BilibiliCookieStore? cookieStore,
-    BilibiliAuthApi? api,
-  })  : _cookieStore = cookieStore ?? const PlatformBilibiliCookieStore(),
-        _api = api ?? BilibiliHttpAuthApi();
+  BilibiliAuthService({BilibiliCookieStore? cookieStore, BilibiliAuthApi? api})
+    : _cookieStore = cookieStore ?? const PlatformBilibiliCookieStore(),
+      _api = api ?? BilibiliHttpAuthApi();
 
   final BilibiliCookieStore _cookieStore;
   final BilibiliAuthApi _api;
@@ -233,12 +224,11 @@ class BilibiliAuthService {
   Future<BilibiliAccount> loginWithCookie(String rawCookie) async {
     final String cookie = rawCookie.trim();
     if (!_containsSessionCookie(cookie)) {
-      throw const BilibiliAuthException(
-        'Cookie 中没有找到有效的 SESSDATA，无法建立登录状态。',
-      );
+      throw const BilibiliAuthException('Cookie 中没有找到有效的 SESSDATA，无法建立登录状态。');
     }
-    final BilibiliSessionState verifiedSession =
-        await _requestCurrentSession(cookie);
+    final BilibiliSessionState verifiedSession = await _requestCurrentSession(
+      cookie,
+    );
     if (verifiedSession.status == BilibiliSessionStatus.networkError) {
       throw BilibiliAuthException(
         verifiedSession.message ?? '暂时无法验证 Cookie，请检查网络后重试。',

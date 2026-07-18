@@ -36,10 +36,12 @@ void main() {
       bvid: 'BV1GJ411x7h7',
       cid: 137649199,
     );
-    final VideoShotFrame? firstSheetFrame =
-        preview?.frameFor(const Duration(seconds: 35));
-    final VideoShotFrame? secondSheetFrame =
-        preview?.frameFor(const Duration(seconds: 60));
+    final VideoShotFrame? firstSheetFrame = preview?.frameFor(
+      const Duration(seconds: 35),
+    );
+    final VideoShotFrame? secondSheetFrame = preview?.frameFor(
+      const Duration(seconds: 60),
+    );
 
     expect(preview, isNotNull);
     expect(firstSheetFrame?.imageUrl, 'https://i0.hdslb.com/first.jpg');

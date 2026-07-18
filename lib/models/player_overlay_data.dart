@@ -73,16 +73,14 @@ class SubtitleTrackLoadResult {
       tracks.any((SubtitleTrack track) => !track.isLocked);
 
   /// 创建“没有字幕”的稳定结果，供原生明确返回空数组时使用。
-  const SubtitleTrackLoadResult.empty({
-    this.message = '此视频没有可用字幕。',
-  })  : status = SubtitleLoadStatus.empty,
-        tracks = const <SubtitleTrack>[];
+  const SubtitleTrackLoadResult.empty({this.message = '此视频没有可用字幕。'})
+    : status = SubtitleLoadStatus.empty,
+      tracks = const <SubtitleTrack>[];
 
   /// 创建“需要登录”的稳定结果，不把登录会话详情传给页面。
-  const SubtitleTrackLoadResult.loginRequired({
-    this.message = '登录后可尝试读取字幕。',
-  })  : status = SubtitleLoadStatus.loginRequired,
-        tracks = const <SubtitleTrack>[];
+  const SubtitleTrackLoadResult.loginRequired({this.message = '登录后可尝试读取字幕。'})
+    : status = SubtitleLoadStatus.loginRequired,
+      tracks = const <SubtitleTrack>[];
 
   /// 创建“字幕锁定”的稳定结果，提示页面不要伪造或继续请求内容。
   const SubtitleTrackLoadResult.locked({
@@ -91,17 +89,17 @@ class SubtitleTrackLoadResult {
   }) : status = SubtitleLoadStatus.locked;
 
   /// 创建“暂时无法读取”的稳定结果，页面可展示重试入口但不能伪造字幕。
-  const SubtitleTrackLoadResult.unavailable({
-    this.message = '字幕暂时无法读取，请稍后重试。',
-  })  : status = SubtitleLoadStatus.unavailable,
-        tracks = const <SubtitleTrack>[];
+  const SubtitleTrackLoadResult.unavailable({this.message = '字幕暂时无法读取，请稍后重试。'})
+    : status = SubtitleLoadStatus.unavailable,
+      tracks = const <SubtitleTrack>[];
 
   /// 从平台字典转换出稳定结果，并过滤重复或损坏的轨道条目。
   factory SubtitleTrackLoadResult.fromPlatformMap(
     Map<Object?, Object?> values,
   ) {
-    final SubtitleLoadStatus status =
-        _parseSubtitleLoadStatus(values['status']);
+    final SubtitleLoadStatus status = _parseSubtitleLoadStatus(
+      values['status'],
+    );
     final String message = values['message']?.toString().trim() ?? '';
     final Object? rawTracks = values['tracks'];
     final Map<String, SubtitleTrack> tracksById = <String, SubtitleTrack>{};
@@ -186,33 +184,29 @@ class SubtitleCueLoadResult {
 
   /// 创建没有字幕条目的稳定结果。
   const SubtitleCueLoadResult.empty({this.message = '此字幕轨道没有可显示内容。'})
-      : status = SubtitleLoadStatus.empty,
-        cues = const <SubtitleCue>[];
+    : status = SubtitleLoadStatus.empty,
+      cues = const <SubtitleCue>[];
 
   /// 创建字幕受登录限制时的稳定结果。
-  const SubtitleCueLoadResult.loginRequired({
-    this.message = '登录后可尝试读取字幕。',
-  })  : status = SubtitleLoadStatus.loginRequired,
-        cues = const <SubtitleCue>[];
+  const SubtitleCueLoadResult.loginRequired({this.message = '登录后可尝试读取字幕。'})
+    : status = SubtitleLoadStatus.loginRequired,
+      cues = const <SubtitleCue>[];
 
   /// 创建锁定轨道的稳定结果。
-  const SubtitleCueLoadResult.locked({
-    this.message = '此字幕当前不可用。',
-  })  : status = SubtitleLoadStatus.locked,
-        cues = const <SubtitleCue>[];
+  const SubtitleCueLoadResult.locked({this.message = '此字幕当前不可用。'})
+    : status = SubtitleLoadStatus.locked,
+      cues = const <SubtitleCue>[];
 
   /// 创建网络或数据暂时不可用时的稳定结果。
-  const SubtitleCueLoadResult.unavailable({
-    this.message = '字幕暂时无法读取，请稍后重试。',
-  })  : status = SubtitleLoadStatus.unavailable,
-        cues = const <SubtitleCue>[];
+  const SubtitleCueLoadResult.unavailable({this.message = '字幕暂时无法读取，请稍后重试。'})
+    : status = SubtitleLoadStatus.unavailable,
+      cues = const <SubtitleCue>[];
 
   /// 从原生字典转换字幕条目，并限制总条数避免异常响应造成内存压力。
-  factory SubtitleCueLoadResult.fromPlatformMap(
-    Map<Object?, Object?> values,
-  ) {
-    final SubtitleLoadStatus status =
-        _parseSubtitleLoadStatus(values['status']);
+  factory SubtitleCueLoadResult.fromPlatformMap(Map<Object?, Object?> values) {
+    final SubtitleLoadStatus status = _parseSubtitleLoadStatus(
+      values['status'],
+    );
     final String message = values['message']?.toString().trim() ?? '';
     final Object? rawCues = values['cues'];
     final List<SubtitleCue> cues = <SubtitleCue>[];
@@ -425,15 +419,15 @@ class DanmakuSegmentLoadResult {
   const DanmakuSegmentLoadResult.empty({
     this.segmentIndex = 1,
     this.message = '当前六分钟片段没有可显示弹幕。',
-  })  : status = DanmakuLoadStatus.empty,
-        entries = const <DanmakuEntry>[];
+  }) : status = DanmakuLoadStatus.empty,
+       entries = const <DanmakuEntry>[];
 
   /// 创建网络、平台通道或数据格式失败时可展示的稳定结果。
   const DanmakuSegmentLoadResult.unavailable({
     this.segmentIndex = 1,
     this.message = '弹幕暂时无法读取，请稍后重试。',
-  })  : status = DanmakuLoadStatus.unavailable,
-        entries = const <DanmakuEntry>[];
+  }) : status = DanmakuLoadStatus.unavailable,
+       entries = const <DanmakuEntry>[];
 
   /// 从 Android 方法通道字典转换结果，并过滤损坏或超量的弹幕条目。
   factory DanmakuSegmentLoadResult.fromPlatformMap(
@@ -465,8 +459,9 @@ class DanmakuSegmentLoadResult {
     }
     return DanmakuSegmentLoadResult(
       status: status,
-      message:
-          message.isEmpty ? _defaultMessageForDanmakuStatus(status) : message,
+      message: message.isEmpty
+          ? _defaultMessageForDanmakuStatus(status)
+          : message,
       segmentIndex: segmentIndex,
       entries: List<DanmakuEntry>.unmodifiable(entries),
     );

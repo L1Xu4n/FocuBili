@@ -5,9 +5,14 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/router/app_router.dart';
+import '../../models/user_search.dart';
 import '../../models/video_preview.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/search_history_service.dart';
+import '../profile/user_profile_page.dart';
+
+/// 标识搜索页当前查找公开视频还是公开用户。
+enum _SearchMode { videos, users }
 
 /// 保存搜索筛选面板中的内容分区编号和中文名称。
 class _SearchCategory {
@@ -21,9 +26,10 @@ class _SearchCategory {
 /// 搜索页支持关键词候选、筛选、分页、BV 直达和主动选择的视频结果。
 class SearchPage extends StatefulWidget {
   /// 创建搜索页面；测试可传入不访问真实网络的服务替身。
-  const SearchPage({super.key, this.service});
+  const SearchPage({super.key, this.service, this.userSearchService});
 
   final BilibiliService? service;
+  final BilibiliUserSearchService? userSearchService;
 
   /// 创建搜索页状态，保存输入、分页、筛选、候选词和结果列表。
   @override
@@ -71,6 +77,7 @@ class _SearchPageState extends State<SearchPage> {
   final Set<String> _episodeCountLookupAttemptedBvids = <String>{};
   final Map<String, String> _fallbackEpisodeCountTexts = <String, String>{};
   late final BilibiliService _service;
+  late final BilibiliUserSearchService _userSearchService;
   Timer? _suggestionDebounce;
   VideoPreview? _directResult;
   List<VideoSearchResult> _searchResults = const <VideoSearchResult>[];
@@ -85,6 +92,9 @@ class _SearchPageState extends State<SearchPage> {
   int _totalPages = 0;
   int _activeEpisodeCountLookups = 0;
   VideoSearchFilter _filter = const VideoSearchFilter();
+  UserSearchFilter _userFilter = const UserSearchFilter();
+  List<UserSearchResult> _userResults = const <UserSearchResult>[];
+  _SearchMode _searchMode = _SearchMode.videos;
   List<String> _searchHistory = const <String>[];
 
   /// 页面创建后初始化服务、滚动监听、焦点监听和本机搜索记录。
@@ -92,6 +102,11 @@ class _SearchPageState extends State<SearchPage> {
   void initState() {
     super.initState();
     _service = widget.service ?? BilibiliVideoInfoService();
+    _userSearchService =
+        widget.userSearchService ??
+        (_service is BilibiliUserSearchService
+            ? _service as BilibiliUserSearchService
+            : BilibiliVideoInfoService());
     _resultScrollController.addListener(_handleResultScroll);
     _searchFocusNode.addListener(_handleSearchFocusChange);
     _loadSearchHistory();
@@ -131,7 +146,9 @@ class _SearchPageState extends State<SearchPage> {
   void _handleSearchInputChanged(String value) {
     _suggestionDebounce?.cancel();
     final String input = value.trim();
-    if (input.isEmpty || _bvidPattern.hasMatch(input)) {
+    if (_searchMode == _SearchMode.users ||
+        input.isEmpty ||
+        _bvidPattern.hasMatch(input)) {
       setState(() => _suggestions = const <String>[]);
       return;
     }
@@ -166,6 +183,7 @@ class _SearchPageState extends State<SearchPage> {
       _errorMessage = null;
       _directResult = null;
       _searchResults = const <VideoSearchResult>[];
+      _userResults = const <UserSearchResult>[];
       _suggestions = const <String>[];
       _activeQuery = input;
       _currentPage = 0;
@@ -173,16 +191,29 @@ class _SearchPageState extends State<SearchPage> {
     });
     try {
       if (input.isEmpty) {
-        throw const BilibiliLookupException('请输入关键词、BV 号或视频链接。');
+        throw BilibiliLookupException(
+          _searchMode == _SearchMode.videos
+              ? '请输入关键词、BV 号或视频链接。'
+              : '请输入要搜索的用户名。',
+        );
       }
       final List<String> history = await _historyService.addHistory(input);
-      final bool opensDirectly = _bvidPattern.hasMatch(input);
+      final bool opensDirectly =
+          _searchMode == _SearchMode.videos && _bvidPattern.hasMatch(input);
       final VideoPreview? directResult = opensDirectly
           ? await _service.lookupVideo(input)
           : null;
-      final VideoSearchPage? searchPage = opensDirectly
+      final VideoSearchPage? searchPage =
+          opensDirectly || _searchMode == _SearchMode.users
           ? null
           : await _service.searchVideos(input, page: 1, filter: _filter);
+      final UserSearchPage? userPage = _searchMode == _SearchMode.users
+          ? await _userSearchService.searchUsers(
+              input,
+              page: 1,
+              filter: _userFilter,
+            )
+          : null;
       if (!mounted) {
         return;
       }
@@ -190,8 +221,9 @@ class _SearchPageState extends State<SearchPage> {
         _searchHistory = history;
         _directResult = directResult;
         _searchResults = searchPage?.results ?? const <VideoSearchResult>[];
-        _currentPage = searchPage?.page ?? 0;
-        _totalPages = searchPage?.totalPages ?? 0;
+        _userResults = userPage?.results ?? const <UserSearchResult>[];
+        _currentPage = searchPage?.page ?? userPage?.page ?? 0;
+        _totalPages = searchPage?.totalPages ?? userPage?.totalPages ?? 0;
         _loading = false;
       });
       if (_resultScrollController.hasClients) {
@@ -209,13 +241,39 @@ class _SearchPageState extends State<SearchPage> {
     if (_loading ||
         _loadingMore ||
         _activeQuery.isEmpty ||
-        _bvidPattern.hasMatch(_activeQuery) ||
+        (_searchMode == _SearchMode.videos &&
+            _bvidPattern.hasMatch(_activeQuery)) ||
         _currentPage <= 0 ||
         _currentPage >= _totalPages) {
       return;
     }
     setState(() => _loadingMore = true);
     try {
+      if (_searchMode == _SearchMode.users) {
+        final UserSearchPage nextPage = await _userSearchService.searchUsers(
+          _activeQuery,
+          page: _currentPage + 1,
+          filter: _userFilter,
+        );
+        if (!mounted) {
+          return;
+        }
+        final Set<int> existingMids = _userResults
+            .map((UserSearchResult result) => result.mid)
+            .toSet();
+        setState(() {
+          _userResults = <UserSearchResult>[
+            ..._userResults,
+            ...nextPage.results.where(
+              (UserSearchResult result) => existingMids.add(result.mid),
+            ),
+          ];
+          _currentPage = nextPage.page;
+          _totalPages = nextPage.totalPages;
+          _loadingMore = false;
+        });
+        return;
+      }
       final VideoSearchPage nextPage = await _service.searchVideos(
         _activeQuery,
         page: _currentPage + 1,
@@ -279,6 +337,7 @@ class _SearchPageState extends State<SearchPage> {
       _loadingMore = false;
       _directResult = null;
       _searchResults = const <VideoSearchResult>[];
+      _userResults = const <UserSearchResult>[];
       _errorMessage = message;
     });
   }
@@ -290,6 +349,7 @@ class _SearchPageState extends State<SearchPage> {
     setState(() {
       _directResult = null;
       _searchResults = const <VideoSearchResult>[];
+      _userResults = const <UserSearchResult>[];
       _suggestions = const <String>[];
       _errorMessage = null;
       _hasSubmitted = false;
@@ -297,6 +357,41 @@ class _SearchPageState extends State<SearchPage> {
       _currentPage = 0;
       _totalPages = 0;
     });
+  }
+
+  /// 切换视频或用户搜索，并清除上一模式结果，避免两类卡片混在同一列表。
+  void _changeSearchMode(Set<_SearchMode> values) {
+    if (values.isEmpty || values.first == _searchMode) {
+      return;
+    }
+    setState(() {
+      _searchMode = values.first;
+      _directResult = null;
+      _searchResults = const <VideoSearchResult>[];
+      _userResults = const <UserSearchResult>[];
+      _suggestions = const <String>[];
+      _errorMessage = null;
+      _hasSubmitted = false;
+      _activeQuery = '';
+      _currentPage = 0;
+      _totalPages = 0;
+    });
+  }
+
+  /// 打开用户搜索结果对应的公开主页。
+  void _openUserResult(UserSearchResult result) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        // 用户主页构建函数先显示搜索资料，再由公开接口补全内容。
+        builder: (BuildContext context) => UserProfilePage(
+          mid: result.mid,
+          initialName: result.name,
+          initialAvatarUrl: result.avatarUrl,
+          initialSign: result.signature,
+          initialOfficialDescription: result.certification,
+        ),
+      ),
+    );
   }
 
   /// 把查询到的完整视频作为参数打开原生播放器页面。
@@ -422,6 +517,81 @@ class _SearchPageState extends State<SearchPage> {
     if (_controller.text.trim().isNotEmpty) {
       unawaited(_submitSearch());
     }
+  }
+
+  /// 切换用户排序方式，并在输入非空时立即重新请求第一页。
+  void _changeUserSearchOrder(UserSearchOrder order) {
+    if (_userFilter.order == order) {
+      return;
+    }
+    setState(() => _userFilter = _userFilter.copyWith(order: order));
+    if (_controller.text.trim().isNotEmpty) {
+      unawaited(_submitSearch());
+    }
+  }
+
+  /// 打开用户类型筛选面板，支持全部、UP 主、普通用户和认证用户。
+  Future<void> _openUserFilterSheet() async {
+    final UserSearchType? selectedType =
+        await showModalBottomSheet<UserSearchType>(
+          context: context,
+          showDragHandle: true,
+          builder: (BuildContext context) => SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text('用户分类', style: Theme.of(context).textTheme.titleLarge),
+                  const SizedBox(height: 16),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: UserSearchType.values
+                        .map((UserSearchType type) {
+                          return ChoiceChip(
+                            label: Text(_userTypeLabel(type)),
+                            selected: type == _userFilter.type,
+                            // 用户分类标签函数把选择返回搜索页面，网络请求由外层统一发起。
+                            onSelected: (_) => Navigator.of(context).pop(type),
+                          );
+                        })
+                        .toList(growable: false),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+    if (!mounted || selectedType == null || selectedType == _userFilter.type) {
+      return;
+    }
+    setState(() => _userFilter = _userFilter.copyWith(type: selectedType));
+    if (_controller.text.trim().isNotEmpty) {
+      unawaited(_submitSearch());
+    }
+  }
+
+  /// 返回用户排序在搜索栏中显示的短标签。
+  String _userOrderLabel(UserSearchOrder order) {
+    return switch (order) {
+      UserSearchOrder.defaultOrder => '默认排序',
+      UserSearchOrder.fansDescending => '粉丝多',
+      UserSearchOrder.fansAscending => '粉丝少',
+      UserSearchOrder.levelDescending => '等级高',
+      UserSearchOrder.levelAscending => '等级低',
+    };
+  }
+
+  /// 返回用户分类在筛选面板中显示的中文名称。
+  String _userTypeLabel(UserSearchType type) {
+    return switch (type) {
+      UserSearchType.all => '全部用户',
+      UserSearchType.uploader => 'UP 主',
+      UserSearchType.normal => '普通用户',
+      UserSearchType.certified => '认证用户',
+    };
   }
 
   /// 打开参考图样式的筛选面板，并在用户确认后重新搜索。
@@ -698,7 +868,9 @@ class _SearchPageState extends State<SearchPage> {
               // 键盘确认函数复用标准搜索流程。
               onSubmitted: (_) => _submitSearch(),
               decoration: InputDecoration(
-                hintText: '搜索关键词、BV 号或 B 站视频链接',
+                hintText: _searchMode == _SearchMode.videos
+                    ? '搜索关键词、BV 号或 B 站视频链接'
+                    : '搜索用户名',
                 prefixIcon: const Icon(Icons.search_rounded),
                 suffixIcon: IconButton(
                   // 输入清空函数同时移除旧候选词和搜索结果。
@@ -706,6 +878,28 @@ class _SearchPageState extends State<SearchPage> {
                   icon: const Icon(Icons.close_rounded),
                   tooltip: '清空',
                 ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: SegmentedButton<_SearchMode>(
+                key: const Key('search-mode-selector'),
+                segments: const <ButtonSegment<_SearchMode>>[
+                  ButtonSegment<_SearchMode>(
+                    value: _SearchMode.videos,
+                    icon: Icon(Icons.ondemand_video_outlined),
+                    label: Text('视频'),
+                  ),
+                  ButtonSegment<_SearchMode>(
+                    value: _SearchMode.users,
+                    icon: Icon(Icons.person_search_outlined),
+                    label: Text('用户'),
+                  ),
+                ],
+                selected: <_SearchMode>{_searchMode},
+                // 搜索模式函数在视频和用户结果之间切换。
+                onSelectionChanged: _changeSearchMode,
               ),
             ),
             if (!keyboardVisible) ...<Widget>[
@@ -771,6 +965,9 @@ class _SearchPageState extends State<SearchPage> {
 
   /// 创建可横向滚动的排序标签和带已启用数量的筛选按钮。
   Widget _buildSortAndFilterBar() {
+    if (_searchMode == _SearchMode.users) {
+      return _buildUserSortAndFilterBar();
+    }
     final int filterCount = _activeFilterCount();
     return SizedBox(
       height: 46,
@@ -802,6 +999,44 @@ class _SearchPageState extends State<SearchPage> {
               onPressed: _openFilterSheet,
               icon: const Icon(Icons.filter_list_rounded),
               tooltip: '筛选',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 创建用户搜索的粉丝数、等级排序标签和用户类型筛选按钮。
+  Widget _buildUserSortAndFilterBar() {
+    return SizedBox(
+      height: 46,
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: UserSearchOrder.values.length,
+              separatorBuilder: (BuildContext context, int index) =>
+                  const SizedBox(width: 6),
+              itemBuilder: (BuildContext context, int index) {
+                final UserSearchOrder order = UserSearchOrder.values[index];
+                return ChoiceChip(
+                  label: Text(_userOrderLabel(order)),
+                  selected: _userFilter.order == order,
+                  // 用户排序标签函数按所选粉丝数或等级顺序重新搜索。
+                  onSelected: (_) => _changeUserSearchOrder(order),
+                );
+              },
+            ),
+          ),
+          const VerticalDivider(indent: 8, endIndent: 8),
+          Badge(
+            isLabelVisible: _userFilter.type != UserSearchType.all,
+            child: IconButton(
+              // 用户筛选按钮函数打开账号分类选择面板。
+              onPressed: _openUserFilterSheet,
+              icon: const Icon(Icons.filter_list_rounded),
+              tooltip: '用户分类',
             ),
           ),
         ],
@@ -888,6 +1123,20 @@ class _SearchPageState extends State<SearchPage> {
         ],
       );
     }
+    if (_userResults.isNotEmpty) {
+      return ListView.separated(
+        controller: _resultScrollController,
+        itemCount: _userResults.length + 1,
+        separatorBuilder: (BuildContext context, int index) =>
+            const SizedBox(height: 6),
+        itemBuilder: (BuildContext context, int index) {
+          if (index == _userResults.length) {
+            return _buildLoadMoreFooter();
+          }
+          return _buildUserResultCard(_userResults[index]);
+        },
+      );
+    }
     if (_searchResults.isNotEmpty) {
       return ListView.separated(
         controller: _resultScrollController,
@@ -903,12 +1152,98 @@ class _SearchPageState extends State<SearchPage> {
       );
     }
     if (_hasSubmitted) {
-      return const _SearchMessage(
+      return _SearchMessage(
         icon: Icons.search_off_rounded,
-        text: '没有找到相关公开视频，可以调整筛选或更换关键词。',
+        text: _searchMode == _SearchMode.videos
+            ? '没有找到相关公开视频，可以调整筛选或更换关键词。'
+            : '没有找到相关用户，可以调整分类或更换用户名。',
       );
     }
     return const _SearchEmptyState();
+  }
+
+  /// 创建用户头像、等级、粉丝数、投稿数、认证和签名组成的搜索卡片。
+  Widget _buildUserResultCard(UserSearchResult result) {
+    return Card(
+      key: ValueKey<String>('user-search-${result.mid}'),
+      margin: EdgeInsets.zero,
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        leading: CircleAvatar(
+          radius: 28,
+          backgroundImage: result.avatarUrl.isEmpty
+              ? null
+              : CachedNetworkImageProvider(
+                  result.avatarUrl,
+                  headers: const <String, String>{
+                    'Referer': 'https://www.bilibili.com/',
+                  },
+                ),
+          child: result.avatarUrl.isEmpty
+              ? const Icon(Icons.person_rounded)
+              : null,
+        ),
+        title: Row(
+          children: <Widget>[
+            Flexible(
+              child: Text(
+                result.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+            const SizedBox(width: 6),
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.primaryContainer,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                child: Text(
+                  'LV${result.level}',
+                  style: Theme.of(context).textTheme.labelSmall,
+                ),
+              ),
+            ),
+            if (result.isCertified) ...<Widget>[
+              const SizedBox(width: 5),
+              Icon(
+                Icons.verified_rounded,
+                size: 17,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            ],
+          ],
+        ),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            const SizedBox(height: 3),
+            Text(
+              '粉丝 ${_formatCount(result.followerCount)}  ·  视频 ${result.videoCount}',
+            ),
+            if (result.isCertified)
+              Text(
+                result.certification,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: Theme.of(context).colorScheme.primary),
+              )
+            else if (result.signature.isNotEmpty)
+              Text(
+                result.signature,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+          ],
+        ),
+        trailing: const Icon(Icons.chevron_right_rounded),
+        // 用户卡片点击函数打开对应 MID 的公开主页。
+        onTap: () => _openUserResult(result),
+      ),
+    );
   }
 
   /// 创建包含缓存缩略图、角标、发布日期、UP、播放和弹幕数的结果卡片。

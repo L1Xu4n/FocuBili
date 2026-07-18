@@ -62,8 +62,10 @@ class VideoShotPreview {
     }
     final int frameIndex = (lower - 1).clamp(0, sampleSeconds.length - 1);
     final int cellsPerSheet = columns * rows;
-    final int sheetIndex =
-        (frameIndex ~/ cellsPerSheet).clamp(0, imageUrls.length - 1);
+    final int sheetIndex = (frameIndex ~/ cellsPerSheet).clamp(
+      0,
+      imageUrls.length - 1,
+    );
     final int cellIndex = frameIndex % cellsPerSheet;
     return VideoShotFrame(
       imageUrl: imageUrls[sheetIndex],

@@ -78,7 +78,7 @@ class PictureInPicturePlaybackActionReceiver : BroadcastReceiver() {
  *
  * 播放器同时负责倍速、清晰度切换、本地进度记忆和 Android 系统媒体会话。
  */
-@OptIn(UnstableApi::class)
+@UnstableApi
 class NativePlaybackController(
     private val activity: Activity,
     messenger: BinaryMessenger,
@@ -142,9 +142,17 @@ class NativePlaybackController(
     private data class PlaybackSources(
         val videoUrls: List<String>,
         val audioUrls: List<String>,
+        val videoCodec: String,
+        val audioCodec: String,
         val referer: String,
         val actualQuality: Int,
         val qualities: List<PlaybackQualityOption>,
+    )
+
+    /** 保存一条选中媒体轨道的编码名称和主备地址，供兼容选择与缓存隔离使用。 */
+    private data class SelectedMediaTrack(
+        val urls: List<String>,
+        val codec: String,
     )
 
     /** 保存播放失败中可安全展示的原因类型和 HTTP 状态，不含地址、请求头或会话资料。 */
@@ -971,16 +979,18 @@ class NativePlaybackController(
         val dash = data.optJSONObject("dash")
             ?: throw PlaybackSourceException("该视频没有可用的 DASH 播放数据。")
         val actualQuality = data.optInt("quality", quality).takeIf { it > 0 } ?: quality
-        val videoUrls = selectMediaUrls(dash.optJSONArray("video"), actualQuality)
-        val audioUrls = selectMediaUrls(dash.optJSONArray("audio"))
-        if (videoUrls.isEmpty()) {
+        val videoTrack = selectMediaTrack(dash.optJSONArray("video"), actualQuality)
+        val audioTrack = selectMediaTrack(dash.optJSONArray("audio"))
+        if (videoTrack.urls.isEmpty()) {
             throw PlaybackSourceException("播放数据没有返回安全的视频地址。")
         }
         val referer = buildVideoPageUrl(bvid)
             ?: throw PlaybackSourceException("无法生成视频页面地址。")
         return PlaybackSources(
-            videoUrls = videoUrls,
-            audioUrls = audioUrls,
+            videoUrls = videoTrack.urls,
+            audioUrls = audioTrack.urls,
+            videoCodec = videoTrack.codec,
+            audioCodec = audioTrack.codec,
             referer = referer,
             actualQuality = actualQuality,
             qualities = parseQualityOptions(data, dash),
@@ -1786,13 +1796,13 @@ class NativePlaybackController(
         }
     }
 
-    /** 从一组 DASH 轨道中选择目标质量，并保留该轨道的主地址与全部安全备用地址。 */
-    private fun selectMediaUrls(
+    /** 从 DASH 轨道选择目标质量并优先 AVC/H.264，避开部分 HEVC 初始化数据解析崩溃。 */
+    private fun selectMediaTrack(
         mediaItems: JSONArray?,
         preferredId: Int? = null,
-    ): List<String> {
+    ): SelectedMediaTrack {
         if (mediaItems == null) {
-            return emptyList()
+            return SelectedMediaTrack(emptyList(), "")
         }
         var selectedMedia: JSONObject? = null
         var bestScore = Long.MIN_VALUE
@@ -1807,15 +1817,25 @@ class NativePlaybackController(
             } else {
                 0L
             }
+            val compatibilityBonus = if (preferredId != null) {
+                PlaybackTrackPolicy.compatibilityScore(media.optString("codecs"))
+            } else {
+                0L
+            }
             val heightScore = media.optInt("height").coerceAtLeast(0).toLong() * HEIGHT_SCORE_UNIT
             val bandwidthScore = media.optLong("bandwidth").coerceAtLeast(0L)
-            val score = qualityBonus + heightScore + bandwidthScore
+            val score = qualityBonus + compatibilityBonus + heightScore + bandwidthScore
             if (score > bestScore) {
                 selectedMedia = media
                 bestScore = score
             }
         }
-        return selectedMedia?.let(::readMediaUrls) ?: emptyList()
+        return selectedMedia?.let { media ->
+            SelectedMediaTrack(
+                urls = readMediaUrls(media),
+                codec = media.optString("codecs").trim(),
+            )
+        } ?: SelectedMediaTrack(emptyList(), "")
     }
 
     /** 从一条 DASH 轨道读取并去重主备地址，只保留 B 站 HTTPS 媒体域名。 */
@@ -1993,7 +2013,10 @@ class NativePlaybackController(
         val videoItem = MediaItem.Builder()
             .setMediaId("$currentBvid:$currentCid:$currentQuality")
             .setUri(videoUrl)
-            .setCustomCacheKey("$currentBvid:$currentCid:$currentQuality:video")
+            .setCustomCacheKey(
+                "$currentBvid:$currentCid:$currentQuality:" +
+                    "${PlaybackTrackPolicy.cacheKey(sources.videoCodec)}:video",
+            )
             .setMediaMetadata(mediaMetadata)
             .build()
         val videoSource = sourceFactory.createMediaSource(videoItem)
@@ -2001,7 +2024,10 @@ class NativePlaybackController(
             val audioSource = sourceFactory.createMediaSource(
                 MediaItem.Builder()
                     .setUri(audioUrl)
-                    .setCustomCacheKey("$currentBvid:$currentCid:$currentQuality:audio")
+                    .setCustomCacheKey(
+                        "$currentBvid:$currentCid:$currentQuality:" +
+                            "${PlaybackTrackPolicy.cacheKey(sources.audioCodec)}:audio",
+                    )
                     .build(),
             )
             MergingMediaSource(videoSource, audioSource)

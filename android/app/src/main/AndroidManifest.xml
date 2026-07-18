@@ -1,5 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Android 13 起发送专注继续提醒前需要用户运行时授权。 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:label="焦点哔哩"
@@ -8,6 +10,10 @@
         <!-- 仅接收系统画中画 PendingIntent；不对其他应用导出，避免外部任意控制播放。 -->
         <receiver
             android:name=".PictureInPicturePlaybackActionReceiver"
+            android:exported="false" />
+        <!-- 只接收本应用安排的专注提醒闹钟，不允许其他应用直接调用。 -->
+        <receiver
+            android:name=".FocusReminderReceiver"
             android:exported="false" />
         <activity
             android:name=".MainActivity"

@@ -8,7 +8,9 @@ import '../../models/video_note.dart';
 import '../../models/video_preview.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/video_note_service.dart';
+import '../../services/video_note_share_service.dart';
 import 'video_note_composer.dart';
+import 'video_note_share_preview.dart';
 
 /// 允许测试替换播放器目标页，同时保留视频、分P和时间点三项跳转参数。
 typedef VideoNotePlayerBuilder =
@@ -27,12 +29,14 @@ class VideoNoteDetailPage extends StatefulWidget {
     required this.noteService,
     this.videoService,
     this.playerBuilder,
+    this.shareService = const VideoNoteShareService(),
   });
 
   final VideoNote note;
   final VideoNoteService noteService;
   final BilibiliService? videoService;
   final VideoNotePlayerBuilder? playerBuilder;
+  final VideoNoteShareService shareService;
 
   /// 创建负责详情编辑、截图预览和保存状态的页面状态。
   @override
@@ -256,6 +260,19 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
     );
   }
 
+  /// 用当前屏幕上的草稿生成分享长图，未保存修改不会被悄悄替换成旧内容。
+  Future<void> _openSharePreview() async {
+    final VideoNote draft = _note.copyWith(
+      title: _titleController.text.trim(),
+      body: _bodyController.text.trim(),
+    );
+    await showVideoNoteSharePreview(
+      context,
+      draft,
+      shareService: widget.shareService,
+    );
+  }
+
   /// 构建视频来源卡片中的 16:9 封面；缺失或加载失败时显示稳定占位图。
   Widget _buildVideoCover() {
     final ColorScheme colors = Theme.of(context).colorScheme;
@@ -366,6 +383,12 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
         appBar: AppBar(
           title: const Text('笔记详情'),
           actions: <Widget>[
+            IconButton(
+              key: const Key('share-note-from-detail'),
+              onPressed: _saving ? null : _openSharePreview,
+              icon: const Icon(Icons.ios_share_rounded),
+              tooltip: '分享笔记图片',
+            ),
             IconButton(
               key: const Key('delete-note-from-detail'),
               // 顶部删除函数启动二次确认，避免误删本机笔记。

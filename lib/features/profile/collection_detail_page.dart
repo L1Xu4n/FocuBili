@@ -106,9 +106,9 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
     try {
       final CreatorContentPage<CreatorVideo> result =
           await _publicContentService.loadCollectionVideos(
-        widget.collection.ownerMid,
-        widget.collection.id,
-      );
+            widget.collection.ownerMid,
+            widget.collection.id,
+          );
       if (!mounted) {
         return;
       }
@@ -148,10 +148,10 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
     try {
       final CreatorContentPage<CreatorVideo> result =
           await _publicContentService.loadCollectionVideos(
-        widget.collection.ownerMid,
-        widget.collection.id,
-        page: _page + 1,
-      );
+            widget.collection.ownerMid,
+            widget.collection.id,
+            page: _page + 1,
+          );
       if (!mounted) {
         return;
       }
@@ -175,8 +175,9 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
     List<CreatorVideo> current,
     List<CreatorVideo> incoming,
   ) {
-    final Set<String> bvids =
-        current.map((CreatorVideo video) => video.bvid).toSet();
+    final Set<String> bvids = current
+        .map((CreatorVideo video) => video.bvid)
+        .toSet();
     return List<CreatorVideo>.unmodifiable(<CreatorVideo>[
       ...current,
       ...incoming.where((CreatorVideo video) => bvids.add(video.bvid)),
@@ -194,10 +195,7 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
       if (!mounted) {
         return;
       }
-      await Navigator.of(context).pushNamed(
-        AppRoutes.player,
-        arguments: video,
-      );
+      await Navigator.of(context).pushNamed(AppRoutes.player, arguments: video);
     } catch (error) {
       if (mounted) {
         _showMessage('无法打开视频：$error');
@@ -214,10 +212,7 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          duration: const Duration(seconds: 3),
-        ),
+        SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
       );
   }
 
@@ -246,8 +241,8 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
                 const SizedBox(height: 6),
                 Text(
@@ -337,8 +332,10 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
                 _buildCover(item.coverUrl, width: 150, height: 92),
                 Container(
                   margin: const EdgeInsets.all(6),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 5,
+                    vertical: 2,
+                  ),
                   color: Colors.black54,
                   child: Text(
                     _formatDuration(item.duration),
