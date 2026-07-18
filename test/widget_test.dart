@@ -2139,7 +2139,11 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const Key('more-settings-menu')));
+    final dynamic moreMenuState = tester.state(
+      find.byKey(const Key('more-settings-menu')),
+    );
+    // 测试环境直接调用 Flutter 菜单状态，避免外层播放手势抢占模拟点击。
+    moreMenuState.showButtonMenu();
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('danmaku-settings-menu-item')));
     await tester.pumpAndSettle();
@@ -2147,6 +2151,7 @@ void main() {
 
     await tester.tap(find.byKey(const Key('danmaku-settings-enabled')));
     await tester.pumpAndSettle();
+    expect(find.byTooltip('关闭弹幕'), findsOneWidget);
     expect((await preferencesService.load()).enabled, isTrue);
   });
 

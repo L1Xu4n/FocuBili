@@ -1,7 +1,8 @@
 import 'dart:async';
 
-import 'package:flutter/gestures.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -153,6 +154,8 @@ class _PlayerPageState extends State<PlayerPage>
   bool _partSelectorExpanded = false;
   bool _partsAscending = true;
   DanmakuPreferences _danmakuPreferences = DanmakuPreferences();
+  bool _danmakuPreferencesChangedByUser = false;
+  bool _danmakuPersistenceWarningShown = false;
   _VideoFitMode _videoFitMode = _VideoFitMode.contain;
   bool _temporaryDoubleSpeedActive = false;
   bool _horizontalScrubbing = false;
@@ -248,7 +251,8 @@ class _PlayerPageState extends State<PlayerPage>
             ? BilibiliVideoShotService()
             : const EmptyVideoShotService());
     _videoNoteService = widget.videoNoteService ?? VideoNoteService();
-    _danmakuPreferencesService = widget.danmakuPreferencesService ?? DanmakuPreferencesService();
+    _danmakuPreferencesService =
+        widget.danmakuPreferencesService ?? DanmakuPreferencesService();
     _pendingInitialPosition = widget.initialPosition;
     _playbackSubscription = _playbackService.states.listen(
       _applyPlaybackSnapshot,
@@ -260,8 +264,11 @@ class _PlayerPageState extends State<PlayerPage>
 
   /// 启动时恢复全局弹幕配置；旧用户或读取失败由服务返回默认值，页面仍可正常播放。
   Future<void> _loadDanmakuPreferences() async {
-    final DanmakuPreferences preferences = await _danmakuPreferencesService.load();
-    if (!mounted) return;
+    final DanmakuPreferences preferences =
+        await _danmakuPreferencesService.load();
+    if (!mounted || _danmakuPreferencesChangedByUser) {
+      return;
+    }
     setState(() => _danmakuPreferences = preferences);
     _danmakuLanePlanner.clear();
     if (preferences.enabled) {
@@ -1605,38 +1612,61 @@ class _PlayerPageState extends State<PlayerPage>
     }
   }
 
-  /// 切换全屏弹幕按钮，并在开启后按当前播放位置读取真实的六分钟弹幕片段。
+  /// 切换顶部弹幕按钮；实际的片段加载、动画启停和持久化统一交给配置应用函数。
   void _toggleDanmaku() {
-    final bool nextEnabled = !_danmakuEnabled;
     _applyDanmakuPreferences(
-      _danmakuPreferences.copyWith(enabled: nextEnabled),
+      _danmakuPreferences.copyWith(enabled: !_danmakuEnabled),
     );
-    if (nextEnabled) {
-      _failedDanmakuSegments.clear();
-      _ensureDanmakuSegmentsForPosition(_playbackSnapshot.position);
-      _syncDanmakuAnimation(_playbackSnapshot);
-    } else {
-      _danmakuFrameController.stop();
-      _danmakuFrameController.value = 0;
-    }
     _showPlayerControls();
   }
 
-  /// 立即应用已归一化配置并异步持久化；写盘失败只影响下次恢复，当前播放会话继续使用新值。
+  /// 立即应用已归一化配置；开关会启停当前动画，屏蔽规则会先清队列再加载。
   void _applyDanmakuPreferences(DanmakuPreferences preferences) {
-    final bool blockingRulesChanged =
-        preferences.blockedKeywords.join('\u0000') !=
-            _danmakuPreferences.blockedKeywords.join('\u0000');
+    final bool enabledChanged =
+        preferences.enabled != _danmakuPreferences.enabled;
+    final bool blockingRulesChanged = !listEquals(
+      preferences.blockedKeywords,
+      _danmakuPreferences.blockedKeywords,
+    );
+    _danmakuPreferencesChangedByUser = true;
     setState(() => _danmakuPreferences = preferences);
     _danmakuLanePlanner.clear();
-    unawaited(_danmakuPreferencesService.save(preferences));
+    unawaited(_persistDanmakuPreferences(preferences));
+
     if (blockingRulesChanged) {
       // 清空已经进入缓存的旧条目并重新请求，使新增屏蔽词立即生效且不留下占轨条目。
       _clearDanmakuForPart();
-      if (preferences.enabled) {
-        _ensureDanmakuSegmentsForPosition(_playbackSnapshot.position);
-        _syncDanmakuAnimation(_playbackSnapshot);
-      }
+    }
+    if (!preferences.enabled) {
+      _danmakuFrameController.stop();
+      _danmakuFrameController.value = 0;
+      return;
+    }
+    if (enabledChanged) {
+      // 重新开启时允许曾经失败的分段重试，避免本次播放会话一直空白。
+      _failedDanmakuSegments.clear();
+    }
+    if (enabledChanged || blockingRulesChanged) {
+      _ensureDanmakuSegmentsForPosition(_playbackSnapshot.position);
+      _syncDanmakuAnimation(_playbackSnapshot);
+    }
+  }
+
+  /// 异步保存当前配置；失败时会话内仍使用新值，并只提示一次“下次启动可能无法恢复”。
+  Future<void> _persistDanmakuPreferences(
+    DanmakuPreferences preferences,
+  ) async {
+    final bool saved = await _danmakuPreferencesService.save(preferences);
+    if (!mounted) {
+      return;
+    }
+    if (saved) {
+      _danmakuPersistenceWarningShown = false;
+      return;
+    }
+    if (!_danmakuPersistenceWarningShown) {
+      _danmakuPersistenceWarningShown = true;
+      _showTransientSnackBar('弹幕设置已应用，但保存失败；下次启动可能恢复默认值');
     }
   }
 
@@ -1748,7 +1778,8 @@ class _PlayerPageState extends State<PlayerPage>
     setState(() {
       // 屏蔽在进入缓存和车道规划队列前完成，命中的条目不会隐藏后仍占用轨道。
       _danmakuSegments[result.segmentIndex] = result.entries
-          .where((DanmakuEntry entry) => !_danmakuPreferences.blocks(entry.content))
+          .where((DanmakuEntry entry) =>
+              !_danmakuPreferences.blocks(entry.content))
           .toList(growable: false);
     });
     _trimDanmakuSegments(
@@ -2082,29 +2113,129 @@ class _PlayerPageState extends State<PlayerPage>
               setSheetState(() {});
             }
 
-            /// 创建带单位、当前值与合法范围的滑块行，避免用户误解透明度、像素或秒数含义。
-            Widget sliderRow({required String label, required String valueLabel, required double value, required double min, required double max, required int divisions, required ValueChanged<double> onChanged}) {
-              return Column(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
-                Text('$label：$valueLabel（${min.toStringAsFixed(0)}–${max.toStringAsFixed(0)}）'),
-                Slider(value: value, min: min, max: max, divisions: divisions, onChanged: onChanged),
-              ]);
+            /// 创建带单位、当前值与范围文案的滑块行，透明度等比例值不会被误显示为“0–1”。
+            Widget sliderRow({
+              required String label,
+              required String valueLabel,
+              required String rangeLabel,
+              required double value,
+              required double min,
+              required double max,
+              required int divisions,
+              required ValueChanged<double> onChanged,
+            }) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text('$label：$valueLabel（范围：$rangeLabel）'),
+                  Slider(
+                    value: value,
+                    min: min,
+                    max: max,
+                    divisions: divisions,
+                    onChanged: onChanged,
+                  ),
+                ],
+              );
             }
 
             return SafeArea(
               child: Padding(
-                padding: EdgeInsets.fromLTRB(20, 16, 20, 16 + MediaQuery.viewInsetsOf(context).bottom),
+                padding: EdgeInsets.fromLTRB(
+                  20,
+                  16,
+                  20,
+                  16 + MediaQuery.viewInsetsOf(context).bottom,
+                ),
                 child: SingleChildScrollView(
-                  child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: <Widget>[
-                    const Text('弹幕设置', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-                    SwitchListTile(key: const Key('danmaku-settings-enabled'), contentPadding: EdgeInsets.zero, title: const Text('启用弹幕'), value: value.enabled, onChanged: (bool enabled) => update(value.copyWith(enabled: enabled))),
-                    sliderRow(label: '透明度', valueLabel: '${(value.opacity * 100).round()}%', value: value.opacity, min: DanmakuPreferences.minOpacity, max: DanmakuPreferences.maxOpacity, divisions: 8, onChanged: (double item) => update(value.copyWith(opacity: item))),
-                    sliderRow(label: '字号', valueLabel: '${value.fontSize.round()} 逻辑像素', value: value.fontSize, min: DanmakuPreferences.minFontSize, max: DanmakuPreferences.maxFontSize, divisions: 20, onChanged: (double item) => update(value.copyWith(fontSize: item))),
-                    sliderRow(label: '轨道数量', valueLabel: '${value.laneCount} 条', value: value.laneCount.toDouble(), min: DanmakuPreferences.minLaneCount.toDouble(), max: DanmakuPreferences.maxLaneCount.toDouble(), divisions: 23, onChanged: (double item) => update(value.copyWith(laneCount: item.round()))),
-                    sliderRow(label: '滚动时长', valueLabel: '${value.scrollDurationSeconds.round()} 秒/穿屏（越小越快）', value: value.scrollDurationSeconds, min: DanmakuPreferences.minScrollDurationSeconds, max: DanmakuPreferences.maxScrollDurationSeconds, divisions: 17, onChanged: (double item) => update(value.copyWith(scrollDurationSeconds: item))),
-                    TextField(key: const Key('danmaku-blocked-keywords'), controller: keywordsController, decoration: const InputDecoration(labelText: '屏蔽关键词', helperText: '用逗号或换行分隔；忽略大小写、首尾空格和重复项'), minLines: 1, maxLines: 3, onChanged: (String text) => update(value.copyWith(blockedKeywords: text.split(RegExp(r'[,，\n]'))))),
-                    const SizedBox(height: 12),
-                    FilledButton(onPressed: () => Navigator.pop(sheetContext), child: const Text('完成')),
-                  ]),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      const Text(
+                        '弹幕设置',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      SwitchListTile(
+                        key: const Key('danmaku-settings-enabled'),
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('启用弹幕'),
+                        value: value.enabled,
+                        onChanged: (bool enabled) =>
+                            update(value.copyWith(enabled: enabled)),
+                      ),
+                      sliderRow(
+                        label: '透明度',
+                        valueLabel: '${(value.opacity * 100).round()}%',
+                        rangeLabel: '20%–100%',
+                        value: value.opacity,
+                        min: DanmakuPreferences.minOpacity,
+                        max: DanmakuPreferences.maxOpacity,
+                        divisions: 8,
+                        onChanged: (double item) =>
+                            update(value.copyWith(opacity: item)),
+                      ),
+                      sliderRow(
+                        label: '字号',
+                        valueLabel: '${value.fontSize.round()} 逻辑像素',
+                        rangeLabel: '10–30 逻辑像素',
+                        value: value.fontSize,
+                        min: DanmakuPreferences.minFontSize,
+                        max: DanmakuPreferences.maxFontSize,
+                        divisions: 20,
+                        onChanged: (double item) =>
+                            update(value.copyWith(fontSize: item)),
+                      ),
+                      sliderRow(
+                        label: '轨道数量',
+                        valueLabel: '${value.laneCount} 条',
+                        rangeLabel: '1–24 条',
+                        value: value.laneCount.toDouble(),
+                        min: DanmakuPreferences.minLaneCount.toDouble(),
+                        max: DanmakuPreferences.maxLaneCount.toDouble(),
+                        divisions: 23,
+                        onChanged: (double item) =>
+                            update(value.copyWith(laneCount: item.round())),
+                      ),
+                      sliderRow(
+                        label: '滚动时长',
+                        valueLabel:
+                            '${value.scrollDurationSeconds.round()} 秒/穿屏（越小越快）',
+                        rangeLabel: '3–20 秒/穿屏',
+                        value: value.scrollDurationSeconds,
+                        min: DanmakuPreferences.minScrollDurationSeconds,
+                        max: DanmakuPreferences.maxScrollDurationSeconds,
+                        divisions: 17,
+                        onChanged: (double item) => update(
+                          value.copyWith(scrollDurationSeconds: item),
+                        ),
+                      ),
+                      TextField(
+                        key: const Key('danmaku-blocked-keywords'),
+                        controller: keywordsController,
+                        decoration: const InputDecoration(
+                          labelText: '屏蔽关键词',
+                          helperText: '用逗号或换行分隔；忽略大小写、首尾空格和重复项',
+                        ),
+                        keyboardType: TextInputType.multiline,
+                        minLines: 1,
+                        maxLines: 3,
+                        onChanged: (String text) => update(
+                          value.copyWith(
+                            blockedKeywords: text.split(RegExp(r'[,，\n]')),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      FilledButton(
+                        onPressed: () => Navigator.pop(sheetContext),
+                        child: const Text('完成'),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             );
@@ -5209,12 +5340,21 @@ class _DanmakuLanePlanner {
   }
 
   /// 按时间顺序为弹幕寻找空闲车道；没有空闲车道时丢弃该条，避免文字叠成一团。
-  List<_DanmakuLayoutItem> plan(List<DanmakuEntry> entries, Size size, DanmakuPreferences preferences) {
-    if (identical(_cachedEntries, entries) && _cachedSize == size && identical(_cachedPreferences, preferences)) {
+  List<_DanmakuLayoutItem> plan(
+    List<DanmakuEntry> entries,
+    Size size,
+    DanmakuPreferences preferences,
+  ) {
+    if (identical(_cachedEntries, entries) &&
+        _cachedSize == size &&
+        identical(_cachedPreferences, preferences)) {
       return _cachedItems;
     }
     final double laneHeight = preferences.fontSize + 9;
-    final int laneCount = (size.height / laneHeight).floor().clamp(1, preferences.laneCount).toInt();
+    final int laneCount = (size.height / laneHeight)
+        .floor()
+        .clamp(1, preferences.laneCount)
+        .toInt();
     final List<int> scrollingLaneFreeAt = List<int>.filled(laneCount, 0);
     final List<int> topFixedLaneFreeAt = List<int>.filled(laneCount, 0);
     final List<int> bottomFixedLaneFreeAt = List<int>.filled(laneCount, 0);
@@ -5225,7 +5365,11 @@ class _DanmakuLanePlanner {
       );
     final List<_DanmakuLayoutItem> items = <_DanmakuLayoutItem>[];
     for (final DanmakuEntry entry in ordered) {
-      final double textWidth = _measureTextWidth(entry.content, size.width, preferences);
+      final double textWidth = _measureTextWidth(
+        entry.content,
+        size.width,
+        preferences,
+      );
       final int startedAt = entry.position.inMilliseconds;
       final int lane;
       if (entry.mode == 5) {
@@ -5279,9 +5423,16 @@ class _DanmakuLanePlanner {
   }
 
   /// 测量单行弹幕的真实宽度并限制极端长文本，保证移动速度与碰撞判断一致。
-  double _measureTextWidth(String text, double canvasWidth, DanmakuPreferences preferences) {
+  double _measureTextWidth(
+    String text,
+    double canvasWidth,
+    DanmakuPreferences preferences,
+  ) {
     final TextPainter painter = TextPainter(
-      text: TextSpan(text: text, style: _DanmakuPainter.textStyleFor(preferences)),
+      text: TextSpan(
+        text: text,
+        style: _DanmakuPainter.textStyleFor(preferences),
+      ),
       textDirection: TextDirection.ltr,
       maxLines: 1,
       ellipsis: '…',
@@ -5324,8 +5475,16 @@ class _DanmakuLanePlanner {
 class _DanmakuPainter extends CustomPainter {
   static const Duration _fixedDisplayDuration = Duration(seconds: 4);
   static const int _maximumVisibleEntries = 48;
+
   /// 按配置生成绘制样式；字号单位为 Flutter 逻辑像素，透明度限制在 20% 至 100%。
-  static TextStyle textStyleFor(DanmakuPreferences preferences) => TextStyle(color: Colors.white.withOpacity(preferences.opacity), fontSize: preferences.fontSize, fontWeight: FontWeight.w600, shadows: const <Shadow>[Shadow(color: Colors.black, blurRadius: 2)]);
+  static TextStyle textStyleFor(DanmakuPreferences preferences) => TextStyle(
+        color: Colors.white.withOpacity(preferences.opacity),
+        fontSize: preferences.fontSize,
+        fontWeight: FontWeight.w600,
+        shadows: const <Shadow>[
+          Shadow(color: Colors.black, blurRadius: 2),
+        ],
+      );
 
   /// 创建使用逐帧控制器重绘的弹幕画笔，原生播放器状态只负责校准时间锚点。
   _DanmakuPainter({
@@ -5363,7 +5522,8 @@ class _DanmakuPainter extends CustomPainter {
       return;
     }
     final Duration position = _currentPosition();
-    final List<_DanmakuLayoutItem> items = lanePlanner.plan(entries, size, preferences);
+    final List<_DanmakuLayoutItem> items =
+        lanePlanner.plan(entries, size, preferences);
     final int firstCandidate = _firstCandidateIndex(
       items,
       position - const Duration(seconds: 14),
@@ -5387,7 +5547,9 @@ class _DanmakuPainter extends CustomPainter {
       final TextPainter textPainter = TextPainter(
         text: TextSpan(
           text: item.entry.content,
-          style: textStyleFor(preferences).copyWith(color: _colorForEntry(item.entry).withOpacity(preferences.opacity)),
+          style: textStyleFor(preferences).copyWith(
+              color:
+                  _colorForEntry(item.entry).withOpacity(preferences.opacity)),
         ),
         textDirection: TextDirection.ltr,
         maxLines: 1,
@@ -5436,7 +5598,8 @@ class _DanmakuPainter extends CustomPainter {
       canvasWidth: canvasWidth,
       textWidth: item.textWidth,
       reverse: item.entry.mode == 6,
-      travelDuration: Duration(milliseconds: (preferences.scrollDurationSeconds * 1000).round()),
+      travelDuration: Duration(
+          milliseconds: (preferences.scrollDurationSeconds * 1000).round()),
     );
   }
 

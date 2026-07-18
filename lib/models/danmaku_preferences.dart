@@ -11,16 +11,34 @@ class DanmakuPreferences {
   }) {
     return DanmakuPreferences._(
       enabled: enabled,
-      opacity: _normalizeDouble(opacity, defaultOpacity, minOpacity, maxOpacity),
-      fontSize: _normalizeDouble(fontSize, defaultFontSize, minFontSize, maxFontSize),
+      opacity:
+          _normalizeDouble(opacity, defaultOpacity, minOpacity, maxOpacity),
+      fontSize: _normalizeDouble(
+        fontSize,
+        defaultFontSize,
+        minFontSize,
+        maxFontSize,
+      ),
       laneCount: laneCount.clamp(minLaneCount, maxLaneCount).toInt(),
-      scrollDurationSeconds: _normalizeDouble(scrollDurationSeconds, defaultScrollDurationSeconds, minScrollDurationSeconds, maxScrollDurationSeconds),
+      scrollDurationSeconds: _normalizeDouble(
+        scrollDurationSeconds,
+        defaultScrollDurationSeconds,
+        minScrollDurationSeconds,
+        maxScrollDurationSeconds,
+      ),
       blockedKeywords: normalizeKeywords(blockedKeywords),
     );
   }
 
   /// 创建已经归一化的不可变配置，仅供公开工厂和复制函数使用。
-  const DanmakuPreferences._({required this.enabled, required this.opacity, required this.fontSize, required this.laneCount, required this.scrollDurationSeconds, required this.blockedKeywords});
+  const DanmakuPreferences._({
+    required this.enabled,
+    required this.opacity,
+    required this.fontSize,
+    required this.laneCount,
+    required this.scrollDurationSeconds,
+    required this.blockedKeywords,
+  });
 
   static const bool defaultEnabled = false;
   static const double defaultOpacity = 0.9;
@@ -47,20 +65,49 @@ class DanmakuPreferences {
   factory DanmakuPreferences.fromJson(Map<String, dynamic> json) {
     final Object? rawKeywords = json['blockedKeywords'];
     return DanmakuPreferences(
-      enabled: json['enabled'] is bool ? json['enabled'] as bool : defaultEnabled,
+      enabled:
+          json['enabled'] is bool ? json['enabled'] as bool : defaultEnabled,
       opacity: _readDouble(json['opacity'], defaultOpacity),
       fontSize: _readDouble(json['fontSize'], defaultFontSize),
       laneCount: _readInteger(json['laneCount'], defaultLaneCount),
-      scrollDurationSeconds: _readDouble(json['scrollDurationSeconds'], defaultScrollDurationSeconds),
-      blockedKeywords: rawKeywords is List ? rawKeywords.map((Object? item) => item?.toString() ?? '').toList() : const <String>[],
+      scrollDurationSeconds: _readDouble(
+        json['scrollDurationSeconds'],
+        defaultScrollDurationSeconds,
+      ),
+      blockedKeywords: rawKeywords is List
+          ? rawKeywords.map((Object? item) => item?.toString() ?? '').toList()
+          : const <String>[],
     );
   }
 
   /// 输出仅包含 JSON 基础类型的稳定字典；滚动速度的单位是“完整穿屏所需视频秒数”。
-  Map<String, dynamic> toJson() => <String, dynamic>{'enabled': enabled, 'opacity': opacity, 'fontSize': fontSize, 'laneCount': laneCount, 'scrollDurationSeconds': scrollDurationSeconds, 'blockedKeywords': blockedKeywords};
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'enabled': enabled,
+        'opacity': opacity,
+        'fontSize': fontSize,
+        'laneCount': laneCount,
+        'scrollDurationSeconds': scrollDurationSeconds,
+        'blockedKeywords': blockedKeywords,
+      };
 
   /// 复制部分字段并再次执行边界归一化，供设置界面每次操作后立即生成安全配置。
-  DanmakuPreferences copyWith({bool? enabled, double? opacity, double? fontSize, int? laneCount, double? scrollDurationSeconds, List<String>? blockedKeywords}) => DanmakuPreferences(enabled: enabled ?? this.enabled, opacity: opacity ?? this.opacity, fontSize: fontSize ?? this.fontSize, laneCount: laneCount ?? this.laneCount, scrollDurationSeconds: scrollDurationSeconds ?? this.scrollDurationSeconds, blockedKeywords: blockedKeywords ?? this.blockedKeywords);
+  DanmakuPreferences copyWith({
+    bool? enabled,
+    double? opacity,
+    double? fontSize,
+    int? laneCount,
+    double? scrollDurationSeconds,
+    List<String>? blockedKeywords,
+  }) =>
+      DanmakuPreferences(
+        enabled: enabled ?? this.enabled,
+        opacity: opacity ?? this.opacity,
+        fontSize: fontSize ?? this.fontSize,
+        laneCount: laneCount ?? this.laneCount,
+        scrollDurationSeconds:
+            scrollDurationSeconds ?? this.scrollDurationSeconds,
+        blockedKeywords: blockedKeywords ?? this.blockedKeywords,
+      );
 
   /// 规范屏蔽词：去除首尾空格、忽略空项，并按小写结果去重；保留首次输入的显示形式。
   static List<String> normalizeKeywords(Iterable<String> keywords) {
@@ -68,7 +115,9 @@ class DanmakuPreferences {
     final List<String> result = <String>[];
     for (final String keyword in keywords) {
       final String trimmed = keyword.trim();
-      if (trimmed.isNotEmpty && seen.add(trimmed.toLowerCase())) result.add(trimmed);
+      if (trimmed.isNotEmpty && seen.add(trimmed.toLowerCase())) {
+        result.add(trimmed);
+      }
     }
     return List<String>.unmodifiable(result);
   }
@@ -76,7 +125,8 @@ class DanmakuPreferences {
   /// 判断文本是否包含任一屏蔽词；匹配忽略大小写和关键词首尾空格，空关键词永不匹配。
   bool blocks(String content) {
     final String normalizedContent = content.toLowerCase();
-    return blockedKeywords.any((String keyword) => normalizedContent.contains(keyword.toLowerCase()));
+    return blockedKeywords.any(
+        (String keyword) => normalizedContent.contains(keyword.toLowerCase()));
   }
 
   /// 把 JSON 数字或数字字符串转成 double；无法解析时使用对应字段默认值，后续工厂还会检查有限值和范围。
@@ -90,6 +140,11 @@ class DanmakuPreferences {
       : int.tryParse(value?.toString() ?? '') ?? fallback;
 
   /// 将浮点字段限制在闭区间内；NaN 和无穷值不可用于 Slider 或绘制，统一降级为字段默认值。
-  static double _normalizeDouble(double value, double fallback, double minimum, double maximum) =>
+  static double _normalizeDouble(
+    double value,
+    double fallback,
+    double minimum,
+    double maximum,
+  ) =>
       value.isFinite ? value.clamp(minimum, maximum).toDouble() : fallback;
 }
