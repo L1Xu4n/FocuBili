@@ -37,6 +37,9 @@ class VideoNoteComposer extends StatelessWidget {
     required this.onSave,
     required this.onNew,
     required this.onClose,
+    this.onTitleChanged,
+    this.onBodyChanged,
+    this.onJumpToPosition,
     this.createdAt,
     this.framePath,
     this.onDelete,
@@ -55,6 +58,15 @@ class VideoNoteComposer extends StatelessWidget {
   final VoidCallback onSave;
   final VoidCallback onNew;
   final VoidCallback onClose;
+
+  /// 标题输入变化回调，播放器用它安排不打扰用户的自动保存。
+  final ValueChanged<String>? onTitleChanged;
+
+  /// 正文输入变化回调，播放器用它安排不打扰用户的自动保存。
+  final ValueChanged<String>? onBodyChanged;
+
+  /// 用户明确要求跳回当前笔记时间点的回调；为空时不显示跳转按钮。
+  final VoidCallback? onJumpToPosition;
   final VoidCallback? onDelete;
   final bool compact;
   final bool borderless;
@@ -157,7 +169,7 @@ class VideoNoteComposer extends StatelessWidget {
             const SizedBox(width: 2),
             IconButton(
               key: const Key('close-video-notes'),
-              // 关闭按钮函数退出笔记面板，不会自动提交未保存的内容。
+              // 关闭按钮函数退出笔记面板；播放器会先自动保存正在编辑的草稿。
               onPressed: saving ? null : onClose,
               visualDensity: VisualDensity.compact,
               constraints: const BoxConstraints.tightFor(width: 36, height: 36),
@@ -272,6 +284,8 @@ class VideoNoteComposer extends StatelessWidget {
           key: const Key('note-title-field'),
           controller: titleController,
           enabled: !saving,
+          // 标题变化函数只通知外层安排自动保存，不在输入每个字符时直接写磁盘。
+          onChanged: onTitleChanged,
           maxLength: 80,
           minLines: 1,
           maxLines: borderless ? 1 : 1,
@@ -298,6 +312,8 @@ class VideoNoteComposer extends StatelessWidget {
           key: const Key('note-body-field'),
           controller: bodyController,
           enabled: !saving,
+          // 正文变化函数只通知外层安排自动保存，不在输入每个字符时直接写磁盘。
+          onChanged: onBodyChanged,
           minLines: borderless ? (compact ? 4 : 3) : (compact ? 3 : 4),
           maxLines: borderless ? (compact ? 9 : 7) : (compact ? 5 : 8),
           maxLength: 6000,
@@ -335,6 +351,15 @@ class VideoNoteComposer extends StatelessWidget {
             Row(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
+                if (onJumpToPosition != null)
+                  OutlinedButton.icon(
+                    key: const Key('jump-to-video-note-position'),
+                    // 跳转按钮函数由播放器在用户明确点击后才移动视频时间点。
+                    onPressed: saving ? null : onJumpToPosition,
+                    icon: const Icon(Icons.my_location_rounded, size: 18),
+                    label: const Text('跳转到时间点'),
+                  ),
+                if (onJumpToPosition != null) const SizedBox(width: 6),
                 if (onDelete != null)
                   IconButton(
                     key: const Key('delete-video-note'),

@@ -17,12 +17,20 @@ class FocusDashboard extends StatefulWidget {
     required this.onOpenVideo,
     required this.onOpenStatistics,
     this.onOpenLinkedVideo,
+    this.continueLearningCard,
+    this.onOpenLearningList,
   });
 
   final FocusTimerController controller;
   final VoidCallback onOpenVideo;
   final VoidCallback onOpenStatistics;
   final ValueChanged<FocusSession>? onOpenLinkedVideo;
+
+  /// 首页传入的单条继续学习卡片；为空时保持原有专注首页布局。
+  final Widget? continueLearningCard;
+
+  /// 打开完整学习清单的回调，由外层首页决定页面和本机服务实例。
+  final VoidCallback? onOpenLearningList;
 
   /// 创建保存目标输入和预设时长选择的页面状态。
   @override
@@ -569,6 +577,14 @@ class _FocusDashboardState extends State<FocusDashboard> {
             SliverAppBar.large(
               title: const Text('焦点哔哩'),
               actions: <Widget>[
+                if (widget.onOpenLearningList != null)
+                  IconButton(
+                    key: const Key('open-learning-list'),
+                    // 学习清单按钮函数由首页打开完整任务管理页面。
+                    onPressed: widget.onOpenLearningList,
+                    icon: const Icon(Icons.menu_book_rounded),
+                    tooltip: '学习清单',
+                  ),
                 IconButton(
                   key: const Key('open-focus-statistics'),
                   // 统计按钮函数打开本机专注看板与统一记录管理页。
@@ -596,6 +612,10 @@ class _FocusDashboardState extends State<FocusDashboard> {
                       ),
                     )
                   else ...<Widget>[
+                    if (widget.continueLearningCard != null) ...<Widget>[
+                      widget.continueLearningCard!,
+                      const SizedBox(height: 12),
+                    ],
                     if (finishedSession != null) ...<Widget>[
                       _buildFinishedCard(context, finishedSession),
                       const SizedBox(height: 12),

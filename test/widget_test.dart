@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart' show TapGestureRecognizer;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -9,12 +10,15 @@ import 'package:focubili/app.dart';
 import 'package:focubili/features/focus/focus_timer_controller.dart';
 import 'package:focubili/features/player/player_page.dart';
 import 'package:focubili/features/profile/login_page.dart';
+import 'package:focubili/features/profile/user_profile_page.dart';
 import 'package:focubili/features/search/search_page.dart';
 import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/models/focus_session.dart';
 import 'package:focubili/models/video_note.dart';
 import 'package:focubili/models/video_shot_preview.dart';
 import 'package:focubili/models/watch_history_entry.dart';
+import 'package:focubili/models/learning_list_entry.dart';
+import 'package:focubili/models/player_enhancement.dart';
 import 'package:focubili/services/bilibili_service.dart';
 import 'package:focubili/services/device_status_service.dart';
 import 'package:focubili/services/danmaku_preferences_service.dart';
@@ -24,8 +28,10 @@ import 'package:focubili/services/playback_preferences_service.dart';
 import 'package:focubili/services/search_history_service.dart';
 import 'package:focubili/services/first_launch_service.dart';
 import 'package:focubili/services/watch_history_service.dart';
+import 'package:focubili/services/learning_list_service.dart';
 import 'package:focubili/services/video_shot_service.dart';
 import 'package:focubili/services/video_note_service.dart';
+import 'package:focubili/services/bilibili_player_enhancement_service.dart';
 import 'package:focubili/models/player_overlay_data.dart';
 
 /// 记录视频详情请求地址并返回固定 JSON，验证服务解析时不依赖真实网络。
@@ -435,9 +441,58 @@ class _FakePlaybackService implements PlaybackService {
     _emit();
   }
 
+  /// 向播放器页面推送一条完播状态，验证 Flutter 不会自行自动连播下一分P。
+  void emitEnded() {
+    _isPlaying = false;
+    _position = duration;
+    _emit(phase: PlaybackPhase.ended, message: '播放结束');
+  }
+
   /// 关闭测试使用的状态流，模拟页面离开时释放播放器。
   @override
   Future<void> dispose() => _states.close();
+}
+
+/// 为播放器组件测试提供固定章节和互动剧情，不访问真实 B 站接口。
+class _FakePlayerEnhancementService
+    implements BilibiliPlayerEnhancementService {
+  /// 创建可配置元数据、起始节点和分支节点的播放器增强替身。
+  _FakePlayerEnhancementService({
+    required this.metadata,
+    this.initialNode,
+    this.branchNode,
+  });
+
+  final PlayerEnhancementMetadata metadata;
+  final InteractiveVideoNode? initialNode;
+  final InteractiveVideoNode? branchNode;
+  final List<int?> requestedEdgeIds = <int?>[];
+
+  /// 返回测试预先设置的章节和互动入口信息。
+  @override
+  Future<PlayerEnhancementMetadata> loadMetadata({
+    required String bvid,
+    required int cid,
+  }) async {
+    return metadata;
+  }
+
+  /// 根据 edge_id 返回起始或后续剧情节点，并记录播放器请求。
+  @override
+  Future<InteractiveVideoNode> loadInteractiveNode({
+    required String bvid,
+    required int graphVersion,
+    int? edgeId,
+  }) async {
+    requestedEdgeIds.add(edgeId);
+    final InteractiveVideoNode? node = edgeId == null
+        ? initialNode
+        : branchNode;
+    if (node == null) {
+      throw const PlayerEnhancementException('测试没有准备互动节点。');
+    }
+    return node;
+  }
 }
 
 /// 记录播放器请求的观看历史，避免组件测试依赖 SharedPreferences 真正写入磁盘。
@@ -963,6 +1018,39 @@ void main() {
     expect(find.text('0:05 / 3:32'), findsOneWidget);
   });
 
+  /// 验证控制栏菜单不再参与画面双击竞争，并在第一帧建立短动画菜单路由。
+  testWidgets('播放器清晰度菜单点击立即打开', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: _FakePlaybackService(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final PopupMenuButton<int> qualityMenu = tester.widget(
+      find.byKey(const Key('quality-menu')),
+    );
+    expect(
+      qualityMenu.popUpAnimationStyle,
+      const AnimationStyle(
+        duration: Duration(milliseconds: 100),
+        reverseDuration: Duration(milliseconds: 80),
+        curve: Curves.easeOut,
+        reverseCurve: Curves.easeIn,
+      ),
+    );
+
+    await tester.tap(find.byKey(const Key('quality-menu')));
+    await tester.pump();
+
+    expect(find.byKey(const Key('quality-64')), findsOneWidget);
+  });
+
   /// 验证倍速菜单能把用户选择传给原生播放器服务接口。
   testWidgets('播放器可以选择倍速', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
@@ -988,6 +1076,56 @@ void main() {
     speedMenu.onSelected!(3);
     await tester.pumpAndSettle();
     expect(service._speed, 3);
+  });
+
+  /// 验证学习清单按钮位于“记笔记”左侧，第二次点击会确认并取消本机任务。
+  testWidgets('播放器顶部学习清单按钮可确认取消加入', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final LearningListService learningListService = LearningListService(
+      preferencesLoader: () async => preferences,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: _FakePlaybackService(),
+          learningListService: learningListService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final Finder learningButton = find.byKey(
+      const Key('current-video-learning-list-button'),
+    );
+    final Finder noteButton = find.byKey(const Key('portrait-note-button'));
+    final Rect learningBounds = tester.getRect(learningButton);
+    final Rect noteBounds = tester.getRect(noteButton);
+    expect(learningBounds.center.dy, closeTo(noteBounds.center.dy, 1));
+    expect(learningBounds.center.dx, lessThan(noteBounds.center.dx));
+
+    await tester.tap(learningButton);
+    await tester.pumpAndSettle();
+    expect(await learningListService.loadEntries(), hasLength(1));
+    expect(
+      find.descendant(of: learningButton, matching: find.text('已加入学习清单')),
+      findsOneWidget,
+    );
+
+    await tester.tap(learningButton);
+    await tester.pumpAndSettle();
+    expect(find.text('取消加入学习清单'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, '取消加入'));
+    await tester.pumpAndSettle();
+
+    expect(await learningListService.loadEntries(), isEmpty);
+    expect(
+      find.descendant(of: learningButton, matching: find.text('加入学习清单')),
+      findsOneWidget,
+    );
   });
 
   /// 验证清晰度菜单能把选中的质量编号传给原生播放器。
@@ -1329,28 +1467,30 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final Finder mention = find.byKey(const Key('description-mention-778899'));
-    final Finder link = find.byKey(Key('description-link-$externalUri'));
-    expect(mention, findsOneWidget);
-    expect(link, findsOneWidget);
-    expect(
-      tester
-          .widget<Text>(
-            find.descendant(of: mention, matching: find.byType(Text)),
-          )
-          .style
-          ?.color,
-      isNotNull,
-    );
-    expect(
-      tester
-          .widget<Text>(find.descendant(of: link, matching: find.byType(Text)))
-          .style
-          ?.decoration,
-      TextDecoration.underline,
-    );
+    final Finder description = find.byKey(const Key('video-description'));
+    final Text descriptionText = tester.widget<Text>(description);
+    final TextSpan rootSpan = descriptionText.textSpan! as TextSpan;
+    final List<InlineSpan> spans = rootSpan.children!;
+    final TextSpan mention = spans[1] as TextSpan;
+    final TextSpan link = spans[3] as TextSpan;
+    expect(mention.style?.color, isNotNull);
+    expect(mention.recognizer, isNotNull);
+    expect(link.style?.decoration, TextDecoration.underline);
+    expect(link.recognizer, isNotNull);
 
-    await tester.tap(link);
+    final TapGestureRecognizer mentionRecognizer =
+        mention.recognizer! as TapGestureRecognizer;
+    mentionRecognizer.onTap!();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+    expect(find.byType(UserProfilePage), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pump(const Duration(seconds: 1));
+
+    final TapGestureRecognizer linkRecognizer =
+        link.recognizer! as TapGestureRecognizer;
+    linkRecognizer.onTap!();
     await tester.pumpAndSettle();
     expect(find.text('即将打开外部链接'), findsOneWidget);
     expect(find.textContaining('内容和安全性'), findsOneWidget);
@@ -1359,7 +1499,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(launchedUri, isNull);
 
-    await tester.tap(link);
+    linkRecognizer.onTap!();
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('confirm-external-link')));
     await tester.pumpAndSettle();
@@ -1512,6 +1652,11 @@ void main() {
 
     await tester.enterText(find.byKey(const Key('note-title-field')), '关键观点');
     await tester.enterText(find.byKey(const Key('note-body-field')), '这是正文内容。');
+    // 停止输入后，草稿会在去抖时间内自动写入本机，不依赖手动保存按钮。
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    expect(await noteService.loadNotes(), hasLength(1));
+    expect((await noteService.loadNotes()).single.body, '这是正文内容。');
     // 模拟写笔记期间视频继续播放，截图仍应回到新建笔记时锁定的 00:00。
     await playbackService.seekTo(const Duration(seconds: 75));
     await tester.pump();
@@ -1539,8 +1684,8 @@ void main() {
     expect(await noteService.loadNotes(), hasLength(1));
   });
 
-  /// 验证全屏右侧笔记按钮打开半透明笔记本，并能从左侧列表跳转时间点。
-  testWidgets('全屏时间点笔记显示半透明列表并跳转进度', (WidgetTester tester) async {
+  /// 验证全屏笔记列表只选中内容，且必须点击独立按钮才会跳转时间点。
+  testWidgets('全屏时间点笔记显示半透明列表并显式跳转进度', (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
     final SharedPreferences preferences = await SharedPreferences.getInstance();
     final VideoNoteService noteService = VideoNoteService(
@@ -1657,8 +1802,11 @@ void main() {
     );
     noteEntry.onTap!();
     await tester.pump();
-    expect(playbackService.seekToRequests, 1);
+    expect(playbackService.seekToRequests, 0);
     expect(find.text('视频位置：00:42'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('jump-to-video-note-position')));
+    await tester.pump();
+    expect(playbackService.seekToRequests, 1);
 
     await tester.binding.handlePopRoute();
     await tester.pump();
@@ -1833,6 +1981,239 @@ void main() {
     await tester.pump();
     expect(service._speed, 1);
     expect(find.text('三倍速中>>'), findsNothing);
+  });
+
+  /// 验证完播后显示显式选择，并且只有点击按钮才会切换到下一分P。
+  testWidgets('播放器完播后不自动连播，用户可主动播放下一节', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final LearningListService learningListService = LearningListService(
+      preferencesLoader: () async => preferences,
+    );
+    final _FakePlaybackService service = _FakePlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _createMultiPartVideo(),
+          playbackService: service,
+          learningListService: learningListService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const Key('current-video-learning-list-button')),
+    );
+    await tester.pumpAndSettle();
+
+    final int opensBeforeEnded = service.openVideoRequests;
+    service.emitEnded();
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const Key('playback-completion-prompt')), findsOneWidget);
+    expect(find.byKey(const Key('mark-learning-complete')), findsOneWidget);
+    expect(find.byKey(const Key('play-next-after-completion')), findsOneWidget);
+    expect(service.openVideoRequests, opensBeforeEnded);
+
+    await tester.tap(find.byKey(const Key('play-next-after-completion')));
+    await tester.pumpAndSettle();
+    expect(service.openedCid, 137649200);
+    expect(find.byKey(const Key('playback-completion-prompt')), findsNothing);
+  });
+
+  /// 验证完播提示中的完成按钮会把视频写入学习清单并明确标记为已完成。
+  testWidgets('播放器完播后可以标记学习任务完成', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final LearningListService learningListService = LearningListService(
+      preferencesLoader: () async => preferences,
+    );
+    final _FakePlaybackService service = _FakePlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: service,
+          learningListService: learningListService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    service.emitEnded();
+    await tester.pump();
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('mark-learning-complete')));
+    await tester.pumpAndSettle();
+
+    final List<LearningListEntry> entries = await learningListService
+        .loadEntries();
+    expect(entries, hasLength(1));
+    expect(entries.single.status, LearningListStatus.completed);
+    expect(find.byKey(const Key('playback-completion-prompt')), findsNothing);
+  });
+
+  /// 验证指定视频的章节条按真实顺序出现、可以跳转，并能从分段面板关闭显示。
+  testWidgets('播放器显示四段视频进度并支持分段面板跳转', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final _FakePlaybackService playbackService = _FakePlaybackService(
+      duration: const Duration(seconds: 690),
+    );
+    final _FakePlayerEnhancementService enhancementService =
+        _FakePlayerEnhancementService(
+          metadata: const PlayerEnhancementMetadata(
+            chapters: <VideoChapter>[
+              VideoChapter(
+                title: '什么是北京中轴线',
+                start: Duration.zero,
+                end: Duration(seconds: 68),
+              ),
+              VideoChapter(
+                title: '王朝的接力',
+                start: Duration(seconds: 68),
+                end: Duration(seconds: 292),
+              ),
+              VideoChapter(
+                title: '巨匠的思索',
+                start: Duration(seconds: 292),
+                end: Duration(seconds: 508),
+              ),
+              VideoChapter(
+                title: '人间的烟火',
+                start: Duration(seconds: 508),
+                end: Duration(seconds: 690),
+              ),
+            ],
+          ),
+        );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: playbackService,
+          playerEnhancementService: enhancementService,
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byKey(const Key('video-chapter-strip')), findsOneWidget);
+    expect(find.text('王朝的接力'), findsOneWidget);
+    await tester.tap(
+      find.byKey(const ValueKey<String>('video-chapter-strip-1')),
+    );
+    await tester.pump();
+    expect(playbackService._position, const Duration(seconds: 68));
+
+    await tester.tap(find.byKey(const Key('more-settings-menu')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tap(find.byKey(const Key('video-chapters-menu-item')));
+    await tester.pump(const Duration(milliseconds: 250));
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(find.byKey(const Key('video-chapter-panel')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey<String>('video-chapter-item-3')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const Key('video-chapter-progress-toggle')));
+    await tester.pump(const Duration(milliseconds: 250));
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const Key('video-chapter-panel')),
+        matching: find.byTooltip('关闭'),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(find.byKey(const Key('video-chapter-strip')), findsNothing);
+  });
+
+  /// 验证互动视频完播不会自动开分支，点击选项后才打开目标 CID 并加载下一节点。
+  testWidgets('互动视频由用户选择剧情分支且不会自动连播', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final _FakePlaybackService playbackService = _FakePlaybackService();
+    final _FakePlayerEnhancementService enhancementService =
+        _FakePlayerEnhancementService(
+          metadata: const PlayerEnhancementMetadata(
+            interaction: InteractiveVideoInfo(graphVersion: 1619916),
+          ),
+          initialNode: const InteractiveVideoNode(
+            title: '初始界面',
+            edgeId: 1,
+            isLeaf: false,
+            choices: <InteractiveVideoChoice>[
+              InteractiveVideoChoice(
+                edgeId: 46910898,
+                cid: 40178418329,
+                label: 'A 开始游戏',
+              ),
+              InteractiveVideoChoice(
+                edgeId: 46910899,
+                cid: 40178877072,
+                label: 'B 离开游戏',
+              ),
+            ],
+          ),
+          branchNode: const InteractiveVideoNode(
+            title: '起床',
+            edgeId: 46910898,
+            isLeaf: false,
+            choices: <InteractiveVideoChoice>[
+              InteractiveVideoChoice(
+                edgeId: 46910900,
+                cid: 40178419999,
+                label: '继续寻找真相',
+              ),
+            ],
+          ),
+        );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: playbackService,
+          playerEnhancementService: enhancementService,
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    final int opensBeforeEnded = playbackService.openVideoRequests;
+    playbackService.emitEnded();
+    await tester.pump();
+    await tester.pump();
+    expect(
+      find.byKey(const Key('interactive-video-choice-overlay')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('playback-completion-prompt')), findsNothing);
+    expect(playbackService.openVideoRequests, opensBeforeEnded);
+
+    await tester.tap(
+      find.byKey(const ValueKey<String>('interactive-video-choice-0')),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(playbackService.openedCid, 40178418329);
+    expect(enhancementService.requestedEdgeIds, <int?>[null, 46910898]);
+    expect(
+      find.byKey(const Key('interactive-video-choice-overlay')),
+      findsNothing,
+    );
+
+    playbackService.emitEnded();
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('继续寻找真相'), findsOneWidget);
   });
 
   /// 验证横向拖动无需等待长按即可预览，并只在松手时提交一次进度跳转。
