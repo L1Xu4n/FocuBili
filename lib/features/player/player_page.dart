@@ -16,8 +16,10 @@ import '../../features/notes/video_note_composer.dart';
 import '../../features/profile/user_profile_page.dart';
 import '../../models/video_note.dart';
 import '../../models/video_preview.dart';
+import '../../models/player_enhancement.dart';
 import '../../models/video_shot_preview.dart';
 import '../../models/watch_history_entry.dart';
+import '../../models/learning_list_entry.dart';
 import '../../services/device_status_service.dart';
 import '../../services/external_link_service.dart';
 import '../../services/native_playback_service.dart';
@@ -25,6 +27,7 @@ import '../../services/player_overlay_service.dart';
 import '../../services/bilibili_public_content_service.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/watch_history_service.dart';
+import '../../services/learning_list_service.dart';
 import '../../services/video_shot_service.dart';
 import '../../services/video_note_service.dart';
 import '../../models/player_overlay_data.dart';
@@ -33,6 +36,11 @@ import '../../models/focus_session.dart';
 import '../../models/playback_preferences.dart';
 import '../../services/danmaku_preferences_service.dart';
 import '../../services/playback_preferences_service.dart';
+import '../../services/bilibili_player_enhancement_service.dart';
+import 'enhancements/interactive_video_overlay.dart';
+import 'enhancements/playback_completion_overlay.dart';
+import 'enhancements/player_enhancement_controller.dart';
+import 'enhancements/video_chapter_widgets.dart';
 import 'widgets/player_control_widgets.dart';
 
 part 'player_collection_sheet.dart';
@@ -58,7 +66,7 @@ enum _PlayerMoreMenuAction {
 enum _CollectionEntryOrder { original, newest, oldest, mostPlayed }
 
 /// 标识播放器首次跳转来自笔记还是专注记录，以显示准确提示文案。
-enum PlayerInitialPositionSource { note, focus }
+enum PlayerInitialPositionSource { note, focus, learning }
 
 /// 新架构的原生播放器页面，提供简洁的 App 风格控制层。
 class PlayerPage extends StatefulWidget {
@@ -68,6 +76,7 @@ class PlayerPage extends StatefulWidget {
     required this.video,
     this.playbackService,
     this.watchHistoryService,
+    this.learningListService,
     this.deviceStatusService,
     this.playerOverlayService,
     this.bilibiliService,
@@ -76,6 +85,7 @@ class PlayerPage extends StatefulWidget {
     this.videoNoteService,
     this.danmakuPreferencesService,
     this.playbackPreferencesService,
+    this.playerEnhancementService,
     this.focusTimerController,
     this.externalLinkLauncher,
     this.initialPartCid,
@@ -86,6 +96,7 @@ class PlayerPage extends StatefulWidget {
   final VideoPreview video;
   final PlaybackService? playbackService;
   final WatchHistoryService? watchHistoryService;
+  final LearningListService? learningListService;
   final DeviceStatusService? deviceStatusService;
   final PlayerOverlayService? playerOverlayService;
   final BilibiliService? bilibiliService;
@@ -94,6 +105,7 @@ class PlayerPage extends StatefulWidget {
   final VideoNoteService? videoNoteService;
   final DanmakuPreferencesService? danmakuPreferencesService;
   final PlaybackPreferencesService? playbackPreferencesService;
+  final BilibiliPlayerEnhancementService? playerEnhancementService;
   final FocusTimerController? focusTimerController;
   final ExternalLinkLauncher? externalLinkLauncher;
   final int? initialPartCid;
@@ -113,6 +125,13 @@ class _PlayerPageState extends State<PlayerPage>
   static const Duration _resumeNoticeDuration = _transientHintDuration;
   static const Duration _notesPanelAnimationDuration = Duration(
     milliseconds: 280,
+  );
+  static const Duration _noteAutoSaveDelay = Duration(milliseconds: 800);
+  static const AnimationStyle _playerPopupMenuAnimationStyle = AnimationStyle(
+    duration: Duration(milliseconds: 100),
+    reverseDuration: Duration(milliseconds: 80),
+    curve: Curves.easeOut,
+    reverseCurve: Curves.easeIn,
   );
   static const Duration _watchHistoryProgressSaveInterval = Duration(
     seconds: 15,
@@ -140,6 +159,7 @@ class _PlayerPageState extends State<PlayerPage>
 
   late final PlaybackService _playbackService;
   late final WatchHistoryService _watchHistoryService;
+  late final LearningListService _learningListService;
   late final DeviceStatusService _deviceStatusService;
   late final PlayerOverlayService _playerOverlayService;
   late final BilibiliService _bilibiliService;
@@ -154,6 +174,10 @@ class _PlayerPageState extends State<PlayerPage>
       ScrollController();
   final TextEditingController _noteTitleController = TextEditingController();
   final TextEditingController _noteBodyController = TextEditingController();
+  final Map<String, TapGestureRecognizer> _descriptionMentionRecognizers =
+      <String, TapGestureRecognizer>{};
+  final Map<String, TapGestureRecognizer> _descriptionLinkRecognizers =
+      <String, TapGestureRecognizer>{};
   StreamSubscription<PlaybackSnapshot>? _playbackSubscription;
   PlaybackSnapshot _playbackSnapshot = const PlaybackSnapshot();
   int? _textureId;
@@ -170,11 +194,13 @@ class _PlayerPageState extends State<PlayerPage>
   String? _seekFeedback;
   String? _resumeNotice;
   Timer? _controlsTimer;
+  Timer? _interactivePromptTimer;
   Timer? _seekFeedbackTimer;
   Timer? _resumeNoticeTimer;
   Timer? _playerNoticeTimer;
   Timer? _fullscreenStatusTimer;
   Timer? _notesPanelAnimationTimer;
+  Timer? _noteAutoSaveTimer;
   double _playbackSpeed = 1;
   int _currentQuality = 64;
   int? _pendingQualitySelection;
@@ -212,6 +238,15 @@ class _PlayerPageState extends State<PlayerPage>
       _VerticalAdjustmentMode.none;
   int? _recordedHistoryPartCid;
   Duration _lastHistorySavedPosition = Duration.zero;
+  LearningListEntry? _learningListEntry;
+  bool _learningListLoading = false;
+  String? _addingLearningBvid;
+  int? _recordedLearningListPartCid;
+  Duration _lastLearningListSavedPosition = Duration.zero;
+  bool _learningProgressSaveInFlight = false;
+  bool _completionPromptVisible = false;
+  bool _interactivePromptVisible = false;
+  bool _interactiveChoiceOpening = false;
   DateTime _fullscreenClock = DateTime.now();
   int? _batteryPercent;
   SubtitleTrackLoadResult? _subtitleTrackResult;
@@ -239,12 +274,14 @@ class _PlayerPageState extends State<PlayerPage>
   bool _includeCurrentFrame = false;
   String? _noteFramePath;
   bool _fullscreenNoteListCollapsed = false;
+  int _noteDraftRevision = 0;
   Duration? _pendingInitialPosition;
   Map<String, WatchHistoryEntry> _watchHistoryByBvid =
       const <String, WatchHistoryEntry>{};
   String? _locatedCollectionPreviewBvid;
   late final DanmakuPreferencesService _danmakuPreferencesService;
   late final PlaybackPreferencesService _playbackPreferencesService;
+  late final PlayerEnhancementController _playerEnhancementController;
   PlaybackPreferences _playbackPreferences = const PlaybackPreferences();
   FocusTimerController? _boundFocusController;
   String? _observedFocusSessionId;
@@ -284,6 +321,7 @@ class _PlayerPageState extends State<PlayerPage>
     _notePartCid = _currentPart.cid;
     _playbackService = widget.playbackService ?? NativePlaybackService();
     _watchHistoryService = widget.watchHistoryService ?? WatchHistoryService();
+    _learningListService = widget.learningListService ?? LearningListService();
     _deviceStatusService =
         widget.deviceStatusService ?? const NativeDeviceStatusService();
     _playerOverlayService =
@@ -301,17 +339,111 @@ class _PlayerPageState extends State<PlayerPage>
         widget.danmakuPreferencesService ?? DanmakuPreferencesService();
     _playbackPreferencesService =
         widget.playbackPreferencesService ?? const PlaybackPreferencesService();
+    _playerEnhancementController = PlayerEnhancementController(
+      service:
+          widget.playerEnhancementService ??
+          (widget.playbackService == null
+              ? BilibiliPublicPlayerEnhancementService()
+              : const EmptyPlayerEnhancementService()),
+    )..addListener(_handlePlayerEnhancementChanged);
     _pendingInitialPosition = widget.initialPosition;
     _playbackSubscription = _playbackService.states.listen(
       _applyPlaybackSnapshot,
     );
     unawaited(_loadWatchHistoryBadges());
+    unawaited(_loadCurrentLearningListEntry());
     unawaited(_loadDanmakuPreferences());
     unawaited(_loadPlaybackPreferences());
     if (widget.playbackService == null) {
       unawaited(_allowPlayerOrientations());
     }
     unawaited(_initializeNativePlayback());
+  }
+
+  /// 响应独立增强控制器变化，刷新章节界面，并处理已完播或即将到结尾的互动选择。
+  void _handlePlayerEnhancementChanged() {
+    if (!mounted) {
+      return;
+    }
+    final PlaybackSnapshot snapshot = _playbackSnapshot;
+    setState(() {
+      if (snapshot.phase == PlaybackPhase.ended &&
+          !_interactiveChoiceOpening &&
+          _playerEnhancementController.handlesPlaybackCompletion) {
+        _interactivePromptVisible = true;
+        _completionPromptVisible = false;
+        _showControls = true;
+      }
+    });
+    _scheduleInteractiveChoicePrompt(snapshot);
+  }
+
+  /// 根据真实总时长安排选项计时器，让结尾前的毫秒提前量不会被半秒状态刷新跳过。
+  void _scheduleInteractiveChoicePrompt(PlaybackSnapshot snapshot) {
+    _interactivePromptTimer?.cancel();
+    _interactivePromptTimer = null;
+    if (!mounted ||
+        snapshot.phase != PlaybackPhase.ready ||
+        !snapshot.isPlaying ||
+        snapshot.isInPictureInPicture ||
+        _interactivePromptVisible ||
+        _interactiveChoiceOpening) {
+      return;
+    }
+    final Duration? delay = _playerEnhancementController.interactiveChoiceDelay(
+      position: snapshot.position,
+      duration: snapshot.duration,
+    );
+    if (delay == null) {
+      return;
+    }
+    if (delay <= Duration.zero) {
+      unawaited(_presentInteractiveChoice(snapshot));
+      return;
+    }
+    _interactivePromptTimer = Timer(delay, () {
+      _interactivePromptTimer = null;
+      unawaited(_presentInteractiveChoice(_playbackSnapshot));
+    });
+  }
+
+  /// 显示已经到时的互动选项，并按接口要求暂停当前节点而不替用户选择分支。
+  Future<void> _presentInteractiveChoice(PlaybackSnapshot snapshot) async {
+    if (!mounted ||
+        snapshot.phase != PlaybackPhase.ready ||
+        !snapshot.isPlaying ||
+        _interactivePromptVisible ||
+        _interactiveChoiceOpening ||
+        !_playerEnhancementController.canPresentInteractiveChoice) {
+      return;
+    }
+    _interactivePromptTimer?.cancel();
+    _interactivePromptTimer = null;
+    _playerEnhancementController.markInteractiveChoicePresented();
+    setState(() {
+      _interactivePromptVisible = true;
+      _completionPromptVisible = false;
+      _showControls = true;
+    });
+    if (!_playerEnhancementController.interactiveNode!.pauseVideoForChoice ||
+        !snapshot.isPlaying) {
+      return;
+    }
+    try {
+      await _playbackService.pause();
+    } catch (_) {
+      if (mounted) {
+        _showPlayerNotice('已到达剧情选择点，请选择下一步。');
+      }
+    }
+  }
+
+  /// 请求当前 BV 与 CID 的章节及互动信息，旧请求由控制器令牌自动丢弃。
+  Future<void> _loadPlayerEnhancements() {
+    return _playerEnhancementController.load(
+      bvid: _activeVideo.bvid,
+      cid: _currentPart.cid,
+    );
   }
 
   /// 绑定应用级专注控制器，使从首页或播放器发起的专注都能触发结束联动。
@@ -513,6 +645,345 @@ class _PlayerPageState extends State<PlayerPage>
     });
   }
 
+  /// 读取当前视频是否已在学习清单中，切换合集视频后只应用匹配当前 BV 的结果。
+  Future<void> _loadCurrentLearningListEntry() async {
+    final String requestedBvid = _activeVideo.bvid;
+    if (mounted) {
+      setState(() => _learningListLoading = true);
+    }
+    final List<LearningListEntry> entries = await _learningListService
+        .loadEntries();
+    if (!mounted || _activeVideo.bvid != requestedBvid) {
+      return;
+    }
+    LearningListEntry? matched;
+    for (final LearningListEntry entry in entries) {
+      if (entry.bvid == requestedBvid) {
+        matched = entry;
+        break;
+      }
+    }
+    setState(() {
+      _learningListEntry = matched;
+      _learningListLoading = false;
+      _recordedLearningListPartCid = matched?.partCid;
+      _lastLearningListSavedPosition = matched?.position ?? Duration.zero;
+    });
+  }
+
+  /// 将当前详情视频加入学习清单；播放器已就绪时优先保存真实分P和进度。
+  Future<void> _addCurrentVideoToLearningList() async {
+    if (_addingLearningBvid != null) {
+      return;
+    }
+    final String bvid = _activeVideo.bvid;
+    final bool hasLivePlayback = _playbackSnapshot.phase == PlaybackPhase.ready;
+    setState(() => _addingLearningBvid = bvid);
+    try {
+      final List<LearningListEntry> entries = await _learningListService
+          .addVideo(
+            _activeVideo,
+            part: hasLivePlayback ? _currentPart : null,
+            position: hasLivePlayback ? _playbackSnapshot.position : null,
+            status: hasLivePlayback && _playing
+                ? LearningListStatus.learning
+                : null,
+          );
+      if (!mounted || _activeVideo.bvid != bvid) {
+        return;
+      }
+      final LearningListEntry? entry = _entryForBvid(entries, bvid);
+      setState(() {
+        _learningListEntry = entry;
+        _recordedLearningListPartCid = entry?.partCid;
+        _lastLearningListSavedPosition = entry?.position ?? Duration.zero;
+      });
+      _showPlayerNotice('已加入学习清单');
+    } catch (_) {
+      if (mounted) {
+        _showPlayerNotice('加入学习清单失败，请稍后重试。');
+      }
+    } finally {
+      if (mounted && _addingLearningBvid == bvid) {
+        setState(() => _addingLearningBvid = null);
+      }
+    }
+  }
+
+  /// 处理详情顶部学习清单按钮：未加入时加入，已加入时先询问是否取消。
+  Future<void> _handleCurrentVideoLearningListTap() async {
+    if (_learningListLoading || _addingLearningBvid != null) {
+      return;
+    }
+    if (_learningListEntry == null) {
+      await _addCurrentVideoToLearningList();
+      return;
+    }
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) => AlertDialog(
+        title: const Text('取消加入学习清单'),
+        content: Text('确定把“${_activeVideo.title}”移出学习清单吗？观看记录和笔记不会被删除。'),
+        actions: <Widget>[
+          TextButton(
+            // 保留按钮函数只关闭确认框，不修改学习清单。
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('保留'),
+          ),
+          FilledButton(
+            // 取消加入按钮函数把确认结果交回播放器，再执行本机移除操作。
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('取消加入'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+    await _removeCurrentVideoFromLearningList();
+  }
+
+  /// 从本机学习清单移除当前视频，不影响已有观看记录、笔记或播放器进度。
+  Future<void> _removeCurrentVideoFromLearningList() async {
+    if (_addingLearningBvid != null) {
+      return;
+    }
+    final String bvid = _activeVideo.bvid;
+    setState(() => _addingLearningBvid = bvid);
+    try {
+      await _learningListService.remove(bvid);
+      if (!mounted || _activeVideo.bvid != bvid) {
+        return;
+      }
+      setState(() {
+        _learningListEntry = null;
+        _recordedLearningListPartCid = null;
+        _lastLearningListSavedPosition = Duration.zero;
+      });
+      _showPlayerNotice('已取消加入学习清单');
+    } catch (_) {
+      if (mounted) {
+        _showPlayerNotice('取消加入学习清单失败，请稍后重试。');
+      }
+    } finally {
+      if (mounted && _addingLearningBvid == bvid) {
+        setState(() => _addingLearningBvid = null);
+      }
+    }
+  }
+
+  /// 查询合集条目的完整资料后加入学习清单；当前正在播放的视频无需重复查询。
+  Future<void> _addCollectionVideoToLearningList(
+    VideoCollectionEntry entry,
+  ) async {
+    if (_addingLearningBvid != null) {
+      return;
+    }
+    final String bvid = entry.bvid;
+    setState(() => _addingLearningBvid = bvid);
+    try {
+      final bool currentVideo = bvid == _activeVideo.bvid;
+      final VideoPreview video = currentVideo
+          ? _activeVideo
+          : await _bilibiliService.lookupVideo(bvid);
+      final bool hasLivePlayback =
+          currentVideo && _playbackSnapshot.phase == PlaybackPhase.ready;
+      final List<LearningListEntry> entries = await _learningListService
+          .addVideo(
+            video,
+            part: hasLivePlayback ? _currentPart : null,
+            position: hasLivePlayback ? _playbackSnapshot.position : null,
+            status: hasLivePlayback && _playing
+                ? LearningListStatus.learning
+                : null,
+          );
+      if (!mounted) {
+        return;
+      }
+      if (_activeVideo.bvid == bvid) {
+        final LearningListEntry? learningEntry = _entryForBvid(entries, bvid);
+        setState(() {
+          _learningListEntry = learningEntry;
+          _recordedLearningListPartCid = learningEntry?.partCid;
+          _lastLearningListSavedPosition =
+              learningEntry?.position ?? Duration.zero;
+        });
+      }
+      _showPlayerNotice('已加入学习清单');
+    } catch (_) {
+      if (mounted) {
+        _showPlayerNotice('加入学习清单失败，请检查网络后重试。');
+      }
+    } finally {
+      if (mounted && _addingLearningBvid == bvid) {
+        setState(() => _addingLearningBvid = null);
+      }
+    }
+  }
+
+  /// 从服务返回的任务列表中取出指定 BV，避免页面重复扫描和空值断言。
+  LearningListEntry? _entryForBvid(
+    List<LearningListEntry> entries,
+    String bvid,
+  ) {
+    for (final LearningListEntry entry in entries) {
+      if (entry.bvid == bvid) {
+        return entry;
+      }
+    }
+    return null;
+  }
+
+  /// 在播放状态真实变化或进度跨过保存间隔时，把当前任务写回学习清单。
+  void _recordLearningListProgressWhenNeeded(PlaybackSnapshot snapshot) {
+    final LearningListEntry? entry = _learningListEntry;
+    if (entry == null || snapshot.phase != PlaybackPhase.ready) {
+      return;
+    }
+    final int positionDeltaMs =
+        (snapshot.position.inMilliseconds -
+                _lastLearningListSavedPosition.inMilliseconds)
+            .abs();
+    final bool partChanged = _recordedLearningListPartCid != _currentPart.cid;
+    final bool crossedInterval =
+        positionDeltaMs >= _watchHistoryProgressSaveInterval.inMilliseconds;
+    final bool startedLearning =
+        snapshot.isPlaying && entry.status != LearningListStatus.learning;
+    final bool pausedAtNewPosition =
+        !snapshot.isPlaying && positionDeltaMs >= 1000;
+    if (!partChanged &&
+        !crossedInterval &&
+        !startedLearning &&
+        !pausedAtNewPosition) {
+      return;
+    }
+    _recordedLearningListPartCid = _currentPart.cid;
+    unawaited(
+      _saveCurrentLearningListProgress(
+        snapshot.position,
+        status: snapshot.isPlaying ? LearningListStatus.learning : null,
+      ),
+    );
+  }
+
+  /// 在离开、换分P或播放结束前补存学习任务的当前位置，不自动改变完成状态。
+  void _flushCurrentLearningListProgress() {
+    final LearningListEntry? entry = _learningListEntry;
+    if (entry == null ||
+        (_recordedLearningListPartCid != _currentPart.cid &&
+            _playbackSnapshot.position == Duration.zero)) {
+      return;
+    }
+    unawaited(
+      _saveCurrentLearningListProgress(
+        _playbackSnapshot.position,
+        status: _playing ? LearningListStatus.learning : null,
+        force: true,
+      ),
+    );
+  }
+
+  /// 把当前真实分P和位置持久化给已有任务；不存在的任务不会被播放器静默创建。
+  Future<void> _saveCurrentLearningListProgress(
+    Duration position, {
+    LearningListStatus? status,
+    bool force = false,
+  }) async {
+    final LearningListEntry? entry = _learningListEntry;
+    if (entry == null || _learningProgressSaveInFlight) {
+      return;
+    }
+    final String bvid = _activeVideo.bvid;
+    final VideoPart part = _currentPart;
+    final Duration safePosition = position.isNegative
+        ? Duration.zero
+        : position;
+    final int positionDeltaMs =
+        (safePosition.inMilliseconds -
+                _lastLearningListSavedPosition.inMilliseconds)
+            .abs();
+    if (!force &&
+        _recordedLearningListPartCid == part.cid &&
+        positionDeltaMs < 1000 &&
+        (status == null || status == entry.status)) {
+      return;
+    }
+    _learningProgressSaveInFlight = true;
+    try {
+      final List<LearningListEntry> entries = await _learningListService
+          .updateProgress(
+            bvid,
+            part: part,
+            position: safePosition,
+            status: status,
+          );
+      if (!mounted || _activeVideo.bvid != bvid) {
+        return;
+      }
+      final LearningListEntry? updated = _entryForBvid(entries, bvid);
+      if (updated != null) {
+        setState(() {
+          _learningListEntry = updated;
+          _recordedLearningListPartCid = part.cid;
+          _lastLearningListSavedPosition = updated.position;
+        });
+      }
+    } catch (_) {
+      // 学习清单写入失败不应中断播放；之后的进度检查会再次尝试保存。
+    } finally {
+      _learningProgressSaveInFlight = false;
+    }
+  }
+
+  /// 播放结束后把任务明确标记完成；未加入的视频会先创建任务再完成。
+  Future<void> _markCurrentLearningCompleted() async {
+    if (_addingLearningBvid != null) {
+      return;
+    }
+    final String bvid = _activeVideo.bvid;
+    setState(() => _addingLearningBvid = bvid);
+    try {
+      await _learningListService.addVideo(
+        _activeVideo,
+        part: _currentPart,
+        position: _displayDuration,
+      );
+      final List<LearningListEntry> entries = await _learningListService
+          .updateStatus(bvid, LearningListStatus.completed);
+      if (!mounted || _activeVideo.bvid != bvid) {
+        return;
+      }
+      final LearningListEntry? completed = _entryForBvid(entries, bvid);
+      setState(() {
+        _learningListEntry = completed;
+        _completionPromptVisible = false;
+        _recordedLearningListPartCid = _currentPart.cid;
+        _lastLearningListSavedPosition =
+            completed?.position ?? _displayDuration;
+      });
+      _showPlayerNotice('已标记为完成');
+    } catch (_) {
+      if (mounted) {
+        _showPlayerNotice('标记完成失败，请稍后重试。');
+      }
+    } finally {
+      if (mounted && _addingLearningBvid == bvid) {
+        setState(() => _addingLearningBvid = null);
+      }
+    }
+  }
+
+  /// 用户主动选择下一节时才切换分P，确保播放器结束后绝不自动连播。
+  Future<void> _playNextPartAfterCompletion() async {
+    final int index = _currentPartIndex;
+    if (index < 0 || index >= _activeVideo.parts.length - 1) {
+      return;
+    }
+    setState(() => _completionPromptVisible = false);
+    await _changePart(_activeVideo.parts[index + 1]);
+  }
+
   /// 请求 Android 创建 Media3 视频纹理，再直接请求公开视频的播放数据。
   Future<void> _initializeNativePlayback() async {
     try {
@@ -533,6 +1004,7 @@ class _PlayerPageState extends State<PlayerPage>
         _brightness = levels.brightness;
         _volume = levels.volume;
       });
+      unawaited(_loadPlayerEnhancements());
       if (restoredPartMatched && _activeVideo.parts.length > 1) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _showPartRestoreSnackBar(restoredPart.pageNumber);
@@ -602,6 +1074,12 @@ class _PlayerPageState extends State<PlayerPage>
     if (!mounted) {
       return;
     }
+    final bool justEnded =
+        _playbackSnapshot.phase != PlaybackPhase.ended &&
+        snapshot.phase == PlaybackPhase.ended;
+    final bool leftEnded =
+        _playbackSnapshot.phase == PlaybackPhase.ended &&
+        snapshot.phase != PlaybackPhase.ended;
     final Duration? requestedInitialPosition = _pendingInitialPosition;
     final bool shouldSeekToInitialPosition =
         requestedInitialPosition != null &&
@@ -659,6 +1137,17 @@ class _PlayerPageState extends State<PlayerPage>
       } else if (leftPictureInPicture) {
         _showControls = true;
       }
+      if (leftEnded) {
+        _interactivePromptVisible = false;
+        _completionPromptVisible = false;
+      }
+      if (justEnded) {
+        // 互动视频优先显示剧情选择；普通视频仍显示学习完成选项，二者都不会自动连播。
+        _interactivePromptVisible =
+            _playerEnhancementController.handlesPlaybackCompletion;
+        _completionPromptVisible = !_interactivePromptVisible;
+        _showControls = true;
+      }
     });
     _syncDanmakuAnimation(snapshot);
     if (qualitySelectionFailed) {
@@ -673,7 +1162,13 @@ class _PlayerPageState extends State<PlayerPage>
     } else {
       _recordWatchHistoryWhenReady(snapshot);
       _recordWatchHistoryProgressWhenNeeded(snapshot);
+      _recordLearningListProgressWhenNeeded(snapshot);
     }
+    if (justEnded) {
+      _flushCurrentWatchHistoryProgress();
+      _flushCurrentLearningListProgress();
+    }
+    _scheduleInteractiveChoicePrompt(snapshot);
     if (_danmakuEnabled && snapshot.phase == PlaybackPhase.ready) {
       _ensureDanmakuSegmentsForPosition(snapshot.position);
     }
@@ -801,9 +1296,11 @@ class _PlayerPageState extends State<PlayerPage>
 
   /// 在播放器首次就绪后跳转到笔记或专注记录要求的时间点，并显示对应来源文案。
   Future<void> _seekToRequestedInitialPosition(Duration position) async {
-    final bool fromFocus =
-        widget.initialPositionSource == PlayerInitialPositionSource.focus;
-    final String sourceLabel = fromFocus ? '专注位置' : '笔记位置';
+    final String sourceLabel = switch (widget.initialPositionSource) {
+      PlayerInitialPositionSource.note => '笔记位置',
+      PlayerInitialPositionSource.focus => '专注位置',
+      PlayerInitialPositionSource.learning => '学习清单位置',
+    };
     try {
       await _playbackService.seekTo(position);
       if (mounted) {
@@ -943,6 +1440,7 @@ class _PlayerPageState extends State<PlayerPage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _flushCurrentWatchHistoryProgress();
+    _flushCurrentLearningListProgress();
     final FocusTimerController? focusController = _boundFocusController;
     focusController?.removeListener(_handleFocusStateChanged);
     if (focusController != null) {
@@ -956,16 +1454,24 @@ class _PlayerPageState extends State<PlayerPage>
     }
     _isRetrying = false;
     _controlsTimer?.cancel();
+    _interactivePromptTimer?.cancel();
     _seekFeedbackTimer?.cancel();
     _resumeNoticeTimer?.cancel();
     _playerNoticeTimer?.cancel();
     _fullscreenStatusTimer?.cancel();
     _notesPanelAnimationTimer?.cancel();
+    _flushVideoNoteAutoSave();
+    _noteAutoSaveTimer?.cancel();
     _danmakuFrameController.dispose();
     _partScrollController.dispose();
     _collectionPreviewScrollController.dispose();
     _noteTitleController.dispose();
     _noteBodyController.dispose();
+    _playerEnhancementController.removeListener(
+      _handlePlayerEnhancementChanged,
+    );
+    _playerEnhancementController.dispose();
+    _disposeDescriptionRecognizers();
     unawaited(_playbackSubscription?.cancel() ?? Future<void>.value());
     unawaited(_playbackService.dispose());
     unawaited(_restoreSystemUi());
@@ -1424,6 +1930,7 @@ class _PlayerPageState extends State<PlayerPage>
       isPlaying: false,
     );
     _flushCurrentWatchHistoryProgress();
+    _flushCurrentLearningListProgress();
     _clearSubtitlesForPart();
     _clearDanmakuForPart();
     _resetVideoShotPreview();
@@ -1433,14 +1940,19 @@ class _PlayerPageState extends State<PlayerPage>
       _showControls = true;
       _resumeNotice = null;
       _partSelectorExpanded = false;
+      _completionPromptVisible = false;
+      _interactivePromptVisible = false;
     });
     _shownRestoredCid = null;
     _recordedHistoryPartCid = null;
     _lastHistorySavedPosition = Duration.zero;
+    _recordedLearningListPartCid = null;
+    _lastLearningListSavedPosition = Duration.zero;
     _resumeNoticeTimer?.cancel();
     _lastFocusPlaybackBvid = null;
     _lastFocusPlaybackPartCid = null;
     _lastFocusPlaybackPlaying = null;
+    unawaited(_loadPlayerEnhancements());
     try {
       await _playbackService.openVideo(
         _activeVideo,
@@ -1452,6 +1964,102 @@ class _PlayerPageState extends State<PlayerPage>
     } catch (error) {
       _showPlaybackError('无法切换分P：$error');
     }
+  }
+
+  /// 打开用户明确选择的互动剧情 CID，并提前读取这个节点的下一批选择。
+  Future<void> _playInteractiveChoice(InteractiveVideoChoice choice) async {
+    if (_interactiveChoiceOpening) {
+      return;
+    }
+    setState(() {
+      _interactiveChoiceOpening = true;
+      _interactivePromptVisible = false;
+      _completionPromptVisible = false;
+    });
+    await _saveFocusLastSeen();
+    await _boundFocusController?.updatePlaybackState(
+      bvid: _activeVideo.bvid,
+      partCid: _currentPart.cid,
+      isPlaying: false,
+    );
+    _flushCurrentWatchHistoryProgress();
+    _flushCurrentLearningListProgress();
+    _clearSubtitlesForPart();
+    _clearDanmakuForPart();
+    _resetVideoShotPreview();
+    final VideoPart branchPart = VideoPart(
+      pageNumber: _currentPart.pageNumber,
+      cid: choice.cid,
+      title: choice.label,
+      duration: Duration.zero,
+    );
+    setState(() {
+      _currentPart = branchPart;
+      _progress = 0;
+      _showControls = true;
+      _resumeNotice = null;
+    });
+    _shownRestoredCid = null;
+    _recordedHistoryPartCid = null;
+    _lastHistorySavedPosition = Duration.zero;
+    _recordedLearningListPartCid = null;
+    _lastLearningListSavedPosition = Duration.zero;
+    unawaited(_playerEnhancementController.selectChoice(choice));
+    try {
+      await _playbackService.openVideo(
+        _activeVideo,
+        part: branchPart,
+        quality: _currentQuality,
+      );
+    } on PlatformException catch (error) {
+      _showPlaybackError('无法打开互动剧情：${error.message ?? error.code}');
+    } catch (error) {
+      _showPlaybackError('无法打开互动剧情：$error');
+    } finally {
+      if (mounted) {
+        setState(() => _interactiveChoiceOpening = false);
+      }
+    }
+  }
+
+  /// 跳到章节开始时间，并保持用户原来的播放或暂停状态。
+  Future<void> _seekToChapter(Duration position) async {
+    try {
+      await _playbackService.seekTo(position);
+      if (mounted && _displayDuration > Duration.zero) {
+        setState(() {
+          _progress =
+              (position.inMilliseconds / _displayDuration.inMilliseconds)
+                  .clamp(0, 1)
+                  .toDouble();
+        });
+      }
+      _showPlayerControls();
+    } catch (error) {
+      if (mounted) {
+        _showPlayerNotice('暂时无法跳转到这个视频分段。');
+      }
+    }
+  }
+
+  /// 打开独立的分段信息面板；竖屏从底部出现，横屏从右侧出现。
+  Future<void> _showVideoChapterPanel() async {
+    final List<VideoChapter> chapters = _playerEnhancementController.chapters;
+    if (chapters.isEmpty) {
+      _showPlayerNotice('当前视频没有分段信息。');
+      return;
+    }
+    await showVideoChapterPanel(
+      context: context,
+      chapters: chapters,
+      position: _playbackSnapshot.position,
+      chapterProgressVisible:
+          _playerEnhancementController.chapterProgressVisible,
+      // 分段面板跳转函数把用户选择的开始时间交给原生播放器。
+      onSeek: (Duration position) => unawaited(_seekToChapter(position)),
+      onToggleChapterProgress:
+          _playerEnhancementController.toggleChapterProgress,
+    );
   }
 
   /// 返回当前分P在视频分P列表中的位置。
@@ -2741,7 +3349,7 @@ class _PlayerPageState extends State<PlayerPage>
     }
   }
 
-  /// 构建“更多”菜单，提供真实可用的字幕选择和画面比例设置。
+  /// 构建“更多”菜单，只保留字幕、弹幕和画面比例等次级播放器设置。
   List<PopupMenuEntry<_PlayerMoreMenuAction>> _buildMoreSettingsMenu() {
     return <PopupMenuEntry<_PlayerMoreMenuAction>>[
       const PopupMenuItem<_PlayerMoreMenuAction>(
@@ -3054,7 +3662,9 @@ class _PlayerPageState extends State<PlayerPage>
     if (!mounted) {
       return;
     }
+    _flushVideoNoteAutoSave();
     setState(() {
+      _noteDraftRevision += 1;
       _editingVideoNote = null;
       _noteTitleController.clear();
       _noteBodyController.clear();
@@ -3070,6 +3680,7 @@ class _PlayerPageState extends State<PlayerPage>
     if (!_notesOpen && !_notesOverlayMounted) {
       return;
     }
+    _flushVideoNoteAutoSave();
     _notesPanelAnimationTimer?.cancel();
     setState(() {
       _notesOpen = false;
@@ -3100,10 +3711,13 @@ class _PlayerPageState extends State<PlayerPage>
     return _currentPart;
   }
 
-  /// 选择已有笔记，填入编辑器并让播放器跳转到该笔记的时间点。
-  Future<void> _selectVideoNote(VideoNote note) async {
+  /// 选择已有笔记并填入编辑器；播放位置只会由显式跳转按钮改变。
+  void _selectVideoNote(VideoNote note) {
     final VideoPart targetPart = _findVideoNotePart(note.partCid);
+    _noteAutoSaveTimer?.cancel();
+    _noteAutoSaveTimer = null;
     setState(() {
+      _noteDraftRevision += 1;
       _editingVideoNote = note;
       _noteTitleController.text = note.title;
       _noteBodyController.text = note.body;
@@ -3112,6 +3726,16 @@ class _PlayerPageState extends State<PlayerPage>
       _includeCurrentFrame = note.framePath != null;
       _noteFramePath = note.framePath;
     });
+  }
+
+  /// 只在用户点击显式按钮时跳转到当前编辑笔记的分P和时间点。
+  Future<void> _jumpToSelectedVideoNotePosition() async {
+    final VideoNote? note = _editingVideoNote;
+    if (note == null) {
+      _showTransientSnackBar('请先选择一条笔记。');
+      return;
+    }
+    final VideoPart targetPart = _findVideoNotePart(note.partCid);
     try {
       if (targetPart.cid != _currentPart.cid) {
         await _changePart(targetPart);
@@ -3127,6 +3751,42 @@ class _PlayerPageState extends State<PlayerPage>
   /// 更新“插入当前画面”选择，取消时只影响本次保存，不立即删除旧文件。
   void _setIncludeCurrentFrame(bool selected) {
     setState(() => _includeCurrentFrame = selected);
+    _scheduleVideoNoteAutoSave();
+  }
+
+  /// 在标题或正文停止输入片刻后自动保存，避免频繁写入本机偏好设置。
+  void _handleVideoNoteDraftChanged(String value) {
+    if (!_notesOpen || _noteSaving) {
+      return;
+    }
+    _scheduleVideoNoteAutoSave();
+  }
+
+  /// 重置输入去抖计时器；空白草稿不会创建无意义的本机笔记。
+  void _scheduleVideoNoteAutoSave() {
+    _noteAutoSaveTimer?.cancel();
+    if (_noteTitleController.text.trim().isEmpty &&
+        _noteBodyController.text.trim().isEmpty) {
+      return;
+    }
+    _noteAutoSaveTimer = Timer(_noteAutoSaveDelay, () {
+      _noteAutoSaveTimer = null;
+      unawaited(_saveVideoNote(automatic: true));
+    });
+  }
+
+  /// 立即提交仍在等待去抖的草稿，供新建、关闭、换视频和离开播放器前调用。
+  void _flushVideoNoteAutoSave() {
+    final Timer? timer = _noteAutoSaveTimer;
+    if (timer == null) {
+      return;
+    }
+    timer.cancel();
+    _noteAutoSaveTimer = null;
+    if (_noteTitleController.text.trim().isNotEmpty ||
+        _noteBodyController.text.trim().isNotEmpty) {
+      unawaited(_saveVideoNote(automatic: true));
+    }
   }
 
   /// 等待原生播放器把目标时间点真正渲染到 Surface，再执行截图。
@@ -3172,17 +3832,30 @@ class _PlayerPageState extends State<PlayerPage>
     }
   }
 
-  /// 保存标题、正文、自动记录时间、视频位置和可选画面，再刷新当前视频笔记。
-  Future<void> _saveVideoNote() async {
-    final String title = _noteTitleController.text.trim();
-    if (title.isEmpty) {
+  /// 保存标题、正文、自动记录时间、视频位置和可选画面；自动保存不会反复弹出提示。
+  Future<void> _saveVideoNote({bool automatic = false}) async {
+    if (_noteSaving) {
+      return;
+    }
+    final String enteredTitle = _noteTitleController.text.trim();
+    final String body = _noteBodyController.text.trim();
+    if (enteredTitle.isEmpty && !automatic) {
       _showTransientSnackBar('请先填写笔记标题。');
       return;
     }
+    if (enteredTitle.isEmpty && body.isEmpty) {
+      return;
+    }
+    final String title = enteredTitle.isEmpty ? '未命名笔记' : enteredTitle;
+    final VideoNote? existing = _editingVideoNote;
+    final int draftRevision = _noteDraftRevision;
+    final bool includeFrame = _includeCurrentFrame;
+    final int notePartCid = _notePartCid;
+    final Duration notePosition = _notePosition;
     setState(() => _noteSaving = true);
-    String? framePath = _includeCurrentFrame ? _noteFramePath : null;
+    String? framePath = includeFrame ? _noteFramePath : null;
     try {
-      if (_includeCurrentFrame && framePath == null) {
+      if (includeFrame && framePath == null && !automatic) {
         framePath = await _captureFrameAtNotePosition();
         if (framePath == null) {
           throw PlatformException(
@@ -3192,8 +3865,7 @@ class _PlayerPageState extends State<PlayerPage>
         }
       }
       final DateTime now = DateTime.now();
-      final VideoNote? existing = _editingVideoNote;
-      final VideoPart notePart = _findVideoNotePart(_notePartCid);
+      final VideoPart notePart = _findVideoNotePart(notePartCid);
       final VideoNote note = existing == null
           ? VideoNote(
               id: '${_activeVideo.bvid}-${now.microsecondsSinceEpoch}',
@@ -3204,33 +3876,35 @@ class _PlayerPageState extends State<PlayerPage>
               partPageNumber: notePart.pageNumber,
               partTitle: notePart.title,
               title: title,
-              body: _noteBodyController.text.trim(),
+              body: body,
               createdAt: now,
               updatedAt: now,
-              position: _notePosition,
+              position: notePosition,
               videoCoverUrl: _activeVideo.thumbnailUrl,
               framePath: framePath,
             )
           : existing.copyWith(
               title: title,
-              body: _noteBodyController.text.trim(),
+              body: body,
               updatedAt: now,
-              position: _notePosition,
+              position: notePosition,
               framePath: framePath,
-              clearFrame: !_includeCurrentFrame,
+              clearFrame: !includeFrame,
             );
       await _videoNoteService.saveNote(note);
       if (!mounted) {
         return;
       }
       setState(() {
-        _editingVideoNote = note;
-        _noteFramePath = note.framePath;
+        if (draftRevision == _noteDraftRevision) {
+          _editingVideoNote = note;
+          _noteFramePath = note.framePath;
+        }
         _noteSaving = false;
         _notesLoading = true;
       });
       await _loadCurrentVideoNotes();
-      if (mounted) {
+      if (mounted && !automatic) {
         _showTransientSnackBar('笔记已保存到本机。');
       }
     } on PlatformException catch (error) {
@@ -3283,6 +3957,7 @@ class _PlayerPageState extends State<PlayerPage>
         return;
       }
       setState(() {
+        _noteDraftRevision += 1;
         _noteSaving = false;
         _notesLoading = true;
       });
@@ -3406,7 +4081,9 @@ class _PlayerPageState extends State<PlayerPage>
       isPlaying: false,
     );
     _notesPanelAnimationTimer?.cancel();
+    _flushVideoNoteAutoSave();
     _flushCurrentWatchHistoryProgress();
+    _flushCurrentLearningListProgress();
     await _playbackService.pause();
     final SavedPlaybackState? savedState = await _playbackService
         .loadSavedPlaybackState(video.bvid);
@@ -3454,14 +4131,23 @@ class _PlayerPageState extends State<PlayerPage>
       _fullscreenNoteListCollapsed = false;
       _notesOverlayMounted = false;
       _locatedCollectionPreviewBvid = null;
+      _learningListEntry = null;
+      _learningListLoading = false;
+      _completionPromptVisible = false;
+      _interactivePromptVisible = false;
+      _interactiveChoiceOpening = false;
     });
     _shownRestoredCid = null;
     _recordedHistoryPartCid = null;
     _lastHistorySavedPosition = Duration.zero;
+    _recordedLearningListPartCid = null;
+    _lastLearningListSavedPosition = Duration.zero;
     _resumeNoticeTimer?.cancel();
     _lastFocusPlaybackBvid = null;
     _lastFocusPlaybackPartCid = null;
     _lastFocusPlaybackPlaying = null;
+    unawaited(_loadCurrentLearningListEntry());
+    unawaited(_loadPlayerEnhancements());
     await _playbackService.openVideo(
       video,
       part: targetPart,
@@ -3561,6 +4247,65 @@ class _PlayerPageState extends State<PlayerPage>
     );
   }
 
+  /// 创建播放结束后的紧凑选择层，并随底部播放栏上浮以避免内容重叠。
+  Widget _buildPlaybackCompletionPrompt() {
+    if (!_completionPromptVisible || _playbackSnapshot.isInPictureInPicture) {
+      return const SizedBox.shrink();
+    }
+    final bool hasNextPart =
+        _currentPartIndex >= 0 &&
+        _currentPartIndex < _activeVideo.parts.length - 1;
+    final bool markingCompleted = _addingLearningBvid == _activeVideo.bvid;
+    final bool controlsVisible = _showControls && !_controlsLocked;
+    final double fullscreenSafeBottom = _fullscreen
+        ? MediaQuery.paddingOf(context).bottom
+        : 0;
+    return AnimatedPositioned(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+      left: 16,
+      right: 16,
+      bottom: (controlsVisible ? 78 : 14) + fullscreenSafeBottom,
+      child: Center(
+        child: PlaybackCompletionOverlay(
+          hasNextPart: hasNextPart,
+          markingCompleted: markingCompleted,
+          // 完成回调只更新当前学习任务，不改变播放器分P。
+          onMarkCompleted: () => unawaited(_markCurrentLearningCompleted()),
+          // 下一节回调继续保留“必须由用户点击”的非自动连播规则。
+          onPlayNext: () => unawaited(_playNextPartAfterCompletion()),
+        ),
+      ),
+    );
+  }
+
+  /// 创建互动视频完播选择层，加载失败时允许重试但绝不会替用户自动选择。
+  Widget _buildInteractiveVideoPrompt() {
+    if (!_interactivePromptVisible || _playbackSnapshot.isInPictureInPicture) {
+      return const SizedBox.shrink();
+    }
+    final bool controlsVisible = _showControls && !_controlsLocked;
+    final double fullscreenSafeBottom = _fullscreen
+        ? MediaQuery.paddingOf(context).bottom
+        : 0;
+    return InteractiveVideoChoiceOverlay(
+      node: _playerEnhancementController.interactiveNode,
+      loading:
+          _playerEnhancementController.interactiveNodeLoading ||
+          _interactiveChoiceOpening,
+      errorMessage: _playerEnhancementController.interactiveNodeError,
+      bottomInset: (controlsVisible ? 82 : 14) + fullscreenSafeBottom,
+      // 剧情按钮函数只播放用户明确点击的目标分支。
+      onChoiceSelected: (InteractiveVideoChoice choice) {
+        unawaited(_playInteractiveChoice(choice));
+      },
+      // 重试函数重新请求当前节点，不触发播放和跳转。
+      onRetry: () {
+        unawaited(_playerEnhancementController.retryInteractiveNode());
+      },
+    );
+  }
+
   /// 从合集内部返回栈取出上一支视频，使返回键符合“回到切换前视频”的预期。
   Future<void> _restorePreviousCollectionVideo() async {
     if (_openingCollectionBvid != null || _collectionVideoBackStack.isEmpty) {
@@ -3594,6 +4339,9 @@ class _PlayerPageState extends State<PlayerPage>
             collection: collection,
             currentBvid: _activeVideo.bvid,
             watchHistoryByBvid: _watchHistoryByBvid,
+            // 合集面板加入函数沿用播放器的完整视频查询与学习清单服务。
+            onAddToLearningList: (VideoCollectionEntry entry) =>
+                unawaited(_addCollectionVideoToLearningList(entry)),
           ),
         );
     if (selected != null && mounted && selected.bvid != _activeVideo.bvid) {
@@ -3711,6 +4459,46 @@ class _PlayerPageState extends State<PlayerPage>
     );
   }
 
+  /// 创建放在“记笔记”左侧的学习清单按钮，并根据加入状态切换文字和图标。
+  Widget _buildCurrentVideoLearningListButton() {
+    final bool busy =
+        _learningListLoading || _addingLearningBvid == _activeVideo.bvid;
+    return Tooltip(
+      message: _learningListEntry == null ? '加入学习清单' : '取消加入学习清单',
+      child: TextButton.icon(
+        key: const Key('current-video-learning-list-button'),
+        style: TextButton.styleFrom(
+          visualDensity: VisualDensity.compact,
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+        ),
+        // 顶部学习清单按钮函数会在加入与取消加入之间切换，并在取消前要求确认。
+        onPressed: busy
+            ? null
+            : () => unawaited(_handleCurrentVideoLearningListTap()),
+        icon: busy
+            ? const SizedBox.square(
+                dimension: 17,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : Icon(
+                _learningListEntry == null
+                    ? Icons.playlist_add_rounded
+                    : Icons.playlist_add_check_rounded,
+                size: 20,
+              ),
+        label: Text(
+          _learningListLoading
+              ? '读取中…'
+              : _learningListEntry == null
+              ? '加入学习清单'
+              : _learningListEntry!.status == LearningListStatus.completed
+              ? '已完成'
+              : '已加入学习清单',
+        ),
+      ),
+    );
+  }
+
   /// 创建最多三行的简介；确实溢出时才显示蓝色展开文字，并保留 @UP 点击能力。
   Widget _buildExpandableDescription() {
     final TextStyle style =
@@ -3766,44 +4554,66 @@ class _PlayerPageState extends State<PlayerPage>
     return segments
         .map((VideoDescriptionSegment segment) {
           if (segment.isLink) {
-            return WidgetSpan(
-              alignment: PlaceholderAlignment.baseline,
-              baseline: TextBaseline.alphabetic,
-              child: InkWell(
-                key: Key('description-link-${segment.linkUri}'),
-                // 外链点击函数先展示风险确认，不会直接把用户带离应用。
-                onTap: () => unawaited(_confirmAndOpenDescriptionLink(segment)),
-                child: Text(
-                  segment.text,
-                  style: baseStyle.copyWith(
-                    color: Theme.of(context).colorScheme.primary,
-                    decoration: TextDecoration.underline,
-                    decorationColor: Theme.of(context).colorScheme.primary,
-                  ),
-                ),
+            return TextSpan(
+              text: segment.text,
+              // 外链点击识别器先展示风险确认，不会直接把用户带离应用。
+              recognizer: _descriptionLinkRecognizer(segment),
+              style: baseStyle.copyWith(
+                color: Theme.of(context).colorScheme.primary,
+                decoration: TextDecoration.underline,
+                decorationColor: Theme.of(context).colorScheme.primary,
               ),
             );
           }
           if (!segment.isMention) {
             return TextSpan(text: segment.text);
           }
-          return WidgetSpan(
-            alignment: PlaceholderAlignment.baseline,
-            baseline: TextBaseline.alphabetic,
-            child: InkWell(
-              key: Key('description-mention-${segment.mentionedMid}'),
-              // UP 提及点击函数使用接口提供的 MID 打开对应公开主页。
-              onTap: () => unawaited(_openDescriptionMention(segment)),
-              child: Text(
-                segment.text,
-                style: baseStyle.copyWith(
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-              ),
+          return TextSpan(
+            text: segment.text,
+            // UP 提及点击识别器让 @ 文本像普通文字一样参与换行，并保持可点击。
+            recognizer: _descriptionMentionRecognizer(segment),
+            style: baseStyle.copyWith(
+              color: Theme.of(context).colorScheme.primary,
             ),
           );
         })
         .toList(growable: false);
+  }
+
+  /// 为一个 @UP 片段复用稳定的点击识别器，避免每次重建富文本都泄漏手势对象。
+  TapGestureRecognizer _descriptionMentionRecognizer(
+    VideoDescriptionSegment segment,
+  ) {
+    final String key = '${segment.mentionedMid}:${segment.text}';
+    final TapGestureRecognizer recognizer = _descriptionMentionRecognizers
+        .putIfAbsent(key, TapGestureRecognizer.new);
+    recognizer.onTap = () => unawaited(_openDescriptionMention(segment));
+    return recognizer;
+  }
+
+  /// 为一个外链片段复用稳定的点击识别器，保留原有的安全确认流程。
+  TapGestureRecognizer _descriptionLinkRecognizer(
+    VideoDescriptionSegment segment,
+  ) {
+    final String key = '${segment.linkUri}:${segment.text}';
+    final TapGestureRecognizer recognizer = _descriptionLinkRecognizers
+        .putIfAbsent(key, TapGestureRecognizer.new);
+    recognizer.onTap = () => unawaited(_confirmAndOpenDescriptionLink(segment));
+    return recognizer;
+  }
+
+  /// 释放简介富文本持有的手势识别器，避免播放器退出后仍保留点击回调。
+  void _disposeDescriptionRecognizers() {
+    for (final TapGestureRecognizer recognizer
+        in _descriptionMentionRecognizers.values) {
+      recognizer.dispose();
+    }
+    for (final TapGestureRecognizer recognizer
+        in _descriptionLinkRecognizers.values) {
+      recognizer.dispose();
+    }
+    _descriptionMentionRecognizers.clear();
+    _descriptionLinkRecognizers.clear();
   }
 
   /// 打开简介中被提及 UP 主的公开主页，昵称只作为加载前的占位标题。
@@ -3951,6 +4761,7 @@ class _PlayerPageState extends State<PlayerPage>
   Widget _buildCollectionPreviewRow(VideoCollectionEntry entry) {
     final bool current = entry.bvid == _activeVideo.bvid;
     final bool opening = _openingCollectionBvid == entry.bvid;
+    final bool adding = _addingLearningBvid == entry.bvid;
     final WatchHistoryEntry? watchHistory = _watchHistoryByBvid[entry.bvid];
     final ColorScheme colors = Theme.of(context).colorScheme;
     return Material(
@@ -4093,7 +4904,26 @@ class _PlayerPageState extends State<PlayerPage>
                 ),
               ),
               const SizedBox(width: 4),
-              const Icon(Icons.more_vert_rounded, size: 20),
+              SizedBox(
+                width: 36,
+                height: 36,
+                child: IconButton(
+                  key: Key('add-learning-player-collection-${entry.bvid}'),
+                  visualDensity: VisualDensity.compact,
+                  // 合集预览加入函数查询对应完整视频并自动继承该视频观看进度。
+                  onPressed: adding
+                      ? null
+                      : () =>
+                            unawaited(_addCollectionVideoToLearningList(entry)),
+                  icon: adding
+                      ? const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.playlist_add_rounded, size: 20),
+                  tooltip: '加入学习清单',
+                ),
+              ),
             ],
           ),
         ),
@@ -4177,8 +5007,15 @@ class _PlayerPageState extends State<PlayerPage>
       onIncludeFrameChanged: _setIncludeCurrentFrame,
       // 保存函数自动写入记录时间、视频时间点和用户选择的当前画面。
       onSave: () => unawaited(_saveVideoNote()),
+      // 标题和正文变化函数安排去抖自动保存，避免每次按键都立即写本机存储。
+      onTitleChanged: _handleVideoNoteDraftChanged,
+      onBodyChanged: _handleVideoNoteDraftChanged,
       onNew: _startNewVideoNote,
       onClose: _closeVideoNotes,
+      // 跳转函数只在用户点击独立按钮后才改变视频分P和时间点。
+      onJumpToPosition: _editingVideoNote == null
+          ? null
+          : () => unawaited(_jumpToSelectedVideoNotePosition()),
       onDelete: _editingVideoNote == null
           ? null
           : () => unawaited(_deleteEditingVideoNote()),
@@ -4187,7 +5024,7 @@ class _PlayerPageState extends State<PlayerPage>
     );
   }
 
-  /// 创建竖屏笔记顶部的横向时间点列表，点按后跳转视频并编辑该笔记。
+  /// 创建竖屏笔记顶部的横向时间点列表，点按后只切换编辑内容。
   Widget _buildPortraitVideoNoteStrip() {
     if (_notesLoading) {
       return const SizedBox(
@@ -4227,8 +5064,8 @@ class _PlayerPageState extends State<PlayerPage>
               child: InkWell(
                 key: Key('portrait-video-note-${note.id}'),
                 borderRadius: BorderRadius.circular(12),
-                // 竖屏笔记卡点击函数跳转到笔记位置并填入编辑器。
-                onTap: () => unawaited(_selectVideoNote(note)),
+                // 竖屏笔记卡点击函数只载入笔记，跳转需要用户使用编辑器按钮确认。
+                onTap: () => _selectVideoNote(note),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 9,
@@ -4300,7 +5137,7 @@ class _PlayerPageState extends State<PlayerPage>
       // 分隔函数给全屏笔记时间线保留紧凑间距。
       separatorBuilder: (BuildContext context, int index) =>
           const SizedBox(height: 6),
-      // 构建函数显示可自动滚动的标题和视频时间点，并支持点击跳转。
+      // 构建函数显示可自动滚动的标题和视频时间点，点击只切换编辑内容。
       itemBuilder: (BuildContext context, int index) {
         final VideoNote note = _currentVideoNotes[index];
         final bool selected = note.id == _editingVideoNote?.id;
@@ -4313,8 +5150,8 @@ class _PlayerPageState extends State<PlayerPage>
           child: InkWell(
             key: Key('fullscreen-video-note-${note.id}'),
             borderRadius: BorderRadius.circular(9),
-            // 全屏笔记点击函数跳转到对应视频位置并载入标题、正文和画面。
-            onTap: () => unawaited(_selectVideoNote(note)),
+            // 全屏笔记点击函数只载入标题、正文和画面，跳转由单独按钮执行。
+            onTap: () => _selectVideoNote(note),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
               child: Row(
@@ -4549,13 +5386,15 @@ class _PlayerPageState extends State<PlayerPage>
           const SizedBox(height: 12),
           Row(
             children: <Widget>[
-              Text(
-                '简介',
-                style: Theme.of(
-                  context,
-                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+              Expanded(
+                child: Text(
+                  '简介',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
               ),
-              const Spacer(),
+              _buildCurrentVideoLearningListButton(),
               TextButton.icon(
                 key: const Key('portrait-note-button'),
                 // 竖屏记笔记按钮函数在播放器下方打开编辑区，并固定播放器高度。
@@ -4584,6 +5423,36 @@ class _PlayerPageState extends State<PlayerPage>
     );
   }
 
+  /// 创建固定在视频画面内的分段进度条，控制栏隐藏后仍保持可见并支持点击跳转。
+  Widget _buildChapterProgressOverlay({required bool inPictureInPicture}) {
+    if (inPictureInPicture ||
+        _playerEnhancementController.chapters.isEmpty ||
+        !_playerEnhancementController.chapterProgressVisible) {
+      return const SizedBox.shrink();
+    }
+    final bool aboveControls = _showControls && !_controlsLocked;
+    final double fullscreenSafeBottom = _fullscreen
+        ? MediaQuery.paddingOf(context).bottom
+        : 0;
+    final double horizontalInset = _fullscreen && aboveControls ? 12 : 0;
+    final double bottom = (aboveControls ? 54 : 4) + fullscreenSafeBottom;
+    return Positioned(
+      left: horizontalInset,
+      right: horizontalInset,
+      bottom: bottom,
+      child: VideoChapterStrip(
+        chapters: _playerEnhancementController.chapters,
+        position: _playbackSnapshot.position,
+        compact: true,
+        onDarkSurface: true,
+        // 画面内章节条点击函数统一跳转到对应章节的开始位置。
+        onSeek: (Duration position) {
+          unawaited(_seekToChapter(position));
+        },
+      ),
+    );
+  }
+
   /// 创建播放器与详情共用的竖向滚动，向上滑动时按距离连续压缩播放器直到完全隐藏。
   Widget _buildCollapsingPlayerBody({
     required Widget player,
@@ -4603,11 +5472,88 @@ class _PlayerPageState extends State<PlayerPage>
     );
   }
 
+  /// 创建只覆盖视频画面的手势层，确保控制栏按钮不必等待双击识别结果。
+  Widget _buildPlayerSurface({
+    required BuildContext context,
+    required BoxConstraints constraints,
+    required bool enableSurfaceGestures,
+  }) {
+    return GestureDetector(
+      key: const Key('player-surface'),
+      behavior: HitTestBehavior.opaque,
+      dragStartBehavior: DragStartBehavior.down,
+      // 画面单击函数只切换控制层，避免误触导致视频暂停。
+      onTap: enableSurfaceGestures ? _toggleControls : null,
+      // 双击落点记录函数为分区快进快退提供位置信息。
+      onDoubleTapDown: enableSurfaceGestures ? _recordDoubleTapPosition : null,
+      // 双击处理函数依据画面宽度计算左中右分区。
+      onDoubleTap: enableSurfaceGestures
+          ? () => _handleDoubleTap(constraints.maxWidth)
+          : null,
+      // 长按开始函数仅临时切换到三倍速，横向快进由独立拖动手势负责。
+      onLongPressStart: enableSurfaceGestures
+          ? _startTemporaryTripleSpeed
+          : null,
+      // 长按结束函数恢复原倍速，不改变播放位置。
+      onLongPressEnd: enableSurfaceGestures ? _stopTemporaryTripleSpeed : null,
+      // 长按取消函数恢复界面状态且不提交未确认的进度。
+      onLongPressCancel: enableSurfaceGestures
+          ? _cancelTemporaryLongPress
+          : null,
+      // 横向拖动开始函数立即进入进度预览，并计算当前视频对应的拖动速度。
+      onHorizontalDragStart: enableSurfaceGestures
+          ? (DragStartDetails details) => _startHorizontalScrub(
+              details,
+              constraints.biggest,
+              MediaQuery.viewPaddingOf(context),
+            )
+          : null,
+      // 横向拖动更新函数只刷新预览，避免频繁向原生播放器发送跳转命令。
+      onHorizontalDragUpdate: enableSurfaceGestures
+          ? _updateHorizontalScrub
+          : null,
+      // 横向拖动结束函数一次性提交最终目标位置。
+      onHorizontalDragEnd: enableSurfaceGestures
+          ? _finishHorizontalScrub
+          : null,
+      // 横向拖动取消函数恢复开始位置，避免系统手势造成误跳转。
+      onHorizontalDragCancel: enableSurfaceGestures
+          ? _cancelHorizontalScrub
+          : null,
+      // 全屏竖向手势开始函数判断左侧亮度、右侧音量和上下安全区；竖屏把手势交给页面滚动。
+      onVerticalDragStart: _fullscreen && enableSurfaceGestures
+          ? (DragStartDetails details) => _startVerticalAdjustment(
+              details,
+              constraints.biggest,
+              MediaQuery.of(context).viewPadding.top,
+              MediaQuery.of(context).viewPadding.bottom,
+            )
+          : null,
+      // 全屏竖向手势更新函数实时调整窗口亮度或媒体音量。
+      onVerticalDragUpdate: _fullscreen && enableSurfaceGestures
+          ? (DragUpdateDetails details) =>
+                _updateVerticalAdjustment(details, constraints.maxHeight)
+          : null,
+      // 全屏竖向手势结束函数恢复控制栏自动隐藏计时。
+      onVerticalDragEnd: _fullscreen && enableSurfaceGestures
+          ? _finishVerticalAdjustment
+          : null,
+      child: Stack(
+        fit: StackFit.expand,
+        children: <Widget>[
+          _buildVideoOutput(),
+          _buildDanmakuOverlay(),
+          _buildSubtitleOverlay(),
+        ],
+      ),
+    );
+  }
+
   /// 创建播放器画面、手势、可点击错误重试层、控制层以及非全屏时的视频信息区域。
   @override
   Widget build(BuildContext context) {
     final bool inPictureInPicture = _playbackSnapshot.isInPictureInPicture;
-    // 错误或选集展开时关闭底层画面手势，避免父级手势抢走重试与选集按钮点击。
+    // 错误或选集展开时关闭画面手势，避免画面层干扰重试与选集按钮点击。
     final bool enableSurfaceGestures =
         _playbackSnapshot.phase != PlaybackPhase.error &&
         !_partSelectorExpanded &&
@@ -4617,129 +5563,108 @@ class _PlayerPageState extends State<PlayerPage>
         return Listener(
           // 指针被系统取消时优先撤销预览，避免取消事件被拖动识别器当作普通松手。
           onPointerCancel: _handlePlayerPointerCancel,
-          child: GestureDetector(
-            key: const Key('player-surface'),
-            behavior: HitTestBehavior.opaque,
-            dragStartBehavior: DragStartBehavior.down,
-            // 画面单击函数只切换控制层，避免误触导致视频暂停。
-            onTap: enableSurfaceGestures ? _toggleControls : null,
-            // 双击落点记录函数为分区快进快退提供位置信息。
-            onDoubleTapDown: enableSurfaceGestures
-                ? _recordDoubleTapPosition
-                : null,
-            // 双击处理函数依据画面宽度计算左中右分区。
-            onDoubleTap: enableSurfaceGestures
-                ? () => _handleDoubleTap(constraints.maxWidth)
-                : null,
-            // 长按开始函数仅临时切换到三倍速，横向快进由独立拖动手势负责。
-            onLongPressStart: enableSurfaceGestures
-                ? _startTemporaryTripleSpeed
-                : null,
-            // 长按结束函数恢复原倍速，不改变播放位置。
-            onLongPressEnd: enableSurfaceGestures
-                ? _stopTemporaryTripleSpeed
-                : null,
-            // 长按取消函数恢复界面状态且不提交未确认的进度。
-            onLongPressCancel: enableSurfaceGestures
-                ? _cancelTemporaryLongPress
-                : null,
-            // 横向拖动开始函数立即进入进度预览，并计算当前视频对应的拖动速度。
-            onHorizontalDragStart: enableSurfaceGestures
-                ? (DragStartDetails details) => _startHorizontalScrub(
-                    details,
-                    constraints.biggest,
-                    MediaQuery.viewPaddingOf(context),
-                  )
-                : null,
-            // 横向拖动更新函数只刷新预览，避免频繁向原生播放器发送跳转命令。
-            onHorizontalDragUpdate: enableSurfaceGestures
-                ? _updateHorizontalScrub
-                : null,
-            // 横向拖动结束函数一次性提交最终目标位置。
-            onHorizontalDragEnd: enableSurfaceGestures
-                ? _finishHorizontalScrub
-                : null,
-            // 横向拖动取消函数恢复开始位置，避免系统手势造成误跳转。
-            onHorizontalDragCancel: enableSurfaceGestures
-                ? _cancelHorizontalScrub
-                : null,
-            // 全屏竖向手势开始函数判断左侧亮度、右侧音量和上下安全区；竖屏把手势交给页面滚动。
-            onVerticalDragStart: _fullscreen && enableSurfaceGestures
-                ? (DragStartDetails details) => _startVerticalAdjustment(
-                    details,
-                    constraints.biggest,
-                    MediaQuery.of(context).viewPadding.top,
-                    MediaQuery.of(context).viewPadding.bottom,
-                  )
-                : null,
-            // 全屏竖向手势更新函数实时调整窗口亮度或媒体音量。
-            onVerticalDragUpdate: _fullscreen && enableSurfaceGestures
-                ? (DragUpdateDetails details) =>
-                      _updateVerticalAdjustment(details, constraints.maxHeight)
-                : null,
-            // 全屏竖向手势结束函数恢复控制栏自动隐藏计时。
-            onVerticalDragEnd: _fullscreen && enableSurfaceGestures
-                ? _finishVerticalAdjustment
-                : null,
-            child: ColoredBox(
-              color: Colors.black,
-              child: Stack(
-                fit: StackFit.expand,
-                children: <Widget>[
-                  _buildVideoOutput(),
-                  _buildDanmakuOverlay(),
-                  _buildSubtitleOverlay(),
-                  if (_temporarySpeedActive)
-                    SafeArea(
-                      child: Align(
-                        alignment: Alignment.topCenter,
-                        child: Padding(
-                          padding: const EdgeInsets.only(top: 12),
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: Colors.black54,
-                              borderRadius: BorderRadius.circular(16),
+          child: ColoredBox(
+            color: Colors.black,
+            child: Stack(
+              fit: StackFit.expand,
+              children: <Widget>[
+                _buildPlayerSurface(
+                  context: context,
+                  constraints: constraints,
+                  enableSurfaceGestures: enableSurfaceGestures,
+                ),
+                if (_temporarySpeedActive)
+                  SafeArea(
+                    child: Align(
+                      alignment: Alignment.topCenter,
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 12),
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: Colors.black54,
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: const Padding(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 7,
                             ),
-                            child: const Padding(
-                              padding: EdgeInsets.symmetric(
-                                horizontal: 14,
-                                vertical: 7,
-                              ),
-                              child: Text(
-                                '三倍速中>>',
-                                key: Key('temporary-triple-speed'),
-                                style: TextStyle(color: Colors.white),
-                              ),
+                            child: Text(
+                              '三倍速中>>',
+                              key: Key('temporary-triple-speed'),
+                              style: TextStyle(color: Colors.white),
                             ),
                           ),
                         ),
                       ),
                     ),
-                  _buildSeekFeedback(),
-                  AnimatedPositioned(
-                    duration: const Duration(milliseconds: 180),
-                    curve: Curves.easeOut,
-                    left: 24,
-                    right: 24,
-                    bottom: _showControls ? 58 : 10,
-                    child: IgnorePointer(
-                      child: AnimatedOpacity(
-                        opacity: _resumeNotice == null ? 0 : 1,
-                        duration: const Duration(milliseconds: 180),
-                        child: Center(
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: Colors.black87,
-                              borderRadius: BorderRadius.circular(18),
+                  ),
+                _buildSeekFeedback(),
+                _buildPlaybackCompletionPrompt(),
+                _buildInteractiveVideoPrompt(),
+                AnimatedPositioned(
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeOut,
+                  left: 24,
+                  right: 24,
+                  bottom: _showControls ? 58 : 10,
+                  child: IgnorePointer(
+                    child: AnimatedOpacity(
+                      opacity: _resumeNotice == null ? 0 : 1,
+                      duration: const Duration(milliseconds: 180),
+                      child: Center(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: Colors.black87,
+                            borderRadius: BorderRadius.circular(18),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 8,
                             ),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 14,
-                                vertical: 8,
-                              ),
-                              child: Text(
-                                _resumeNotice ?? '',
-                                style: const TextStyle(color: Colors.white),
+                            child: Text(
+                              _resumeNotice ?? '',
+                              style: const TextStyle(color: Colors.white),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                AnimatedPositioned(
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeOut,
+                  top: _fullscreen ? 72 : 52,
+                  left: 24,
+                  right: 24,
+                  child: IgnorePointer(
+                    child: AnimatedOpacity(
+                      opacity: _playerNotice == null ? 0 : 1,
+                      duration: const Duration(milliseconds: 160),
+                      child: Center(
+                        child: DecoratedBox(
+                          key: _playerNotice == null
+                              ? null
+                              : const Key('player-floating-notice'),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.82),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 7,
+                            ),
+                            child: Text(
+                              _playerNotice ?? '',
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
                               ),
                             ),
                           ),
@@ -4747,88 +5672,54 @@ class _PlayerPageState extends State<PlayerPage>
                       ),
                     ),
                   ),
-                  AnimatedPositioned(
-                    duration: const Duration(milliseconds: 180),
-                    curve: Curves.easeOut,
-                    top: _fullscreen ? 72 : 52,
-                    left: 24,
-                    right: 24,
-                    child: IgnorePointer(
-                      child: AnimatedOpacity(
-                        opacity: _playerNotice == null ? 0 : 1,
-                        duration: const Duration(milliseconds: 160),
-                        child: Center(
+                ),
+                Align(
+                  alignment: Alignment.bottomCenter,
+                  child: IgnorePointer(
+                    child: AnimatedOpacity(
+                      opacity: !_showControls && !inPictureInPicture ? 1 : 0,
+                      duration: const Duration(milliseconds: 180),
+                      child: LinearProgressIndicator(
+                        key: const Key('mini-progress'),
+                        value: _progress,
+                        minHeight: 2,
+                        backgroundColor: Colors.white24,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                  ),
+                ),
+                AnimatedOpacity(
+                  key: const Key('player-controls'),
+                  opacity:
+                      _showControls && !_controlsLocked && !inPictureInPicture
+                      ? 1
+                      : 0,
+                  duration: const Duration(milliseconds: 180),
+                  child: IgnorePointer(
+                    ignoring:
+                        !_showControls || _controlsLocked || inPictureInPicture,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: <Widget>[
+                        // 渐变层只负责绘制，不能拦截画面空白处的单击、双击和拖动。
+                        const IgnorePointer(
                           child: DecoratedBox(
-                            key: _playerNotice == null
-                                ? null
-                                : const Key('player-floating-notice'),
                             decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.82),
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 14,
-                                vertical: 7,
-                              ),
-                              child: Text(
-                                _playerNotice ?? '',
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 13,
-                                ),
+                              gradient: LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: <Color>[
+                                  Colors.black54,
+                                  Colors.transparent,
+                                  Colors.transparent,
+                                  Colors.black87,
+                                ],
                               ),
                             ),
                           ),
                         ),
-                      ),
-                    ),
-                  ),
-                  Align(
-                    alignment: Alignment.bottomCenter,
-                    child: IgnorePointer(
-                      child: AnimatedOpacity(
-                        opacity: !_showControls && !inPictureInPicture ? 1 : 0,
-                        duration: const Duration(milliseconds: 180),
-                        child: LinearProgressIndicator(
-                          key: const Key('mini-progress'),
-                          value: _progress,
-                          minHeight: 2,
-                          backgroundColor: Colors.white24,
-                          color: Theme.of(context).colorScheme.primary,
-                        ),
-                      ),
-                    ),
-                  ),
-                  AnimatedOpacity(
-                    key: const Key('player-controls'),
-                    opacity:
-                        _showControls && !_controlsLocked && !inPictureInPicture
-                        ? 1
-                        : 0,
-                    duration: const Duration(milliseconds: 180),
-                    child: IgnorePointer(
-                      ignoring:
-                          !_showControls ||
-                          _controlsLocked ||
-                          inPictureInPicture,
-                      child: DecoratedBox(
-                        decoration: const BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: <Color>[
-                              Colors.black54,
-                              Colors.transparent,
-                              Colors.transparent,
-                              Colors.black87,
-                            ],
-                          ),
-                        ),
-                        child: Stack(
+                        Stack(
                           children: <Widget>[
                             Positioned(
                               top: 0,
@@ -4900,6 +5791,21 @@ class _PlayerPageState extends State<PlayerPage>
                                                   ? '开始专注'
                                                   : '管理专注',
                                             ),
+                                          if (_playerEnhancementController
+                                              .chapters
+                                              .isNotEmpty)
+                                            PlayerCompactIconButton(
+                                              key: const Key(
+                                                'video-chapter-button',
+                                              ),
+                                              // 分段按钮函数直接打开章节面板，不再藏在更多选项中。
+                                              onPressed: () => unawaited(
+                                                _showVideoChapterPanel(),
+                                              ),
+                                              icon:
+                                                  Icons.view_timeline_outlined,
+                                              tooltip: '分段信息',
+                                            ),
                                           PlayerCompactIconButton(
                                             key: const Key(
                                               'picture-in-picture',
@@ -4932,6 +5838,9 @@ class _PlayerPageState extends State<PlayerPage>
                                               ),
                                               tooltip: '更多选项',
                                               padding: EdgeInsets.zero,
+                                              // 菜单使用短动画，避免点击控制项后仍感觉慢半拍。
+                                              popUpAnimationStyle:
+                                                  _playerPopupMenuAnimationStyle,
                                               iconSize: 22,
                                               icon: const Icon(
                                                 Icons.more_vert_rounded,
@@ -5055,6 +5964,9 @@ class _PlayerPageState extends State<PlayerPage>
                                               initialValue: _currentQuality,
                                               tooltip: '清晰度',
                                               padding: EdgeInsets.zero,
+                                              // 菜单使用短动画，避免点击控制项后仍感觉慢半拍。
+                                              popUpAnimationStyle:
+                                                  _playerPopupMenuAnimationStyle,
                                               // 清晰度菜单选择函数保留进度后重新请求播放源。
                                               onSelected: (int quality) =>
                                                   unawaited(
@@ -5090,6 +6002,9 @@ class _PlayerPageState extends State<PlayerPage>
                                               initialValue: _playbackSpeed,
                                               tooltip: '播放倍速',
                                               padding: EdgeInsets.zero,
+                                              // 菜单使用短动画，避免点击控制项后仍感觉慢半拍。
+                                              popUpAnimationStyle:
+                                                  _playerPopupMenuAnimationStyle,
                                               // 倍速菜单选择函数把用户选择交给原生播放器。
                                               onSelected: (double speed) =>
                                                   unawaited(
@@ -5146,63 +6061,66 @@ class _PlayerPageState extends State<PlayerPage>
                             ),
                           ],
                         ),
-                      ),
+                      ],
                     ),
                   ),
-                  if (_partSelectorExpanded && _fullscreen)
-                    Positioned(
-                      key: const Key('fullscreen-part-selector'),
-                      top: 0,
-                      right: 0,
-                      bottom: 0,
-                      width: constraints.maxWidth * 0.56,
-                      child: Material(
-                        elevation: 16,
-                        color: Theme.of(context).colorScheme.surface,
-                        child: _buildExpandedPartSelector(),
-                      ),
+                ),
+                _buildChapterProgressOverlay(
+                  inPictureInPicture: inPictureInPicture,
+                ),
+                if (_partSelectorExpanded && _fullscreen)
+                  Positioned(
+                    key: const Key('fullscreen-part-selector'),
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                    width: constraints.maxWidth * 0.56,
+                    child: Material(
+                      elevation: 16,
+                      color: Theme.of(context).colorScheme.surface,
+                      child: _buildExpandedPartSelector(),
                     ),
-                  if (_fullscreen &&
-                      !inPictureInPicture &&
-                      (_controlsLocked || _showControls))
-                    Positioned(
-                      key: const Key('fullscreen-controls-lock'),
-                      left: 8,
-                      top: constraints.maxHeight / 2 - 22,
-                      child: SafeArea(
-                        right: false,
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            color: Colors.black54,
-                            borderRadius: BorderRadius.circular(22),
+                  ),
+                if (_fullscreen &&
+                    !inPictureInPicture &&
+                    (_controlsLocked || _showControls))
+                  Positioned(
+                    key: const Key('fullscreen-controls-lock'),
+                    left: 8,
+                    top: constraints.maxHeight / 2 - 22,
+                    child: SafeArea(
+                      right: false,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(22),
+                        ),
+                        child: IconButton(
+                          // 锁定按钮函数隐藏或恢复其他播放器按钮和画面手势。
+                          onPressed: _toggleControlsLock,
+                          icon: Icon(
+                            _controlsLocked
+                                ? Icons.lock_rounded
+                                : Icons.lock_open_rounded,
+                            color: Colors.white,
                           ),
-                          child: IconButton(
-                            // 锁定按钮函数隐藏或恢复其他播放器按钮和画面手势。
-                            onPressed: _toggleControlsLock,
-                            icon: Icon(
-                              _controlsLocked
-                                  ? Icons.lock_rounded
-                                  : Icons.lock_open_rounded,
-                              color: Colors.white,
-                            ),
-                            tooltip: _controlsLocked ? '解锁播放器' : '锁定播放器',
-                          ),
+                          tooltip: _controlsLocked ? '解锁播放器' : '锁定播放器',
                         ),
                       ),
                     ),
-                  if (_fullscreen &&
-                      !_notesOpen &&
-                      !_partSelectorExpanded &&
-                      _showControls &&
-                      !_controlsLocked &&
-                      !inPictureInPicture)
-                    _buildFullscreenVideoNoteButton(),
-                  if (_fullscreen && _notesOverlayMounted)
-                    _buildFullscreenVideoNotesPanel(constraints.maxWidth),
-                  // 错误重试层放在控制栏之后，确保按钮不会被全屏控制栏的透明区域拦截点击。
-                  _buildPlaybackHint(),
-                ],
-              ),
+                  ),
+                if (_fullscreen &&
+                    !_notesOpen &&
+                    !_partSelectorExpanded &&
+                    _showControls &&
+                    !_controlsLocked &&
+                    !inPictureInPicture)
+                  _buildFullscreenVideoNoteButton(),
+                if (_fullscreen && _notesOverlayMounted)
+                  _buildFullscreenVideoNotesPanel(constraints.maxWidth),
+                // 错误重试层放在控制栏之后，确保按钮不会被全屏控制栏的透明区域拦截点击。
+                _buildPlaybackHint(),
+              ],
             ),
           ),
         );

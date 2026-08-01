@@ -361,7 +361,8 @@ class BilibiliVideoInfoService
         }
         final int mentionedMid = _readIdentifier(segment['biz_id']);
         final int type = _readInteger(segment['type']);
-        if (mentionedMid > 0 && (type == 1 || text.startsWith('@'))) {
+        if (mentionedMid > 0 &&
+            (type == 1 || type == 2 || text.trimLeft().startsWith('@'))) {
           mentions.add(
             VideoDescriptionSegment(text: text, mentionedMid: mentionedMid),
           );
@@ -372,19 +373,25 @@ class BilibiliVideoInfoService
     if (fallbackDescription.isNotEmpty) {
       int cursor = 0;
       for (final VideoDescriptionSegment mention in mentions) {
-        final int mentionStart = fallbackDescription.indexOf(
+        final ({int start, int end})? match = _findDescriptionMentionMatch(
+          fallbackDescription,
           mention.text,
           cursor,
         );
-        if (mentionStart < 0) {
+        if (match == null) {
           continue;
         }
         _appendDescriptionTextSegments(
           segments,
-          fallbackDescription.substring(cursor, mentionStart),
+          fallbackDescription.substring(cursor, match.start),
         );
-        segments.add(mention);
-        cursor = mentionStart + mention.text.length;
+        segments.add(
+          VideoDescriptionSegment(
+            text: fallbackDescription.substring(match.start, match.end),
+            mentionedMid: mention.mentionedMid,
+          ),
+        );
+        cursor = match.end;
       }
       _appendDescriptionTextSegments(
         segments,
@@ -400,9 +407,16 @@ class BilibiliVideoInfoService
         }
         final int mentionedMid = _readIdentifier(segment['biz_id']);
         final int type = _readInteger(segment['type']);
-        if (mentionedMid > 0 && (type == 1 || text.startsWith('@'))) {
+        if (mentionedMid > 0 &&
+            (type == 1 || type == 2 || text.trimLeft().startsWith('@'))) {
+          final String normalizedText = text.trim();
           segments.add(
-            VideoDescriptionSegment(text: text, mentionedMid: mentionedMid),
+            VideoDescriptionSegment(
+              text: normalizedText.startsWith('@')
+                  ? normalizedText
+                  : '@$normalizedText',
+              mentionedMid: mentionedMid,
+            ),
           );
         } else {
           _appendDescriptionTextSegments(segments, text);
@@ -410,6 +424,34 @@ class BilibiliVideoInfoService
       }
     }
     return List<VideoDescriptionSegment>.unmodifiable(segments);
+  }
+
+  /// 在完整简介中定位一条提及，并优先把原文里的 @ 一并纳入可点击片段。
+  ({int start, int end})? _findDescriptionMentionMatch(
+    String description,
+    String metadataText,
+    int cursor,
+  ) {
+    final String normalizedText = metadataText.trim();
+    if (normalizedText.isEmpty) {
+      return null;
+    }
+    final String accountName = normalizedText.startsWith('@')
+        ? normalizedText.substring(1).trimLeft()
+        : normalizedText;
+    if (accountName.isEmpty) {
+      return null;
+    }
+    final String markedText = '@$accountName';
+    final int markedStart = description.indexOf(markedText, cursor);
+    if (markedStart >= 0) {
+      return (start: markedStart, end: markedStart + markedText.length);
+    }
+    final int plainStart = description.indexOf(normalizedText, cursor);
+    if (plainStart < 0) {
+      return null;
+    }
+    return (start: plainStart, end: plainStart + normalizedText.length);
   }
 
   /// 把普通简介文字拆成文本和 URL 片段；句末中英文标点不算作链接的一部分。

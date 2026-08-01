@@ -8,6 +8,7 @@ import '../../models/public_profile.dart';
 import '../../models/video_preview.dart';
 import '../../services/bilibili_public_content_service.dart';
 import '../../services/bilibili_service.dart';
+import '../../services/learning_list_service.dart';
 
 /// 展示一个 UGC 合集中的独立视频列表，不把它解释为单视频分P。
 class CollectionDetailPage extends StatefulWidget {
@@ -17,11 +18,13 @@ class CollectionDetailPage extends StatefulWidget {
     required this.collection,
     this.publicContentService,
     this.videoService,
+    this.learningListService,
   });
 
   final CreatorCollection collection;
   final BilibiliPublicContentService? publicContentService;
   final BilibiliService? videoService;
+  final LearningListService? learningListService;
 
   /// 从视频详情自带的 UGC 合集模型创建统一合集详情页。
   factory CollectionDetailPage.fromVideoCollection({
@@ -29,6 +32,7 @@ class CollectionDetailPage extends StatefulWidget {
     required VideoCollection collection,
     BilibiliPublicContentService? publicContentService,
     BilibiliService? videoService,
+    LearningListService? learningListService,
   }) {
     return CollectionDetailPage(
       key: key,
@@ -54,6 +58,7 @@ class CollectionDetailPage extends StatefulWidget {
       ),
       publicContentService: publicContentService,
       videoService: videoService,
+      learningListService: learningListService,
     );
   }
 
@@ -66,6 +71,7 @@ class CollectionDetailPage extends StatefulWidget {
 class _CollectionDetailPageState extends State<CollectionDetailPage> {
   late final BilibiliPublicContentService _publicContentService;
   late final BilibiliService _videoService;
+  late final LearningListService _learningListService;
   final ScrollController _scrollController = ScrollController();
   List<CreatorVideo> _videos = const <CreatorVideo>[];
   int _page = 0;
@@ -74,6 +80,7 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
   bool _loadingMore = false;
   String? _errorMessage;
   String? _openingBvid;
+  String? _addingBvid;
 
   /// 初始化服务、滚动监听，并读取合集第一页。
   @override
@@ -82,6 +89,7 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
     _publicContentService =
         widget.publicContentService ?? BilibiliHttpPublicContentService();
     _videoService = widget.videoService ?? BilibiliVideoInfoService();
+    _learningListService = widget.learningListService ?? LearningListService();
     _scrollController.addListener(_loadMoreNearBottom);
     unawaited(_loadFirstPage());
   }
@@ -186,7 +194,7 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
 
   /// 查询点击视频的完整分P信息后打开播放器，避免用合集卡片的轻量数据直接播放。
   Future<void> _openVideo(CreatorVideo item) async {
-    if (_openingBvid != null) {
+    if (_openingBvid != null || _addingBvid != null) {
       return;
     }
     setState(() => _openingBvid = item.bvid);
@@ -214,6 +222,29 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
       ..showSnackBar(
         SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
       );
+  }
+
+  /// 查询合集条目的完整视频和分P资料后加入学习清单，避免保存轻量列表数据。
+  Future<void> _addVideoToLearningList(CreatorVideo item) async {
+    if (_openingBvid != null || _addingBvid != null) {
+      return;
+    }
+    setState(() => _addingBvid = item.bvid);
+    try {
+      final VideoPreview video = await _videoService.lookupVideo(item.bvid);
+      await _learningListService.addVideo(video);
+      if (mounted) {
+        _showMessage('已加入学习清单，可在首页继续学习。');
+      }
+    } catch (_) {
+      if (mounted) {
+        _showMessage('加入学习清单失败，请检查网络后重试。');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _addingBvid = null);
+      }
+    }
   }
 
   /// 创建合集封面、标题、简介和真实视频数量头部。
@@ -317,13 +348,14 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
   /// 创建单支合集视频卡片，点击后打开这支独立视频而不是切换分P。
   Widget _buildVideoTile(CreatorVideo item) {
     final bool opening = _openingBvid == item.bvid;
+    final bool adding = _addingBvid == item.bvid;
     return Card(
       key: Key('collection-video-${item.bvid}'),
       margin: EdgeInsets.zero,
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         // 合集视频点击函数查询完整详情后进入播放器。
-        onTap: opening ? null : () => unawaited(_openVideo(item)),
+        onTap: opening || adding ? null : () => unawaited(_openVideo(item)),
         child: Row(
           children: <Widget>[
             Stack(
@@ -346,14 +378,58 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: Text(
-                item.title,
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontWeight: FontWeight.w600),
+              child: SizedBox(
+                height: 92,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 7),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Expanded(
+                        child: Text(
+                          item.title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      OutlinedButton.icon(
+                        key: Key('add-learning-collection-${item.bvid}'),
+                        style: OutlinedButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 2,
+                          ),
+                        ),
+                        // 合集条目加入函数先查询完整视频，再把任务写入本机清单。
+                        onPressed: opening || adding
+                            ? null
+                            : () => unawaited(_addVideoToLearningList(item)),
+                        icon: adding
+                            ? const SizedBox.square(
+                                dimension: 15,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.playlist_add_rounded, size: 17),
+                        label: const Text('加入学习清单'),
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
             if (opening)
+              const Padding(
+                padding: EdgeInsets.all(12),
+                child: SizedBox.square(
+                  dimension: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              )
+            else if (adding)
               const Padding(
                 padding: EdgeInsets.all(12),
                 child: SizedBox.square(

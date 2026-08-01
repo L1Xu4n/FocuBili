@@ -8,11 +8,15 @@ import '../../core/router/app_router.dart';
 import '../../models/user_search.dart';
 import '../../models/video_preview.dart';
 import '../../services/bilibili_service.dart';
+import '../../services/learning_list_service.dart';
 import '../../services/search_history_service.dart';
 import '../profile/user_profile_page.dart';
 
 /// 标识搜索页当前查找公开视频还是公开用户。
 enum _SearchMode { videos, users }
+
+/// 标识视频结果“更多选项”菜单中可以执行的操作。
+enum _SearchResultMenuAction { toggleLearningList }
 
 /// 保存搜索筛选面板中的内容分区编号和中文名称。
 class _SearchCategory {
@@ -25,11 +29,17 @@ class _SearchCategory {
 
 /// 搜索页支持关键词候选、筛选、分页、BV 直达和主动选择的视频结果。
 class SearchPage extends StatefulWidget {
-  /// 创建搜索页面；测试可传入不访问真实网络的服务替身。
-  const SearchPage({super.key, this.service, this.userSearchService});
+  /// 创建搜索页面；测试可以替换网络服务和本机学习清单服务。
+  const SearchPage({
+    super.key,
+    this.service,
+    this.userSearchService,
+    this.learningListService,
+  });
 
   final BilibiliService? service;
   final BilibiliUserSearchService? userSearchService;
+  final LearningListService? learningListService;
 
   /// 创建搜索页状态，保存输入、分页、筛选、候选词和结果列表。
   @override
@@ -78,12 +88,14 @@ class _SearchPageState extends State<SearchPage> {
   final Map<String, String> _fallbackEpisodeCountTexts = <String, String>{};
   late final BilibiliService _service;
   late final BilibiliUserSearchService _userSearchService;
+  late final LearningListService _learningListService;
   Timer? _suggestionDebounce;
   VideoPreview? _directResult;
   List<VideoSearchResult> _searchResults = const <VideoSearchResult>[];
   List<String> _suggestions = const <String>[];
   String? _errorMessage;
   String? _openingBvid;
+  String? _addingBvid;
   String _activeQuery = '';
   bool _loading = false;
   bool _loadingMore = false;
@@ -96,12 +108,14 @@ class _SearchPageState extends State<SearchPage> {
   List<UserSearchResult> _userResults = const <UserSearchResult>[];
   _SearchMode _searchMode = _SearchMode.videos;
   List<String> _searchHistory = const <String>[];
+  Set<String> _learningBvids = <String>{};
 
-  /// 页面创建后初始化服务、滚动监听、焦点监听和本机搜索记录。
+  /// 页面创建后初始化服务、监听、本机搜索历史和学习清单状态。
   @override
   void initState() {
     super.initState();
     _service = widget.service ?? BilibiliVideoInfoService();
+    _learningListService = widget.learningListService ?? LearningListService();
     _userSearchService =
         widget.userSearchService ??
         (_service is BilibiliUserSearchService
@@ -110,6 +124,7 @@ class _SearchPageState extends State<SearchPage> {
     _resultScrollController.addListener(_handleResultScroll);
     _searchFocusNode.addListener(_handleSearchFocusChange);
     _loadSearchHistory();
+    unawaited(_loadLearningListMembership());
   }
 
   /// 释放输入、焦点、滚动和候选词计时器，避免页面销毁后继续请求。
@@ -152,6 +167,7 @@ class _SearchPageState extends State<SearchPage> {
       setState(() => _suggestions = const <String>[]);
       return;
     }
+    setState(() {});
     _suggestionDebounce = Timer(const Duration(milliseconds: 350), () {
       unawaited(_loadSuggestions(input));
     });
@@ -312,6 +328,16 @@ class _SearchPageState extends State<SearchPage> {
     }
   }
 
+  /// 读取本机学习清单中的 BV 号，让“更多选项”能显示加入或取消加入。
+  Future<void> _loadLearningListMembership() async {
+    final entries = await _learningListService.loadEntries();
+    if (mounted) {
+      setState(() {
+        _learningBvids = entries.map((entry) => entry.bvid).toSet();
+      });
+    }
+  }
+
   /// 将候选词或搜索记录放入输入框，并立即按当前筛选条件搜索。
   void _selectSuggestedQuery(String value) {
     _controller.text = value;
@@ -319,8 +345,37 @@ class _SearchPageState extends State<SearchPage> {
     unawaited(_submitSearch());
   }
 
-  /// 清空设备中的搜索记录，并同步移除页面上的记录按钮。
+  /// 先询问用户，只有明确确认后才清空设备中的全部搜索记录。
   Future<void> _clearSearchHistory() async {
+    final bool confirmed =
+        await showDialog<bool>(
+          context: context,
+          builder: (BuildContext dialogContext) {
+            return AlertDialog(
+              key: const Key('clear-search-history-dialog'),
+              title: const Text('清除搜索记录？'),
+              content: const Text('确定清除全部搜索记录吗？此操作无法撤销。'),
+              actions: <Widget>[
+                TextButton(
+                  key: const Key('cancel-clear-search-history'),
+                  // 取消按钮函数关闭弹窗，并把“未确认”结果返回给调用方。
+                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('取消'),
+                ),
+                FilledButton(
+                  key: const Key('confirm-clear-search-history'),
+                  // 清除按钮函数关闭弹窗，并把“已确认”结果返回给调用方。
+                  onPressed: () => Navigator.of(dialogContext).pop(true),
+                  child: const Text('清除'),
+                ),
+              ],
+            );
+          },
+        ) ??
+        false;
+    if (!confirmed) {
+      return;
+    }
     final List<String> history = await _historyService.clearHistory();
     if (mounted) {
       setState(() => _searchHistory = history);
@@ -401,7 +456,7 @@ class _SearchPageState extends State<SearchPage> {
 
   /// 点击关键词结果后查询完整分P信息，再把可播放视频交给播放器页面。
   Future<void> _openSearchResult(VideoSearchResult result) async {
-    if (_openingBvid != null) {
+    if (_openingBvid != null || _addingBvid != null) {
       return;
     }
     setState(() => _openingBvid = result.bvid);
@@ -435,6 +490,138 @@ class _SearchPageState extends State<SearchPage> {
       ..showSnackBar(
         SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
       );
+  }
+
+  /// 将已经查询完成的视频加入本机学习清单，并自动继承现有观看记录。
+  Future<void> _addVideoToLearningList(VideoPreview video) async {
+    if (_addingBvid != null) {
+      return;
+    }
+    setState(() => _addingBvid = video.bvid);
+    try {
+      await _learningListService.addVideo(video);
+      if (mounted) {
+        setState(() => _learningBvids.add(video.bvid));
+        _showTransientMessage('已加入学习清单，可在首页继续学习。');
+      }
+    } catch (_) {
+      if (mounted) {
+        _showTransientMessage('加入学习清单失败，请稍后重试。');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _addingBvid = null);
+      }
+    }
+  }
+
+  /// 查询搜索卡片缺少的完整分P资料后加入学习清单，避免只保存轻量搜索结果。
+  Future<void> _addSearchResultToLearningList(VideoSearchResult result) async {
+    if (_addingBvid != null || _openingBvid != null) {
+      return;
+    }
+    setState(() => _addingBvid = result.bvid);
+    try {
+      final VideoPreview video = await _service.lookupVideo(result.bvid);
+      await _learningListService.addVideo(video);
+      if (mounted) {
+        setState(() => _learningBvids.add(result.bvid));
+        _showTransientMessage('已加入学习清单，可在首页继续学习。');
+      }
+    } on BilibiliLookupException catch (error) {
+      if (mounted) {
+        _showTransientMessage('无法加入学习清单：${error.message}');
+      }
+    } catch (_) {
+      if (mounted) {
+        _showTransientMessage('加入学习清单失败，请检查网络后重试。');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _addingBvid = null);
+      }
+    }
+  }
+
+  /// 再次选择已加入的视频时先询问用户，再从本机学习清单移除它。
+  Future<void> _removeVideoFromLearningList(String bvid) async {
+    if (_addingBvid != null || _openingBvid != null) {
+      return;
+    }
+    final bool confirmed =
+        await showDialog<bool>(
+          context: context,
+          builder: (BuildContext dialogContext) {
+            return AlertDialog(
+              title: const Text('取消加入学习清单？'),
+              content: const Text('这只会移除学习任务，不会删除观看记录和笔记。'),
+              actions: <Widget>[
+                TextButton(
+                  // 取消按钮函数关闭询问框并保留当前学习任务。
+                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('保留'),
+                ),
+                FilledButton(
+                  // 确认按钮函数关闭询问框，并继续执行移除操作。
+                  onPressed: () => Navigator.of(dialogContext).pop(true),
+                  child: const Text('取消加入'),
+                ),
+              ],
+            );
+          },
+        ) ??
+        false;
+    if (!confirmed || !mounted) {
+      return;
+    }
+    setState(() => _addingBvid = bvid);
+    try {
+      await _learningListService.remove(bvid);
+      if (mounted) {
+        setState(() => _learningBvids.remove(bvid));
+        _showTransientMessage('已取消加入学习清单。');
+      }
+    } catch (_) {
+      if (mounted) {
+        _showTransientMessage('取消加入失败，请稍后重试。');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _addingBvid = null);
+      }
+    }
+  }
+
+  /// 处理 BV 直达结果的更多菜单，在加入和取消加入之间切换。
+  void _handleDirectResultMenuAction(
+    _SearchResultMenuAction action,
+    VideoPreview video,
+  ) {
+    switch (action) {
+      case _SearchResultMenuAction.toggleLearningList:
+        if (_learningBvids.contains(video.bvid)) {
+          unawaited(_removeVideoFromLearningList(video.bvid));
+          return;
+        }
+        unawaited(_addVideoToLearningList(video));
+        break;
+    }
+  }
+
+  /// 处理关键词视频结果的更多菜单，缺少详情时仍沿用原来的补查加入流程。
+  void _handleSearchResultMenuAction(
+    _SearchResultMenuAction action,
+    VideoSearchResult result,
+  ) {
+    switch (action) {
+      case _SearchResultMenuAction.toggleLearningList:
+        if (_learningBvids.contains(result.bvid)) {
+          unawaited(_removeVideoFromLearningList(result.bvid));
+          return;
+        }
+        unawaited(_addSearchResultToLearningList(result));
+        break;
+    }
   }
 
   /// 为当前已渲染、且服务端未返回分集文字的卡片安排一次详情补查。
@@ -824,16 +1011,29 @@ class _SearchPageState extends State<SearchPage> {
     return '$minutes:${seconds.toString().padLeft(2, '0')}';
   }
 
-  /// 把发布日期转换为“年-月-日 时:分”格式。
+  /// 把发布日期转换为结果列表常见的“几小时前”“月-日”或完整日期。
   String _formatPublishedAt(DateTime? dateTime) {
     if (dateTime == null) {
       return '发布日期未知';
     }
-    return '${dateTime.year.toString().padLeft(4, '0')}-'
-        '${dateTime.month.toString().padLeft(2, '0')}-'
-        '${dateTime.day.toString().padLeft(2, '0')} '
-        '${dateTime.hour.toString().padLeft(2, '0')}:'
-        '${dateTime.minute.toString().padLeft(2, '0')}';
+    final DateTime now = DateTime.now();
+    final Duration difference = now.difference(dateTime);
+    if (!difference.isNegative && difference < const Duration(hours: 1)) {
+      final int minutes = difference.inMinutes.clamp(1, 59).toInt();
+      return '$minutes分钟前';
+    }
+    if (!difference.isNegative && difference < const Duration(days: 1)) {
+      return '${difference.inHours}小时前';
+    }
+    if (!difference.isNegative && difference < const Duration(days: 7)) {
+      return '${difference.inDays}天前';
+    }
+    final String month = dateTime.month.toString().padLeft(2, '0');
+    final String day = dateTime.day.toString().padLeft(2, '0');
+    if (dateTime.year == now.year) {
+      return '$month-$day';
+    }
+    return '${dateTime.year.toString().padLeft(4, '0')}-$month-$day';
   }
 
   /// 将播放和弹幕数量转换为万、亿单位的紧凑文字。
@@ -847,18 +1047,70 @@ class _SearchPageState extends State<SearchPage> {
     return value.toString();
   }
 
-  /// 创建搜索输入、候选词、筛选栏、记录和结果区域。
+  /// 创建顶部一体式搜索栏、搜索类型切换、筛选和结果区域。
   @override
   Widget build(BuildContext context) {
     final bool keyboardVisible = MediaQuery.viewInsetsOf(context).bottom > 0;
     return Scaffold(
       resizeToAvoidBottomInset: true,
-      appBar: AppBar(title: const Text('搜索')),
-      body: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
-        child: Column(
-          children: <Widget>[
-            TextField(
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(4, 0, 4, 12),
+          child: Column(
+            children: <Widget>[
+              _buildSearchHeader(),
+              const Divider(height: 1),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: SegmentedButton<_SearchMode>(
+                    key: const Key('search-mode-selector'),
+                    segments: const <ButtonSegment<_SearchMode>>[
+                      ButtonSegment<_SearchMode>(
+                        value: _SearchMode.videos,
+                        icon: Icon(Icons.ondemand_video_outlined),
+                        label: Text('视频'),
+                      ),
+                      ButtonSegment<_SearchMode>(
+                        value: _SearchMode.users,
+                        icon: Icon(Icons.person_search_outlined),
+                        label: Text('用户'),
+                      ),
+                    ],
+                    selected: <_SearchMode>{_searchMode},
+                    // 搜索模式函数在视频和用户结果之间切换。
+                    onSelectionChanged: _changeSearchMode,
+                  ),
+                ),
+              ),
+              if (!keyboardVisible)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 6, 8, 0),
+                  child: _buildSortAndFilterBar(),
+                ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: _buildResultOverlay(),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 创建与页面同色的输入、清空和搜索一体栏；底部一级页面不再重复显示返回键。
+  Widget _buildSearchHeader() {
+    return SizedBox(
+      height: 58,
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: TextField(
+              key: const Key('search-input-field'),
               controller: _controller,
               focusNode: _searchFocusNode,
               autofocus: false,
@@ -869,97 +1121,127 @@ class _SearchPageState extends State<SearchPage> {
               onSubmitted: (_) => _submitSearch(),
               decoration: InputDecoration(
                 hintText: _searchMode == _SearchMode.videos
-                    ? '搜索关键词、BV 号或 B 站视频链接'
+                    ? '搜索关键词、BV 号或视频链接'
                     : '搜索用户名',
-                prefixIcon: const Icon(Icons.search_rounded),
-                suffixIcon: IconButton(
-                  // 输入清空函数同时移除旧候选词和搜索结果。
-                  onPressed: _clearInput,
-                  icon: const Icon(Icons.close_rounded),
-                  tooltip: '清空',
-                ),
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                filled: true,
+                fillColor: Theme.of(context).scaffoldBackgroundColor,
+                contentPadding: const EdgeInsets.symmetric(vertical: 12),
               ),
             ),
-            const SizedBox(height: 8),
-            SizedBox(
-              width: double.infinity,
-              child: SegmentedButton<_SearchMode>(
-                key: const Key('search-mode-selector'),
-                segments: const <ButtonSegment<_SearchMode>>[
-                  ButtonSegment<_SearchMode>(
-                    value: _SearchMode.videos,
-                    icon: Icon(Icons.ondemand_video_outlined),
-                    label: Text('视频'),
-                  ),
-                  ButtonSegment<_SearchMode>(
-                    value: _SearchMode.users,
-                    icon: Icon(Icons.person_search_outlined),
-                    label: Text('用户'),
-                  ),
-                ],
-                selected: <_SearchMode>{_searchMode},
-                // 搜索模式函数在视频和用户结果之间切换。
-                onSelectionChanged: _changeSearchMode,
-              ),
-            ),
-            if (!keyboardVisible) ...<Widget>[
-              const SizedBox(height: 8),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  // 搜索按钮函数请求 BV 详情或关键词第一页结果。
-                  onPressed: _loading ? null : _submitSearch,
-                  child: Text(_loading ? '正在搜索…' : '搜索'),
-                ),
-              ),
-              const SizedBox(height: 6),
-              _buildSortAndFilterBar(),
-            ],
-            _buildSearchHistory(),
-            Expanded(child: _buildResultOverlay()),
-          ],
-        ),
+          ),
+          IconButton(
+            key: const Key('search-clear-button'),
+            // 输入清空函数同时移除旧候选词和搜索结果。
+            onPressed: _clearInput,
+            icon: const Icon(Icons.close_rounded),
+            tooltip: '清空',
+          ),
+          IconButton(
+            key: const Key('search-submit-button'),
+            // 搜索按钮函数请求 BV 详情或关键词第一页结果。
+            onPressed: _loading ? null : _submitSearch,
+            icon: _loading
+                ? const SizedBox.square(
+                    dimension: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.search_rounded),
+            tooltip: '搜索',
+          ),
+        ],
       ),
     );
   }
 
-  /// 将候选词覆盖在结果列表顶部，避免候选区域预留空白或挤走搜索结果。
+  /// 在结果上覆盖候选词和搜索历史，输入新关键词时不受旧结果干扰。
   Widget _buildResultOverlay() {
+    final bool showSuggestions =
+        _searchFocusNode.hasFocus && _suggestions.isNotEmpty;
+    final bool showHistory = _searchHistory.isNotEmpty;
+    final bool showSearchSupport =
+        (showSuggestions || showHistory) &&
+        (_searchFocusNode.hasFocus || !_hasSubmitted);
     return Stack(
       key: const Key('search-result-overlay'),
       fit: StackFit.expand,
       children: <Widget>[
         _buildResultArea(),
-        if (_searchFocusNode.hasFocus && _suggestions.isNotEmpty)
-          Positioned(top: 0, left: 0, right: 0, child: _buildSuggestions()),
+        if (showSearchSupport)
+          Positioned.fill(
+            child: ColoredBox(
+              color: Theme.of(context).scaffoldBackgroundColor,
+              child: ListView(
+                padding: const EdgeInsets.only(top: 14, bottom: 24),
+                children: <Widget>[
+                  if (showSuggestions) _buildSuggestions(),
+                  if (showSuggestions && showHistory)
+                    const SizedBox(height: 18),
+                  if (showHistory) _buildSearchHistory(),
+                ],
+              ),
+            ),
+          ),
       ],
     );
   }
 
-  /// 创建输入框下方的候选词列表，失去焦点时自动隐藏。
+  /// 创建扁平的纵向候选词列表，并把用户已输入的开头文字标成主题色。
   Widget _buildSuggestions() {
     if (!_searchFocusNode.hasFocus || _suggestions.isEmpty) {
       return const SizedBox.shrink();
     }
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxHeight: 220),
-      child: Card(
-        margin: const EdgeInsets.only(top: 6),
-        child: ListView.builder(
-          shrinkWrap: true,
-          itemCount: _suggestions.length,
-          itemBuilder: (BuildContext context, int index) {
-            final String suggestion = _suggestions[index];
-            return ListTile(
-              dense: true,
-              leading: const Icon(Icons.search_rounded, size: 20),
-              title: Text(suggestion),
-              // 候选词点击函数立即执行所选关键词搜索。
-              onTap: () => _selectSuggestedQuery(suggestion),
-            );
-          },
-        ),
+    return Column(
+      key: const Key('search-suggestions-section'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: List<Widget>.generate(_suggestions.take(10).length, (
+        int index,
+      ) {
+        final String suggestion = _suggestions[index];
+        return InkWell(
+          key: ValueKey<String>('search-suggestion-$index-$suggestion'),
+          // 候选词点击函数立即执行所选关键词搜索。
+          onTap: () => _selectSuggestedQuery(suggestion),
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+            child: _buildHighlightedSuggestion(suggestion),
+          ),
+        );
+      }, growable: false),
+    );
+  }
+
+  /// 把候选词中与输入开头相同的部分标成主题色，剩余文字保持正文颜色。
+  Widget _buildHighlightedSuggestion(String suggestion) {
+    final String input = _controller.text.trim();
+    final bool startsWithInput =
+        input.isNotEmpty &&
+        suggestion.toLowerCase().startsWith(input.toLowerCase());
+    final int highlightedLength = startsWithInput ? input.length : 0;
+    final TextStyle baseStyle =
+        Theme.of(context).textTheme.titleMedium ?? const TextStyle();
+    return Text.rich(
+      TextSpan(
+        children: <InlineSpan>[
+          if (highlightedLength > 0)
+            TextSpan(
+              text: suggestion.substring(0, highlightedLength),
+              style: baseStyle.copyWith(
+                color: Theme.of(context).colorScheme.primary,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          TextSpan(
+            text: suggestion.substring(highlightedLength),
+            style: baseStyle,
+          ),
+        ],
       ),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
     );
   }
 
@@ -1044,47 +1326,59 @@ class _SearchPageState extends State<SearchPage> {
     );
   }
 
-  /// 创建横向搜索记录栏，并提供重新搜索与清空全部记录入口。
+  /// 创建带标题、清空动作和自动换行标签的搜索历史区域。
   Widget _buildSearchHistory() {
-    if (_searchHistory.isEmpty || _hasSubmitted || _searchFocusNode.hasFocus) {
+    if (_searchHistory.isEmpty) {
       return const SizedBox.shrink();
     }
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+      key: const Key('search-history-section'),
+      padding: const EdgeInsets.symmetric(horizontal: 4),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           Row(
             children: <Widget>[
-              Text('搜索记录', style: Theme.of(context).textTheme.titleSmall),
+              Text(
+                '搜索历史',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+              ),
               const Spacer(),
-              IconButton(
+              TextButton.icon(
+                key: const Key('search-history-clear-button'),
                 // 清空记录按钮函数删除设备中的全部搜索记录。
                 onPressed: _clearSearchHistory,
-                icon: const Icon(Icons.delete_outline_rounded),
-                tooltip: '清空搜索记录',
+                icon: const Icon(Icons.delete_sweep_outlined, size: 19),
+                label: const Text('清空'),
               ),
             ],
           ),
-          SizedBox(
-            height: 42,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: _searchHistory.length,
-              separatorBuilder: (BuildContext context, int index) =>
-                  const SizedBox(width: 8),
-              itemBuilder: (BuildContext context, int index) {
-                final String value = _searchHistory[index];
-                return ActionChip(
-                  label: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 220),
-                    child: Text(value, overflow: TextOverflow.ellipsis),
-                  ),
-                  // 历史记录按钮函数把内容放回输入框并重新搜索。
-                  onPressed: () => _selectSuggestedQuery(value),
-                );
-              },
-            ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            runSpacing: 10,
+            children: _searchHistory
+                .map((String value) {
+                  return ActionChip(
+                    key: ValueKey<String>('search-history-$value'),
+                    backgroundColor: Theme.of(
+                      context,
+                    ).colorScheme.surfaceContainerHighest,
+                    side: BorderSide.none,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    label: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 220),
+                      child: Text(value, overflow: TextOverflow.ellipsis),
+                    ),
+                    // 历史记录按钮函数把内容放回输入框并重新搜索。
+                    onPressed: () => _selectSuggestedQuery(value),
+                  );
+                })
+                .toList(growable: false),
           ),
         ],
       ),
@@ -1104,22 +1398,23 @@ class _SearchPageState extends State<SearchPage> {
     }
     final VideoPreview? directResult = _directResult;
     if (directResult != null) {
+      final VideoSearchResult directRow = VideoSearchResult(
+        bvid: directResult.bvid,
+        title: directResult.title,
+        ownerName: directResult.ownerName,
+        duration: directResult.duration,
+        thumbnailUrl: directResult.thumbnailUrl,
+        publishedAt: directResult.publishedAt,
+        playCount: directResult.stats.viewCount,
+        danmakuCount: directResult.stats.danmakuCount,
+        episodeCountText: directResult.parts.length > 1
+            ? '共 ${directResult.parts.length} P'
+            : '',
+      );
       return ListView(
         controller: _resultScrollController,
         children: <Widget>[
-          Card(
-            child: ListTile(
-              contentPadding: const EdgeInsets.all(16),
-              leading: const CircleAvatar(
-                child: Icon(Icons.play_arrow_rounded),
-              ),
-              title: Text(directResult.title),
-              subtitle: Text('UP主：${directResult.ownerName}'),
-              trailing: const Icon(Icons.chevron_right_rounded),
-              // BV 直达结果点击函数直接打开完整视频。
-              onTap: () => _openVideo(directResult),
-            ),
-          ),
+          _buildSearchResultCard(directRow, directVideo: directResult),
         ],
       );
     }
@@ -1246,28 +1541,48 @@ class _SearchPageState extends State<SearchPage> {
     );
   }
 
-  /// 创建包含缓存缩略图、角标、发布日期、UP、播放和弹幕数的结果卡片。
-  Widget _buildSearchResultCard(VideoSearchResult result) {
+  /// 创建扁平的 B 站式视频行；BV 直达资料可避免再次查询详情。
+  Widget _buildSearchResultCard(
+    VideoSearchResult result, {
+    VideoPreview? directVideo,
+  }) {
+    final bool isDirectResult = directVideo != null;
     final bool opening = _openingBvid == result.bvid;
-    final String episodeCountText = _episodeCountTextFor(result);
-    _scheduleEpisodeCountFallback(result);
-    return Card(
-      key: ValueKey<String>('search-${result.bvid}'),
-      margin: EdgeInsets.zero,
+    final bool changingLearningState = _addingBvid == result.bvid;
+    final bool menuEnabled = _openingBvid == null && _addingBvid == null;
+    final bool isInLearningList = _learningBvids.contains(result.bvid);
+    final String episodeCountText = isDirectResult
+        ? result.episodeCountText
+        : _episodeCountTextFor(result);
+    if (!isDirectResult) {
+      _scheduleEpisodeCountFallback(result);
+    }
+    final Color secondaryTextColor = Theme.of(
+      context,
+    ).colorScheme.onSurfaceVariant;
+    return Material(
+      color: Colors.transparent,
       child: InkWell(
-        borderRadius: BorderRadius.circular(20),
-        // 搜索结果点击函数先补全 cid 与分P，再进入播放器。
-        onTap: opening ? null : () => _openSearchResult(result),
+        key: ValueKey<String>(
+          '${isDirectResult ? 'direct' : 'search'}-${result.bvid}',
+        ),
+        borderRadius: BorderRadius.circular(12),
+        // 直达结果直接打开；轻量结果先补全 cid 与分P 再进入播放器。
+        onTap: opening || changingLearningState
+            ? null
+            : () => isDirectResult
+                  ? _openVideo(directVideo)
+                  : _openSearchResult(result),
         child: Padding(
-          padding: const EdgeInsets.all(10),
+          padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
           child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: <Widget>[
               _buildSearchThumbnail(result, episodeCountText: episodeCountText),
-              const SizedBox(width: 10),
+              const SizedBox(width: 12),
               Expanded(
                 child: SizedBox(
-                  height: 92,
+                  height: 96,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
@@ -1275,46 +1590,110 @@ class _SearchPageState extends State<SearchPage> {
                         result.title,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.w600),
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w600,
+                          height: 1.25,
+                        ),
                       ),
                       const Spacer(),
                       Text(
-                        _formatPublishedAt(result.publishedAt),
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                      Text(
-                        result.ownerName,
+                        '${_formatPublishedAt(result.publishedAt)}  ${result.ownerName}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: secondaryTextColor,
+                        ),
                       ),
+                      const SizedBox(height: 3),
                       Row(
                         children: <Widget>[
-                          const Icon(
+                          Icon(
                             Icons.play_circle_outline_rounded,
                             size: 16,
+                            color: secondaryTextColor,
                           ),
                           const SizedBox(width: 3),
                           Text(
                             _formatCount(result.playCount),
-                            style: Theme.of(context).textTheme.bodySmall,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: secondaryTextColor),
                           ),
                           const SizedBox(width: 12),
-                          const Icon(Icons.subtitles_outlined, size: 16),
+                          Icon(
+                            Icons.subtitles_outlined,
+                            size: 16,
+                            color: secondaryTextColor,
+                          ),
                           const SizedBox(width: 3),
                           Text(
                             _formatCount(result.danmakuCount),
-                            style: Theme.of(context).textTheme.bodySmall,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: secondaryTextColor),
                           ),
-                          const Spacer(),
-                          if (opening)
+                          if (opening) ...<Widget>[
+                            const Spacer(),
                             const SizedBox.square(
-                              dimension: 16,
+                              dimension: 15,
                               child: CircularProgressIndicator(strokeWidth: 2),
                             ),
+                          ],
                         ],
                       ),
                     ],
+                  ),
+                ),
+              ),
+              SizedBox(
+                width: 38,
+                height: 96,
+                child: Align(
+                  alignment: Alignment.bottomCenter,
+                  child: PopupMenuButton<_SearchResultMenuAction>(
+                    key: Key(
+                      '${isDirectResult ? 'more-direct' : 'more-search'}-'
+                      '${result.bvid}',
+                    ),
+                    enabled: menuEnabled,
+                    tooltip: '更多选项',
+                    padding: EdgeInsets.zero,
+                    icon: changingLearningState
+                        ? const SizedBox.square(
+                            dimension: 17,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : Icon(
+                            Icons.more_vert_rounded,
+                            color: secondaryTextColor,
+                          ),
+                    itemBuilder: (BuildContext context) =>
+                        <PopupMenuEntry<_SearchResultMenuAction>>[
+                          PopupMenuItem<_SearchResultMenuAction>(
+                            key: Key(
+                              '${isDirectResult ? 'add-learning-direct' : 'add-learning-search'}-'
+                              '${result.bvid}',
+                            ),
+                            value: _SearchResultMenuAction.toggleLearningList,
+                            child: ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              leading: Icon(
+                                isInLearningList
+                                    ? Icons.playlist_remove_rounded
+                                    : Icons.playlist_add_rounded,
+                              ),
+                              title: Text(
+                                isInLearningList ? '取消加入学习清单' : '加入学习清单',
+                              ),
+                            ),
+                          ),
+                        ],
+                    // 更多菜单函数执行加入或取消加入，并阻止卡片同时跳转。
+                    onSelected: (_SearchResultMenuAction action) {
+                      if (isDirectResult) {
+                        _handleDirectResultMenuAction(action, directVideo);
+                        return;
+                      }
+                      _handleSearchResultMenuAction(action, result);
+                    },
                   ),
                 ),
               ),
@@ -1331,10 +1710,10 @@ class _SearchPageState extends State<SearchPage> {
     required String episodeCountText,
   }) {
     return SizedBox(
-      width: 146,
-      height: 92,
+      width: 148,
+      height: 96,
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(12),
         child: Stack(
           fit: StackFit.expand,
           children: <Widget>[

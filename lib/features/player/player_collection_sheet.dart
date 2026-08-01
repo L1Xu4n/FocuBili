@@ -7,11 +7,15 @@ class _CollectionPickerSheet extends StatefulWidget {
     required this.collection,
     required this.currentBvid,
     required this.watchHistoryByBvid,
+    this.onAddToLearningList,
   });
 
   final VideoCollection collection;
   final String currentBvid;
   final Map<String, WatchHistoryEntry> watchHistoryByBvid;
+
+  /// 将当前条目加入播放器外层学习清单的回调；面板本身不保存视频数据。
+  final ValueChanged<VideoCollectionEntry>? onAddToLearningList;
 
   /// 创建保存搜索文字、排序选项和滚动位置的面板状态。
   @override
@@ -273,8 +277,23 @@ class _CollectionPickerSheetState extends State<_CollectionPickerSheet> {
             current ? '正在播放' : '${_formatCount(entry.stats.viewCount)}播放',
             maxLines: 1,
           ),
-          trailing: Icon(
-            current ? Icons.graphic_eq_rounded : Icons.play_arrow_rounded,
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              IconButton(
+                key: Key('add-learning-collection-sheet-${entry.bvid}'),
+                visualDensity: VisualDensity.compact,
+                // 加入按钮函数交给外层播放器查询完整视频并写入本机学习清单。
+                onPressed: widget.onAddToLearningList == null
+                    ? null
+                    : () => widget.onAddToLearningList!(entry),
+                icon: const Icon(Icons.playlist_add_rounded),
+                tooltip: '加入学习清单',
+              ),
+              Icon(
+                current ? Icons.graphic_eq_rounded : Icons.play_arrow_rounded,
+              ),
+            ],
           ),
           // 条目点击函数关闭合集面板，并把所选视频返回给播放器切换。
           onTap: current ? null : () => Navigator.of(context).pop(entry),

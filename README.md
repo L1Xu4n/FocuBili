@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/L1Xu4n/FocuBili/releases"><img src="https://img.shields.io/github/v/release/L1Xu4n/FocuBili?display_name=tag&sort=semver" alt="GitHub Release"></a>
-  <img src="https://img.shields.io/badge/current-v1.0.0-00A1D6" alt="Current version v1.0.0">
+  <img src="https://img.shields.io/badge/version-v1.0.1-2EA44F" alt="Current version v1.0.1">
   <img src="https://img.shields.io/badge/Flutter-3.44.6-02569B?logo=flutter" alt="Flutter 3.44.6">
   <img src="https://img.shields.io/badge/Android-7.0+-3DDC84?logo=android" alt="Android 7.0+">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="GPL-3.0"></a>
@@ -27,6 +27,20 @@ FocuBili 希望保留“主动找到一支视频并认真看完”这件事本�
 - 搜索、BV 号和视频链接是主要入口；
 - 播放页优先保留视频、选集、简介和必要控制；
 - 账号数据功能以只读为主，不伪装点赞、投币、收藏或关注写操作。
+
+## v1.0.1 更新内容
+
+- 新增仅保存在当前设备的学习清单：可从搜索、视频详情和合集条目加入，保存并恢复分P与观看进度。
+- 首页只突出一条“继续学习”任务；完整清单可按未开始、学习中和已完成管理。
+- 重构搜索顶部、候选词、可换行历史和视频结果卡片，同时保留视频 / 用户搜索、排序与筛选。
+- 视频播放结束时显示紧凑的“标记完成 / 播放下一节”，不再自动连播或遮挡播放控制栏。
+- 支持互动视频剧情分支；选项使用居中的无色半透明卡片，播放栏出现时自动上浮，只有用户点击后才切换剧情。
+- 支持视频分段进度条、分段预览和点击跳转；横竖屏都显示在播放器画面内。
+- 修复 Android 原生层拒绝 3 倍速的问题；简介中的 `@UP` 以可点击的蓝色文字打开对应主页。
+- 时间点笔记改为明确点击“跳转到时间点”才移动视频位置，输入停止后会自动保存到本机。
+- 完整 `flutter test` 共 212 项全部通过，并完成 Android 15 模拟器实播验证。
+
+[下载 FocuBili v1.0.1 APK](https://github.com/L1Xu4n/FocuBili/releases/download/v1.0.1/FocuBili-v1.0.1-release.apk) · [查看完整发布说明](docs/RELEASE_NOTES_v1.0.1.md)
 
 ## v1.0.0 更新内容
 
@@ -122,7 +136,7 @@ FocuBili 希望保留“主动找到一支视频并认真看完”这件事本�
 - 竖屏右上角提供画中画、弹幕和更多设置；字幕与画面比例设置均可直接使用。
 - 播放器和详情共用一条滚动链路，向上浏览时播放器会连续缩小并完全收起。
 - Android Media3 直接播放 DASH 视频与音频，并通过 Flutter `Texture` 显示画面。
-- 支持播放/暂停、进度拖动、双击快进/快退、长按临时二倍速、清晰度与倍速切换。
+- 支持播放/暂停、进度拖动、双击快进/快退、长按临时三倍速、清晰度与倍速切换。
 - 支持横向滑动进度预览、竖向亮度/音量调节、沉浸全屏、画面比例、字幕、弹幕和画中画。
 - 支持 MediaSession、耳机和系统媒体按钮。
 - 支持播放进度、最后分P、本机观看记录和有限容量的边播边缓存。

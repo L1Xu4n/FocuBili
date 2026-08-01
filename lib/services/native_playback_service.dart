@@ -314,11 +314,11 @@ class NativePlaybackService implements PlaybackService {
     });
   }
 
-  /// 检查倍速范围后，把新的播放速度发送给 Android Media3。
+  /// 检查 0.5 到 3 倍的速度范围后，把新的播放速度发送给 Android Media3。
   @override
   Future<void> setPlaybackSpeed(double speed) {
-    if (!speed.isFinite || speed < 0.5 || speed > 2) {
-      throw ArgumentError.value(speed, 'speed', '倍速必须在 0.5 到 2.0 之间。');
+    if (!speed.isFinite || speed < 0.5 || speed > 3) {
+      throw ArgumentError.value(speed, 'speed', '倍速必须在 0.5 到 3.0 之间。');
     }
     return _invokeVoid('setSpeed', <String, Object?>{'speed': speed});
   }

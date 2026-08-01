@@ -270,6 +270,10 @@ void main() {
     final Finder profileSign = find.byKey(const Key('creator-profile-sign'));
     expect(tester.widget<Text>(profileSign).maxLines, 2);
     expect(find.text('展开简介'), findsOneWidget);
+    final SliverAppBar compactAppBar = tester.widget<SliverAppBar>(
+      find.byKey(const Key('creator-profile-app-bar')),
+    );
+    expect(compactAppBar.expandedHeight, lessThan(380));
     await tester.tap(find.byKey(const Key('toggle-creator-profile-sign')));
     await tester.pumpAndSettle();
     expect(tester.widget<Text>(profileSign).maxLines, isNull);

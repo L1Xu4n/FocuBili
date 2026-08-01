@@ -823,29 +823,50 @@ class _UserProfilePageState extends State<UserProfilePage>
     );
   }
 
-  /// 按展开后的真实简介高度扩大 Sliver，确保完整文字不会被标签栏裁掉。
+  /// 按资料的真实行数计算头部高度，避免短简介下方留下大块空白。
   double _profileHeaderExpandedHeight(BuildContext context) {
     final String sign = _profile?.sign.isNotEmpty == true
         ? _profile!.sign
         : widget.initialSign;
-    if (sign.isEmpty) {
-      return 300;
-    }
-    // FlexibleSpace 还会扣除系统状态栏、工具栏和 TabBar；380 可容纳头像、认证、两行简介与展开按钮。
-    const double collapsedHeight = 380;
-    if (!_profileSignExpanded) {
-      return collapsedHeight;
-    }
+    final String officialDescription =
+        _profile?.officialDescription.isNotEmpty == true
+        ? _profile!.officialDescription
+        : widget.initialOfficialDescription;
     final TextStyle style =
         Theme.of(context).textTheme.bodySmall ?? const TextStyle();
-    final TextPainter painter = TextPainter(
+    final double availableWidth = MediaQuery.sizeOf(context).width - 36;
+    final TextPainter signPainter = TextPainter(
       text: TextSpan(text: sign, style: style),
       textDirection: Directionality.of(context),
       textScaler: MediaQuery.textScalerOf(context),
-    )..layout(maxWidth: MediaQuery.sizeOf(context).width - 36);
-    final double twoLineHeight = painter.preferredLineHeight * 2;
-    return collapsedHeight +
-        (painter.height - twoLineHeight).clamp(0, double.infinity);
+    )..layout(maxWidth: availableWidth);
+    final TextPainter certificationPainter = TextPainter(
+      text: TextSpan(text: '认证：$officialDescription', style: style),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+    )..layout(maxWidth: availableWidth - 22);
+
+    // 270dp 包含工具栏、标签栏、资料区内边距、头像、昵称和 UID 行，并预留字体缩放余量。
+    double height = 270;
+    if (officialDescription.isNotEmpty) {
+      height += 5 + certificationPainter.height.clamp(20, double.infinity);
+    }
+    if (sign.isNotEmpty) {
+      final double collapsedSignHeight = signPainter.height.clamp(
+        0,
+        signPainter.preferredLineHeight * 2,
+      );
+      height +=
+          4 + (_profileSignExpanded ? signPainter.height : collapsedSignHeight);
+      if (signPainter.height > signPainter.preferredLineHeight * 2 ||
+          _profileSignExpanded) {
+        height += 30;
+      }
+    }
+    if (_profileError != null) {
+      height += 52;
+    }
+    return height;
   }
 
   /// 创建横向投稿列表项，左侧使用 16:9 封面，右侧显示标题、日期和公开统计。

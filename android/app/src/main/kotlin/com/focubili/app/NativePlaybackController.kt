@@ -280,7 +280,7 @@ class NativePlaybackController(
                 if (speed == null || !speed.isFinite() ||
                     speed < MIN_PLAYBACK_SPEED || speed > MAX_PLAYBACK_SPEED
                 ) {
-                    result.error("invalid_speed", "倍速必须在 0.5 到 2.0 之间。", null)
+                    result.error("invalid_speed", "倍速必须在 0.5 到 3.0 之间。", null)
                 } else {
                     setPlaybackSpeed(speed)
                     result.success(null)
@@ -571,7 +571,13 @@ class NativePlaybackController(
         nativePlayer.addListener(object : Player.Listener {
             /** 播放或暂停变化时把最新状态同步给 Flutter。 */
             override fun onIsPlayingChanged(isPlaying: Boolean) {
-                if (playbackPrepared && playbackPhase != PHASE_ERROR) {
+                if (
+                    PlaybackPhasePolicy.shouldReturnToReady(
+                        playbackPrepared = playbackPrepared,
+                        playbackEnded = nativePlayer.playbackState == Player.STATE_ENDED,
+                        playbackFailed = playbackPhase == PHASE_ERROR,
+                    )
+                ) {
                     playbackPhase = PHASE_READY
                     playbackMessage = null
                 }
@@ -2428,7 +2434,8 @@ class NativePlaybackController(
         private const val DEFAULT_VIDEO_ASPECT_RATIO = 16f / 9f
         private const val MIN_SCREEN_BRIGHTNESS = 0.01f
         private const val MIN_PLAYBACK_SPEED = 0.5f
-        private const val MAX_PLAYBACK_SPEED = 2.0f
+        // Flutter 播放器支持长按和菜单选择 3 倍速，原生校验必须使用同一上限。
+        private const val MAX_PLAYBACK_SPEED = 3.0f
         private const val MIN_PICTURE_IN_PICTURE_ASPECT = 0.42
         private const val MAX_PICTURE_IN_PICTURE_ASPECT = 2.39
         private const val PICTURE_IN_PICTURE_RATIO_BASE = 1000
