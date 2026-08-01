@@ -38,6 +38,7 @@ import '../../services/danmaku_preferences_service.dart';
 import '../../services/playback_preferences_service.dart';
 import '../../services/bilibili_player_enhancement_service.dart';
 import 'enhancements/interactive_video_overlay.dart';
+import 'enhancements/playback_completion_overlay.dart';
 import 'enhancements/player_enhancement_controller.dart';
 import 'enhancements/video_chapter_widgets.dart';
 import 'widgets/player_control_widgets.dart';
@@ -54,7 +55,6 @@ enum _VideoFitMode { contain, cover, stretch }
 
 /// 标识播放器右上角“更多”菜单中可执行的本地播放器设置。
 enum _PlayerMoreMenuAction {
-  chapters,
   subtitles,
   danmakuSettings,
   fitContain,
@@ -194,6 +194,7 @@ class _PlayerPageState extends State<PlayerPage>
   String? _seekFeedback;
   String? _resumeNotice;
   Timer? _controlsTimer;
+  Timer? _interactivePromptTimer;
   Timer? _seekFeedbackTimer;
   Timer? _resumeNoticeTimer;
   Timer? _playerNoticeTimer;
@@ -359,13 +360,14 @@ class _PlayerPageState extends State<PlayerPage>
     unawaited(_initializeNativePlayback());
   }
 
-  /// 响应独立增强控制器变化，并在互动视频已经完播时优先展示剧情选择。
+  /// 响应独立增强控制器变化，刷新章节界面，并处理已完播或即将到结尾的互动选择。
   void _handlePlayerEnhancementChanged() {
     if (!mounted) {
       return;
     }
+    final PlaybackSnapshot snapshot = _playbackSnapshot;
     setState(() {
-      if (_playbackSnapshot.phase == PlaybackPhase.ended &&
+      if (snapshot.phase == PlaybackPhase.ended &&
           !_interactiveChoiceOpening &&
           _playerEnhancementController.handlesPlaybackCompletion) {
         _interactivePromptVisible = true;
@@ -373,6 +375,67 @@ class _PlayerPageState extends State<PlayerPage>
         _showControls = true;
       }
     });
+    _scheduleInteractiveChoicePrompt(snapshot);
+  }
+
+  /// 根据真实总时长安排选项计时器，让结尾前的毫秒提前量不会被半秒状态刷新跳过。
+  void _scheduleInteractiveChoicePrompt(PlaybackSnapshot snapshot) {
+    _interactivePromptTimer?.cancel();
+    _interactivePromptTimer = null;
+    if (!mounted ||
+        snapshot.phase != PlaybackPhase.ready ||
+        !snapshot.isPlaying ||
+        snapshot.isInPictureInPicture ||
+        _interactivePromptVisible ||
+        _interactiveChoiceOpening) {
+      return;
+    }
+    final Duration? delay = _playerEnhancementController.interactiveChoiceDelay(
+      position: snapshot.position,
+      duration: snapshot.duration,
+    );
+    if (delay == null) {
+      return;
+    }
+    if (delay <= Duration.zero) {
+      unawaited(_presentInteractiveChoice(snapshot));
+      return;
+    }
+    _interactivePromptTimer = Timer(delay, () {
+      _interactivePromptTimer = null;
+      unawaited(_presentInteractiveChoice(_playbackSnapshot));
+    });
+  }
+
+  /// 显示已经到时的互动选项，并按接口要求暂停当前节点而不替用户选择分支。
+  Future<void> _presentInteractiveChoice(PlaybackSnapshot snapshot) async {
+    if (!mounted ||
+        snapshot.phase != PlaybackPhase.ready ||
+        !snapshot.isPlaying ||
+        _interactivePromptVisible ||
+        _interactiveChoiceOpening ||
+        !_playerEnhancementController.canPresentInteractiveChoice) {
+      return;
+    }
+    _interactivePromptTimer?.cancel();
+    _interactivePromptTimer = null;
+    _playerEnhancementController.markInteractiveChoicePresented();
+    setState(() {
+      _interactivePromptVisible = true;
+      _completionPromptVisible = false;
+      _showControls = true;
+    });
+    if (!_playerEnhancementController.interactiveNode!.pauseVideoForChoice ||
+        !snapshot.isPlaying) {
+      return;
+    }
+    try {
+      await _playbackService.pause();
+    } catch (_) {
+      if (mounted) {
+        _showPlayerNotice('已到达剧情选择点，请选择下一步。');
+      }
+    }
   }
 
   /// 请求当前 BV 与 CID 的章节及互动信息，旧请求由控制器令牌自动丢弃。
@@ -1105,6 +1168,7 @@ class _PlayerPageState extends State<PlayerPage>
       _flushCurrentWatchHistoryProgress();
       _flushCurrentLearningListProgress();
     }
+    _scheduleInteractiveChoicePrompt(snapshot);
     if (_danmakuEnabled && snapshot.phase == PlaybackPhase.ready) {
       _ensureDanmakuSegmentsForPosition(snapshot.position);
     }
@@ -1390,6 +1454,7 @@ class _PlayerPageState extends State<PlayerPage>
     }
     _isRetrying = false;
     _controlsTimer?.cancel();
+    _interactivePromptTimer?.cancel();
     _seekFeedbackTimer?.cancel();
     _resumeNoticeTimer?.cancel();
     _playerNoticeTimer?.cancel();
@@ -3236,12 +3301,9 @@ class _PlayerPageState extends State<PlayerPage>
     keywordsController.dispose();
   }
 
-  /// 根据菜单操作打开分段、字幕或弹幕设置，或切换播放器画面比例。
+  /// 根据菜单操作打开字幕或弹幕设置，或切换播放器画面比例。
   void _handleMoreSettingsSelection(_PlayerMoreMenuAction action) {
     switch (action) {
-      case _PlayerMoreMenuAction.chapters:
-        unawaited(_showVideoChapterPanel());
-        return;
       case _PlayerMoreMenuAction.subtitles:
         unawaited(_showSubtitleSelector());
         return;
@@ -3287,25 +3349,9 @@ class _PlayerPageState extends State<PlayerPage>
     }
   }
 
-  /// 构建“更多”菜单，按当前视频能力提供分段、字幕、弹幕和画面比例设置。
+  /// 构建“更多”菜单，只保留字幕、弹幕和画面比例等次级播放器设置。
   List<PopupMenuEntry<_PlayerMoreMenuAction>> _buildMoreSettingsMenu() {
     return <PopupMenuEntry<_PlayerMoreMenuAction>>[
-      if (_playerEnhancementController
-          .chapters
-          .isNotEmpty) ...<PopupMenuEntry<_PlayerMoreMenuAction>>[
-        const PopupMenuItem<_PlayerMoreMenuAction>(
-          key: Key('video-chapters-menu-item'),
-          value: _PlayerMoreMenuAction.chapters,
-          child: Row(
-            children: <Widget>[
-              Icon(Icons.view_timeline_outlined),
-              SizedBox(width: 8),
-              Text('分段信息'),
-            ],
-          ),
-        ),
-        const PopupMenuDivider(),
-      ],
       const PopupMenuItem<_PlayerMoreMenuAction>(
         value: _PlayerMoreMenuAction.subtitles,
         child: Row(
@@ -4201,7 +4247,7 @@ class _PlayerPageState extends State<PlayerPage>
     );
   }
 
-  /// 创建播放结束后的明确选择层，只有用户点击下一节时才会切换分P。
+  /// 创建播放结束后的紧凑选择层，并随底部播放栏上浮以避免内容重叠。
   Widget _buildPlaybackCompletionPrompt() {
     if (!_completionPromptVisible || _playbackSnapshot.isInPictureInPicture) {
       return const SizedBox.shrink();
@@ -4210,81 +4256,24 @@ class _PlayerPageState extends State<PlayerPage>
         _currentPartIndex >= 0 &&
         _currentPartIndex < _activeVideo.parts.length - 1;
     final bool markingCompleted = _addingLearningBvid == _activeVideo.bvid;
-    return Center(
-      child: SafeArea(
-        minimum: const EdgeInsets.symmetric(horizontal: 24, vertical: 52),
-        child: Material(
-          key: const Key('playback-completion-prompt'),
-          color: Colors.black.withValues(alpha: 0.9),
-          borderRadius: BorderRadius.circular(20),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                const Icon(
-                  Icons.check_circle_outline_rounded,
-                  color: Colors.white,
-                  size: 34,
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  '这一节播放完成',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  hasNextPart ? '你可以标记完成，或主动播放下一节。' : '已经是最后一节，可以把这条学习任务标记完成。',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white70),
-                ),
-                const SizedBox(height: 16),
-                Wrap(
-                  alignment: WrapAlignment.center,
-                  spacing: 10,
-                  runSpacing: 8,
-                  children: <Widget>[
-                    OutlinedButton.icon(
-                      key: const Key('mark-learning-complete'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.white,
-                        side: const BorderSide(color: Colors.white54),
-                      ),
-                      // 完成按钮函数只在用户明确确认后更新学习任务状态。
-                      onPressed: markingCompleted
-                          ? null
-                          : () => unawaited(_markCurrentLearningCompleted()),
-                      icon: markingCompleted
-                          ? const SizedBox.square(
-                              dimension: 16,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : const Icon(Icons.task_alt_rounded),
-                      label: const Text('标记完成'),
-                    ),
-                    FilledButton.icon(
-                      key: const Key('play-next-after-completion'),
-                      // 下一节按钮函数是唯一会在完播后切换分P的入口，最后一节保持禁用。
-                      onPressed: hasNextPart && !markingCompleted
-                          ? () => unawaited(_playNextPartAfterCompletion())
-                          : null,
-                      icon: const Icon(Icons.skip_next_rounded),
-                      label: const Text('播放下一节'),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
+    final bool controlsVisible = _showControls && !_controlsLocked;
+    final double fullscreenSafeBottom = _fullscreen
+        ? MediaQuery.paddingOf(context).bottom
+        : 0;
+    return AnimatedPositioned(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+      left: 16,
+      right: 16,
+      bottom: (controlsVisible ? 78 : 14) + fullscreenSafeBottom,
+      child: Center(
+        child: PlaybackCompletionOverlay(
+          hasNextPart: hasNextPart,
+          markingCompleted: markingCompleted,
+          // 完成回调只更新当前学习任务，不改变播放器分P。
+          onMarkCompleted: () => unawaited(_markCurrentLearningCompleted()),
+          // 下一节回调继续保留“必须由用户点击”的非自动连播规则。
+          onPlayNext: () => unawaited(_playNextPartAfterCompletion()),
         ),
       ),
     );
@@ -4295,12 +4284,17 @@ class _PlayerPageState extends State<PlayerPage>
     if (!_interactivePromptVisible || _playbackSnapshot.isInPictureInPicture) {
       return const SizedBox.shrink();
     }
+    final bool controlsVisible = _showControls && !_controlsLocked;
+    final double fullscreenSafeBottom = _fullscreen
+        ? MediaQuery.paddingOf(context).bottom
+        : 0;
     return InteractiveVideoChoiceOverlay(
       node: _playerEnhancementController.interactiveNode,
       loading:
           _playerEnhancementController.interactiveNodeLoading ||
           _interactiveChoiceOpening,
       errorMessage: _playerEnhancementController.interactiveNodeError,
+      bottomInset: (controlsVisible ? 82 : 14) + fullscreenSafeBottom,
       // 剧情按钮函数只播放用户明确点击的目标分支。
       onChoiceSelected: (InteractiveVideoChoice choice) {
         unawaited(_playInteractiveChoice(choice));
@@ -5429,6 +5423,36 @@ class _PlayerPageState extends State<PlayerPage>
     );
   }
 
+  /// 创建固定在视频画面内的分段进度条，控制栏隐藏后仍保持可见并支持点击跳转。
+  Widget _buildChapterProgressOverlay({required bool inPictureInPicture}) {
+    if (inPictureInPicture ||
+        _playerEnhancementController.chapters.isEmpty ||
+        !_playerEnhancementController.chapterProgressVisible) {
+      return const SizedBox.shrink();
+    }
+    final bool aboveControls = _showControls && !_controlsLocked;
+    final double fullscreenSafeBottom = _fullscreen
+        ? MediaQuery.paddingOf(context).bottom
+        : 0;
+    final double horizontalInset = _fullscreen && aboveControls ? 12 : 0;
+    final double bottom = (aboveControls ? 54 : 4) + fullscreenSafeBottom;
+    return Positioned(
+      left: horizontalInset,
+      right: horizontalInset,
+      bottom: bottom,
+      child: VideoChapterStrip(
+        chapters: _playerEnhancementController.chapters,
+        position: _playbackSnapshot.position,
+        compact: true,
+        onDarkSurface: true,
+        // 画面内章节条点击函数统一跳转到对应章节的开始位置。
+        onSeek: (Duration position) {
+          unawaited(_seekToChapter(position));
+        },
+      ),
+    );
+  }
+
   /// 创建播放器与详情共用的竖向滚动，向上滑动时按距离连续压缩播放器直到完全隐藏。
   Widget _buildCollapsingPlayerBody({
     required Widget player,
@@ -5443,18 +5467,6 @@ class _PlayerPageState extends State<PlayerPage>
             child: player,
           ),
         ),
-        if (_playerEnhancementController.chapters.isNotEmpty &&
-            _playerEnhancementController.chapterProgressVisible)
-          SliverToBoxAdapter(
-            child: VideoChapterStrip(
-              chapters: _playerEnhancementController.chapters,
-              position: _playbackSnapshot.position,
-              // 竖屏章节条函数把点击位置交给统一章节跳转方法。
-              onSeek: (Duration position) {
-                unawaited(_seekToChapter(position));
-              },
-            ),
-          ),
         SliverToBoxAdapter(child: _buildNonFullscreenDetails()),
       ],
     );
@@ -5779,6 +5791,21 @@ class _PlayerPageState extends State<PlayerPage>
                                                   ? '开始专注'
                                                   : '管理专注',
                                             ),
+                                          if (_playerEnhancementController
+                                              .chapters
+                                              .isNotEmpty)
+                                            PlayerCompactIconButton(
+                                              key: const Key(
+                                                'video-chapter-button',
+                                              ),
+                                              // 分段按钮函数直接打开章节面板，不再藏在更多选项中。
+                                              onPressed: () => unawaited(
+                                                _showVideoChapterPanel(),
+                                              ),
+                                              icon:
+                                                  Icons.view_timeline_outlined,
+                                              tooltip: '分段信息',
+                                            ),
                                           PlayerCompactIconButton(
                                             key: const Key(
                                               'picture-in-picture',
@@ -5844,23 +5871,6 @@ class _PlayerPageState extends State<PlayerPage>
                                 child: Column(
                                   mainAxisSize: MainAxisSize.min,
                                   children: <Widget>[
-                                    if (_fullscreen &&
-                                        _playerEnhancementController
-                                            .chapters
-                                            .isNotEmpty &&
-                                        _playerEnhancementController
-                                            .chapterProgressVisible)
-                                      VideoChapterStrip(
-                                        chapters: _playerEnhancementController
-                                            .chapters,
-                                        position: _playbackSnapshot.position,
-                                        compact: true,
-                                        onDarkSurface: true,
-                                        // 全屏章节条函数把点击位置交给统一章节跳转方法。
-                                        onSeek: (Duration position) {
-                                          unawaited(_seekToChapter(position));
-                                        },
-                                      ),
                                     SliderTheme(
                                       data: SliderTheme.of(context).copyWith(
                                         trackHeight: 1.2,
@@ -6054,6 +6064,9 @@ class _PlayerPageState extends State<PlayerPage>
                       ],
                     ),
                   ),
+                ),
+                _buildChapterProgressOverlay(
+                  inPictureInPicture: inPictureInPicture,
                 ),
                 if (_partSelectorExpanded && _fullscreen)
                   Positioned(

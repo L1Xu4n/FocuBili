@@ -18,7 +18,7 @@ class _PlayerEnhancementJsonFixture {
         "data": {
           "view_points": [
             {"type": 1, "from": 0, "to": 68, "content": "什么是北京中轴线", "img_url": "http://i0.hdslb.com/bfs/vchapter/1629781561_0.jpg"},
-            {"type": 1, "from": 68, "to": 292, "content": "王朝的接力", "img_url": "//i0.hdslb.com/bfs/vchapter/1629781561_1.jpg"},
+            {"type": 1, "from": 68, "to": 292, "content": "王朝的接力", "imgUrl": "//i0.hdslb.com/bfs/vchapter/1629781561_68.jpg"},
             {"type": 1, "from": 292, "to": 508, "content": "巨匠的思索", "img_url": "https://i0.hdslb.com/bfs/vchapter/1629781561_2.jpg"},
             {"type": 1, "from": 508, "to": 690, "content": "人间的烟火", "img_url": "https://i0.hdslb.com/bfs/vchapter/1629781561_3.jpg"}
           ],
@@ -38,6 +38,8 @@ class _PlayerEnhancementJsonFixture {
         "edges": {
           "questions": [
             {
+              "start_time_r": 300,
+              "pause_video": 1,
               "choices": [
                 {"id": 46910898, "cid": 40178418329, "option": "A 开始游戏"},
                 {"id": 46910899, "cid": 40178877072, "option": "B 离开游戏"}
@@ -77,6 +79,7 @@ void main() {
     expect(metadata.chapters[1].start, const Duration(seconds: 68));
     expect(metadata.chapters.last.end, const Duration(seconds: 690));
     expect(metadata.chapters.first.imageUrl, startsWith('https://'));
+    expect(metadata.chapters[1].imageUrl, endsWith('1629781561_68.jpg'));
     expect(metadata.interaction, isNull);
   });
 
@@ -102,5 +105,7 @@ void main() {
     expect(node.choices, hasLength(2));
     expect(node.choices.first.cid, 40178418329);
     expect(node.choices.first.label, 'A 开始游戏');
+    expect(node.choicePromptLeadTime, const Duration(milliseconds: 300));
+    expect(node.pauseVideoForChoice, isTrue);
   });
 }

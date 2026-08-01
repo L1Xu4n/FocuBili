@@ -571,7 +571,13 @@ class NativePlaybackController(
         nativePlayer.addListener(object : Player.Listener {
             /** 播放或暂停变化时把最新状态同步给 Flutter。 */
             override fun onIsPlayingChanged(isPlaying: Boolean) {
-                if (playbackPrepared && playbackPhase != PHASE_ERROR) {
+                if (
+                    PlaybackPhasePolicy.shouldReturnToReady(
+                        playbackPrepared = playbackPrepared,
+                        playbackEnded = nativePlayer.playbackState == Player.STATE_ENDED,
+                        playbackFailed = playbackPhase == PHASE_ERROR,
+                    )
+                ) {
                     playbackPhase = PHASE_READY
                     playbackMessage = null
                 }

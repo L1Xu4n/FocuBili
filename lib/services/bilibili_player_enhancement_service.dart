@@ -96,9 +96,14 @@ class BilibiliPublicPlayerEnhancementService
     );
     final Map<Object?, Object?> edges = _readMap(data['edges']);
     final List<Object?> questions = _readList(edges['questions']);
-    final Map<Object?, Object?> firstQuestion = questions.isEmpty
-        ? const <Object?, Object?>{}
-        : _readMap(questions.first);
+    Map<Object?, Object?> firstQuestion = const <Object?, Object?>{};
+    for (final Object? rawQuestion in questions) {
+      final Map<Object?, Object?> question = _readMap(rawQuestion);
+      if (_readList(question['choices']).isNotEmpty) {
+        firstQuestion = question;
+        break;
+      }
+    }
     final List<InteractiveVideoChoice> choices = _readList(
       firstQuestion['choices'],
     ).map(_parseChoice).whereType<InteractiveVideoChoice>().toList();
@@ -107,6 +112,12 @@ class BilibiliPublicPlayerEnhancementService
       edgeId: _readInt(data['edge_id']),
       isLeaf: _readInt(data['is_leaf']) == 1,
       choices: List<InteractiveVideoChoice>.unmodifiable(choices),
+      choicePromptLeadTime: _parseInteractiveChoiceLeadTime(
+        firstQuestion['start_time_r'],
+      ),
+      pauseVideoForChoice:
+          firstQuestion['pause_video'] == true ||
+          _readInt(firstQuestion['pause_video']) == 1,
     );
   }
 
@@ -144,7 +155,7 @@ class BilibiliPublicPlayerEnhancementService
           title: title,
           start: Duration(seconds: startSeconds),
           end: Duration(seconds: endSeconds),
-          imageUrl: _normalizeImageUrl(_readText(chapter['img_url'])),
+          imageUrl: _normalizeImageUrl(_readChapterImageUrl(chapter)),
         ),
       );
     }
@@ -180,6 +191,26 @@ class BilibiliPublicPlayerEnhancementService
       return 'https://${value.substring(7)}';
     }
     return value;
+  }
+
+  /// 兼容播放器接口的新旧预览图字段，优先读取当前接口使用的 imgUrl。
+  static String _readChapterImageUrl(Map<Object?, Object?> chapter) {
+    final String camelCaseUrl = _readText(chapter['imgUrl']);
+    return camelCaseUrl.isNotEmpty
+        ? camelCaseUrl
+        : _readText(chapter['img_url']);
+  }
+
+  /// 把互动接口的毫秒提前量转换为时长；缺失或非法值表示只在完播时兜底显示。
+  static Duration? _parseInteractiveChoiceLeadTime(Object? rawValue) {
+    if (rawValue == null) {
+      return null;
+    }
+    final double milliseconds = _readNumber(rawValue);
+    if (!milliseconds.isFinite || milliseconds < 0) {
+      return null;
+    }
+    return Duration(milliseconds: milliseconds.round());
   }
 
   /// 将任意映射安全转换为 Object 映射，字段缺失时返回空映射。

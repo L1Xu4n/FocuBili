@@ -19,6 +19,7 @@ class PlayerEnhancementController extends ChangeNotifier {
   bool _metadataLoading = false;
   bool _interactiveNodeLoading = false;
   bool _chapterProgressVisible = true;
+  bool _interactiveChoicePresented = false;
   String? _metadataError;
   String? _interactiveNodeError;
 
@@ -31,9 +32,42 @@ class PlayerEnhancementController extends ChangeNotifier {
   /// 判断当前视频是否带有有效互动剧情版本。
   bool get isInteractive => _metadata.interaction != null;
 
-  /// 判断播放器完播时是否应该交给互动选择层处理。
+  /// 判断播放器完播时是否应该交给互动选择层处理，节点尚在加载时也保留加载或重试入口。
   bool get handlesPlaybackCompletion {
-    return isInteractive && !(_interactiveNode?.isLeaf ?? false);
+    final InteractiveVideoNode? node = _interactiveNode;
+    return isInteractive && (node == null || node.hasChoices);
+  }
+
+  /// 判断当前节点是否已经具备一组尚未展示的有效互动选项。
+  bool get canPresentInteractiveChoice {
+    final InteractiveVideoNode? node = _interactiveNode;
+    return !_interactiveChoicePresented && node != null && node.hasChoices;
+  }
+
+  /// 计算距离互动选项应出现还剩多久；空值表示当前节点只能依靠完播事件兜底。
+  Duration? interactiveChoiceDelay({
+    required Duration position,
+    required Duration duration,
+  }) {
+    final InteractiveVideoNode? node = _interactiveNode;
+    final Duration? leadTime = node?.choicePromptLeadTime;
+    if (!canPresentInteractiveChoice ||
+        leadTime == null ||
+        duration <= Duration.zero) {
+      return null;
+    }
+    final int triggerMilliseconds =
+        duration.inMilliseconds - leadTime.inMilliseconds;
+    final int remainingMilliseconds =
+        triggerMilliseconds - position.inMilliseconds;
+    return Duration(
+      milliseconds: remainingMilliseconds > 0 ? remainingMilliseconds : 0,
+    );
+  }
+
+  /// 标记当前节点已展示过选项，避免原生状态刷新时重复弹出同一组剧情按钮。
+  void markInteractiveChoicePresented() {
+    _interactiveChoicePresented = true;
   }
 
   /// 判断分段元数据是否仍在请求中。
@@ -62,6 +96,7 @@ class PlayerEnhancementController extends ChangeNotifier {
     _interactiveNodeError = null;
     _metadataLoading = true;
     _interactiveNodeLoading = false;
+    _interactiveChoicePresented = false;
     notifyListeners();
     try {
       final PlayerEnhancementMetadata metadata = await _service.loadMetadata(
@@ -93,6 +128,7 @@ class PlayerEnhancementController extends ChangeNotifier {
     _lastRequestedEdgeId = choice.edgeId;
     _interactiveNode = null;
     _interactiveNodeError = null;
+    _interactiveChoicePresented = false;
     notifyListeners();
     await _loadInteractiveNode(token: token, edgeId: choice.edgeId);
   }

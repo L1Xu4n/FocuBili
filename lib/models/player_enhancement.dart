@@ -52,12 +52,23 @@ class InteractiveVideoNode {
     required this.edgeId,
     required this.isLeaf,
     required this.choices,
+    this.choicePromptLeadTime,
+    this.pauseVideoForChoice = false,
   });
 
   final String title;
   final int edgeId;
   final bool isLeaf;
   final List<InteractiveVideoChoice> choices;
+
+  /// 返回剧情选项应在结尾前提前多久出现；接口未提供时由播放结束事件兜底显示。
+  final Duration? choicePromptLeadTime;
+
+  /// 标识到达剧情选择点时是否应先暂停当前分支的视频。
+  final bool pauseVideoForChoice;
+
+  /// 判断当前节点是否真的存在可供用户主动选择的后续剧情。
+  bool get hasChoices => !isLeaf && choices.isNotEmpty;
 }
 
 /// 汇总一个分P的章节和互动视频入口信息。
