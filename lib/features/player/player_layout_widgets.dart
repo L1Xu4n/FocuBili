@@ -5,11 +5,17 @@ class _FullscreenDeviceStatus extends StatelessWidget {
   /// 创建只监听专注控制器局部刷新的设备状态栏。
   const _FullscreenDeviceStatus({
     required this.focusController,
+    required this.currentBvid,
+    required this.currentPartCid,
+    required this.partRemainingDuration,
     required this.clock,
     required this.batteryPercent,
   });
 
   final FocusTimerController? focusController;
+  final String currentBvid;
+  final int currentPartCid;
+  final Duration partRemainingDuration;
   final DateTime clock;
   final int? batteryPercent;
 
@@ -36,13 +42,20 @@ class _FullscreenDeviceStatus extends StatelessWidget {
         '${seconds.toString().padLeft(2, '0')}';
   }
 
-  /// 构建左侧专注目标和倒计时，超长目标沿水平方向循环滚动。
+  /// 构建左侧专注目标和倒计时；当前分 P 模式直接使用播放器真实观看剩余进度。
   Widget _buildFocusStatus(FocusTimerController controller) {
     final FocusSession? session = controller.activeSession;
     if (session == null) {
       return const SizedBox.shrink();
     }
     final bool paused = session.status == FocusSessionStatus.paused;
+    final bool followsCurrentPart =
+        session.completeOnPartEnd &&
+        session.sourceBvid == currentBvid &&
+        session.sourcePartCid == currentPartCid;
+    final Duration visibleRemaining = followsCurrentPart
+        ? partRemainingDuration
+        : controller.remainingDuration;
     return Row(
       key: const Key('fullscreen-focus-status'),
       children: <Widget>[
@@ -69,7 +82,7 @@ class _FullscreenDeviceStatus extends StatelessWidget {
         ),
         const SizedBox(width: 5),
         Text(
-          _formatRemaining(controller.remainingDuration),
+          _formatRemaining(visibleRemaining),
           key: const Key('fullscreen-focus-remaining'),
           style: const TextStyle(
             color: Colors.white,

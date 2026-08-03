@@ -6,6 +6,7 @@ import '../../models/focus_session.dart';
 import '../../services/focus_encouragement_service.dart';
 import '../../services/focus_notification_service.dart';
 import 'focus_timer_controller.dart';
+import 'focus_reminder_background_guide.dart';
 
 /// 显示鼓励、原因和可选提醒流程；返回 true 表示用户确认打断或退出。
 Future<bool> showFocusInterruptionFlow(
@@ -158,6 +159,16 @@ Future<void> _scheduleReminderWithPermission(
     }
     return;
   }
+  if (!context.mounted) {
+    return;
+  }
+  final bool exactAlarmPermitted = await _ensureExactAlarmPermission(
+    context,
+    service,
+  );
+  if (!exactAlarmPermitted || !context.mounted) {
+    return;
+  }
   final bool scheduled = await service.scheduleReminder(
     sessionId: session.id,
     goal: session.goal,
@@ -170,6 +181,93 @@ Future<void> _scheduleReminderWithPermission(
   ScaffoldMessenger.of(context)
     ..hideCurrentSnackBar()
     ..showSnackBar(const SnackBar(content: Text('已设置继续专注提醒')));
+  await showFocusReminderBackgroundGuideIfNeeded(
+    context,
+    notificationService: service,
+  );
+}
+
+/// 每次安排提醒都检查精确闹钟特殊权限；用户进入系统设置后返回时会自动复查并继续安排。
+Future<bool> _ensureExactAlarmPermission(
+  BuildContext context,
+  FocusNotificationService service,
+) async {
+  if (await service.hasExactAlarmPermission()) {
+    return true;
+  }
+  if (!context.mounted) {
+    return false;
+  }
+  final bool? shouldOpenSettings = await showDialog<bool>(
+    context: context,
+    builder: (BuildContext dialogContext) => AlertDialog(
+      title: const Text('需要“闹钟和提醒”权限'),
+      content: const Text(
+        '允许焦点哔哩设置精确闹钟后，即使你清理应用后台，Android 仍能在所选时间唤醒并发送提醒。系统强制停止应用后，任何应用都无法继续提醒。',
+      ),
+      actions: <Widget>[
+        TextButton(
+          // 暂不开启函数放弃本次系统提醒，但保留已经记录的专注打断原因。
+          onPressed: () => Navigator.of(dialogContext).pop(false),
+          child: const Text('暂不开启'),
+        ),
+        FilledButton(
+          // 打开权限函数关闭解释框，随后进入 Android“闹钟和提醒”特殊访问页。
+          onPressed: () => Navigator.of(dialogContext).pop(true),
+          child: const Text('打开系统设置'),
+        ),
+      ],
+    ),
+  );
+  if (shouldOpenSettings != true || !context.mounted) {
+    return false;
+  }
+  final _NextAppResumeWaiter waiter = _NextAppResumeWaiter();
+  await waiter.openSettingsAndWait(service.openExactAlarmSettings);
+  final bool permitted = await service.hasExactAlarmPermission();
+  if (!permitted && context.mounted) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('未获得精确闹钟权限，本次提醒没有设置')));
+  }
+  return permitted;
+}
+
+/// 监听应用从 Android 权限页返回，避免用户授权后还要重新填写一次提醒时间。
+class _NextAppResumeWaiter with WidgetsBindingObserver {
+  final Completer<void> _completer = Completer<void>();
+  bool _leftApp = false;
+
+  /// 在打开系统设置前注册生命周期监听，返回应用后完成等待，超时也会安全解除监听。
+  Future<void> openSettingsAndWait(Future<void> Function() openSettings) async {
+    WidgetsBinding.instance.addObserver(this);
+    try {
+      await openSettings();
+      await _completer.future.timeout(
+        const Duration(minutes: 5),
+        // 超时函数允许提醒流程退出，不让系统设置异常永久悬挂当前异步任务。
+        onTimeout: () {},
+      );
+    } finally {
+      WidgetsBinding.instance.removeObserver(this);
+    }
+  }
+
+  /// 记录应用确实离开前台，并只在随后重新进入前台时完成权限复查等待。
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      _leftApp = true;
+      return;
+    }
+    if (state == AppLifecycleState.resumed &&
+        _leftApp &&
+        !_completer.isCompleted) {
+      _completer.complete();
+    }
+  }
 }
 
 /// 保存原因输入和提醒时间的弹窗组件。
@@ -205,6 +303,18 @@ class _InterruptionReasonDialogState extends State<_InterruptionReasonDialog> {
       initialTime: _reminderAt == null
           ? TimeOfDay.fromDateTime(now.add(const Duration(hours: 1)))
           : TimeOfDay.fromDateTime(_reminderAt!),
+      helpText: '选择提醒时间',
+      cancelText: '取消',
+      confirmText: '确定',
+      hourLabelText: '小时',
+      minuteLabelText: '分钟',
+      // 时间选择器构建函数固定使用常见的中文 24 小时制，不显示英文 AM/PM。
+      builder: (BuildContext pickerContext, Widget? child) => MediaQuery(
+        data: MediaQuery.of(
+          pickerContext,
+        ).copyWith(alwaysUse24HourFormat: true),
+        child: child ?? const SizedBox.shrink(),
+      ),
     );
     if (time == null || !mounted) {
       return;

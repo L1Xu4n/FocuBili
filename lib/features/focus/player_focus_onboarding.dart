@@ -1,0 +1,56 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+
+import '../../core/router/app_router.dart';
+import '../../services/focus_preferences_service.dart';
+
+/// 第一次打开播放器专注时说明自动勿扰能力，并允许用户直接进入应用设置。
+Future<void> showPlayerFocusDoNotDisturbGuideIfNeeded(
+  BuildContext context, {
+  FocusPreferencesService? preferencesService,
+  Future<void> Function()? openSettings,
+}) async {
+  final FocusPreferencesService service =
+      preferencesService ?? FocusPreferencesService();
+  final FocusPreferences preferences = await service.load();
+  if (preferences.hasSeenPlayerDoNotDisturbGuide || !context.mounted) {
+    return;
+  }
+  await service.markPlayerDoNotDisturbGuideSeen();
+  if (!context.mounted) {
+    return;
+  }
+  final bool? shouldOpenSettings = await showDialog<bool>(
+    context: context,
+    builder: (BuildContext dialogContext) => AlertDialog(
+      icon: const Icon(Icons.do_not_disturb_on_outlined),
+      title: const Text('专注时可以自动开启勿扰'),
+      content: const Text(
+        '你可以在“我的 → 设置 → 个性化设置”中开启“专注状态将手机设为勿扰模式”。开启后，专注视频播放时进入勿扰，暂停或结束时恢复；快进、快退不会反复切换。',
+      ),
+      actions: <Widget>[
+        TextButton(
+          // 稍后设置函数关闭首次说明，用户仍可随时从“我的”页面进入设置。
+          onPressed: () => Navigator.of(dialogContext).pop(false),
+          child: const Text('稍后设置'),
+        ),
+        FilledButton(
+          // 前往设置函数先关闭说明，再由调用方打开应用内个性化设置页。
+          onPressed: () => Navigator.of(dialogContext).pop(true),
+          child: const Text('前往设置'),
+        ),
+      ],
+    ),
+  );
+  if (shouldOpenSettings != true || !context.mounted) {
+    return;
+  }
+  if (openSettings != null) {
+    await openSettings();
+    return;
+  }
+  await Navigator.of(
+    context,
+  ).pushNamed<void>(AppRoutes.personalizationSettings);
+}

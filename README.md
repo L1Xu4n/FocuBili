@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/L1Xu4n/FocuBili/releases"><img src="https://img.shields.io/github/v/release/L1Xu4n/FocuBili?display_name=tag&sort=semver" alt="GitHub Release"></a>
-  <img src="https://img.shields.io/badge/version-v1.0.1-2EA44F" alt="Current version v1.0.1">
+  <img src="https://img.shields.io/badge/version-v1.1.0-2EA44F" alt="Current version v1.1.0">
   <img src="https://img.shields.io/badge/Flutter-3.44.6-02569B?logo=flutter" alt="Flutter 3.44.6">
   <img src="https://img.shields.io/badge/Android-7.0+-3DDC84?logo=android" alt="Android 7.0+">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="GPL-3.0"></a>
@@ -27,6 +27,24 @@ FocuBili 希望保留“主动找到一支视频并认真看完”这件事本�
 - 搜索、BV 号和视频链接是主要入口；
 - 播放页优先保留视频、选集、简介和必要控制；
 - 账号数据功能以只读为主，不伪装点赞、投币、收藏或关注写操作。
+
+## v1.1.0 更新内容
+
+- 学习清单改为按视频分P独立管理：同一视频的不同分P可分别加入、排序、搜索和完成。
+- 已完成任务自动移动到清单末尾并与未完成任务分隔；“继续学习”只按清单顺序播放未完成分P。
+- 只有学习清单中的分P完播后才显示“标记已完成 / 继续学习”，最后一项完成后明确显示学习结束。
+- 首页在每次返回时刷新学习清单，加入或取消后的状态会立即同步；所有加入、取消操作统一使用底部提示。
+- 专注提醒升级为 Android 系统闹钟：应用进程退出后仍可触发，设备重启、应用升级或重新取得精确闹钟权限后会恢复待提醒任务。
+- 设置新增统一“权限管理”，集中检查通知、精确闹钟、勿扰、电量限制和小米/Redmi/POCO 后台自启动入口。
+- 勿扰模式会在专注视频播放时开启、暂停时恢复；快进快退产生的短暂缓冲不会反复切换系统勿扰。
+- 问题诊断新增闹钟安排、恢复、触发、权限和后台限制记录，并保持 Cookie、笔记正文、专注目标等隐私字段脱敏。
+- 重写时间点截图查看器，截图初始完整居中，支持双击、双指缩放、平移和一键回正。
+- 修复全屏笔记布局、截图缩放位置、继续学习卡住、已完成任务回到学习中、分P加入状态串联及启动图标/启动背景问题。
+- `flutter analyze` 无问题，完整 `flutter test` 共 240 项全部通过，并完成 Android 15 模拟器安装与权限页验证。
+
+[下载 FocuBili v1.1.0 APK](https://github.com/L1Xu4n/FocuBili/releases/download/v1.1.0/FocuBili-v1.1.0-release.apk) · [查看完整发布说明](docs/RELEASE_NOTES_v1.1.0.md)
+
+APK SHA-256：`4998C8EB9EF7F69C336F2A0BA50EF1772D6F154899506B4D2C10FFF5F91CFE95`
 
 ## v1.0.1 更新内容
 
@@ -121,7 +139,8 @@ FocuBili 希望保留“主动找到一支视频并认真看完”这件事本�
 - 首页和“我的”页面均可进入专注数据看板，查看 7 天、30 天或全部指标与每日趋势。
 - 统计趋势使用自适应折线图；记录管理显示打断次数、打断原因和终止原因，并支持搜索、筛选、排序、单条删除和清空。
 - 统计页和统计分享图均显示自适应日期与完整时长坐标；分享图按范围自动抽样日期，避免 30 天数据挤在一起。
-- Android 提醒会按需检查通知权限并提供系统设置入口；省电模式下提醒时间可能由系统稍微延后。
+- Android 提醒由系统闹钟管理，并在每次安排前检查通知与精确闹钟权限；小米系设备会额外引导后台自启动和无限制电量设置。
+- 设置页提供统一权限管理；设备重启、应用升级或重新取得精确闹钟权限后，会恢复仍待触发的提醒。
 
 ### 搜索与视频详情
 
@@ -157,7 +176,7 @@ FocuBili 希望保留“主动找到一支视频并认真看完”这件事本�
 - 弹幕屏蔽词、透明度、字号、轨道记忆和解码策略仍待完善。
 - 时间点笔记目前只保存在当前设备，已支持手动导出和系统分享，但尚未提供自动同步或云备份。
 - 不同 Android 厂商的全屏安全区、画中画和后台恢复仍需要更多真机验证。
-- Android 通知权限、待机提醒延迟和厂商省电策略仍需在多台真机继续验收。
+- Android 提醒已支持重启恢复和厂商后台保护引导，但不同品牌的自启动、电量限制和待机调度仍需在更多真机持续验收。
 - Release APK 目前使用本机现有签名配置，仅适合学习测试；正式长期分发前应配置并妥善保存独立签名密钥。
 
 ## 下载

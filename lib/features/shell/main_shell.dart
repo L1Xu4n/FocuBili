@@ -16,10 +16,16 @@ class MainShell extends StatefulWidget {
 /// 保存主框架当前页面，并维持各页面的滚动与输入状态。
 class _MainShellState extends State<MainShell> {
   int _currentIndex = 0;
+  int _homeRefreshGeneration = 0;
 
-  /// 切换到底部导航指定页面，并触发主框架刷新。
+  /// 切换到底部导航指定页面；每次选择首页都发送新的学习清单刷新代次。
   void _selectPage(int index) {
-    setState(() => _currentIndex = index);
+    setState(() {
+      _currentIndex = index;
+      if (index == 0) {
+        _homeRefreshGeneration += 1;
+      }
+    });
   }
 
   /// 从首页的搜索入口直接切换到搜索页面。
@@ -31,7 +37,10 @@ class _MainShellState extends State<MainShell> {
   @override
   Widget build(BuildContext context) {
     final List<Widget> pages = <Widget>[
-      HomePage(onSearchRequested: _openSearch),
+      HomePage(
+        onSearchRequested: _openSearch,
+        refreshGeneration: _homeRefreshGeneration,
+      ),
       const SearchPage(),
       const ProfilePage(),
     ];

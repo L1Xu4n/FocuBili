@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/router/app_router.dart';
 import '../../services/app_update_service.dart';
 
 typedef ExternalUrlLauncher = Future<bool> Function(Uri uri);
@@ -147,6 +148,19 @@ class _AboutPageState extends State<AboutPage> {
                   onTap: () => _open(_ownerUri),
                 ),
               ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            child: ListTile(
+              key: const Key('open-problem-diagnostics'),
+              leading: const Icon(Icons.bug_report_outlined),
+              title: const Text('问题诊断'),
+              subtitle: const Text('查看最近错误并复制脱敏诊断信息'),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              // 问题诊断入口函数只打开本机页面；诊断内容仅在用户点击复制后才进入剪贴板。
+              onTap: () =>
+                  Navigator.of(context).pushNamed(AppRoutes.problemDiagnostics),
             ),
           ),
           const SizedBox(height: 12),

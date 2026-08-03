@@ -1,15 +1,18 @@
-/// 表示学习清单中一条视频任务当前所处的学习阶段。
+/// 表示学习清单中一条视频分 P 任务当前所处的学习阶段。
 enum LearningListStatus {
-  /// 用户已经加入清单，但还没有从该任务开始播放。
+  /// 用户已经加入清单，但还没有开始播放。
   notStarted,
 
-  /// 用户正在学习这条视频，分P和播放位置会随播放器更新。
+  /// 用户已经开始学习该分 P，但还没有明确标记完成。
   learning,
 
-  /// 用户主动确认已经完成这条学习任务。
-  completed;
+  /// 用户已经明确完成该分 P；页面会把它放在未完成任务之后。
+  completed,
+}
 
-  /// 返回用于界面展示的中文状态名称。
+/// 为学习状态提供稳定、面向普通用户的中文显示文字。
+extension LearningListStatusLabel on LearningListStatus {
+  /// 返回状态在列表和操作菜单中使用的中文标签。
   String get label => switch (this) {
     LearningListStatus.notStarted => '未开始',
     LearningListStatus.learning => '学习中',
@@ -17,13 +20,14 @@ enum LearningListStatus {
   };
 }
 
-/// 表示一条仅保存在当前设备上的学习任务及其最近学习进度。
+/// 表示学习清单内一个可独立排序、独立完成的视频分 P 任务。
 class LearningListEntry {
-  /// 创建包含视频资料、当前分P、时间点和学习状态的本机任务。
+  /// 创建一条学习任务；同一视频的不同 CID 会保存为不同条目。
   const LearningListEntry({
     required this.bvid,
     required this.title,
     required this.ownerName,
+    required this.thumbnailUrl,
     required this.partCid,
     required this.partPageNumber,
     required this.partTitle,
@@ -32,47 +36,59 @@ class LearningListEntry {
     required this.status,
     required this.addedAt,
     required this.updatedAt,
-    this.thumbnailUrl = '',
+    this.sortOrder = 0,
   });
 
-  /// 视频的 BV 号，用于合并同一视频的重复加入操作。
+  /// 视频的公开 BV 编号，不保存完整播放地址或登录凭据。
   final String bvid;
 
   /// 视频标题，仅用于学习清单和首页继续学习卡片展示。
   final String title;
 
-  /// 视频作者名称，仅用于帮助用户识别学习任务。
+  /// 投稿者名称，仅用于帮助用户在清单中识别视频。
   final String ownerName;
 
-  /// 视频封面地址，仅用于低流量缩略图展示。
+  /// 视频封面缩略图地址，读取失败时界面会显示本地占位图。
   final String thumbnailUrl;
 
-  /// 当前要继续学习的分P CID，播放器用它恢复到正确分P。
+  /// 当前学习任务所对应分 P 的 CID；它与 BV 共同组成唯一标识。
   final int partCid;
 
-  /// 当前要继续学习的分P序号，从 1 开始。
+  /// 便于阅读的分 P 序号，例如 P1、P2。
   final int partPageNumber;
 
-  /// 当前分P的标题，接口临时不可用时仍可显示任务上下文。
+  /// 分 P 的原始标题，例如“第一节”。
   final String partTitle;
 
-  /// 当前分P最近保存的播放位置。
+  /// 当前分 P 已保存的播放位置。
   final Duration position;
 
-  /// 当前分P的总时长，用于界面显示已学进度。
+  /// 当前分 P 的总时长；接口缺失时为零。
   final Duration duration;
 
-  /// 这条任务的用户可控学习状态。
+  /// 该分 P 学习任务的完成状态。
   final LearningListStatus status;
 
-  /// 任务首次加入学习清单的本机时间。
+  /// 用户首次加入该分 P 到学习清单的本机时间。
   final DateTime addedAt;
 
-  /// 任务、状态或观看进度最后一次更新的本机时间。
+  /// 最近一次更新进度、状态或排序的本机时间。
   final DateTime updatedAt;
 
-  /// 复制任务并替换指定字段，未传入的资料保持不变。
+  /// 用户为学习顺序设置的数字；数值越小，未完成任务越靠前。
+  final int sortOrder;
+
+  /// 返回以 BV 与 CID 组成的稳定唯一标识，避免同一视频不同 P 相互覆盖。
+  String get stableId => '$bvid:$partCid';
+
+  /// 判断候选视频和分 P 是否正好对应这一条学习任务。
+  bool matchesPart(String candidateBvid, int candidatePartCid) {
+    return bvid == candidateBvid.trim() && partCid == candidatePartCid;
+  }
+
+  /// 基于当前任务替换指定字段，未传入的字段保持原值。
   LearningListEntry copyWith({
+    String? bvid,
     String? title,
     String? ownerName,
     String? thumbnailUrl,
@@ -82,10 +98,12 @@ class LearningListEntry {
     Duration? position,
     Duration? duration,
     LearningListStatus? status,
+    DateTime? addedAt,
     DateTime? updatedAt,
+    int? sortOrder,
   }) {
     return LearningListEntry(
-      bvid: bvid,
+      bvid: bvid ?? this.bvid,
       title: title ?? this.title,
       ownerName: ownerName ?? this.ownerName,
       thumbnailUrl: thumbnailUrl ?? this.thumbnailUrl,
@@ -95,8 +113,9 @@ class LearningListEntry {
       position: position ?? this.position,
       duration: duration ?? this.duration,
       status: status ?? this.status,
-      addedAt: addedAt,
+      addedAt: addedAt ?? this.addedAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      sortOrder: sortOrder ?? this.sortOrder,
     );
   }
 
@@ -115,6 +134,7 @@ class LearningListEntry {
       'status': status.name,
       'addedAt': addedAt.toUtc().toIso8601String(),
       'updatedAt': updatedAt.toUtc().toIso8601String(),
+      'sortOrder': sortOrder,
     };
   }
 
@@ -132,6 +152,7 @@ class LearningListEntry {
     final Object? status = json['status'];
     final Object? addedAt = json['addedAt'];
     final Object? updatedAt = json['updatedAt'];
+    final Object? sortOrder = json['sortOrder'];
     if (bvid is! String ||
         title is! String ||
         ownerName is! String ||
@@ -160,6 +181,9 @@ class LearningListEntry {
               ? 24 * 60 * 60 * 1000
               : normalizedDurationMs,
         )
+        .toInt();
+    final int normalizedSortOrder = (sortOrder is num ? sortOrder.toInt() : 0)
+        .clamp(0, 1 << 31)
         .toInt();
     final DateTime? parsedAddedAt = DateTime.tryParse(addedAt);
     final DateTime? parsedUpdatedAt = DateTime.tryParse(updatedAt);
@@ -190,6 +214,7 @@ class LearningListEntry {
       status: parsedStatus,
       addedAt: parsedAddedAt.toLocal(),
       updatedAt: parsedUpdatedAt.toLocal(),
+      sortOrder: normalizedSortOrder,
     );
   }
 
@@ -208,7 +233,8 @@ class LearningListEntry {
         duration == other.duration &&
         status == other.status &&
         addedAt == other.addedAt &&
-        updatedAt == other.updatedAt;
+        updatedAt == other.updatedAt &&
+        sortOrder == other.sortOrder;
   }
 
   /// 返回与全部字段对应的哈希值，需与相等判断保持一致。
@@ -226,5 +252,6 @@ class LearningListEntry {
     status,
     addedAt,
     updatedAt,
+    sortOrder,
   );
 }

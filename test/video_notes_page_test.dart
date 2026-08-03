@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:photo_view/photo_view.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:focubili/features/notes/video_note_detail_page.dart';
@@ -281,14 +282,41 @@ void main() {
       find.byKey(const Key('open-note-frame-fullscreen')),
     );
     openFrameButton.onTap!();
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
     expect(
       find.byKey(const Key('fullscreen-note-frame-viewer')),
       findsOneWidget,
     );
+    final PhotoView viewer = tester.widget<PhotoView>(
+      find.byKey(const Key('fullscreen-note-frame-viewer')),
+    );
+    expect(viewer.basePosition, Alignment.center);
+    expect(viewer.initialScale, PhotoViewComputedScale.contained);
+    expect(viewer.minScale, PhotoViewComputedScale.contained);
+    expect(viewer.maxScale, PhotoViewComputedScale.contained * 6);
     expect(
-      tester.getSize(find.byKey(const Key('fullscreen-note-frame-viewport'))),
-      const Size(450, 900),
+      tester
+          .getRect(find.byKey(const Key('fullscreen-note-frame-viewer')))
+          .center,
+      const Offset(225, 450),
+    );
+    final PhotoViewControllerBase<PhotoViewControllerValue> controller =
+        viewer.controller!;
+    // 模拟用户已经平移并放大，再验证重置按钮恢复初始倍率与中心偏移。
+    controller.updateMultiple(position: const Offset(60, 40), scale: 3);
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('reset-fullscreen-note-frame-zoom')));
+    await tester.pump();
+    expect(controller.position, Offset.zero);
+    expect(controller.scale, isNull);
+    expect(
+      find.byKey(const Key('reset-fullscreen-note-frame-zoom')),
+      findsOneWidget,
     );
     // 关闭按钮必须保持普通按钮大小，不能被全屏 Stack 拉伸成遮罩层。
     final Size closeButtonSize = tester.getSize(
@@ -403,8 +431,8 @@ void main() {
     expect(find.byKey(const Key('open-test-note-detail')), findsOneWidget);
   });
 
-  /// 验证全屏编辑器的头部高度和截图预览不再强制拉满固定宽高。
-  testWidgets('全屏笔记头部紧凑且截图按原比例布局', (WidgetTester tester) async {
+  /// 验证全屏编辑器突出分 P，并让截图在专用区域内铺满显示。
+  testWidgets('全屏笔记头部突出分P且截图铺满专用区域', (WidgetTester tester) async {
     final TextEditingController titleController = TextEditingController();
     final TextEditingController bodyController = TextEditingController();
     addTearDown(titleController.dispose);
@@ -413,23 +441,26 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: VideoNoteComposer(
-            titleController: titleController,
-            bodyController: bodyController,
-            position: const Duration(minutes: 5),
-            includeFrame: true,
-            saving: false,
-            framePath: frame.path,
-            compact: true,
-            borderless: true,
-            // 画面选择测试函数无需改变外部状态。
-            onIncludeFrameChanged: (bool selected) {},
-            // 保存测试函数只用于满足编辑器必需回调。
-            onSave: () {},
-            // 新建测试函数只用于满足编辑器必需回调。
-            onNew: () {},
-            // 关闭测试函数只用于满足编辑器必需回调。
-            onClose: () {},
+          body: SingleChildScrollView(
+            child: VideoNoteComposer(
+              titleController: titleController,
+              bodyController: bodyController,
+              position: const Duration(minutes: 5),
+              partPageNumber: 3,
+              includeFrame: true,
+              saving: false,
+              framePath: frame.path,
+              compact: true,
+              borderless: true,
+              // 画面选择测试函数无需改变外部状态。
+              onIncludeFrameChanged: (bool selected) {},
+              // 保存测试函数只用于满足编辑器必需回调。
+              onSave: () {},
+              // 新建测试函数只用于满足编辑器必需回调。
+              onNew: () {},
+              // 关闭测试函数只用于满足编辑器必需回调。
+              onClose: () {},
+            ),
           ),
         ),
       ),
@@ -445,7 +476,14 @@ void main() {
     );
     expect(preview.width, isNull);
     expect(preview.height, isNull);
-    expect(preview.fit, BoxFit.contain);
+    expect(preview.fit, BoxFit.cover);
+    final Text partLabel = tester.widget<Text>(
+      find.descendant(
+        of: find.byKey(const Key('note-part-label')),
+        matching: find.text('P3'),
+      ),
+    );
+    expect(partLabel.style?.fontSize, 16);
   });
 
   /// 验证狭窄全屏面板会为完整记录时间启用横向循环滚动，而不是省略文字。

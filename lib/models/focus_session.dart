@@ -92,6 +92,7 @@ class FocusSession {
     this.sourcePartTitle,
     this.sourceFramePath,
     this.sourcePosition = Duration.zero,
+    this.completeOnPartEnd = false,
     this.interruptions = const <FocusInterruption>[],
     this.terminationReason,
     this.dailyFocusMilliseconds = const <String, int>{},
@@ -111,6 +112,7 @@ class FocusSession {
     String? sourcePartTitle,
     String? sourceFramePath,
     Duration sourcePosition = Duration.zero,
+    bool completeOnPartEnd = false,
   }) {
     return FocusSession(
       id: id,
@@ -134,6 +136,7 @@ class FocusSession {
       sourcePartTitle: sourcePartTitle,
       sourceFramePath: sourceFramePath,
       sourcePosition: sourcePosition,
+      completeOnPartEnd: completeOnPartEnd,
     );
   }
 
@@ -153,6 +156,10 @@ class FocusSession {
   final String? sourcePartTitle;
   final String? sourceFramePath;
   final Duration sourcePosition;
+
+  /// 为 true 时忽略估算倒计时到零，只有关联 CID 收到真实完播事件才正常完成。
+  final bool completeOnPartEnd;
+
   final List<FocusInterruption> interruptions;
   final String? terminationReason;
 
@@ -350,6 +357,25 @@ class FocusSession {
     );
   }
 
+  /// 在关联分 P 真实完播时按实际投入时长完成，快进观看不会虚增为整段标称时长。
+  FocusSession finishAtPartEnd(DateTime now) {
+    if (!isActive || !completeOnPartEnd) {
+      return this;
+    }
+    final Duration finalElapsed = elapsedAt(now);
+    return _copy(
+      accumulatedFocusDuration: finalElapsed,
+      dailyFocusMilliseconds: status == FocusSessionStatus.running
+          ? _recordCurrentRunUntil(now)
+          : dailyFocusMilliseconds,
+      status: FocusSessionStatus.completed,
+      finishedAt: now,
+      clearRunStartedAt: true,
+      clearPauseReason: true,
+      clearTerminationReason: true,
+    );
+  }
+
   /// 把刚完成的任务重新打开并增加时长，等待关联视频再次播放。
   FocusSession reopenAt(DateTime now, Duration extension) {
     if (status != FocusSessionStatus.completed || extension <= Duration.zero) {
@@ -364,6 +390,7 @@ class FocusSession {
           ? FocusPauseReason.playback
           : FocusPauseReason.awaitingVideo,
       replacePauseReason: true,
+      completeOnPartEnd: false,
       clearTerminationReason: true,
     );
   }
@@ -383,6 +410,7 @@ class FocusSession {
     String? sourcePartTitle,
     String? sourceFramePath,
     Duration? sourcePosition,
+    bool? completeOnPartEnd,
     List<FocusInterruption>? interruptions,
     String? terminationReason,
     Map<String, int>? dailyFocusMilliseconds,
@@ -416,6 +444,7 @@ class FocusSession {
       sourcePartTitle: sourcePartTitle ?? this.sourcePartTitle,
       sourceFramePath: sourceFramePath ?? this.sourceFramePath,
       sourcePosition: sourcePosition ?? this.sourcePosition,
+      completeOnPartEnd: completeOnPartEnd ?? this.completeOnPartEnd,
       interruptions: interruptions ?? this.interruptions,
       terminationReason: clearTerminationReason
           ? null
@@ -536,6 +565,7 @@ class FocusSession {
       'sourcePartTitle': sourcePartTitle,
       'sourceFramePath': sourceFramePath,
       'sourcePositionMs': sourcePosition.inMilliseconds,
+      'completeOnPartEnd': completeOnPartEnd,
       'interruptions': interruptions
           .map((FocusInterruption item) => item.toJson())
           .toList(growable: false),
@@ -665,6 +695,7 @@ class FocusSession {
             ? (json['sourcePositionMs'] as num).toInt().clamp(0, 1 << 31)
             : 0,
       ),
+      completeOnPartEnd: json['completeOnPartEnd'] == true,
       interruptions: List<FocusInterruption>.unmodifiable(interruptions),
       terminationReason: _optionalString(json['terminationReason']),
       dailyFocusMilliseconds: Map<String, int>.unmodifiable(
