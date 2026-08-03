@@ -83,10 +83,11 @@ void main() {
     expect(service.currentTask(entries)?.bvid, _video().bvid);
   });
 
-  test('播放进度、状态和重复加入会合并到同一条学习任务', () async {
+  test('同一视频不同P会独立保存进度和完成状态', () async {
     final SharedPreferences preferences = await SharedPreferences.getInstance();
     final LearningListService service = _service(preferences);
-    await service.addVideo(_video());
+    await service.addVideo(_video(), part: _video().parts.first);
+    await service.addVideo(_video(), part: _video().parts.last);
 
     await service.updateProgress(
       _video().bvid,
@@ -97,15 +98,90 @@ void main() {
     final List<LearningListEntry> completed = await service.updateStatus(
       _video().bvid,
       LearningListStatus.completed,
+      partCid: _video().parts.last.cid,
     );
-    final List<LearningListEntry> merged = await service.addVideo(_video());
+    final List<LearningListEntry> merged = await service.addVideo(
+      _video(),
+      part: _video().parts.last,
+    );
 
-    expect(completed.single.status, LearningListStatus.completed);
-    expect(merged, hasLength(1));
-    expect(merged.single.partCid, 1002);
-    expect(merged.single.position, const Duration(minutes: 4, seconds: 30));
-    expect(merged.single.status, LearningListStatus.completed);
-    expect(await service.loadCurrentTask(), isNull);
+    expect(completed, hasLength(2));
+    expect(merged, hasLength(2));
+    final LearningListEntry? firstPart = service.findEntryForPart(
+      merged,
+      _video().bvid,
+      _video().parts.first.cid,
+    );
+    final LearningListEntry? secondPart = service.findEntryForPart(
+      merged,
+      _video().bvid,
+      _video().parts.last.cid,
+    );
+    expect(firstPart?.status, LearningListStatus.notStarted);
+    expect(secondPart?.position, const Duration(minutes: 4, seconds: 30));
+    expect(secondPart?.status, LearningListStatus.completed);
+    expect(merged.last.partCid, _video().parts.last.cid);
+    expect(
+      (await service.loadCurrentTask())?.partCid,
+      _video().parts.first.cid,
+    );
+  });
+
+  test('未完成任务可重排，已完成任务置底且不会成为下一条学习任务', () async {
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final LearningListService service = _service(preferences);
+    final VideoPreview otherVideo = const VideoPreview(
+      bvid: 'BV1Learning3',
+      cid: 3001,
+      title: '另一个学习任务',
+      ownerName: '测试 UP 主',
+      parts: <VideoPart>[
+        VideoPart(
+          pageNumber: 1,
+          cid: 3001,
+          title: '唯一一节',
+          duration: Duration(minutes: 2),
+        ),
+      ],
+    );
+    await service.addVideo(_video(), part: _video().parts.first);
+    await service.addVideo(_video(), part: _video().parts.last);
+    await service.addVideo(otherVideo, part: otherVideo.initialPart);
+    final List<LearningListEntry> beforeReorder = await service.loadEntries();
+    final LearningListEntry firstPart = service.findEntryForPart(
+      beforeReorder,
+      _video().bvid,
+      _video().parts.first.cid,
+    )!;
+    final LearningListEntry secondPart = service.findEntryForPart(
+      beforeReorder,
+      _video().bvid,
+      _video().parts.last.cid,
+    )!;
+    final LearningListEntry otherPart = service.findEntryForPart(
+      beforeReorder,
+      otherVideo.bvid,
+      otherVideo.initialPart.cid,
+    )!;
+
+    await service.reorderIncomplete(<String>[
+      otherPart.stableId,
+      firstPart.stableId,
+      secondPart.stableId,
+    ]);
+    final List<LearningListEntry> reordered = await service.updateStatus(
+      _video().bvid,
+      LearningListStatus.completed,
+      partCid: secondPart.partCid,
+    );
+
+    expect(reordered.map((LearningListEntry entry) => entry.stableId), <String>[
+      otherPart.stableId,
+      firstPart.stableId,
+      secondPart.stableId,
+    ]);
+    expect(service.nextIncompleteAfter(reordered, firstPart), isNull);
+    expect(service.currentTask(reordered)?.stableId, otherPart.stableId);
   });
 
   test('读取损坏数据会跳过问题条目，并可独立删除和清空学习清单', () async {

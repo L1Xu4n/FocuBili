@@ -93,6 +93,29 @@ void main() {
     expect(restored?.sourcePartTitle, '第二P');
   });
 
+  /// 验证当前分P完成模式可持久化，并在真实完播时只结算实际投入时间。
+  test('当前分P专注等待真实完播并保存实际时长', () {
+    final DateTime start = DateTime(2026, 8, 3, 9);
+    final FocusSession running = FocusSession.start(
+      id: 'focus-part-end',
+      goal: '看完当前分P',
+      plannedDuration: const Duration(minutes: 20),
+      now: start,
+      sourceBvid: 'BV1PART',
+      sourcePartCid: 789,
+      completeOnPartEnd: true,
+    );
+    final FocusSession finished = running.finishAtPartEnd(
+      start.add(const Duration(minutes: 7)),
+    );
+    final FocusSession? restored = FocusSession.tryParse(finished.toJson());
+
+    expect(finished.status, FocusSessionStatus.completed);
+    expect(finished.accumulatedFocusDuration, const Duration(minutes: 7));
+    expect(restored?.completeOnPartEnd, isTrue);
+    expect(restored?.accumulatedFocusDuration, const Duration(minutes: 7));
+  });
+
   /// 验证旧记录只保存 BV 号时仍可打开视频，但不会误认为已经精确关联分P。
   test('旧专注记录只含 BV 号时仍可浏览视频', () {
     final FocusSession legacy = FocusSession.start(

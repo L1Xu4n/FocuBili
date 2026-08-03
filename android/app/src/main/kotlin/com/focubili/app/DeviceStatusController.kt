@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
+import android.os.Build
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -29,6 +30,7 @@ class DeviceStatusController(
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             METHOD_GET_BATTERY_PERCENT -> result.success(readBatteryPercent())
+            METHOD_GET_DIAGNOSTIC_DEVICE_INFO -> result.success(readDiagnosticDeviceInfo())
             else -> result.notImplemented()
         }
     }
@@ -57,6 +59,26 @@ class DeviceStatusController(
         return (level * 100 / scale).coerceIn(0, 100)
     }
 
+    /**
+     * 返回问题诊断页需要的公开系统版本、API 级别和设备型号。
+     *
+     * 不读取序列号、Android ID、MAC 地址、广告标识符或任何账号资料，确保复制诊断文本可安全反馈。
+     */
+    private fun readDiagnosticDeviceInfo(): Map<String, Any> {
+        val manufacturer = Build.MANUFACTURER?.trim().orEmpty()
+        val modelName = Build.MODEL?.trim().orEmpty()
+        val displayModel = when {
+            modelName.isBlank() -> "未知设备"
+            manufacturer.isBlank() || modelName.contains(manufacturer, ignoreCase = true) -> modelName
+            else -> "$manufacturer $modelName"
+        }
+        return mapOf(
+            "androidRelease" to Build.VERSION.RELEASE?.trim().orEmpty().ifBlank { "未知" },
+            "apiLevel" to Build.VERSION.SDK_INT,
+            "model" to displayModel,
+        )
+    }
+
     /** 解除方法通道回调，避免 Activity 销毁后继续引用 Flutter 引擎。 */
     fun dispose() {
         channel.setMethodCallHandler(null)
@@ -65,5 +87,6 @@ class DeviceStatusController(
     private companion object {
         const val CHANNEL_NAME = "com.focubili.app/device_status"
         const val METHOD_GET_BATTERY_PERCENT = "getBatteryPercent"
+        const val METHOD_GET_DIAGNOSTIC_DEVICE_INFO = "getDiagnosticDeviceInfo"
     }
 }

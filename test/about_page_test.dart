@@ -50,6 +50,7 @@ void main() {
     expect(find.text('版本 0.2.2'), findsOneWidget);
     expect(find.text('@L1Xu4n'), findsOneWidget);
     expect(find.byKey(const Key('about-update-dot')), findsOneWidget);
+    expect(find.byKey(const Key('open-problem-diagnostics')), findsOneWidget);
     await tester.tap(find.byKey(const Key('open-release-page')));
     await tester.pump();
     expect(openedUri?.path, contains('/releases/tag/v0.3.0'));

@@ -31,6 +31,7 @@ class VideoNoteComposer extends StatelessWidget {
     required this.titleController,
     required this.bodyController,
     required this.position,
+    this.partPageNumber,
     required this.includeFrame,
     required this.saving,
     required this.onIncludeFrameChanged,
@@ -50,6 +51,9 @@ class VideoNoteComposer extends StatelessWidget {
   final TextEditingController titleController;
   final TextEditingController bodyController;
   final Duration position;
+
+  /// 当前笔记关联的分 P 序号；全屏编辑器用它突出显示“第几 P”。
+  final int? partPageNumber;
   final DateTime? createdAt;
   final bool includeFrame;
   final String? framePath;
@@ -100,6 +104,31 @@ class VideoNoteComposer extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 6),
+              if (partPageNumber != null && partPageNumber! > 0) ...<Widget>[
+                DecoratedBox(
+                  key: const Key('note-part-label'),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.primaryContainer,
+                    borderRadius: BorderRadius.circular(7),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 7,
+                      vertical: 2,
+                    ),
+                    child: Text(
+                      'P$partPageNumber',
+                      style: textTheme.titleSmall?.copyWith(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w900,
+                        height: 1,
+                        color: Theme.of(context).colorScheme.onPrimaryContainer,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+              ],
               Text(
                 '视频位置：${formatVideoNotePosition(position)}',
                 key: const Key('note-position-label'),
@@ -227,6 +256,35 @@ class VideoNoteComposer extends StatelessWidget {
     if (!includeFrame || path == null || path.isEmpty) {
       return const SizedBox.shrink();
     }
+    if (compact && borderless) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 12),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: SizedBox(
+            width: double.infinity,
+            child: AspectRatio(
+              aspectRatio: 16 / 9,
+              child: ColoredBox(
+                color: Colors.black,
+                child: Image.file(
+                  File(path),
+                  key: const Key('note-frame-preview'),
+                  fit: BoxFit.cover,
+                  // 全屏画面文件读取失败函数仍填满预览区域并保留明确提示。
+                  errorBuilder:
+                      (
+                        BuildContext context,
+                        Object error,
+                        StackTrace? stackTrace,
+                      ) => _buildFrameErrorPlaceholder(context, compact: true),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
     return Padding(
       padding: const EdgeInsets.only(top: 10),
       child: Align(
@@ -244,21 +302,29 @@ class VideoNoteComposer extends StatelessWidget {
               fit: BoxFit.contain,
               // 画面文件读取失败函数保留明确提示，文字笔记仍然可以继续保存。
               errorBuilder:
-                  (BuildContext context, Object error, StackTrace? stackTrace) {
-                    return Container(
-                      width: compact ? 210 : 280,
-                      height: compact ? 70 : 96,
-                      alignment: Alignment.center,
-                      color: Theme.of(
-                        context,
-                      ).colorScheme.surfaceContainerHighest,
-                      child: const Text('已保存的画面文件不存在'),
-                    );
-                  },
+                  (
+                    BuildContext context,
+                    Object error,
+                    StackTrace? stackTrace,
+                  ) => _buildFrameErrorPlaceholder(context, compact: compact),
             ),
           ),
         ),
       ),
+    );
+  }
+
+  /// 创建截图缺失时使用的固定占位，避免图片文件被清理后破坏笔记编辑布局。
+  Widget _buildFrameErrorPlaceholder(
+    BuildContext context, {
+    required bool compact,
+  }) {
+    return Container(
+      width: compact ? 210 : 280,
+      height: compact ? 70 : 96,
+      alignment: Alignment.center,
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      child: const Text('已保存的画面文件不存在'),
     );
   }
 

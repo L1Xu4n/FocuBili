@@ -12,6 +12,7 @@ import '../../features/focus/focus_timer_controller.dart';
 import '../../features/focus/focus_timer_scope.dart';
 import '../../features/focus/focus_interruption_dialog.dart';
 import '../../features/focus/player_focus_sheet.dart';
+import '../../features/focus/player_focus_onboarding.dart';
 import '../../features/notes/video_note_composer.dart';
 import '../../features/profile/user_profile_page.dart';
 import '../../models/video_note.dart';
@@ -24,6 +25,7 @@ import '../../services/device_status_service.dart';
 import '../../services/external_link_service.dart';
 import '../../services/native_playback_service.dart';
 import '../../services/player_overlay_service.dart';
+import '../../services/problem_diagnostics_service.dart';
 import '../../services/bilibili_public_content_service.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/watch_history_service.dart';
@@ -166,6 +168,7 @@ class _PlayerPageState extends State<PlayerPage>
   late final BilibiliPublicContentService _publicContentService;
   late final VideoShotService _videoShotService;
   late final VideoNoteService _videoNoteService;
+  late final ProblemDiagnosticsService _problemDiagnosticsService;
   late VideoPreview _activeVideo;
   late VideoPart _currentPart;
   final List<VideoPreview> _collectionVideoBackStack = <VideoPreview>[];
@@ -196,6 +199,7 @@ class _PlayerPageState extends State<PlayerPage>
   Timer? _controlsTimer;
   Timer? _interactivePromptTimer;
   Timer? _seekFeedbackTimer;
+  Timer? _focusSeekTransitionTimer;
   Timer? _resumeNoticeTimer;
   Timer? _playerNoticeTimer;
   Timer? _fullscreenStatusTimer;
@@ -245,6 +249,7 @@ class _PlayerPageState extends State<PlayerPage>
   Duration _lastLearningListSavedPosition = Duration.zero;
   bool _learningProgressSaveInFlight = false;
   bool _completionPromptVisible = false;
+  bool _completionLearningFinished = false;
   bool _interactivePromptVisible = false;
   bool _interactiveChoiceOpening = false;
   DateTime _fullscreenClock = DateTime.now();
@@ -289,6 +294,7 @@ class _PlayerPageState extends State<PlayerPage>
   String? _lastFocusPlaybackBvid;
   int? _lastFocusPlaybackPartCid;
   bool? _lastFocusPlaybackPlaying;
+  bool _focusSeekTransitionActive = false;
   String? _dismissedAssociationCandidate;
   bool _associationPromptOpen = false;
   bool _leaveRequestInProgress = false;
@@ -335,6 +341,7 @@ class _PlayerPageState extends State<PlayerPage>
             ? BilibiliVideoShotService()
             : const EmptyVideoShotService());
     _videoNoteService = widget.videoNoteService ?? VideoNoteService();
+    _problemDiagnosticsService = ProblemDiagnosticsService();
     _danmakuPreferencesService =
         widget.danmakuPreferencesService ?? DanmakuPreferencesService();
     _playbackPreferencesService =
@@ -645,24 +652,25 @@ class _PlayerPageState extends State<PlayerPage>
     });
   }
 
-  /// 读取当前视频是否已在学习清单中，切换合集视频后只应用匹配当前 BV 的结果。
+  /// 读取当前视频分 P 是否已在学习清单中，避免同一视频的其他 P 覆盖当前任务状态。
   Future<void> _loadCurrentLearningListEntry() async {
     final String requestedBvid = _activeVideo.bvid;
+    final int requestedPartCid = _currentPart.cid;
     if (mounted) {
       setState(() => _learningListLoading = true);
     }
     final List<LearningListEntry> entries = await _learningListService
         .loadEntries();
-    if (!mounted || _activeVideo.bvid != requestedBvid) {
+    if (!mounted ||
+        _activeVideo.bvid != requestedBvid ||
+        _currentPart.cid != requestedPartCid) {
       return;
     }
-    LearningListEntry? matched;
-    for (final LearningListEntry entry in entries) {
-      if (entry.bvid == requestedBvid) {
-        matched = entry;
-        break;
-      }
-    }
+    final LearningListEntry? matched = _learningListService.findEntryForPart(
+      entries,
+      requestedBvid,
+      requestedPartCid,
+    );
     setState(() {
       _learningListEntry = matched;
       _learningListLoading = false;
@@ -671,37 +679,41 @@ class _PlayerPageState extends State<PlayerPage>
     });
   }
 
-  /// 将当前详情视频加入学习清单；播放器已就绪时优先保存真实分P和进度。
+  /// 将当前分 P 加入学习清单；播放器已就绪时优先保存真实进度。
   Future<void> _addCurrentVideoToLearningList() async {
     if (_addingLearningBvid != null) {
       return;
     }
-    final String bvid = _activeVideo.bvid;
+    final VideoPreview video = _activeVideo;
+    final VideoPart part = _currentPart;
+    final String bvid = video.bvid;
     final bool hasLivePlayback = _playbackSnapshot.phase == PlaybackPhase.ready;
     setState(() => _addingLearningBvid = bvid);
     try {
       final List<LearningListEntry> entries = await _learningListService
           .addVideo(
-            _activeVideo,
-            part: hasLivePlayback ? _currentPart : null,
+            video,
+            part: part,
             position: hasLivePlayback ? _playbackSnapshot.position : null,
             status: hasLivePlayback && _playing
                 ? LearningListStatus.learning
                 : null,
           );
-      if (!mounted || _activeVideo.bvid != bvid) {
+      if (!mounted ||
+          _activeVideo.bvid != bvid ||
+          _currentPart.cid != part.cid) {
         return;
       }
-      final LearningListEntry? entry = _entryForBvid(entries, bvid);
+      final LearningListEntry? entry = _entryForPart(entries, bvid, part.cid);
       setState(() {
         _learningListEntry = entry;
         _recordedLearningListPartCid = entry?.partCid;
         _lastLearningListSavedPosition = entry?.position ?? Duration.zero;
       });
-      _showPlayerNotice('已加入学习清单');
+      _showTransientSnackBar('已将 P${part.pageNumber} 加入学习清单');
     } catch (_) {
       if (mounted) {
-        _showPlayerNotice('加入学习清单失败，请稍后重试。');
+        _showTransientSnackBar('加入学习清单失败，请稍后重试。');
       }
     } finally {
       if (mounted && _addingLearningBvid == bvid) {
@@ -715,7 +727,7 @@ class _PlayerPageState extends State<PlayerPage>
     if (_learningListLoading || _addingLearningBvid != null) {
       return;
     }
-    if (_learningListEntry == null) {
+    if (_currentLearningListEntry == null) {
       await _addCurrentVideoToLearningList();
       return;
     }
@@ -723,7 +735,9 @@ class _PlayerPageState extends State<PlayerPage>
       context: context,
       builder: (BuildContext dialogContext) => AlertDialog(
         title: const Text('取消加入学习清单'),
-        content: Text('确定把“${_activeVideo.title}”移出学习清单吗？观看记录和笔记不会被删除。'),
+        content: Text(
+          '确定把“${_activeVideo.title}”的 P${_currentPart.pageNumber} 移出学习清单吗？观看记录和笔记不会被删除。',
+        ),
         actions: <Widget>[
           TextButton(
             // 保留按钮函数只关闭确认框，不修改学习清单。
@@ -744,16 +758,19 @@ class _PlayerPageState extends State<PlayerPage>
     await _removeCurrentVideoFromLearningList();
   }
 
-  /// 从本机学习清单移除当前视频，不影响已有观看记录、笔记或播放器进度。
+  /// 从本机学习清单移除当前分 P，不影响同视频其他 P、观看记录或笔记。
   Future<void> _removeCurrentVideoFromLearningList() async {
     if (_addingLearningBvid != null) {
       return;
     }
     final String bvid = _activeVideo.bvid;
+    final int partCid = _currentPart.cid;
     setState(() => _addingLearningBvid = bvid);
     try {
-      await _learningListService.remove(bvid);
-      if (!mounted || _activeVideo.bvid != bvid) {
+      await _learningListService.remove(bvid, partCid: partCid);
+      if (!mounted ||
+          _activeVideo.bvid != bvid ||
+          _currentPart.cid != partCid) {
         return;
       }
       setState(() {
@@ -761,10 +778,10 @@ class _PlayerPageState extends State<PlayerPage>
         _recordedLearningListPartCid = null;
         _lastLearningListSavedPosition = Duration.zero;
       });
-      _showPlayerNotice('已取消加入学习清单');
+      _showTransientSnackBar('已将当前分 P 移出学习清单');
     } catch (_) {
       if (mounted) {
-        _showPlayerNotice('取消加入学习清单失败，请稍后重试。');
+        _showTransientSnackBar('取消加入学习清单失败，请稍后重试。');
       }
     } finally {
       if (mounted && _addingLearningBvid == bvid) {
@@ -802,7 +819,11 @@ class _PlayerPageState extends State<PlayerPage>
         return;
       }
       if (_activeVideo.bvid == bvid) {
-        final LearningListEntry? learningEntry = _entryForBvid(entries, bvid);
+        final LearningListEntry? learningEntry = _entryForPart(
+          entries,
+          bvid,
+          _currentPart.cid,
+        );
         setState(() {
           _learningListEntry = learningEntry;
           _recordedLearningListPartCid = learningEntry?.partCid;
@@ -822,23 +843,31 @@ class _PlayerPageState extends State<PlayerPage>
     }
   }
 
-  /// 从服务返回的任务列表中取出指定 BV，避免页面重复扫描和空值断言。
-  LearningListEntry? _entryForBvid(
+  /// 从服务返回的任务列表中取出指定 BV 与 CID，避免同视频不同 P 读到错误任务。
+  LearningListEntry? _entryForPart(
     List<LearningListEntry> entries,
     String bvid,
+    int partCid,
   ) {
-    for (final LearningListEntry entry in entries) {
-      if (entry.bvid == bvid) {
-        return entry;
-      }
+    return _learningListService.findEntryForPart(entries, bvid, partCid);
+  }
+
+  /// 只返回与画面当前 BV 和 CID 完全一致的任务，异步旧结果不会污染其他分 P 按钮。
+  LearningListEntry? get _currentLearningListEntry {
+    final LearningListEntry? entry = _learningListEntry;
+    if (entry == null ||
+        !entry.matchesPart(_activeVideo.bvid, _currentPart.cid)) {
+      return null;
     }
-    return null;
+    return entry;
   }
 
   /// 在播放状态真实变化或进度跨过保存间隔时，把当前任务写回学习清单。
   void _recordLearningListProgressWhenNeeded(PlaybackSnapshot snapshot) {
-    final LearningListEntry? entry = _learningListEntry;
-    if (entry == null || snapshot.phase != PlaybackPhase.ready) {
+    final LearningListEntry? entry = _currentLearningListEntry;
+    if (entry == null ||
+        entry.status == LearningListStatus.completed ||
+        snapshot.phase != PlaybackPhase.ready) {
       return;
     }
     final int positionDeltaMs =
@@ -869,8 +898,9 @@ class _PlayerPageState extends State<PlayerPage>
 
   /// 在离开、换分P或播放结束前补存学习任务的当前位置，不自动改变完成状态。
   void _flushCurrentLearningListProgress() {
-    final LearningListEntry? entry = _learningListEntry;
+    final LearningListEntry? entry = _currentLearningListEntry;
     if (entry == null ||
+        entry.status == LearningListStatus.completed ||
         (_recordedLearningListPartCid != _currentPart.cid &&
             _playbackSnapshot.position == Duration.zero)) {
       return;
@@ -890,12 +920,16 @@ class _PlayerPageState extends State<PlayerPage>
     LearningListStatus? status,
     bool force = false,
   }) async {
-    final LearningListEntry? entry = _learningListEntry;
+    final LearningListEntry? entry = _currentLearningListEntry;
     if (entry == null || _learningProgressSaveInFlight) {
       return;
     }
     final String bvid = _activeVideo.bvid;
     final VideoPart part = _currentPart;
+    final LearningListStatus? safeStatus =
+        entry.status == LearningListStatus.completed
+        ? LearningListStatus.completed
+        : status;
     final Duration safePosition = position.isNegative
         ? Duration.zero
         : position;
@@ -906,7 +940,7 @@ class _PlayerPageState extends State<PlayerPage>
     if (!force &&
         _recordedLearningListPartCid == part.cid &&
         positionDeltaMs < 1000 &&
-        (status == null || status == entry.status)) {
+        (safeStatus == null || safeStatus == entry.status)) {
       return;
     }
     _learningProgressSaveInFlight = true;
@@ -916,12 +950,14 @@ class _PlayerPageState extends State<PlayerPage>
             bvid,
             part: part,
             position: safePosition,
-            status: status,
+            status: safeStatus,
           );
-      if (!mounted || _activeVideo.bvid != bvid) {
+      if (!mounted ||
+          _activeVideo.bvid != bvid ||
+          _currentPart.cid != part.cid) {
         return;
       }
-      final LearningListEntry? updated = _entryForBvid(entries, bvid);
+      final LearningListEntry? updated = _entryForPart(entries, bvid, part.cid);
       if (updated != null) {
         setState(() {
           _learningListEntry = updated;
@@ -936,33 +972,44 @@ class _PlayerPageState extends State<PlayerPage>
     }
   }
 
-  /// 播放结束后把任务明确标记完成；未加入的视频会先创建任务再完成。
+  /// 把当前已加入清单的分 P 标记完成，并让按钮立即显示“已标记完成”。
   Future<void> _markCurrentLearningCompleted() async {
-    if (_addingLearningBvid != null) {
+    final LearningListEntry? current = _currentLearningListEntry;
+    if (_addingLearningBvid != null ||
+        current == null ||
+        !current.matchesPart(_activeVideo.bvid, _currentPart.cid) ||
+        current.status == LearningListStatus.completed) {
       return;
     }
     final String bvid = _activeVideo.bvid;
     setState(() => _addingLearningBvid = bvid);
     try {
-      await _learningListService.addVideo(
-        _activeVideo,
-        part: _currentPart,
-        position: _displayDuration,
-      );
       final List<LearningListEntry> entries = await _learningListService
-          .updateStatus(bvid, LearningListStatus.completed);
-      if (!mounted || _activeVideo.bvid != bvid) {
+          .updateProgress(
+            bvid,
+            part: _currentPart,
+            position: _displayDuration,
+            status: LearningListStatus.completed,
+          );
+      if (!mounted ||
+          _activeVideo.bvid != bvid ||
+          _currentPart.cid != current.partCid) {
         return;
       }
-      final LearningListEntry? completed = _entryForBvid(entries, bvid);
+      final LearningListEntry? completed = _entryForPart(
+        entries,
+        bvid,
+        current.partCid,
+      );
       setState(() {
         _learningListEntry = completed;
-        _completionPromptVisible = false;
+        _completionPromptVisible = true;
+        _completionLearningFinished = false;
         _recordedLearningListPartCid = _currentPart.cid;
         _lastLearningListSavedPosition =
             completed?.position ?? _displayDuration;
       });
-      _showPlayerNotice('已标记为完成');
+      _showPlayerNotice('已标记完成');
     } catch (_) {
       if (mounted) {
         _showPlayerNotice('标记完成失败，请稍后重试。');
@@ -974,14 +1021,77 @@ class _PlayerPageState extends State<PlayerPage>
     }
   }
 
-  /// 用户主动选择下一节时才切换分P，确保播放器结束后绝不自动连播。
-  Future<void> _playNextPartAfterCompletion() async {
-    final int index = _currentPartIndex;
-    if (index < 0 || index >= _activeVideo.parts.length - 1) {
+  /// 完成当前分 P 后在同一播放器内打开下一项；最后一项则保留提示并显示全部完成。
+  Future<void> _continueLearningAfterCompletion() async {
+    final LearningListEntry? current = _currentLearningListEntry;
+    if (_addingLearningBvid != null ||
+        current == null ||
+        !current.matchesPart(_activeVideo.bvid, _currentPart.cid)) {
       return;
     }
-    setState(() => _completionPromptVisible = false);
-    await _changePart(_activeVideo.parts[index + 1]);
+    final String bvid = _activeVideo.bvid;
+    setState(() => _addingLearningBvid = bvid);
+    try {
+      final List<LearningListEntry> beforeCompletion =
+          await _learningListService.loadEntries();
+      final LearningListEntry? next = _learningListService.nextIncompleteAfter(
+        beforeCompletion,
+        current,
+      );
+      final List<LearningListEntry> updatedEntries = await _learningListService
+          .updateProgress(
+            bvid,
+            part: _currentPart,
+            position: _displayDuration,
+            status: LearningListStatus.completed,
+          );
+      if (!mounted ||
+          _activeVideo.bvid != bvid ||
+          _currentPart.cid != current.partCid) {
+        return;
+      }
+      final LearningListEntry? completed = _entryForPart(
+        updatedEntries,
+        bvid,
+        current.partCid,
+      );
+      if (next == null) {
+        setState(() {
+          _learningListEntry = completed;
+          _completionPromptVisible = true;
+          _completionLearningFinished = true;
+          _recordedLearningListPartCid = _currentPart.cid;
+          _lastLearningListSavedPosition =
+              completed?.position ?? _displayDuration;
+        });
+        _showPlayerNotice('学习清单已完成');
+        return;
+      }
+      final VideoPreview nextVideo = next.bvid == _activeVideo.bvid
+          ? _activeVideo
+          : await _bilibiliService.lookupVideo(next.bvid);
+      if (!mounted || _activeVideo.bvid != bvid) {
+        return;
+      }
+      await _switchActiveVideo(nextVideo, learningEntry: next);
+    } catch (_) {
+      if (mounted) {
+        if (_activeVideo.bvid == bvid && _currentPart.cid == current.partCid) {
+          setState(() {
+            _learningListEntry = _learningListEntry?.copyWith(
+              status: LearningListStatus.completed,
+            );
+            _completionPromptVisible = true;
+            _completionLearningFinished = false;
+          });
+        }
+        _showPlayerNotice('继续学习失败，请稍后重试。');
+      }
+    } finally {
+      if (mounted && _addingLearningBvid == bvid) {
+        setState(() => _addingLearningBvid = null);
+      }
+    }
   }
 
   /// 请求 Android 创建 Media3 视频纹理，再直接请求公开视频的播放数据。
@@ -1004,6 +1114,7 @@ class _PlayerPageState extends State<PlayerPage>
         _brightness = levels.brightness;
         _volume = levels.volume;
       });
+      unawaited(_loadCurrentLearningListEntry());
       unawaited(_loadPlayerEnhancements());
       if (restoredPartMatched && _activeVideo.parts.length > 1) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1074,12 +1185,17 @@ class _PlayerPageState extends State<PlayerPage>
     if (!mounted) {
       return;
     }
+    final PlaybackSnapshot previousSnapshot = _playbackSnapshot;
     final bool justEnded =
-        _playbackSnapshot.phase != PlaybackPhase.ended &&
+        previousSnapshot.phase != PlaybackPhase.ended &&
         snapshot.phase == PlaybackPhase.ended;
     final bool leftEnded =
-        _playbackSnapshot.phase == PlaybackPhase.ended &&
+        previousSnapshot.phase == PlaybackPhase.ended &&
         snapshot.phase != PlaybackPhase.ended;
+    final bool isNewPlaybackError =
+        snapshot.phase == PlaybackPhase.error &&
+        (previousSnapshot.phase != PlaybackPhase.error ||
+            previousSnapshot.message != snapshot.message);
     final Duration? requestedInitialPosition = _pendingInitialPosition;
     final bool shouldSeekToInitialPosition =
         requestedInitialPosition != null &&
@@ -1109,6 +1225,12 @@ class _PlayerPageState extends State<PlayerPage>
     final bool leftPictureInPicture =
         _playbackSnapshot.isInPictureInPicture &&
         !snapshot.isInPictureInPicture;
+    final LearningListEntry? currentLearningEntry = _learningListEntry;
+    final bool completedLearningEntry =
+        justEnded &&
+        currentLearningEntry != null &&
+        currentLearningEntry.matchesPart(_activeVideo.bvid, _currentPart.cid) &&
+        currentLearningEntry.status != LearningListStatus.completed;
     setState(() {
       _playbackSnapshot = snapshot;
       _isRetrying = false;
@@ -1140,16 +1262,22 @@ class _PlayerPageState extends State<PlayerPage>
       if (leftEnded) {
         _interactivePromptVisible = false;
         _completionPromptVisible = false;
+        _completionLearningFinished = false;
       }
       if (justEnded) {
-        // 互动视频优先显示剧情选择；普通视频仍显示学习完成选项，二者都不会自动连播。
+        // 互动视频优先显示剧情选择；普通视频仅在当前分 P 已加入学习清单时显示完成操作。
         _interactivePromptVisible =
             _playerEnhancementController.handlesPlaybackCompletion;
-        _completionPromptVisible = !_interactivePromptVisible;
+        _completionPromptVisible =
+            !_interactivePromptVisible && completedLearningEntry;
+        _completionLearningFinished = false;
         _showControls = true;
       }
     });
     _syncDanmakuAnimation(snapshot);
+    if (isNewPlaybackError) {
+      _recordPlaybackDiagnostic(snapshot, previousSnapshot.phase);
+    }
     if (qualitySelectionFailed) {
       _showMembershipQualityNotice();
     }
@@ -1185,14 +1313,53 @@ class _PlayerPageState extends State<PlayerPage>
     }
   }
 
+  /// 把新的原生播放失败写入脱敏问题诊断；不记录 BV、标题、播放地址、Cookie 或服务端响应正文。
+  void _recordPlaybackDiagnostic(
+    PlaybackSnapshot snapshot,
+    PlaybackPhase previousPhase,
+  ) {
+    final String playerState = switch (previousPhase) {
+      PlaybackPhase.loading => 'preparing',
+      PlaybackPhase.ready => 'playing',
+      PlaybackPhase.ended => 'ended',
+      PlaybackPhase.error => 'error',
+      PlaybackPhase.idle => 'idle',
+    };
+    unawaited(
+      _problemDiagnosticsService.recordPlaybackFailure(
+        message: snapshot.message ?? '无法获取视频播放地址。',
+        playerState: playerState,
+        multiPart: _activeVideo.parts.length > 1,
+      ),
+    );
+  }
+
   /// 只在播放状态、BV 或分P真正变化时同步专注控制器，避免重复写本机存储。
   void _syncFocusPlaybackState(PlaybackSnapshot snapshot) {
     final FocusTimerController? controller = _boundFocusController;
     if (controller == null) {
       return;
     }
+    if (snapshot.phase == PlaybackPhase.ended) {
+      unawaited(
+        controller.completeForPlaybackPart(
+          bvid: _activeVideo.bvid,
+          partCid: _currentPart.cid,
+        ),
+      );
+    }
     final bool actuallyPlaying =
         snapshot.isPlaying && snapshot.phase == PlaybackPhase.ready;
+    if (_focusSeekTransitionActive &&
+        _lastFocusPlaybackPlaying == true &&
+        !actuallyPlaying &&
+        snapshot.phase != PlaybackPhase.ended &&
+        snapshot.phase != PlaybackPhase.error) {
+      return;
+    }
+    if (actuallyPlaying && _focusSeekTransitionActive) {
+      _finishFocusSeekTransition(syncCurrentSnapshot: false);
+    }
     if (_lastFocusPlaybackBvid == _activeVideo.bvid &&
         _lastFocusPlaybackPartCid == _currentPart.cid &&
         _lastFocusPlaybackPlaying == actuallyPlaying) {
@@ -1208,6 +1375,31 @@ class _PlayerPageState extends State<PlayerPage>
         isPlaying: actuallyPlaying,
       ),
     );
+  }
+
+  /// 快进或快退开始时短暂忽略原生播放器的缓冲暂停，避免勿扰模式被反复关闭和开启。
+  void _beginFocusSeekTransition() {
+    if (_lastFocusPlaybackPlaying != true) {
+      return;
+    }
+    _focusSeekTransitionActive = true;
+    _focusSeekTransitionTimer?.cancel();
+    _focusSeekTransitionTimer = Timer(const Duration(milliseconds: 1500), () {
+      _finishFocusSeekTransition();
+    });
+  }
+
+  /// 结束快进保护窗口，并按需把保护期间最后一个真实播放状态同步给专注控制器。
+  void _finishFocusSeekTransition({bool syncCurrentSnapshot = true}) {
+    _focusSeekTransitionTimer?.cancel();
+    _focusSeekTransitionTimer = null;
+    if (!_focusSeekTransitionActive) {
+      return;
+    }
+    _focusSeekTransitionActive = false;
+    if (syncCurrentSnapshot && mounted) {
+      _syncFocusPlaybackState(_playbackSnapshot);
+    }
   }
 
   /// 为首页创建且尚未关联的任务询问是否绑定当前真实视频分P。
@@ -1302,7 +1494,7 @@ class _PlayerPageState extends State<PlayerPage>
       PlayerInitialPositionSource.learning => '学习清单位置',
     };
     try {
-      await _playbackService.seekTo(position);
+      await _seekNativeTo(position);
       if (mounted) {
         _showTransientSnackBar(
           '已跳转到$sourceLabel：${formatVideoNotePosition(position)}',
@@ -1456,6 +1648,7 @@ class _PlayerPageState extends State<PlayerPage>
     _controlsTimer?.cancel();
     _interactivePromptTimer?.cancel();
     _seekFeedbackTimer?.cancel();
+    _focusSeekTransitionTimer?.cancel();
     _resumeNoticeTimer?.cancel();
     _playerNoticeTimer?.cancel();
     _fullscreenStatusTimer?.cancel();
@@ -1486,6 +1679,7 @@ class _PlayerPageState extends State<PlayerPage>
 
   /// 执行原生播放或暂停命令，并把平台异常转换为页面可读的错误。
   Future<void> _setPlaybackActive(bool shouldPlay) async {
+    _finishFocusSeekTransition(syncCurrentSnapshot: false);
     try {
       if (shouldPlay) {
         await _playbackService.play();
@@ -1613,6 +1807,7 @@ class _PlayerPageState extends State<PlayerPage>
 
   /// 请求原生播放器按相对时长跳转，并把发生的异常显示在页面上。
   Future<void> _seekNativeBy(Duration offset) async {
+    _beginFocusSeekTransition();
     try {
       await _playbackService.seekBy(offset);
     } on PlatformException catch (error) {
@@ -1622,13 +1817,19 @@ class _PlayerPageState extends State<PlayerPage>
     }
   }
 
+  /// 在任意绝对跳转前开启快进保护，避免原生缓冲状态被误判为用户暂停。
+  Future<void> _seekNativeTo(Duration position) {
+    _beginFocusSeekTransition();
+    return _playbackService.seekTo(position);
+  }
+
   /// 把进度条比例换算为真实毫秒位置，再请求原生播放器跳转。
   Future<void> _seekToProgress(double progress) async {
     final Duration target = Duration(
       milliseconds: (_displayDuration.inMilliseconds * progress).round(),
     );
     try {
-      await _playbackService.seekTo(target);
+      await _seekNativeTo(target);
     } on PlatformException catch (error) {
       _showPlaybackError('无法跳转进度：${error.message ?? error.code}');
     } catch (error) {
@@ -1940,7 +2141,10 @@ class _PlayerPageState extends State<PlayerPage>
       _showControls = true;
       _resumeNotice = null;
       _partSelectorExpanded = false;
+      _learningListEntry = null;
+      _learningListLoading = false;
       _completionPromptVisible = false;
+      _completionLearningFinished = false;
       _interactivePromptVisible = false;
     });
     _shownRestoredCid = null;
@@ -1952,6 +2156,7 @@ class _PlayerPageState extends State<PlayerPage>
     _lastFocusPlaybackBvid = null;
     _lastFocusPlaybackPartCid = null;
     _lastFocusPlaybackPlaying = null;
+    unawaited(_loadCurrentLearningListEntry());
     unawaited(_loadPlayerEnhancements());
     try {
       await _playbackService.openVideo(
@@ -1998,12 +2203,16 @@ class _PlayerPageState extends State<PlayerPage>
       _progress = 0;
       _showControls = true;
       _resumeNotice = null;
+      _learningListEntry = null;
+      _learningListLoading = false;
+      _completionLearningFinished = false;
     });
     _shownRestoredCid = null;
     _recordedHistoryPartCid = null;
     _lastHistorySavedPosition = Duration.zero;
     _recordedLearningListPartCid = null;
     _lastLearningListSavedPosition = Duration.zero;
+    unawaited(_loadCurrentLearningListEntry());
     unawaited(_playerEnhancementController.selectChoice(choice));
     try {
       await _playbackService.openVideo(
@@ -2025,7 +2234,7 @@ class _PlayerPageState extends State<PlayerPage>
   /// 跳到章节开始时间，并保持用户原来的播放或暂停状态。
   Future<void> _seekToChapter(Duration position) async {
     try {
-      await _playbackService.seekTo(position);
+      await _seekNativeTo(position);
       if (mounted && _displayDuration > Duration.zero) {
         setState(() {
           _progress =
@@ -2463,6 +2672,8 @@ class _PlayerPageState extends State<PlayerPage>
       _fullscreenEnteredByOrientation = nextFullscreen && enteredByOrientation;
       _controlsLocked = nextFullscreen ? _controlsLocked : false;
       _showControls = true;
+      // 从竖屏笔记本进入全屏时直接挂载全屏工作区；退出时保留笔记打开状态给竖屏布局继续使用。
+      _notesOverlayMounted = nextFullscreen && _notesOpen;
     });
     if (nextFullscreen) {
       _startFullscreenStatusUpdates();
@@ -2543,8 +2754,7 @@ class _PlayerPageState extends State<PlayerPage>
   /// 计算当前分P尚未播放的时长，并限制在专注模块允许的 1 到 180 分钟内。
   Duration _currentPartFocusDuration() {
     final int remainingMilliseconds =
-        _displayDuration.inMilliseconds -
-        _playbackSnapshot.position.inMilliseconds;
+        _currentPartPlaybackRemaining().inMilliseconds;
     return Duration(
       milliseconds: remainingMilliseconds.clamp(
         FocusTimerController.minimumDuration.inMilliseconds,
@@ -2553,11 +2763,27 @@ class _PlayerPageState extends State<PlayerPage>
     );
   }
 
+  /// 使用播放器真实总时长和当前位置计算当前分 P 剩余时间，不套用专注时长的一分钟下限。
+  Duration _currentPartPlaybackRemaining() {
+    final Duration duration = _playbackSnapshot.duration > Duration.zero
+        ? _playbackSnapshot.duration
+        : _displayDuration;
+    final int remainingMilliseconds =
+        duration.inMilliseconds - _playbackSnapshot.position.inMilliseconds;
+    return Duration(
+      milliseconds: remainingMilliseconds.clamp(0, duration.inMilliseconds),
+    );
+  }
+
   /// 打开播放器专注面板，提供当前分P计划及活动计时控制。
   Future<void> _openPlayerFocusSheet() async {
     final FocusTimerController? controller = _boundFocusController;
     if (controller == null) {
       _showPlayerNotice('专注控制器尚未准备好');
+      return;
+    }
+    await showPlayerFocusDoNotDisturbGuideIfNeeded(context);
+    if (!mounted) {
       return;
     }
     _showPlayerControls();
@@ -3740,7 +3966,7 @@ class _PlayerPageState extends State<PlayerPage>
       if (targetPart.cid != _currentPart.cid) {
         await _changePart(targetPart);
       }
-      await _playbackService.seekTo(note.position);
+      await _seekNativeTo(note.position);
     } catch (_) {
       if (mounted) {
         _showTransientSnackBar('暂时无法跳转到这个笔记的时间点。');
@@ -3817,7 +4043,7 @@ class _PlayerPageState extends State<PlayerPage>
         await _changePart(targetPart);
         await _playbackService.pause();
       }
-      await _playbackService.seekTo(_notePosition);
+      await _seekNativeTo(_notePosition);
       await _waitForNoteFramePosition(_notePosition);
       return await _playbackService.captureCurrentFrame();
     } finally {
@@ -3825,7 +4051,7 @@ class _PlayerPageState extends State<PlayerPage>
         await _changePart(returnPart);
         await _playbackService.pause();
       }
-      await _playbackService.seekTo(returnPosition);
+      await _seekNativeTo(returnPosition);
       if (shouldResume) {
         await _playbackService.play();
       }
@@ -4072,8 +4298,11 @@ class _PlayerPageState extends State<PlayerPage>
     }
   }
 
-  /// 复用现有纹理打开另一支视频，并完整重置旧视频的分P、字幕、弹幕和历史状态。
-  Future<void> _switchActiveVideo(VideoPreview video) async {
+  /// 复用现有纹理打开另一支视频；学习任务可精确指定分 P 与进度，避免替换页面释放新播放器。
+  Future<void> _switchActiveVideo(
+    VideoPreview video, {
+    LearningListEntry? learningEntry,
+  }) async {
     await _saveFocusLastSeen();
     await _boundFocusController?.updatePlaybackState(
       bvid: _activeVideo.bvid,
@@ -4088,7 +4317,21 @@ class _PlayerPageState extends State<PlayerPage>
     final SavedPlaybackState? savedState = await _playbackService
         .loadSavedPlaybackState(video.bvid);
     VideoPart targetPart = video.initialPart;
-    if (savedState != null) {
+    final LearningListEntry? requestedLearningEntry =
+        learningEntry != null && learningEntry.bvid == video.bvid
+        ? learningEntry
+        : null;
+    if (requestedLearningEntry != null) {
+      for (final VideoPart part in video.parts) {
+        if (part.cid == requestedLearningEntry.partCid) {
+          targetPart = part;
+          break;
+        }
+        if (part.pageNumber == requestedLearningEntry.partPageNumber) {
+          targetPart = part;
+        }
+      }
+    } else if (savedState != null) {
       for (final VideoPart part in video.parts) {
         if (part.cid == savedState.cid) {
           targetPart = part;
@@ -4131,9 +4374,10 @@ class _PlayerPageState extends State<PlayerPage>
       _fullscreenNoteListCollapsed = false;
       _notesOverlayMounted = false;
       _locatedCollectionPreviewBvid = null;
-      _learningListEntry = null;
+      _learningListEntry = requestedLearningEntry;
       _learningListLoading = false;
       _completionPromptVisible = false;
+      _completionLearningFinished = false;
       _interactivePromptVisible = false;
       _interactiveChoiceOpening = false;
     });
@@ -4141,7 +4385,13 @@ class _PlayerPageState extends State<PlayerPage>
     _recordedHistoryPartCid = null;
     _lastHistorySavedPosition = Duration.zero;
     _recordedLearningListPartCid = null;
-    _lastLearningListSavedPosition = Duration.zero;
+    _lastLearningListSavedPosition =
+        requestedLearningEntry?.position ?? Duration.zero;
+    _pendingInitialPosition =
+        requestedLearningEntry != null &&
+            requestedLearningEntry.position > Duration.zero
+        ? requestedLearningEntry.position
+        : null;
     _resumeNoticeTimer?.cancel();
     _lastFocusPlaybackBvid = null;
     _lastFocusPlaybackPartCid = null;
@@ -4153,7 +4403,9 @@ class _PlayerPageState extends State<PlayerPage>
       part: targetPart,
       quality: _currentQuality,
     );
-    if (savedState != null && video.parts.length > 1) {
+    if (requestedLearningEntry == null &&
+        savedState != null &&
+        video.parts.length > 1) {
       _showPartRestoreSnackBar(targetPart.pageNumber);
     }
   }
@@ -4247,15 +4499,15 @@ class _PlayerPageState extends State<PlayerPage>
     );
   }
 
-  /// 创建播放结束后的紧凑选择层，并随底部播放栏上浮以避免内容重叠。
+  /// 创建仅属于学习清单任务的完播选择层，并随底部播放栏上浮以避免内容重叠。
   Widget _buildPlaybackCompletionPrompt() {
     if (!_completionPromptVisible || _playbackSnapshot.isInPictureInPicture) {
       return const SizedBox.shrink();
     }
-    final bool hasNextPart =
-        _currentPartIndex >= 0 &&
-        _currentPartIndex < _activeVideo.parts.length - 1;
+    final LearningListEntry? currentEntry = _currentLearningListEntry;
     final bool markingCompleted = _addingLearningBvid == _activeVideo.bvid;
+    final bool markedCompleted =
+        currentEntry?.status == LearningListStatus.completed;
     final bool controlsVisible = _showControls && !_controlsLocked;
     final double fullscreenSafeBottom = _fullscreen
         ? MediaQuery.paddingOf(context).bottom
@@ -4268,12 +4520,14 @@ class _PlayerPageState extends State<PlayerPage>
       bottom: (controlsVisible ? 78 : 14) + fullscreenSafeBottom,
       child: Center(
         child: PlaybackCompletionOverlay(
-          hasNextPart: hasNextPart,
-          markingCompleted: markingCompleted,
+          markedCompleted: markedCompleted,
+          learningFinished: _completionLearningFinished,
+          processing: markingCompleted,
           // 完成回调只更新当前学习任务，不改变播放器分P。
           onMarkCompleted: () => unawaited(_markCurrentLearningCompleted()),
-          // 下一节回调继续保留“必须由用户点击”的非自动连播规则。
-          onPlayNext: () => unawaited(_playNextPartAfterCompletion()),
+          // 继续学习回调只在用户明确点击后按学习清单顺序打开下一条任务。
+          onContinueLearning: () =>
+              unawaited(_continueLearningAfterCompletion()),
         ),
       ),
     );
@@ -4461,10 +4715,11 @@ class _PlayerPageState extends State<PlayerPage>
 
   /// 创建放在“记笔记”左侧的学习清单按钮，并根据加入状态切换文字和图标。
   Widget _buildCurrentVideoLearningListButton() {
+    final LearningListEntry? currentEntry = _currentLearningListEntry;
     final bool busy =
         _learningListLoading || _addingLearningBvid == _activeVideo.bvid;
     return Tooltip(
-      message: _learningListEntry == null ? '加入学习清单' : '取消加入学习清单',
+      message: currentEntry == null ? '加入学习清单' : '取消加入学习清单',
       child: TextButton.icon(
         key: const Key('current-video-learning-list-button'),
         style: TextButton.styleFrom(
@@ -4481,7 +4736,7 @@ class _PlayerPageState extends State<PlayerPage>
                 child: CircularProgressIndicator(strokeWidth: 2),
               )
             : Icon(
-                _learningListEntry == null
+                currentEntry == null
                     ? Icons.playlist_add_rounded
                     : Icons.playlist_add_check_rounded,
                 size: 20,
@@ -4489,11 +4744,11 @@ class _PlayerPageState extends State<PlayerPage>
         label: Text(
           _learningListLoading
               ? '读取中…'
-              : _learningListEntry == null
-              ? '加入学习清单'
-              : _learningListEntry!.status == LearningListStatus.completed
-              ? '已完成'
-              : '已加入学习清单',
+              : currentEntry == null
+              ? '加入 P${_currentPart.pageNumber}'
+              : currentEntry.status == LearningListStatus.completed
+              ? 'P${_currentPart.pageNumber} 已完成'
+              : 'P${_currentPart.pageNumber} 已加入',
         ),
       ),
     );
@@ -5000,6 +5255,7 @@ class _PlayerPageState extends State<PlayerPage>
       titleController: _noteTitleController,
       bodyController: _noteBodyController,
       position: _notePosition,
+      partPageNumber: _findVideoNotePart(_notePartCid).pageNumber,
       createdAt: _editingVideoNote?.createdAt,
       includeFrame: _includeCurrentFrame,
       framePath: _noteFramePath,
@@ -5180,9 +5436,27 @@ class _PlayerPageState extends State<PlayerPage>
                           ),
                         ),
                         const SizedBox(height: 3),
-                        Text(
-                          formatVideoNotePosition(note.position),
-                          style: Theme.of(context).textTheme.labelSmall,
+                        DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: selected
+                                ? colors.primary.withValues(alpha: 0.22)
+                                : colors.surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            child: Text(
+                              'P${note.partPageNumber} ${formatVideoNotePosition(note.position)}',
+                              style: Theme.of(context).textTheme.labelMedium
+                                  ?.copyWith(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                            ),
+                          ),
                         ),
                       ],
                     ),
@@ -5203,14 +5477,16 @@ class _PlayerPageState extends State<PlayerPage>
     });
   }
 
-  /// 创建更宽且紧凑的半透明全屏笔记本，为无边框正文保留主要编辑空间。
+  /// 创建约占播放器三分之二宽度的笔记本，保留左侧视频画面供边看边记。
   Widget _buildFullscreenVideoNotesPanel(double playerWidth) {
+    final double panelWidth = playerWidth * 0.64;
+    final double expandedListWidth = playerWidth * 0.17;
     return Positioned(
       key: const Key('fullscreen-video-notes-panel'),
       top: 10,
       right: 10,
       bottom: 10,
-      width: playerWidth * 0.64,
+      width: panelWidth,
       child: AnimatedSlide(
         key: const Key('fullscreen-video-notes-slide'),
         offset: _notesOpen ? Offset.zero : const Offset(1.08, 0),
@@ -5231,7 +5507,7 @@ class _PlayerPageState extends State<PlayerPage>
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: <Widget>[
                 SizedBox(
-                  width: _fullscreenNoteListCollapsed ? 46 : playerWidth * 0.17,
+                  width: _fullscreenNoteListCollapsed ? 46 : expandedListWidth,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: <Widget>[
@@ -5744,6 +6020,10 @@ class _PlayerPageState extends State<PlayerPage>
                                         focusController:
                                             widget.focusTimerController ??
                                             FocusTimerScope.maybeOf(context),
+                                        currentBvid: _activeVideo.bvid,
+                                        currentPartCid: _currentPart.cid,
+                                        partRemainingDuration:
+                                            _currentPartPlaybackRemaining(),
                                         clock: _fullscreenClock,
                                         batteryPercent: _batteryPercent,
                                       ),

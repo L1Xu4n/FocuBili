@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../models/focus_session.dart';
 import 'custom_focus_duration_dialog.dart';
+import 'focus_do_not_disturb.dart';
 import 'focus_interruption_dialog.dart';
 import 'focus_timer_controller.dart';
 
@@ -169,12 +170,17 @@ class _PlayerFocusSheetState extends State<PlayerFocusSheet> {
       sourceFramePath: widget.sourceFramePath,
       sourcePosition: widget.sourcePosition,
       startImmediately: widget.videoIsPlaying,
+      completeOnPartEnd: _choice == _PlayerFocusDurationChoice.part,
     );
     if (!mounted) {
       return;
     }
     if (!started) {
       _showMessage('请填写目标；当前分P剩余时间需在 1 到 180 分钟内。');
+      return;
+    }
+    await handleDoNotDisturbAfterFocusStart(context, widget.controller);
+    if (!mounted) {
       return;
     }
     FocusScope.of(context).unfocus();
@@ -236,7 +242,7 @@ class _PlayerFocusSheetState extends State<PlayerFocusSheet> {
     final int minutes = (widget.partRemainingDuration.inSeconds / 60)
         .ceil()
         .clamp(1, 180);
-    return '当前分P（约 $minutes 分）';
+    return '当前分P（完播结束，约 $minutes 分）';
   }
 
   /// 创建没有活动专注时的目标和时长选择表单。
@@ -294,7 +300,7 @@ class _PlayerFocusSheetState extends State<PlayerFocusSheet> {
               key: const Key('player-focus-current-part'),
               label: Text(_formatPartDuration()),
               selected: _choice == _PlayerFocusDurationChoice.part,
-              // 当前分P选择函数使用画面真实剩余时长作为专注计划。
+              // 当前分P选择函数只用剩余时长显示估算，最终完成必须等待当前 CID 真实完播。
               onSelected: (_) =>
                   setState(() => _choice = _PlayerFocusDurationChoice.part),
             ),
@@ -327,7 +333,9 @@ class _PlayerFocusSheetState extends State<PlayerFocusSheet> {
         ),
         const SizedBox(height: 12),
         Text(
-          _formatCountdown(widget.controller.remainingDuration),
+          session.completeOnPartEnd
+              ? '等待当前分P完播 · ${_formatCountdown(widget.controller.remainingDuration)}'
+              : _formatCountdown(widget.controller.remainingDuration),
           key: const Key('player-focus-countdown'),
           textAlign: TextAlign.center,
           style: const TextStyle(fontSize: 38, fontWeight: FontWeight.w800),

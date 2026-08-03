@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../../models/focus_session.dart';
 import 'custom_focus_duration_dialog.dart';
+import 'focus_do_not_disturb.dart';
 import 'focus_interruption_dialog.dart';
 import 'focus_timer_controller.dart';
 
@@ -70,6 +71,10 @@ class _FocusDashboardState extends State<FocusDashboard> {
     }
     if (!started) {
       _showMessage('请填写目标，并选择 1 到 180 分钟。');
+      return;
+    }
+    await handleDoNotDisturbAfterFocusStart(context, widget.controller);
+    if (!mounted) {
       return;
     }
     FocusScope.of(context).unfocus();
@@ -318,7 +323,9 @@ class _FocusDashboardState extends State<FocusDashboard> {
             ),
             const SizedBox(height: 18),
             Text(
-              _formatCountdown(widget.controller.remainingDuration),
+              session.completeOnPartEnd
+                  ? '等待当前分P完播 · ${_formatCountdown(widget.controller.remainingDuration)}'
+                  : _formatCountdown(widget.controller.remainingDuration),
               key: const Key('focus-countdown'),
               textAlign: TextAlign.center,
               style: theme.textTheme.displayMedium?.copyWith(

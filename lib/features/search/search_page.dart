@@ -6,9 +6,11 @@ import 'package:flutter/material.dart';
 
 import '../../core/router/app_router.dart';
 import '../../models/user_search.dart';
+import '../../models/learning_list_entry.dart';
 import '../../models/video_preview.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/learning_list_service.dart';
+import '../../services/problem_diagnostics_service.dart';
 import '../../services/search_history_service.dart';
 import '../profile/user_profile_page.dart';
 
@@ -89,6 +91,7 @@ class _SearchPageState extends State<SearchPage> {
   late final BilibiliService _service;
   late final BilibiliUserSearchService _userSearchService;
   late final LearningListService _learningListService;
+  late final ProblemDiagnosticsService _problemDiagnosticsService;
   Timer? _suggestionDebounce;
   VideoPreview? _directResult;
   List<VideoSearchResult> _searchResults = const <VideoSearchResult>[];
@@ -108,7 +111,8 @@ class _SearchPageState extends State<SearchPage> {
   List<UserSearchResult> _userResults = const <UserSearchResult>[];
   _SearchMode _searchMode = _SearchMode.videos;
   List<String> _searchHistory = const <String>[];
-  Set<String> _learningBvids = <String>{};
+  Set<String> _learningTaskIds = <String>{};
+  final Map<String, int> _knownSearchInitialPartCids = <String, int>{};
 
   /// 页面创建后初始化服务、监听、本机搜索历史和学习清单状态。
   @override
@@ -116,6 +120,7 @@ class _SearchPageState extends State<SearchPage> {
     super.initState();
     _service = widget.service ?? BilibiliVideoInfoService();
     _learningListService = widget.learningListService ?? LearningListService();
+    _problemDiagnosticsService = ProblemDiagnosticsService();
     _userSearchService =
         widget.userSearchService ??
         (_service is BilibiliUserSearchService
@@ -246,8 +251,28 @@ class _SearchPageState extends State<SearchPage> {
         _resultScrollController.jumpTo(0);
       }
     } on BilibiliLookupException catch (error) {
+      if (input.isNotEmpty) {
+        unawaited(
+          _problemDiagnosticsService.recordNetworkFailure(
+            operation: _searchMode == _SearchMode.videos
+                ? 'search_video'
+                : 'search_user',
+            message: error.message,
+          ),
+        );
+      }
       _showLookupError(error.message);
     } catch (_) {
+      if (input.isNotEmpty) {
+        unawaited(
+          _problemDiagnosticsService.recordNetworkFailure(
+            operation: _searchMode == _SearchMode.videos
+                ? 'search_video'
+                : 'search_user',
+            message: '网络连接失败。',
+          ),
+        );
+      }
       _showLookupError('搜索失败，请检查网络或稍后再试。');
     }
   }
@@ -328,14 +353,26 @@ class _SearchPageState extends State<SearchPage> {
     }
   }
 
-  /// 读取本机学习清单中的 BV 号，让“更多选项”能显示加入或取消加入。
+  /// 读取本机学习清单中的“BV + CID”标识，让同一视频不同 P 的菜单状态互不干扰。
   Future<void> _loadLearningListMembership() async {
     final entries = await _learningListService.loadEntries();
     if (mounted) {
       setState(() {
-        _learningBvids = entries.map((entry) => entry.bvid).toSet();
+        _learningTaskIds = entries.map((entry) => entry.stableId).toSet();
       });
     }
+  }
+
+  /// 判断当前已知分 P 是否在学习清单中；轻量搜索结果尚未查询 CID 时不会误判同视频其他 P。
+  bool _isVideoPartInLearningList(VideoPreview video) {
+    return _learningTaskIds.contains('${video.bvid}:${video.initialPart.cid}');
+  }
+
+  /// 用服务返回的完整任务列表刷新本机成员标识，避免新增或移除一个 P 影响同视频其他 P。
+  void _replaceLearningTaskIds(List<LearningListEntry> entries) {
+    _learningTaskIds = entries
+        .map((LearningListEntry entry) => entry.stableId)
+        .toSet();
   }
 
   /// 将候选词或搜索记录放入输入框，并立即按当前筛选条件搜索。
@@ -465,7 +502,10 @@ class _SearchPageState extends State<SearchPage> {
       if (!mounted) {
         return;
       }
-      setState(() => _openingBvid = null);
+      setState(() {
+        _openingBvid = null;
+        _knownSearchInitialPartCids[result.bvid] = video.initialPart.cid;
+      });
       _openVideo(video);
     } on BilibiliLookupException catch (error) {
       _showSearchResultError(error.message);
@@ -492,17 +532,18 @@ class _SearchPageState extends State<SearchPage> {
       );
   }
 
-  /// 将已经查询完成的视频加入本机学习清单，并自动继承现有观看记录。
+  /// 将已查询完成视频的默认分 P 加入本机学习清单，不会覆盖同一视频已经加入的其他 P。
   Future<void> _addVideoToLearningList(VideoPreview video) async {
     if (_addingBvid != null) {
       return;
     }
     setState(() => _addingBvid = video.bvid);
     try {
-      await _learningListService.addVideo(video);
+      final List<LearningListEntry> entries = await _learningListService
+          .addVideo(video, part: video.initialPart);
       if (mounted) {
-        setState(() => _learningBvids.add(video.bvid));
-        _showTransientMessage('已加入学习清单，可在首页继续学习。');
+        setState(() => _replaceLearningTaskIds(entries));
+        _showTransientMessage('已将 P${video.initialPart.pageNumber} 加入学习清单。');
       }
     } catch (_) {
       if (mounted) {
@@ -515,7 +556,7 @@ class _SearchPageState extends State<SearchPage> {
     }
   }
 
-  /// 查询搜索卡片缺少的完整分P资料后加入学习清单，避免只保存轻量搜索结果。
+  /// 查询搜索卡片缺少的完整分 P 资料后加入默认 P，避免轻量搜索结果误删同视频其他 P。
   Future<void> _addSearchResultToLearningList(VideoSearchResult result) async {
     if (_addingBvid != null || _openingBvid != null) {
       return;
@@ -523,10 +564,14 @@ class _SearchPageState extends State<SearchPage> {
     setState(() => _addingBvid = result.bvid);
     try {
       final VideoPreview video = await _service.lookupVideo(result.bvid);
-      await _learningListService.addVideo(video);
+      final List<LearningListEntry> entries = await _learningListService
+          .addVideo(video, part: video.initialPart);
       if (mounted) {
-        setState(() => _learningBvids.add(result.bvid));
-        _showTransientMessage('已加入学习清单，可在首页继续学习。');
+        setState(() {
+          _knownSearchInitialPartCids[result.bvid] = video.initialPart.cid;
+          _replaceLearningTaskIds(entries);
+        });
+        _showTransientMessage('已将 P${video.initialPart.pageNumber} 加入学习清单。');
       }
     } on BilibiliLookupException catch (error) {
       if (mounted) {
@@ -543,8 +588,8 @@ class _SearchPageState extends State<SearchPage> {
     }
   }
 
-  /// 再次选择已加入的视频时先询问用户，再从本机学习清单移除它。
-  Future<void> _removeVideoFromLearningList(String bvid) async {
+  /// 再次选择已加入的默认分 P 时先询问用户，再只从清单移除这一条分 P。
+  Future<void> _removeVideoFromLearningList(VideoPreview video) async {
     if (_addingBvid != null || _openingBvid != null) {
       return;
     }
@@ -554,7 +599,9 @@ class _SearchPageState extends State<SearchPage> {
           builder: (BuildContext dialogContext) {
             return AlertDialog(
               title: const Text('取消加入学习清单？'),
-              content: const Text('这只会移除学习任务，不会删除观看记录和笔记。'),
+              content: Text(
+                '这只会移除 P${video.initialPart.pageNumber} 的学习任务，不会删除同视频其他 P、观看记录和笔记。',
+              ),
               actions: <Widget>[
                 TextButton(
                   // 取消按钮函数关闭询问框并保留当前学习任务。
@@ -574,11 +621,14 @@ class _SearchPageState extends State<SearchPage> {
     if (!confirmed || !mounted) {
       return;
     }
-    setState(() => _addingBvid = bvid);
+    setState(() => _addingBvid = video.bvid);
     try {
-      await _learningListService.remove(bvid);
+      final List<LearningListEntry> entries = await _learningListService.remove(
+        video.bvid,
+        partCid: video.initialPart.cid,
+      );
       if (mounted) {
-        setState(() => _learningBvids.remove(bvid));
+        setState(() => _replaceLearningTaskIds(entries));
         _showTransientMessage('已取消加入学习清单。');
       }
     } catch (_) {
@@ -592,6 +642,31 @@ class _SearchPageState extends State<SearchPage> {
     }
   }
 
+  /// 查询轻量搜索结果的默认分 P 后执行精确移除，避免仅凭 BV 号删掉同视频其他任务。
+  Future<void> _removeSearchResultFromLearningList(
+    VideoSearchResult result,
+  ) async {
+    if (_addingBvid != null || _openingBvid != null) {
+      return;
+    }
+    setState(() => _openingBvid = result.bvid);
+    try {
+      final VideoPreview video = await _service.lookupVideo(result.bvid);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _openingBvid = null;
+        _knownSearchInitialPartCids[result.bvid] = video.initialPart.cid;
+      });
+      await _removeVideoFromLearningList(video);
+    } on BilibiliLookupException catch (error) {
+      _showSearchResultError(error.message);
+    } catch (_) {
+      _showSearchResultError('无法读取分 P 信息，请检查网络后重试。');
+    }
+  }
+
   /// 处理 BV 直达结果的更多菜单，在加入和取消加入之间切换。
   void _handleDirectResultMenuAction(
     _SearchResultMenuAction action,
@@ -599,8 +674,8 @@ class _SearchPageState extends State<SearchPage> {
   ) {
     switch (action) {
       case _SearchResultMenuAction.toggleLearningList:
-        if (_learningBvids.contains(video.bvid)) {
-          unawaited(_removeVideoFromLearningList(video.bvid));
+        if (_isVideoPartInLearningList(video)) {
+          unawaited(_removeVideoFromLearningList(video));
           return;
         }
         unawaited(_addVideoToLearningList(video));
@@ -615,8 +690,10 @@ class _SearchPageState extends State<SearchPage> {
   ) {
     switch (action) {
       case _SearchResultMenuAction.toggleLearningList:
-        if (_learningBvids.contains(result.bvid)) {
-          unawaited(_removeVideoFromLearningList(result.bvid));
+        final int? initialPartCid = _knownSearchInitialPartCids[result.bvid];
+        if (initialPartCid != null &&
+            _learningTaskIds.contains('${result.bvid}:$initialPartCid')) {
+          unawaited(_removeSearchResultFromLearningList(result));
           return;
         }
         unawaited(_addSearchResultToLearningList(result));
@@ -1550,7 +1627,12 @@ class _SearchPageState extends State<SearchPage> {
     final bool opening = _openingBvid == result.bvid;
     final bool changingLearningState = _addingBvid == result.bvid;
     final bool menuEnabled = _openingBvid == null && _addingBvid == null;
-    final bool isInLearningList = _learningBvids.contains(result.bvid);
+    final int? knownPartCid =
+        directVideo?.initialPart.cid ??
+        _knownSearchInitialPartCids[result.bvid];
+    final bool isInLearningList =
+        knownPartCid != null &&
+        _learningTaskIds.contains('${result.bvid}:$knownPartCid');
     final String episodeCountText = isDirectResult
         ? result.episodeCountText
         : _episodeCountTextFor(result);

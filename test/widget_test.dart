@@ -27,6 +27,8 @@ import 'package:focubili/services/player_overlay_service.dart';
 import 'package:focubili/services/playback_preferences_service.dart';
 import 'package:focubili/services/search_history_service.dart';
 import 'package:focubili/services/first_launch_service.dart';
+import 'package:focubili/services/focus_notification_service.dart';
+import 'package:focubili/services/focus_preferences_service.dart';
 import 'package:focubili/services/watch_history_service.dart';
 import 'package:focubili/services/learning_list_service.dart';
 import 'package:focubili/services/video_shot_service.dart';
@@ -246,6 +248,7 @@ class _FakePlaybackService implements PlaybackService {
     this.savedState,
     this.rejectQuality = false,
     this.emitReadyOnOpen = true,
+    this.emitLoadingDuringSeek = false,
     this.duration = _defaultDuration,
   });
 
@@ -257,14 +260,17 @@ class _FakePlaybackService implements PlaybackService {
   Duration _position = Duration.zero;
   double _speed = 1;
   int _quality = 64;
+  String? openedBvid;
   int? openedCid;
   int openVideoRequests = 0;
+  final List<String> openedBvids = <String>[];
   final List<int> openedCids = <int>[];
   final List<int> openedQualities = <int>[];
   Completer<void>? retryOpenCompleter;
   final SavedPlaybackState? savedState;
   final bool rejectQuality;
   final bool emitReadyOnOpen;
+  final bool emitLoadingDuringSeek;
   int pictureInPictureRequests = 0;
   int pauseRequests = 0;
   int seekByRequests = 0;
@@ -292,7 +298,9 @@ class _FakePlaybackService implements PlaybackService {
   }) async {
     final VideoPart targetPart = part ?? video.initialPart;
     openVideoRequests += 1;
+    openedBvid = video.bvid;
     openedCid = targetPart.cid;
+    openedBvids.add(video.bvid);
     openedCids.add(targetPart.cid);
     openedQualities.add(quality);
     final Completer<void>? pendingRetry = retryOpenCompleter;
@@ -326,6 +334,10 @@ class _FakePlaybackService implements PlaybackService {
   @override
   Future<void> seekBy(Duration offset) async {
     seekByRequests += 1;
+    if (emitLoadingDuringSeek) {
+      _emit(phase: PlaybackPhase.loading);
+      await Future<void>.delayed(Duration.zero);
+    }
     final int nextMilliseconds =
         (_position.inMilliseconds + offset.inMilliseconds)
             .clamp(0, duration.inMilliseconds)
@@ -338,6 +350,10 @@ class _FakePlaybackService implements PlaybackService {
   @override
   Future<void> seekTo(Duration position) async {
     seekToRequests += 1;
+    if (emitLoadingDuringSeek) {
+      _emit(phase: PlaybackPhase.loading);
+      await Future<void>.delayed(Duration.zero);
+    }
     _position = Duration(
       milliseconds: position.inMilliseconds
           .clamp(0, duration.inMilliseconds)
@@ -867,6 +883,10 @@ void main() {
     await tester.pumpWidget(const FocuBiliApp());
     await tester.pumpAndSettle();
 
+    final MaterialApp app = tester.widget<MaterialApp>(
+      find.byType(MaterialApp),
+    );
+    expect(app.locale, const Locale('zh', 'CN'));
     expect(find.text('焦点哔哩'), findsWidgets);
     expect(find.text('打开视频'), findsOneWidget);
     expect(find.text('首页'), findsOneWidget);
@@ -1028,6 +1048,89 @@ void main() {
     expect(find.text('0:05 / 3:32'), findsOneWidget);
   });
 
+  /// 验证快进产生的加载快照不会切换勿扰，但用户按下暂停和播放仍会正常关闭与开启。
+  testWidgets('专注播放快进不抖动勿扰且暂停播放正常切换', (WidgetTester tester) async {
+    const MethodChannel channel = MethodChannel(
+      'com.focubili.app/test_player_seek_do_not_disturb',
+    );
+    final List<bool> doNotDisturbStates = <bool>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (MethodCall call) async {
+          if (call.method == 'hasDoNotDisturbAccess') {
+            return true;
+          }
+          if (call.method == 'setFocusDoNotDisturb') {
+            doNotDisturbStates.add(
+              Map<Object?, Object?>.from(call.arguments as Map)['enabled'] ==
+                  true,
+            );
+            return true;
+          }
+          return null;
+        });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+    });
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final FocusPreferencesService preferencesService = FocusPreferencesService(
+      preferencesLoader: () async => preferences,
+    );
+    await preferencesService.saveDoNotDisturbEnabled(true);
+    await preferencesService.markPlayerDoNotDisturbGuideSeen();
+    final FocusTimerController focusController = FocusTimerController(
+      tickInterval: const Duration(days: 1),
+      notificationService: const FocusNotificationService(channel: channel),
+      focusPreferencesService: preferencesService,
+    );
+    addTearDown(focusController.dispose);
+    await focusController.initialize();
+    final VideoPreview video = VideoPreview.placeholder();
+    await focusController.startFocus(
+      goal: '验证勿扰切换',
+      duration: const Duration(minutes: 25),
+      sourceBvid: video.bvid,
+      sourcePartCid: video.initialPart.cid,
+    );
+    final _FakePlaybackService playbackService = _FakePlaybackService(
+      emitLoadingDuringSeek: true,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: video,
+          playbackService: playbackService,
+          focusTimerController: focusController,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await playbackService.play();
+    await tester.pump();
+    doNotDisturbStates.clear();
+
+    final Rect playerBounds = tester.getRect(
+      find.byKey(const Key('player-surface')),
+    );
+    final Offset rightTap = Offset(
+      playerBounds.right - 12,
+      playerBounds.center.dy,
+    );
+    await tester.tapAt(rightTap);
+    await tester.pump(const Duration(milliseconds: 80));
+    await tester.tapAt(rightTap);
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(playbackService.seekByRequests, 1);
+    expect(doNotDisturbStates, isEmpty, reason: '快进加载只是播放器内部过渡，不应把系统勿扰关闭后再开启。');
+
+    await tester.tap(find.byKey(const Key('play-pause-button')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('play-pause-button')));
+    await tester.pump();
+    expect(doNotDisturbStates, <bool>[false, true]);
+  });
+
   /// 验证控制栏菜单不再参与画面双击竞争，并在第一帧建立短动画菜单路由。
   testWidgets('播放器清晰度菜单点击立即打开', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
@@ -1120,8 +1223,11 @@ void main() {
     await tester.tap(learningButton);
     await tester.pumpAndSettle();
     expect(await learningListService.loadEntries(), hasLength(1));
+    expect(find.byType(SnackBar), findsOneWidget);
+    expect(find.text('已将 P1 加入学习清单'), findsOneWidget);
+    expect(find.byKey(const Key('player-floating-notice')), findsNothing);
     expect(
-      find.descendant(of: learningButton, matching: find.text('已加入学习清单')),
+      find.descendant(of: learningButton, matching: find.text('P1 已加入')),
       findsOneWidget,
     );
 
@@ -1132,10 +1238,97 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(await learningListService.loadEntries(), isEmpty);
+    expect(find.byType(SnackBar), findsOneWidget);
+    expect(find.text('已将当前分 P 移出学习清单'), findsOneWidget);
+    expect(find.byKey(const Key('player-floating-notice')), findsNothing);
     expect(
-      find.descendant(of: learningButton, matching: find.text('加入学习清单')),
+      find.descendant(of: learningButton, matching: find.text('加入 P1')),
       findsOneWidget,
     );
+  });
+
+  /// 验证同一视频只有真正加入的分 P 显示已加入，切换分 P 不会复用旧按钮状态。
+  testWidgets('播放器学习清单按钮按分P独立显示状态', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final LearningListService learningListService = LearningListService(
+      preferencesLoader: () async => preferences,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _createMultiPartVideo(),
+          playbackService: _FakePlaybackService(),
+          learningListService: learningListService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final Finder learningButton = find.byKey(
+      const Key('current-video-learning-list-button'),
+    );
+    await tester.tap(learningButton);
+    await tester.pumpAndSettle();
+    expect(find.text('P1 已加入'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('part-2')).first);
+    await tester.pumpAndSettle();
+    expect(find.text('加入 P2'), findsOneWidget);
+    expect(find.text('P2 已加入'), findsNothing);
+    final List<LearningListEntry> onlyFirstPart = await learningListService
+        .loadEntries();
+    expect(onlyFirstPart, hasLength(1));
+    expect(onlyFirstPart.single.partCid, 137649199);
+
+    await tester.tap(learningButton);
+    await tester.pumpAndSettle();
+    expect(find.text('P2 已加入'), findsOneWidget);
+    expect(await learningListService.loadEntries(), hasLength(2));
+
+    await tester.tap(find.byKey(const Key('part-1')).first);
+    await tester.pumpAndSettle();
+    expect(find.text('P1 已加入'), findsOneWidget);
+  });
+
+  /// 验证已完成任务再次播放时仍保持完成，自动进度保存不能把它降级成学习中。
+  testWidgets('播放器不会把已完成学习任务改回学习中', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final LearningListService learningListService = LearningListService(
+      preferencesLoader: () async => preferences,
+    );
+    final VideoPreview video = VideoPreview.placeholder();
+    await learningListService.addVideo(video, part: video.initialPart);
+    await learningListService.updateStatus(
+      video.bvid,
+      LearningListStatus.completed,
+      partCid: video.initialPart.cid,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: video,
+          playbackService: _FakePlaybackService(),
+          learningListService: learningListService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('P1 已完成'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('play-pause-button')));
+    await tester.pumpAndSettle();
+
+    expect(
+      (await learningListService.loadEntries()).single.status,
+      LearningListStatus.completed,
+    );
+    expect(find.text('P1 已完成'), findsOneWidget);
   });
 
   /// 验证清晰度菜单能把选中的质量编号传给原生播放器。
@@ -1330,6 +1523,50 @@ void main() {
     await service.play();
     await tester.pump();
     expect(controller.activeSession?.status, FocusSessionStatus.running);
+  });
+
+  /// 验证播放器把原生 ended 快照交给专注控制器，使当前分P模式按真实完播结束。
+  testWidgets('播放器当前分P专注收到真实完播后完成', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final VideoPreview video = _createMultiPartVideo();
+    final FocusTimerController controller = FocusTimerController(
+      tickInterval: const Duration(days: 1),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await controller.startFocus(
+      goal: '看完第一P',
+      duration: const Duration(minutes: 2),
+      startImmediately: false,
+      sourceBvid: video.bvid,
+      sourceVideoTitle: video.title,
+      sourcePartCid: video.initialPart.cid,
+      sourcePartPageNumber: video.initialPart.pageNumber,
+      sourcePartTitle: video.initialPart.title,
+      completeOnPartEnd: true,
+    );
+    final _FakePlaybackService playbackService = _FakePlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: video,
+          playbackService: playbackService,
+          focusTimerController: controller,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await playbackService.play();
+    await tester.pump();
+    expect(controller.activeSession?.status, FocusSessionStatus.running);
+    playbackService.emitEnded();
+    await tester.pump();
+    await tester.pump();
+
+    expect(controller.activeSession, isNull);
+    expect(controller.history.single.status, FocusSessionStatus.completed);
+    expect(find.text('专注完成，视频已暂停'), findsOneWidget);
   });
 
   /// 验证全屏底栏选集会打开右侧双列面板，并能从面板切换分P。
@@ -1764,6 +2001,11 @@ void main() {
       find.byKey(const Key('fullscreen-video-notes-material')),
     );
     expect(panelMaterial.color!.a, lessThan(1.0));
+    final Size panelSize = tester.getSize(
+      find.byKey(const Key('fullscreen-video-notes-panel')),
+    );
+    expect(panelSize.width, closeTo(2000 * 0.64, 1));
+    expect(panelSize.width, lessThan(2000 * 2 / 3));
     final AnimatedSlide openedPanelSlide = tester.widget<AnimatedSlide>(
       find.byKey(const Key('fullscreen-video-notes-slide')),
     );
@@ -1993,8 +2235,8 @@ void main() {
     expect(find.text('三倍速中>>'), findsNothing);
   });
 
-  /// 验证完播后显示显式选择，并且只有点击按钮才会切换到下一分P。
-  testWidgets('播放器完播后不自动连播，用户可主动播放下一节', (WidgetTester tester) async {
+  /// 验证清单最后一项完播后由用户确认完成，不会再按视频分 P 自动连播。
+  testWidgets('学习清单最后一项完播后显示已完成学习', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     SharedPreferences.setMockInitialValues(<String, Object>{});
@@ -2002,19 +2244,17 @@ void main() {
     final LearningListService learningListService = LearningListService(
       preferencesLoader: () async => preferences,
     );
+    final VideoPreview video = _createMultiPartVideo();
+    await learningListService.addVideo(video, part: video.parts.first);
     final _FakePlaybackService service = _FakePlaybackService();
     await tester.pumpWidget(
       MaterialApp(
         home: PlayerPage(
-          video: _createMultiPartVideo(),
+          video: video,
           playbackService: service,
           learningListService: learningListService,
         ),
       ),
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(
-      find.byKey(const Key('current-video-learning-list-button')),
     );
     await tester.pumpAndSettle();
 
@@ -2024,25 +2264,107 @@ void main() {
     await tester.pump();
     expect(find.byKey(const Key('playback-completion-prompt')), findsOneWidget);
     expect(find.byKey(const Key('mark-learning-complete')), findsOneWidget);
-    expect(find.byKey(const Key('play-next-after-completion')), findsOneWidget);
+    expect(
+      find.byKey(const Key('continue-learning-after-completion')),
+      findsOneWidget,
+    );
     expect(service.openVideoRequests, opensBeforeEnded);
 
-    await tester.tap(find.byKey(const Key('play-next-after-completion')));
+    await tester.tap(find.byKey(const Key('mark-learning-complete')));
     await tester.pumpAndSettle();
-    expect(service.openedCid, 137649200);
-    expect(find.byKey(const Key('playback-completion-prompt')), findsNothing);
+    expect(find.text('已标记完成'), findsWidgets);
+    await tester.tap(
+      find.byKey(const Key('continue-learning-after-completion')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('已完成学习'), findsOneWidget);
+    expect(find.byKey(const Key('playback-completion-prompt')), findsOneWidget);
+    expect(service.openVideoRequests, opensBeforeEnded);
+    expect(
+      (await learningListService.loadEntries()).single.status,
+      LearningListStatus.completed,
+    );
+  });
+
+  /// 验证继续学习复用当前播放服务打开下一项，旧页面不会销毁后误释放新播放器。
+  testWidgets('继续学习会在当前播放器内打开下一条任务', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final LearningListService learningListService = LearningListService(
+      preferencesLoader: () async => preferences,
+    );
+    final VideoPreview firstVideo = _createCollectionVideo();
+    final VideoPreview secondVideo = _createSecondCollectionVideo();
+    await learningListService.addVideo(
+      firstVideo,
+      part: firstVideo.initialPart,
+    );
+    await learningListService.addVideo(
+      secondVideo,
+      part: secondVideo.initialPart,
+    );
+    final _FakePlaybackService playbackService = _FakePlaybackService();
+    final _CollectionSwitchVideoService videoService =
+        _CollectionSwitchVideoService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: firstVideo,
+          playbackService: playbackService,
+          learningListService: learningListService,
+          bilibiliService: videoService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final int opensBeforeEnded = playbackService.openVideoRequests;
+    playbackService.emitEnded();
+    await tester.pump();
+    await tester.pump();
+    await tester.tap(
+      find.byKey(const Key('continue-learning-after-completion')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(PlayerPage), findsOneWidget);
+    expect(videoService.lookupRequests, 1);
+    expect(playbackService.openVideoRequests, opensBeforeEnded + 1);
+    expect(playbackService.openedBvid, secondVideo.bvid);
+    expect(playbackService.openedCid, secondVideo.initialPart.cid);
+    expect(find.text(secondVideo.title), findsOneWidget);
+    final List<LearningListEntry> entries = await learningListService
+        .loadEntries();
+    expect(
+      entries
+          .firstWhere(
+            (LearningListEntry entry) => entry.bvid == firstVideo.bvid,
+          )
+          .status,
+      LearningListStatus.completed,
+    );
   });
 
   /// 验证 720×360 横屏中的紧凑完播卡片不会再向下挤入播放控制栏。
   testWidgets('横屏完播卡片保持紧凑并避开播放栏', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(720, 360));
     addTearDown(() => tester.binding.setSurfaceSize(null));
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final LearningListService learningListService = LearningListService(
+      preferencesLoader: () async => preferences,
+    );
+    final VideoPreview video = VideoPreview.placeholder();
+    await learningListService.addVideo(video, part: video.initialPart);
     final _FakePlaybackService service = _FakePlaybackService();
     await tester.pumpWidget(
       MaterialApp(
         home: PlayerPage(
-          video: VideoPreview.placeholder(),
+          video: video,
           playbackService: service,
+          learningListService: learningListService,
         ),
       ),
     );
@@ -2064,7 +2386,29 @@ void main() {
     expect(playerBounds.bottom - promptBounds.bottom, greaterThanOrEqualTo(70));
   });
 
-  /// 验证完播提示中的完成按钮会把视频写入学习清单并明确标记为已完成。
+  /// 验证普通视频完播时不显示学习清单专属的完成或继续学习提示。
+  testWidgets('非学习清单视频完播后不显示完成提示', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final _FakePlaybackService service = _FakePlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: service,
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    service.emitEnded();
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byKey(const Key('playback-completion-prompt')), findsNothing);
+  });
+
+  /// 验证完播提示中的完成按钮仅更新已有学习任务，并让已完成状态留在卡片中。
   testWidgets('播放器完播后可以标记学习任务完成', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -2073,11 +2417,13 @@ void main() {
     final LearningListService learningListService = LearningListService(
       preferencesLoader: () async => preferences,
     );
+    final VideoPreview video = VideoPreview.placeholder();
+    await learningListService.addVideo(video, part: video.initialPart);
     final _FakePlaybackService service = _FakePlaybackService();
     await tester.pumpWidget(
       MaterialApp(
         home: PlayerPage(
-          video: VideoPreview.placeholder(),
+          video: video,
           playbackService: service,
           learningListService: learningListService,
         ),
@@ -2095,7 +2441,8 @@ void main() {
         .loadEntries();
     expect(entries, hasLength(1));
     expect(entries.single.status, LearningListStatus.completed);
-    expect(find.byKey(const Key('playback-completion-prompt')), findsNothing);
+    expect(find.byKey(const Key('playback-completion-prompt')), findsOneWidget);
+    expect(find.text('已标记完成'), findsWidgets);
   });
 
   /// 验证章节条固定在播放器内、可滚动显示标题、可跳转，并能从专用按钮打开面板。
@@ -2732,6 +3079,66 @@ void main() {
     await tester.pump();
   });
 
+  /// 验证“当前分P”专注的左上角时间跟随播放器快进后的真实剩余进度，而不是旧计划倒计时。
+  testWidgets('当前分P专注左上角同步真实播放剩余时间', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final VideoPreview video = VideoPreview.placeholder();
+    final _FakePlaybackService playbackService = _FakePlaybackService();
+    final FocusTimerController focusController = FocusTimerController(
+      tickInterval: const Duration(days: 1),
+    );
+    addTearDown(focusController.dispose);
+    await focusController.initialize();
+    await focusController.startFocus(
+      goal: '看完当前分P',
+      duration: const Duration(minutes: 3, seconds: 32),
+      sourceBvid: video.bvid,
+      sourcePartCid: video.initialPart.cid,
+      sourcePartPageNumber: video.initialPart.pageNumber,
+      sourcePartTitle: video.initialPart.title,
+      completeOnPartEnd: true,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: video,
+          playbackService: playbackService,
+          deviceStatusService: const _FakeDeviceStatusService(80),
+          focusTimerController: focusController,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await playbackService.seekTo(const Duration(minutes: 1));
+    await tester.pump();
+    final IconButton fullscreenButton = tester.widget<IconButton>(
+      find.byWidgetPredicate(
+        (Widget widget) => widget is IconButton && widget.tooltip == '进入全屏',
+      ),
+    );
+    fullscreenButton.onPressed!();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(
+      tester
+          .widget<Text>(find.byKey(const Key('fullscreen-focus-remaining')))
+          .data,
+      '02:32',
+    );
+
+    await playbackService.seekTo(const Duration(minutes: 2));
+    await tester.pump();
+    expect(
+      tester
+          .widget<Text>(find.byKey(const Key('fullscreen-focus-remaining')))
+          .data,
+      '01:32',
+    );
+    await focusController.endFocusEarly();
+    await tester.pump();
+  });
+
   /// 验证播放器可以打开专注控制面板，并在专注结束时暂停真实播放服务。
   testWidgets('播放器管理专注并在结束时自动暂停', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
@@ -2764,6 +3171,9 @@ void main() {
       find.byKey(const Key('player-focus-button')),
     );
     focusButton.onPressed!();
+    await tester.pumpAndSettle();
+    expect(find.text('专注时可以自动开启勿扰'), findsOneWidget);
+    await tester.tap(find.text('稍后设置'));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('player-focus-active')), findsOneWidget);
     await tester.tap(find.byTooltip('关闭'));
