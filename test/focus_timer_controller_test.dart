@@ -1,9 +1,13 @@
+import 'package:flutter/widgets.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:focubili/features/focus/focus_timer_controller.dart';
 import 'package:focubili/models/focus_session.dart';
 import 'package:focubili/services/focus_session_service.dart';
+import 'package:focubili/services/focus_notification_service.dart';
+import 'package:focubili/services/focus_preferences_service.dart';
 
 /// 提供可手动推进的本地时间，测试无需真实等待几十分钟。
 class _MutableFocusClock {
@@ -156,6 +160,147 @@ void main() {
     );
     clock.advance(const Duration(minutes: 2));
     expect(controller.elapsedDuration, const Duration(minutes: 4));
+  });
+
+  /// 验证当前分P模式即使估算时间归零也不完成，必须由同一 CID 的真实完播事件结束。
+  test('当前分P专注只在匹配分P真实完播时完成', () async {
+    final _MutableFocusClock clock = _MutableFocusClock(
+      DateTime(2026, 8, 3, 10),
+    );
+    final FocusTimerController controller = FocusTimerController(
+      clock: clock.call,
+      tickInterval: const Duration(days: 1),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await controller.startFocus(
+      goal: '看完当前分P',
+      duration: const Duration(minutes: 1),
+      sourceBvid: 'BV1PART',
+      sourcePartCid: 9001,
+      sourcePartPageNumber: 3,
+      sourcePartTitle: '第三P',
+      completeOnPartEnd: true,
+    );
+
+    clock.advance(const Duration(minutes: 2));
+    controller.didChangeAppLifecycleState(AppLifecycleState.resumed);
+    expect(controller.activeSession, isNotNull);
+    expect(controller.remainingDuration, Duration.zero);
+    expect(
+      await controller.completeForPlaybackPart(bvid: 'BV1PART', partCid: 9002),
+      isFalse,
+    );
+    expect(controller.activeSession, isNotNull);
+    expect(
+      await controller.completeForPlaybackPart(bvid: 'BV1PART', partCid: 9001),
+      isTrue,
+    );
+    expect(controller.activeSession, isNull);
+    expect(controller.history.single.status, FocusSessionStatus.completed);
+  });
+
+  /// 验证每次开始都会检查权限，真实暂停和恢复会对应关闭与开启勿扰。
+  test('专注开始检查并去重勿扰模式切换', () async {
+    const MethodChannel channel = MethodChannel(
+      'com.focubili.app/test_controller_focus_notifications',
+    );
+    final List<MethodCall> calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (MethodCall call) async {
+          calls.add(call);
+          return switch (call.method) {
+            'hasDoNotDisturbAccess' => true,
+            'setFocusDoNotDisturb' => true,
+            _ => null,
+          };
+        });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+    });
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final FocusPreferencesService focusPreferencesService =
+        FocusPreferencesService(preferencesLoader: () async => preferences);
+    await focusPreferencesService.saveDoNotDisturbEnabled(true);
+    final FocusTimerController controller = FocusTimerController(
+      tickInterval: const Duration(days: 1),
+      notificationService: FocusNotificationService(channel: channel),
+      focusPreferencesService: focusPreferencesService,
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await controller.startFocus(
+      goal: '勿扰专注',
+      duration: const Duration(minutes: 25),
+      sourceBvid: 'BV1DND',
+      sourcePartCid: 100,
+    );
+
+    expect(
+      await controller.ensureDoNotDisturbForActiveFocus(),
+      FocusDoNotDisturbResult.enabled,
+    );
+    expect(
+      calls.any((MethodCall call) => call.method == 'hasDoNotDisturbAccess'),
+      isTrue,
+    );
+    expect(
+      calls
+          .where((MethodCall call) => call.method == 'setFocusDoNotDisturb')
+          .any(
+            (MethodCall call) =>
+                Map<Object?, Object?>.from(call.arguments as Map)['enabled'] ==
+                true,
+          ),
+      isTrue,
+    );
+    expect(
+      calls.where((MethodCall call) {
+        if (call.method != 'setFocusDoNotDisturb') {
+          return false;
+        }
+        return Map<Object?, Object?>.from(call.arguments as Map)['enabled'] ==
+            true;
+      }).length,
+      1,
+    );
+
+    await controller.updatePlaybackState(
+      bvid: 'BV1DND',
+      partCid: 100,
+      isPlaying: false,
+    );
+    await controller.updatePlaybackState(
+      bvid: 'BV1DND',
+      partCid: 100,
+      isPlaying: true,
+    );
+    await Future<void>.delayed(Duration.zero);
+    final List<bool> playbackDndStates = calls
+        .where((MethodCall call) => call.method == 'setFocusDoNotDisturb')
+        .map(
+          (MethodCall call) =>
+              Map<Object?, Object?>.from(call.arguments as Map)['enabled'] ==
+              true,
+        )
+        .toList(growable: false);
+    expect(playbackDndStates, <bool>[
+      false,
+      true,
+      false,
+      true,
+    ], reason: '初始化先确保恢复系统状态；真实暂停要恢复勿扰，继续播放时应再次开启。');
+
+    await controller.endFocusEarly();
+    await Future<void>.delayed(Duration.zero);
+    final MethodCall lastDndCall = calls.lastWhere(
+      (MethodCall call) => call.method == 'setFocusDoNotDisturb',
+    );
+    expect(
+      Map<Object?, Object?>.from(lastDndCall.arguments as Map)['enabled'],
+      isFalse,
+    );
   });
 
   /// 验证首页“今日专注”只计算午夜后的部分，不把整段跨日任务算到今天。

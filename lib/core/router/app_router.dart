@@ -5,6 +5,8 @@ import '../../features/focus/focus_statistics_page.dart';
 import '../../features/notes/video_notes_page.dart';
 import '../../features/profile/cache_management_page.dart';
 import '../../features/profile/about_page.dart';
+import '../../features/profile/problem_diagnostics_page.dart';
+import '../../features/profile/android_permission_management_page.dart';
 import '../../features/profile/login_page.dart';
 import '../../features/profile/personalization_settings_page.dart';
 import '../../features/profile/watch_history_page.dart';
@@ -18,6 +20,8 @@ abstract final class AppRoutes {
   static const String login = '/login';
   static const String cacheManagement = '/settings/cache';
   static const String about = '/settings/about';
+  static const String problemDiagnostics = '/settings/about/diagnostics';
+  static const String androidPermissions = '/settings/permissions';
   static const String personalizationSettings = '/settings/personalization';
   static const String watchHistory = '/history';
   static const String videoNotes = '/notes';
@@ -61,6 +65,19 @@ abstract final class AppRouter {
         return MaterialPageRoute<void>(
           // 关于页集中展示项目来源、版本和 GitHub Release 更新状态。
           builder: (BuildContext context) => const AboutPage(),
+          settings: settings,
+        );
+      case AppRoutes.problemDiagnostics:
+        return MaterialPageRoute<void>(
+          // 问题诊断页构建函数展示本机脱敏环境和最近错误，不会自动上传数据。
+          builder: (BuildContext context) => const ProblemDiagnosticsPage(),
+          settings: settings,
+        );
+      case AppRoutes.androidPermissions:
+        return MaterialPageRoute<void>(
+          // 权限管理页构建函数集中展示申请、检查、取消入口和后台提醒保护说明。
+          builder: (BuildContext context) =>
+              const AndroidPermissionManagementPage(),
           settings: settings,
         );
       case AppRoutes.personalizationSettings:

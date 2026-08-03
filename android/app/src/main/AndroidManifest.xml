@@ -2,11 +2,18 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Android 13 起发送专注继续提醒前需要用户运行时授权。 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Android 12 起允许用户授权精确闹钟；未授权时仍会安全回退为后台可唤醒提醒。 -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- 设备重启会清空 AlarmManager；接收开机完成后从私有待办中恢复尚未到期的提醒。 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- 勿扰模式属于 Android 特殊访问权限，应用只在用户开启设置后才会请求。 -->
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
 
     <application
         android:label="焦点哔哩"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round">
         <!-- 仅接收系统画中画 PendingIntent；不对其他应用导出，避免外部任意控制播放。 -->
         <receiver
             android:name=".PictureInPicturePlaybackActionReceiver"
@@ -15,6 +22,17 @@
         <receiver
             android:name=".FocusReminderReceiver"
             android:exported="false" />
+        <!-- 系统重启、应用升级或重新授予精确闹钟权限后恢复尚未到期的提醒。 -->
+        <receiver
+            android:name=".FocusReminderRestoreReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
         <activity
             android:name=".MainActivity"
             android:exported="true"

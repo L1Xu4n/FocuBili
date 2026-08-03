@@ -15,12 +15,20 @@ import androidx.core.content.ContextCompat
 class FocusReminderReceiver : BroadcastReceiver() {
     /** 校验通知权限并展示一条可打开应用的提醒。 */
     override fun onReceive(context: Context, intent: Intent) {
+        val sessionId = intent.getStringExtra("sessionId").orEmpty()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
             PackageManager.PERMISSION_GRANTED
-        ) return
+        ) {
+            FocusReminderScheduler.markTriggered(context, sessionId, "notification_permission_denied")
+            return
+        }
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (!manager.areNotificationsEnabled()) {
+            FocusReminderScheduler.markTriggered(context, sessionId, "notifications_disabled")
+            return
+        }
         FocusNotificationController.createNotificationChannel(context)
-        val sessionId = intent.getStringExtra("sessionId").orEmpty()
         val goal = intent.getStringExtra("goal").orEmpty().ifBlank { "未结束的专注任务" }
         val openAppIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -43,7 +51,7 @@ class FocusReminderReceiver : BroadcastReceiver() {
             .setAutoCancel(true)
             .setContentIntent(openAppPendingIntent)
             .build()
-        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(sessionId.hashCode(), notification)
+        FocusReminderScheduler.markTriggered(context, sessionId, "notification_posted")
     }
 }

@@ -21,11 +21,13 @@ class HomePage extends StatefulWidget {
     required this.onSearchRequested,
     this.learningListService,
     this.videoService,
+    this.refreshGeneration = 0,
   });
 
   final VoidCallback onSearchRequested;
   final LearningListService? learningListService;
   final BilibiliService? videoService;
+  final int refreshGeneration;
 
   /// 创建首页状态，用于读取并刷新唯一突出显示的继续学习任务。
   @override
@@ -33,11 +35,12 @@ class HomePage extends StatefulWidget {
 }
 
 /// 管理首页的继续学习任务读取、打开清单和恢复播放操作。
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   late final LearningListService _learningListService;
   late final BilibiliService _videoService;
   LearningListEntry? _continueLearningEntry;
   bool _learningListLoading = true;
+  int _reloadGeneration = 0;
 
   /// 初始化学习清单服务，并异步读取当前唯一需要突出的学习任务。
   @override
@@ -45,23 +48,49 @@ class _HomePageState extends State<HomePage> {
     super.initState();
     _learningListService = widget.learningListService ?? LearningListService();
     _videoService = widget.videoService ?? BilibiliVideoInfoService();
-    _reloadContinueLearning();
+    WidgetsBinding.instance.addObserver(this);
+    unawaited(_reloadContinueLearning());
   }
 
-  /// 从本机清单选择一条当前任务；服务会优先返回最近更新的“学习中”任务。
+  /// 主框架每次重新选择首页都会递增刷新代次，首页据此重新读取刚加入的学习任务。
+  @override
+  void didUpdateWidget(covariant HomePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.refreshGeneration != widget.refreshGeneration) {
+      unawaited(_reloadContinueLearning());
+    }
+  }
+
+  /// 应用从后台回到前台时重新读取清单，覆盖其他页面或上次进程状态产生的变化。
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_reloadContinueLearning());
+    }
+  }
+
+  /// 从本机清单选择当前第一条未完成任务，并忽略晚于新请求返回的旧异步结果。
   Future<void> _reloadContinueLearning() async {
+    final int generation = ++_reloadGeneration;
     if (mounted) {
       setState(() => _learningListLoading = true);
     }
     final LearningListEntry? entry = await _learningListService
         .loadCurrentTask();
-    if (!mounted) {
+    if (!mounted || generation != _reloadGeneration) {
       return;
     }
     setState(() {
       _continueLearningEntry = entry;
       _learningListLoading = false;
     });
+  }
+
+  /// 页面销毁时解除应用生命周期监听，避免旧首页继续响应前后台事件。
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
   }
 
   /// 打开专注统计看板，查看趋势并统一管理本机记录。

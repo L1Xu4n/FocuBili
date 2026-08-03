@@ -6,9 +6,13 @@ import '../../models/focus_session.dart';
 import '../../models/focus_statistics.dart';
 import '../../services/focus_session_service.dart';
 import '../../services/focus_notification_service.dart';
+import '../../services/focus_preferences_service.dart';
 
 /// 定义可替换的当前时间读取函数，测试可以手动推进时间而无需真实等待。
 typedef FocusClock = DateTime Function();
+
+/// 描述一次专注开始时勿扰模式的检查结果，界面据此提示权限或启用状态。
+enum FocusDoNotDisturbResult { disabled, enabled, permissionRequired, failed }
 
 /// 管理全应用唯一的专注任务、视频播放联动、打断记录和本机持久化。
 class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
@@ -18,9 +22,12 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
     FocusClock? clock,
     Duration tickInterval = const Duration(seconds: 1),
     FocusNotificationService? notificationService,
+    FocusPreferencesService? focusPreferencesService,
   }) : _service = service ?? FocusSessionService(),
        _notificationService =
            notificationService ?? const FocusNotificationService(),
+       _focusPreferencesService =
+           focusPreferencesService ?? FocusPreferencesService(),
        _clock = clock ?? DateTime.now,
        _tickInterval = tickInterval;
 
@@ -30,6 +37,7 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
 
   final FocusSessionService _service;
   final FocusNotificationService _notificationService;
+  final FocusPreferencesService _focusPreferencesService;
   final FocusClock _clock;
   final Duration _tickInterval;
   FocusSession? _activeSession;
@@ -41,6 +49,10 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
   bool _finishingExpiredSession = false;
   bool _observingLifecycle = false;
   bool _backgroundInterruptionRecorded = false;
+  int _doNotDisturbSyncGeneration = 0;
+  bool? _desiredDoNotDisturbState;
+  bool? _appliedDoNotDisturbState;
+  Future<void>? _doNotDisturbDrain;
   String? _playingBvid;
   int? _playingPartCid;
   bool _videoPlaying = false;
@@ -120,6 +132,7 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
     String? sourcePartTitle,
     String? sourceFramePath,
     Duration sourcePosition = Duration.zero,
+    bool completeOnPartEnd = false,
   }) async {
     if (!_ready || hasActiveSession) {
       return false;
@@ -146,12 +159,42 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
       sourcePartTitle: sourcePartTitle,
       sourceFramePath: sourceFramePath,
       sourcePosition: sourcePosition,
+      completeOnPartEnd: completeOnPartEnd && hasSource,
     );
     _lastFinishedSession = null;
     _syncTicker();
     notifyListeners();
     await _persist();
     return true;
+  }
+
+  /// 每次开始专注都检查本机开关与系统权限；只有任务正在计时时才进入勿扰。
+  Future<FocusDoNotDisturbResult> ensureDoNotDisturbForActiveFocus() async {
+    final FocusSession? session = _activeSession;
+    if (session == null || session.status != FocusSessionStatus.running) {
+      return FocusDoNotDisturbResult.disabled;
+    }
+    try {
+      final FocusPreferences preferences = await _focusPreferencesService
+          .load();
+      if (!preferences.enableDoNotDisturb) {
+        return FocusDoNotDisturbResult.disabled;
+      }
+      if (!await _notificationService.hasDoNotDisturbAccess()) {
+        return FocusDoNotDisturbResult.permissionRequired;
+      }
+      final bool enabled = await _requestDoNotDisturbState(true);
+      return enabled
+          ? FocusDoNotDisturbResult.enabled
+          : FocusDoNotDisturbResult.failed;
+    } on Object {
+      return FocusDoNotDisturbResult.failed;
+    }
+  }
+
+  /// 打开 Android 勿扰模式特殊访问设置，供开始专注时的权限说明弹窗调用。
+  Future<void> openDoNotDisturbSettings() {
+    return _notificationService.openDoNotDisturbSettings();
   }
 
   /// 手动暂停专注并按默认原因记为一次打断；界面可使用 interruptFocus 提供详细原因。
@@ -252,6 +295,26 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
     if (_activeSession?.status == FocusSessionStatus.running) {
       unawaited(_notificationService.cancelReminder(session.id));
     }
+  }
+
+  /// 只在选择“当前分 P”的任务收到同一 BV 与 CID 的真实完播时完成专注。
+  Future<bool> completeForPlaybackPart({
+    required String bvid,
+    required int partCid,
+  }) async {
+    final FocusSession? session = _activeSession;
+    if (session == null ||
+        !session.isActive ||
+        !session.completeOnPartEnd ||
+        session.sourceBvid != bvid ||
+        session.sourcePartCid != partCid) {
+      return false;
+    }
+    final FocusSession finished = session.finishAtPartEnd(_clock());
+    _finalizeSession(finished);
+    await _persist();
+    unawaited(_notificationService.cancelReminder(session.id));
+    return true;
   }
 
   /// 把活动任务关联到用户刚确认的视频分P，并按真实播放状态决定是否计时。
@@ -496,6 +559,10 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
       _syncTicker();
       return;
     }
+    if (session.completeOnPartEnd) {
+      notifyListeners();
+      return;
+    }
     if (session.remainingAt(_clock()) <= Duration.zero) {
       unawaited(_completeExpiredSession());
       return;
@@ -509,7 +576,9 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
       return;
     }
     final FocusSession? session = _activeSession;
-    if (session == null || session.status != FocusSessionStatus.running) {
+    if (session == null ||
+        session.status != FocusSessionStatus.running ||
+        session.completeOnPartEnd) {
       return;
     }
     _finishingExpiredSession = true;
@@ -547,9 +616,77 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
     if (!shouldRun) {
       _ticker?.cancel();
       _ticker = null;
+      unawaited(_syncDoNotDisturbForCurrentState());
       return;
     }
     _ticker ??= Timer.periodic(_tickInterval, (_) => _tick());
+    unawaited(_syncDoNotDisturbForCurrentState());
+  }
+
+  /// 根据最新专注状态异步进入或恢复勿扰模式，并用代次号忽略过期权限检查结果。
+  Future<void> _syncDoNotDisturbForCurrentState() async {
+    if (!_ready) {
+      return;
+    }
+    final int generation = ++_doNotDisturbSyncGeneration;
+    final bool running = _activeSession?.status == FocusSessionStatus.running;
+    if (!running) {
+      await _requestDoNotDisturbState(false);
+      return;
+    }
+    try {
+      final FocusPreferences preferences = await _focusPreferencesService
+          .load();
+      if (generation != _doNotDisturbSyncGeneration) {
+        return;
+      }
+      if (!preferences.enableDoNotDisturb) {
+        await _requestDoNotDisturbState(false);
+        return;
+      }
+      final bool permitted = await _notificationService.hasDoNotDisturbAccess();
+      if (generation != _doNotDisturbSyncGeneration || !permitted) {
+        return;
+      }
+      await _requestDoNotDisturbState(true);
+    } on Object {
+      // 本机设置或系统权限暂时不可用时不影响专注计时本身。
+    }
+  }
+
+  /// 合并连续的勿扰请求并按顺序执行；播放器会过滤快进抖动，真实暂停仍会关闭勿扰。
+  Future<bool> _requestDoNotDisturbState(bool enabled) async {
+    _desiredDoNotDisturbState = enabled;
+    if (_appliedDoNotDisturbState == enabled && _doNotDisturbDrain == null) {
+      return true;
+    }
+    final Future<void> drain = _doNotDisturbDrain ??=
+        _drainDoNotDisturbRequests();
+    await drain;
+    return _appliedDoNotDisturbState == enabled;
+  }
+
+  /// 串行执行最新勿扰目标；处理中目标改变时会完成旧请求后立即应用最终状态，避免异步先后颠倒。
+  Future<void> _drainDoNotDisturbRequests() async {
+    try {
+      while (_desiredDoNotDisturbState != null &&
+          _desiredDoNotDisturbState != _appliedDoNotDisturbState) {
+        final bool target = _desiredDoNotDisturbState!;
+        final bool applied = await _notificationService.setFocusDoNotDisturb(
+          target,
+        );
+        if (!applied) {
+          _desiredDoNotDisturbState = _appliedDoNotDisturbState;
+          return;
+        }
+        _appliedDoNotDisturbState = target;
+      }
+    } finally {
+      _doNotDisturbDrain = null;
+      if (_desiredDoNotDisturbState != _appliedDoNotDisturbState) {
+        unawaited(_requestDoNotDisturbState(_desiredDoNotDisturbState!));
+      }
+    }
   }
 
   /// 把当前活动任务和历史列表保存到设备。
@@ -582,6 +719,7 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
       WidgetsBinding.instance.removeObserver(this);
       _observingLifecycle = false;
     }
+    unawaited(_requestDoNotDisturbState(false));
     super.dispose();
   }
 }

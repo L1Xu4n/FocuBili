@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.1+7
+version: 1.1.0+9
 
 environment:
   # Flutter 3.44 随附 Dart 3.12；明确下限可避免旧工具链误用新的依赖锁定结果。
@@ -37,9 +37,14 @@ dependencies:
   file_picker: ^11.0.2
   flutter:
     sdk: flutter
+  # 使用 Flutter 官方中文 Material 文案，让日期、时间和系统选择器保持中文。
+  flutter_localizations:
+    sdk: flutter
   # 8.3.1 兼容项目当前 AGP 8.11.1；9+ 要求 AGP 8.12.1/Kotlin 2.2。
   package_info_plus: ^8.3.1
   path_provider: ^2.1.6
+  # 专门处理截图的居中、双指缩放、双击缩放和平移边界，替代不稳定的自写矩阵。
+  photo_view: ^0.15.0
   # 11.1.0 使用新的 SharePlus API，并兼容项目当前 AGP 8.11.1；12+ 要求 AGP 8.12.1/Kotlin 2.2。
   share_plus: ^11.1.0
   shared_preferences: ^2.5.5

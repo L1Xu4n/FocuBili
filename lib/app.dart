@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/services.dart';
 
 import 'core/router/app_router.dart';
@@ -123,6 +124,9 @@ class _FocuBiliAppState extends State<FocuBiliApp> {
       scaffoldMessengerKey: _scaffoldMessengerKey,
       title: '焦点哔哩',
       debugShowCheckedModeBanner: false,
+      locale: const Locale('zh', 'CN'),
+      supportedLocales: const <Locale>[Locale('zh', 'CN')],
+      localizationsDelegates: GlobalMaterialLocalizations.delegates,
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
       themeMode: ThemeMode.system,

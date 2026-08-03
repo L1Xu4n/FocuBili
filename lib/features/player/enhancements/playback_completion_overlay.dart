@@ -1,20 +1,50 @@
 import 'package:flutter/material.dart';
 
-/// 以紧凑卡片展示普通视频完播后的学习操作，避免遮挡播放器控制栏。
+/// 以紧凑卡片展示学习清单任务完播后的明确完成和继续学习操作。
 class PlaybackCompletionOverlay extends StatelessWidget {
-  /// 创建完播卡片，并接收学习完成状态及两个由用户主动触发的操作。
+  /// 创建完播卡片；所有操作都必须由用户主动点击，播放器绝不自动跳到下一项。
   const PlaybackCompletionOverlay({
     super.key,
-    required this.hasNextPart,
-    required this.markingCompleted,
+    required this.markedCompleted,
+    required this.learningFinished,
+    required this.processing,
     required this.onMarkCompleted,
-    required this.onPlayNext,
+    required this.onContinueLearning,
   });
 
-  final bool hasNextPart;
-  final bool markingCompleted;
+  /// 当前分 P 是否已被用户明确标记完成。
+  final bool markedCompleted;
+
+  /// 点击“继续学习”后是否确认清单中已没有后续未完成任务。
+  final bool learningFinished;
+
+  /// 当前是否正在写入完成状态或加载下一条学习任务。
+  final bool processing;
+
+  /// 用户点击“标记已完成”时执行的状态更新回调。
   final VoidCallback onMarkCompleted;
-  final VoidCallback onPlayNext;
+
+  /// 用户点击“继续学习”时执行的按清单顺序跳转回调。
+  final VoidCallback onContinueLearning;
+
+  /// 根据当前完成状态生成卡片的标题，避免用户误以为视频会自动连播。
+  String _title() {
+    if (learningFinished) {
+      return '已完成学习';
+    }
+    return markedCompleted ? '已标记完成' : '这一项播放完成';
+  }
+
+  /// 根据当前完成状态生成下一步说明，明确最后一项的继续学习结果。
+  String _description() {
+    if (learningFinished) {
+      return '学习清单内的全部视频都已完成。';
+    }
+    if (markedCompleted) {
+      return '可以继续学习，应用会按学习清单中的顺序打开下一项。';
+    }
+    return '标记此分 P 完成，或继续学习并按清单顺序打开下一项。';
+  }
 
   /// 构建横向标题区与等宽操作按钮，把卡片高度控制在横屏播放器可用范围内。
   @override
@@ -38,8 +68,10 @@ class PlaybackCompletionOverlay extends StatelessWidget {
             children: <Widget>[
               Row(
                 children: <Widget>[
-                  const Icon(
-                    Icons.check_circle_outline_rounded,
+                  Icon(
+                    learningFinished || markedCompleted
+                        ? Icons.task_alt_rounded
+                        : Icons.check_circle_outline_rounded,
                     color: Colors.white,
                     size: 28,
                   ),
@@ -49,11 +81,11 @@ class PlaybackCompletionOverlay extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
                       children: <Widget>[
-                        const Text(
-                          '这一节播放完成',
+                        Text(
+                          _title(),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
+                          style: const TextStyle(
                             color: Colors.white,
                             fontSize: 16,
                             height: 1.15,
@@ -62,9 +94,7 @@ class PlaybackCompletionOverlay extends StatelessWidget {
                         ),
                         const SizedBox(height: 3),
                         Text(
-                          hasNextPart
-                              ? '标记学习完成，或由你决定播放下一节。'
-                              : '已经是最后一节，可以标记这条学习任务完成。',
+                          _description(),
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
@@ -78,64 +108,79 @@ class PlaybackCompletionOverlay extends StatelessWidget {
                   ),
                 ],
               ),
-              const SizedBox(height: 11),
-              Row(
-                children: <Widget>[
-                  Expanded(
-                    child: SizedBox(
-                      height: 40,
-                      child: OutlinedButton.icon(
-                        key: const Key('mark-learning-complete'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.white,
-                          side: const BorderSide(color: Colors.white38),
-                          padding: const EdgeInsets.symmetric(horizontal: 10),
-                          visualDensity: VisualDensity.compact,
-                        ),
-                        // 完成按钮函数只把用户明确操作交给学习清单服务。
-                        onPressed: markingCompleted ? null : onMarkCompleted,
-                        icon: markingCompleted
-                            ? const SizedBox.square(
-                                dimension: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Colors.white,
+              if (!learningFinished) ...<Widget>[
+                const SizedBox(height: 11),
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: SizedBox(
+                        height: 40,
+                        child: OutlinedButton.icon(
+                          key: const Key('mark-learning-complete'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.white,
+                            side: const BorderSide(color: Colors.white38),
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          // 完成按钮函数只把用户明确操作交给当前分 P 的学习任务。
+                          onPressed: processing || markedCompleted
+                              ? null
+                              : onMarkCompleted,
+                          icon: processing && !markedCompleted
+                              ? const SizedBox.square(
+                                  dimension: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : Icon(
+                                  markedCompleted
+                                      ? Icons.task_alt_rounded
+                                      : Icons.task_alt_outlined,
+                                  size: 19,
                                 ),
-                              )
-                            : const Icon(Icons.task_alt_rounded, size: 19),
-                        label: const Text(
-                          '标记完成',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                          label: Text(
+                            markedCompleted ? '已标记完成' : '标记已完成',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: SizedBox(
-                      height: 40,
-                      child: FilledButton.icon(
-                        key: const Key('play-next-after-completion'),
-                        style: FilledButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 10),
-                          visualDensity: VisualDensity.compact,
-                        ),
-                        // 下一节按钮函数只在仍有后续分P时执行用户主动切换。
-                        onPressed: hasNextPart && !markingCompleted
-                            ? onPlayNext
-                            : null,
-                        icon: const Icon(Icons.skip_next_rounded, size: 19),
-                        label: const Text(
-                          '播放下一节',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: SizedBox(
+                        height: 40,
+                        child: FilledButton.icon(
+                          key: const Key('continue-learning-after-completion'),
+                          style: FilledButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          // 继续按钮函数只在用户点击后完成当前任务并按学习清单顺序跳转。
+                          onPressed: processing ? null : onContinueLearning,
+                          icon: processing && markedCompleted
+                              ? const SizedBox.square(
+                                  dimension: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Icon(Icons.play_arrow_rounded, size: 19),
+                          label: const Text(
+                            '继续学习',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                ],
-              ),
+                  ],
+                ),
+              ],
             ],
           ),
         ),
