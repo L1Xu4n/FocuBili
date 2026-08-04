@@ -265,4 +265,4 @@ android/app/src/main/kotlin/com/focubili/app/
 项目主要在 Codex 协助下开发。
 
 友情链接：
-Linux.do——新的理想型社区
+[Linux.do](https://linux.do/)——新的理想型社区
