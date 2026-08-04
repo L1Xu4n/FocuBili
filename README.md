@@ -263,3 +263,6 @@ android/app/src/main/kotlin/com/focubili/app/
 使用、修改或分发本项目时，请同时遵守第三方项目许可证、平台条款和内容版权要求。
 
 项目主要在 Codex 协助下开发。
+
+友情链接：
+Linux.do——新的理想型社区
