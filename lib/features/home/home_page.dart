@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../core/router/app_router.dart';
 import '../../models/focus_session.dart';
 import '../../models/learning_list_entry.dart';
+import '../../services/bilibili_auth_service.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/learning_list_service.dart';
 import '../focus/focus_dashboard.dart';
@@ -15,18 +16,22 @@ import '../learning/learning_video_launcher.dart';
 
 /// 专注导向的首页，把目标计时作为主动观看前的第一入口。
 class HomePage extends StatefulWidget {
-  /// 创建首页，并接收切换到“打开视频”页的回调和可替换的学习清单服务。
+  /// 创建首页，并接收搜索、个人中心入口和可替换的本机服务。
   const HomePage({
     super.key,
     required this.onSearchRequested,
+    this.onProfileRequested,
     this.learningListService,
     this.videoService,
+    this.authService,
     this.refreshGeneration = 0,
   });
 
   final VoidCallback onSearchRequested;
+  final VoidCallback? onProfileRequested;
   final LearningListService? learningListService;
   final BilibiliService? videoService;
+  final BilibiliAuthService? authService;
   final int refreshGeneration;
 
   /// 创建首页状态，用于读取并刷新唯一突出显示的继续学习任务。
@@ -38,9 +43,12 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   late final LearningListService _learningListService;
   late final BilibiliService _videoService;
+  late final BilibiliAuthService _authService;
   LearningListEntry? _continueLearningEntry;
+  BilibiliSessionState _homeSession = const BilibiliSessionState.signedOut();
   bool _learningListLoading = true;
   int _reloadGeneration = 0;
+  int _accountReloadGeneration = 0;
 
   /// 初始化学习清单服务，并异步读取当前唯一需要突出的学习任务。
   @override
@@ -48,8 +56,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     super.initState();
     _learningListService = widget.learningListService ?? LearningListService();
     _videoService = widget.videoService ?? BilibiliVideoInfoService();
+    _authService = widget.authService ?? BilibiliAuthService();
     WidgetsBinding.instance.addObserver(this);
     unawaited(_reloadContinueLearning());
+    unawaited(_reloadHomeSession());
   }
 
   /// 主框架每次重新选择首页都会递增刷新代次，首页据此重新读取刚加入的学习任务。
@@ -58,6 +68,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.refreshGeneration != widget.refreshGeneration) {
       unawaited(_reloadContinueLearning());
+      unawaited(_reloadHomeSession());
     }
   }
 
@@ -66,6 +77,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       unawaited(_reloadContinueLearning());
+      unawaited(_reloadHomeSession());
     }
   }
 
@@ -84,6 +96,25 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       _continueLearningEntry = entry;
       _learningListLoading = false;
     });
+  }
+
+  /// 读取首页右上角需要的已登录头像；网络错误时保留主题色默认图标。
+  Future<void> _reloadHomeSession() async {
+    final int generation = ++_accountReloadGeneration;
+    final BilibiliSessionState session;
+    try {
+      session = await _authService.loadCurrentSession();
+    } catch (_) {
+      if (!mounted || generation != _accountReloadGeneration) {
+        return;
+      }
+      setState(() => _homeSession = const BilibiliSessionState.networkError());
+      return;
+    }
+    if (!mounted || generation != _accountReloadGeneration) {
+      return;
+    }
+    setState(() => _homeSession = session);
   }
 
   /// 页面销毁时解除应用生命周期监听，避免旧首页继续响应前后台事件。
@@ -271,6 +302,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return FocusDashboard(
       controller: FocusTimerScope.of(context),
       onOpenVideo: widget.onSearchRequested,
+      onOpenProfile: widget.onProfileRequested,
+      profileAvatarUrl: _homeSession.isActive
+          ? _homeSession.account?.avatarUrl
+          : null,
       onOpenStatistics: () => _openFocusStatistics(context),
       onOpenLinkedVideo: (FocusSession session) =>
           _openLinkedVideo(context, session),

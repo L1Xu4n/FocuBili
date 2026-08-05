@@ -37,11 +37,15 @@ class SearchPage extends StatefulWidget {
     this.service,
     this.userSearchService,
     this.learningListService,
+    this.onBackRequested,
   });
 
   final BilibiliService? service;
   final BilibiliUserSearchService? userSearchService;
   final LearningListService? learningListService;
+
+  /// 可选的首页返回回调；独立打开搜索页时保持原有无返回按钮的布局。
+  final VoidCallback? onBackRequested;
 
   /// 创建搜索页状态，保存输入、分页、筛选、候选词和结果列表。
   @override
@@ -1179,12 +1183,20 @@ class _SearchPageState extends State<SearchPage> {
     );
   }
 
-  /// 创建与页面同色的输入、清空和搜索一体栏；底部一级页面不再重复显示返回键。
+  /// 创建带可选返回按钮的输入、清空和搜索一体栏。
   Widget _buildSearchHeader() {
     return SizedBox(
       height: 58,
       child: Row(
         children: <Widget>[
+          if (widget.onBackRequested != null)
+            IconButton(
+              key: const Key('search-back-button'),
+              // 返回按钮函数把搜索页交还给主框架首页。
+              onPressed: widget.onBackRequested,
+              icon: const Icon(Icons.arrow_back_rounded),
+              tooltip: '返回首页',
+            ),
           Expanded(
             child: TextField(
               key: const Key('search-input-field'),

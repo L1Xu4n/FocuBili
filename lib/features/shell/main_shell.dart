@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../home/home_page.dart';
@@ -8,23 +10,61 @@ import '../search/search_page.dart';
 class MainShell extends StatefulWidget {
   const MainShell({super.key});
 
-  /// 创建主框架的可变状态，用于保存当前底部导航位置。
+  /// 创建主框架的可变状态，用于保存当前一级页面位置。
   @override
   State<MainShell> createState() => _MainShellState();
 }
 
-/// 保存主框架当前页面，并维持各页面的滚动与输入状态。
-class _MainShellState extends State<MainShell> {
+/// 保存主框架页面状态，并负责不经过中间页的水平过渡动画。
+class _MainShellState extends State<MainShell>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _navigationController;
   int _currentIndex = 0;
+  int? _transitionFrom;
+  int? _transitionTo;
   int _homeRefreshGeneration = 0;
 
-  /// 切换到底部导航指定页面；每次选择首页都发送新的学习清单刷新代次。
+  /// 初始化一级页面过渡控制器，并在动画完成后提交目标页面索引。
+  @override
+  void initState() {
+    super.initState();
+    _navigationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 360),
+    )..addStatusListener(_handleNavigationStatus);
+  }
+
+  /// 切换到指定一级页面；只让当前页和目标页参与直接滑入动画。
   void _selectPage(int index) {
+    if (index < 0 ||
+        index > 2 ||
+        index == _currentIndex ||
+        _transitionTo != null) {
+      return;
+    }
     setState(() {
-      _currentIndex = index;
+      _transitionFrom = _currentIndex;
+      _transitionTo = index;
       if (index == 0) {
         _homeRefreshGeneration += 1;
       }
+    });
+    unawaited(_navigationController.forward(from: 0));
+  }
+
+  /// 动画完成后提交目标页面，让隐藏页面继续保留在同一层级中。
+  void _handleNavigationStatus(AnimationStatus status) {
+    if (status != AnimationStatus.completed || !mounted) {
+      return;
+    }
+    final int? targetIndex = _transitionTo;
+    if (targetIndex == null) {
+      return;
+    }
+    setState(() {
+      _currentIndex = targetIndex;
+      _transitionFrom = null;
+      _transitionTo = null;
     });
   }
 
@@ -33,44 +73,101 @@ class _MainShellState extends State<MainShell> {
     _selectPage(1);
   }
 
-  /// 创建带 IndexedStack 的主界面，切页时不销毁已有页面状态。
-  @override
-  Widget build(BuildContext context) {
-    final List<Widget> pages = <Widget>[
+  /// 从“我的”页返回首页，并触发首页重新读取学习清单和账号头像。
+  void _openHome() {
+    _selectPage(0);
+  }
+
+  /// 从首页右上角的账号入口打开“我的”页。
+  void _openProfile() {
+    _selectPage(2);
+  }
+
+  /// 创建需要挂载到主框架的三个一级页面，并保持它们的顺序稳定。
+  List<Widget> _buildPages() {
+    return <Widget>[
       HomePage(
         onSearchRequested: _openSearch,
+        onProfileRequested: _openProfile,
         refreshGeneration: _homeRefreshGeneration,
       ),
-      const SearchPage(),
-      const ProfilePage(),
+      SearchPage(onBackRequested: _openHome),
+      ProfilePage(onBackRequested: _openHome),
     ];
+  }
+
+  /// 创建一个页面层；过渡期间目标页从相邻方向滑入，搜索页不会被绘制。
+  Widget _buildPageLayer(Widget page, int index, double width) {
+    final int? transitionFrom = _transitionFrom;
+    final int? transitionTo = _transitionTo;
+    final bool transitioning = transitionFrom != null && transitionTo != null;
+    final bool isVisible = transitioning
+        ? index == transitionFrom || index == transitionTo
+        : index == _currentIndex;
+    final double progress = Curves.easeOutCubic.transform(
+      _navigationController.value,
+    );
+    final double direction = transitioning && transitionTo > transitionFrom
+        ? 1
+        : -1;
+    final double translation = !transitioning
+        ? 0
+        : index == transitionTo
+        ? (1 - progress) * direction * width
+        : -progress * direction * width;
+    return Positioned.fill(
+      child: Offstage(
+        offstage: !isVisible,
+        child: TickerMode(
+          enabled: isVisible,
+          child: Transform.translate(
+            offset: Offset(translation, 0),
+            child: page,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 创建直接页面过渡层；各页始终保留在树中，所以搜索输入和滚动状态不会丢失。
+  @override
+  Widget build(BuildContext context) {
+    final List<Widget> pages = _buildPages();
     return Scaffold(
       body: SafeArea(
         bottom: false,
-        child: IndexedStack(index: _currentIndex, children: pages),
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
-        // 导航选择函数只更新本地页面索引，不进行网络请求。
-        onDestinationSelected: _selectPage,
-        destinations: const <NavigationDestination>[
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home_rounded),
-            label: '首页',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.search_rounded),
-            selectedIcon: Icon(Icons.manage_search_rounded),
-            label: '搜索',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline_rounded),
-            selectedIcon: Icon(Icons.person_rounded),
-            label: '我的',
-          ),
-        ],
+        child: LayoutBuilder(
+          builder: (BuildContext context, BoxConstraints constraints) {
+            return ClipRect(
+              child: AnimatedBuilder(
+                animation: _navigationController,
+                builder: (BuildContext context, Widget? child) {
+                  return Stack(
+                    fit: StackFit.expand,
+                    children: <Widget>[
+                      for (int index = 0; index < pages.length; index++)
+                        _buildPageLayer(
+                          pages[index],
+                          index,
+                          constraints.maxWidth,
+                        ),
+                    ],
+                  );
+                },
+              ),
+            );
+          },
+        ),
       ),
     );
+  }
+
+  /// 释放页面动画控制器，避免主框架离开后继续持有动画资源。
+  @override
+  void dispose() {
+    _navigationController
+      ..removeStatusListener(_handleNavigationStatus)
+      ..dispose();
+    super.dispose();
   }
 }

@@ -13,8 +13,11 @@ enum _AccountMenuAction { switchAccount, logout }
 
 /// “我的”页面展示登录状态，并提供本地数据与后续账号功能入口。
 class ProfilePage extends StatefulWidget {
-  /// 创建会在进入时检查 B 站会话的“我的”页面。
-  const ProfilePage({super.key});
+  /// 创建会在进入时检查 B 站会话的“我的”页面，并支持从主框架返回首页。
+  const ProfilePage({super.key, this.onBackRequested});
+
+  /// 可选的首页返回回调；独立打开页面时仍沿用系统路由返回行为。
+  final VoidCallback? onBackRequested;
 
   /// 创建保存账号、加载和错误状态的页面状态。
   @override
@@ -340,7 +343,18 @@ class _ProfilePageState extends State<ProfilePage> {
   Widget build(BuildContext context) {
     final bool hasUpdate = AppUpdateScope.maybeOf(context)?.hasUpdate ?? false;
     return Scaffold(
-      appBar: AppBar(title: const Text('我的')),
+      appBar: AppBar(
+        leading: widget.onBackRequested == null
+            ? null
+            : IconButton(
+                key: const Key('profile-back-button'),
+                // 返回按钮函数把“我的”页切回首页。
+                onPressed: widget.onBackRequested,
+                icon: const Icon(Icons.arrow_back_rounded),
+                tooltip: '返回首页',
+              ),
+        title: const Text('我的'),
+      ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: <Widget>[

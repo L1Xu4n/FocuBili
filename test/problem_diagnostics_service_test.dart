@@ -10,7 +10,7 @@ ProblemDiagnosticsService _createDiagnosticsService(
 ) {
   return ProblemDiagnosticsService(
     preferencesLoader: () async => preferences,
-    appVersionLoader: () async => '1.1.0+9',
+    appVersionLoader: () async => '1.1.1+10',
     deviceInfoLoader: () async => const DiagnosticDeviceInfo(
       androidRelease: '15',
       apiLevel: 35,
@@ -40,7 +40,7 @@ void main() {
     );
 
     final ProblemDiagnosticsSnapshot snapshot = await service.loadSnapshot();
-    expect(snapshot.appVersion, '1.1.0+9');
+    expect(snapshot.appVersion, '1.1.1+10');
     expect(snapshot.deviceInfo.androidLabel, '15 / API 35');
     expect(snapshot.recentErrors, hasLength(1));
     expect(snapshot.recentErrors.single.category, 'riskControl');
@@ -54,7 +54,7 @@ void main() {
 
     final String copyText = await service.buildCopyText();
     expect(copyText, contains('FocuBili 问题诊断'));
-    expect(copyText, contains('应用版本：1.1.0+9'));
+    expect(copyText, contains('应用版本：1.1.1+10'));
     expect(copyText, contains('Android：15 / API 35'));
     expect(copyText, contains('分类：riskControl'));
     expect(copyText, contains('操作：load_play_url'));
@@ -67,7 +67,7 @@ void main() {
     bool clearedReminderDiagnostics = false;
     final ProblemDiagnosticsService service = ProblemDiagnosticsService(
       preferencesLoader: () async => preferences,
-      appVersionLoader: () async => '1.1.0+9',
+      appVersionLoader: () async => '1.1.1+10',
       deviceInfoLoader: () async => const DiagnosticDeviceInfo(
         androidRelease: '15',
         apiLevel: 35,

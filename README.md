@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/L1Xu4n/FocuBili/releases"><img src="https://img.shields.io/github/v/release/L1Xu4n/FocuBili?display_name=tag&sort=semver" alt="GitHub Release"></a>
-  <img src="https://img.shields.io/badge/version-v1.1.0-2EA44F" alt="Current version v1.1.0">
+  <img src="https://img.shields.io/badge/version-v1.1.1-2EA44F" alt="Current version v1.1.1">
   <img src="https://img.shields.io/badge/Flutter-3.44.6-02569B?logo=flutter" alt="Flutter 3.44.6">
   <img src="https://img.shields.io/badge/Android-7.0+-3DDC84?logo=android" alt="Android 7.0+">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="GPL-3.0"></a>
@@ -27,6 +27,19 @@ FocuBili 希望保留“主动找到一支视频并认真看完”这件事本�
 - 搜索、BV 号和视频链接是主要入口；
 - 播放页优先保留视频、选集、简介和必要控制；
 - 账号数据功能以只读为主，不伪装点赞、投币、收藏或关注写操作。
+
+## v1.1.1 更新内容
+
+- 首页改为无底部导航的专注入口：通过首屏搜索按钮进入搜索页，通过右上角主题色个人图标进入“我的”。
+- 首页下方内容拆分为可扩展卡片；首屏上滑一次吸附展开全部卡片，并带有原位下坠、模糊和透明过渡效果。
+- 搜索页与“我的”页新增返回首页入口，页面切换使用直接滑入动画，不会短暂经过搜索页。
+- 深色模式下首页按钮、背景和文字保持可读；已登录账号在首页个人入口显示头像，头像不可用时回退为主题色图标。
+- 修复大幅上滑后的卡片吸附位置和轻微下滑误触发整页回弹问题。
+- `flutter analyze` 通过，完整 `flutter test` 共 245 项通过。
+
+[下载 FocuBili v1.1.1 APK](https://github.com/L1Xu4n/FocuBili/releases/download/v1.1.1/FocuBili-v1.1.1-release.apk) · [查看完整发布说明](docs/RELEASE_NOTES_v1.1.1.md)
+
+APK SHA-256：`1EB849A3795CEC0E749C424FD4836184622A7A30B4975C5CEE0EEAB9AA84A31D`
 
 ## v1.1.0 更新内容
 

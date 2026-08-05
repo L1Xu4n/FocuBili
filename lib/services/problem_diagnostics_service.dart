@@ -616,13 +616,13 @@ class ProblemDiagnosticsService {
     return text.toString().trimRight();
   }
 
-  /// 安全读取安装版本；插件在测试或极少数异常设备不可用时回退到本轮目标版本。
+  /// 安全读取安装版本；插件在测试或极少数异常设备不可用时回退到当前发布版本。
   Future<String> _loadVersionSafely() async {
     try {
       final String version = (await _appVersionLoader()).trim();
-      return version.isEmpty ? '1.1.0+9' : version;
+      return version.isEmpty ? '1.1.1+10' : version;
     } catch (_) {
-      return '1.1.0+9';
+      return '1.1.1+10';
     }
   }
 
