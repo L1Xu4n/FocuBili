@@ -10,7 +10,7 @@ Future<ProblemDiagnosticsService> _createPageDiagnosticsService() async {
   final SharedPreferences preferences = await SharedPreferences.getInstance();
   return ProblemDiagnosticsService(
     preferencesLoader: () async => preferences,
-    appVersionLoader: () async => '1.1.0+9',
+    appVersionLoader: () async => '1.1.1+10',
     deviceInfoLoader: () async => const DiagnosticDeviceInfo(
       androidRelease: '15',
       apiLevel: 35,
@@ -40,7 +40,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('基础环境信息'), findsOneWidget);
-    expect(find.text('1.1.0+9'), findsOneWidget);
+    expect(find.text('1.1.1+10'), findsOneWidget);
     expect(find.text('Android 15 / API 35'), findsOneWidget);
     expect(find.text('网络错误'), findsOneWidget);
     expect(find.byKey(const Key('reminder-diagnostics-card')), findsOneWidget);
