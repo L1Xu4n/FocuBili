@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/layout/adaptive_layout.dart';
 import '../../core/router/app_router.dart';
 import '../../services/bilibili_auth_service.dart';
 import '../../services/app_update_service.dart';
@@ -355,87 +356,104 @@ class _ProfilePageState extends State<ProfilePage> {
               ),
         title: const Text('我的'),
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: <Widget>[
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Row(
-                children: <Widget>[
-                  _buildAvatar(),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        Text(
-                          _accountTitle(),
-                          style: const TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(_accountDescription()),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  _buildAccountAction(),
-                ],
-              ),
+      body: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          final double horizontalPadding =
+              AdaptiveLayout.centeredHorizontalPadding(
+                width: constraints.maxWidth,
+                maxContentWidth: AdaptiveLayout.profileContentMaxWidth,
+                compact: 16,
+              );
+          return ListView(
+            key: const Key('profile-adaptive-content'),
+            padding: EdgeInsets.fromLTRB(
+              horizontalPadding,
+              16,
+              horizontalPadding,
+              16,
             ),
-          ),
-          const SizedBox(height: 16),
-          _ProfileTile(
-            icon: Icons.history_rounded,
-            title: '观看记录',
-            // 观看记录入口函数打开只保存在本机的视频观看历史页面。
-            onTap: () =>
-                Navigator.of(context).pushNamed(AppRoutes.watchHistory),
-          ),
-          _ProfileTile(
-            icon: Icons.star_outline_rounded,
-            title: '我的收藏',
-            // 收藏入口函数打开真实收藏夹列表，具体会话错误由目标页面明确显示。
-            onTap: () => _openFavoriteFolders(),
-          ),
-          _ProfileTile(
-            icon: Icons.subscriptions_outlined,
-            title: '我的订阅',
-            // 订阅入口函数只展示由多支独立视频组成的 UGC 合集。
-            onTap: () => _openSubscribedCollections(),
-          ),
-          _ProfileTile(
-            icon: Icons.people_outline_rounded,
-            title: '我的关注',
-            // 关注入口函数只展示当前账号已关注的 UP 主。
-            onTap: () => _openFollowedCreators(),
-          ),
-          _ProfileTile(
-            icon: Icons.edit_note_rounded,
-            title: '时间点笔记',
-            // 时间点笔记入口函数打开本机笔记的统一查看与管理页面。
-            onTap: () => Navigator.of(context).pushNamed(AppRoutes.videoNotes),
-          ),
-          _ProfileTile(
-            icon: Icons.insights_rounded,
-            title: '专注数据',
-            // 专注数据入口函数打开本机看板、筛选和统一记录管理页面。
-            onTap: () =>
-                Navigator.of(context).pushNamed(AppRoutes.focusStatistics),
-          ),
-          _ProfileTile(
-            icon: Icons.settings_outlined,
-            title: '设置',
-            showBadge: hasUpdate,
-            // 设置入口函数进入个性化设置页，其中仍保留独立缓存管理入口。
-            onTap: () => Navigator.of(
-              context,
-            ).pushNamed(AppRoutes.personalizationSettings),
-          ),
-        ],
+            children: <Widget>[
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Row(
+                    children: <Widget>[
+                      _buildAvatar(),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: <Widget>[
+                            Text(
+                              _accountTitle(),
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(_accountDescription()),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      _buildAccountAction(),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              _ProfileTile(
+                icon: Icons.history_rounded,
+                title: '观看记录',
+                // 观看记录入口函数打开只保存在本机的视频观看历史页面。
+                onTap: () =>
+                    Navigator.of(context).pushNamed(AppRoutes.watchHistory),
+              ),
+              _ProfileTile(
+                icon: Icons.star_outline_rounded,
+                title: '我的收藏',
+                // 收藏入口函数打开真实收藏夹列表，具体会话错误由目标页面明确显示。
+                onTap: () => _openFavoriteFolders(),
+              ),
+              _ProfileTile(
+                icon: Icons.subscriptions_outlined,
+                title: '我的订阅',
+                // 订阅入口函数只展示由多支独立视频组成的 UGC 合集。
+                onTap: () => _openSubscribedCollections(),
+              ),
+              _ProfileTile(
+                icon: Icons.people_outline_rounded,
+                title: '我的关注',
+                // 关注入口函数只展示当前账号已关注的 UP 主。
+                onTap: () => _openFollowedCreators(),
+              ),
+              _ProfileTile(
+                icon: Icons.edit_note_rounded,
+                title: '时间点笔记',
+                // 时间点笔记入口函数打开本机笔记的统一查看与管理页面。
+                onTap: () =>
+                    Navigator.of(context).pushNamed(AppRoutes.videoNotes),
+              ),
+              _ProfileTile(
+                icon: Icons.insights_rounded,
+                title: '专注数据',
+                // 专注数据入口函数打开本机看板、筛选和统一记录管理页面。
+                onTap: () =>
+                    Navigator.of(context).pushNamed(AppRoutes.focusStatistics),
+              ),
+              _ProfileTile(
+                icon: Icons.settings_outlined,
+                title: '设置',
+                showBadge: hasUpdate,
+                // 设置入口函数进入个性化设置页，其中仍保留独立缓存管理入口。
+                onTap: () => Navigator.of(
+                  context,
+                ).pushNamed(AppRoutes.personalizationSettings),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

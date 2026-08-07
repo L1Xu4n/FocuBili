@@ -3,6 +3,7 @@ import 'dart:io';
 
 import '../models/video_preview.dart';
 import '../models/user_search.dart';
+import 'bilibili_request_policy.dart';
 
 /// 定义可替换的 JSON 请求函数，方便测试时不用真的访问网络。
 typedef JsonRequest = Future<String> Function(Uri uri);
@@ -891,14 +892,14 @@ class BilibiliVideoInfoService
     final HttpClient client = HttpClient();
     try {
       final HttpClientRequest request = await client.getUrl(uri);
-      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      request.headers.set(HttpHeaders.userAgentHeader, _desktopUserAgent);
-      request.headers.set(
-        HttpHeaders.refererHeader,
-        uri.path == _videoSearchPath
-            ? 'https://search.bilibili.com/'
-            : 'https://www.bilibili.com/',
-      );
+      final Map<String, String> requestHeaders =
+          BilibiliRequestPolicy.publicJsonHeaders(
+            uri,
+            userAgent: _desktopUserAgent,
+          );
+      for (final MapEntry<String, String> header in requestHeaders.entries) {
+        request.headers.set(header.key, header.value);
+      }
       final HttpClientResponse response = await request.close();
       final String responseText = await response.transform(utf8.decoder).join();
       if (response.statusCode != HttpStatus.ok) {

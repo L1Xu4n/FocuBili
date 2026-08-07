@@ -4,6 +4,7 @@ import 'dart:collection';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
+import '../../core/layout/adaptive_layout.dart';
 import '../../core/router/app_router.dart';
 import '../../models/user_search.dart';
 import '../../models/learning_list_entry.dart';
@@ -1135,49 +1136,73 @@ class _SearchPageState extends State<SearchPage> {
     return Scaffold(
       resizeToAvoidBottomInset: true,
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(4, 0, 4, 12),
-          child: Column(
-            children: <Widget>[
-              _buildSearchHeader(),
-              const Divider(height: 1),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: SegmentedButton<_SearchMode>(
-                    key: const Key('search-mode-selector'),
-                    segments: const <ButtonSegment<_SearchMode>>[
-                      ButtonSegment<_SearchMode>(
-                        value: _SearchMode.videos,
-                        icon: Icon(Icons.ondemand_video_outlined),
-                        label: Text('视频'),
+        child: LayoutBuilder(
+          builder: (BuildContext context, BoxConstraints constraints) {
+            final double horizontalPadding =
+                AdaptiveLayout.centeredHorizontalPadding(
+                  width: constraints.maxWidth,
+                  maxContentWidth: AdaptiveLayout.searchContentMaxWidth,
+                  compact: 4,
+                );
+            return Padding(
+              padding: EdgeInsets.fromLTRB(
+                horizontalPadding,
+                0,
+                horizontalPadding,
+                12,
+              ),
+              child: SizedBox(
+                key: const Key('search-adaptive-content'),
+                width: double.infinity,
+                child: Column(
+                  children: <Widget>[
+                    _buildSearchHeader(),
+                    const Divider(height: 1),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+                      child: Center(
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 480),
+                          child: SizedBox(
+                            width: double.infinity,
+                            child: SegmentedButton<_SearchMode>(
+                              key: const Key('search-mode-selector'),
+                              segments: const <ButtonSegment<_SearchMode>>[
+                                ButtonSegment<_SearchMode>(
+                                  value: _SearchMode.videos,
+                                  icon: Icon(Icons.ondemand_video_outlined),
+                                  label: Text('视频'),
+                                ),
+                                ButtonSegment<_SearchMode>(
+                                  value: _SearchMode.users,
+                                  icon: Icon(Icons.person_search_outlined),
+                                  label: Text('用户'),
+                                ),
+                              ],
+                              selected: <_SearchMode>{_searchMode},
+                              // 搜索模式函数在视频和用户结果之间切换。
+                              onSelectionChanged: _changeSearchMode,
+                            ),
+                          ),
+                        ),
                       ),
-                      ButtonSegment<_SearchMode>(
-                        value: _SearchMode.users,
-                        icon: Icon(Icons.person_search_outlined),
-                        label: Text('用户'),
+                    ),
+                    if (!keyboardVisible)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(8, 6, 8, 0),
+                        child: _buildSortAndFilterBar(),
                       ),
-                    ],
-                    selected: <_SearchMode>{_searchMode},
-                    // 搜索模式函数在视频和用户结果之间切换。
-                    onSelectionChanged: _changeSearchMode,
-                  ),
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        child: _buildResultOverlay(),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              if (!keyboardVisible)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(8, 6, 8, 0),
-                  child: _buildSortAndFilterBar(),
-                ),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: _buildResultOverlay(),
-                ),
-              ),
-            ],
-          ),
+            );
+          },
         ),
       ),
     );

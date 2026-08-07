@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/L1Xu4n/FocuBili/releases"><img src="https://img.shields.io/github/v/release/L1Xu4n/FocuBili?display_name=tag&sort=semver" alt="GitHub Release"></a>
-  <img src="https://img.shields.io/badge/version-v1.1.1-2EA44F" alt="Current version v1.1.1">
+  <img src="https://img.shields.io/badge/version-v1.2.0-2EA44F" alt="Current version v1.2.0">
   <img src="https://img.shields.io/badge/Flutter-3.44.6-02569B?logo=flutter" alt="Flutter 3.44.6">
   <img src="https://img.shields.io/badge/Android-7.0+-3DDC84?logo=android" alt="Android 7.0+">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="GPL-3.0"></a>
@@ -27,6 +27,16 @@ FocuBili 希望保留“主动找到一支视频并认真看完”这件事本�
 - 搜索、BV 号和视频链接是主要入口；
 - 播放页优先保留视频、选集、简介和必要控制；
 - 账号数据功能以只读为主，不伪装点赞、投币、收藏或关注写操作。
+
+## v1.2.0 更新内容
+
+- 首页、搜索页和“我的”页增加统一的平板响应式边距与内容限宽；矮横屏和分屏中的首页欢迎区会按可用高度缩短。
+- 平板网页登录改用 B 站官方 H5 入口，并在保留设备真实 WebView 版本的同时补充移动端 UA 标记。
+- 修复视频详情请求来源与目标视频不一致时触发的 HTTP 412；公开详情仍不携带账号 Cookie。
+- 修复“我的 → 设置 → 返回”后隐藏搜索框重新取得焦点、输入法自动弹出以及文字写入搜索框的问题。
+- 搜索页和“我的”页按系统返回时先回首页，只有首页继续把返回交给 Android 退出应用。
+
+正式 APK 请从 [GitHub Release v1.2.0](https://github.com/L1Xu4n/FocuBili/releases/tag/v1.2.0) 下载。完整变更见 [v1.2.0 发布说明](docs/RELEASE_NOTES_v1.2.0.md)。
 
 ## v1.1.1 更新内容
 
