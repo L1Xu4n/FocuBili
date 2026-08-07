@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../services/bilibili_auth_service.dart';
+import '../../services/bilibili_request_policy.dart';
 
 /// 标识登录首页提供的手机号、密码和 Cookie 三种入口。
 enum _LoginMode { phone, password, cookie }
@@ -252,9 +253,6 @@ class _OfficialWebLoginPage extends StatefulWidget {
 
 /// 管理官方网页加载、非网页协议拦截和登录成功后的自动返回。
 class _OfficialWebLoginPageState extends State<_OfficialWebLoginPage> {
-  static final Uri _officialLoginUri = Uri.parse(
-    'https://passport.bilibili.com/login',
-  );
   final BilibiliAuthService _authService = BilibiliAuthService();
   late final WebViewController _webController;
   Timer? _loginCheckTimer;
@@ -266,17 +264,39 @@ class _OfficialWebLoginPageState extends State<_OfficialWebLoginPage> {
   @override
   void initState() {
     super.initState();
-    _webController = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(Colors.white)
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onNavigationRequest: _handleNavigationRequest,
-          onPageFinished: _handlePageFinished,
-          onWebResourceError: _handleWebResourceError,
-        ),
-      )
-      ..loadRequest(_officialLoginUri);
+    _webController = WebViewController();
+    unawaited(_configureWebController());
+  }
+
+  /// 按顺序设置移动端 UA、网页权限和导航规则，再加载 B 站官方登录地址。
+  Future<void> _configureWebController() async {
+    await _webController.setJavaScriptMode(JavaScriptMode.unrestricted);
+    await _webController.setBackgroundColor(Colors.white);
+    String? defaultUserAgent;
+    try {
+      defaultUserAgent = await _webController.platform.getUserAgent();
+    } catch (_) {
+      // 平台未提供 UA 读取能力时使用固定移动端回退值，登录页仍可继续加载。
+    }
+    await _webController.setUserAgent(
+      BilibiliRequestPolicy.ensureMobileWebUserAgent(defaultUserAgent),
+    );
+    await _webController.setNavigationDelegate(
+      NavigationDelegate(
+        onNavigationRequest: _handleNavigationRequest,
+        onPageFinished: _handlePageFinished,
+        onWebResourceError: _handleWebResourceError,
+      ),
+    );
+    if (!mounted) {
+      return;
+    }
+    await _webController.loadRequest(
+      BilibiliRequestPolicy.officialMobileLoginUri,
+    );
+    if (!mounted) {
+      return;
+    }
     _startLoginCheckTimer();
   }
 

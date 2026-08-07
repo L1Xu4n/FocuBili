@@ -42,6 +42,8 @@ class _MainShellState extends State<MainShell>
         _transitionTo != null) {
       return;
     }
+    // 一级页面会常驻组件树；切走前必须解除当前输入焦点，避免隐藏搜索框继续接收键盘输入。
+    FocusManager.instance.primaryFocus?.unfocus();
     setState(() {
       _transitionFrom = _currentIndex;
       _transitionTo = index;
@@ -83,6 +85,14 @@ class _MainShellState extends State<MainShell>
     _selectPage(2);
   }
 
+  /// 处理 Android 系统返回：搜索页和“我的”页先回首页，首页再交给系统退出。
+  void _handleSystemBack(bool didPop, Object? result) {
+    if (didPop || _transitionTo != null || _currentIndex == 0) {
+      return;
+    }
+    _openHome();
+  }
+
   /// 创建需要挂载到主框架的三个一级页面，并保持它们的顺序稳定。
   List<Widget> _buildPages() {
     return <Widget>[
@@ -118,11 +128,14 @@ class _MainShellState extends State<MainShell>
     return Positioned.fill(
       child: Offstage(
         offstage: !isVisible,
-        child: TickerMode(
-          enabled: isVisible,
-          child: Transform.translate(
-            offset: Offset(translation, 0),
-            child: page,
+        child: ExcludeFocus(
+          excluding: index != (_transitionTo ?? _currentIndex),
+          child: TickerMode(
+            enabled: isVisible,
+            child: Transform.translate(
+              offset: Offset(translation, 0),
+              child: page,
+            ),
           ),
         ),
       ),
@@ -133,30 +146,34 @@ class _MainShellState extends State<MainShell>
   @override
   Widget build(BuildContext context) {
     final List<Widget> pages = _buildPages();
-    return Scaffold(
-      body: SafeArea(
-        bottom: false,
-        child: LayoutBuilder(
-          builder: (BuildContext context, BoxConstraints constraints) {
-            return ClipRect(
-              child: AnimatedBuilder(
-                animation: _navigationController,
-                builder: (BuildContext context, Widget? child) {
-                  return Stack(
-                    fit: StackFit.expand,
-                    children: <Widget>[
-                      for (int index = 0; index < pages.length; index++)
-                        _buildPageLayer(
-                          pages[index],
-                          index,
-                          constraints.maxWidth,
-                        ),
-                    ],
-                  );
-                },
-              ),
-            );
-          },
+    return PopScope<Object?>(
+      canPop: _currentIndex == 0 && _transitionTo == null,
+      onPopInvokedWithResult: _handleSystemBack,
+      child: Scaffold(
+        body: SafeArea(
+          bottom: false,
+          child: LayoutBuilder(
+            builder: (BuildContext context, BoxConstraints constraints) {
+              return ClipRect(
+                child: AnimatedBuilder(
+                  animation: _navigationController,
+                  builder: (BuildContext context, Widget? child) {
+                    return Stack(
+                      fit: StackFit.expand,
+                      children: <Widget>[
+                        for (int index = 0; index < pages.length; index++)
+                          _buildPageLayer(
+                            pages[index],
+                            index,
+                            constraints.maxWidth,
+                          ),
+                      ],
+                    );
+                  },
+                ),
+              );
+            },
+          ),
         ),
       ),
     );

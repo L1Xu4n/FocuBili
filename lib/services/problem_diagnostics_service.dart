@@ -620,9 +620,9 @@ class ProblemDiagnosticsService {
   Future<String> _loadVersionSafely() async {
     try {
       final String version = (await _appVersionLoader()).trim();
-      return version.isEmpty ? '1.1.1+10' : version;
+      return version.isEmpty ? '1.2.0+11' : version;
     } catch (_) {
-      return '1.1.1+10';
+      return '1.2.0+11';
     }
   }
 
