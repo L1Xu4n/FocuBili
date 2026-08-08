@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/services.dart';
 
 import '../core/utils/bilibili_id_converter.dart';
@@ -63,20 +65,64 @@ abstract final class BilibiliDeepLinkParser {
     );
   }
 
-  /// 优先提取 BV 号；官方 Scheme 只带数字 AV 号时转换为等价 BV 号。
+  /// 按结构化字段提取 BV；不会再把 QQ 的不透明 Base64 参数误认成随机 BV 号。
   static String? _extractBvid(Uri uri) {
-    final String searchable = '${uri.path} ${uri.query}';
-    final RegExpMatch? bvMatch = _bvidPattern.firstMatch(searchable);
+    final RegExpMatch? bvMatch = _bvidPattern.firstMatch(uri.path);
     if (bvMatch != null) {
-      final String rawBvid = bvMatch.group(0)!;
-      return 'BV${rawBvid.substring(2)}';
+      return _normalizeBvid(bvMatch.group(0)!);
     }
-    final RegExpMatch? avMatch = _avPattern.firstMatch(searchable);
+    final String? explicitBvid = uri.queryParameters['bvid'];
+    final RegExpMatch? explicitMatch = explicitBvid == null
+        ? null
+        : _bvidPattern.firstMatch(explicitBvid);
+    if (explicitMatch != null) {
+      return _normalizeBvid(explicitMatch.group(0)!);
+    }
     final String? firstSegment = uri.pathSegments.isEmpty
         ? null
         : uri.pathSegments.first;
-    final int? aid = int.tryParse(avMatch?.group(1) ?? firstSegment ?? '');
-    return aid == null ? null : BilibiliIdConverter.avToBv(aid);
+    final RegExpMatch? pathAvMatch = _avPattern.firstMatch(uri.path);
+    int? aid;
+    for (final String? candidate in <String?>[
+      pathAvMatch?.group(1),
+      firstSegment,
+      uri.queryParameters['aid'],
+      uri.queryParameters['avid'],
+    ]) {
+      aid = int.tryParse(candidate ?? '');
+      if (aid != null) {
+        break;
+      }
+    }
+    final String? convertedBvid = aid == null
+        ? null
+        : BilibiliIdConverter.avToBv(aid);
+    if (convertedBvid != null) {
+      return convertedBvid;
+    }
+    return _extractH5AwakenBvid(uri.queryParameters['h5awaken']);
+  }
+
+  /// 解码 QQ 分享携带的 h5awaken，并只从解码后的官方唤醒内容读取标准 BV 号。
+  static String? _extractH5AwakenBvid(String? rawPayload) {
+    if (rawPayload == null || rawPayload.trim().isEmpty) {
+      return null;
+    }
+    try {
+      final String normalizedPayload = base64.normalize(rawPayload.trim());
+      final String decodedPayload = utf8.decode(
+        base64.decode(normalizedPayload),
+      );
+      final RegExpMatch? match = _bvidPattern.firstMatch(decodedPayload);
+      return match == null ? null : _normalizeBvid(match.group(0)!);
+    } on FormatException {
+      return null;
+    }
+  }
+
+  /// 统一 BV 前缀大小写，同时保留后十位区分大小写的真实编号。
+  static String _normalizeBvid(String rawBvid) {
+    return 'BV${rawBvid.substring(2)}';
   }
 
   /// 读取 `cid` 等必须为正数的查询参数，非法值不会传给播放器。

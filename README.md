@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/L1Xu4n/FocuBili/releases"><img src="https://img.shields.io/github/v/release/L1Xu4n/FocuBili?display_name=tag&sort=semver" alt="GitHub Release"></a>
-  <img src="https://img.shields.io/badge/version-v1.3.0-2EA44F" alt="Current version v1.3.0">
+  <img src="https://img.shields.io/badge/version-v1.3.1-2EA44F" alt="Current version v1.3.1">
   <img src="https://img.shields.io/badge/Flutter-3.44.6-02569B?logo=flutter" alt="Flutter 3.44.6">
   <img src="https://img.shields.io/badge/Android-7.0+-3DDC84?logo=android" alt="Android 7.0+">
   <a href="https://qm.qq.com/q/szv665wx7W"><img src="https://img.shields.io/badge/QQ%E7%BE%A4-1055054828-12B7F5?logo=tencentqq&logoColor=white" alt="官方QQ群 1055054828"></a>
@@ -28,6 +28,13 @@ FocuBili 希望保留“主动找到一支视频并认真看完”这件事本�
 - 搜索、BV 号和视频链接是主要入口；
 - 播放页优先保留视频、选集、简介和必要控制；
 - 账号数据功能以只读为主，不伪装点赞、投币、收藏或关注写操作。
+
+## v1.3.1 更新内容
+
+- 修复 QQ 内打开 `bilibili://video/...` 分享链接时，不透明唤醒参数被误识别为 BV 号、随后详情接口返回 `-400` 的问题。
+- 超大 AV 号会优先按路径正确转换；外层编号不可用时，可从 QQ `h5awaken` 解码后的标准视频链接恢复 BV 号。
+
+正式 APK 请从 [GitHub Release v1.3.1](https://github.com/L1Xu4n/FocuBili/releases/tag/v1.3.1) 下载。完整变化见 [v1.3.1 发布说明](docs/RELEASE_NOTES_v1.3.1.md)。
 
 ## v1.3.0 更新内容
 
