@@ -4,6 +4,8 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.BatteryManager
 import android.os.Build
 import io.flutter.plugin.common.BinaryMessenger
@@ -11,7 +13,7 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 
 /**
- * 向 Flutter 提供无需权限的设备状态，只读取系统公开的当前电量百分比。
+ * 向 Flutter 提供系统公开的当前电量与网络连接类型。
  *
  * 控制器不持有 Flutter 页面、账号或播放器数据，因此读取失败时也不会影响播放。
  */
@@ -30,6 +32,7 @@ class DeviceStatusController(
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             METHOD_GET_BATTERY_PERCENT -> result.success(readBatteryPercent())
+            METHOD_GET_NETWORK_TYPE -> result.success(readNetworkType())
             METHOD_GET_DIAGNOSTIC_DEVICE_INFO -> result.success(readDiagnosticDeviceInfo())
             else -> result.notImplemented()
         }
@@ -60,6 +63,25 @@ class DeviceStatusController(
     }
 
     /**
+     * 只读取当前活动网络的传输类型，不读取 Wi-Fi 名称、运营商、IP 或任何设备标识。
+     *
+     * Android 没有活动网络时返回 offline；无法识别的 VPN 等连接统一返回 other。
+     */
+    private fun readNetworkType(): String {
+        val connectivityManager = applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE)
+            as? ConnectivityManager ?: return NETWORK_OTHER
+        val activeNetwork = connectivityManager.activeNetwork ?: return NETWORK_OFFLINE
+        val capabilities = connectivityManager.getNetworkCapabilities(activeNetwork)
+            ?: return NETWORK_OTHER
+        return when {
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> NETWORK_WIFI
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> NETWORK_MOBILE
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> NETWORK_ETHERNET
+            else -> NETWORK_OTHER
+        }
+    }
+
+    /**
      * 返回问题诊断页需要的公开系统版本、API 级别和设备型号。
      *
      * 不读取序列号、Android ID、MAC 地址、广告标识符或任何账号资料，确保复制诊断文本可安全反馈。
@@ -87,6 +109,12 @@ class DeviceStatusController(
     private companion object {
         const val CHANNEL_NAME = "com.focubili.app/device_status"
         const val METHOD_GET_BATTERY_PERCENT = "getBatteryPercent"
+        const val METHOD_GET_NETWORK_TYPE = "getNetworkType"
         const val METHOD_GET_DIAGNOSTIC_DEVICE_INFO = "getDiagnosticDeviceInfo"
+        const val NETWORK_WIFI = "wifi"
+        const val NETWORK_MOBILE = "mobile"
+        const val NETWORK_ETHERNET = "ethernet"
+        const val NETWORK_OFFLINE = "offline"
+        const val NETWORK_OTHER = "other"
     }
 }

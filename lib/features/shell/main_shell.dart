@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../core/layout/adaptive_layout.dart';
 import '../home/home_page.dart';
 import '../profile/profile_page.dart';
 import '../search/search_page.dart';
@@ -44,6 +45,18 @@ class _MainShellState extends State<MainShell>
     }
     // 一级页面会常驻组件树；切走前必须解除当前输入焦点，避免隐藏搜索框继续接收键盘输入。
     FocusManager.instance.primaryFocus?.unfocus();
+    if (AdaptiveLayout.usesWorkspace(MediaQuery.sizeOf(context))) {
+      _navigationController.stop();
+      setState(() {
+        _currentIndex = index;
+        _transitionFrom = null;
+        _transitionTo = null;
+        if (index == 0) {
+          _homeRefreshGeneration += 1;
+        }
+      });
+      return;
+    }
     setState(() {
       _transitionFrom = _currentIndex;
       _transitionTo = index;
@@ -94,16 +107,100 @@ class _MainShellState extends State<MainShell>
   }
 
   /// 创建需要挂载到主框架的三个一级页面，并保持它们的顺序稳定。
-  List<Widget> _buildPages() {
+  List<Widget> _buildPages({required bool workspace}) {
     return <Widget>[
       HomePage(
         onSearchRequested: _openSearch,
         onProfileRequested: _openProfile,
         refreshGeneration: _homeRefreshGeneration,
       ),
-      SearchPage(onBackRequested: _openHome),
-      ProfilePage(onBackRequested: _openHome),
+      SearchPage(onBackRequested: workspace ? null : _openHome),
+      ProfilePage(onBackRequested: workspace ? null : _openHome),
     ];
+  }
+
+  /// 创建横屏平板和桌面宽窗口使用的左侧一级导航。
+  Widget _buildWorkspaceNavigation(Size windowSize) {
+    final bool extended = AdaptiveLayout.usesExpandedWorkspace(windowSize);
+    return NavigationRail(
+      key: const Key('workspace-navigation-rail'),
+      selectedIndex: _currentIndex,
+      extended: extended,
+      minWidth: AdaptiveLayout.compactNavigationWidth,
+      minExtendedWidth: AdaptiveLayout.expandedNavigationWidth,
+      labelType: extended
+          ? NavigationRailLabelType.none
+          : NavigationRailLabelType.all,
+      leading: Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Image.asset(
+            'assets/icon/focubili_icon.png',
+            width: 42,
+            height: 42,
+          ),
+        ),
+      ),
+      destinations: const <NavigationRailDestination>[
+        NavigationRailDestination(
+          icon: Icon(Icons.home_outlined),
+          selectedIcon: Icon(Icons.home_rounded),
+          label: Text('首页'),
+        ),
+        NavigationRailDestination(
+          icon: Icon(Icons.search_rounded),
+          selectedIcon: Icon(Icons.manage_search_rounded),
+          label: Text('搜索'),
+        ),
+        NavigationRailDestination(
+          icon: Icon(Icons.person_outline_rounded),
+          selectedIcon: Icon(Icons.person_rounded),
+          label: Text('我的'),
+        ),
+      ],
+      onDestinationSelected: _selectPage,
+    );
+  }
+
+  /// 创建保持三个一级页面状态的页面堆栈，手机端可选择启用水平切换动画。
+  Widget _buildPageStack({
+    required List<Widget> pages,
+    required double width,
+    required bool animate,
+  }) {
+    if (!animate) {
+      return Stack(
+        fit: StackFit.expand,
+        children: <Widget>[
+          for (int index = 0; index < pages.length; index++)
+            Positioned.fill(
+              child: Offstage(
+                offstage: index != _currentIndex,
+                child: ExcludeFocus(
+                  excluding: index != _currentIndex,
+                  child: TickerMode(
+                    enabled: index == _currentIndex,
+                    child: pages[index],
+                  ),
+                ),
+              ),
+            ),
+        ],
+      );
+    }
+    return AnimatedBuilder(
+      animation: _navigationController,
+      builder: (BuildContext context, Widget? child) {
+        return Stack(
+          fit: StackFit.expand,
+          children: <Widget>[
+            for (int index = 0; index < pages.length; index++)
+              _buildPageLayer(pages[index], index, width),
+          ],
+        );
+      },
+    );
   }
 
   /// 创建一个页面层；过渡期间目标页从相邻方向滑入，搜索页不会被绘制。
@@ -145,7 +242,6 @@ class _MainShellState extends State<MainShell>
   /// 创建直接页面过渡层；各页始终保留在树中，所以搜索输入和滚动状态不会丢失。
   @override
   Widget build(BuildContext context) {
-    final List<Widget> pages = _buildPages();
     return PopScope<Object?>(
       canPop: _currentIndex == 0 && _transitionTo == null,
       onPopInvokedWithResult: _handleSystemBack,
@@ -154,24 +250,29 @@ class _MainShellState extends State<MainShell>
           bottom: false,
           child: LayoutBuilder(
             builder: (BuildContext context, BoxConstraints constraints) {
-              return ClipRect(
-                child: AnimatedBuilder(
-                  animation: _navigationController,
-                  builder: (BuildContext context, Widget? child) {
-                    return Stack(
-                      fit: StackFit.expand,
-                      children: <Widget>[
-                        for (int index = 0; index < pages.length; index++)
-                          _buildPageLayer(
-                            pages[index],
-                            index,
-                            constraints.maxWidth,
-                          ),
-                      ],
-                    );
-                  },
+              final Size windowSize = Size(
+                constraints.maxWidth,
+                constraints.maxHeight,
+              );
+              final bool workspace = AdaptiveLayout.usesWorkspace(windowSize);
+              final List<Widget> pages = _buildPages(workspace: workspace);
+              final Widget pageStack = ClipRect(
+                child: _buildPageStack(
+                  pages: pages,
+                  width: constraints.maxWidth,
+                  animate: !workspace,
                 ),
               );
+              if (workspace) {
+                return Row(
+                  children: <Widget>[
+                    _buildWorkspaceNavigation(windowSize),
+                    const VerticalDivider(width: 1),
+                    Expanded(child: pageStack),
+                  ],
+                );
+              }
+              return ClipRect(child: pageStack);
             },
           ),
         ),

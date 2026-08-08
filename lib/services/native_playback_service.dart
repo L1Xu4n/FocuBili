@@ -232,7 +232,7 @@ abstract interface class PlaybackService {
 class NativePlaybackService implements PlaybackService {
   /// 注册 Android 到 Flutter 的状态回调，让此页面能接收原生播放状态。
   NativePlaybackService() {
-    _channel.setMethodCallHandler(_handlePlatformCall);
+    _claimPlatformChannel();
   }
 
   static const MethodChannel _channel = MethodChannel(
@@ -242,10 +242,23 @@ class NativePlaybackService implements PlaybackService {
     r'^BV[0-9A-Za-z]{10}$',
     caseSensitive: false,
   );
+  static NativePlaybackService? _activeService;
 
   final StreamController<PlaybackSnapshot> _stateController =
       StreamController<PlaybackSnapshot>.broadcast();
   bool _disposed = false;
+
+  /// 判断当前实例是否仍拥有唯一原生播放器的回调通道，供被下层播放器覆盖的页面决定是否重建。
+  bool get ownsPlatformChannel => identical(_activeService, this);
+
+  /// 把静态 MethodChannel 的回调重新绑定到当前页面，避免多个播放器路由互相留下失效监听器。
+  void _claimPlatformChannel() {
+    if (_disposed) {
+      return;
+    }
+    _activeService = this;
+    _channel.setMethodCallHandler(_handlePlatformCall);
+  }
 
   /// 暴露播放器状态流，但不允许页面直接向流中写数据。
   @override
@@ -254,6 +267,7 @@ class NativePlaybackService implements PlaybackService {
   /// 请求 Android 创建 Media3 与视频纹理，并返回纹理编号给 Flutter 的 Texture 控件。
   @override
   Future<int?> initialize() async {
+    _claimPlatformChannel();
     final Object? result = await _channel.invokeMethod<Object?>('initialize');
     if (result is! Map) {
       return null;
@@ -441,6 +455,10 @@ class NativePlaybackService implements PlaybackService {
     } on MissingPluginException {
       // 测试或非 Android 平台没有原生实现时，不影响页面正常销毁。
     } finally {
+      if (identical(_activeService, this)) {
+        _activeService = null;
+        _channel.setMethodCallHandler(null);
+      }
       await _stateController.close();
     }
   }

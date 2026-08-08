@@ -9,12 +9,22 @@ class PlaybackPreferencesService {
 
   static const String _doubleTapSeekKey =
       'playback_preferences.enable_double_tap_seek';
+  static const String _wifiDefaultQualityKey =
+      'playback_preferences.wifi_default_quality';
+  static const String _mobileDefaultQualityKey =
+      'playback_preferences.mobile_default_quality';
 
   /// 读取播放器配置；首次安装或旧版本没有该字段时默认开启双击快进快退。
   Future<PlaybackPreferences> load() async {
     final SharedPreferences preferences = await SharedPreferences.getInstance();
     return PlaybackPreferences(
       enableDoubleTapSeek: preferences.getBool(_doubleTapSeekKey) ?? true,
+      wifiDefaultQuality: PreferredPlaybackQuality.fromId(
+        preferences.getInt(_wifiDefaultQualityKey),
+      ),
+      mobileDefaultQuality: PreferredPlaybackQuality.fromId(
+        preferences.getInt(_mobileDefaultQualityKey),
+      ),
     );
   }
 
@@ -22,5 +32,19 @@ class PlaybackPreferencesService {
   Future<void> saveDoubleTapSeekEnabled(bool enabled) async {
     final SharedPreferences preferences = await SharedPreferences.getInstance();
     await preferences.setBool(_doubleTapSeekKey, enabled);
+  }
+
+  /// 保存 Wi-Fi 或有线网络默认清晰度，下一次打开播放器时生效。
+  Future<void> saveWifiDefaultQuality(PreferredPlaybackQuality quality) async {
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    await preferences.setInt(_wifiDefaultQualityKey, quality.id);
+  }
+
+  /// 保存移动网络默认清晰度，避免与 Wi-Fi 选择互相覆盖。
+  Future<void> saveMobileDefaultQuality(
+    PreferredPlaybackQuality quality,
+  ) async {
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    await preferences.setInt(_mobileDefaultQualityKey, quality.id);
   }
 }

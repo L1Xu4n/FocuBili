@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
+import '../../core/layout/adaptive_page_frame.dart';
+import '../../core/layout/adaptive_two_column_list.dart';
 import '../../core/router/app_router.dart';
 import '../../models/video_preview.dart';
 import '../../models/watch_history_entry.dart';
@@ -457,12 +459,11 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
     if (visibleEntries.isEmpty) {
       return const Center(child: Text('没有匹配的观看记录'));
     }
-    return ListView.separated(
+    return AdaptiveTwoColumnList(
       key: const Key('watch-history-list'),
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       itemCount: visibleEntries.length,
-      separatorBuilder: (BuildContext context, int index) =>
-          const SizedBox(height: 8),
+      mainAxisSpacing: 8,
       itemBuilder: (BuildContext context, int index) {
         final WatchHistoryEntry entry = visibleEntries[index];
         final bool isOpening = _openingBvid == entry.bvid;
@@ -582,7 +583,7 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
             ),
         ],
       ),
-      body: _buildBody(),
+      body: AdaptivePageFrame(maxWidth: 1180, child: _buildBody()),
     );
   }
 }

@@ -20,6 +20,19 @@ internal object PlaybackTrackPolicy {
         }
     }
 
+    /** 只允许等于或低于目标编号的清晰度，默认档不可用时绝不自动升到更耗流量的档位。 */
+    fun isAtOrBelowPreferred(candidateQuality: Int, preferredQuality: Int): Boolean {
+        return candidateQuality > 0 && candidateQuality <= preferredQuality
+    }
+
+    /** x86 桌面模拟器优先使用同步 MediaCodec，避开部分虚拟显卡异步回调造成的秒级视频帧延迟。 */
+    fun shouldUseSynchronousCodec(supportedAbis: List<String>): Boolean {
+        return supportedAbis.any { abi ->
+            val normalized = abi.trim().lowercase(Locale.ROOT)
+            normalized == "x86" || normalized == "x86_64"
+        }
+    }
+
     /** 把不可信编码名称限制成稳定安全的缓存键，空名称使用 unknown。 */
     fun cacheKey(codec: String): String {
         return codec

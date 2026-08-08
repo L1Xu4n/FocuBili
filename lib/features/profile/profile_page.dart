@@ -303,22 +303,24 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
-  /// 根据当前账号状态创建头像，远程图片失败时回退为本地图标。
-  Widget _buildAvatar() {
+  /// 根据当前账号状态和目标尺寸创建头像，远程图片失败时回退为本地图标。
+  Widget _buildAvatar({double radius = 30, Key? key}) {
     final String avatarUrl = _session.account?.avatarUrl ?? '';
     if (avatarUrl.isEmpty) {
-      return const CircleAvatar(
-        radius: 30,
-        child: Icon(Icons.person_rounded, size: 34),
+      return CircleAvatar(
+        key: key,
+        radius: radius,
+        child: Icon(Icons.person_rounded, size: radius * 1.1),
       );
     }
     return CircleAvatar(
-      radius: 30,
+      key: key,
+      radius: radius,
       child: ClipOval(
         child: Image.network(
           avatarUrl,
-          width: 60,
-          height: 60,
+          width: radius * 2,
+          height: radius * 2,
           fit: BoxFit.cover,
           // 头像错误函数回退为本地图标，避免图片地址失效破坏账号卡片。
           errorBuilder: _buildAvatarError,
@@ -327,15 +329,195 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
-  /// 创建远程头像加载失败时使用的固定尺寸本地占位图标。
+  /// 创建远程头像加载失败时使用的自适应本地占位图标。
   Widget _buildAvatarError(
     BuildContext context,
     Object error,
     StackTrace? stackTrace,
   ) {
-    return const SizedBox.square(
-      dimension: 60,
-      child: Icon(Icons.person_rounded, size: 34),
+    return const SizedBox.expand(
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Icon(Icons.person_rounded, size: 34),
+      ),
+    );
+  }
+
+  /// 创建可在手机列表和平板左栏之间复用的账号状态卡片。
+  Widget _buildAccountCard() {
+    return Card(
+      key: const Key('profile-account-card'),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Row(
+          children: <Widget>[
+            _buildAvatar(),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    _accountTitle(),
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(_accountDescription()),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            _buildAccountAction(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 创建平板左栏专用的纵向账号摘要，让头像、名称和操作保持同一视觉中心。
+  Widget _buildWorkspaceAccountCard() {
+    final bool active = _session.status == BilibiliSessionStatus.active;
+    return Card(
+      key: const Key('profile-account-card'),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 20, 24, 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Text(
+                  'B站账号',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const Spacer(),
+                if (active) _buildAccountAction(),
+              ],
+            ),
+            const SizedBox(height: 22),
+            Center(
+              child: _buildAvatar(
+                key: const Key('profile-workspace-avatar'),
+                radius: 42,
+              ),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              _accountTitle(),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              _accountDescription(),
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+            if (!active) ...<Widget>[
+              const SizedBox(height: 18),
+              Align(alignment: Alignment.center, child: _buildAccountAction()),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 创建“我的”页面全部功能入口，供手机纵向列表和平板网格共同使用。
+  List<Widget> _buildFeatureTiles({required bool hasUpdate}) {
+    return <Widget>[
+      _ProfileTile(
+        icon: Icons.history_rounded,
+        title: '观看记录',
+        // 观看记录入口函数打开只保存在本机的视频观看历史页面。
+        onTap: () => Navigator.of(context).pushNamed(AppRoutes.watchHistory),
+      ),
+      _ProfileTile(
+        icon: Icons.star_outline_rounded,
+        title: '我的收藏',
+        // 收藏入口函数打开真实收藏夹列表，具体会话错误由目标页面明确显示。
+        onTap: () => _openFavoriteFolders(),
+      ),
+      _ProfileTile(
+        icon: Icons.subscriptions_outlined,
+        title: '我的订阅',
+        // 订阅入口函数只展示由多支独立视频组成的 UGC 合集。
+        onTap: () => _openSubscribedCollections(),
+      ),
+      _ProfileTile(
+        icon: Icons.people_outline_rounded,
+        title: '我的关注',
+        // 关注入口函数只展示当前账号已关注的 UP 主。
+        onTap: () => _openFollowedCreators(),
+      ),
+      _ProfileTile(
+        icon: Icons.edit_note_rounded,
+        title: '时间点笔记',
+        // 时间点笔记入口函数打开本机笔记的统一查看与管理页面。
+        onTap: () => Navigator.of(context).pushNamed(AppRoutes.videoNotes),
+      ),
+      _ProfileTile(
+        icon: Icons.insights_rounded,
+        title: '专注数据',
+        // 专注数据入口函数打开本机看板、筛选和统一记录管理页面。
+        onTap: () => Navigator.of(context).pushNamed(AppRoutes.focusStatistics),
+      ),
+      _ProfileTile(
+        icon: Icons.settings_outlined,
+        title: '设置',
+        showBadge: hasUpdate,
+        // 设置入口函数进入个性化设置页，其中仍保留独立缓存管理入口。
+        onTap: () =>
+            Navigator.of(context).pushNamed(AppRoutes.personalizationSettings),
+      ),
+    ];
+  }
+
+  /// 创建横屏平板的账号摘要左栏和功能入口网格。
+  Widget _buildWorkspaceProfile(bool hasUpdate) {
+    final List<Widget> tiles = _buildFeatureTiles(hasUpdate: hasUpdate);
+    return Padding(
+      key: const Key('profile-workspace-layout'),
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          SizedBox(
+            key: const Key('profile-workspace-account'),
+            width: 300,
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: _buildWorkspaceAccountCard(),
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: GridView.extent(
+              key: const Key('profile-workspace-grid'),
+              maxCrossAxisExtent: 360,
+              mainAxisSpacing: 8,
+              crossAxisSpacing: 8,
+              childAspectRatio: 4.1,
+              children: tiles,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -358,6 +540,9 @@ class _ProfilePageState extends State<ProfilePage> {
       ),
       body: LayoutBuilder(
         builder: (BuildContext context, BoxConstraints constraints) {
+          if (AdaptiveLayout.usesWorkspace(MediaQuery.sizeOf(context))) {
+            return _buildWorkspaceProfile(hasUpdate);
+          }
           final double horizontalPadding =
               AdaptiveLayout.centeredHorizontalPadding(
                 width: constraints.maxWidth,
@@ -373,84 +558,9 @@ class _ProfilePageState extends State<ProfilePage> {
               16,
             ),
             children: <Widget>[
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Row(
-                    children: <Widget>[
-                      _buildAvatar(),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: <Widget>[
-                            Text(
-                              _accountTitle(),
-                              style: const TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(_accountDescription()),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      _buildAccountAction(),
-                    ],
-                  ),
-                ),
-              ),
+              _buildAccountCard(),
               const SizedBox(height: 16),
-              _ProfileTile(
-                icon: Icons.history_rounded,
-                title: '观看记录',
-                // 观看记录入口函数打开只保存在本机的视频观看历史页面。
-                onTap: () =>
-                    Navigator.of(context).pushNamed(AppRoutes.watchHistory),
-              ),
-              _ProfileTile(
-                icon: Icons.star_outline_rounded,
-                title: '我的收藏',
-                // 收藏入口函数打开真实收藏夹列表，具体会话错误由目标页面明确显示。
-                onTap: () => _openFavoriteFolders(),
-              ),
-              _ProfileTile(
-                icon: Icons.subscriptions_outlined,
-                title: '我的订阅',
-                // 订阅入口函数只展示由多支独立视频组成的 UGC 合集。
-                onTap: () => _openSubscribedCollections(),
-              ),
-              _ProfileTile(
-                icon: Icons.people_outline_rounded,
-                title: '我的关注',
-                // 关注入口函数只展示当前账号已关注的 UP 主。
-                onTap: () => _openFollowedCreators(),
-              ),
-              _ProfileTile(
-                icon: Icons.edit_note_rounded,
-                title: '时间点笔记',
-                // 时间点笔记入口函数打开本机笔记的统一查看与管理页面。
-                onTap: () =>
-                    Navigator.of(context).pushNamed(AppRoutes.videoNotes),
-              ),
-              _ProfileTile(
-                icon: Icons.insights_rounded,
-                title: '专注数据',
-                // 专注数据入口函数打开本机看板、筛选和统一记录管理页面。
-                onTap: () =>
-                    Navigator.of(context).pushNamed(AppRoutes.focusStatistics),
-              ),
-              _ProfileTile(
-                icon: Icons.settings_outlined,
-                title: '设置',
-                showBadge: hasUpdate,
-                // 设置入口函数进入个性化设置页，其中仍保留独立缓存管理入口。
-                onTap: () => Navigator.of(
-                  context,
-                ).pushNamed(AppRoutes.personalizationSettings),
-              ),
+              ..._buildFeatureTiles(hasUpdate: hasUpdate),
             ],
           );
         },

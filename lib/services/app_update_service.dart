@@ -17,6 +17,7 @@ class AppUpdateResult {
     required this.currentVersion,
     this.latestVersion,
     this.releaseUrl,
+    this.releaseHighlights = const <String>[],
     this.message,
   });
 
@@ -26,12 +27,16 @@ class AppUpdateResult {
       currentVersion = '',
       latestVersion = null,
       releaseUrl = null,
+      releaseHighlights = const <String>[],
       message = null;
 
   final AppUpdateStatus status;
   final String currentVersion;
   final String? latestVersion;
   final Uri? releaseUrl;
+
+  /// 保存 Release 正文中专门提供给 App 展示的最多三条简短更新内容。
+  final List<String> releaseHighlights;
   final String? message;
 
   /// 指示当前结果是否需要显示新版本红点。
@@ -92,6 +97,12 @@ class AppUpdateService {
   static final Uri latestReleaseApiUri = Uri.parse(
     'https://api.github.com/repos/L1Xu4n/FocuBili/releases/latest',
   );
+  static const String releaseSummaryStartMarker =
+      '<!-- focubili-update-summary:start -->';
+  static const String releaseSummaryEndMarker =
+      '<!-- focubili-update-summary:end -->';
+  static const int _maximumReleaseHighlights = 3;
+  static const int _maximumReleaseHighlightLength = 80;
 
   final Future<Map<String, Object?>> Function()? _releaseLoader;
   final HttpClient? _httpClient;
@@ -112,6 +123,9 @@ class AppUpdateService {
           Uri.tryParse(release['html_url']?.toString() ?? '') ??
           AppUpdateService.releasesUri;
       final bool available = compareVersions(latestVersion, currentVersion) > 0;
+      final List<String> releaseHighlights = _readReleaseHighlights(
+        release['body'],
+      );
       return AppUpdateResult(
         status: available
             ? AppUpdateStatus.available
@@ -119,6 +133,7 @@ class AppUpdateService {
         currentVersion: currentVersion,
         latestVersion: latestVersion,
         releaseUrl: releaseUrl,
+        releaseHighlights: releaseHighlights,
         message: available ? '发现新版本 $latestVersion' : '当前已是最新版本',
       );
     } catch (error) {
@@ -176,6 +191,56 @@ class AppUpdateService {
       r'(\d+(?:\.\d+){0,3}(?:-[0-9A-Za-z.-]+)?)',
     ).firstMatch(raw);
     return match?.group(1) ?? '';
+  }
+
+  /// 只读取 Release 正文固定标记内的摘要，防止整篇 Markdown 更新日志进入 App。
+  static List<String> _readReleaseHighlights(Object? value) {
+    final String body = value?.toString() ?? '';
+    final int startIndex = body.indexOf(releaseSummaryStartMarker);
+    if (startIndex < 0) {
+      return const <String>[];
+    }
+    final int contentStart = startIndex + releaseSummaryStartMarker.length;
+    final int endIndex = body.indexOf(releaseSummaryEndMarker, contentStart);
+    if (endIndex < contentStart) {
+      return const <String>[];
+    }
+    final List<String> highlights = <String>[];
+    for (final String line in const LineSplitter().convert(
+      body.substring(contentStart, endIndex),
+    )) {
+      final String highlight = _sanitizeReleaseHighlight(line);
+      if (highlight.isEmpty || highlights.contains(highlight)) {
+        continue;
+      }
+      highlights.add(highlight);
+      if (highlights.length >= _maximumReleaseHighlights) {
+        break;
+      }
+    }
+    return List<String>.unmodifiable(highlights);
+  }
+
+  /// 清理单条摘要中的列表符号和基础 Markdown，并限制长度保证启动提示易读。
+  static String _sanitizeReleaseHighlight(String rawLine) {
+    String value = rawLine.trim();
+    if (value.isEmpty || value.startsWith('<!--')) {
+      return '';
+    }
+    value = value
+        .replaceFirst(RegExp(r'^(?:[-*+]|\d+[.)])\s+'), '')
+        .replaceAllMapped(
+          RegExp(r'\[([^\]]+)\]\([^\)]+\)'),
+          (Match match) => match.group(1) ?? '',
+        )
+        .replaceAll(RegExp(r'[`*_~]'), '')
+        .replaceAll(RegExp(r'<[^>]+>'), '')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (value.length <= _maximumReleaseHighlightLength) {
+      return value;
+    }
+    return '${value.substring(0, _maximumReleaseHighlightLength).trimRight()}…';
   }
 
   /// 比较两个语义版本；返回正数表示 left 更新，负数表示 right 更新。

@@ -48,4 +48,21 @@ void main() {
     expect(calls, isEmpty);
     await service.dispose();
   });
+
+  /// 验证下层播放器占用静态通道后，旧页面可通过重新初始化夺回状态回调。
+  test('嵌套播放器退出后旧服务可以重新取得原生通道', () async {
+    final NativePlaybackService first = NativePlaybackService();
+    final NativePlaybackService second = NativePlaybackService();
+
+    expect(first.ownsPlatformChannel, isFalse);
+    expect(second.ownsPlatformChannel, isTrue);
+
+    await second.dispose();
+    expect(second.ownsPlatformChannel, isFalse);
+
+    await first.initialize();
+    expect(first.ownsPlatformChannel, isTrue);
+
+    await first.dispose();
+  });
 }

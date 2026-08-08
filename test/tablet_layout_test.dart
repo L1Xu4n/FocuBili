@@ -3,10 +3,20 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:focubili/core/layout/adaptive_layout.dart';
+import 'package:focubili/core/layout/adaptive_page_frame.dart';
 import 'package:focubili/features/focus/focus_dashboard.dart';
 import 'package:focubili/features/focus/focus_timer_controller.dart';
 import 'package:focubili/features/profile/profile_page.dart';
+import 'package:focubili/features/profile/personalization_settings_page.dart';
 import 'package:focubili/features/search/search_page.dart';
+
+/// 把测试窗口设置为指定逻辑尺寸，确保 MediaQuery 和布局约束使用同一宽高。
+void _configureTestWindow(WidgetTester tester, Size size) {
+  tester.view.devicePixelRatio = 1;
+  tester.view.physicalSize = size;
+  addTearDown(tester.view.resetDevicePixelRatio);
+  addTearDown(tester.view.resetPhysicalSize);
+}
 
 /// 注册首页、搜索和“我的”三个一级页面的平板布局回归测试。
 void main() {
@@ -23,54 +33,97 @@ void main() {
     expect(AdaptiveLayout.pageHorizontalPadding(840), 32);
   });
 
-  /// 搜索主体和模式选择器在平板横屏中居中限宽，不再横跨整个屏幕。
-  testWidgets('平板搜索页限制内容和模式选择器宽度', (WidgetTester tester) async {
-    await tester.binding.setSurfaceSize(const Size(1280, 800));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+  /// 二级页面在超宽窗口中居中限宽，避免列表文字跨越整个平板或桌面窗口。
+  testWidgets('二级页面使用统一宽屏阅读框架', (WidgetTester tester) async {
+    _configureTestWindow(tester, const Size(1600, 900));
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: AdaptivePageFrame(
+            maxWidth: 900,
+            child: ColoredBox(
+              key: Key('adaptive-page-content'),
+              color: Colors.blue,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final Rect frameRect = tester.getRect(
+      find.byKey(const Key('adaptive-page-frame')),
+    );
+    expect(frameRect.width, 900);
+    expect(frameRect.left, 350);
+    expect(frameRect.right, 1250);
+  });
+
+  /// 搜索页在平板横屏中固定条件侧栏，并把剩余空间交给结果区。
+  testWidgets('平板搜索页使用条件和结果双栏', (WidgetTester tester) async {
+    _configureTestWindow(tester, const Size(1280, 800));
     await tester.pumpWidget(const MaterialApp(home: SearchPage()));
     await tester.pumpAndSettle();
 
-    final Rect searchContentRect = tester.getRect(
-      find.byKey(const Key('search-adaptive-content')),
+    final Rect sidebarRect = tester.getRect(
+      find.byKey(const Key('search-workspace-sidebar')),
     );
-    expect(searchContentRect.width, AdaptiveLayout.searchContentMaxWidth);
-    expect(searchContentRect.left, 160);
-    expect(searchContentRect.right, 1120);
+    expect(sidebarRect.width, AdaptiveLayout.searchSidebarWidth);
+    expect(sidebarRect.left, 16);
     final Rect modeSelectorRect = tester.getRect(
       find.byKey(const Key('search-mode-selector')),
     );
-    expect(modeSelectorRect.width, 480);
-    expect(modeSelectorRect.center.dx, 640);
+    expect(modeSelectorRect.width, 312);
+    expect(find.byKey(const Key('search-workspace-results')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
-  /// “我的”页面账号卡在平板横屏中保持紧凑行长，入口仍可正常滚动。
-  testWidgets('平板我的页面限制账号卡宽度', (WidgetTester tester) async {
-    await tester.binding.setSurfaceSize(const Size(1280, 800));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+  /// “我的”页面在平板横屏中把账号摘要和功能网格并排展示。
+  testWidgets('平板我的页面使用账号和功能双栏', (WidgetTester tester) async {
+    _configureTestWindow(tester, const Size(1280, 800));
     await tester.pumpWidget(const MaterialApp(home: ProfilePage()));
     await tester.pumpAndSettle();
 
-    final Finder accountCard = find
-        .descendant(
-          of: find.byKey(const Key('profile-adaptive-content')),
-          matching: find.byType(Card),
-        )
-        .first;
-    final Rect accountCardRect = tester.getRect(accountCard);
-    expect(accountCardRect.width, AdaptiveLayout.profileContentMaxWidth);
-    expect(accountCardRect.left, 280);
-    expect(accountCardRect.right, 1000);
-    await tester.ensureVisible(find.text('设置'));
-    await tester.pump();
+    final Rect accountPaneRect = tester.getRect(
+      find.byKey(const Key('profile-workspace-account')),
+    );
+    expect(accountPaneRect.width, 300);
+    expect(accountPaneRect.left, 20);
+    final Rect accountCardRect = tester.getRect(
+      find.byKey(const Key('profile-account-card')),
+    );
+    final Rect avatarRect = tester.getRect(
+      find.byKey(const Key('profile-workspace-avatar')),
+    );
+    expect(accountCardRect.height, lessThan(360));
+    expect(avatarRect.center.dx, closeTo(accountCardRect.center.dx, 1));
+    expect(find.byKey(const Key('profile-workspace-grid')), findsOneWidget);
     expect(find.text('设置').hitTestable(), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
-  /// 矮横屏平板缩短首页欢迎区并限制卡片宽度，首张卡片仍能滚动显示。
-  testWidgets('矮横屏首页缩短首屏并限制专注卡片宽度', (WidgetTester tester) async {
-    await tester.binding.setSurfaceSize(const Size(1024, 600));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+  /// 个性化设置在横屏把高频播放选项和应用维护入口分栏，避免形成一条过宽长列表。
+  testWidgets('平板设置页使用播放和应用双栏', (WidgetTester tester) async {
+    _configureTestWindow(tester, const Size(1280, 800));
+    await tester.pumpWidget(
+      const MaterialApp(home: PersonalizationSettingsPage()),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('settings-workspace-layout')), findsOneWidget);
+    final Rect playbackRect = tester.getRect(
+      find.byKey(const Key('settings-playback-section')),
+    );
+    final Rect applicationRect = tester.getRect(
+      find.byKey(const Key('settings-application-section')),
+    );
+    expect(playbackRect.left, lessThan(applicationRect.left));
+    expect(playbackRect.width, applicationRect.width);
+    expect(tester.takeException(), isNull);
+  });
+
+  /// 矮横屏平板首页把学习入口和专注状态同时放在左右两栏。
+  testWidgets('矮横屏首页使用学习和专注双栏', (WidgetTester tester) async {
+    _configureTestWindow(tester, const Size(1024, 600));
     final FocusTimerController controller = FocusTimerController(
       tickInterval: const Duration(days: 1),
     );
@@ -91,19 +144,11 @@ void main() {
     );
     await tester.pump();
 
-    expect(
-      tester.getSize(find.byKey(const Key('focus-home-hero'))).height,
-      536,
-    );
-    await tester.drag(find.byType(CustomScrollView), const Offset(0, -560));
-    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('focus-workspace-layout')), findsOneWidget);
+    expect(find.byKey(const Key('focus-workspace-primary')), findsOneWidget);
+    expect(find.byKey(const Key('focus-workspace-secondary')), findsOneWidget);
+    expect(find.byKey(const Key('focus-home-hero')), findsNothing);
     expect(find.byKey(const Key('focus-ready-card')), findsOneWidget);
-    final Rect readyCardRect = tester.getRect(
-      find.byKey(const Key('focus-ready-card')),
-    );
-    expect(readyCardRect.width, AdaptiveLayout.homeContentMaxWidth);
-    expect(readyCardRect.left, 92);
-    expect(readyCardRect.right, 932);
     expect(tester.takeException(), isNull);
   });
 

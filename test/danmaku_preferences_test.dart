@@ -20,6 +20,12 @@ void main() {
     expect(value.fontSize, 15);
     expect(value.laneCount, 12);
     expect(value.scrollDurationSeconds, 9);
+    expect(value.displayArea, 0.75);
+    expect(value.strokeWidth, 1.4);
+    expect(value.showScrolling, isTrue);
+    expect(value.showTop, isTrue);
+    expect(value.showBottom, isTrue);
+    expect(value.mergeRepeated, isTrue);
     expect(value.blockedKeywords, isEmpty);
   });
 
@@ -31,6 +37,10 @@ void main() {
       fontSize: 18,
       laneCount: 8,
       scrollDurationSeconds: 6,
+      displayArea: 0.5,
+      strokeWidth: 2,
+      showTop: false,
+      mergeRepeated: false,
       blockedKeywords: <String>[' Spoiler ', 'spoiler', '', '广告'],
     );
     final DanmakuPreferences restored = DanmakuPreferences.fromJson(
@@ -42,17 +52,20 @@ void main() {
 
   /// 验证超出最小值或最大值的数字会被截断到合法区间。
   test('越界和错误类型被截断或回退到合法范围', () {
-    final DanmakuPreferences value = DanmakuPreferences.fromJson(
-      <String, dynamic>{
-        'opacity': -5,
-        'fontSize': 100,
-        'laneCount': 0,
-        'scrollDurationSeconds': 999,
-      },
-    );
+    final DanmakuPreferences value =
+        DanmakuPreferences.fromJson(<String, dynamic>{
+          'opacity': -5,
+          'fontSize': 100,
+          'laneCount': 0,
+          'scrollDurationSeconds': 999,
+          'displayArea': 0,
+          'strokeWidth': 99,
+        });
     expect(value.opacity, DanmakuPreferences.minOpacity);
     expect(value.fontSize, DanmakuPreferences.maxFontSize);
     expect(value.laneCount, DanmakuPreferences.minLaneCount);
+    expect(value.displayArea, DanmakuPreferences.minDisplayArea);
+    expect(value.strokeWidth, DanmakuPreferences.maxStrokeWidth);
     expect(
       value.scrollDurationSeconds,
       DanmakuPreferences.maxScrollDurationSeconds,

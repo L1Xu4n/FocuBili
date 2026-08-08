@@ -19,7 +19,9 @@ import 'package:focubili/models/video_shot_preview.dart';
 import 'package:focubili/models/watch_history_entry.dart';
 import 'package:focubili/models/learning_list_entry.dart';
 import 'package:focubili/models/player_enhancement.dart';
+import 'package:focubili/models/playback_preferences.dart';
 import 'package:focubili/services/bilibili_service.dart';
+import 'package:focubili/services/app_theme_mode_service.dart';
 import 'package:focubili/services/device_status_service.dart';
 import 'package:focubili/services/danmaku_preferences_service.dart';
 import 'package:focubili/services/native_playback_service.dart';
@@ -250,12 +252,14 @@ class _FakePlaybackService implements PlaybackService {
     this.emitReadyOnOpen = true,
     this.emitLoadingDuringSeek = false,
     this.duration = _defaultDuration,
+    this.textureId,
   });
 
   final StreamController<PlaybackSnapshot> _states =
       StreamController<PlaybackSnapshot>.broadcast();
   static const Duration _defaultDuration = Duration(minutes: 3, seconds: 32);
   final Duration duration;
+  final int? textureId;
   bool _isPlaying = false;
   Duration _position = Duration.zero;
   double _speed = 1;
@@ -266,6 +270,7 @@ class _FakePlaybackService implements PlaybackService {
   final List<String> openedBvids = <String>[];
   final List<int> openedCids = <int>[];
   final List<int> openedQualities = <int>[];
+  final List<int> selectedQualities = <int>[];
   Completer<void>? retryOpenCompleter;
   final SavedPlaybackState? savedState;
   final bool rejectQuality;
@@ -285,9 +290,9 @@ class _FakePlaybackService implements PlaybackService {
   @override
   Stream<PlaybackSnapshot> get states => _states.stream;
 
-  /// 测试环境没有原生视频纹理，因此返回空编号并保留 Flutter 的黑色底图。
+  /// 默认返回空纹理；画幅测试可以注入假编号，只验证 Flutter 缩放布局而不播放视频。
   @override
-  Future<int?> initialize() async => null;
+  Future<int?> initialize() async => textureId;
 
   /// 模拟打开视频完成，记录分P和清晰度，并在需要时等待测试控制的重试请求。
   @override
@@ -372,6 +377,7 @@ class _FakePlaybackService implements PlaybackService {
   /// 模拟原生播放器切换清晰度并推送新状态。
   @override
   Future<void> selectQuality(int quality) async {
+    selectedQualities.add(quality);
     _emit(phase: PlaybackPhase.loading, currentQuality: quality);
     if (!rejectQuality) {
       _quality = quality;
@@ -538,28 +544,39 @@ class _RecordingWatchHistoryService extends WatchHistoryService {
 
 /// 为全屏播放器测试提供稳定的电量读数，避免组件测试依赖真实 Android 电池。
 class _FakeDeviceStatusService implements DeviceStatusService {
-  /// 创建返回固定电量或未知状态的设备状态服务替身。
-  const _FakeDeviceStatusService(this.batteryPercent);
+  /// 创建返回固定电量和网络类型的设备状态服务替身。
+  const _FakeDeviceStatusService(
+    this.batteryPercent, {
+    this.networkType = DeviceNetworkType.wifi,
+  });
 
   final int? batteryPercent;
+  final DeviceNetworkType networkType;
 
   /// 返回构造时传入的电量百分比，不访问任何原生方法通道。
   @override
   Future<int?> loadBatteryPercent() async => batteryPercent;
+
+  /// 返回构造时传入的网络类型，不读取 Android 连接信息。
+  @override
+  Future<DeviceNetworkType> loadNetworkType() async => networkType;
 }
 
 /// 为播放器组件测试提供固定字幕轨道和条目，不访问 Android 通道或真实字幕地址。
 class _FakePlayerOverlayService implements PlayerOverlayService {
-  /// 创建可配置字幕元数据和字幕文字的本地服务替身。
+  /// 创建可配置字幕、弹幕结果或延迟弹幕加载函数的本地服务替身。
   _FakePlayerOverlayService({
     required this.tracksResult,
     required this.cuesResult,
     this.danmakuResult = const DanmakuSegmentLoadResult.empty(),
+    this.danmakuLoader,
   });
 
   final SubtitleTrackLoadResult tracksResult;
   final SubtitleCueLoadResult cuesResult;
   final DanmakuSegmentLoadResult danmakuResult;
+  final Future<DanmakuSegmentLoadResult> Function(int segmentIndex)?
+  danmakuLoader;
   final List<int> danmakuSegmentRequests = <int>[];
 
   /// 返回测试配置的字幕轨道列表，不接触登录会话或网络。
@@ -577,7 +594,7 @@ class _FakePlayerOverlayService implements PlayerOverlayService {
     required String trackId,
   }) async => cuesResult;
 
-  /// 页面当前字幕测试不加载弹幕，因此返回空片段以满足叠加服务的完整接口。
+  /// 记录段号并返回即时或延迟结果，用于覆盖正常加载与网络晚到两种弹幕场景。
   @override
   Future<DanmakuSegmentLoadResult> loadDanmakuSegment({
     required String bvid,
@@ -585,6 +602,9 @@ class _FakePlayerOverlayService implements PlayerOverlayService {
     required int segmentIndex,
   }) async {
     danmakuSegmentRequests.add(segmentIndex);
+    if (danmakuLoader != null) {
+      return danmakuLoader!(segmentIndex);
+    }
     return danmakuResult;
   }
 }
@@ -751,6 +771,11 @@ VideoPreview _createSecondCollectionVideo() {
 
 /// 验证应用能够显示首页、搜索入口和底部一级导航。
 void main() {
+  /// 每项组件测试从空白本机偏好开始，避免网络清晰度选择跨用例泄漏。
+  setUp(() {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+  });
+
   /// 验证公开详情服务能解析 BV 号、大编号、UP 主、时长和多P列表。
   test('公开视频详情服务能解析 BV 链接和大编号', () async {
     final _RecordingJsonRequest requester = _RecordingJsonRequest();
@@ -875,6 +900,7 @@ void main() {
     expect(suggestions, <String>['星球研究所', '星球研究所视频']);
   });
 
+  /// 验证没有保存外观偏好时，根组件默认跟随系统并正常显示首页。
   testWidgets('新框架首页可以正常启动', (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues(<String, Object>{
       FirstLaunchService.agreementAcceptedKey: true,
@@ -887,10 +913,28 @@ void main() {
       find.byType(MaterialApp),
     );
     expect(app.locale, const Locale('zh', 'CN'));
+    expect(app.themeMode, ThemeMode.system);
     expect(find.text('焦点哔哩'), findsWidgets);
     expect(find.text('打开视频'), findsOneWidget);
     expect(find.text('首页'), findsOneWidget);
     expect(find.text('我的'), findsOneWidget);
+  });
+
+  /// 验证根组件启动时恢复本机深色选择，而不是每次强制跟随系统。
+  testWidgets('应用根组件恢复已保存的深色模式', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      FirstLaunchService.agreementAcceptedKey: true,
+      FirstLaunchService.loginGuideShownKey: true,
+    });
+    await const AppThemeModeService().save(ThemeMode.dark);
+
+    await tester.pumpWidget(const FocuBiliApp());
+    await tester.pumpAndSettle();
+
+    final MaterialApp app = tester.widget<MaterialApp>(
+      find.byType(MaterialApp),
+    );
+    expect(app.themeMode, ThemeMode.dark);
   });
 
   /// 验证登录页默认选择手机号，并允许切换到不会明文展示内容的 Cookie 表单。
@@ -1354,6 +1398,72 @@ void main() {
 
     expect(service._quality, 32);
     expect(find.byKey(const Key('player-floating-notice')), findsNothing);
+  });
+
+  /// 验证 Wi-Fi 默认请求 1080P，而视频只提供较低档时自动降到 720P。
+  testWidgets('Wi-Fi 默认清晰度不可用时只向下回退', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    const PlaybackPreferencesService preferencesService =
+        PlaybackPreferencesService();
+    await preferencesService.saveWifiDefaultQuality(
+      PreferredPlaybackQuality.p1080,
+    );
+    final _FakePlaybackService service = _FakePlaybackService();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: service,
+          playbackPreferencesService: preferencesService,
+          deviceStatusService: const _FakeDeviceStatusService(
+            70,
+            networkType: DeviceNetworkType.wifi,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(service.openedQualities, <int>[80]);
+    expect(service.selectedQualities, <int>[64]);
+    expect(service._quality, 64);
+  });
+
+  /// 验证移动网络使用独立的低流量默认清晰度，不沿用 Wi-Fi 选择。
+  testWidgets('移动网络使用独立默认清晰度', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    const PlaybackPreferencesService preferencesService =
+        PlaybackPreferencesService();
+    await preferencesService.saveWifiDefaultQuality(
+      PreferredPlaybackQuality.p1080,
+    );
+    await preferencesService.saveMobileDefaultQuality(
+      PreferredPlaybackQuality.p480,
+    );
+    final _FakePlaybackService service = _FakePlaybackService();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: service,
+          playbackPreferencesService: preferencesService,
+          deviceStatusService: const _FakeDeviceStatusService(
+            70,
+            networkType: DeviceNetworkType.mobile,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(service.openedQualities, <int>[32]);
+    expect(service.selectedQualities, isEmpty);
   });
 
   /// 验证服务端回退到原画质时，页面明确提示大会员或账号权限原因。
@@ -1921,6 +2031,12 @@ void main() {
     expect(playbackService.frameCaptureCids, <int?>[137649199]);
     expect(playbackService._position, const Duration(seconds: 75));
     expect(playbackService._isPlaying, isTrue);
+    expect(find.byKey(const Key('regular-note-part-label')), findsOneWidget);
+    expect(find.text('P1'), findsNWidgets(2));
+    expect(
+      find.byKey(Key('portrait-video-note-part-${notes.single.id}')),
+      findsOneWidget,
+    );
 
     await tester.tap(find.byKey(const Key('delete-video-note')));
     await tester.pumpAndSettle();
@@ -2890,7 +3006,8 @@ void main() {
         ),
       ),
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
     final IconButton fullscreenButton = tester.widget<IconButton>(
       find.byWidgetPredicate(
         (Widget widget) => widget is IconButton && widget.tooltip == '进入全屏',
@@ -3049,6 +3166,7 @@ void main() {
 
     expect(find.byKey(const Key('fullscreen-device-status')), findsOneWidget);
     expect(find.text('73%'), findsOneWidget);
+    expect(find.text('Wi-Fi'), findsOneWidget);
     expect(find.byKey(const Key('fullscreen-focus-status')), findsOneWidget);
     expect(find.byKey(const Key('fullscreen-focus-remaining')), findsOneWidget);
     expect(
@@ -3074,6 +3192,12 @@ void main() {
     expect(
       tester.getCenter(find.byKey(const Key('fullscreen-battery'))).dy,
       closeTo(focusY, 2),
+    );
+    expect(
+      tester.getCenter(find.byKey(const Key('player-network-type'))).dx,
+      lessThan(
+        tester.getCenter(find.byKey(const Key('fullscreen-battery'))).dx,
+      ),
     );
     await focusController.endFocusEarly();
     await tester.pump();
@@ -3249,6 +3373,7 @@ void main() {
 
   /// 验证弹幕开关会按当前时间轴请求真实六分钟片段，并创建不拦截手势的绘制画布。
   testWidgets('播放器可以加载并绘制当前片段的真实弹幕', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final _FakePlayerOverlayService overlayService = _FakePlayerOverlayService(
@@ -3293,6 +3418,97 @@ void main() {
 
     expect(overlayService.danmakuSegmentRequests, <int>[1]);
     expect(find.byKey(const Key('danmaku-canvas')), findsOneWidget);
+  });
+
+  /// 验证网络返回弹幕时播放已前进，不会把错过的条目直接补画到屏幕中间。
+  testWidgets('弹幕片段晚到后只保留当前位置及未来条目', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final Completer<DanmakuSegmentLoadResult> danmakuCompleter =
+        Completer<DanmakuSegmentLoadResult>();
+    final _FakePlayerOverlayService overlayService = _FakePlayerOverlayService(
+      tracksResult: const SubtitleTrackLoadResult.empty(),
+      cuesResult: const SubtitleCueLoadResult.empty(),
+      // 延迟函数模拟片段请求期间视频从三十秒继续播放到三十五秒。
+      danmakuLoader: (int segmentIndex) => danmakuCompleter.future,
+    );
+    final _FakePlaybackService playbackService = _FakePlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: playbackService,
+          playerOverlayService: overlayService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    playbackService.emitPosition(const Duration(seconds: 30));
+    await tester.pump();
+    final IconButton fullscreenButton = tester.widget<IconButton>(
+      find.byWidgetPredicate(
+        (Widget widget) => widget is IconButton && widget.tooltip == '进入全屏',
+      ),
+    );
+    fullscreenButton.onPressed!();
+    await tester.pumpAndSettle();
+    final IconButton danmakuButton = tester.widget<IconButton>(
+      find.byKey(const Key('danmaku-toggle')),
+    );
+    danmakuButton.onPressed!();
+    await tester.pump();
+    expect(overlayService.danmakuSegmentRequests, <int>[1]);
+
+    playbackService.emitPosition(const Duration(seconds: 35));
+    await tester.pump();
+    danmakuCompleter.complete(
+      const DanmakuSegmentLoadResult(
+        status: DanmakuLoadStatus.available,
+        message: '',
+        segmentIndex: 1,
+        entries: <DanmakuEntry>[
+          DanmakuEntry(
+            position: Duration(seconds: 25),
+            content: '已经离屏的历史弹幕',
+            color: 0xFFFFFF,
+            mode: 1,
+          ),
+          DanmakuEntry(
+            position: Duration(seconds: 32),
+            content: '会从中间补画的旧弹幕',
+            color: 0xFFFFFF,
+            mode: 1,
+          ),
+          DanmakuEntry(
+            position: Duration(seconds: 35),
+            content: '当前位置弹幕',
+            color: 0xFFFFFF,
+            mode: 1,
+          ),
+          DanmakuEntry(
+            position: Duration(seconds: 36),
+            content: '未来弹幕',
+            color: 0xFFFFFF,
+            mode: 1,
+          ),
+        ],
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    final CustomPaint canvas = tester.widget<CustomPaint>(
+      find.byKey(const Key('danmaku-canvas')),
+    );
+    final dynamic painter = canvas.painter;
+    final List<DanmakuEntry> renderEntries = List<DanmakuEntry>.from(
+      painter.entries as List<dynamic>,
+    );
+    expect(renderEntries.map((DanmakuEntry entry) => entry.content), <String>[
+      '当前位置弹幕',
+      '未来弹幕',
+    ]);
   });
 
   /// 验证输入法压缩搜索页面时，固定控件和空状态都不会产生黄黑溢出标记。
@@ -3496,6 +3712,117 @@ void main() {
     expect(service._isPlaying, isTrue);
     expect(service.seekByRequests, 0);
     expect(service._position, Duration.zero);
+  });
+
+  /// 验证平板横屏保留详情侧栏、顶部状态，并允许画面竖滑调节亮度和音量。
+  testWidgets('平板横屏播放器使用双栏状态栏和竖滑调节', (WidgetTester tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(1280, 800);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final FocusTimerController focusController = FocusTimerController(
+      tickInterval: const Duration(days: 1),
+    );
+    addTearDown(focusController.dispose);
+    await focusController.initialize();
+    await focusController.startFocus(
+      goal: '平板专注',
+      duration: const Duration(minutes: 25),
+    );
+    final _FakePlaybackService playbackService = _FakePlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _createCollectionVideo(),
+          playbackService: playbackService,
+          deviceStatusService: const _FakeDeviceStatusService(66),
+          focusTimerController: focusController,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('player-workspace-layout')), findsOneWidget);
+    final Scaffold playerScaffold = tester.widget<Scaffold>(
+      find.byType(Scaffold).first,
+    );
+    expect((playerScaffold.body! as SafeArea).top, isFalse);
+    expect(find.byKey(const Key('player-workspace-video')), findsOneWidget);
+    expect(find.byKey(const Key('player-workspace-side-pane')), findsOneWidget);
+    final Rect videoPane = tester.getRect(
+      find.byKey(const Key('player-workspace-video')),
+    );
+    final Rect playerSurface = tester.getRect(
+      find.byKey(const Key('player-surface')),
+    );
+    expect(playerSurface, videoPane);
+    expect(videoPane.width, greaterThan(1280 * 0.7));
+    expect(find.byKey(const Key('fullscreen-device-status')), findsOneWidget);
+    expect(find.byKey(const Key('fullscreen-focus-status')), findsOneWidget);
+    expect(find.text('66%'), findsOneWidget);
+    expect(find.text('Wi-Fi'), findsOneWidget);
+    await tester.tapAt(playerSurface.center);
+    await tester.pump(const Duration(milliseconds: 250));
+    await tester.dragFrom(
+      Offset(playerSurface.left + 120, playerSurface.center.dy),
+      const Offset(0, -160),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(playbackService.brightness, greaterThan(0.5));
+    await tester.dragFrom(
+      Offset(playerSurface.right - 120, playerSurface.center.dy),
+      const Offset(0, -160),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(playbackService.volume, greaterThan(0.5));
+    expect(find.byKey(const Key('collapsing-player-scroll')), findsNothing);
+    expect(find.text('简介'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  /// 验证平板播放器的填充和拉伸选项确实改变 Texture 的 BoxFit，而不是被外层画幅抵消。
+  testWidgets('平板播放器画幅选项实际切换缩放模式', (WidgetTester tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(1280, 800);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _createCollectionVideo(),
+          playbackService: _FakePlaybackService(textureId: 42),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(find.byKey(const Key('video-fit-contain')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('more-settings-menu')));
+    await tester.pump(const Duration(milliseconds: 300));
+    final Finder coverItem = find.byKey(const Key('video-fit-mode-cover'));
+    await tester.ensureVisible(coverItem);
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(coverItem);
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(
+      tester.widget<FittedBox>(find.byKey(const Key('video-fit-cover'))).fit,
+      BoxFit.cover,
+    );
+
+    await tester.tap(find.byKey(const Key('more-settings-menu')));
+    await tester.pump(const Duration(milliseconds: 300));
+    final Finder stretchItem = find.byKey(const Key('video-fit-mode-stretch'));
+    await tester.ensureVisible(stretchItem);
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(stretchItem);
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(
+      tester.widget<FittedBox>(find.byKey(const Key('video-fit-stretch'))).fit,
+      BoxFit.fill,
+    );
+    expect(tester.takeException(), isNull);
   });
 
   /// 验证搜索记录保存在本地，并将重复内容移动到最前面。

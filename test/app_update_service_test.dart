@@ -52,6 +52,15 @@ void main() {
       releaseLoader: () async => <String, Object?>{
         'tag_name': 'v0.3.0',
         'html_url': 'https://github.com/L1Xu4n/FocuBili/releases/tag/v0.3.0',
+        'body': '''
+普通发布说明不会直接显示。
+<!-- focubili-update-summary:start -->
+- 优化平板播放器和账号卡片
+- 修复画幅设置，并查看 [完整说明](https://example.com)
+- 增加简略更新内容
+- 第四条不会进入 App
+<!-- focubili-update-summary:end -->
+''',
       },
     );
 
@@ -60,6 +69,23 @@ void main() {
     expect(result.status, AppUpdateStatus.available);
     expect(result.latestVersion, '0.3.0');
     expect(result.releaseUrl?.path, contains('/releases/tag/v0.3.0'));
+    expect(result.releaseHighlights, <String>[
+      '优化平板播放器和账号卡片',
+      '修复画幅设置，并查看 完整说明',
+      '增加简略更新内容',
+    ]);
+  });
+
+  test('Release 未按约定提供摘要标记时不会把整篇正文显示到 App', () async {
+    final AppUpdateResult result = await AppUpdateService(
+      releaseLoader: () async => <String, Object?>{
+        'tag_name': 'v0.3.0',
+        'body': '## 完整更新日志\n- 这是一篇很长的正文',
+      },
+    ).check(currentVersion: '0.2.2');
+
+    expect(result.status, AppUpdateStatus.available);
+    expect(result.releaseHighlights, isEmpty);
   });
 
   test('控制器保存关闭状态并停止自动检查', () async {

@@ -10,9 +10,10 @@
 
 <p align="center">
   <a href="https://github.com/L1Xu4n/FocuBili/releases"><img src="https://img.shields.io/github/v/release/L1Xu4n/FocuBili?display_name=tag&sort=semver" alt="GitHub Release"></a>
-  <img src="https://img.shields.io/badge/version-v1.2.0-2EA44F" alt="Current version v1.2.0">
+  <img src="https://img.shields.io/badge/version-v1.3.0-2EA44F" alt="Current version v1.3.0">
   <img src="https://img.shields.io/badge/Flutter-3.44.6-02569B?logo=flutter" alt="Flutter 3.44.6">
   <img src="https://img.shields.io/badge/Android-7.0+-3DDC84?logo=android" alt="Android 7.0+">
+  <a href="https://qm.qq.com/q/szv665wx7W"><img src="https://img.shields.io/badge/QQ%E7%BE%A4-1055054828-12B7F5?logo=tencentqq&logoColor=white" alt="官方QQ群 1055054828"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="GPL-3.0"></a>
 </p>
 
@@ -27,6 +28,22 @@ FocuBili 希望保留“主动找到一支视频并认真看完”这件事本�
 - 搜索、BV 号和视频链接是主要入口；
 - 播放页优先保留视频、选集、简介和必要控制；
 - 账号数据功能以只读为主，不伪装点赞、投币、收藏或关注写操作。
+
+## v1.3.0 更新内容
+
+- 个性化设置新增全局“浅色 / 深色 / 跟随系统”，首次安装默认跟随系统；切换后立即生效，重启仍保留选择。
+
+- Android 平板在 Flutter 首帧创建前请求横屏，冷启动不再先显示竖屏；手机继续保持竖屏。
+- `900dp` 以上横向窗口使用可复用于 Windows 的工作台：左侧一级导航，首页、搜索和“我的”分别使用内容双栏。
+- 播放器在平板默认显示 16:9 视频区和详情/学习/笔记侧栏，不再把平板横屏误认为手机沉浸全屏。
+- 平板非全屏播放器也支持亮度/音量竖滑，顶部展示专注计时、时间、网络和电量；Wi-Fi 与移动网络可分别设置默认清晰度。
+- 观看记录、收藏夹及内容、订阅及合集详情、关注和时间点笔记使用宽屏双列；专注数据、笔记详情和 UP 主页也有独立横屏布局。
+- 个性化设置按“播放与专注 / 应用与存储”分成横屏双栏。
+- 播放器遇到容器解析损坏时会清理当前分P缓存、绕过缓存重试，并完整组合备用音视频线路。
+- 弹幕支持合并、过滤、显示区域和描边设置；迟到历史不会中途补画，所有基础类型经限量发射调度从右侧连续进入并向左完整穿屏。
+- 支持从 QQ、浏览器或 B站网页通过 `bilibili://video` 和标准视频网址唤起焦点哔哩，兼容 AV/BV、分P和时间点。
+
+正式 APK 请从 [GitHub Release v1.3.0](https://github.com/L1Xu4n/FocuBili/releases/tag/v1.3.0) 下载。完整变化见 [v1.3.0 发布说明](docs/RELEASE_NOTES_v1.3.0.md)，横屏设计依据见 [v1.2.1 横屏工作台说明](docs/V1_2_1_LANDSCAPE_LAYOUT.md)。
 
 ## v1.2.0 更新内容
 
@@ -196,7 +213,7 @@ APK SHA-256：`4998C8EB9EF7F69C336F2A0BA50EF1772D6F154899506B4D2C10FFF5F91CFE95`
 
 - 项目依赖非官方公开接口，接口可能随平台策略调整而失效或触发风控。
 - 充电专属、会员、课程、番剧、私密或其他受访问控制保护的内容不会被绕过。
-- 弹幕屏蔽词、透明度、字号、轨道记忆和解码策略仍待完善。
+- 弹幕设置已支持屏蔽词、透明度、字号、轨道、显示区域、描边、类型筛选和重复合并；高密度视频仍需在更多真机持续观察性能。
 - 时间点笔记目前只保存在当前设备，已支持手动导出和系统分享，但尚未提供自动同步或云备份。
 - 不同 Android 厂商的全屏安全区、画中画和后台恢复仍需要更多真机验证。
 - Android 提醒已支持重启恢复和厂商后台保护引导，但不同品牌的自启动、电量限制和待机调度仍需在更多真机持续验收。
@@ -234,6 +251,20 @@ Release APK 默认生成在：
 ```text
 build/app/outputs/flutter-apk/app-release.apk
 ```
+
+### 发布新版本时的 App 更新摘要
+
+更新检查会读取 GitHub 最新 Release 正文，但只展示以下两个固定标记之间的最多三条内容。以后发布每个正式版本时，都必须把简短、面向普通用户的更新内容放在 Release 正文开头：
+
+```markdown
+<!-- focubili-update-summary:start -->
+- 第一条重要更新，建议不超过 80 个字
+- 第二条重要更新
+- 第三条重要更新
+<!-- focubili-update-summary:end -->
+```
+
+标记外可以继续编写完整更新日志；App 不会把整篇 Markdown 或未标记正文显示在启动提示中。
 
 Windows 用户建议把仓库放在不含中文和空格的目录。若必须使用中文目录，可以先映射英文盘符再构建：
 
@@ -274,7 +305,7 @@ android/app/src/main/kotlin/com/focubili/app/
 ## 致谢
 
 - [PiliPala](https://github.com/guozhigq/pilipala)：优秀的 Flutter 第三方 B 站客户端。FocuBili 在技术路线、模块划分和移动端产品思路上受到了它的启发。
-- [PiliPlus](https://github.com/bggRGjQaUbCoE/PiliPlus)：空间公开接口、WBI 参数和请求上下文的实现为本项目提供了重要参考。
+- [PiliPlus](https://github.com/bggRGjQaUbCoE/PiliPlus)：空间公开接口、WBI 参数、请求上下文以及弹幕分段调度思路为本项目提供了重要参考。
 - [JKVideo](https://github.com/tiajinsha/JKVideo)：优秀的 React Native 第三方 B 站客户端。FocuBili 在研究原生 DASH 播放链路与单一播放器所有权时参考了它的公开实现思路。
 
 详细说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。感谢所有上游作者和贡献者。

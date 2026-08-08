@@ -37,6 +37,7 @@ import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
@@ -122,7 +123,8 @@ class NativePlaybackController(
     private var playbackPrepared = false
     private var resumeWhenForeground = false
     private var playbackDataRefreshCount = 0
-    private var playbackSourceAttemptIndex = 0
+    private var playbackCandidateAttempt = 0
+    private var bypassMediaCacheForPlayback = false
     private var latestPlaybackSources: PlaybackSources? = null
     private var playbackRequestToken = 0L
     private var lastProgressSaveElapsedMs = 0L
@@ -159,6 +161,7 @@ class NativePlaybackController(
     private data class PlaybackFailureDetails(
         val causeType: String,
         val httpStatusCode: Int?,
+        val malformedContainer: Boolean,
     )
 
     /** 保存当前视频可读取轨道的临时地址；该地址只留在原生内存，绝不经过 Flutter 或磁盘。 */
@@ -558,7 +561,7 @@ class NativePlaybackController(
         if (player != null) {
             return
         }
-        val nativePlayer = ExoPlayer.Builder(activity).build()
+        val nativePlayer = createNativePlayer()
         nativePlayer.setAudioAttributes(
             AudioAttributes.Builder()
                 .setUsage(C.USAGE_MEDIA)
@@ -637,6 +640,16 @@ class NativePlaybackController(
         mainHandler.post(stateTicker)
     }
 
+    /** 为 ARM 真机保留默认异步解码；x86 模拟器改用同步适配器，避免竖屏高分辨率视频帧严重积压。 */
+    private fun createNativePlayer(): ExoPlayer {
+        if (!PlaybackTrackPolicy.shouldUseSynchronousCodec(Build.SUPPORTED_ABIS.toList())) {
+            return ExoPlayer.Builder(activity).build()
+        }
+        val renderersFactory = DefaultRenderersFactory(activity)
+            .forceDisableMediaCodecAsynchronousQueueing()
+        return ExoPlayer.Builder(activity, renderersFactory).build()
+    }
+
     /** 播放失败后先轮换备用 CDN，再有限次数刷新播放数据，避免长视频偶发断流直接报错。 */
     private fun retryPlaybackAfterError(
         nativePlayer: ExoPlayer,
@@ -658,13 +671,33 @@ class NativePlaybackController(
         resumeAfterPrepare = nativePlayer.playWhenReady || resumeAfterPrepare
         playbackPrepared = false
         val sources = latestPlaybackSources
-        val candidateCount = sources?.let(::playbackCandidateCount) ?: 0
-        val nextCandidateIndex = playbackSourceAttemptIndex + 1
-        val shouldRefreshPlayurl = shouldRefreshPlayurlImmediately(failureDetails)
-        if (!shouldRefreshPlayurl && sources != null && nextCandidateIndex < candidateCount) {
-            playbackSourceAttemptIndex = nextCandidateIndex
+        if (
+            failureDetails.malformedContainer &&
+            !bypassMediaCacheForPlayback &&
+            sources != null
+        ) {
+            bypassMediaCacheForPlayback = true
+            evictCurrentPlaybackCache(sources)
             playbackPhase = PHASE_LOADING
-            playbackMessage = "当前线路不稳定，正在切换备用线路…"
+            playbackMessage = "检测到媒体缓存片段损坏，正在绕过缓存重新加载…"
+            emitPlaybackState()
+            mainHandler.postDelayed(
+                {
+                    if (player === nativePlayer && latestPlaybackSources === sources) {
+                        prepareMediaSources(sources)
+                    }
+                },
+                BACKUP_SOURCE_RETRY_DELAY_MS,
+            )
+            return
+        }
+        val candidateCount = sources?.let(::playbackCandidateCount) ?: 0
+        val nextCandidateAttempt = playbackCandidateAttempt + 1
+        val shouldRefreshPlayurl = shouldRefreshPlayurlImmediately(failureDetails)
+        if (!shouldRefreshPlayurl && sources != null && nextCandidateAttempt < candidateCount) {
+            playbackCandidateAttempt = nextCandidateAttempt
+            playbackPhase = PHASE_LOADING
+            playbackMessage = "当前线路不稳定，正在尝试其他音视频组合…"
             emitPlaybackState()
             mainHandler.postDelayed(
                 {
@@ -678,7 +711,8 @@ class NativePlaybackController(
         }
         if (playbackDataRefreshCount < MAX_PLAYBACK_DATA_REFRESH_COUNT) {
             playbackDataRefreshCount += 1
-            playbackSourceAttemptIndex = 0
+            playbackCandidateAttempt = 0
+            bypassMediaCacheForPlayback = false
             latestPlaybackSources = null
             playbackPhase = PHASE_LOADING
             playbackMessage = if (shouldRefreshPlayurl) {
@@ -721,6 +755,8 @@ class NativePlaybackController(
         return PlaybackFailureDetails(
             causeType = describePlaybackCauseType(diagnosticCause),
             httpStatusCode = invalidResponse?.responseCode,
+            malformedContainer =
+                error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
         )
     }
 
@@ -763,31 +799,35 @@ class NativePlaybackController(
             "；候选索引：${describePlaybackCandidateIndexes(sources)}）"
     }
 
-    /** 返回当前实际选中的视频和音频候选序号，不显示任何媒体地址。 */
+    /** 返回当前实际选中的视频和音频组合序号，不显示任何媒体地址。 */
     private fun describePlaybackCandidateIndexes(sources: PlaybackSources?): String {
         if (sources == null) {
             return "视频未知，音频未知"
         }
-        return "视频 ${describeCurrentCandidateIndex(sources.videoUrls)}，" +
-            "音频 ${describeCurrentCandidateIndex(sources.audioUrls)}"
+        val selection = PlaybackRecoveryPolicy.candidateAt(
+            attemptIndex = playbackCandidateAttempt,
+            videoCount = sources.videoUrls.size,
+            audioCount = sources.audioUrls.size,
+        )
+        return "视频 ${describeCurrentCandidateIndex(sources.videoUrls, selection.videoIndex)}，" +
+            "音频 ${describeCurrentCandidateIndex(sources.audioUrls, selection.audioIndex)}"
     }
 
-    /** 按 `mediaUrlAt` 的回退规则计算当前真实使用的候选序号，空音轨明确标记为无。 */
-    private fun describeCurrentCandidateIndex(urls: List<String>): String {
-        if (urls.isEmpty()) {
+    /** 使用已经计算的轨道序号生成一基诊断文本，空音轨明确标记为无。 */
+    private fun describeCurrentCandidateIndex(urls: List<String>, selectedIndex: Int?): String {
+        if (urls.isEmpty() || selectedIndex == null) {
             return "无"
         }
-        val actualIndex = if (playbackSourceAttemptIndex in urls.indices) {
-            playbackSourceAttemptIndex
-        } else {
-            0
-        }
+        val actualIndex = selectedIndex.coerceIn(urls.indices)
         return "${actualIndex + 1}/${urls.size}"
     }
 
-    /** 返回本次音视频主备地址中需要尝试的最大线路数量。 */
+    /** 返回本次需要尝试的全部音视频交叉组合数量。 */
     private fun playbackCandidateCount(sources: PlaybackSources): Int {
-        return maxOf(sources.videoUrls.size, sources.audioUrls.size.coerceAtLeast(1))
+        return PlaybackRecoveryPolicy.candidateCount(
+            videoCount = sources.videoUrls.size,
+            audioCount = sources.audioUrls.size,
+        )
     }
 
     /** 创建 Flutter 可显示的 SurfaceTexture，并把它作为 Media3 的视频输出表面。 */
@@ -899,7 +939,8 @@ class NativePlaybackController(
         playbackPrepared = false
         resumeWhenForeground = false
         playbackDataRefreshCount = 0
-        playbackSourceAttemptIndex = 0
+        playbackCandidateAttempt = 0
+        bypassMediaCacheForPlayback = false
         latestPlaybackSources = null
         playbackPhase = PHASE_LOADING
         playbackMessage = if (pendingStartPositionMs > 0L) {
@@ -929,7 +970,8 @@ class NativePlaybackController(
         currentQuality = quality
         playbackPrepared = false
         playbackDataRefreshCount = 0
-        playbackSourceAttemptIndex = 0
+        playbackCandidateAttempt = 0
+        bypassMediaCacheForPlayback = false
         latestPlaybackSources = null
         playbackPhase = PHASE_LOADING
         playbackMessage = "正在切换清晰度…"
@@ -1814,11 +1856,18 @@ class NativePlaybackController(
         var bestScore = Long.MIN_VALUE
         for (index in 0 until mediaItems.length()) {
             val media = mediaItems.optJSONObject(index) ?: continue
+            val candidateQuality = media.optInt("id")
+            if (
+                preferredId != null &&
+                !PlaybackTrackPolicy.isAtOrBelowPreferred(candidateQuality, preferredId)
+            ) {
+                continue
+            }
             val candidateUrls = readMediaUrls(media)
             if (candidateUrls.isEmpty()) {
                 continue
             }
-            val qualityBonus = if (preferredId != null && media.optInt("id") == preferredId) {
+            val qualityBonus = if (preferredId != null && candidateQuality == preferredId) {
                 PREFERRED_TRACK_SCORE
             } else {
                 0L
@@ -1865,8 +1914,11 @@ class NativePlaybackController(
         return urls.toList()
     }
 
-    /** 使用桌面 UA、视频页 Referer 和受容量限制的本地缓存创建 Media3 数据源。 */
-    private fun createMediaDataSourceFactory(referer: String): DataSource.Factory {
+    /** 使用桌面 UA、视频页 Referer 创建网络数据源，并按恢复状态选择是否接入本地缓存。 */
+    private fun createMediaDataSourceFactory(
+        referer: String,
+        bypassCache: Boolean,
+    ): DataSource.Factory {
         val requestProperties = mutableMapOf(
             "Accept" to "*/*",
             "Accept-Encoding" to "identity",
@@ -1882,6 +1934,9 @@ class NativePlaybackController(
             .setConnectTimeoutMs(MEDIA_CONNECT_TIMEOUT_MS)
             .setReadTimeoutMs(MEDIA_READ_TIMEOUT_MS)
             .setDefaultRequestProperties(requestProperties)
+        if (bypassCache) {
+            return networkFactory
+        }
         return CacheDataSource.Factory()
             .setCache(ensureMediaCache())
             .setUpstreamDataSourceFactory(networkFactory)
@@ -1987,12 +2042,33 @@ class NativePlaybackController(
         return SUPPORTED_MEDIA_CACHE_CAPACITIES.contains(capacityBytes)
     }
 
-    /** 选择当前主备线路地址，越界时回退到该轨道的第一条安全地址。 */
-    private fun mediaUrlAt(urls: List<String>, index: Int): String {
-        if (urls.isEmpty()) {
+    /** 选择已经过恢复策略校验的轨道地址；无独立音轨时返回空字符串。 */
+    private fun mediaUrlAt(urls: List<String>, index: Int?): String {
+        if (urls.isEmpty() || index == null) {
             return ""
         }
         return urls.getOrElse(index) { urls.first() }
+    }
+
+    /** 生成当前视频或音频轨道的稳定缓存键，使清理和写入始终指向同一资源。 */
+    private fun playbackCacheKey(sources: PlaybackSources, video: Boolean): String {
+        val codec = if (video) sources.videoCodec else sources.audioCodec
+        val trackType = if (video) "video" else "audio"
+        return "$currentBvid:$currentCid:$currentQuality:" +
+            "${PlaybackTrackPolicy.cacheKey(codec)}:$trackType"
+    }
+
+    /**
+     * 容器解析损坏时只删除当前分P的音视频缓存资源。
+     *
+     * 清理失败会继续使用绕过缓存的网络数据源，不让缓存维护错误阻断播放恢复。
+     */
+    private fun evictCurrentPlaybackCache(sources: PlaybackSources) {
+        val cache = mediaCache ?: return
+        runCatching { cache.removeResource(playbackCacheKey(sources, video = true)) }
+        if (sources.audioUrls.isNotEmpty()) {
+            runCatching { cache.removeResource(playbackCacheKey(sources, video = false)) }
+        }
     }
 
     /** 合并当前候选线路的 DASH 音视频，并按历史位置、倍速和播放状态启动唯一播放器。 */
@@ -2000,29 +2076,35 @@ class NativePlaybackController(
         val nativePlayer = player ?: return
         if (latestPlaybackSources !== sources) {
             latestPlaybackSources = sources
-            playbackSourceAttemptIndex = 0
+            playbackCandidateAttempt = 0
+            bypassMediaCacheForPlayback = false
         }
         currentQuality = sources.actualQuality
         availableQualities = sources.qualities
-        val videoUrl = mediaUrlAt(sources.videoUrls, playbackSourceAttemptIndex)
-        val audioUrl = mediaUrlAt(sources.audioUrls, playbackSourceAttemptIndex)
+        val selection = PlaybackRecoveryPolicy.candidateAt(
+            attemptIndex = playbackCandidateAttempt,
+            videoCount = sources.videoUrls.size,
+            audioCount = sources.audioUrls.size,
+        )
+        val videoUrl = mediaUrlAt(sources.videoUrls, selection.videoIndex)
+        val audioUrl = mediaUrlAt(sources.audioUrls, selection.audioIndex)
         val displayTitle = buildMediaDisplayTitle()
         val mediaMetadata = MediaMetadata.Builder()
             .setTitle(displayTitle)
             .setArtist(currentOwnerName.ifBlank { "未知 UP 主" })
             .build()
         val sourceFactory = ProgressiveMediaSource.Factory(
-            createMediaDataSourceFactory(sources.referer),
+            createMediaDataSourceFactory(
+                referer = sources.referer,
+                bypassCache = bypassMediaCacheForPlayback,
+            ),
         ).setLoadErrorHandlingPolicy(
             DefaultLoadErrorHandlingPolicy(MEDIA_MINIMUM_RETRY_COUNT),
         )
         val videoItem = MediaItem.Builder()
             .setMediaId("$currentBvid:$currentCid:$currentQuality")
             .setUri(videoUrl)
-            .setCustomCacheKey(
-                "$currentBvid:$currentCid:$currentQuality:" +
-                    "${PlaybackTrackPolicy.cacheKey(sources.videoCodec)}:video",
-            )
+            .setCustomCacheKey(playbackCacheKey(sources, video = true))
             .setMediaMetadata(mediaMetadata)
             .build()
         val videoSource = sourceFactory.createMediaSource(videoItem)
@@ -2030,10 +2112,7 @@ class NativePlaybackController(
             val audioSource = sourceFactory.createMediaSource(
                 MediaItem.Builder()
                     .setUri(audioUrl)
-                    .setCustomCacheKey(
-                        "$currentBvid:$currentCid:$currentQuality:" +
-                            "${PlaybackTrackPolicy.cacheKey(sources.audioCodec)}:audio",
-                    )
+                    .setCustomCacheKey(playbackCacheKey(sources, video = false))
                     .build(),
             )
             MergingMediaSource(videoSource, audioSource)
@@ -2330,7 +2409,8 @@ class NativePlaybackController(
         resumeAfterPrepare = false
         resumeWhenForeground = false
         playbackDataRefreshCount = 0
-        playbackSourceAttemptIndex = 0
+        playbackCandidateAttempt = 0
+        bypassMediaCacheForPlayback = false
         latestPlaybackSources = null
         clearSubtitleTrackSession()
         playbackPhase = PHASE_IDLE

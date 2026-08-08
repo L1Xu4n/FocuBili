@@ -1,12 +1,18 @@
 /// 保存用户级弹幕显示偏好；数值均会在构造时归一化，避免损坏的本地数据进入布局。
 class DanmakuPreferences {
-  /// 使用明确默认值创建配置：默认关闭、90% 不透明度、15 逻辑像素字号、12 条轨道、9 秒滚动时长且不屏蔽文字。
+  /// 使用明确默认值创建配置，并限制透明度、区域、字号、轨道、时长和描边的安全范围。
   factory DanmakuPreferences({
     bool enabled = defaultEnabled,
     double opacity = defaultOpacity,
     double fontSize = defaultFontSize,
     int laneCount = defaultLaneCount,
     double scrollDurationSeconds = defaultScrollDurationSeconds,
+    double displayArea = defaultDisplayArea,
+    double strokeWidth = defaultStrokeWidth,
+    bool showScrolling = true,
+    bool showTop = true,
+    bool showBottom = true,
+    bool mergeRepeated = true,
     List<String> blockedKeywords = const <String>[],
   }) {
     return DanmakuPreferences._(
@@ -30,6 +36,22 @@ class DanmakuPreferences {
         minScrollDurationSeconds,
         maxScrollDurationSeconds,
       ),
+      displayArea: _normalizeDouble(
+        displayArea,
+        defaultDisplayArea,
+        minDisplayArea,
+        maxDisplayArea,
+      ),
+      strokeWidth: _normalizeDouble(
+        strokeWidth,
+        defaultStrokeWidth,
+        minStrokeWidth,
+        maxStrokeWidth,
+      ),
+      showScrolling: showScrolling,
+      showTop: showTop,
+      showBottom: showBottom,
+      mergeRepeated: mergeRepeated,
       blockedKeywords: normalizeKeywords(blockedKeywords),
     );
   }
@@ -41,6 +63,12 @@ class DanmakuPreferences {
     required this.fontSize,
     required this.laneCount,
     required this.scrollDurationSeconds,
+    required this.displayArea,
+    required this.strokeWidth,
+    required this.showScrolling,
+    required this.showTop,
+    required this.showBottom,
+    required this.mergeRepeated,
     required this.blockedKeywords,
   });
 
@@ -57,15 +85,27 @@ class DanmakuPreferences {
   static const double defaultScrollDurationSeconds = 9;
   static const double minScrollDurationSeconds = 3;
   static const double maxScrollDurationSeconds = 20;
+  static const double defaultDisplayArea = 0.75;
+  static const double minDisplayArea = 0.25;
+  static const double maxDisplayArea = 1;
+  static const double defaultStrokeWidth = 1.4;
+  static const double minStrokeWidth = 0;
+  static const double maxStrokeWidth = 3;
 
   final bool enabled;
   final double opacity;
   final double fontSize;
   final int laneCount;
   final double scrollDurationSeconds;
+  final double displayArea;
+  final double strokeWidth;
+  final bool showScrolling;
+  final bool showTop;
+  final bool showBottom;
+  final bool mergeRepeated;
   final List<String> blockedKeywords;
 
-  /// 从持久化字典读取配置；缺字段、错误类型和越界数字分别回退默认值或被合法范围截断，以兼容旧用户。
+  /// 从持久化字典读取配置；旧版本缺失的新字段会采用兼容默认值。
   factory DanmakuPreferences.fromJson(Map<String, dynamic> json) {
     final Object? rawKeywords = json['blockedKeywords'];
     return DanmakuPreferences(
@@ -79,29 +119,53 @@ class DanmakuPreferences {
         json['scrollDurationSeconds'],
         defaultScrollDurationSeconds,
       ),
+      displayArea: _readDouble(json['displayArea'], defaultDisplayArea),
+      strokeWidth: _readDouble(json['strokeWidth'], defaultStrokeWidth),
+      showScrolling: json['showScrolling'] is bool
+          ? json['showScrolling'] as bool
+          : true,
+      showTop: json['showTop'] is bool ? json['showTop'] as bool : true,
+      showBottom: json['showBottom'] is bool
+          ? json['showBottom'] as bool
+          : true,
+      mergeRepeated: json['mergeRepeated'] is bool
+          ? json['mergeRepeated'] as bool
+          : true,
       blockedKeywords: rawKeywords is List
           ? rawKeywords.map((Object? item) => item?.toString() ?? '').toList()
           : const <String>[],
     );
   }
 
-  /// 输出仅包含 JSON 基础类型的稳定字典；滚动速度的单位是“完整穿屏所需视频秒数”。
+  /// 输出仅包含 JSON 基础类型的稳定字典，供 SharedPreferences 安全保存。
   Map<String, dynamic> toJson() => <String, dynamic>{
     'enabled': enabled,
     'opacity': opacity,
     'fontSize': fontSize,
     'laneCount': laneCount,
     'scrollDurationSeconds': scrollDurationSeconds,
+    'displayArea': displayArea,
+    'strokeWidth': strokeWidth,
+    'showScrolling': showScrolling,
+    'showTop': showTop,
+    'showBottom': showBottom,
+    'mergeRepeated': mergeRepeated,
     'blockedKeywords': blockedKeywords,
   };
 
-  /// 复制部分字段并再次执行边界归一化，供设置界面每次操作后立即生成安全配置。
+  /// 复制部分字段并再次执行边界归一化，供设置界面即时生成安全配置。
   DanmakuPreferences copyWith({
     bool? enabled,
     double? opacity,
     double? fontSize,
     int? laneCount,
     double? scrollDurationSeconds,
+    double? displayArea,
+    double? strokeWidth,
+    bool? showScrolling,
+    bool? showTop,
+    bool? showBottom,
+    bool? mergeRepeated,
     List<String>? blockedKeywords,
   }) => DanmakuPreferences(
     enabled: enabled ?? this.enabled,
@@ -109,10 +173,26 @@ class DanmakuPreferences {
     fontSize: fontSize ?? this.fontSize,
     laneCount: laneCount ?? this.laneCount,
     scrollDurationSeconds: scrollDurationSeconds ?? this.scrollDurationSeconds,
+    displayArea: displayArea ?? this.displayArea,
+    strokeWidth: strokeWidth ?? this.strokeWidth,
+    showScrolling: showScrolling ?? this.showScrolling,
+    showTop: showTop ?? this.showTop,
+    showBottom: showBottom ?? this.showBottom,
+    mergeRepeated: mergeRepeated ?? this.mergeRepeated,
     blockedKeywords: blockedKeywords ?? this.blockedKeywords,
   );
 
-  /// 规范屏蔽词：去除首尾空格、忽略空项，并按小写结果去重；保留首次输入的显示形式。
+  /// 判断 B 站普通弹幕模式是否允许显示；高级模式在当前安全渲染器中明确忽略。
+  bool allowsMode(int mode) {
+    return switch (mode) {
+      4 => showBottom,
+      5 => showTop,
+      1 || 2 || 3 || 6 => showScrolling,
+      _ => false,
+    };
+  }
+
+  /// 规范屏蔽词：去除首尾空格、忽略空项，并按小写结果去重。
   static List<String> normalizeKeywords(Iterable<String> keywords) {
     final Set<String> seen = <String>{};
     final List<String> result = <String>[];
@@ -125,7 +205,7 @@ class DanmakuPreferences {
     return List<String>.unmodifiable(result);
   }
 
-  /// 判断文本是否包含任一屏蔽词；匹配忽略大小写和关键词首尾空格，空关键词永不匹配。
+  /// 判断文本是否包含任一屏蔽词；匹配忽略大小写，空关键词永不匹配。
   bool blocks(String content) {
     final String normalizedContent = content.toLowerCase();
     return blockedKeywords.any(
@@ -133,17 +213,17 @@ class DanmakuPreferences {
     );
   }
 
-  /// 把 JSON 数字或数字字符串转成 double；无法解析时使用对应字段默认值，后续工厂还会检查有限值和范围。
+  /// 把 JSON 数字或数字字符串转成 double，无法解析时使用对应默认值。
   static double _readDouble(Object? value, double fallback) => value is num
       ? value.toDouble()
       : double.tryParse(value?.toString() ?? '') ?? fallback;
 
-  /// 把 JSON 整数或数字字符串转成 int；类型损坏时使用轨道数默认值，避免恢复阶段抛出格式异常。
+  /// 把 JSON 整数或数字字符串转成 int，无法解析时使用对应默认值。
   static int _readInteger(Object? value, int fallback) => value is num
       ? value.toInt()
       : int.tryParse(value?.toString() ?? '') ?? fallback;
 
-  /// 将浮点字段限制在闭区间内；NaN 和无穷值不可用于 Slider 或绘制，统一降级为字段默认值。
+  /// 将浮点字段限制在闭区间内；NaN 和无穷值统一降级为字段默认值。
   static double _normalizeDouble(
     double value,
     double fallback,

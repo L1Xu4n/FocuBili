@@ -28,6 +28,29 @@ Future<void> _pumpMainShell(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
+/// 在固定平板横屏尺寸中创建主框架，验证工作台导航不会退化成手机切页。
+Future<void> _pumpLandscapeMainShell(WidgetTester tester) async {
+  tester.view.devicePixelRatio = 1;
+  tester.view.physicalSize = const Size(1067, 600);
+  addTearDown(tester.view.resetDevicePixelRatio);
+  addTearDown(tester.view.resetPhysicalSize);
+  final FocusTimerController focusController = FocusTimerController(
+    tickInterval: const Duration(days: 1),
+  );
+  addTearDown(focusController.dispose);
+  await focusController.initialize();
+  await tester.pumpWidget(
+    MaterialApp(
+      onGenerateRoute: AppRouter.onGenerateRoute,
+      home: FocusTimerScope(
+        controller: focusController,
+        child: const MainShell(),
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
+}
+
 /// 注册主框架的系统返回和隐藏输入焦点回归测试。
 void main() {
   /// 每项测试清空本机偏好，避免学习清单或搜索历史影响页面状态。
@@ -96,5 +119,25 @@ void main() {
       find.byKey(const Key('search-input-field')),
     );
     expect(restoredSearchInput.controller?.text, '原有搜索');
+  });
+
+  /// 验证横屏平板通过左侧导航直接切换三个一级页面，子页不再显示返回首页按钮。
+  testWidgets('平板横屏使用左侧一级导航', (WidgetTester tester) async {
+    await _pumpLandscapeMainShell(tester);
+
+    final Finder rail = find.byKey(const Key('workspace-navigation-rail'));
+    expect(rail, findsOneWidget);
+    expect(find.byKey(const Key('focus-workspace-layout')), findsOneWidget);
+
+    await tester.tap(find.descendant(of: rail, matching: find.text('搜索')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('search-workspace-layout')), findsOneWidget);
+    expect(find.byKey(const Key('search-back-button')), findsNothing);
+
+    await tester.tap(find.descendant(of: rail, matching: find.text('我的')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('profile-workspace-layout')), findsOneWidget);
+    expect(find.byKey(const Key('profile-back-button')), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 }

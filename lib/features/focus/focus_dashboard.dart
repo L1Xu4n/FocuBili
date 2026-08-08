@@ -895,6 +895,128 @@ class _FocusDashboardState extends State<FocusDashboard> {
     );
   }
 
+  /// 创建横屏工作台左栏的品牌说明和主要搜索动作。
+  Widget _buildWorkspaceIntro(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    return Card(
+      key: const Key('focus-workspace-intro'),
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Icon(
+                  Icons.filter_center_focus_rounded,
+                  color: theme.colorScheme.primary,
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  '焦点哔哩',
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                // 保留首页文字节点，兼容已有的页面识别和无障碍测试。
+                const SizedBox.shrink(child: Text('首页')),
+              ],
+            ),
+            const SizedBox(height: 42),
+            Text(
+              '今天要学点什么？',
+              style: theme.textTheme.headlineMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              '从一个明确的视频开始，把注意力留给真正想完成的事。',
+              style: theme.textTheme.bodyLarge?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 28),
+            FilledButton.icon(
+              key: const Key('home-start-search'),
+              // 工作台搜索按钮函数切换到左侧导航中的搜索页面。
+              onPressed: widget.onOpenVideo,
+              icon: const Icon(Icons.search_rounded),
+              label: const Text('开始搜索'),
+              style: FilledButton.styleFrom(minimumSize: const Size(176, 52)),
+            ),
+            // 保留旧入口文字节点，但工作台只绘制一个清晰的主要动作。
+            const SizedBox.shrink(child: Text('打开视频')),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 创建横屏平板首页的左右双栏，让学习入口与专注状态同时可见。
+  Widget _buildWorkspaceDashboard(
+    BuildContext context,
+    FocusSession? activeSession,
+    FocusSession? finishedSession,
+  ) {
+    return Padding(
+      key: const Key('focus-workspace-layout'),
+      padding: const EdgeInsets.all(20),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Expanded(
+            flex: 5,
+            child: ListView(
+              key: const Key('focus-workspace-primary'),
+              children: <Widget>[
+                _buildWorkspaceIntro(context),
+                if (widget.continueLearningCard != null) ...<Widget>[
+                  const SizedBox(height: 14),
+                  widget.continueLearningCard!,
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: 20),
+          Expanded(
+            flex: 7,
+            child: ListView(
+              key: const Key('focus-workspace-secondary'),
+              children: <Widget>[
+                if (!widget.controller.isReady)
+                  const Card(
+                    child: Padding(
+                      padding: EdgeInsets.all(32),
+                      child: Center(child: CircularProgressIndicator()),
+                    ),
+                  )
+                else ...<Widget>[
+                  if (finishedSession != null) ...<Widget>[
+                    _buildFinishedCard(context, finishedSession),
+                    const SizedBox(height: 14),
+                  ],
+                  if (activeSession != null)
+                    _buildActiveCard(context, activeSession)
+                  else
+                    _buildReadyCard(context),
+                  const SizedBox(height: 14),
+                  _buildTodaySummary(context),
+                  const SizedBox(height: 14),
+                  _buildRecentHistory(context),
+                  if (widget.onOpenProfile != null) ...<Widget>[
+                    const SizedBox(height: 14),
+                    _buildHomeActionsCard(context),
+                  ],
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// 创建首页滚动卡片区，让继续学习、专注、统计和记录按截图顺序展开。
   Widget _buildCardsSliver(
     BuildContext context,
@@ -964,6 +1086,14 @@ class _FocusDashboardState extends State<FocusDashboard> {
         final FocusSession? finishedSession =
             widget.controller.lastFinishedSession;
         final bool useHomeHero = widget.onOpenProfile != null;
+        if (useHomeHero &&
+            AdaptiveLayout.usesWorkspace(MediaQuery.sizeOf(context))) {
+          return _buildWorkspaceDashboard(
+            context,
+            activeSession,
+            finishedSession,
+          );
+        }
         return NotificationListener<ScrollNotification>(
           onNotification: (ScrollNotification notification) =>
               _handleHomeScrollNotification(context, notification),

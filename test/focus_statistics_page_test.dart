@@ -46,6 +46,22 @@ void main() {
     expect(find.byKey(const Key('focus-trend-line-chart')), findsOneWidget);
     expect(find.text('学习 Flutter'), findsOneWidget);
     expect(find.text('阅读项目文档'), findsOneWidget);
+    expect(
+      find.byKey(const Key('focus-statistics-wide-layout')),
+      findsOneWidget,
+    );
+    final Rect overviewPane = tester.getRect(
+      find.byKey(const Key('focus-statistics-overview-pane')),
+    );
+    final Rect historyPane = tester.getRect(
+      find.byKey(const Key('focus-statistics-history-pane')),
+    );
+    expect(overviewPane.top, historyPane.top);
+    expect(historyPane.left, greaterThan(overviewPane.right));
+    expect(
+      tester.getRect(find.byKey(const Key('focus-total-duration'))).left,
+      lessThan(tester.getRect(find.byKey(Key('focus-history-$latestId'))).left),
+    );
 
     await tester.ensureVisible(find.byKey(const Key('focus-history-search')));
     await tester.enterText(

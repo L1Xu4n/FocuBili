@@ -305,6 +305,31 @@ void main() {
     );
   });
 
+  /// 验证服务端顶部、底部和反向类型不再使用居中固定或左到右运动。
+  test('所有基础显示类型统一从右侧进入并向左移动', () {
+    const double canvasWidth = 1200;
+    const double textWidth = 160;
+    const Duration elapsed = Duration(seconds: 3);
+    final double expected = DanmakuTimeline.horizontalOffset(
+      elapsed: elapsed,
+      canvasWidth: canvasWidth,
+      textWidth: textWidth,
+    );
+
+    for (final int mode in <int>[1, 2, 3, 4, 5, 6]) {
+      expect(
+        DanmakuTimeline.horizontalOffsetForDisplayMode(
+          mode: mode,
+          elapsed: elapsed,
+          canvasWidth: canvasWidth,
+          textWidth: textWidth,
+        ),
+        expected,
+        reason: '模式 $mode 不应再从屏幕中间或左边生成',
+      );
+    }
+  });
+
   test('空弹幕片段会保留正常空状态而不会被误判为网络失败', () async {
     final NativePlayerOverlayService service = NativePlayerOverlayService(
       platformChannel: _FakePlayerOverlayPlatformChannel((

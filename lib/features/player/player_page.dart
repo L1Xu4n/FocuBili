@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
 
+import '../../core/layout/adaptive_layout.dart';
+import '../../core/layout/device_orientation_policy.dart';
 import '../../features/common/watch_history_badge.dart';
 import '../../features/focus/focus_timer_controller.dart';
 import '../../features/focus/focus_timer_scope.dart';
@@ -34,6 +36,9 @@ import '../../services/video_shot_service.dart';
 import '../../services/video_note_service.dart';
 import '../../models/player_overlay_data.dart';
 import '../../models/danmaku_preferences.dart';
+import '../../models/danmaku_launch_scheduler.dart';
+import '../../models/danmaku_presentation_window.dart';
+import '../../models/danmaku_timeline_index.dart';
 import '../../models/focus_session.dart';
 import '../../models/playback_preferences.dart';
 import '../../services/danmaku_preferences_service.dart';
@@ -68,7 +73,10 @@ enum _PlayerMoreMenuAction {
 enum _CollectionEntryOrder { original, newest, oldest, mostPlayed }
 
 /// 标识播放器首次跳转来自笔记还是专注记录，以显示准确提示文案。
-enum PlayerInitialPositionSource { note, focus, learning }
+enum PlayerInitialPositionSource { note, focus, learning, externalLink }
+
+/// 标识播放页希望 Android 系统栏采用的三种可见状态。
+enum _PlayerSystemUiLayout { standard, landscapePlayer, fullscreen }
 
 /// 新架构的原生播放器页面，提供简洁的 App 风格控制层。
 class PlayerPage extends StatefulWidget {
@@ -149,6 +157,7 @@ class _PlayerPageState extends State<PlayerPage>
     seconds: 30,
   );
   static const int _maximumCachedDanmakuSegments = 3;
+  static const int _maximumDanmakuSegmentRetries = 3;
   static const double _expandedPartItemHeight = 76;
   static const List<double> _playbackSpeeds = <double>[
     0.75,
@@ -202,7 +211,7 @@ class _PlayerPageState extends State<PlayerPage>
   Timer? _focusSeekTransitionTimer;
   Timer? _resumeNoticeTimer;
   Timer? _playerNoticeTimer;
-  Timer? _fullscreenStatusTimer;
+  Timer? _playerStatusTimer;
   Timer? _notesPanelAnimationTimer;
   Timer? _noteAutoSaveTimer;
   double _playbackSpeed = 1;
@@ -252,21 +261,31 @@ class _PlayerPageState extends State<PlayerPage>
   bool _completionLearningFinished = false;
   bool _interactivePromptVisible = false;
   bool _interactiveChoiceOpening = false;
-  DateTime _fullscreenClock = DateTime.now();
+  DateTime _playerClock = DateTime.now();
   int? _batteryPercent;
+  DeviceNetworkType _networkType = DeviceNetworkType.other;
+  bool _playerStatusSyncScheduled = false;
+  bool _pendingPlayerStatusVisible = false;
+  int _preferredOpeningQuality = PreferredPlaybackQuality.p720.id;
+  bool _defaultQualityPending = true;
   SubtitleTrackLoadResult? _subtitleTrackResult;
   SubtitleTrack? _selectedSubtitleTrack;
   List<SubtitleCue> _subtitleCues = const <SubtitleCue>[];
   bool _subtitleTracksLoading = false;
   bool _subtitleCuesLoading = false;
   int _subtitleRequestToken = 0;
+  final Map<int, List<DanmakuEntry>> _rawDanmakuSegments =
+      <int, List<DanmakuEntry>>{};
   final Map<int, List<DanmakuEntry>> _danmakuSegments =
       <int, List<DanmakuEntry>>{};
   final Set<int> _loadingDanmakuSegments = <int>{};
-  final Set<int> _failedDanmakuSegments = <int>{};
+  final Map<int, int> _danmakuSegmentFailureCounts = <int, int>{};
+  final Map<int, DateTime> _danmakuSegmentRetryAfter = <int, DateTime>{};
   int _danmakuRequestToken = 0;
   late final AnimationController _danmakuFrameController;
   final _DanmakuLanePlanner _danmakuLanePlanner = _DanmakuLanePlanner();
+  final DanmakuPresentationWindow _danmakuPresentationWindow =
+      DanmakuPresentationWindow();
   Duration _danmakuPositionAnchor = Duration.zero;
   List<VideoNote> _currentVideoNotes = const <VideoNote>[];
   VideoNote? _editingVideoNote;
@@ -299,6 +318,9 @@ class _PlayerPageState extends State<PlayerPage>
   bool _associationPromptOpen = false;
   bool _leaveRequestInProgress = false;
   bool _allowRoutePop = false;
+  bool _systemUiSyncScheduled = false;
+  _PlayerSystemUiLayout? _pendingSystemUiLayout;
+  _PlayerSystemUiLayout? _appliedSystemUiLayout;
 
   /// 返回配置中的弹幕开关，统一旧播放器代码和持久化模型之间的状态来源。
   bool get _danmakuEnabled => _danmakuPreferences.enabled;
@@ -360,7 +382,6 @@ class _PlayerPageState extends State<PlayerPage>
     unawaited(_loadWatchHistoryBadges());
     unawaited(_loadCurrentLearningListEntry());
     unawaited(_loadDanmakuPreferences());
-    unawaited(_loadPlaybackPreferences());
     if (widget.playbackService == null) {
       unawaited(_allowPlayerOrientations());
     }
@@ -469,13 +490,24 @@ class _PlayerPageState extends State<PlayerPage>
     _scheduleOrientationSync();
   }
 
-  /// 播放页存活期间允许手机自由转向，离开页面时会重新恢复应用的竖屏约束。
+  /// 播放页存活期间让手机可旋转全屏，并让 Android 平板继续保持横屏工作台。
   Future<void> _allowPlayerOrientations() async {
-    await SystemChrome.setPreferredOrientations(<DeviceOrientation>[
-      DeviceOrientation.portraitUp,
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
+    final List<FlutterView> views = WidgetsBinding
+        .instance
+        .platformDispatcher
+        .views
+        .toList();
+    if (views.isEmpty) {
+      return;
+    }
+    final List<DeviceOrientation> orientations =
+        DeviceOrientationPolicy.playerOrientations(
+          logicalSize: DeviceOrientationPolicy.logicalSizeForView(views.first),
+          isAndroid: !kIsWeb && defaultTargetPlatform == TargetPlatform.android,
+        );
+    if (orientations.isNotEmpty) {
+      await SystemChrome.setPreferredOrientations(orientations);
+    }
   }
 
   /// 把多次系统尺寸变化合并到一帧处理，避免旋转动画中反复进出全屏。
@@ -490,9 +522,76 @@ class _PlayerPageState extends State<PlayerPage>
     });
   }
 
+  /// 把构建期得到的横屏状态延后到帧末同步，避免在 build 中直接修改 Android 系统栏。
+  void _schedulePlayerSystemUiSync({required bool landscapeLayout}) {
+    if (widget.playbackService != null) {
+      return;
+    }
+    _pendingSystemUiLayout = _fullscreen
+        ? _PlayerSystemUiLayout.fullscreen
+        : landscapeLayout
+        ? _PlayerSystemUiLayout.landscapePlayer
+        : _PlayerSystemUiLayout.standard;
+    if (_systemUiSyncScheduled) {
+      return;
+    }
+    _systemUiSyncScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _systemUiSyncScheduled = false;
+      final _PlayerSystemUiLayout? target = _pendingSystemUiLayout;
+      if (target != null) {
+        unawaited(_applyPlayerSystemUiLayout(target));
+      }
+    });
+  }
+
+  /// 应用播放页系统栏模式：横屏仅隐藏顶部状态栏，全屏同时隐藏顶部和底部系统栏。
+  Future<void> _applyPlayerSystemUiLayout(_PlayerSystemUiLayout target) async {
+    if (!mounted || _appliedSystemUiLayout == target) {
+      return;
+    }
+    switch (target) {
+      case _PlayerSystemUiLayout.standard:
+        await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+      case _PlayerSystemUiLayout.landscapePlayer:
+        await SystemChrome.setEnabledSystemUIMode(
+          SystemUiMode.manual,
+          overlays: const <SystemUiOverlay>[SystemUiOverlay.bottom],
+        );
+      case _PlayerSystemUiLayout.fullscreen:
+        await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    }
+    if (mounted) {
+      _appliedSystemUiLayout = target;
+    }
+  }
+
+  /// 临时打开普通系统栏供 UP 主页使用，并让播放页返回后重新计算横屏系统栏状态。
+  Future<void> _showStandardSystemUiForNestedRoute() async {
+    if (widget.playbackService != null) {
+      return;
+    }
+    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    _appliedSystemUiLayout = null;
+  }
+
   /// 横屏自动进入全屏、竖屏退出自动全屏；笔记打开时不自动改变布局。
   void _syncFullscreenWithOrientation() {
     if (!mounted) {
+      return;
+    }
+    if (AdaptiveLayout.usesWorkspace(MediaQuery.sizeOf(context))) {
+      _suppressAutoFullscreenUntilPortrait = false;
+      _restoreOrientationChoicesOnPortrait = false;
+      if (_fullscreen && _fullscreenEnteredByOrientation) {
+        unawaited(
+          _setFullscreen(
+            false,
+            updateOrientation: false,
+            enteredByOrientation: true,
+          ),
+        );
+      }
       return;
     }
     final Orientation orientation = MediaQuery.orientationOf(context);
@@ -524,17 +623,57 @@ class _PlayerPageState extends State<PlayerPage>
     }
   }
 
-  /// 读取设备里保存的双击手势偏好；读取异常时继续使用默认开启状态。
-  Future<void> _loadPlaybackPreferences() async {
+  /// 读取设备里保存的手势和默认清晰度；异常时返回当前安全默认配置。
+  Future<PlaybackPreferences> _loadPlaybackPreferences() async {
     try {
       final PlaybackPreferences preferences = await _playbackPreferencesService
           .load();
       if (mounted) {
         setState(() => _playbackPreferences = preferences);
       }
+      return preferences;
     } catch (_) {
       // 本地配置损坏不影响视频播放，默认配置已经是可用的安全回退。
+      return _playbackPreferences;
     }
+  }
+
+  /// 读取当前网络类型；系统通道异常时按更保守的移动网络配置处理。
+  Future<DeviceNetworkType> _loadNetworkTypeSafely() async {
+    if (widget.playbackService != null && widget.deviceStatusService == null) {
+      return DeviceNetworkType.other;
+    }
+    try {
+      return await _deviceStatusService.loadNetworkType();
+    } catch (_) {
+      return DeviceNetworkType.other;
+    }
+  }
+
+  /// 读取当前电量；替换了原生播放器却未提供设备服务时直接返回未知，避免调用不存在的平台通道。
+  Future<int?> _loadBatteryPercentSafely() async {
+    if (widget.playbackService != null && widget.deviceStatusService == null) {
+      return null;
+    }
+    try {
+      return await _deviceStatusService.loadBatteryPercent();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 根据 Wi-Fi、有线或移动网络返回本次打开视频应请求的默认清晰度。
+  int _preferredQualityForNetwork(
+    PlaybackPreferences preferences,
+    DeviceNetworkType networkType,
+  ) {
+    return switch (networkType) {
+      DeviceNetworkType.wifi ||
+      DeviceNetworkType.ethernet => preferences.wifiDefaultQuality.id,
+      DeviceNetworkType.mobile ||
+      DeviceNetworkType.offline ||
+      DeviceNetworkType.other => preferences.mobileDefaultQuality.id,
+    };
   }
 
   /// 测试或父组件更换注入控制器时，解绑旧实例并监听新实例。
@@ -1097,6 +1236,12 @@ class _PlayerPageState extends State<PlayerPage>
   /// 请求 Android 创建 Media3 视频纹理，再直接请求公开视频的播放数据。
   Future<void> _initializeNativePlayback() async {
     try {
+      final PlaybackPreferences preferences = await _loadPlaybackPreferences();
+      final DeviceNetworkType networkType = await _loadNetworkTypeSafely();
+      final int preferredQuality = _preferredQualityForNetwork(
+        preferences,
+        networkType,
+      );
       final SavedPlaybackState? savedState = await _playbackService
           .loadSavedPlaybackState(_activeVideo.bvid);
       final SystemPlaybackLevels levels = await _playbackService
@@ -1113,6 +1258,10 @@ class _PlayerPageState extends State<PlayerPage>
         _currentPart = restoredPart;
         _brightness = levels.brightness;
         _volume = levels.volume;
+        _networkType = networkType;
+        _currentQuality = preferredQuality;
+        _preferredOpeningQuality = preferredQuality;
+        _defaultQualityPending = true;
       });
       unawaited(_loadCurrentLearningListEntry());
       unawaited(_loadPlayerEnhancements());
@@ -1129,7 +1278,7 @@ class _PlayerPageState extends State<PlayerPage>
       await _playbackService.openVideo(
         _activeVideo,
         part: _currentPart,
-        quality: _currentQuality,
+        quality: preferredQuality,
       );
     } on PlatformException catch (error) {
       _showPlaybackError('无法启动原生播放器：${error.message ?? error.code}');
@@ -1186,6 +1335,8 @@ class _PlayerPageState extends State<PlayerPage>
       return;
     }
     final PlaybackSnapshot previousSnapshot = _playbackSnapshot;
+    final bool shouldRestartDanmakuPresentation =
+        _shouldRestartDanmakuPresentation(previousSnapshot, snapshot);
     final bool justEnded =
         previousSnapshot.phase != PlaybackPhase.ended &&
         snapshot.phase == PlaybackPhase.ended;
@@ -1222,6 +1373,22 @@ class _PlayerPageState extends State<PlayerPage>
         qualitySelectionFinished &&
         (snapshot.phase == PlaybackPhase.error ||
             snapshot.currentQuality != pendingQuality);
+    final bool shouldResolveDefaultQuality =
+        _defaultQualityPending &&
+        snapshot.phase == PlaybackPhase.ready &&
+        snapshot.availableQualities.isNotEmpty;
+    final int? defaultFallbackQuality = shouldResolveDefaultQuality
+        ? selectPlaybackQualityAtOrBelow(
+            preferredQuality: _preferredOpeningQuality,
+            actualQuality: snapshot.currentQuality,
+            availableQualities: snapshot.availableQualities.map(
+              (PlaybackQuality quality) => quality.id,
+            ),
+          )
+        : null;
+    if (shouldResolveDefaultQuality) {
+      _defaultQualityPending = false;
+    }
     final bool leftPictureInPicture =
         _playbackSnapshot.isInPictureInPicture &&
         !snapshot.isInPictureInPicture;
@@ -1274,12 +1441,19 @@ class _PlayerPageState extends State<PlayerPage>
         _showControls = true;
       }
     });
+    if (shouldRestartDanmakuPresentation) {
+      _restartDanmakuPresentationFrom(snapshot.position);
+    }
     _syncDanmakuAnimation(snapshot);
     if (isNewPlaybackError) {
       _recordPlaybackDiagnostic(snapshot, previousSnapshot.phase);
     }
     if (qualitySelectionFailed) {
       _showMembershipQualityNotice();
+    }
+    if (defaultFallbackQuality != null &&
+        defaultFallbackQuality != snapshot.currentQuality) {
+      unawaited(_changeQuality(defaultFallbackQuality));
     }
     if (shouldShowResumeNotice) {
       _shownRestoredCid = _currentPart.cid;
@@ -1311,6 +1485,25 @@ class _PlayerPageState extends State<PlayerPage>
         unawaited(_maybePromptFocusAssociation());
       });
     }
+  }
+
+  /// 识别原生恢复、快进或回退造成的非连续位置；普通进度心跳和倍速播放不会误触发重置。
+  bool _shouldRestartDanmakuPresentation(
+    PlaybackSnapshot previous,
+    PlaybackSnapshot current,
+  ) {
+    if (!_danmakuEnabled || current.phase != PlaybackPhase.ready) {
+      return false;
+    }
+    final Duration delta = current.position - previous.position;
+    if (delta < const Duration(milliseconds: -250)) {
+      return true;
+    }
+    if (previous.phase != PlaybackPhase.ready &&
+        delta > const Duration(seconds: 1)) {
+      return true;
+    }
+    return delta > const Duration(seconds: 3);
   }
 
   /// 把新的原生播放失败写入脱敏问题诊断；不记录 BV、标题、播放地址、Cookie 或服务端响应正文。
@@ -1492,6 +1685,7 @@ class _PlayerPageState extends State<PlayerPage>
       PlayerInitialPositionSource.note => '笔记位置',
       PlayerInitialPositionSource.focus => '专注位置',
       PlayerInitialPositionSource.learning => '学习清单位置',
+      PlayerInitialPositionSource.externalLink => '外部链接位置',
     };
     try {
       await _seekNativeTo(position);
@@ -1651,7 +1845,7 @@ class _PlayerPageState extends State<PlayerPage>
     _focusSeekTransitionTimer?.cancel();
     _resumeNoticeTimer?.cancel();
     _playerNoticeTimer?.cancel();
-    _fullscreenStatusTimer?.cancel();
+    _playerStatusTimer?.cancel();
     _notesPanelAnimationTimer?.cancel();
     _flushVideoNoteAutoSave();
     _noteAutoSaveTimer?.cancel();
@@ -1805,11 +1999,17 @@ class _PlayerPageState extends State<PlayerPage>
     _restartControlsAutoHideTimer();
   }
 
-  /// 请求原生播放器按相对时长跳转，并把发生的异常显示在页面上。
+  /// 请求原生播放器按相对时长跳转；成功后从目标位置重新生成弹幕，历史内容不会从中间补画。
   Future<void> _seekNativeBy(Duration offset) async {
+    final int targetMilliseconds = (_playbackSnapshot.position + offset)
+        .inMilliseconds
+        .clamp(0, _displayDuration.inMilliseconds);
     _beginFocusSeekTransition();
     try {
       await _playbackService.seekBy(offset);
+      _restartDanmakuPresentationFrom(
+        Duration(milliseconds: targetMilliseconds),
+      );
     } on PlatformException catch (error) {
       _showPlaybackError('无法跳转进度：${error.message ?? error.code}');
     } catch (error) {
@@ -1817,10 +2017,11 @@ class _PlayerPageState extends State<PlayerPage>
     }
   }
 
-  /// 在任意绝对跳转前开启快进保护，避免原生缓冲状态被误判为用户暂停。
-  Future<void> _seekNativeTo(Duration position) {
+  /// 执行绝对跳转并从目标时间重新生成弹幕，确保跳转前的历史弹幕不会出现在屏幕中段。
+  Future<void> _seekNativeTo(Duration position) async {
     _beginFocusSeekTransition();
-    return _playbackService.seekTo(position);
+    await _playbackService.seekTo(position);
+    _restartDanmakuPresentationFrom(position);
   }
 
   /// 把进度条比例换算为真实毫秒位置，再请求原生播放器跳转。
@@ -2348,7 +2549,7 @@ class _PlayerPageState extends State<PlayerPage>
     return 'Q$_currentQuality';
   }
 
-  /// 根据手指起点选择左侧亮度或右侧音量，并避开全屏顶部与底部系统手势区。
+  /// 根据手指起点选择左侧亮度或右侧音量，并避开播放器顶部与底部控制区。
   void _startVerticalAdjustment(
     DragStartDetails details,
     Size playerSize,
@@ -2367,10 +2568,8 @@ class _PlayerPageState extends State<PlayerPage>
         (_fullscreenBottomGestureExclusionHeight + bottomSystemInset)
             .clamp(0, playerSize.height)
             .toDouble();
-    if (_fullscreen &&
-        (details.localPosition.dy <= topExcludedHeight ||
-            details.localPosition.dy >=
-                playerSize.height - bottomExcludedHeight)) {
+    if (details.localPosition.dy <= topExcludedHeight ||
+        details.localPosition.dy >= playerSize.height - bottomExcludedHeight) {
       _verticalAdjustmentMode = _VerticalAdjustmentMode.none;
       return;
     }
@@ -2675,11 +2874,6 @@ class _PlayerPageState extends State<PlayerPage>
       // 从竖屏笔记本进入全屏时直接挂载全屏工作区；退出时保留笔记打开状态给竖屏布局继续使用。
       _notesOverlayMounted = nextFullscreen && _notesOpen;
     });
-    if (nextFullscreen) {
-      _startFullscreenStatusUpdates();
-    } else {
-      _stopFullscreenStatusUpdates();
-    }
     _restartControlsAutoHideTimer();
     if (nextFullscreen) {
       if (updateOrientation) {
@@ -2689,10 +2883,12 @@ class _PlayerPageState extends State<PlayerPage>
         ]);
       }
       await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+      _appliedSystemUiLayout = _PlayerSystemUiLayout.fullscreen;
     } else if (updateOrientation) {
       await _restoreSystemUi();
     } else {
       await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+      _appliedSystemUiLayout = _PlayerSystemUiLayout.standard;
     }
     await WidgetsBinding.instance.endOfFrame;
     if (mounted) {
@@ -2718,37 +2914,64 @@ class _PlayerPageState extends State<PlayerPage>
     }
   }
 
-  /// 启动全屏顶部的本地时间和电量刷新；只在全屏期间每分钟读取一次以节省资源。
-  void _startFullscreenStatusUpdates() {
-    _stopFullscreenStatusUpdates();
-    _refreshFullscreenStatus();
-    _fullscreenStatusTimer = Timer.periodic(const Duration(minutes: 1), (_) {
-      _refreshFullscreenStatus();
+  /// 在本帧布局确定后按顶部栏真实可见性启停状态刷新，避免用平台尺寸猜测布局。
+  void _schedulePlayerStatusVisibility(bool visible) {
+    _pendingPlayerStatusVisible = visible;
+    if (!visible) {
+      _stopPlayerStatusUpdates();
+      return;
+    }
+    if (_playerStatusSyncScheduled) {
+      return;
+    }
+    _playerStatusSyncScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _playerStatusSyncScheduled = false;
+      if (!mounted) {
+        return;
+      }
+      if (_pendingPlayerStatusVisible && _playerStatusTimer == null) {
+        _startPlayerStatusUpdates();
+      }
     });
   }
 
-  /// 停止全屏设备状态定时器，避免退出播放页后仍保留页面回调。
-  void _stopFullscreenStatusUpdates() {
-    _fullscreenStatusTimer?.cancel();
-    _fullscreenStatusTimer = null;
+  /// 播放器顶部可见期间每分钟刷新时间和电量，横屏工作台与全屏直接复用结果。
+  void _startPlayerStatusUpdates() {
+    _stopPlayerStatusUpdates();
+    _playerClock = DateTime.now();
+    unawaited(_refreshPlayerDeviceStatus());
+    _playerStatusTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      _refreshPlayerStatus();
+    });
+  }
+
+  /// 停止播放器设备状态定时器，避免退出页面后仍保留回调。
+  void _stopPlayerStatusUpdates() {
+    _playerStatusTimer?.cancel();
+    _playerStatusTimer = null;
   }
 
   /// 立即刷新显示时间，并异步读取 Android 提供的当前电量百分比。
-  void _refreshFullscreenStatus() {
-    if (!mounted || !_fullscreen) {
+  void _refreshPlayerStatus() {
+    if (!mounted) {
       return;
     }
-    setState(() => _fullscreenClock = DateTime.now());
-    unawaited(_refreshFullscreenBattery());
+    setState(() => _playerClock = DateTime.now());
+    unawaited(_refreshPlayerDeviceStatus());
   }
 
-  /// 读取电量后确认页面仍在全屏，再更新顶部小型状态栏的显示内容。
-  Future<void> _refreshFullscreenBattery() async {
-    final int? batteryPercent = await _deviceStatusService.loadBatteryPercent();
-    if (!mounted || !_fullscreen) {
+  /// 读取电量和网络类型后确认页面仍存在，再更新顶部小型状态栏。
+  Future<void> _refreshPlayerDeviceStatus() async {
+    final int? batteryPercent = await _loadBatteryPercentSafely();
+    final DeviceNetworkType networkType = await _loadNetworkTypeSafely();
+    if (!mounted) {
       return;
     }
-    setState(() => _batteryPercent = batteryPercent);
+    setState(() {
+      _batteryPercent = batteryPercent;
+      _networkType = networkType;
+    });
   }
 
   /// 计算当前分P尚未播放的时长，并限制在专注模块允许的 1 到 180 分钟内。
@@ -2821,12 +3044,25 @@ class _PlayerPageState extends State<PlayerPage>
     }
   }
 
-  /// 恢复普通竖屏与 edge-to-edge 系统栏设置。
+  /// 离开全屏后恢复手机竖屏或平板横屏，并重新启用 edge-to-edge 系统栏。
   Future<void> _restoreSystemUi() async {
-    await SystemChrome.setPreferredOrientations(<DeviceOrientation>[
-      DeviceOrientation.portraitUp,
-    ]);
+    final List<FlutterView> views = WidgetsBinding
+        .instance
+        .platformDispatcher
+        .views
+        .toList();
+    if (views.isNotEmpty) {
+      final List<DeviceOrientation>
+      orientations = DeviceOrientationPolicy.startupOrientations(
+        logicalSize: DeviceOrientationPolicy.logicalSizeForView(views.first),
+        isAndroid: !kIsWeb && defaultTargetPlatform == TargetPlatform.android,
+      );
+      if (orientations.isNotEmpty) {
+        await SystemChrome.setPreferredOrientations(orientations);
+      }
+    }
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    _appliedSystemUiLayout = _PlayerSystemUiLayout.standard;
   }
 
   /// 处理顶部返回按钮：先关闭笔记，再退出全屏或返回上一支合集视频。
@@ -2901,35 +3137,74 @@ class _PlayerPageState extends State<PlayerPage>
     _showPlayerControls();
   }
 
-  /// 立即应用已归一化配置；开关会启停当前动画，屏蔽规则会先清队列再加载。
+  /// 立即应用已归一化配置；筛选规则只重建内存索引，不重复下载同一弹幕段。
   void _applyDanmakuPreferences(DanmakuPreferences preferences) {
-    final bool enabledChanged =
-        preferences.enabled != _danmakuPreferences.enabled;
-    final bool blockingRulesChanged = !listEquals(
-      preferences.blockedKeywords,
-      _danmakuPreferences.blockedKeywords,
-    );
+    final DanmakuPreferences previous = _danmakuPreferences;
+    final bool enabledChanged = preferences.enabled != previous.enabled;
+    final bool filteringRulesChanged =
+        !listEquals(preferences.blockedKeywords, previous.blockedKeywords) ||
+        preferences.showScrolling != previous.showScrolling ||
+        preferences.showTop != previous.showTop ||
+        preferences.showBottom != previous.showBottom ||
+        preferences.mergeRepeated != previous.mergeRepeated;
+    final bool shouldRestartPresentation =
+        preferences.enabled && (enabledChanged || filteringRulesChanged);
+    final Duration presentationStart = _currentDanmakuTimelinePosition();
+    if (shouldRestartPresentation) {
+      _danmakuPresentationWindow.restartFrom(presentationStart);
+    }
     _danmakuPreferencesChangedByUser = true;
-    setState(() => _danmakuPreferences = preferences);
+    setState(() {
+      _danmakuPreferences = preferences;
+      if (filteringRulesChanged) {
+        _rebuildDanmakuSegments();
+      } else if (shouldRestartPresentation) {
+        _rebuildDanmakuSegment(
+          DanmakuSegmentLoadResult.segmentIndexForPosition(presentationStart),
+        );
+      }
+    });
     _danmakuLanePlanner.clear();
     unawaited(_persistDanmakuPreferences(preferences));
 
-    if (blockingRulesChanged) {
-      // 清空已经进入缓存的旧条目并重新请求，使新增屏蔽词立即生效且不留下占轨条目。
-      _clearDanmakuForPart();
-    }
     if (!preferences.enabled) {
       _danmakuFrameController.stop();
       _danmakuFrameController.value = 0;
       return;
     }
     if (enabledChanged) {
-      // 重新开启时允许曾经失败的分段重试，避免本次播放会话一直空白。
-      _failedDanmakuSegments.clear();
+      // 重新开启时允许曾达到上限的分段再次自动重试。
+      _danmakuSegmentFailureCounts.clear();
+      _danmakuSegmentRetryAfter.clear();
     }
-    if (enabledChanged || blockingRulesChanged) {
+    if (enabledChanged || filteringRulesChanged) {
       _ensureDanmakuSegmentsForPosition(_playbackSnapshot.position);
       _syncDanmakuAnimation(_playbackSnapshot);
+    }
+  }
+
+  /// 使用当前偏好和呈现起点重建一个片段，并保存稳定列表供车道布局缓存复用。
+  void _rebuildDanmakuSegment(int segmentIndex) {
+    final List<DanmakuEntry>? rawEntries = _rawDanmakuSegments[segmentIndex];
+    if (rawEntries == null) {
+      _danmakuSegments.remove(segmentIndex);
+      return;
+    }
+    final List<DanmakuEntry> indexedEntries = DanmakuTimelineIndex.fromEntries(
+      rawEntries,
+      _danmakuPreferences,
+    ).entries;
+    _danmakuSegments[segmentIndex] = _danmakuPresentationWindow.filterEntries(
+      segmentIndex: segmentIndex,
+      entries: indexedEntries,
+    );
+  }
+
+  /// 使用当前类型、关键词和合并规则重新建立所有已下载片段的 100ms 时间索引。
+  void _rebuildDanmakuSegments() {
+    _danmakuSegments.clear();
+    for (final int segmentIndex in _rawDanmakuSegments.keys) {
+      _rebuildDanmakuSegment(segmentIndex);
     }
   }
 
@@ -2980,6 +3255,19 @@ class _PlayerPageState extends State<PlayerPage>
     );
   }
 
+  /// 从指定视频位置开启新的弹幕呈现窗口，并立即刷新已缓存的目标片段。
+  void _restartDanmakuPresentationFrom(Duration position) {
+    if (!_danmakuEnabled) {
+      return;
+    }
+    _danmakuPresentationWindow.restartFrom(position);
+    final int segmentIndex = DanmakuSegmentLoadResult.segmentIndexForPosition(
+      position,
+    );
+    _rebuildDanmakuSegment(segmentIndex);
+    _danmakuLanePlanner.clear();
+  }
+
   /// 横竖屏尺寸变化前后重新建立时间锚点和车道，防止每次切换都累计向左偏移。
   void _reanchorDanmakuForViewportChange() {
     final Duration currentPosition = _currentDanmakuTimelinePosition();
@@ -3001,10 +3289,18 @@ class _PlayerPageState extends State<PlayerPage>
     _danmakuFrameController.stop();
     _danmakuFrameController.value = 0;
     _danmakuPositionAnchor = Duration.zero;
+    _rawDanmakuSegments.clear();
     _danmakuSegments.clear();
     _loadingDanmakuSegments.clear();
-    _failedDanmakuSegments.clear();
+    _danmakuSegmentFailureCounts.clear();
+    _danmakuSegmentRetryAfter.clear();
+    _danmakuPresentationWindow.clear();
     _danmakuLanePlanner.clear();
+  }
+
+  /// 根据连续失败次数生成短退避，避免临时网络问题时每个 500ms 进度快照都立即重试。
+  Duration _danmakuRetryDelay(int failureCount) {
+    return Duration(seconds: failureCount * 2);
   }
 
   /// 确保当前片段存在，并在接近六分钟边界时预取下一片段减少播放中的等待。
@@ -3029,14 +3325,17 @@ class _PlayerPageState extends State<PlayerPage>
     _trimDanmakuSegments(currentSegment);
   }
 
-  /// 请求一段真实弹幕并以片段编号缓存，失败只提示一次且不会重复刷接口。
+  /// 请求一段真实弹幕并建立时间索引；临时失败最多自动重试三次且带递增退避。
   Future<void> _loadDanmakuSegment(int segmentIndex) async {
+    final int failureCount = _danmakuSegmentFailureCounts[segmentIndex] ?? 0;
+    final DateTime? retryAfter = _danmakuSegmentRetryAfter[segmentIndex];
     if (!_danmakuEnabled ||
         segmentIndex < 1 ||
         segmentIndex > DanmakuSegmentLoadResult.maximumSegmentIndex ||
-        _danmakuSegments.containsKey(segmentIndex) ||
+        _rawDanmakuSegments.containsKey(segmentIndex) ||
         _loadingDanmakuSegments.contains(segmentIndex) ||
-        _failedDanmakuSegments.contains(segmentIndex)) {
+        failureCount >= _maximumDanmakuSegmentRetries ||
+        (retryAfter != null && DateTime.now().isBefore(retryAfter))) {
       return;
     }
     final int requestToken = _danmakuRequestToken;
@@ -3055,17 +3354,32 @@ class _PlayerPageState extends State<PlayerPage>
       return;
     }
     if (result.status == DanmakuLoadStatus.unavailable) {
-      _failedDanmakuSegments.add(segmentIndex);
-      _showTransientSnackBar(result.message);
+      final int nextFailureCount = failureCount + 1;
+      _danmakuSegmentFailureCounts[segmentIndex] = nextFailureCount;
+      if (nextFailureCount < _maximumDanmakuSegmentRetries) {
+        _danmakuSegmentRetryAfter[segmentIndex] = DateTime.now().add(
+          _danmakuRetryDelay(nextFailureCount),
+        );
+        if (nextFailureCount == 1) {
+          _showTransientSnackBar('${result.message} 将自动重试。');
+        }
+      } else {
+        _danmakuSegmentRetryAfter.remove(segmentIndex);
+        _showTransientSnackBar('${result.message} 本片段已暂停自动重试。');
+      }
       return;
     }
+    _danmakuSegmentFailureCounts.remove(segmentIndex);
+    _danmakuSegmentRetryAfter.remove(segmentIndex);
+    final Duration presentationPosition = _currentDanmakuTimelinePosition();
     setState(() {
-      // 屏蔽在进入缓存和车道规划队列前完成，命中的条目不会隐藏后仍占用轨道。
-      _danmakuSegments[result.segmentIndex] = result.entries
-          .where(
-            (DanmakuEntry entry) => !_danmakuPreferences.blocks(entry.content),
-          )
-          .toList(growable: false);
+      // 原始条目保留在会话内，设置变化时只重建 100ms 时间索引，不再次请求网络。
+      _rawDanmakuSegments[result.segmentIndex] = result.entries;
+      _danmakuPresentationWindow.prepareSegment(
+        segmentIndex: result.segmentIndex,
+        currentPosition: presentationPosition,
+      );
+      _rebuildDanmakuSegment(result.segmentIndex);
     });
     _trimDanmakuSegments(
       DanmakuSegmentLoadResult.segmentIndexForPosition(
@@ -3076,24 +3390,40 @@ class _PlayerPageState extends State<PlayerPage>
 
   /// 仅保留当前位置前后相邻的少量弹幕片段，防止长视频连续观看时内存持续增长。
   void _trimDanmakuSegments(int currentSegment) {
-    if (_danmakuSegments.length <= _maximumCachedDanmakuSegments) {
+    final List<int> staleFailures = _danmakuSegmentFailureCounts.keys
+        .where((int index) => (index - currentSegment).abs() > 1)
+        .toList(growable: false);
+    for (final int index in staleFailures) {
+      _danmakuSegmentFailureCounts.remove(index);
+      _danmakuSegmentRetryAfter.remove(index);
+    }
+    if (_rawDanmakuSegments.length <= _maximumCachedDanmakuSegments) {
       return;
     }
-    final List<int> removableSegments = _danmakuSegments.keys
+    final List<int> removableSegments = _rawDanmakuSegments.keys
         .where((int index) => (index - currentSegment).abs() > 1)
         .toList(growable: false);
     for (final int index in removableSegments) {
-      _danmakuSegments.remove(index);
+      _removeDanmakuSegment(index);
     }
-    while (_danmakuSegments.length > _maximumCachedDanmakuSegments) {
-      final int oldestIndex = _danmakuSegments.keys.reduce(
+    while (_rawDanmakuSegments.length > _maximumCachedDanmakuSegments) {
+      final int oldestIndex = _rawDanmakuSegments.keys.reduce(
         (int left, int right) =>
             (left - currentSegment).abs() >= (right - currentSegment).abs()
             ? left
             : right,
       );
-      _danmakuSegments.remove(oldestIndex);
+      _removeDanmakuSegment(oldestIndex);
     }
+  }
+
+  /// 同步移除一个片段的原始数据、索引和失败状态，防止长视频缓存只清掉其中一层。
+  void _removeDanmakuSegment(int segmentIndex) {
+    _rawDanmakuSegments.remove(segmentIndex);
+    _danmakuSegments.remove(segmentIndex);
+    _danmakuSegmentFailureCounts.remove(segmentIndex);
+    _danmakuSegmentRetryAfter.remove(segmentIndex);
+    _danmakuPresentationWindow.forgetSegment(segmentIndex);
   }
 
   /// 返回当前六分钟片段的真实弹幕列表；未加载、为空或关闭弹幕时返回空列表。
@@ -3102,7 +3432,7 @@ class _PlayerPageState extends State<PlayerPage>
       return const <DanmakuEntry>[];
     }
     final int segmentIndex = DanmakuSegmentLoadResult.segmentIndexForPosition(
-      _playbackSnapshot.position,
+      _currentDanmakuTimelinePosition(),
     );
     return _danmakuSegments[segmentIndex] ?? const <DanmakuEntry>[];
   }
@@ -3449,6 +3779,43 @@ class _PlayerPageState extends State<PlayerPage>
                         onChanged: (bool enabled) =>
                             update(value.copyWith(enabled: enabled)),
                       ),
+                      const Text('显示类型'),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 6,
+                        children: <Widget>[
+                          FilterChip(
+                            key: const Key('danmaku-show-scrolling'),
+                            label: const Text('滚动'),
+                            selected: value.showScrolling,
+                            onSelected: (bool selected) =>
+                                update(value.copyWith(showScrolling: selected)),
+                          ),
+                          FilterChip(
+                            key: const Key('danmaku-show-top'),
+                            label: const Text('顶部'),
+                            selected: value.showTop,
+                            onSelected: (bool selected) =>
+                                update(value.copyWith(showTop: selected)),
+                          ),
+                          FilterChip(
+                            key: const Key('danmaku-show-bottom'),
+                            label: const Text('底部'),
+                            selected: value.showBottom,
+                            onSelected: (bool selected) =>
+                                update(value.copyWith(showBottom: selected)),
+                          ),
+                        ],
+                      ),
+                      SwitchListTile(
+                        key: const Key('danmaku-merge-repeated'),
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('合并同时出现的相同弹幕'),
+                        subtitle: const Text('减少刷屏和文字排版开销，并显示合并数量'),
+                        value: value.mergeRepeated,
+                        onChanged: (bool enabled) =>
+                            update(value.copyWith(mergeRepeated: enabled)),
+                      ),
                       sliderRow(
                         label: '透明度',
                         valueLabel: '${(value.opacity * 100).round()}%',
@@ -3459,6 +3826,17 @@ class _PlayerPageState extends State<PlayerPage>
                         divisions: 8,
                         onChanged: (double item) =>
                             update(value.copyWith(opacity: item)),
+                      ),
+                      sliderRow(
+                        label: '显示区域',
+                        valueLabel: '顶部 ${(value.displayArea * 100).round()}%',
+                        rangeLabel: '25%–100%',
+                        value: value.displayArea,
+                        min: DanmakuPreferences.minDisplayArea,
+                        max: DanmakuPreferences.maxDisplayArea,
+                        divisions: 3,
+                        onChanged: (double item) =>
+                            update(value.copyWith(displayArea: item)),
                       ),
                       sliderRow(
                         label: '字号',
@@ -3493,6 +3871,19 @@ class _PlayerPageState extends State<PlayerPage>
                         divisions: 17,
                         onChanged: (double item) =>
                             update(value.copyWith(scrollDurationSeconds: item)),
+                      ),
+                      sliderRow(
+                        label: '文字描边',
+                        valueLabel: value.strokeWidth == 0
+                            ? '关闭'
+                            : value.strokeWidth.toStringAsFixed(1),
+                        rangeLabel: '0–3',
+                        value: value.strokeWidth,
+                        min: DanmakuPreferences.minStrokeWidth,
+                        max: DanmakuPreferences.maxStrokeWidth,
+                        divisions: 6,
+                        onChanged: (double item) =>
+                            update(value.copyWith(strokeWidth: item)),
                       ),
                       TextField(
                         key: const Key('danmaku-blocked-keywords'),
@@ -3697,7 +4088,11 @@ class _PlayerPageState extends State<PlayerPage>
     switch (_videoFitMode) {
       case _VideoFitMode.contain:
         return Center(
-          child: AspectRatio(aspectRatio: aspectRatio, child: texture),
+          child: AspectRatio(
+            key: const Key('video-fit-contain'),
+            aspectRatio: aspectRatio,
+            child: texture,
+          ),
         );
       case _VideoFitMode.cover:
         return _buildScaledVideoOutput(
@@ -3722,6 +4117,7 @@ class _PlayerPageState extends State<PlayerPage>
   }) {
     return SizedBox.expand(
       child: FittedBox(
+        key: Key(fit == BoxFit.cover ? 'video-fit-cover' : 'video-fit-stretch'),
         fit: fit,
         clipBehavior: Clip.hardEdge,
         child: SizedBox(
@@ -4245,7 +4641,53 @@ class _PlayerPageState extends State<PlayerPage>
     );
   }
 
-  /// 暂停当前视频后打开 UP 主公开主页，返回时按进入前状态恢复播放。
+  /// 当下层播放器夺走唯一原生通道时，重新创建纹理并打开当前视频，恢复原页面的播放所有权。
+  Future<void> _restorePlaybackAfterNestedPlayer({
+    required bool shouldResume,
+  }) async {
+    final PlaybackService service = _playbackService;
+    if (service is! NativePlaybackService || service.ownsPlatformChannel) {
+      return;
+    }
+    try {
+      final int? textureId = await service.initialize();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _textureId = textureId;
+        _playbackSnapshot = _playbackSnapshot.copyWith(
+          phase: PlaybackPhase.loading,
+          isPlaying: false,
+          message: '正在恢复原视频…',
+        );
+      });
+      await service.openVideo(
+        _activeVideo,
+        part: _currentPart,
+        quality: _currentQuality,
+      );
+      if (_playbackSpeed != 1) {
+        await service.setPlaybackSpeed(_playbackSpeed);
+      }
+      if (!shouldResume) {
+        await service.pause();
+      }
+    } catch (error) {
+      if (mounted) {
+        _showPlaybackError('返回原视频时恢复播放失败：$error');
+      }
+    }
+  }
+
+  /// 返回播放页后重新隐藏横屏状态栏，并立即执行一次布局对应的系统栏同步。
+  void _resumePlayerSystemUiAfterNestedRoute() {
+    _appliedSystemUiLayout = null;
+    final Size size = MediaQuery.sizeOf(context);
+    _schedulePlayerSystemUiSync(landscapeLayout: size.width > size.height);
+  }
+
+  /// 暂停当前视频后打开 UP 主公开主页，返回时重建被下层播放器占用的原生会话。
   Future<void> _openOwnerProfile() async {
     if (_activeVideo.ownerMid <= 0) {
       _showPlayerNotice('暂时没有这个 UP 主的主页编号');
@@ -4258,6 +4700,10 @@ class _PlayerPageState extends State<PlayerPage>
     if (!mounted) {
       return;
     }
+    await _showStandardSystemUiForNestedRoute();
+    if (!mounted) {
+      return;
+    }
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         // 用户主页构建函数传入已有昵称头像，并复用公开内容服务。
@@ -4267,10 +4713,16 @@ class _PlayerPageState extends State<PlayerPage>
           initialAvatarUrl: _activeVideo.ownerAvatarUrl,
           publicContentService: _publicContentService,
           videoService: _bilibiliService,
+          learningListService: _learningListService,
           watchHistoryService: _watchHistoryService,
         ),
       ),
     );
+    if (!mounted) {
+      return;
+    }
+    _resumePlayerSystemUiAfterNestedRoute();
+    await _restorePlaybackAfterNestedPlayer(shouldResume: shouldResume);
     if (mounted && shouldResume && !_playing) {
       await _playbackService.play();
     }
@@ -4884,6 +5336,10 @@ class _PlayerPageState extends State<PlayerPage>
     if (!mounted) {
       return;
     }
+    await _showStandardSystemUiForNestedRoute();
+    if (!mounted) {
+      return;
+    }
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         // 用户主页构建函数把 @ 文本去掉后作为初始昵称，随后由公开接口校正。
@@ -4892,10 +5348,16 @@ class _PlayerPageState extends State<PlayerPage>
           initialName: segment.text.replaceFirst('@', '').trim(),
           publicContentService: _publicContentService,
           videoService: _bilibiliService,
+          learningListService: _learningListService,
           watchHistoryService: _watchHistoryService,
         ),
       ),
     );
+    if (!mounted) {
+      return;
+    }
+    _resumePlayerSystemUiAfterNestedRoute();
+    await _restorePlaybackAfterNestedPlayer(shouldResume: shouldResume);
     if (mounted && shouldResume && !_playing) {
       await _playbackService.play();
     }
@@ -5337,9 +5799,22 @@ class _PlayerPageState extends State<PlayerPage>
                         style: const TextStyle(fontWeight: FontWeight.w700),
                       ),
                       const SizedBox(height: 3),
-                      Text(
-                        formatVideoNotePosition(note.position),
-                        style: Theme.of(context).textTheme.bodySmall,
+                      Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: Text(
+                              formatVideoNotePosition(note.position),
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            'P${note.partPageNumber}',
+                            key: Key('portrait-video-note-part-${note.id}'),
+                            style: Theme.of(context).textTheme.labelMedium
+                                ?.copyWith(fontWeight: FontWeight.w800),
+                          ),
+                        ],
                       ),
                     ],
                   ),
@@ -5748,11 +6223,60 @@ class _PlayerPageState extends State<PlayerPage>
     );
   }
 
+  /// 创建横屏平板播放器工作台，左侧稳定播放、右侧显示详情、笔记或分P。
+  Widget _buildWorkspacePlayerBody({required Widget player}) {
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final double sidebarWidth = (constraints.maxWidth * 0.32)
+            .clamp(
+              AdaptiveLayout.playerSidebarMinWidth,
+              AdaptiveLayout.playerSidebarMaxWidth,
+            )
+            .toDouble();
+        final Widget sideContent;
+        if (_notesOpen) {
+          sideContent = _buildPortraitVideoNotesPanel();
+        } else if (_partSelectorExpanded) {
+          sideContent = _buildExpandedPartSelector();
+        } else {
+          sideContent = SingleChildScrollView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            child: _buildNonFullscreenDetails(),
+          );
+        }
+        return Row(
+          key: const Key('player-workspace-layout'),
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Expanded(
+              child: ColoredBox(
+                key: const Key('player-workspace-video'),
+                color: Colors.black,
+                // 左侧播放器填满工作区；真实视频比例由用户选择的画幅模式在 Texture 层处理。
+                child: player,
+              ),
+            ),
+            const VerticalDivider(width: 1),
+            SizedBox(
+              key: const Key('player-workspace-side-pane'),
+              width: sidebarWidth,
+              child: Material(
+                color: Theme.of(context).colorScheme.surface,
+                child: sideContent,
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   /// 创建只覆盖视频画面的手势层，确保控制栏按钮不必等待双击识别结果。
   Widget _buildPlayerSurface({
     required BuildContext context,
     required BoxConstraints constraints,
     required bool enableSurfaceGestures,
+    required bool enableVerticalAdjustment,
   }) {
     return GestureDetector(
       key: const Key('player-surface'),
@@ -5796,8 +6320,8 @@ class _PlayerPageState extends State<PlayerPage>
       onHorizontalDragCancel: enableSurfaceGestures
           ? _cancelHorizontalScrub
           : null,
-      // 全屏竖向手势开始函数判断左侧亮度、右侧音量和上下安全区；竖屏把手势交给页面滚动。
-      onVerticalDragStart: _fullscreen && enableSurfaceGestures
+      // 竖向手势开始函数在全屏和平板工作台判断左侧亮度、右侧音量及上下安全区。
+      onVerticalDragStart: enableVerticalAdjustment && enableSurfaceGestures
           ? (DragStartDetails details) => _startVerticalAdjustment(
               details,
               constraints.biggest,
@@ -5805,13 +6329,13 @@ class _PlayerPageState extends State<PlayerPage>
               MediaQuery.of(context).viewPadding.bottom,
             )
           : null,
-      // 全屏竖向手势更新函数实时调整窗口亮度或媒体音量。
-      onVerticalDragUpdate: _fullscreen && enableSurfaceGestures
+      // 竖向手势更新函数实时调整窗口亮度或媒体音量。
+      onVerticalDragUpdate: enableVerticalAdjustment && enableSurfaceGestures
           ? (DragUpdateDetails details) =>
                 _updateVerticalAdjustment(details, constraints.maxHeight)
           : null,
-      // 全屏竖向手势结束函数恢复控制栏自动隐藏计时。
-      onVerticalDragEnd: _fullscreen && enableSurfaceGestures
+      // 竖向手势结束函数恢复控制栏自动隐藏计时。
+      onVerticalDragEnd: enableVerticalAdjustment && enableSurfaceGestures
           ? _finishVerticalAdjustment
           : null,
       child: Stack(
@@ -5836,6 +6360,11 @@ class _PlayerPageState extends State<PlayerPage>
         !_controlsLocked;
     final Widget player = LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
+        final bool workspacePlayer =
+            !_fullscreen &&
+            AdaptiveLayout.usesWorkspace(MediaQuery.sizeOf(context));
+        final bool showPlayerStatus = _fullscreen || workspacePlayer;
+        _schedulePlayerStatusVisibility(showPlayerStatus);
         return Listener(
           // 指针被系统取消时优先撤销预览，避免取消事件被拖动识别器当作普通松手。
           onPointerCancel: _handlePlayerPointerCancel,
@@ -5848,6 +6377,7 @@ class _PlayerPageState extends State<PlayerPage>
                   context: context,
                   constraints: constraints,
                   enableSurfaceGestures: enableSurfaceGestures,
+                  enableVerticalAdjustment: showPlayerStatus,
                 ),
                 if (_temporarySpeedActive)
                   SafeArea(
@@ -5912,7 +6442,7 @@ class _PlayerPageState extends State<PlayerPage>
                 AnimatedPositioned(
                   duration: const Duration(milliseconds: 180),
                   curve: Curves.easeOut,
-                  top: _fullscreen ? 72 : 52,
+                  top: showPlayerStatus ? 72 : 52,
                   left: 24,
                   right: 24,
                   child: IgnorePointer(
@@ -6001,7 +6531,7 @@ class _PlayerPageState extends State<PlayerPage>
                               top: 0,
                               left: 0,
                               right: 0,
-                              height: _fullscreen ? 62 : 44,
+                              height: showPlayerStatus ? 62 : 44,
                               child: SafeArea(
                                 key: const Key('top-player-bar'),
                                 top: false,
@@ -6015,7 +6545,7 @@ class _PlayerPageState extends State<PlayerPage>
                                   crossAxisAlignment:
                                       CrossAxisAlignment.stretch,
                                   children: <Widget>[
-                                    if (_fullscreen)
+                                    if (showPlayerStatus)
                                       _FullscreenDeviceStatus(
                                         focusController:
                                             widget.focusTimerController ??
@@ -6024,8 +6554,9 @@ class _PlayerPageState extends State<PlayerPage>
                                         currentPartCid: _currentPart.cid,
                                         partRemainingDuration:
                                             _currentPartPlaybackRemaining(),
-                                        clock: _fullscreenClock,
+                                        clock: _playerClock,
                                         batteryPercent: _batteryPercent,
+                                        networkTypeLabel: _networkType.label,
                                       ),
                                     Expanded(
                                       child: Row(
@@ -6412,6 +6943,10 @@ class _PlayerPageState extends State<PlayerPage>
         ? _playbackSnapshot.videoAspectRatio
         : 16 / 9;
     final Size screenSize = MediaQuery.sizeOf(context);
+    final bool landscapeLayout = screenSize.width > screenSize.height;
+    _schedulePlayerSystemUiSync(landscapeLayout: landscapeLayout);
+    final bool workspaceLayout =
+        !fullscreenLayout && AdaptiveLayout.usesWorkspace(screenSize);
     final double playerHeight = fullscreenLayout
         ? screenSize.height
         : (screenSize.width / aspectRatio)
@@ -6420,6 +6955,8 @@ class _PlayerPageState extends State<PlayerPage>
     final Widget pageBody;
     if (fullscreenLayout) {
       pageBody = SizedBox.expand(child: player);
+    } else if (workspaceLayout) {
+      pageBody = _buildWorkspacePlayerBody(player: player);
     } else if (_notesOpen) {
       pageBody = Column(
         children: <Widget>[
@@ -6443,7 +6980,7 @@ class _PlayerPageState extends State<PlayerPage>
     final Scaffold pageScaffold = Scaffold(
       backgroundColor: fullscreenLayout ? Colors.black : null,
       body: SafeArea(
-        top: !fullscreenLayout,
+        top: !fullscreenLayout && !landscapeLayout,
         left: !fullscreenLayout,
         right: !fullscreenLayout,
         bottom: false,

@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
+import '../../core/layout/adaptive_page_frame.dart';
+import '../../core/layout/adaptive_two_column_list.dart';
 import '../../core/router/app_router.dart';
 import '../../models/public_profile.dart';
 import '../../models/video_preview.dart';
@@ -477,28 +479,22 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
     return RefreshIndicator(
       // 下拉刷新函数重新读取合集第一页。
       onRefresh: _loadFirstPage,
-      child: ListView.separated(
+      child: AdaptiveTwoColumnList(
+        key: const Key('collection-detail-video-list'),
         controller: _scrollController,
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-        itemCount: _videos.length + 2,
-        separatorBuilder: (BuildContext context, int index) =>
-            const SizedBox(height: 10),
+        header: _buildHeader(),
+        itemCount: _videos.length,
+        footer: _loadingMore
+            ? const Padding(
+                padding: EdgeInsets.all(16),
+                child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+              )
+            : const SizedBox(height: 8),
+        mainAxisSpacing: 10,
         itemBuilder: (BuildContext context, int index) {
-          if (index == 0) {
-            return _buildHeader();
-          }
-          if (index == _videos.length + 1) {
-            return _loadingMore
-                ? const Padding(
-                    padding: EdgeInsets.all(16),
-                    child: Center(
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  )
-                : const SizedBox(height: 8);
-          }
-          return _buildVideoTile(_videos[index - 1]);
+          return _buildVideoTile(_videos[index]);
         },
       ),
     );
@@ -523,7 +519,7 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
           ),
         ],
       ),
-      body: _buildBody(),
+      body: AdaptivePageFrame(maxWidth: 1180, child: _buildBody()),
     );
   }
 }

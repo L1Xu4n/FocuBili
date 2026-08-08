@@ -4,6 +4,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:photo_view/photo_view.dart';
 
+import '../../core/layout/adaptive_page_frame.dart';
 import '../../features/player/player_page.dart';
 import '../../models/video_note.dart';
 import '../../models/video_preview.dart';
@@ -371,7 +372,238 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
     );
   }
 
-  /// 构建视频来源、无边框标题正文、时间信息和末尾截图组成的详情页。
+  /// 构建可点击的视频来源卡，手机单列和横屏参考区共用同一份内容。
+  Widget _buildSourceCard(ThemeData theme, ColorScheme colors) {
+    return Material(
+      key: const Key('note-video-source-card'),
+      color: colors.surfaceContainerHighest.withValues(alpha: 0.7),
+      borderRadius: BorderRadius.circular(16),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        // 视频来源卡点击函数打开对应视频、分P和笔记时间点。
+        onTap: _openingVideo ? null : _openSourceVideo,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            children: <Widget>[
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: SizedBox(
+                  width: 132,
+                  height: 74,
+                  child: _buildVideoCover(),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      _note.videoTitle,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      _note.ownerName.isEmpty
+                          ? _note.bvid
+                          : '${_note.ownerName} · ${_note.bvid}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              if (_openingVideo)
+                const SizedBox.square(
+                  dimension: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              else
+                const Icon(Icons.play_circle_outline_rounded),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 构建时间点、创建日期和分P信息标签，宽窄布局均允许自动换行。
+  Widget _buildMetadataChips() {
+    return Wrap(
+      spacing: 12,
+      runSpacing: 8,
+      children: <Widget>[
+        _NoteMetadataChip(
+          icon: Icons.schedule_rounded,
+          label: formatVideoNotePosition(_note.position),
+        ),
+        _NoteMetadataChip(
+          icon: Icons.calendar_today_outlined,
+          label: formatVideoNoteDateTime(_note.createdAt),
+        ),
+        if (_note.partTitle.isNotEmpty)
+          _NoteMetadataChip(
+            icon: Icons.video_library_outlined,
+            label: 'P${_note.partPageNumber} ${_note.partTitle}',
+          ),
+      ],
+    );
+  }
+
+  /// 构建标题和正文编辑器；截图是否跟随正文由当前单列或双区布局决定。
+  Widget _buildEditor(ThemeData theme, {required bool includeFrame}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        TextField(
+          key: const Key('note-detail-title-field'),
+          controller: _titleController,
+          enabled: !_saving,
+          maxLength: 80,
+          minLines: 1,
+          maxLines: 3,
+          style: theme.textTheme.headlineSmall?.copyWith(
+            fontWeight: FontWeight.w900,
+            height: 1.25,
+          ),
+          decoration: const InputDecoration(
+            hintText: '笔记标题',
+            filled: false,
+            border: InputBorder.none,
+            enabledBorder: InputBorder.none,
+            focusedBorder: InputBorder.none,
+            counterText: '',
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        const Divider(height: 28),
+        TextField(
+          key: const Key('note-detail-body-field'),
+          controller: _bodyController,
+          enabled: !_saving,
+          minLines: 8,
+          maxLines: null,
+          maxLength: 6000,
+          style: theme.textTheme.bodyLarge?.copyWith(height: 1.55),
+          decoration: const InputDecoration(
+            hintText: '写下此刻的想法…',
+            filled: false,
+            border: InputBorder.none,
+            enabledBorder: InputBorder.none,
+            focusedBorder: InputBorder.none,
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        if (includeFrame) _buildFrameSection(),
+      ],
+    );
+  }
+
+  /// 构建手机和窄窗口使用的单列详情，保持来源、元数据、正文、截图的自然阅读顺序。
+  Widget _buildNarrowBody(ThemeData theme, ColorScheme colors) {
+    return ListView(
+      key: const Key('video-note-detail-scroll-view'),
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 36),
+      children: <Widget>[
+        _buildSourceCard(theme, colors),
+        const SizedBox(height: 22),
+        _buildMetadataChips(),
+        const SizedBox(height: 24),
+        _buildEditor(theme, includeFrame: true),
+      ],
+    );
+  }
+
+  /// 构建横屏左侧参考区，让视频来源、时间和截图在编辑正文时始终可见且独立滚动。
+  Widget _buildWideReferencePane(ThemeData theme, ColorScheme colors) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: colors.surfaceContainerLow.withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: colors.outlineVariant),
+      ),
+      child: SingleChildScrollView(
+        key: const Key('note-detail-wide-reference-pane'),
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Text(
+              '视频参考',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 12),
+            _buildSourceCard(theme, colors),
+            const SizedBox(height: 16),
+            _buildMetadataChips(),
+            _buildFrameSection(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 构建横屏右侧写作区，提供更宽的正文行宽并与参考资料分开滚动。
+  Widget _buildWideEditorPane(ThemeData theme, ColorScheme colors) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: colors.outlineVariant),
+      ),
+      child: ListView(
+        key: const Key('video-note-detail-scroll-view'),
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        padding: const EdgeInsets.fromLTRB(24, 22, 24, 36),
+        children: <Widget>[
+          Text(
+            '笔记内容',
+            style: theme.textTheme.labelLarge?.copyWith(
+              color: colors.primary,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 14),
+          _buildEditor(theme, includeFrame: false),
+        ],
+      ),
+    );
+  }
+
+  /// 按实际窗口宽度切换单列和双区详情，未来 Windows 调整窗口大小时会使用相同回流规则。
+  Widget _buildResponsiveBody(ThemeData theme, ColorScheme colors) {
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        if (constraints.maxWidth < 900) {
+          return _buildNarrowBody(theme, colors);
+        }
+        return Padding(
+          key: const Key('note-detail-wide-workspace'),
+          padding: const EdgeInsets.fromLTRB(18, 12, 18, 24),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Expanded(flex: 4, child: _buildWideReferencePane(theme, colors)),
+              const SizedBox(width: 16),
+              Expanded(flex: 6, child: _buildWideEditorPane(theme, colors)),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// 构建带未保存拦截、顶部操作和响应式编辑工作台的笔记详情页。
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
@@ -414,131 +646,9 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
             ),
           ],
         ),
-        body: ListView(
-          key: const Key('video-note-detail-scroll-view'),
-          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 36),
-          children: <Widget>[
-            Material(
-              key: const Key('note-video-source-card'),
-              color: colors.surfaceContainerHighest.withValues(alpha: 0.7),
-              borderRadius: BorderRadius.circular(16),
-              clipBehavior: Clip.antiAlias,
-              child: InkWell(
-                // 视频来源卡点击函数打开对应视频、分P和笔记时间点。
-                onTap: _openingVideo ? null : _openSourceVideo,
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Row(
-                    children: <Widget>[
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(10),
-                        child: SizedBox(
-                          width: 132,
-                          height: 74,
-                          child: _buildVideoCover(),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: <Widget>[
-                            Text(
-                              _note.videoTitle,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: theme.textTheme.titleSmall?.copyWith(
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            const SizedBox(height: 5),
-                            Text(
-                              _note.ownerName.isEmpty
-                                  ? _note.bvid
-                                  : '${_note.ownerName} · ${_note.bvid}',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: theme.textTheme.bodySmall,
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      if (_openingVideo)
-                        const SizedBox.square(
-                          dimension: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      else
-                        const Icon(Icons.play_circle_outline_rounded),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 22),
-            Wrap(
-              spacing: 12,
-              runSpacing: 8,
-              children: <Widget>[
-                _NoteMetadataChip(
-                  icon: Icons.schedule_rounded,
-                  label: formatVideoNotePosition(_note.position),
-                ),
-                _NoteMetadataChip(
-                  icon: Icons.calendar_today_outlined,
-                  label: formatVideoNoteDateTime(_note.createdAt),
-                ),
-                if (_note.partTitle.isNotEmpty)
-                  _NoteMetadataChip(
-                    icon: Icons.video_library_outlined,
-                    label: 'P${_note.partPageNumber} ${_note.partTitle}',
-                  ),
-              ],
-            ),
-            const SizedBox(height: 24),
-            TextField(
-              key: const Key('note-detail-title-field'),
-              controller: _titleController,
-              enabled: !_saving,
-              maxLength: 80,
-              minLines: 1,
-              maxLines: 3,
-              style: theme.textTheme.headlineSmall?.copyWith(
-                fontWeight: FontWeight.w900,
-                height: 1.25,
-              ),
-              decoration: const InputDecoration(
-                hintText: '笔记标题',
-                filled: false,
-                border: InputBorder.none,
-                enabledBorder: InputBorder.none,
-                focusedBorder: InputBorder.none,
-                counterText: '',
-                contentPadding: EdgeInsets.zero,
-              ),
-            ),
-            const Divider(height: 28),
-            TextField(
-              key: const Key('note-detail-body-field'),
-              controller: _bodyController,
-              enabled: !_saving,
-              minLines: 5,
-              maxLines: null,
-              maxLength: 6000,
-              style: theme.textTheme.bodyLarge?.copyWith(height: 1.55),
-              decoration: const InputDecoration(
-                hintText: '写下此刻的想法…',
-                filled: false,
-                border: InputBorder.none,
-                enabledBorder: InputBorder.none,
-                focusedBorder: InputBorder.none,
-                contentPadding: EdgeInsets.zero,
-              ),
-            ),
-            _buildFrameSection(),
-          ],
+        body: AdaptivePageFrame(
+          maxWidth: 1400,
+          child: _buildResponsiveBody(theme, colors),
         ),
       ),
     );
