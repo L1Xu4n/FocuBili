@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:focubili/core/utils/bilibili_id_converter.dart';
@@ -21,6 +23,40 @@ void main() {
     expect(target?.partCid, 279786);
     expect(target?.partPageNumber, 1);
     expect(target?.initialPosition, const Duration(milliseconds: 12500));
+  });
+
+  /// QQ 的超大 AV 号必须转换成真实 BV，Base64 原文中的随机 BV 形状不能抢先覆盖。
+  test('解析 QQ 分享 Scheme 的超大 AV 号并忽略不透明参数误匹配', () {
+    final BilibiliVideoDeepLinkTarget? target = BilibiliDeepLinkParser.parse(
+      'bilibili://video/117054938090233?'
+      'from_spmid=main.h5.share.6g12lqp.8g9x97j9dxseqgeymskqyaqt&'
+      'h5awaken=BVabcdefghijOpaqueBase64Text&page=0&trackid=',
+    );
+
+    expect(target?.bvid, 'BV1EWu86rEFg');
+    expect(target?.partPageNumber, 1);
+  });
+
+  /// 外层编号缺失时，从 QQ 解码后的 open_app_url 恢复 BV，损坏 Base64 则安全拒绝。
+  test('从 QQ h5awaken 恢复标准 BV 链接', () {
+    final String awakenPayload = base64.encode(
+      utf8.encode(
+        'open_app_from_type=h5&'
+        'open_app_url=https%3A%2F%2Fm.bilibili.com%2Fvideo%2F'
+        'BV1EWu86rEFg%3Fp%3D1&item_id=%7B%22avid%22%3A117054938090233%7D',
+      ),
+    );
+    final BilibiliVideoDeepLinkTarget? target = BilibiliDeepLinkParser.parse(
+      'bilibili://video/not-numeric?h5awaken=$awakenPayload',
+    );
+
+    expect(target?.bvid, 'BV1EWu86rEFg');
+    expect(
+      BilibiliDeepLinkParser.parse(
+        'bilibili://video/not-numeric?h5awaken=not-valid-base64!',
+      ),
+      isNull,
+    );
   });
 
   /// 标准 B站视频网页会提取 BV、网页分P和秒数时间点。
