@@ -228,6 +228,29 @@ class VideoNoteComposer extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
+            if (partPageNumber != null && partPageNumber! > 0) ...<Widget>[
+              DecoratedBox(
+                key: const Key('regular-note-part-label'),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.primaryContainer,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
+                  child: Text(
+                    'P$partPageNumber',
+                    style: textTheme.labelSmall?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      color: Theme.of(context).colorScheme.onPrimaryContainer,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+            ],
             DecoratedBox(
               decoration: BoxDecoration(
                 color: Theme.of(context).colorScheme.surfaceContainerHighest,
@@ -311,6 +334,95 @@ class VideoNoteComposer extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+
+  /// 创建“插入画面”和可选跳转按钮，窄屏允许自然换行而不挤压右侧保存操作。
+  Widget _buildNoteOptionActions() {
+    return Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 8,
+      runSpacing: 8,
+      children: <Widget>[
+        FilterChip(
+          key: const Key('include-current-frame'),
+          selected: includeFrame,
+          avatar: const Icon(Icons.add_photo_alternate_outlined, size: 18),
+          label: const Text('插入时间点画面'),
+          visualDensity: VisualDensity.compact,
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          // 画面选择函数只记录用户选择，真正截图会在保存时执行。
+          onSelected: saving ? null : onIncludeFrameChanged,
+        ),
+        if (onJumpToPosition != null)
+          OutlinedButton.icon(
+            key: const Key('jump-to-video-note-position'),
+            // 跳转按钮函数由播放器在用户明确点击后才移动视频时间点。
+            onPressed: saving ? null : onJumpToPosition,
+            icon: const Icon(Icons.my_location_rounded, size: 18),
+            label: const Text('跳转到时间点'),
+          ),
+      ],
+    );
+  }
+
+  /// 创建固定靠右的删除与保存操作组，避免左侧选项宽度变化时按钮漂到中间。
+  Widget _buildNoteCommitActions() {
+    return Row(
+      key: const Key('video-note-commit-actions'),
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        if (onDelete != null)
+          IconButton(
+            key: const Key('delete-video-note'),
+            // 删除按钮函数移除当前笔记及其独占的本机画面文件。
+            onPressed: saving ? null : onDelete,
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.delete_outline_rounded),
+            tooltip: '删除笔记',
+          ),
+        if (onDelete != null) const SizedBox(width: 6),
+        FilledButton.icon(
+          key: const Key('save-video-note'),
+          // 保存按钮函数由播放器写入自动时间、视频位置和可选画面。
+          onPressed: saving ? null : onSave,
+          icon: saving
+              ? const SizedBox.square(
+                  dimension: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.save_outlined),
+          label: Text(saving ? '保存中' : '保存'),
+        ),
+      ],
+    );
+  }
+
+  /// 根据编辑器宽度排列底部操作：宽屏同一行，窄屏把提交按钮单独放在右下角。
+  Widget _buildBottomActions() {
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final Widget optionActions = _buildNoteOptionActions();
+        final Widget commitActions = _buildNoteCommitActions();
+        if (constraints.maxWidth >= 680) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: <Widget>[
+              Expanded(child: optionActions),
+              const SizedBox(width: 12),
+              commitActions,
+            ],
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            optionActions,
+            const SizedBox(height: 8),
+            Align(alignment: Alignment.centerRight, child: commitActions),
+          ],
+        );
+      },
     );
   }
 
@@ -398,60 +510,7 @@ class VideoNoteComposer extends StatelessWidget {
             contentPadding: fieldPadding,
           ),
         ),
-        Wrap(
-          alignment: WrapAlignment.spaceBetween,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          spacing: 8,
-          runSpacing: 8,
-          children: <Widget>[
-            FilterChip(
-              key: const Key('include-current-frame'),
-              selected: includeFrame,
-              avatar: const Icon(Icons.add_photo_alternate_outlined, size: 18),
-              label: const Text('插入时间点画面'),
-              visualDensity: VisualDensity.compact,
-              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              // 画面选择函数只记录用户选择，真正截图会在保存时执行。
-              onSelected: saving ? null : onIncludeFrameChanged,
-            ),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                if (onJumpToPosition != null)
-                  OutlinedButton.icon(
-                    key: const Key('jump-to-video-note-position'),
-                    // 跳转按钮函数由播放器在用户明确点击后才移动视频时间点。
-                    onPressed: saving ? null : onJumpToPosition,
-                    icon: const Icon(Icons.my_location_rounded, size: 18),
-                    label: const Text('跳转到时间点'),
-                  ),
-                if (onJumpToPosition != null) const SizedBox(width: 6),
-                if (onDelete != null)
-                  IconButton(
-                    key: const Key('delete-video-note'),
-                    // 删除按钮函数移除当前笔记及其独占的本机画面文件。
-                    onPressed: saving ? null : onDelete,
-                    visualDensity: VisualDensity.compact,
-                    icon: const Icon(Icons.delete_outline_rounded),
-                    tooltip: '删除笔记',
-                  ),
-                const SizedBox(width: 6),
-                FilledButton.icon(
-                  key: const Key('save-video-note'),
-                  // 保存按钮函数由播放器写入自动时间、视频位置和可选画面。
-                  onPressed: saving ? null : onSave,
-                  icon: saving
-                      ? const SizedBox.square(
-                          dimension: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.save_outlined),
-                  label: Text(saving ? '保存中' : '保存'),
-                ),
-              ],
-            ),
-          ],
-        ),
+        _buildBottomActions(),
         _buildFramePreview(context),
       ],
     );

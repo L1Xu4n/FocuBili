@@ -62,6 +62,28 @@ void main() {
     expect(copyText, contains('不包含登录凭据、Cookie、搜索内容、笔记正文、专注目标或完整请求地址'));
   });
 
+  test('未预期错误只记录经过限制的异常类型', () async {
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final ProblemDiagnosticsService service = _createDiagnosticsService(
+      preferences,
+    );
+
+    await service.recordUnexpectedError(
+      operation: 'flutter_framework',
+      errorType: 'FlutterError Cookie=secret 中文正文',
+    );
+
+    final ProblemDiagnosticEntry entry =
+        (await service.loadRecentErrors()).single;
+    expect(entry.operation, 'flutter_framework');
+    expect(entry.additionalInfo, <String, String>{
+      'error_type': 'FlutterErrorCookiesecret',
+    });
+    final String copyText = await service.buildCopyText();
+    expect(copyText, contains('error_type: FlutterErrorCookiesecret'));
+    expect(copyText, isNot(contains('中文正文')));
+  });
+
   test('闹钟安排恢复与触发事件会进入诊断文本且可单独清空', () async {
     final SharedPreferences preferences = await SharedPreferences.getInstance();
     bool clearedReminderDiagnostics = false;

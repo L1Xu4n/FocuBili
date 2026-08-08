@@ -187,8 +187,10 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  /// 验证可播放收藏视频会补查公开详情并跳转，失效视频不会触发详情查询。
-  testWidgets('收藏视频加载更多并仅打开可播放项', (WidgetTester tester) async {
+  /// 验证平板收藏内容使用双列，并保持加载、失效判断和播放器跳转能力。
+  testWidgets('收藏视频平板双列且仅打开可播放项', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     final BilibiliAccountDataService service = _accountService((
       Uri endpoint,
     ) async {
@@ -238,6 +240,15 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+
+    final Rect firstVideo = tester.getRect(
+      find.byKey(const Key('favorite-video-BV1GJ411x7h7')),
+    );
+    final Rect secondVideo = tester.getRect(
+      find.byKey(const Key('favorite-video-BV1Q541167Qg')),
+    );
+    expect(firstVideo.top, secondVideo.top);
+    expect(secondVideo.left, greaterThan(firstVideo.right));
 
     await tester.tap(find.byKey(const Key('favorite-videos-load-more')));
     await tester.pumpAndSettle();

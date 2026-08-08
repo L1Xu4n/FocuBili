@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
+import '../../core/layout/adaptive_page_frame.dart';
+import '../../core/layout/adaptive_two_column_list.dart';
 import '../../models/account_collection.dart';
 import '../../services/bilibili_account_data_service.dart';
 import '../../services/bilibili_service.dart';
@@ -317,13 +319,12 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
     return RefreshIndicator(
       // 下拉刷新函数只重新读取收藏夹列表，不新增、删除或修改收藏夹。
       onRefresh: _loadFolders,
-      child: ListView.separated(
+      child: AdaptiveTwoColumnList(
         key: const Key('favorite-folders-list'),
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         itemCount: folders.length,
-        separatorBuilder: (BuildContext context, int index) =>
-            const SizedBox(height: 8),
+        mainAxisSpacing: 8,
         itemBuilder: (BuildContext context, int index) {
           final FavoriteFolder folder = folders[index];
           return Card(
@@ -410,11 +411,14 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
           ),
         ],
       ),
-      body: Column(
-        children: <Widget>[
-          _buildSearchField(),
-          Expanded(child: _buildBody()),
-        ],
+      body: AdaptivePageFrame(
+        maxWidth: 1180,
+        child: Column(
+          children: <Widget>[
+            _buildSearchField(),
+            Expanded(child: _buildBody()),
+          ],
+        ),
       ),
     );
   }

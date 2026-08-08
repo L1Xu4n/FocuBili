@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../core/layout/adaptive_page_frame.dart';
 import '../../services/media_cache_service.dart';
 
 /// 展示并管理 Media3 边播边缓存，而非完整视频离线下载。
@@ -244,44 +245,47 @@ class _CacheManagementPageState extends State<CacheManagementPage> {
           ),
         ],
       ),
-      body: status == null && _loading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              // 下拉刷新函数只读取状态，适合缓存被系统自动清理后的手动同步。
-              onRefresh: _loadStatus,
-              child: ListView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.all(16),
-                children: <Widget>[
-                  if (status != null) ...<Widget>[
-                    _buildUsageCard(status),
-                    const SizedBox(height: 12),
-                    _buildBusyHint(status),
-                    if (status.isPlaybackActive) const SizedBox(height: 12),
-                    _buildCapacityPicker(status),
-                    const SizedBox(height: 12),
-                    Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton.icon(
-                            // 清空按钮函数先询问用户，再执行不可恢复的缓存清理。
-                            onPressed: _mutating || status.isPlaybackActive
-                                ? null
-                                : () => unawaited(_confirmClearCache()),
-                            icon: const Icon(Icons.delete_outline_rounded),
-                            label: const Text('清空已缓存视频'),
+      body: AdaptivePageFrame(
+        maxWidth: 900,
+        child: status == null && _loading
+            ? const Center(child: CircularProgressIndicator())
+            : RefreshIndicator(
+                // 下拉刷新函数只读取状态，适合缓存被系统自动清理后的手动同步。
+                onRefresh: _loadStatus,
+                child: ListView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.all(16),
+                  children: <Widget>[
+                    if (status != null) ...<Widget>[
+                      _buildUsageCard(status),
+                      const SizedBox(height: 12),
+                      _buildBusyHint(status),
+                      if (status.isPlaybackActive) const SizedBox(height: 12),
+                      _buildCapacityPicker(status),
+                      const SizedBox(height: 12),
+                      Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: SizedBox(
+                            width: double.infinity,
+                            child: OutlinedButton.icon(
+                              // 清空按钮函数先询问用户，再执行不可恢复的缓存清理。
+                              onPressed: _mutating || status.isPlaybackActive
+                                  ? null
+                                  : () => unawaited(_confirmClearCache()),
+                              icon: const Icon(Icons.delete_outline_rounded),
+                              label: const Text('清空已缓存视频'),
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
+                      const SizedBox(height: 12),
+                    ],
+                    _buildExplanationCard(),
                   ],
-                  _buildExplanationCard(),
-                ],
+                ),
               ),
-            ),
+      ),
     );
   }
 }

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import '../../core/layout/adaptive_page_frame.dart';
 import '../../services/bilibili_auth_service.dart';
 import '../../services/bilibili_request_policy.dart';
 
@@ -187,55 +188,58 @@ class _LoginPageState extends State<LoginPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('登录 B 站账号')),
-      body: ListView(
-        padding: const EdgeInsets.all(20),
-        children: <Widget>[
-          SegmentedButton<_LoginMode>(
-            segments: const <ButtonSegment<_LoginMode>>[
-              ButtonSegment<_LoginMode>(
-                value: _LoginMode.phone,
-                icon: Icon(Icons.phone_android_rounded),
-                label: Text('手机号'),
-              ),
-              ButtonSegment<_LoginMode>(
-                value: _LoginMode.password,
-                icon: Icon(Icons.password_rounded),
-                label: Text('密码'),
-              ),
-              ButtonSegment<_LoginMode>(
-                value: _LoginMode.cookie,
-                icon: Icon(Icons.cookie_outlined),
-                label: Text('Cookie'),
+      body: AdaptivePageFrame(
+        maxWidth: 760,
+        child: ListView(
+          padding: const EdgeInsets.all(20),
+          children: <Widget>[
+            SegmentedButton<_LoginMode>(
+              segments: const <ButtonSegment<_LoginMode>>[
+                ButtonSegment<_LoginMode>(
+                  value: _LoginMode.phone,
+                  icon: Icon(Icons.phone_android_rounded),
+                  label: Text('手机号'),
+                ),
+                ButtonSegment<_LoginMode>(
+                  value: _LoginMode.password,
+                  icon: Icon(Icons.password_rounded),
+                  label: Text('密码'),
+                ),
+                ButtonSegment<_LoginMode>(
+                  value: _LoginMode.cookie,
+                  icon: Icon(Icons.cookie_outlined),
+                  label: Text('Cookie'),
+                ),
+              ],
+              selected: <_LoginMode>{_mode},
+              // 登录方式选择函数切换当前表单但不自动提交任何数据。
+              onSelectionChanged: _selectMode,
+            ),
+            const SizedBox(height: 24),
+            _buildSelectedMode(),
+            if (_errorMessage != null) ...<Widget>[
+              const SizedBox(height: 14),
+              Text(
+                _errorMessage!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
               ),
             ],
-            selected: <_LoginMode>{_mode},
-            // 登录方式选择函数切换当前表单但不自动提交任何数据。
-            onSelectionChanged: _selectMode,
-          ),
-          const SizedBox(height: 24),
-          _buildSelectedMode(),
-          if (_errorMessage != null) ...<Widget>[
-            const SizedBox(height: 14),
-            Text(
-              _errorMessage!,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            const SizedBox(height: 24),
+            const Divider(),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              // 网页登录入口函数允许用户直接使用 B 站完整官方登录流程。
+              onPressed: _openOfficialLogin,
+              icon: const Icon(Icons.language_rounded),
+              label: const Text('打开 B 站网页登录'),
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              '说明：当前原生手机号/密码接口尚未直接接入；这样可以避免 App 接触密码，并确保验证码由官方页面完成。',
+              style: TextStyle(fontSize: 12),
             ),
           ],
-          const SizedBox(height: 24),
-          const Divider(),
-          const SizedBox(height: 12),
-          OutlinedButton.icon(
-            // 网页登录入口函数允许用户直接使用 B 站完整官方登录流程。
-            onPressed: _openOfficialLogin,
-            icon: const Icon(Icons.language_rounded),
-            label: const Text('打开 B 站网页登录'),
-          ),
-          const SizedBox(height: 10),
-          const Text(
-            '说明：当前原生手机号/密码接口尚未直接接入；这样可以避免 App 接触密码，并确保验证码由官方页面完成。',
-            style: TextStyle(fontSize: 12),
-          ),
-        ],
+        ),
       ),
     );
   }

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/layout/adaptive_page_frame.dart';
 import '../../services/problem_diagnostics_service.dart';
 
 /// 展示可脱敏复制的基础环境、最近错误和清空入口的问题诊断 MVP 页面。
@@ -411,25 +412,30 @@ class _ProblemDiagnosticsPageState extends State<ProblemDiagnosticsPage> {
           ),
         ],
       ),
-      body: snapshot == null && _loading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              // 下拉刷新函数重新读取本机诊断快照，适合用户遇到新问题后马上查看。
-              onRefresh: _loadSnapshot,
-              child: ListView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
-                children: <Widget>[
-                  if (snapshot != null) ...<Widget>[
-                    _buildEnvironmentCard(snapshot),
-                    const SizedBox(height: 8),
-                    _buildReminderDiagnosticsCard(snapshot.reminderDiagnostics),
-                    _buildRecentErrors(snapshot),
+      body: AdaptivePageFrame(
+        maxWidth: 900,
+        child: snapshot == null && _loading
+            ? const Center(child: CircularProgressIndicator())
+            : RefreshIndicator(
+                // 下拉刷新函数重新读取本机诊断快照，适合用户遇到新问题后马上查看。
+                onRefresh: _loadSnapshot,
+                child: ListView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+                  children: <Widget>[
+                    if (snapshot != null) ...<Widget>[
+                      _buildEnvironmentCard(snapshot),
+                      const SizedBox(height: 8),
+                      _buildReminderDiagnosticsCard(
+                        snapshot.reminderDiagnostics,
+                      ),
+                      _buildRecentErrors(snapshot),
+                    ],
+                    _buildActions(),
                   ],
-                  _buildActions(),
-                ],
+                ),
               ),
-            ),
+      ),
     );
   }
 }

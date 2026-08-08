@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
+import '../../core/layout/adaptive_page_frame.dart';
+import '../../core/layout/adaptive_two_column_list.dart';
 import '../../core/router/app_router.dart';
 import '../../models/account_collection.dart';
 import '../../models/video_preview.dart';
@@ -379,26 +381,24 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
   /// 创建自适应收藏视频卡片列表，避免宽封面和尾部图标在窄屏挤压标题。
   Widget _buildVideoList() {
     final List<FavoriteVideo> visibleVideos = _filteredVideos();
+    final Widget footer =
+        visibleVideos.isEmpty && _searchQuery.trim().isNotEmpty
+        ? const Padding(
+            padding: EdgeInsets.symmetric(vertical: 48),
+            child: Center(child: Text('没有匹配的收藏视频')),
+          )
+        : _buildLoadMoreFooter();
     return RefreshIndicator(
       // 下拉刷新函数只重新读取第 1 页，不会写入收藏夹或账号数据。
       onRefresh: _loadFirstPage,
-      child: ListView.separated(
+      child: AdaptiveTwoColumnList(
         key: const Key('favorite-videos-list'),
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-        itemCount: visibleVideos.length + 1,
-        separatorBuilder: (BuildContext context, int index) =>
-            const SizedBox(height: 8),
+        itemCount: visibleVideos.length,
+        footer: footer,
+        mainAxisSpacing: 8,
         itemBuilder: (BuildContext context, int index) {
-          if (index == visibleVideos.length) {
-            if (visibleVideos.isEmpty && _searchQuery.trim().isNotEmpty) {
-              return const Padding(
-                padding: EdgeInsets.symmetric(vertical: 48),
-                child: Center(child: Text('没有匹配的收藏视频')),
-              );
-            }
-            return _buildLoadMoreFooter();
-          }
           final FavoriteVideo video = visibleVideos[index];
           final bool isOpening = _openingBvid == video.bvid;
           return Card(
@@ -494,11 +494,14 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
           ),
         ],
       ),
-      body: Column(
-        children: <Widget>[
-          _buildSearchField(),
-          Expanded(child: _buildBody()),
-        ],
+      body: AdaptivePageFrame(
+        maxWidth: 1180,
+        child: Column(
+          children: <Widget>[
+            _buildSearchField(),
+            Expanded(child: _buildBody()),
+          ],
+        ),
       ),
     );
   }

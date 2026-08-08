@@ -11,6 +11,7 @@ import 'package:focubili/models/watch_history_entry.dart';
 import 'package:focubili/services/bilibili_account_data_service.dart';
 import 'package:focubili/services/bilibili_public_content_service.dart';
 import 'package:focubili/services/bilibili_service.dart';
+import 'package:focubili/services/learning_list_service.dart';
 import 'package:focubili/services/watch_history_service.dart';
 
 /// 为主页和合集组件测试提供固定公开内容，不访问网络。
@@ -70,7 +71,7 @@ class _FakePublicContentService implements BilibiliPublicContentService {
     );
   }
 
-  /// 返回合集中的一支固定独立视频。
+  /// 返回合集中的两支固定独立视频，供平板双列详情测试使用。
   @override
   Future<CreatorContentPage<CreatorVideo>> loadCollectionVideos(
     int ownerMid,
@@ -85,10 +86,16 @@ class _FakePublicContentService implements BilibiliPublicContentService {
           coverUrl: '',
           duration: Duration(minutes: 2),
         ),
+        CreatorVideo(
+          bvid: 'BV1Q541167Qg',
+          title: '合集中的第二支视频',
+          coverUrl: '',
+          duration: Duration(minutes: 3),
+        ),
       ],
       page: page,
       hasMore: false,
-      totalCount: 1,
+      totalCount: 2,
     );
   }
 
@@ -330,6 +337,37 @@ void main() {
     expect(find.text('上次看过 1:23'), findsOneWidget);
   });
 
+  /// 验证投稿卡片直接显示学习清单按钮，并把完整视频分P资料保存到本机清单。
+  testWidgets('UP主页投稿可直接加入学习清单', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final LearningListService learningListService = LearningListService(
+      preferencesLoader: () async => preferences,
+      watchHistoryService: WatchHistoryService(
+        preferencesLoader: () async => preferences,
+      ),
+    );
+    await tester.pumpWidget(
+      _host(
+        UserProfilePage(
+          mid: 7,
+          publicContentService: _FakePublicContentService(),
+          videoService: _FakeVideoService(),
+          learningListService: learningListService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('加入学习清单'), findsWidgets);
+    expect(find.byIcon(Icons.more_vert_rounded), findsNothing);
+    await tester.tap(find.byKey(const Key('add-creator-video-BV1GJ411x7h7')));
+    await tester.pumpAndSettle();
+
+    expect(await learningListService.loadEntries(), hasLength(1));
+    expect(find.textContaining('已加入学习清单'), findsOneWidget);
+  });
+
   /// 验证投稿接口和标题都没有集数时，页面会从完整详情补出真实分P数。
   testWidgets('UP主页为缺失集数的投稿补查真实分P', (WidgetTester tester) async {
     final _PartCountFallbackVideoService videoService =
@@ -393,8 +431,54 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  /// 验证“我的订阅”展示 UGC 合集并可进入独立合集详情。
-  testWidgets('我的订阅只展示合集并能打开详情', (WidgetTester tester) async {
+  /// 验证宽窗口资料头横向展开、投稿使用双列，合集网格增加列数。
+  testWidgets('UP主页宽窗口使用横向资料头和高密度内容区', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      _host(
+        UserProfilePage(
+          mid: 7,
+          publicContentService: _FakePublicContentService(),
+          videoService: _FakeVideoService(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final Finder firstVideo = find.byKey(
+      const Key('creator-video-BV1GJ411x7h7'),
+    );
+    final Finder secondVideo = find.byKey(
+      const Key('creator-video-BV1GJ411x72'),
+    );
+    expect(
+      find.byKey(const Key('creator-profile-wide-header')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('creator-profile-wide-stats')), findsOneWidget);
+    expect(tester.getRect(firstVideo).top, tester.getRect(secondVideo).top);
+    expect(
+      tester.getRect(secondVideo).left,
+      greaterThan(tester.getRect(firstVideo).right),
+    );
+
+    await tester.tap(find.text('合集'));
+    await tester.pumpAndSettle();
+    final GridView collectionGrid = tester.widget<GridView>(
+      find.byKey(const Key('creator-collection-grid')),
+    );
+    final SliverGridDelegateWithFixedCrossAxisCount delegate =
+        collectionGrid.gridDelegate
+            as SliverGridDelegateWithFixedCrossAxisCount;
+    expect(delegate.crossAxisCount, 4);
+    expect(tester.takeException(), isNull);
+  });
+
+  /// 验证“我的订阅”可进入详情，且详情内容在平板上按两列排列。
+  testWidgets('我的订阅详情在平板使用双列', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
       _host(
         SubscribedCollectionsPage(
@@ -413,5 +497,14 @@ void main() {
     await tester.tap(find.text('我的测试订阅'));
     await tester.pumpAndSettle();
     expect(find.text('合集中的独立视频'), findsOneWidget);
+    expect(find.text('合集中的第二支视频'), findsOneWidget);
+    final Rect firstVideo = tester.getRect(
+      find.byKey(const Key('collection-video-BV1GJ411x7h7')),
+    );
+    final Rect secondVideo = tester.getRect(
+      find.byKey(const Key('collection-video-BV1Q541167Qg')),
+    );
+    expect(firstVideo.top, secondVideo.top);
+    expect(secondVideo.left, greaterThan(firstVideo.right));
   });
 }

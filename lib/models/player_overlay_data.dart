@@ -304,6 +304,7 @@ class DanmakuEntry {
     required this.content,
     required this.color,
     required this.mode,
+    this.repeatCount = 1,
   });
 
   /// Flutter 层保留的单条弹幕最大 Unicode 码点数，与原生限制保持一致。
@@ -322,6 +323,18 @@ class DanmakuEntry {
   final String content;
   final int color;
   final int mode;
+  final int repeatCount;
+
+  /// 复制弹幕并更新合并次数；次数至少为一，避免异常状态显示“×0”。
+  DanmakuEntry copyWith({int? repeatCount}) {
+    return DanmakuEntry(
+      position: position,
+      content: content,
+      color: color,
+      mode: mode,
+      repeatCount: (repeatCount ?? this.repeatCount).clamp(1, 9999).toInt(),
+    );
+  }
 
   /// 从原生安全字典解析弹幕；非法模式、颜色、进度或空文字都会被丢弃。
   static DanmakuEntry? tryParse(Map<Object?, Object?> values) {
@@ -346,6 +359,7 @@ class DanmakuEntry {
       content: content,
       color: color,
       mode: mode,
+      repeatCount: _readInt(values['repeatCount']).clamp(1, 9999).toInt(),
     );
   }
 }
@@ -385,6 +399,32 @@ abstract final class DanmakuTimeline {
             .toDouble();
     final double distance = (canvasWidth + textWidth) * travelProgress;
     return reverse ? -textWidth + distance : canvasWidth - distance;
+  }
+
+  /// 把服务端各种基础显示类型统一为右到左运动，彻底避免固定类型在中间生成或反向类型从左边出现。
+  static double horizontalOffsetForDisplayMode({
+    required int mode,
+    required Duration elapsed,
+    required double canvasWidth,
+    required double textWidth,
+    Duration travelDuration = scrollingTravelDuration,
+  }) {
+    // mode 仍作为显式参数保留，便于调用方证明所有允许类型都走同一方向。
+    switch (mode) {
+      case 1:
+      case 2:
+      case 3:
+      case 4:
+      case 5:
+      case 6:
+      default:
+        return horizontalOffset(
+          elapsed: elapsed,
+          canvasWidth: canvasWidth,
+          textWidth: textWidth,
+          travelDuration: travelDuration,
+        );
+    }
   }
 }
 

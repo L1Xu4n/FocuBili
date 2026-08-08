@@ -1,5 +1,6 @@
 package com.focubili.app
 
+import android.content.Intent
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
@@ -14,9 +15,15 @@ class MainActivity : FlutterActivity() {
     private var bilibiliCookieController: BilibiliCookieController? = null
     private var deviceStatusController: DeviceStatusController? = null
     private var focusNotificationController: FocusNotificationController? = null
+    private var deepLinkController: DeepLinkController? = null
+    private var deferredDeepLink: String? = null
 
-    /** Activity 创建时允许横屏内容延伸到刘海短边，确保视频按物理屏幕中心布局。 */
+    /** Activity 创建时先确定平板方向，再允许横屏内容延伸到刘海短边。 */
     override fun onCreate(savedInstanceState: Bundle?) {
+        requestedOrientation = LargeScreenOrientationPolicy.preferredOrientation(
+            resources.configuration.smallestScreenWidthDp,
+        )
+        deferredDeepLink = externalLinkFromIntent(intent)
         super.onCreate(savedInstanceState)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             val attributes = window.attributes
@@ -48,6 +55,32 @@ class MainActivity : FlutterActivity() {
             activity = this,
             messenger = flutterEngine.dartExecutor.binaryMessenger,
         )
+        deepLinkController = DeepLinkController(
+            messenger = flutterEngine.dartExecutor.binaryMessenger,
+            initialLink = deferredDeepLink,
+        )
+        deferredDeepLink = null
+    }
+
+    /** `singleTask` Activity 收到新 VIEW Intent 时复用现有 Flutter 页面处理链接。 */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val link = externalLinkFromIntent(intent) ?: return
+        val controller = deepLinkController
+        if (controller == null) {
+            deferredDeepLink = link
+        } else {
+            controller.handleLink(link)
+        }
+    }
+
+    /** 只接受 Android VIEW 操作的数据 URI，启动器 Intent 不会被误当成深链。 */
+    private fun externalLinkFromIntent(intent: Intent?): String? {
+        if (intent?.action != Intent.ACTION_VIEW) {
+            return null
+        }
+        return intent.dataString?.trim()?.takeIf(String::isNotEmpty)
     }
 
     /** 把 Android 13 通知权限结果交给专注通知控制器，再保留 Flutter 默认处理。 */
@@ -95,6 +128,9 @@ class MainActivity : FlutterActivity() {
         deviceStatusController = null
         focusNotificationController?.dispose()
         focusNotificationController = null
+        deepLinkController?.dispose()
+        deepLinkController = null
+        deferredDeepLink = null
         super.onDestroy()
     }
 }

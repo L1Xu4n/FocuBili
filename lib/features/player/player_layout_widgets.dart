@@ -1,8 +1,8 @@
 part of 'player_page.dart';
 
-/// 在全屏顶栏同一行展示专注目标、当前时间和电量。
+/// 在全屏或平板工作台顶栏同一行展示专注目标、当前时间和电量。
 class _FullscreenDeviceStatus extends StatelessWidget {
-  /// 创建只监听专注控制器局部刷新的设备状态栏。
+  /// 创建只监听专注控制器局部刷新的播放器设备状态栏。
   const _FullscreenDeviceStatus({
     required this.focusController,
     required this.currentBvid,
@@ -10,6 +10,7 @@ class _FullscreenDeviceStatus extends StatelessWidget {
     required this.partRemainingDuration,
     required this.clock,
     required this.batteryPercent,
+    required this.networkTypeLabel,
   });
 
   final FocusTimerController? focusController;
@@ -18,8 +19,9 @@ class _FullscreenDeviceStatus extends StatelessWidget {
   final Duration partRemainingDuration;
   final DateTime clock;
   final int? batteryPercent;
+  final String networkTypeLabel;
 
-  /// 把本地时间格式化为全屏状态栏使用的“时:分”。
+  /// 把本地时间格式化为播放器状态栏使用的“时:分”。
   String _formatClock() {
     return '${clock.hour.toString().padLeft(2, '0')}:'
         '${clock.minute.toString().padLeft(2, '0')}';
@@ -95,7 +97,7 @@ class _FullscreenDeviceStatus extends StatelessWidget {
     );
   }
 
-  /// 构建三段互不遮挡的全屏状态栏，并只监听左侧专注数据刷新。
+  /// 构建三段互不遮挡的播放器状态栏，并只监听左侧专注数据刷新。
   @override
   Widget build(BuildContext context) {
     final String batteryText = batteryPercent == null
@@ -143,6 +145,16 @@ class _FullscreenDeviceStatus extends StatelessWidget {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: <Widget>[
+                      Text(
+                        networkTypeLabel,
+                        key: const Key('player-network-type'),
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 10,
+                          height: 1,
+                        ),
+                      ),
+                      const SizedBox(width: 7),
                       const Icon(
                         Icons.battery_full_rounded,
                         color: Colors.white70,

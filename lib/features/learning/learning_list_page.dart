@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../core/layout/adaptive_page_frame.dart';
 import '../../models/learning_list_entry.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/learning_list_service.dart';
@@ -617,7 +618,7 @@ class _LearningListPageState extends State<LearningListPage> {
           ),
         ],
       ),
-      body: _buildBody(),
+      body: AdaptivePageFrame(maxWidth: 1180, child: _buildBody()),
     );
   }
 }

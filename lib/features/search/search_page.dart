@@ -1129,6 +1129,102 @@ class _SearchPageState extends State<SearchPage> {
     return value.toString();
   }
 
+  /// 创建视频与用户搜索之间共用的模式选择器。
+  Widget _buildModeSelector() {
+    return SegmentedButton<_SearchMode>(
+      key: const Key('search-mode-selector'),
+      segments: const <ButtonSegment<_SearchMode>>[
+        ButtonSegment<_SearchMode>(
+          value: _SearchMode.videos,
+          icon: Icon(Icons.ondemand_video_outlined),
+          label: Text('视频'),
+        ),
+        ButtonSegment<_SearchMode>(
+          value: _SearchMode.users,
+          icon: Icon(Icons.person_search_outlined),
+          label: Text('用户'),
+        ),
+      ],
+      selected: <_SearchMode>{_searchMode},
+      // 搜索模式函数在视频和用户结果之间切换。
+      onSelectionChanged: _changeSearchMode,
+    );
+  }
+
+  /// 创建横屏搜索侧栏中的候选词、历史记录或操作提示。
+  Widget _buildWorkspaceSearchSupport() {
+    final bool showSuggestions =
+        _searchFocusNode.hasFocus && _suggestions.isNotEmpty;
+    final bool showHistory = _searchHistory.isNotEmpty;
+    if (!showSuggestions && !showHistory) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Text(
+            '输入关键词、BV 号或用户名，结果会显示在右侧。',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+      );
+    }
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(4, 12, 4, 24),
+      children: <Widget>[
+        if (showSuggestions) _buildSuggestions(),
+        if (showSuggestions && showHistory) const SizedBox(height: 18),
+        if (showHistory) _buildSearchHistory(),
+      ],
+    );
+  }
+
+  /// 创建横屏平板搜索工作台，把条件和历史固定在左侧、结果放在右侧。
+  Widget _buildWorkspaceSearch(bool keyboardVisible) {
+    return Padding(
+      key: const Key('search-workspace-layout'),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          SizedBox(
+            key: const Key('search-workspace-sidebar'),
+            width: AdaptiveLayout.searchSidebarWidth,
+            child: Column(
+              children: <Widget>[
+                _buildSearchHeader(),
+                const Divider(height: 1),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(4, 12, 4, 0),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: _buildModeSelector(),
+                  ),
+                ),
+                if (!keyboardVisible)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(4, 8, 4, 0),
+                    child: _buildSortAndFilterBar(),
+                  ),
+                const Divider(height: 16),
+                Expanded(child: _buildWorkspaceSearchSupport()),
+              ],
+            ),
+          ),
+          const VerticalDivider(width: 25),
+          Expanded(
+            key: const Key('search-workspace-results'),
+            child: Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: _buildResultArea(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// 创建顶部一体式搜索栏、搜索类型切换、筛选和结果区域。
   @override
   Widget build(BuildContext context) {
@@ -1138,6 +1234,9 @@ class _SearchPageState extends State<SearchPage> {
       body: SafeArea(
         child: LayoutBuilder(
           builder: (BuildContext context, BoxConstraints constraints) {
+            if (AdaptiveLayout.usesWorkspace(MediaQuery.sizeOf(context))) {
+              return _buildWorkspaceSearch(keyboardVisible);
+            }
             final double horizontalPadding =
                 AdaptiveLayout.centeredHorizontalPadding(
                   width: constraints.maxWidth,
@@ -1165,24 +1264,7 @@ class _SearchPageState extends State<SearchPage> {
                           constraints: const BoxConstraints(maxWidth: 480),
                           child: SizedBox(
                             width: double.infinity,
-                            child: SegmentedButton<_SearchMode>(
-                              key: const Key('search-mode-selector'),
-                              segments: const <ButtonSegment<_SearchMode>>[
-                                ButtonSegment<_SearchMode>(
-                                  value: _SearchMode.videos,
-                                  icon: Icon(Icons.ondemand_video_outlined),
-                                  label: Text('视频'),
-                                ),
-                                ButtonSegment<_SearchMode>(
-                                  value: _SearchMode.users,
-                                  icon: Icon(Icons.person_search_outlined),
-                                  label: Text('用户'),
-                                ),
-                              ],
-                              selected: <_SearchMode>{_searchMode},
-                              // 搜索模式函数在视频和用户结果之间切换。
-                              onSelectionChanged: _changeSearchMode,
-                            ),
+                            child: _buildModeSelector(),
                           ),
                         ),
                       ),

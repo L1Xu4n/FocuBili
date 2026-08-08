@@ -4,6 +4,8 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import '../../core/layout/adaptive_page_frame.dart';
+import '../../core/layout/adaptive_two_column_list.dart';
 import '../../models/video_note.dart';
 import '../../models/video_preview.dart';
 import '../../services/bilibili_service.dart';
@@ -676,13 +678,11 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
                 : RefreshIndicator(
                     // 下拉刷新函数重新读取其他页面刚保存的本机笔记。
                     onRefresh: _loadNotes,
-                    child: ListView.separated(
+                    child: AdaptiveTwoColumnList(
                       key: const Key('video-notes-list'),
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
                       itemCount: visibleNotes.length,
-                      // 分隔函数给相邻笔记卡片保留稳定间距。
-                      separatorBuilder: (BuildContext context, int index) =>
-                          const SizedBox(height: 10),
+                      mainAxisSpacing: 10,
                       // 列表构建函数按最近更新时间展示筛选后的本机笔记。
                       itemBuilder: (BuildContext context, int index) =>
                           _buildNoteCard(visibleNotes[index]),
@@ -731,7 +731,7 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
           ],
         ],
       ),
-      body: body,
+      body: AdaptivePageFrame(maxWidth: 1180, child: body),
       bottomNavigationBar: _selectionMode ? _buildSelectionActions() : null,
     );
   }

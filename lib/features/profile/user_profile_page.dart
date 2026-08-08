@@ -3,8 +3,9 @@ import 'dart:collection';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
+import '../../core/layout/adaptive_page_frame.dart';
+import '../../core/layout/adaptive_two_column_list.dart';
 import '../../core/router/app_router.dart';
 import '../../features/common/watch_history_badge.dart';
 import '../../models/public_profile.dart';
@@ -12,6 +13,7 @@ import '../../models/video_preview.dart';
 import '../../models/watch_history_entry.dart';
 import '../../services/bilibili_public_content_service.dart';
 import '../../services/bilibili_service.dart';
+import '../../services/learning_list_service.dart';
 import '../../services/watch_history_service.dart';
 import 'collection_detail_page.dart';
 
@@ -27,6 +29,7 @@ class UserProfilePage extends StatefulWidget {
     this.initialOfficialDescription = '',
     this.publicContentService,
     this.videoService,
+    this.learningListService,
     this.watchHistoryService,
   });
 
@@ -37,6 +40,7 @@ class UserProfilePage extends StatefulWidget {
   final String initialOfficialDescription;
   final BilibiliPublicContentService? publicContentService;
   final BilibiliService? videoService;
+  final LearningListService? learningListService;
   final WatchHistoryService? watchHistoryService;
 
   /// 创建管理公开主页资料、标签和分页内容的状态。
@@ -53,6 +57,7 @@ class _UserProfilePageState extends State<UserProfilePage>
   static const int _maximumPartCountLookupConcurrency = 2;
   late final BilibiliPublicContentService _publicContentService;
   late final BilibiliService _videoService;
+  late final LearningListService _learningListService;
   late final WatchHistoryService _watchHistoryService;
   late final TabController _tabController;
   final TextEditingController _videoSearchController = TextEditingController();
@@ -67,6 +72,7 @@ class _UserProfilePageState extends State<UserProfilePage>
   String? _profileError;
   String? _contentError;
   String? _openingBvid;
+  String? _addingBvid;
   String _videoKeyword = '';
   CreatorVideoOrder _videoOrder = CreatorVideoOrder.latest;
   int _totalCount = 0;
@@ -86,6 +92,7 @@ class _UserProfilePageState extends State<UserProfilePage>
     _publicContentService =
         widget.publicContentService ?? BilibiliHttpPublicContentService();
     _videoService = widget.videoService ?? BilibiliVideoInfoService();
+    _learningListService = widget.learningListService ?? LearningListService();
     _watchHistoryService = widget.watchHistoryService ?? WatchHistoryService();
     _tabController = TabController(length: 3, vsync: this)
       ..addListener(_handleTabChanged);
@@ -499,7 +506,7 @@ class _UserProfilePageState extends State<UserProfilePage>
 
   /// 查询投稿的完整详情并进入播放器。
   Future<void> _openVideo(CreatorVideo item) async {
-    if (_openingBvid != null) {
+    if (_openingBvid != null || _addingBvid != null) {
       return;
     }
     setState(() => _openingBvid = item.bvid);
@@ -521,11 +528,26 @@ class _UserProfilePageState extends State<UserProfilePage>
     }
   }
 
-  /// 复制投稿 BV 号并显示轻量确认，作为列表右侧更多操作的首个真实能力。
-  Future<void> _copyVideoBvid(CreatorVideo item) async {
-    await Clipboard.setData(ClipboardData(text: item.bvid));
-    if (mounted) {
-      _showMessage('已复制 ${item.bvid}');
+  /// 查询投稿完整分P后加入学习清单，保证主页轻量数据不会丢失真实 CID 和进度信息。
+  Future<void> _addVideoToLearningList(CreatorVideo item) async {
+    if (_openingBvid != null || _addingBvid != null) {
+      return;
+    }
+    setState(() => _addingBvid = item.bvid);
+    try {
+      final VideoPreview video = await _videoService.lookupVideo(item.bvid);
+      await _learningListService.addVideo(video);
+      if (mounted) {
+        _showMessage('已加入学习清单，可在首页继续学习。');
+      }
+    } catch (_) {
+      if (mounted) {
+        _showMessage('加入学习清单失败，请检查网络后重试。');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _addingBvid = null);
+      }
     }
   }
 
@@ -538,6 +560,7 @@ class _UserProfilePageState extends State<UserProfilePage>
           collection: collection,
           publicContentService: _publicContentService,
           videoService: _videoService,
+          learningListService: _learningListService,
         ),
       ),
     );
@@ -649,7 +672,104 @@ class _UserProfilePageState extends State<UserProfilePage>
     );
   }
 
-  /// 创建可随 Sliver 收起的紧凑资料头，保留头像、统计、昵称、认证、UID 和签名。
+  /// 创建昵称、UID、认证、简介和错误重试组成的资料文字区，供宽窄头部共享。
+  Widget _buildProfileDescription({
+    required String name,
+    required String officialDescription,
+    required String sign,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: Text(
+                name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              'UID：${widget.mid}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        ),
+        if (officialDescription.isNotEmpty) ...<Widget>[
+          const SizedBox(height: 5),
+          Row(
+            key: const Key('creator-certification'),
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Icon(
+                Icons.verified_rounded,
+                size: 17,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              const SizedBox(width: 5),
+              Expanded(
+                child: Text(
+                  '认证：$officialDescription',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+        if (sign.isNotEmpty) ...<Widget>[
+          const SizedBox(height: 4),
+          _buildExpandableProfileSign(sign),
+        ],
+        if (_profileError != null) ...<Widget>[
+          const SizedBox(height: 4),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: Text(
+                  _profileError!,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+              TextButton(
+                // 资料重试按钮函数只重新读取主页头部。
+                onPressed: _loadProfile,
+                child: const Text('重试'),
+              ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// 创建资料统计区，并在资料仍加载时覆盖小型进度指示。
+  Widget _buildProfileStatsPanel(
+    CreatorProfile profile, {
+    required bool showLoading,
+  }) {
+    return Stack(
+      alignment: Alignment.center,
+      children: <Widget>[
+        _buildStats(profile),
+        if (showLoading)
+          const SizedBox.square(
+            dimension: 24,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+      ],
+    );
+  }
+
+  /// 创建可随 Sliver 收起的响应式资料头，宽屏横向展开、手机保持紧凑纵向结构。
   Widget _buildProfileHeader() {
     final CreatorProfile? profile = _profile;
     final String name = profile?.name.isNotEmpty == true
@@ -665,117 +785,87 @@ class _UserProfilePageState extends State<UserProfilePage>
     final String sign = profile?.sign.isNotEmpty == true
         ? profile!.sign
         : widget.initialSign;
-    return Padding(
-      key: const Key('creator-profile-header'),
-      padding: const EdgeInsets.fromLTRB(18, 8, 18, 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Row(
-            children: <Widget>[
-              ClipOval(
-                child: _buildImage(
-                  avatarUrl,
-                  width: 82,
-                  height: 82,
-                  fit: BoxFit.cover,
-                  placeholderIcon: Icons.person_rounded,
-                ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Stack(
-                  alignment: Alignment.center,
+    final CreatorProfile displayProfile =
+        profile ??
+        CreatorProfile(
+          mid: widget.mid,
+          name: name,
+          avatarUrl: avatarUrl,
+          sign: '',
+          officialDescription: '',
+        );
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final bool useWideHeader = constraints.maxWidth >= 900;
+        return Padding(
+          key: const Key('creator-profile-header'),
+          padding: const EdgeInsets.fromLTRB(18, 8, 18, 10),
+          child: useWideHeader
+              ? Row(
+                  key: const Key('creator-profile-wide-header'),
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: <Widget>[
-                    _buildStats(
-                      profile ??
-                          CreatorProfile(
-                            mid: widget.mid,
-                            name: name,
-                            avatarUrl: avatarUrl,
-                            sign: '',
-                            officialDescription: '',
-                          ),
-                    ),
-                    if (profile == null && _loadingProfile)
-                      const SizedBox.square(
-                        dimension: 24,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+                    ClipOval(
+                      child: _buildImage(
+                        avatarUrl,
+                        width: 96,
+                        height: 96,
+                        fit: BoxFit.cover,
+                        placeholderIcon: Icons.person_rounded,
                       ),
+                    ),
+                    const SizedBox(width: 18),
+                    Expanded(
+                      child: _buildProfileDescription(
+                        name: name,
+                        officialDescription: officialDescription,
+                        sign: sign,
+                      ),
+                    ),
+                    const SizedBox(width: 24),
+                    SizedBox(
+                      key: const Key('creator-profile-wide-stats'),
+                      width: 320,
+                      child: _buildProfileStatsPanel(
+                        displayProfile,
+                        showLoading: profile == null && _loadingProfile,
+                      ),
+                    ),
+                  ],
+                )
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Row(
+                      children: <Widget>[
+                        ClipOval(
+                          child: _buildImage(
+                            avatarUrl,
+                            width: 82,
+                            height: 82,
+                            fit: BoxFit.cover,
+                            placeholderIcon: Icons.person_rounded,
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: _buildProfileStatsPanel(
+                            displayProfile,
+                            showLoading: profile == null && _loadingProfile,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    _buildProfileDescription(
+                      name: name,
+                      officialDescription: officialDescription,
+                      sign: sign,
+                    ),
                   ],
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: <Widget>[
-              Expanded(
-                child: Text(
-                  name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                'UID：${widget.mid}',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ],
-          ),
-          if (officialDescription.isNotEmpty) ...<Widget>[
-            const SizedBox(height: 5),
-            Row(
-              key: const Key('creator-certification'),
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Icon(
-                  Icons.verified_rounded,
-                  size: 17,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-                const SizedBox(width: 5),
-                Expanded(
-                  child: Text(
-                    '认证：$officialDescription',
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ],
-          if (sign.isNotEmpty) ...<Widget>[
-            const SizedBox(height: 4),
-            _buildExpandableProfileSign(sign),
-          ],
-          if (_profileError != null) ...<Widget>[
-            const SizedBox(height: 4),
-            Row(
-              children: <Widget>[
-                Expanded(
-                  child: Text(
-                    _profileError!,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ),
-                TextButton(
-                  // 资料重试按钮函数只重新读取主页头部。
-                  onPressed: _loadProfile,
-                  child: const Text('重试'),
-                ),
-              ],
-            ),
-          ],
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -834,7 +924,11 @@ class _UserProfilePageState extends State<UserProfilePage>
         : widget.initialOfficialDescription;
     final TextStyle style =
         Theme.of(context).textTheme.bodySmall ?? const TextStyle();
-    final double availableWidth = MediaQuery.sizeOf(context).width - 36;
+    final double windowWidth = MediaQuery.sizeOf(context).width;
+    final bool useWideHeader = windowWidth >= 900;
+    final double availableWidth = useWideHeader
+        ? (windowWidth - 500).clamp(320, 760).toDouble()
+        : windowWidth - 36;
     final TextPainter signPainter = TextPainter(
       text: TextSpan(text: sign, style: style),
       textDirection: Directionality.of(context),
@@ -846,32 +940,39 @@ class _UserProfilePageState extends State<UserProfilePage>
       textScaler: MediaQuery.textScalerOf(context),
     )..layout(maxWidth: availableWidth - 22);
 
-    // 270dp 包含工具栏、标签栏、资料区内边距、头像、昵称和 UID 行，并预留字体缩放余量。
-    double height = 270;
+    double descriptionHeight = 30;
     if (officialDescription.isNotEmpty) {
-      height += 5 + certificationPainter.height.clamp(20, double.infinity);
+      descriptionHeight +=
+          5 + certificationPainter.height.clamp(20, double.infinity);
     }
     if (sign.isNotEmpty) {
       final double collapsedSignHeight = signPainter.height.clamp(
         0,
         signPainter.preferredLineHeight * 2,
       );
-      height +=
+      descriptionHeight +=
           4 + (_profileSignExpanded ? signPainter.height : collapsedSignHeight);
       if (signPainter.height > signPainter.preferredLineHeight * 2 ||
           _profileSignExpanded) {
-        height += 30;
+        descriptionHeight += 30;
       }
     }
     if (_profileError != null) {
-      height += 52;
+      descriptionHeight += 52;
     }
-    return height;
+    if (useWideHeader) {
+      // 宽屏把头像、文字和统计放在同一行，Sliver 只需容纳最高的文字区或 96dp 头像。
+      final double contentHeight = descriptionHeight.clamp(96, double.infinity);
+      return kToolbarHeight + kTextTabBarHeight + contentHeight + 34;
+    }
+    // 手机仍需先放头像统计行，再放完整文字区，因此保留原有纵向高度计算。
+    return 240 + descriptionHeight;
   }
 
   /// 创建横向投稿列表项，左侧使用 16:9 封面，右侧显示标题、日期和公开统计。
   Widget _buildVideoCard(CreatorVideo item) {
     final bool opening = _openingBvid == item.bvid;
+    final bool adding = _addingBvid == item.bvid;
     final WatchHistoryEntry? watchHistory = _watchHistoryByBvid[item.bvid];
     _schedulePartCountFallback(item);
     final int partCount = _partCountFor(item);
@@ -1005,38 +1106,74 @@ class _UserProfilePageState extends State<UserProfilePage>
                         const SizedBox(height: 3),
                         Row(
                           children: <Widget>[
-                            Icon(
-                              Icons.play_circle_outline_rounded,
-                              size: 15,
-                              color: onSurfaceVariant,
+                            Expanded(
+                              child: FittedBox(
+                                alignment: Alignment.centerLeft,
+                                fit: BoxFit.scaleDown,
+                                child: Row(
+                                  children: <Widget>[
+                                    Icon(
+                                      Icons.play_circle_outline_rounded,
+                                      size: 15,
+                                      color: onSurfaceVariant,
+                                    ),
+                                    const SizedBox(width: 3),
+                                    Text(
+                                      _formatCount(item.stats.viewCount),
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.bodySmall,
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Icon(
+                                      Icons.subtitles_outlined,
+                                      size: 15,
+                                      color: onSurfaceVariant,
+                                    ),
+                                    const SizedBox(width: 3),
+                                    Text(
+                                      _formatCount(item.stats.danmakuCount),
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.bodySmall,
+                                    ),
+                                  ],
+                                ),
+                              ),
                             ),
-                            const SizedBox(width: 3),
-                            Text(
-                              _formatCount(item.stats.viewCount),
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                            const SizedBox(width: 10),
-                            Icon(
-                              Icons.subtitles_outlined,
-                              size: 15,
-                              color: onSurfaceVariant,
-                            ),
-                            const SizedBox(width: 3),
-                            Text(
-                              _formatCount(item.stats.danmakuCount),
-                              style: Theme.of(context).textTheme.bodySmall,
+                            const SizedBox(width: 4),
+                            TextButton.icon(
+                              key: Key('add-creator-video-${item.bvid}'),
+                              // 学习清单按钮函数读取完整视频资料后保存第一分P或最近观看分P。
+                              onPressed: opening || adding
+                                  ? null
+                                  : () => unawaited(
+                                      _addVideoToLearningList(item),
+                                    ),
+                              style: TextButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                ),
+                                visualDensity: VisualDensity.compact,
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                              icon: adding
+                                  ? const SizedBox.square(
+                                      dimension: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(
+                                      Icons.playlist_add_rounded,
+                                      size: 18,
+                                    ),
+                              label: const Text('加入学习清单'),
                             ),
                           ],
                         ),
                       ],
                     ),
-                  ),
-                  IconButton(
-                    // 投稿更多按钮函数当前提供复制 BV 号，不伪装点赞或收藏写操作。
-                    onPressed: () => unawaited(_copyVideoBvid(item)),
-                    icon: const Icon(Icons.more_vert_rounded, size: 20),
-                    tooltip: '复制 BV 号',
-                    visualDensity: VisualDensity.compact,
                   ),
                 ],
               ),
@@ -1201,15 +1338,13 @@ class _UserProfilePageState extends State<UserProfilePage>
       return RefreshIndicator(
         // 专栏下拉刷新函数重新读取当前标签第一页。
         onRefresh: _loadFirstContentPage,
-        child: ListView.separated(
+        child: AdaptiveTwoColumnList(
+          key: const Key('creator-article-list'),
           padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
-          itemCount: _items.length + 1,
-          separatorBuilder: (BuildContext context, int index) =>
-              const SizedBox(height: 10),
+          itemCount: _items.length,
+          footer: _buildLoadingFooter(),
+          mainAxisSpacing: 10,
           itemBuilder: (BuildContext context, int index) {
-            if (index == _items.length) {
-              return _buildLoadingFooter();
-            }
             return _buildArticleCard(_items[index] as CreatorArticle);
           },
         ),
@@ -1219,16 +1354,13 @@ class _UserProfilePageState extends State<UserProfilePage>
       return RefreshIndicator(
         // 投稿列表下拉刷新函数重新读取当前筛选条件的第一页。
         onRefresh: _loadFirstContentPage,
-        child: ListView.separated(
+        child: AdaptiveTwoColumnList(
           key: const Key('creator-video-list'),
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-          itemCount: _items.length + 1,
-          separatorBuilder: (BuildContext context, int index) =>
-              const SizedBox(height: 12),
+          itemCount: _items.length,
+          footer: _buildLoadingFooter(),
+          mainAxisSpacing: 12,
           itemBuilder: (BuildContext context, int index) {
-            if (index == _items.length) {
-              return _buildLoadingFooter();
-            }
             return _buildVideoCard(_items[index] as CreatorVideo);
           },
         ),
@@ -1237,20 +1369,31 @@ class _UserProfilePageState extends State<UserProfilePage>
     return RefreshIndicator(
       // 合集网格下拉刷新函数重新读取当前标签第一页。
       onRefresh: _loadFirstContentPage,
-      child: GridView.builder(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          crossAxisSpacing: 10,
-          mainAxisSpacing: 10,
-          childAspectRatio: 0.9,
-        ),
-        itemCount: _items.length + 1,
-        itemBuilder: (BuildContext context, int index) {
-          if (index == _items.length) {
-            return _buildLoadingFooter();
-          }
-          return _buildCollectionCard(_items[index] as CreatorCollection);
+      child: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          final int columnCount = constraints.maxWidth >= 1120
+              ? 4
+              : constraints.maxWidth >= 760
+              ? 3
+              : 2;
+          return GridView.builder(
+            key: const Key('creator-collection-grid'),
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: columnCount,
+              crossAxisSpacing: 10,
+              mainAxisSpacing: 10,
+              childAspectRatio: 0.9,
+            ),
+            itemCount: _items.length + 1,
+            // 合集网格构建函数在最后一格保留分页状态，其余格展示独立合集卡。
+            itemBuilder: (BuildContext context, int index) {
+              if (index == _items.length) {
+                return _buildLoadingFooter();
+              }
+              return _buildCollectionCard(_items[index] as CreatorCollection);
+            },
+          );
         },
       ),
     );
@@ -1281,73 +1424,80 @@ class _UserProfilePageState extends State<UserProfilePage>
         _profile?.name ??
         (widget.initialName.isEmpty ? '用户主页' : widget.initialName);
     return Scaffold(
-      body: NestedScrollView(
-        key: const Key('creator-profile-scroll'),
-        headerSliverBuilder: (BuildContext context, bool innerBoxIsScrolled) {
-          return <Widget>[
-            SliverAppBar(
-              key: const Key('creator-profile-app-bar'),
-              pinned: true,
-              expandedHeight: _profileHeaderExpandedHeight(context),
-              forceElevated: innerBoxIsScrolled,
-              title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
-              actions: <Widget>[
-                if (_selectedTab == _CreatorTab.videos)
-                  IconButton(
-                    // 搜索按钮函数展开或收起当前 UP 主的投稿搜索框。
-                    onPressed: _toggleVideoSearch,
-                    icon: Icon(
-                      _videoSearchExpanded
-                          ? Icons.search_off_rounded
-                          : Icons.search_rounded,
-                    ),
-                    tooltip: _videoSearchExpanded ? '收起投稿搜索' : '搜索投稿',
-                  ),
-                IconButton(
-                  // 刷新按钮函数同时刷新主页头部和当前内容标签。
-                  onPressed: _refreshProfilePage,
-                  icon: const Icon(Icons.refresh_rounded),
-                  tooltip: '刷新主页',
+      body: AdaptivePageFrame(
+        maxWidth: 1280,
+        child: NestedScrollView(
+          key: const Key('creator-profile-scroll'),
+          headerSliverBuilder: (BuildContext context, bool innerBoxIsScrolled) {
+            return <Widget>[
+              SliverAppBar(
+                key: const Key('creator-profile-app-bar'),
+                pinned: true,
+                expandedHeight: _profileHeaderExpandedHeight(context),
+                forceElevated: innerBoxIsScrolled,
+                title: Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-              ],
-              flexibleSpace: FlexibleSpaceBar(
-                collapseMode: CollapseMode.parallax,
-                background: ColoredBox(
-                  color: Theme.of(context).colorScheme.surface,
-                  child: SafeArea(
-                    bottom: false,
-                    child: Padding(
-                      padding: const EdgeInsets.only(
-                        top: kToolbarHeight,
-                        bottom: kTextTabBarHeight,
+                actions: <Widget>[
+                  if (_selectedTab == _CreatorTab.videos)
+                    IconButton(
+                      // 搜索按钮函数展开或收起当前 UP 主的投稿搜索框。
+                      onPressed: _toggleVideoSearch,
+                      icon: Icon(
+                        _videoSearchExpanded
+                            ? Icons.search_off_rounded
+                            : Icons.search_rounded,
                       ),
-                      child: _buildProfileHeader(),
+                      tooltip: _videoSearchExpanded ? '收起投稿搜索' : '搜索投稿',
+                    ),
+                  IconButton(
+                    // 刷新按钮函数同时刷新主页头部和当前内容标签。
+                    onPressed: _refreshProfilePage,
+                    icon: const Icon(Icons.refresh_rounded),
+                    tooltip: '刷新主页',
+                  ),
+                ],
+                flexibleSpace: FlexibleSpaceBar(
+                  collapseMode: CollapseMode.parallax,
+                  background: ColoredBox(
+                    color: Theme.of(context).colorScheme.surface,
+                    child: SafeArea(
+                      bottom: false,
+                      child: Padding(
+                        padding: const EdgeInsets.only(
+                          top: kToolbarHeight,
+                          bottom: kTextTabBarHeight,
+                        ),
+                        child: _buildProfileHeader(),
+                      ),
                     ),
                   ),
                 ),
+                bottom: TabBar(
+                  controller: _tabController,
+                  tabs: const <Tab>[
+                    Tab(text: '投稿'),
+                    Tab(text: '专栏'),
+                    Tab(text: '合集'),
+                  ],
+                ),
               ),
-              bottom: TabBar(
-                controller: _tabController,
-                tabs: const <Tab>[
-                  Tab(text: '投稿'),
-                  Tab(text: '专栏'),
-                  Tab(text: '合集'),
-                ],
+            ];
+          },
+          body: Column(
+            children: <Widget>[
+              if (_selectedTab == _CreatorTab.videos) _buildVideoToolbar(),
+              Expanded(
+                child: NotificationListener<ScrollNotification>(
+                  // 滚动通知函数协调折叠资料头，并在接近底部时触发分页。
+                  onNotification: _handleContentScrollNotification,
+                  child: _buildContent(),
+                ),
               ),
-            ),
-          ];
-        },
-        body: Column(
-          children: <Widget>[
-            if (_selectedTab == _CreatorTab.videos) _buildVideoToolbar(),
-            Expanded(
-              child: NotificationListener<ScrollNotification>(
-                // 滚动通知函数协调折叠资料头，并在接近底部时触发分页。
-                onNotification: _handleContentScrollNotification,
-                child: _buildContent(),
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

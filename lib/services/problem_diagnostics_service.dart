@@ -477,14 +477,21 @@ class ProblemDiagnosticsService {
     );
   }
 
-  /// 记录未预期框架或运行时错误；不保存异常原文和堆栈，避免意外携带用户输入。
-  Future<void> recordUnexpectedError({required String operation}) {
+  /// 记录未预期框架或运行时错误；只保留安全异常类名，不保存异常原文和堆栈。
+  Future<void> recordUnexpectedError({
+    required String operation,
+    String? errorType,
+  }) {
+    final String safeErrorType = _sanitizeErrorType(errorType ?? '');
     return record(
       ProblemDiagnosticEntry(
         occurredAt: _clock(),
         category: 'app',
         operation: _sanitizeOperation(operation),
         description: '应用遇到未预期错误，请复制诊断信息后反馈给开发者。',
+        additionalInfo: safeErrorType.isEmpty
+            ? const <String, String>{}
+            : <String, String>{'error_type': safeErrorType},
       ),
     );
   }
@@ -620,9 +627,9 @@ class ProblemDiagnosticsService {
   Future<String> _loadVersionSafely() async {
     try {
       final String version = (await _appVersionLoader()).trim();
-      return version.isEmpty ? '1.2.0+11' : version;
+      return version.isEmpty ? '1.3.0+13' : version;
     } catch (_) {
-      return '1.2.0+11';
+      return '1.3.0+13';
     }
   }
 
@@ -771,6 +778,15 @@ class ProblemDiagnosticsService {
     return normalized.isEmpty
         ? ''
         : normalized.substring(0, normalized.length.clamp(0, 40).toInt());
+  }
+
+  /// 将异常类型限制为 Dart 类名可用字符，防止调用方误把异常正文或用户内容写进诊断记录。
+  String _sanitizeErrorType(String value) {
+    final String normalized = value.trim().replaceAll(
+      RegExp(r'[^A-Za-z0-9_.$]'),
+      '',
+    );
+    return normalized.substring(0, normalized.length.clamp(0, 80).toInt());
   }
 
   /// 清除 URL、常见凭据片段、连续空白和过长文本，保证诊断说明不会携带敏感资料。

@@ -9,11 +9,13 @@ import 'package:focubili/services/first_launch_service.dart';
 Widget _buildGate({
   Future<void> Function()? exitApplication,
   Future<void> Function(BuildContext context)? openLoginPage,
+  VoidCallback? onReady,
 }) {
   return MaterialApp(
     home: FirstLaunchGate(
       exitApplication: exitApplication,
       openLoginPage: openLoginPage,
+      onReady: onReady,
       child: const Scaffold(body: Text('测试主页')),
     ),
   );
@@ -103,6 +105,21 @@ void main() {
     expect(find.text('测试主页'), findsOneWidget);
     expect(find.byKey(const Key('user-agreement-page')), findsNothing);
     expect(find.byKey(const Key('first-login-guide-dialog')), findsNothing);
+  });
+
+  /// 协议已处理时只通知一次主页就绪，供根组件安全执行冷启动深链。
+  testWidgets('协议通过后只通知一次主页可以接收外部导航', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      FirstLaunchService.agreementAcceptedKey: true,
+      FirstLaunchService.loginGuideShownKey: true,
+    });
+    int readyCalls = 0;
+
+    await tester.pumpWidget(_buildGate(onReady: () => readyCalls += 1));
+    await tester.pumpAndSettle();
+    await tester.pump();
+
+    expect(readyCalls, 1);
   });
 
   /// 验证用户在唯一一次引导中选择登录后会调用登录页面导航。

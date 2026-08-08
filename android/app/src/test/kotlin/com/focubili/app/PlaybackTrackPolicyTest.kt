@@ -1,6 +1,7 @@
 package com.focubili.app
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -24,5 +25,22 @@ class PlaybackTrackPolicyTest {
         assertEquals("hvc1.1.6.l120.90", PlaybackTrackPolicy.cacheKey("hvc1.1.6.L120.90"))
         assertEquals("unknown", PlaybackTrackPolicy.cacheKey("   "))
         assertEquals("bad_codec", PlaybackTrackPolicy.cacheKey("bad codec"))
+    }
+
+    /** 默认清晰度不可用时只接受相同或更低档位，不能在移动网络意外升级。 */
+    @Test
+    fun qualityFallbackOnlyMovesDownward() {
+        assertTrue(PlaybackTrackPolicy.isAtOrBelowPreferred(64, 80))
+        assertTrue(PlaybackTrackPolicy.isAtOrBelowPreferred(80, 80))
+        assertFalse(PlaybackTrackPolicy.isAtOrBelowPreferred(116, 80))
+        assertFalse(PlaybackTrackPolicy.isAtOrBelowPreferred(0, 80))
+    }
+
+    /** x86 模拟器必须禁用异步解码，ARM 真机继续保留 Media3 默认路径。 */
+    @Test
+    fun synchronousCodecIsLimitedToDesktopEmulatorAbis() {
+        assertTrue(PlaybackTrackPolicy.shouldUseSynchronousCodec(listOf("x86_64", "arm64-v8a")))
+        assertTrue(PlaybackTrackPolicy.shouldUseSynchronousCodec(listOf("x86")))
+        assertFalse(PlaybackTrackPolicy.shouldUseSynchronousCodec(listOf("arm64-v8a", "armeabi-v7a")))
     }
 }

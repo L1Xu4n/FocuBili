@@ -35,4 +35,29 @@ void main() {
       isNull,
     );
   });
+
+  /// 验证原生网络名称会转换为播放器使用的稳定枚举。
+  test('读取 Wi-Fi 网络类型', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (MethodCall call) async {
+          expect(call.method, 'getNetworkType');
+          return 'wifi';
+        });
+
+    expect(
+      await const NativeDeviceStatusService().loadNetworkType(),
+      DeviceNetworkType.wifi,
+    );
+  });
+
+  /// 验证未知平台返回不会被误判为 Wi-Fi 或移动网络。
+  test('未知网络类型安全回退', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (MethodCall call) async => 'vpn');
+
+    expect(
+      await const NativeDeviceStatusService().loadNetworkType(),
+      DeviceNetworkType.other,
+    );
+  });
 }

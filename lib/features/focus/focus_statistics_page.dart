@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../core/layout/adaptive_layout.dart';
+import '../../core/layout/adaptive_page_frame.dart';
 import '../../models/focus_session.dart';
 import '../../models/focus_statistics.dart';
 import 'focus_timer_controller.dart';
@@ -493,7 +495,159 @@ class _FocusStatisticsPageState extends State<FocusStatisticsPage> {
     );
   }
 
-  /// 创建统计看板、趋势、筛选工具和记录列表组成的完整页面。
+  /// 创建统计范围切换器，手机单列和平板左侧概览共同复用同一份状态。
+  Widget _buildRangeSelector() {
+    return SegmentedButton<FocusStatisticsRange>(
+      key: const Key('focus-statistics-range'),
+      segments: const <ButtonSegment<FocusStatisticsRange>>[
+        ButtonSegment<FocusStatisticsRange>(
+          value: FocusStatisticsRange.sevenDays,
+          label: Text('7 天'),
+        ),
+        ButtonSegment<FocusStatisticsRange>(
+          value: FocusStatisticsRange.thirtyDays,
+          label: Text('30 天'),
+        ),
+        ButtonSegment<FocusStatisticsRange>(
+          value: FocusStatisticsRange.all,
+          label: Text('全部'),
+        ),
+      ],
+      selected: <FocusStatisticsRange>{_range},
+      // 范围切换函数同时更新指标、趋势和记录列表。
+      onSelectionChanged: (Set<FocusStatisticsRange> values) {
+        setState(() => _range = values.first);
+      },
+    );
+  }
+
+  /// 创建当前专注提示；没有活动任务时不占用看板空间。
+  Widget? _buildActiveSessionCard(FocusTimerController controller) {
+    final FocusSession? activeSession = controller.activeSession;
+    if (activeSession == null) {
+      return null;
+    }
+    return Card(
+      color: Theme.of(context).colorScheme.primaryContainer,
+      child: ListTile(
+        leading: const Icon(Icons.adjust_rounded),
+        title: const Text('当前专注已计入今日趋势'),
+        subtitle: Text(activeSession.goal),
+      ),
+    );
+  }
+
+  /// 组合范围、指标、趋势和完成情况，作为平板左侧的数据概览区。
+  List<Widget> _buildOverviewChildren(
+    FocusTimerController controller,
+    FocusStatisticsSnapshot snapshot,
+  ) {
+    final Widget? activeSessionCard = _buildActiveSessionCard(controller);
+    return <Widget>[
+      _buildRangeSelector(),
+      if (activeSessionCard != null) ...<Widget>[
+        const SizedBox(height: 12),
+        activeSessionCard,
+      ],
+      const SizedBox(height: 12),
+      _buildMetricBoard(snapshot),
+      const SizedBox(height: 12),
+      _FocusTrendCard(snapshot: snapshot),
+      const SizedBox(height: 12),
+      _buildInsightCard(snapshot),
+    ];
+  }
+
+  /// 组合记录标题、搜索筛选和记录卡，作为平板右侧的独立管理区。
+  List<Widget> _buildHistoryChildren(
+    FocusTimerController controller,
+    List<FocusSession> visibleHistory,
+  ) {
+    return <Widget>[
+      Row(
+        children: <Widget>[
+          const Expanded(
+            child: Text(
+              '专注记录管理',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+            ),
+          ),
+          Text('${visibleHistory.length} 条'),
+        ],
+      ),
+      const SizedBox(height: 10),
+      _buildRecordFilters(),
+      const SizedBox(height: 10),
+      if (visibleHistory.isEmpty)
+        const Card(
+          key: Key('empty-focus-history'),
+          child: Padding(
+            padding: EdgeInsets.all(28),
+            child: Center(child: Text('当前条件下没有专注记录')),
+          ),
+        )
+      else
+        ...visibleHistory.map(
+          (FocusSession session) => _buildHistoryCard(controller, session),
+        ),
+    ];
+  }
+
+  /// 根据页面实际宽度选择手机单列或平板双栏，并让平板两栏可以独立滚动。
+  Widget _buildResponsiveContent(
+    FocusTimerController controller,
+    FocusStatisticsSnapshot snapshot,
+    List<FocusSession> visibleHistory,
+  ) {
+    final List<Widget> overview = _buildOverviewChildren(controller, snapshot);
+    final List<Widget> history = _buildHistoryChildren(
+      controller,
+      visibleHistory,
+    );
+    return LayoutBuilder(
+      // 宽度判断函数只读取当前窗口约束，未来 Windows 调整窗口大小时也会自动重排。
+      builder: (BuildContext context, BoxConstraints constraints) {
+        if (constraints.maxWidth < AdaptiveLayout.workspaceBreakpoint) {
+          return ListView(
+            key: const Key('focus-statistics-list'),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+            children: <Widget>[
+              ...overview,
+              const SizedBox(height: 22),
+              ...history,
+            ],
+          );
+        }
+        return Row(
+          key: const Key('focus-statistics-wide-layout'),
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Expanded(
+              flex: 6,
+              child: ListView(
+                key: const Key('focus-statistics-overview-pane'),
+                primary: false,
+                padding: const EdgeInsets.fromLTRB(16, 8, 14, 32),
+                children: overview,
+              ),
+            ),
+            const VerticalDivider(width: 1),
+            Expanded(
+              flex: 5,
+              child: ListView(
+                key: const Key('focus-statistics-history-pane'),
+                primary: false,
+                padding: const EdgeInsets.fromLTRB(14, 8, 16, 32),
+                children: history,
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// 创建统计页，并在控制器变化时同时刷新概览和历史记录区域。
   @override
   Widget build(BuildContext context) {
     final FocusTimerController controller = _controller(context);
@@ -519,98 +673,30 @@ class _FocusStatisticsPageState extends State<FocusStatisticsPage> {
           ),
         ],
       ),
-      body: ListenableBuilder(
-        listenable: controller,
-        builder: (BuildContext context, Widget? child) {
-          final DateTime now = DateTime.now();
-          final FocusStatisticsSnapshot snapshot =
-              FocusStatisticsCalculator.build(
-                history: controller.history,
-                range: _range,
-                now: now,
-                activeSession: controller.activeSession,
-              );
-          final List<FocusSession> visibleHistory = _visibleHistory(
-            controller.history,
-            now,
-          );
-          return ListView(
-            key: const Key('focus-statistics-list'),
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-            children: <Widget>[
-              SegmentedButton<FocusStatisticsRange>(
-                key: const Key('focus-statistics-range'),
-                segments: const <ButtonSegment<FocusStatisticsRange>>[
-                  ButtonSegment<FocusStatisticsRange>(
-                    value: FocusStatisticsRange.sevenDays,
-                    label: Text('7 天'),
-                  ),
-                  ButtonSegment<FocusStatisticsRange>(
-                    value: FocusStatisticsRange.thirtyDays,
-                    label: Text('30 天'),
-                  ),
-                  ButtonSegment<FocusStatisticsRange>(
-                    value: FocusStatisticsRange.all,
-                    label: Text('全部'),
-                  ),
-                ],
-                selected: <FocusStatisticsRange>{_range},
-                // 范围切换函数同时更新指标、趋势和下方记录列表。
-                onSelectionChanged: (Set<FocusStatisticsRange> values) {
-                  setState(() => _range = values.first);
-                },
-              ),
-              if (controller.activeSession != null) ...<Widget>[
-                const SizedBox(height: 12),
-                Card(
-                  color: Theme.of(context).colorScheme.primaryContainer,
-                  child: ListTile(
-                    leading: const Icon(Icons.adjust_rounded),
-                    title: const Text('当前专注已计入今日趋势'),
-                    subtitle: Text(controller.activeSession!.goal),
-                  ),
-                ),
-              ],
-              const SizedBox(height: 12),
-              _buildMetricBoard(snapshot),
-              const SizedBox(height: 12),
-              _FocusTrendCard(snapshot: snapshot),
-              const SizedBox(height: 12),
-              _buildInsightCard(snapshot),
-              const SizedBox(height: 22),
-              Row(
-                children: <Widget>[
-                  const Expanded(
-                    child: Text(
-                      '专注记录管理',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                  Text('${visibleHistory.length} 条'),
-                ],
-              ),
-              const SizedBox(height: 10),
-              _buildRecordFilters(),
-              const SizedBox(height: 10),
-              if (visibleHistory.isEmpty)
-                const Card(
-                  key: Key('empty-focus-history'),
-                  child: Padding(
-                    padding: EdgeInsets.all(28),
-                    child: Center(child: Text('当前条件下没有专注记录')),
-                  ),
-                )
-              else
-                ...visibleHistory.map(
-                  (FocusSession session) =>
-                      _buildHistoryCard(controller, session),
-                ),
-            ],
-          );
-        },
+      body: AdaptivePageFrame(
+        maxWidth: 1180,
+        child: ListenableBuilder(
+          listenable: controller,
+          builder: (BuildContext context, Widget? child) {
+            final DateTime now = DateTime.now();
+            final FocusStatisticsSnapshot snapshot =
+                FocusStatisticsCalculator.build(
+                  history: controller.history,
+                  range: _range,
+                  now: now,
+                  activeSession: controller.activeSession,
+                );
+            final List<FocusSession> visibleHistory = _visibleHistory(
+              controller.history,
+              now,
+            );
+            return _buildResponsiveContent(
+              controller,
+              snapshot,
+              visibleHistory,
+            );
+          },
+        ),
       ),
     );
   }

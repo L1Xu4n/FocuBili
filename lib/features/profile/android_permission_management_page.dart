@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../core/layout/adaptive_page_frame.dart';
 import '../../services/focus_notification_service.dart';
 
 /// 集中展示和管理当前应用使用的 Android 权限与后台提醒保护设置。
@@ -238,21 +239,24 @@ class _AndroidPermissionManagementPageState
     final AndroidPermissionOverview? overview = _overview;
     return Scaffold(
       appBar: AppBar(title: const Text('权限管理')),
-      body: overview == null && _loading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              // 下拉刷新函数只检查权限状态，不会申请或取消任何权限。
-              onRefresh: _loadOverview,
-              child: ListView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
-                children: <Widget>[
-                  _buildIntroduction(),
-                  const SizedBox(height: 8),
-                  if (overview != null) ..._buildPermissionCards(overview),
-                ],
+      body: AdaptivePageFrame(
+        maxWidth: 900,
+        child: overview == null && _loading
+            ? const Center(child: CircularProgressIndicator())
+            : RefreshIndicator(
+                // 下拉刷新函数只检查权限状态，不会申请或取消任何权限。
+                onRefresh: _loadOverview,
+                child: ListView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
+                  children: <Widget>[
+                    _buildIntroduction(),
+                    const SizedBox(height: 8),
+                    if (overview != null) ..._buildPermissionCards(overview),
+                  ],
+                ),
               ),
-            ),
+      ),
     );
   }
 }

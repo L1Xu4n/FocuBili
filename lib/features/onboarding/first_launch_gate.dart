@@ -19,12 +19,16 @@ class FirstLaunchGate extends StatefulWidget {
     this.service,
     this.exitApplication,
     this.openLoginPage,
+    this.onReady,
   });
 
   final Widget child;
   final FirstLaunchService? service;
   final ApplicationExit? exitApplication;
   final LoginPageLauncher? openLoginPage;
+
+  /// 协议已同意且真实主页可以安全接收外部导航时调用一次。
+  final VoidCallback? onReady;
 
   /// 创建读取协议状态、管理倒计时和登录引导的门禁状态。
   @override
@@ -43,6 +47,7 @@ class _FirstLaunchGateState extends State<FirstLaunchGate> {
   bool _loginGuideScheduled = false;
   bool _accepting = false;
   bool _exiting = false;
+  bool _readyNotified = false;
   int _secondsRemaining = _unlockDelaySeconds;
 
   /// 初始化本机首次启动服务，并异步读取之前保存的状态。
@@ -66,6 +71,7 @@ class _FirstLaunchGateState extends State<FirstLaunchGate> {
     });
     if (_agreementAccepted) {
       _scheduleLoginGuide();
+      _notifyReady();
     } else {
       _startUnlockCountdown();
     }
@@ -116,6 +122,20 @@ class _FirstLaunchGateState extends State<FirstLaunchGate> {
       _agreementAccepted = true;
     });
     _scheduleLoginGuide();
+    _notifyReady();
+  }
+
+  /// 在主页完成当前帧构建后只通知一次，防止深链越过首次使用协议。
+  void _notifyReady() {
+    if (_readyNotified || !_agreementAccepted) {
+      return;
+    }
+    _readyNotified = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _agreementAccepted) {
+        widget.onReady?.call();
+      }
+    });
   }
 
   /// 不保存任何协议状态并调用系统退出；重复点击只处理一次。

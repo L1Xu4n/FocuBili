@@ -330,6 +330,39 @@ void main() {
     expect(find.text('笔记详情'), findsOneWidget);
   });
 
+  /// 验证横屏详情把来源与截图放在左侧参考区，标题和正文放在右侧独立编辑区。
+  testWidgets('笔记详情宽窗口使用双区编辑工作台', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final VideoNoteService service = await _createPageNoteService();
+    final File frame = File('assets/icon/focubili_icon.png').absolute;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: VideoNoteDetailPage(
+          note: _createPageNote(framePath: frame.path),
+          noteService: service,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final Finder workspace = find.byKey(
+      const Key('note-detail-wide-workspace'),
+    );
+    final Finder referencePane = find.byKey(
+      const Key('note-detail-wide-reference-pane'),
+    );
+    final Finder titleField = find.byKey(const Key('note-detail-title-field'));
+    expect(workspace, findsOneWidget);
+    expect(referencePane, findsOneWidget);
+    expect(find.byKey(const Key('note-detail-frame-section')), findsOneWidget);
+    expect(
+      tester.getRect(referencePane).right,
+      lessThan(tester.getRect(titleField).left),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   /// 验证详情右上角会生成包含来源、正文、时间点、截图和字数的自适应长图。
   testWidgets('详情页可预览包含截图和完整正文的笔记分享长图', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(500, 900));

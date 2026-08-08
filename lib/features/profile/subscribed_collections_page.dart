@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
+import '../../core/layout/adaptive_page_frame.dart';
+import '../../core/layout/adaptive_two_column_list.dart';
 import '../../models/account_collection.dart';
 import '../../models/public_profile.dart';
 import '../../services/bilibili_account_data_service.dart';
@@ -310,34 +312,30 @@ class _SubscribedCollectionsPageState extends State<SubscribedCollectionsPage> {
   Widget _buildList() {
     final List<SubscribedCollection> visibleCollections =
         _filteredCollections();
+    final Widget footer =
+        visibleCollections.isEmpty && _searchQuery.trim().isNotEmpty
+        ? const Padding(
+            padding: EdgeInsets.symmetric(vertical: 48),
+            child: Center(child: Text('没有匹配的订阅合集')),
+          )
+        : _loadingMore
+        ? const Padding(
+            padding: EdgeInsets.all(16),
+            child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+          )
+        : const SizedBox(height: 8);
     return RefreshIndicator(
       // 下拉刷新函数重新读取第 1 页订阅合集。
       onRefresh: _loadFirstPage,
-      child: ListView.separated(
+      child: AdaptiveTwoColumnList(
         key: const Key('subscribed-collections-list'),
         controller: _scrollController,
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-        itemCount: visibleCollections.length + 1,
-        separatorBuilder: (BuildContext context, int index) =>
-            const SizedBox(height: 10),
+        itemCount: visibleCollections.length,
+        footer: footer,
+        mainAxisSpacing: 10,
         itemBuilder: (BuildContext context, int index) {
-          if (index == visibleCollections.length) {
-            if (visibleCollections.isEmpty && _searchQuery.trim().isNotEmpty) {
-              return const Padding(
-                padding: EdgeInsets.symmetric(vertical: 48),
-                child: Center(child: Text('没有匹配的订阅合集')),
-              );
-            }
-            return _loadingMore
-                ? const Padding(
-                    padding: EdgeInsets.all(16),
-                    child: Center(
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  )
-                : const SizedBox(height: 8);
-          }
           final SubscribedCollection item = visibleCollections[index];
           return Card(
             key: Key('subscribed-collection-${item.id}'),
@@ -416,11 +414,14 @@ class _SubscribedCollectionsPageState extends State<SubscribedCollectionsPage> {
           ),
         ],
       ),
-      body: Column(
-        children: <Widget>[
-          _buildSearchField(),
-          Expanded(child: _buildBody()),
-        ],
+      body: AdaptivePageFrame(
+        maxWidth: 1180,
+        child: Column(
+          children: <Widget>[
+            _buildSearchField(),
+            Expanded(child: _buildBody()),
+          ],
+        ),
       ),
     );
   }
