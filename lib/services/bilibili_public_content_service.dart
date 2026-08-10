@@ -67,7 +67,7 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
            (requestJson == null
                ? _requestPublicSessionJson
                : _adaptInjectedRequest(requestJson)),
-       _cookieStore = cookieStore ?? const PlatformBilibiliCookieStore(),
+       _cookieStore = cookieStore ?? createDefaultBilibiliCookieStore(),
        _skipPlatformCookie =
            cookieStore == null &&
            (requestJson != null || requestSessionJson != null);
@@ -613,7 +613,7 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
     return Map<Object?, Object?>.from(rawData);
   }
 
-  /// 从 Android WebView 读取已有会话；桌面测试或通道不可用时安全回退为空 Cookie。
+  /// 按平台从 Android WebView 或 Windows 加密存储读取会话；不可用时安全回退为空 Cookie。
   Future<String> _readAvailableCookie() async {
     if (_skipPlatformCookie) {
       return '';

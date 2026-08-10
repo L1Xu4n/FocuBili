@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import '../../core/layout/adaptive_page_frame.dart';
 import '../../services/media_cache_service.dart';
 
-/// 展示并管理 Media3 边播边缓存，而非完整视频离线下载。
+/// 按平台展示 Android Media3 边播缓存或 Windows media_kit 播放缓冲。
 class CacheManagementPage extends StatefulWidget {
   /// 创建可注入缓存服务的页面，测试时可传入不依赖 Android 的假服务。
   const CacheManagementPage({super.key, MediaCacheService? service})
@@ -25,11 +25,11 @@ class _CacheManagementPageState extends State<CacheManagementPage> {
   bool _loading = true;
   bool _mutating = false;
 
-  /// 页面创建后立即读取 Android 当前的缓存用量和容量设置。
+  /// 页面创建后立即选择当前平台实现并读取缓存或缓冲用量与容量设置。
   @override
   void initState() {
     super.initState();
-    _service = widget._service ?? NativeMediaCacheService();
+    _service = widget._service ?? createMediaCacheService();
     unawaited(_loadStatus());
   }
 
@@ -74,8 +74,16 @@ class _CacheManagementPageState extends State<CacheManagementPage> {
     final bool? confirmed = await showDialog<bool>(
       context: context,
       builder: (BuildContext dialogContext) => AlertDialog(
-        title: const Text('清空视频缓存？'),
-        content: const Text('这不会删除账号信息或观看记录，只会删除边播边缓存的数据。'),
+        title: Text(
+          status?.storageKind == MediaCacheStorageKind.windowsPlaybackBuffer
+              ? '清空播放缓冲？'
+              : '清空视频缓存？',
+        ),
+        content: Text(
+          status?.storageKind == MediaCacheStorageKind.windowsPlaybackBuffer
+              ? '这不会删除账号信息、观看记录或笔记，只会删除 Windows 播放器的临时磁盘缓冲。'
+              : '这不会删除账号信息或观看记录，只会删除边播边缓存的数据。',
+        ),
         actions: <Widget>[
           TextButton(
             // 取消按钮只关闭确认框，不更改任何缓存内容。
@@ -136,9 +144,11 @@ class _CacheManagementPageState extends State<CacheManagementPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            const Text(
-              '当前占用',
-              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+            Text(
+              status.storageKind == MediaCacheStorageKind.windowsPlaybackBuffer
+                  ? '当前缓冲占用'
+                  : '当前占用',
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 8),
             Text(
@@ -157,7 +167,7 @@ class _CacheManagementPageState extends State<CacheManagementPage> {
     );
   }
 
-  /// 创建只提供五档固定容量的选择器，避免页面与 Android 的安全范围不一致。
+  /// 创建只提供五档固定容量的选择器，保证 Android 和 Windows 都使用经过验证的安全范围。
   Widget _buildCapacityPicker(MediaCacheStatus status) {
     return Card(
       child: Padding(
@@ -204,22 +214,27 @@ class _CacheManagementPageState extends State<CacheManagementPage> {
     );
   }
 
-  /// 创建说明卡片，明确缓存用途、系统清理行为和非离线下载边界。
-  Widget _buildExplanationCard() {
-    return const Card(
+  /// 创建平台化说明卡片，明确持久边播缓存、临时播放缓冲和离线下载之间的边界。
+  Widget _buildExplanationCard(MediaCacheStatus? status) {
+    final bool windowsBuffer =
+        status?.storageKind == MediaCacheStorageKind.windowsPlaybackBuffer;
+    return Card(
       child: Padding(
-        padding: EdgeInsets.all(16),
+        padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            Text(
-              '缓存说明',
+            const Text(
+              '缓存与缓冲说明',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
             ),
-            SizedBox(height: 8),
+            const SizedBox(height: 8),
             Text(
-              '这里保存的是边播边缓存，用于减少短期内重复播放的网络请求，不是离线下载。'
-              'Android 在存储空间紧张时可能自动清理这些数据。',
+              windowsBuffer
+                  ? 'Windows 使用 media_kit 的临时磁盘播放缓冲来支持拖动和网络波动。'
+                        '容量调整会在下一次打开播放器时生效；这些数据不是离线下载，退出播放或系统清理后可能消失。'
+                  : '这里保存的是边播边缓存，用于减少短期内重复播放的网络请求，不是离线下载。'
+                        'Android 在存储空间紧张时可能自动清理这些数据。',
             ),
           ],
         ),
@@ -233,7 +248,11 @@ class _CacheManagementPageState extends State<CacheManagementPage> {
     final MediaCacheStatus? status = _status;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('视频缓存'),
+        title: Text(
+          status?.storageKind == MediaCacheStorageKind.windowsPlaybackBuffer
+              ? '播放缓冲'
+              : '视频缓存',
+        ),
         actions: <Widget>[
           IconButton(
             // 刷新按钮函数只重新读取用量，不会修改缓存内容。
@@ -274,14 +293,20 @@ class _CacheManagementPageState extends State<CacheManagementPage> {
                                   ? null
                                   : () => unawaited(_confirmClearCache()),
                               icon: const Icon(Icons.delete_outline_rounded),
-                              label: const Text('清空已缓存视频'),
+                              label: Text(
+                                status.storageKind ==
+                                        MediaCacheStorageKind
+                                            .windowsPlaybackBuffer
+                                    ? '清空播放缓冲'
+                                    : '清空已缓存视频',
+                              ),
                             ),
                           ),
                         ),
                       ),
                       const SizedBox(height: 12),
                     ],
-                    _buildExplanationCard(),
+                    _buildExplanationCard(status),
                   ],
                 ),
               ),

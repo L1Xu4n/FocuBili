@@ -25,6 +25,7 @@ class _FakeMediaCacheService implements MediaCacheService {
       usedBytes: status.usedBytes,
       capacityBytes: capacityBytes,
       isPlaybackActive: status.isPlaybackActive,
+      storageKind: status.storageKind,
     );
     return status;
   }
@@ -37,6 +38,7 @@ class _FakeMediaCacheService implements MediaCacheService {
       usedBytes: 0,
       capacityBytes: status.capacityBytes,
       isPlaybackActive: status.isPlaybackActive,
+      storageKind: status.storageKind,
     );
     return status;
   }
@@ -128,5 +130,26 @@ void main() {
     expect(find.text('播放中暂不能管理缓存'), findsOneWidget);
     expect(find.text('清空已缓存视频'), findsOneWidget);
     expect(picker.onChanged, isNull);
+  });
+
+  /// 验证 Windows 状态会展示临时播放缓冲文案，而不是冒充可重复使用的 Android 持久缓存。
+  testWidgets('Windows 页面展示播放缓冲边界', (WidgetTester tester) async {
+    final _FakeMediaCacheService service = _FakeMediaCacheService(
+      const MediaCacheStatus(
+        usedBytes: 16 * 1024 * 1024,
+        capacityBytes: defaultMediaCacheBytes,
+        isPlaybackActive: false,
+        storageKind: MediaCacheStorageKind.windowsPlaybackBuffer,
+      ),
+    );
+
+    await tester.pumpWidget(_buildTestApp(service));
+    await tester.pumpAndSettle();
+
+    expect(find.text('播放缓冲'), findsOneWidget);
+    expect(find.text('当前缓冲占用'), findsOneWidget);
+    expect(find.text('清空播放缓冲'), findsOneWidget);
+    expect(find.textContaining('下一次打开播放器时生效'), findsOneWidget);
+    expect(find.textContaining('不是离线下载'), findsOneWidget);
   });
 }

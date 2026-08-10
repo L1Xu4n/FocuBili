@@ -6,6 +6,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
+import 'package:window_manager/window_manager.dart';
 
 import '../../core/layout/adaptive_layout.dart';
 import '../../core/layout/device_orientation_policy.dart';
@@ -26,7 +27,10 @@ import '../../models/learning_list_entry.dart';
 import '../../services/device_status_service.dart';
 import '../../services/external_link_service.dart';
 import '../../services/native_playback_service.dart';
+import '../../services/playback_service_factory.dart';
+import '../../services/playback_video_surface.dart';
 import '../../services/player_overlay_service.dart';
+import '../../services/player_overlay_service_factory.dart';
 import '../../services/problem_diagnostics_service.dart';
 import '../../services/bilibili_public_content_service.dart';
 import '../../services/bilibili_service.dart';
@@ -347,13 +351,13 @@ class _PlayerPageState extends State<PlayerPage>
     _activeVideo = widget.video;
     _currentPart = _activeVideo.initialPart;
     _notePartCid = _currentPart.cid;
-    _playbackService = widget.playbackService ?? NativePlaybackService();
+    _playbackService = widget.playbackService ?? createDefaultPlaybackService();
     _watchHistoryService = widget.watchHistoryService ?? WatchHistoryService();
     _learningListService = widget.learningListService ?? LearningListService();
     _deviceStatusService =
         widget.deviceStatusService ?? const NativeDeviceStatusService();
     _playerOverlayService =
-        widget.playerOverlayService ?? NativePlayerOverlayService();
+        widget.playerOverlayService ?? createDefaultPlayerOverlayService();
     _bilibiliService = widget.bilibiliService ?? BilibiliVideoInfoService();
     _publicContentService =
         widget.publicContentService ?? BilibiliHttpPublicContentService();
@@ -2856,6 +2860,69 @@ class _PlayerPageState extends State<PlayerPage>
     await _setFullscreen(nextFullscreen);
   }
 
+  /// 处理桌面播放器快捷键；文本输入框获得焦点时完全交还键盘事件。
+  KeyEventResult _handlePlayerKeyEvent(FocusNode _, KeyEvent event) {
+    if (event is! KeyDownEvent || _isTextEditingFocused()) {
+      return KeyEventResult.ignored;
+    }
+    final LogicalKeyboardKey key = event.logicalKey;
+    if (key == LogicalKeyboardKey.space) {
+      _togglePlayback();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.arrowLeft) {
+      _seekBy(-5, showFeedback: true);
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.arrowRight) {
+      _seekBy(5, showFeedback: true);
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.arrowUp) {
+      _adjustDesktopVolume(0.05);
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.arrowDown) {
+      _adjustDesktopVolume(-0.05);
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.keyF) {
+      unawaited(_toggleFullscreen());
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.escape) {
+      if (_controlsLocked) {
+        _toggleControlsLock();
+      } else if (_notesOpen) {
+        _closeVideoNotes();
+      } else if (_partSelectorExpanded) {
+        setState(() => _partSelectorExpanded = false);
+      } else if (_fullscreen) {
+        unawaited(_toggleFullscreen());
+      } else {
+        return KeyEventResult.ignored;
+      }
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  /// 判断当前主焦点是否位于文本编辑器内部，避免空格和方向键破坏笔记输入。
+  bool _isTextEditingFocused() {
+    final BuildContext? focusContext =
+        FocusManager.instance.primaryFocus?.context;
+    return focusContext?.widget is EditableText ||
+        focusContext?.findAncestorWidgetOfExactType<EditableText>() != null;
+  }
+
+  /// 按五个百分点调整桌面音量，并复用播放器中央反馈提示。
+  void _adjustDesktopVolume(double delta) {
+    _volume = (_volume + delta).clamp(0, 1).toDouble();
+    unawaited(_playbackService.setMediaVolume(_volume));
+    _showAdjustmentFeedback('音量 ${(_volume * 100).round()}%');
+    _scheduleSeekFeedbackClear();
+  }
+
   /// 统一切换全屏布局，并区分按钮触发和设备旋转触发的方向控制行为。
   Future<void> _setFullscreen(
     bool nextFullscreen, {
@@ -2875,6 +2942,15 @@ class _PlayerPageState extends State<PlayerPage>
       _notesOverlayMounted = nextFullscreen && _notesOpen;
     });
     _restartControlsAutoHideTimer();
+    if (_playbackService is PlaybackVideoSurface) {
+      try {
+        await windowManager.setFullScreen(nextFullscreen);
+      } on MissingPluginException {
+        // 组件测试或插件暂不可用时仍保留播放器内部全屏布局。
+      } on PlatformException {
+        // Windows 拒绝窗口全屏切换时仍允许用户使用应用内全屏控制层。
+      }
+    }
     if (nextFullscreen) {
       if (updateOrientation) {
         await SystemChrome.setPreferredOrientations(<DeviceOrientation>[
@@ -3046,6 +3122,15 @@ class _PlayerPageState extends State<PlayerPage>
 
   /// 离开全屏后恢复手机竖屏或平板横屏，并重新启用 edge-to-edge 系统栏。
   Future<void> _restoreSystemUi() async {
+    if (_playbackService is PlaybackVideoSurface) {
+      try {
+        await windowManager.setFullScreen(false);
+      } on MissingPluginException {
+        // 组件测试没有窗口插件时无需恢复系统窗口状态。
+      } on PlatformException {
+        // 窗口已经销毁时恢复请求可能失败，不影响播放器资源释放。
+      }
+    }
     final List<FlutterView> views = WidgetsBinding
         .instance
         .platformDispatcher
@@ -4060,8 +4145,16 @@ class _PlayerPageState extends State<PlayerPage>
       );
   }
 
-  /// 创建原生 Texture 视频画面，并在横竖屏中统一应用用户选择的比例模式。
+  /// 创建当前平台的视频画面，并在横竖屏中统一应用用户选择的比例模式。
   Widget _buildVideoOutput() {
+    final PlaybackService service = _playbackService;
+    if (service is PlaybackVideoSurface) {
+      final PlaybackVideoSurface surface = service as PlaybackVideoSurface;
+      final double aspectRatio = _playbackSnapshot.videoAspectRatio > 0
+          ? _playbackSnapshot.videoAspectRatio
+          : 16 / 9;
+      return _buildFittedVideoOutput(surface.buildVideoSurface(), aspectRatio);
+    }
     final int? textureId = _textureId;
     if (textureId != null) {
       final double aspectRatio = _playbackSnapshot.videoAspectRatio > 0
@@ -6617,18 +6710,20 @@ class _PlayerPageState extends State<PlayerPage>
                                                   Icons.view_timeline_outlined,
                                               tooltip: '分段信息',
                                             ),
-                                          PlayerCompactIconButton(
-                                            key: const Key(
-                                              'picture-in-picture',
+                                          if (_playbackService
+                                              is! PlaybackVideoSurface)
+                                            PlayerCompactIconButton(
+                                              key: const Key(
+                                                'picture-in-picture',
+                                              ),
+                                              // 画中画按钮函数仅在当前原生播放服务声明支持时显示。
+                                              onPressed: () => unawaited(
+                                                _enterPictureInPicture(),
+                                              ),
+                                              icon: Icons
+                                                  .picture_in_picture_alt_rounded,
+                                              tooltip: '画中画',
                                             ),
-                                            // 画中画按钮函数调用 Android 原生小窗能力。
-                                            onPressed: () => unawaited(
-                                              _enterPictureInPicture(),
-                                            ),
-                                            icon: Icons
-                                                .picture_in_picture_alt_rounded,
-                                            tooltip: '画中画',
-                                          ),
                                           PlayerCompactIconButton(
                                             key: const Key('danmaku-toggle'),
                                             // 弹幕按钮函数开启或关闭当前分P的真实弹幕绘制与预取。
@@ -6991,7 +7086,11 @@ class _PlayerPageState extends State<PlayerPage>
       canPop: _allowRoutePop,
       // 系统返回函数保证先退出全屏或返回上一支合集视频，再离开页面。
       onPopInvokedWithResult: _handlePopInvoked,
-      child: pageScaffold,
+      child: Focus(
+        autofocus: true,
+        onKeyEvent: _handlePlayerKeyEvent,
+        child: pageScaffold,
+      ),
     );
   }
 }

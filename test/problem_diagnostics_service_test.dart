@@ -12,7 +12,8 @@ ProblemDiagnosticsService _createDiagnosticsService(
     preferencesLoader: () async => preferences,
     appVersionLoader: () async => '1.1.1+10',
     deviceInfoLoader: () async => const DiagnosticDeviceInfo(
-      androidRelease: '15',
+      platformName: 'Android',
+      systemVersion: '15',
       apiLevel: 35,
       model: 'Xiaomi 23127PN0CC',
     ),
@@ -41,7 +42,7 @@ void main() {
 
     final ProblemDiagnosticsSnapshot snapshot = await service.loadSnapshot();
     expect(snapshot.appVersion, '1.1.1+10');
-    expect(snapshot.deviceInfo.androidLabel, '15 / API 35');
+    expect(snapshot.deviceInfo.systemLabel, 'Android 15 / API 35');
     expect(snapshot.recentErrors, hasLength(1));
     expect(snapshot.recentErrors.single.category, 'riskControl');
     expect(snapshot.recentErrors.single.operation, 'load_play_url');
@@ -55,11 +56,50 @@ void main() {
     final String copyText = await service.buildCopyText();
     expect(copyText, contains('FocuBili 问题诊断'));
     expect(copyText, contains('应用版本：1.1.1+10'));
-    expect(copyText, contains('Android：15 / API 35'));
+    expect(copyText, contains('系统：Android 15 / API 35'));
     expect(copyText, contains('分类：riskControl'));
     expect(copyText, contains('操作：load_play_url'));
     expect(copyText, isNot(contains('secret')));
     expect(copyText, contains('不包含登录凭据、Cookie、搜索内容、笔记正文、专注目标或完整请求地址'));
+  });
+
+  /// 验证 Windows 复制文本展示真实系统与 Toast 字段，不再出现 Android 精确闹钟文案。
+  test('Windows 诊断文本使用跨平台系统和 Toast 信息', () async {
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final ProblemDiagnosticsService service = ProblemDiagnosticsService(
+      preferencesLoader: () async => preferences,
+      appVersionLoader: () async => '1.4.0+15',
+      deviceInfoLoader: () async => const DiagnosticDeviceInfo(
+        platformName: 'Windows',
+        systemVersion: '11 24H2 (10.0.26100)',
+        apiLevel: null,
+        model: 'Windows PC',
+      ),
+      // 假提醒诊断函数模拟 Windows Toast 已初始化且有一条未来提醒。
+      reminderDiagnosticsLoader: () async =>
+          ReminderDiagnosticsSnapshot.fromPlatformMap(<Object?, Object?>{
+            'pendingCount': 1,
+            'lastScheduleMode': 'windows_toast',
+            'exactAlarmAllowed': true,
+            'notificationsEnabled': true,
+            'batteryOptimizationIgnored': true,
+            'backgroundRestricted': false,
+            'manufacturer': 'Microsoft Windows',
+            'events': <Object?>[],
+          }),
+      // 假清理函数保证测试不会访问真实 Windows 通知插件。
+      reminderDiagnosticsClearer: () async {},
+      clock: () => DateTime(2026, 8, 9, 12),
+    );
+
+    final String copyText = await service.buildCopyText();
+
+    expect(copyText, contains('系统：Windows 11 24H2 (10.0.26100)'));
+    expect(copyText, contains('设备类型：Windows PC'));
+    expect(copyText, contains('提醒方式：Windows Toast'));
+    expect(copyText, contains('Toast 状态：可用'));
+    expect(copyText, isNot(contains('精确闹钟权限')));
+    expect(copyText, isNot(contains('后台限制')));
   });
 
   test('未预期错误只记录经过限制的异常类型', () async {
@@ -91,7 +131,8 @@ void main() {
       preferencesLoader: () async => preferences,
       appVersionLoader: () async => '1.1.1+10',
       deviceInfoLoader: () async => const DiagnosticDeviceInfo(
-        androidRelease: '15',
+        platformName: 'Android',
+        systemVersion: '15',
         apiLevel: 35,
         model: 'Xiaomi 23127PN0CC',
       ),

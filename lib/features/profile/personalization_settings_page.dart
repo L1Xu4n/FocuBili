@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 
@@ -83,8 +84,11 @@ class _PersonalizationSettingsPageState
           .load();
       final FocusPreferences focusPreferences = await _focusPreferencesService
           .load();
-      final bool hasDoNotDisturbAccess = await widget.focusNotificationService
-          .hasDoNotDisturbAccess();
+      final bool hasDoNotDisturbAccess =
+          Platform.isWindows &&
+              widget.focusNotificationService.usesWindowsBackend
+          ? false
+          : await widget.focusNotificationService.hasDoNotDisturbAccess();
       if (!mounted) {
         return;
       }
@@ -111,6 +115,10 @@ class _PersonalizationSettingsPageState
 
   /// 查询当前勿扰权限并刷新副标题；查询失败时按未授权处理。
   Future<void> _refreshDoNotDisturbAccess() async {
+    if (Platform.isWindows &&
+        widget.focusNotificationService.usesWindowsBackend) {
+      return;
+    }
     final bool permitted = await widget.focusNotificationService
         .hasDoNotDisturbAccess();
     if (mounted) {
@@ -397,6 +405,9 @@ class _PersonalizationSettingsPageState
 
   /// 创建“播放与专注”设置卡，让横屏平板左栏只承载使用频率最高的行为开关。
   Widget _buildPlaybackAndFocusSection() {
+    final bool usesWindowsCapabilities =
+        Platform.isWindows &&
+        widget.focusNotificationService.usesWindowsBackend;
     return _buildSettingsSection(
       key: const Key('settings-playback-section'),
       icon: Icons.play_circle_outline_rounded,
@@ -413,21 +424,22 @@ class _PersonalizationSettingsPageState
           title: const Text('启用双击快进快退'),
           subtitle: const Text('关闭后，双击视频画面的任何位置都会切换播放或暂停。'),
         ),
-        SwitchListTile.adaptive(
-          key: const Key('enable-focus-do-not-disturb'),
-          value: _focusPreferences.enableDoNotDisturb,
-          // 勿扰开关函数保存用户选择，并在首次开启时说明 Android 特殊访问权限。
-          onChanged: _savingDoNotDisturb ? null : _setDoNotDisturbEnabled,
-          secondary: const Icon(Icons.do_not_disturb_on_outlined),
-          title: const Text('专注状态将手机设为勿扰模式'),
-          subtitle: Text(
-            !_focusPreferences.enableDoNotDisturb
-                ? '关闭时不会修改手机的勿扰状态。'
-                : _hasDoNotDisturbAccess
-                ? '已授权；播放时开启，暂停或结束时恢复，快进不会反复切换。'
-                : '尚未授权；每次开始专注都会检查并提示。',
+        if (!usesWindowsCapabilities)
+          SwitchListTile.adaptive(
+            key: const Key('enable-focus-do-not-disturb'),
+            value: _focusPreferences.enableDoNotDisturb,
+            // 勿扰开关函数保存用户选择，并在首次开启时说明 Android 特殊访问权限。
+            onChanged: _savingDoNotDisturb ? null : _setDoNotDisturbEnabled,
+            secondary: const Icon(Icons.do_not_disturb_on_outlined),
+            title: const Text('专注状态将手机设为勿扰模式'),
+            subtitle: Text(
+              !_focusPreferences.enableDoNotDisturb
+                  ? '关闭时不会修改手机的勿扰状态。'
+                  : _hasDoNotDisturbAccess
+                  ? '已授权；播放时开启，暂停或结束时恢复，快进不会反复切换。'
+                  : '尚未授权；每次开始专注都会检查并提示。',
+            ),
           ),
-        ),
       ],
     );
   }
@@ -446,12 +458,22 @@ class _PersonalizationSettingsPageState
         ListTile(
           key: const Key('open-android-permissions'),
           leading: const Icon(Icons.admin_panel_settings_outlined),
-          title: const Text('权限管理'),
-          subtitle: const Text('统一申请、检查、取消权限，并设置后台提醒保护'),
+          title: Text(
+            Platform.isWindows &&
+                    widget.focusNotificationService.usesWindowsBackend
+                ? '系统能力'
+                : '权限管理',
+          ),
+          subtitle: Text(
+            Platform.isWindows &&
+                    widget.focusNotificationService.usesWindowsBackend
+                ? '检查 Windows 通知、未来提醒和安装包身份'
+                : '统一申请、检查、取消权限，并设置后台提醒保护',
+          ),
           trailing: const Icon(Icons.chevron_right_rounded),
           // 权限管理入口函数打开统一页面，原有勿扰开关和功能内申请入口继续保留。
           onTap: () =>
-              Navigator.of(context).pushNamed(AppRoutes.androidPermissions),
+              Navigator.of(context).pushNamed(AppRoutes.systemCapabilities),
         ),
         SwitchListTile.adaptive(
           key: const Key('enable-startup-update-check'),

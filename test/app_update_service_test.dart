@@ -76,6 +76,58 @@ void main() {
     ]);
   });
 
+  /// 验证 Windows 只选择本项目的 MSIX 资产，即使 Release 同时把 APK 排在前面。
+  test('Windows 更新优先返回安全 MSIX 安装包', () async {
+    final AppUpdateResult result = await AppUpdateService(
+      targetPlatform: AppUpdateTargetPlatform.windows,
+      releaseLoader: () async => <String, Object?>{
+        'tag_name': 'v1.4.0',
+        'html_url': 'https://github.com/L1Xu4n/FocuBili/releases/tag/v1.4.0',
+        'assets': <Map<String, Object?>>[
+          <String, Object?>{
+            'name': 'FocuBili-v1.4.0-release.apk',
+            'browser_download_url':
+                'https://github.com/L1Xu4n/FocuBili/releases/download/v1.4.0/FocuBili-v1.4.0-release.apk',
+          },
+          <String, Object?>{
+            'name': 'FocuBili-v1.4.0-x64.msix',
+            'browser_download_url':
+                'https://github.com/L1Xu4n/FocuBili/releases/download/v1.4.0/FocuBili-v1.4.0-x64.msix',
+          },
+        ],
+      },
+    ).check(currentVersion: '1.3.1');
+
+    expect(result.downloadUrl?.path, endsWith('.msix'));
+    expect(result.downloadActionLabel, '下载 Windows 安装包');
+    expect(result.downloadUrl?.path, isNot(endsWith('.apk')));
+  });
+
+  /// 验证 Android 只选择 APK，且伪造域名的同名文件不会成为下载入口。
+  test('Android 更新忽略 Windows 和非 GitHub 安装包', () async {
+    final AppUpdateResult result = await AppUpdateService(
+      targetPlatform: AppUpdateTargetPlatform.android,
+      releaseLoader: () async => <String, Object?>{
+        'tag_name': 'v1.4.0',
+        'assets': <Map<String, Object?>>[
+          <String, Object?>{
+            'name': 'FocuBili-v1.4.0-release.apk',
+            'browser_download_url':
+                'https://example.com/L1Xu4n/FocuBili/releases/download/v1.4.0/FocuBili-v1.4.0-release.apk',
+          },
+          <String, Object?>{
+            'name': 'FocuBili-v1.4.0-x64.msix',
+            'browser_download_url':
+                'https://github.com/L1Xu4n/FocuBili/releases/download/v1.4.0/FocuBili-v1.4.0-x64.msix',
+          },
+        ],
+      },
+    ).check(currentVersion: '1.3.1');
+
+    expect(result.downloadUrl, isNull);
+    expect(result.downloadActionLabel, '查看 Release');
+  });
+
   test('Release 未按约定提供摘要标记时不会把整篇正文显示到 App', () async {
     final AppUpdateResult result = await AppUpdateService(
       releaseLoader: () async => <String, Object?>{

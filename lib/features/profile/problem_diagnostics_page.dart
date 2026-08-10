@@ -149,7 +149,11 @@ class _ProblemDiagnosticsPageState extends State<ProblemDiagnosticsPage> {
           children: <Widget>[
             Row(
               children: <Widget>[
-                const Icon(Icons.phone_android_rounded),
+                Icon(
+                  snapshot.deviceInfo.isWindows
+                      ? Icons.desktop_windows_outlined
+                      : Icons.phone_android_rounded,
+                ),
                 const SizedBox(width: 8),
                 Text(
                   '基础环境信息',
@@ -161,11 +165,8 @@ class _ProblemDiagnosticsPageState extends State<ProblemDiagnosticsPage> {
             ),
             const SizedBox(height: 8),
             _buildInfoRow('应用版本', snapshot.appVersion),
-            _buildInfoRow(
-              '系统版本',
-              'Android ${snapshot.deviceInfo.androidLabel}',
-            ),
-            _buildInfoRow('设备型号', snapshot.deviceInfo.model),
+            _buildInfoRow('系统版本', snapshot.deviceInfo.systemLabel),
+            _buildInfoRow('设备类型', snapshot.deviceInfo.model),
             _buildInfoRow(
               '生成时间',
               formatDiagnosticDateTime(snapshot.generatedAt),
@@ -176,9 +177,10 @@ class _ProblemDiagnosticsPageState extends State<ProblemDiagnosticsPage> {
     );
   }
 
-  /// 创建闹钟安排、恢复和触发状态卡片，帮助区分系统未唤醒与通知权限拦截。
+  /// 创建平台提醒状态卡片；Windows 展示 Toast，Android 展示精确闹钟和后台限制。
   Widget _buildReminderDiagnosticsCard(
     ReminderDiagnosticsSnapshot diagnostics,
+    DiagnosticDeviceInfo deviceInfo,
   ) {
     final List<ReminderDiagnosticEvent> visibleEvents = diagnostics.events
         .take(6)
@@ -204,18 +206,26 @@ class _ProblemDiagnosticsPageState extends State<ProblemDiagnosticsPage> {
             ),
             const SizedBox(height: 8),
             _buildInfoRow('待触发', '${diagnostics.pendingCount} 条'),
-            _buildInfoRow(
-              '精确闹钟',
-              diagnostics.exactAlarmAllowed ? '已允许' : '未允许',
-            ),
-            _buildInfoRow(
-              '通知状态',
-              diagnostics.notificationsEnabled ? '已开启' : '未开启',
-            ),
-            _buildInfoRow(
-              '后台限制',
-              diagnostics.backgroundRestricted ? '系统正在限制' : '未检测到限制',
-            ),
+            if (deviceInfo.isWindows) ...<Widget>[
+              _buildInfoRow('提醒方式', 'Windows Toast'),
+              _buildInfoRow(
+                'Toast 状态',
+                diagnostics.notificationsEnabled ? '可用' : '不可用',
+              ),
+            ] else ...<Widget>[
+              _buildInfoRow(
+                '精确闹钟',
+                diagnostics.exactAlarmAllowed ? '已允许' : '未允许',
+              ),
+              _buildInfoRow(
+                '通知状态',
+                diagnostics.notificationsEnabled ? '已开启' : '未开启',
+              ),
+              _buildInfoRow(
+                '后台限制',
+                diagnostics.backgroundRestricted ? '系统正在限制' : '未检测到限制',
+              ),
+            ],
             _buildInfoRow(
               '最近安排',
               diagnostics.lastScheduledAt == null
@@ -230,14 +240,14 @@ class _ProblemDiagnosticsPageState extends State<ProblemDiagnosticsPage> {
             ),
             const SizedBox(height: 8),
             Text(
-              '最近原生事件',
+              '最近系统事件',
               style: Theme.of(
                 context,
               ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 6),
             if (visibleEvents.isEmpty)
-              const Text('暂无闹钟安排或触发记录。')
+              const Text('暂无提醒安排或触发记录。')
             else
               ...visibleEvents.map(
                 (ReminderDiagnosticEvent event) => Padding(
@@ -428,6 +438,7 @@ class _ProblemDiagnosticsPageState extends State<ProblemDiagnosticsPage> {
                       const SizedBox(height: 8),
                       _buildReminderDiagnosticsCard(
                         snapshot.reminderDiagnostics,
+                        snapshot.deviceInfo,
                       ),
                       _buildRecentErrors(snapshot),
                     ],

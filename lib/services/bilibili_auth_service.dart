@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter/services.dart';
 
 /// 保存 B 站登录成功后“我的”页面需要展示的最小账号信息。
@@ -141,6 +142,42 @@ class PlatformBilibiliCookieStore implements BilibiliCookieStore {
   }
 }
 
+/// 使用 Windows 凭据管理器保护的加密存储保存当前单账号 Cookie。
+class WindowsSecureBilibiliCookieStore implements BilibiliCookieStore {
+  /// 创建 Windows 安全 Cookie 存储；测试可以注入不会访问系统凭据的读写函数。
+  WindowsSecureBilibiliCookieStore({FlutterSecureStorage? storage})
+    : _storage = storage ?? const FlutterSecureStorage();
+
+  static const String _cookieKey = 'focubili_bilibili_cookie';
+  final FlutterSecureStorage _storage;
+
+  /// 从 Windows 加密存储读取 Cookie，并在不存在时返回空字符串。
+  @override
+  Future<String> readCookies() async {
+    return (await _storage.read(key: _cookieKey))?.trim() ?? '';
+  }
+
+  /// 把已经通过官方接口验证的 Cookie 原子写入 Windows 加密存储。
+  @override
+  Future<void> replaceCookies(String cookieHeader) {
+    return _storage.write(key: _cookieKey, value: cookieHeader.trim());
+  }
+
+  /// 删除 Windows 中唯一的 B 站会话，不影响应用其他本机设置。
+  @override
+  Future<void> clearBilibiliCookies() {
+    return _storage.delete(key: _cookieKey);
+  }
+}
+
+/// 根据当前系统选择 Android WebView Cookie 或 Windows 加密 Cookie 存储。
+BilibiliCookieStore createDefaultBilibiliCookieStore() {
+  if (Platform.isWindows) {
+    return WindowsSecureBilibiliCookieStore();
+  }
+  return const PlatformBilibiliCookieStore();
+}
+
 /// 使用 Dart HttpClient 请求官方账号状态接口的默认网络实现。
 class BilibiliHttpAuthApi implements BilibiliAuthApi {
   /// 创建使用官方账号状态地址的网络客户端。
@@ -151,7 +188,7 @@ class BilibiliHttpAuthApi implements BilibiliAuthApi {
     'api.bilibili.com',
     '/x/web-interface/nav',
   );
-  static const String _desktopUserAgent =
+  static const String desktopUserAgent =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
       'AppleWebKit/537.36 (KHTML, like Gecko) '
       'Chrome/126.0.0.0 Safari/537.36';
@@ -166,7 +203,7 @@ class BilibiliHttpAuthApi implements BilibiliAuthApi {
       final HttpClientRequest request = await client.getUrl(_accountEndpoint);
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
       request.headers.set(HttpHeaders.cookieHeader, cookieHeader);
-      request.headers.set(HttpHeaders.userAgentHeader, _desktopUserAgent);
+      request.headers.set(HttpHeaders.userAgentHeader, desktopUserAgent);
       request.headers.set(
         HttpHeaders.refererHeader,
         'https://www.bilibili.com/',
@@ -184,9 +221,9 @@ class BilibiliHttpAuthApi implements BilibiliAuthApi {
 
 /// 验证 B 站会话、导入已验证 Cookie，并且永不保存多账号或密码资料。
 class BilibiliAuthService {
-  /// 创建可替换网络和 Cookie 容器的登录服务，默认使用 Android 与真实官方接口。
+  /// 创建可替换网络和 Cookie 容器的登录服务，默认使用当前平台安全存储与真实官方接口。
   BilibiliAuthService({BilibiliCookieStore? cookieStore, BilibiliAuthApi? api})
-    : _cookieStore = cookieStore ?? const PlatformBilibiliCookieStore(),
+    : _cookieStore = cookieStore ?? createDefaultBilibiliCookieStore(),
       _api = api ?? BilibiliHttpAuthApi();
 
   final BilibiliCookieStore _cookieStore;
@@ -249,7 +286,7 @@ class BilibiliAuthService {
     return verifiedSession.account!;
   }
 
-  /// 从 Android WebView 的 B 站域读取 Cookie 请求头，不在 Dart 中持久化副本。
+  /// 从当前平台的安全会话容器读取 Cookie 请求头，不创建额外明文副本。
   Future<String> readCookieHeader() => _cookieStore.readCookies();
 
   /// 仅清理 B 站域 Cookie，用于退出或切换账号，不会自动响应网络错误。

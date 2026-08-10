@@ -9,6 +9,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// 表示一次 GitHub Release 更新检查的最终状态。
 enum AppUpdateStatus { idle, disabled, checking, upToDate, available, failed }
 
+/// 指定更新检查应选择的安装包平台，测试可固定平台而不依赖运行测试的电脑。
+enum AppUpdateTargetPlatform { android, windows, other }
+
 /// 保存当前版本、远端版本和 Release 页面，供“关于”页统一展示。
 class AppUpdateResult {
   /// 创建一份可供设置页和关于页共同读取的更新检查结果。
@@ -17,6 +20,8 @@ class AppUpdateResult {
     required this.currentVersion,
     this.latestVersion,
     this.releaseUrl,
+    this.downloadUrl,
+    this.downloadActionLabel = '查看 Release',
     this.releaseHighlights = const <String>[],
     this.message,
   });
@@ -27,6 +32,8 @@ class AppUpdateResult {
       currentVersion = '',
       latestVersion = null,
       releaseUrl = null,
+      downloadUrl = null,
+      downloadActionLabel = '查看 Release',
       releaseHighlights = const <String>[],
       message = null;
 
@@ -34,6 +41,8 @@ class AppUpdateResult {
   final String currentVersion;
   final String? latestVersion;
   final Uri? releaseUrl;
+  final Uri? downloadUrl;
+  final String downloadActionLabel;
 
   /// 保存 Release 正文中专门提供给 App 展示的最多三条简短更新内容。
   final List<String> releaseHighlights;
@@ -49,7 +58,7 @@ abstract interface class AppVersionProvider {
   Future<String> loadVersion();
 }
 
-/// 从 Android/iOS 安装包元数据读取 pubspec 对应版本号。
+/// 从当前平台安装包元数据读取 pubspec 对应版本号。
 class PlatformAppVersionProvider implements AppVersionProvider {
   /// 创建使用 package_info_plus 读取版本的平台实现。
   const PlatformAppVersionProvider();
@@ -88,8 +97,10 @@ class AppUpdateService {
   AppUpdateService({
     Future<Map<String, Object?>> Function()? releaseLoader,
     HttpClient? httpClient,
+    AppUpdateTargetPlatform? targetPlatform,
   }) : _releaseLoader = releaseLoader,
-       _httpClient = httpClient;
+       _httpClient = httpClient,
+       _targetPlatform = targetPlatform ?? _currentTargetPlatform();
 
   static final Uri releasesUri = Uri.parse(
     'https://github.com/L1Xu4n/FocuBili/releases',
@@ -106,6 +117,7 @@ class AppUpdateService {
 
   final Future<Map<String, Object?>> Function()? _releaseLoader;
   final HttpClient? _httpClient;
+  final AppUpdateTargetPlatform _targetPlatform;
 
   /// 请求最新正式 Release；网络、限流和格式错误均转换为可展示的失败状态。
   Future<AppUpdateResult> check({required String currentVersion}) async {
@@ -123,6 +135,7 @@ class AppUpdateService {
           Uri.tryParse(release['html_url']?.toString() ?? '') ??
           AppUpdateService.releasesUri;
       final bool available = compareVersions(latestVersion, currentVersion) > 0;
+      final Uri? downloadUrl = _selectDownloadAsset(release['assets']);
       final List<String> releaseHighlights = _readReleaseHighlights(
         release['body'],
       );
@@ -133,6 +146,8 @@ class AppUpdateService {
         currentVersion: currentVersion,
         latestVersion: latestVersion,
         releaseUrl: releaseUrl,
+        downloadUrl: downloadUrl,
+        downloadActionLabel: _downloadActionLabel(downloadUrl),
         releaseHighlights: releaseHighlights,
         message: available ? '发现新版本 $latestVersion' : '当前已是最新版本',
       );
@@ -144,6 +159,79 @@ class AppUpdateService {
         message: '暂时无法检查更新，请稍后重试。',
       );
     }
+  }
+
+  /// 根据当前 Dart 平台返回更新安装包类型，未支持平台只保留 Release 页面入口。
+  static AppUpdateTargetPlatform _currentTargetPlatform() {
+    if (Platform.isWindows) {
+      return AppUpdateTargetPlatform.windows;
+    }
+    if (Platform.isAndroid) {
+      return AppUpdateTargetPlatform.android;
+    }
+    return AppUpdateTargetPlatform.other;
+  }
+
+  /// 从 Release 资产中选择当前平台安装包；Windows 不会退回选择 APK，Android 也不会选择 MSIX。
+  Uri? _selectDownloadAsset(Object? rawAssets) {
+    if (rawAssets is! List ||
+        _targetPlatform == AppUpdateTargetPlatform.other) {
+      return null;
+    }
+    final List<String> extensions = switch (_targetPlatform) {
+      AppUpdateTargetPlatform.windows => const <String>[
+        '.msixbundle',
+        '.msix',
+        '.exe',
+      ],
+      AppUpdateTargetPlatform.android => const <String>['.apk'],
+      AppUpdateTargetPlatform.other => const <String>[],
+    };
+    for (final String extension in extensions) {
+      for (final Object? rawAsset in rawAssets) {
+        if (rawAsset is! Map) {
+          continue;
+        }
+        final Map<Object?, Object?> asset = Map<Object?, Object?>.from(
+          rawAsset,
+        );
+        final String name = (asset['name']?.toString() ?? '').trim();
+        final Uri? uri = Uri.tryParse(
+          (asset['browser_download_url']?.toString() ?? '').trim(),
+        );
+        if (name.toLowerCase().endsWith(extension) &&
+            uri != null &&
+            uri.path.toLowerCase().endsWith(extension) &&
+            _isTrustedReleaseAsset(uri)) {
+          return uri;
+        }
+      }
+    }
+    return null;
+  }
+
+  /// 只允许打开本项目 GitHub Release 的 HTTPS 下载地址，拒绝用户信息、自定义端口和片段。
+  static bool _isTrustedReleaseAsset(Uri uri) {
+    return uri.scheme.toLowerCase() == 'https' &&
+        uri.host.toLowerCase() == 'github.com' &&
+        uri.userInfo.isEmpty &&
+        (!uri.hasPort || uri.port == 443) &&
+        uri.fragment.isEmpty &&
+        uri.path.toLowerCase().startsWith(
+          '/l1xu4n/focubili/releases/download/',
+        );
+  }
+
+  /// 返回与选中资产一致的按钮文案；没有安全匹配资产时引导用户查看完整 Release。
+  String _downloadActionLabel(Uri? downloadUrl) {
+    if (downloadUrl == null) {
+      return '查看 Release';
+    }
+    return switch (_targetPlatform) {
+      AppUpdateTargetPlatform.windows => '下载 Windows 安装包',
+      AppUpdateTargetPlatform.android => '下载 Android 安装包',
+      AppUpdateTargetPlatform.other => '查看 Release',
+    };
   }
 
   /// 使用带超时的系统 HTTP 客户端访问 GitHub API，避免启动检查长期占用连接。

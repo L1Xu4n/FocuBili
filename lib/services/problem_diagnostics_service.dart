@@ -14,7 +14,7 @@ typedef ProblemDiagnosticsPreferencesLoader =
 /// 定义读取应用版本的可替换入口，便于测试固定版本文本。
 typedef ProblemDiagnosticsAppVersionLoader = Future<String> Function();
 
-/// 定义读取 Android 系统和设备型号的可替换入口，便于测试不依赖原生通道。
+/// 定义读取当前平台、系统版本和设备类型的可替换入口，便于测试不依赖原生通道。
 typedef ProblemDiagnosticsDeviceInfoLoader =
     Future<DiagnosticDeviceInfo> Function();
 
@@ -25,22 +25,26 @@ typedef ReminderDiagnosticsLoader =
 /// 定义清除原生提醒诊断事件的可替换入口，测试不会触碰真实闹钟。
 typedef ReminderDiagnosticsClearer = Future<void> Function();
 
-/// 保存与问题定位相关但不含标识符、Cookie 或完整请求地址的 Android 环境信息。
+/// 保存与问题定位相关但不含主机名、标识符、Cookie 或完整请求地址的系统环境信息。
 class DiagnosticDeviceInfo {
-  /// 创建一份已脱敏的 Android 版本、API 和设备型号信息。
+  /// 创建一份已脱敏的平台、系统版本、可选 API 和设备类型信息。
   const DiagnosticDeviceInfo({
-    required this.androidRelease,
+    required this.platformName,
+    required this.systemVersion,
     required this.apiLevel,
     required this.model,
   });
 
-  /// Android 的公开系统版本号，例如“15”。
-  final String androidRelease;
+  /// 当前操作系统的公开名称，例如“Android”或“Windows”。
+  final String platformName;
 
-  /// Android 的公开 API 级别；通道不可用时为空。
+  /// 当前操作系统的公开版本；不会包含 Windows 电脑名称或账号名称。
+  final String systemVersion;
+
+  /// Android 的公开 API 级别；Windows 等平台为空。
   final int? apiLevel;
 
-  /// 设备厂商和型号；不读取序列号、Android ID、MAC 地址或广告标识符。
+  /// Android 厂商型号或“Windows PC”；不读取主机名、序列号、Android ID、MAC 地址或广告标识符。
   final String model;
 
   /// 从 Android 方法通道返回的字典中读取并校验环境信息。
@@ -49,16 +53,23 @@ class DiagnosticDeviceInfo {
     final int? apiLevel = (values['apiLevel'] as num?)?.toInt();
     final String model = (values['model'] as String? ?? '').trim();
     return DiagnosticDeviceInfo(
-      androidRelease: release.isEmpty ? '未知' : release,
+      platformName: 'Android',
+      systemVersion: release.isEmpty ? '未知' : release,
       apiLevel: apiLevel != null && apiLevel > 0 ? apiLevel : null,
       model: model.isEmpty ? '未知设备' : model,
     );
   }
 
-  /// 返回适合页面和复制文本展示的 Android 版本字符串。
-  String get androidLabel {
-    final String apiLabel = apiLevel == null ? 'API 未知' : 'API $apiLevel';
-    return '$androidRelease / $apiLabel';
+  /// 判断当前诊断环境是否来自 Windows，供页面隐藏 Android 专属权限字段。
+  bool get isWindows => platformName.toLowerCase() == 'windows';
+
+  /// 返回适合页面和复制文本展示的跨平台系统版本字符串。
+  String get systemLabel {
+    if (platformName.toLowerCase() == 'android') {
+      final String apiLabel = apiLevel == null ? 'API 未知' : 'API $apiLevel';
+      return 'Android $systemVersion / $apiLabel';
+    }
+    return '$platformName $systemVersion'.trim();
   }
 }
 
@@ -77,7 +88,7 @@ class ReminderDiagnosticEvent {
   final String result;
   final String mode;
 
-  /// 从 Android 原生字典读取一条事件；缺失时间或固定字段时返回空。
+  /// 从平台提醒字典读取一条事件；缺失时间或固定字段时返回空。
   static ReminderDiagnosticEvent? tryParse(Map<Object?, Object?> values) {
     final int timeMs = (values['timeMs'] as num?)?.toInt() ?? 0;
     final String type = (values['type'] as String? ?? '').trim();
@@ -96,23 +107,23 @@ class ReminderDiagnosticEvent {
 
   /// 返回问题诊断页面使用的中文事件类型。
   String get typeLabel => switch (type) {
-    'schedule' => '安排闹钟',
+    'schedule' => '安排提醒',
     'trigger' => '触发提醒',
-    'restore' => '恢复闹钟',
-    'cancel' => '取消闹钟',
+    'restore' => '恢复提醒',
+    'cancel' => '取消提醒',
     _ => type,
   };
 
   /// 返回常见原生结果的中文说明，未知结果保留原文用于定位。
   String get resultLabel => switch (result) {
-    'scheduled' => '已进入系统闹钟队列',
+    'scheduled' => '已进入系统提醒队列',
     'notification_posted' => '通知已提交给系统',
     'notification_permission_denied' => '通知运行时权限被拒绝',
     'notifications_disabled' => '应用通知总开关已关闭',
     'cancelled' => '已取消',
     'nothing_pending' => '没有待恢复提醒',
     'invalid_request' => '提醒参数或时间无效',
-    'system_rejected' => '系统拒绝安排闹钟',
+    'system_rejected' => '系统拒绝安排提醒',
     'storage_failed' => '待提醒记录保存失败',
     _ when result.startsWith('restored_') =>
       '已恢复 ${result.substring('restored_'.length)} 条提醒',
@@ -120,7 +131,7 @@ class ReminderDiagnosticEvent {
   };
 }
 
-/// 汇总 Android 闹钟队列、权限限制和最近原生触发事件。
+/// 汇总 Android 闹钟或 Windows Toast 的待触发状态、权限限制和最近系统事件。
 class ReminderDiagnosticsSnapshot {
   /// 创建一份可安全展示和复制的提醒诊断快照。
   const ReminderDiagnosticsSnapshot({
@@ -151,7 +162,7 @@ class ReminderDiagnosticsSnapshot {
   final String manufacturer;
   final List<ReminderDiagnosticEvent> events;
 
-  /// 从 Android MethodChannel 字典读取提醒诊断，忽略损坏的单条事件。
+  /// 从平台提醒字典读取诊断状态，忽略损坏的单条事件。
   factory ReminderDiagnosticsSnapshot.fromPlatformMap(
     Map<Object?, Object?> values,
   ) {
@@ -346,7 +357,7 @@ class ProblemDiagnosticsSnapshot {
   /// 当前已安装应用的语义版本与构建号。
   final String appVersion;
 
-  /// 当前设备的公开 Android 环境信息。
+  /// 当前设备的公开、脱敏跨平台环境信息。
   final DiagnosticDeviceInfo deviceInfo;
 
   /// 本次页面加载或复制文本生成的时间。
@@ -534,7 +545,7 @@ class ProblemDiagnosticsService {
     }
   }
 
-  /// 读取应用版本、Android 环境和最近错误，生成供页面展示的一次性诊断快照。
+  /// 读取应用版本、当前系统环境和最近错误，生成供页面展示的一次性诊断快照。
   Future<ProblemDiagnosticsSnapshot> loadSnapshot() async {
     final List<Object> values = await Future.wait<Object>(<Future<Object>>[
       _loadVersionSafely(),
@@ -558,21 +569,31 @@ class ProblemDiagnosticsService {
       ..writeln('FocuBili 问题诊断')
       ..writeln()
       ..writeln('应用版本：${snapshot.appVersion}')
-      ..writeln('Android：${snapshot.deviceInfo.androidLabel}')
-      ..writeln('设备型号：${snapshot.deviceInfo.model}')
+      ..writeln('系统：${snapshot.deviceInfo.systemLabel}')
+      ..writeln('设备类型：${snapshot.deviceInfo.model}')
       ..writeln('生成时间：${formatDiagnosticDateTime(snapshot.generatedAt)}')
       ..writeln()
       ..writeln('提醒诊断：')
-      ..writeln('待触发提醒：${snapshot.reminderDiagnostics.pendingCount}')
-      ..writeln(
-        '精确闹钟权限：${snapshot.reminderDiagnostics.exactAlarmAllowed ? '已允许' : '未允许'}',
-      )
-      ..writeln(
-        '通知状态：${snapshot.reminderDiagnostics.notificationsEnabled ? '已开启' : '未开启'}',
-      )
-      ..writeln(
-        '后台限制：${snapshot.reminderDiagnostics.backgroundRestricted ? '受限制' : '未检测到限制'}',
-      )
+      ..writeln('待触发提醒：${snapshot.reminderDiagnostics.pendingCount}');
+    if (snapshot.deviceInfo.isWindows) {
+      text
+        ..writeln('提醒方式：Windows Toast')
+        ..writeln(
+          'Toast 状态：${snapshot.reminderDiagnostics.notificationsEnabled ? '可用' : '不可用'}',
+        );
+    } else {
+      text
+        ..writeln(
+          '精确闹钟权限：${snapshot.reminderDiagnostics.exactAlarmAllowed ? '已允许' : '未允许'}',
+        )
+        ..writeln(
+          '通知状态：${snapshot.reminderDiagnostics.notificationsEnabled ? '已开启' : '未开启'}',
+        )
+        ..writeln(
+          '后台限制：${snapshot.reminderDiagnostics.backgroundRestricted ? '受限制' : '未检测到限制'}',
+        );
+    }
+    text
       ..writeln(
         '最近安排：${_formatOptionalDiagnosticTime(snapshot.reminderDiagnostics.lastScheduledAt)}',
       )
@@ -627,13 +648,13 @@ class ProblemDiagnosticsService {
   Future<String> _loadVersionSafely() async {
     try {
       final String version = (await _appVersionLoader()).trim();
-      return version.isEmpty ? '1.3.1+14' : version;
+      return version.isEmpty ? '1.4.0+15' : version;
     } catch (_) {
-      return '1.3.1+14';
+      return '1.4.0+15';
     }
   }
 
-  /// 安全读取 Android 环境；原生通道不可用时保留不含标识符的最小回退信息。
+  /// 安全读取跨平台系统环境；原生通道不可用时保留不含标识符的最小回退信息。
   Future<DiagnosticDeviceInfo> _loadDeviceInfoSafely() async {
     try {
       return await _deviceInfoLoader();
@@ -822,8 +843,11 @@ class ProblemDiagnosticsService {
     return buildNumber.isEmpty ? version : '$version+$buildNumber';
   }
 
-  /// 通过既有 Android 设备状态通道读取公开系统版本和型号；桌面测试没有通道时使用最小回退。
+  /// Android 读取现有设备状态通道，Windows 直接读取不含主机名的公开系统版本。
   static Future<DiagnosticDeviceInfo> _loadNativeDeviceInfo() async {
+    if (!Platform.isAndroid) {
+      return _fallbackDeviceInfo();
+    }
     try {
       final Object? result = await _deviceChannel.invokeMethod<Object?>(
         'getDiagnosticDeviceInfo',
@@ -834,26 +858,42 @@ class ProblemDiagnosticsService {
         );
       }
     } on MissingPluginException {
-      // 测试或非 Android 平台没有原生实现时使用公开的最小回退信息。
+      // 组件测试没有 Android 原生实现时使用公开的最小回退信息。
     } on PlatformException {
       // 原生调用失败时不影响设置页，改为显示未知环境字段。
     }
     return _fallbackDeviceInfo();
   }
 
-  /// 创建没有设备唯一标识符的环境回退值，供非 Android 平台或通道失败时展示。
+  /// 创建没有设备唯一标识符和主机名的环境回退值，供 Windows 或原生通道失败时展示。
   static DiagnosticDeviceInfo _fallbackDeviceInfo() {
-    final String system = Platform.isAndroid
-        ? Platform.operatingSystemVersion.trim()
-        : '未知';
+    final String rawSystemVersion = Platform.operatingSystemVersion
+        .replaceAll(RegExp(r'[\r\n]+'), ' ')
+        .trim();
+    if (Platform.isWindows) {
+      return DiagnosticDeviceInfo(
+        platformName: 'Windows',
+        systemVersion: rawSystemVersion.isEmpty
+            ? '版本未知'
+            : _limitPublicSystemVersion(rawSystemVersion),
+        apiLevel: null,
+        model: 'Windows PC',
+      );
+    }
     final RegExpMatch? releaseMatch = RegExp(
       r'(\d+(?:\.\d+)*)',
-    ).firstMatch(system);
+    ).firstMatch(rawSystemVersion);
     return DiagnosticDeviceInfo(
-      androidRelease: releaseMatch?.group(1) ?? '未知',
+      platformName: Platform.isAndroid ? 'Android' : '未知系统',
+      systemVersion: releaseMatch?.group(1) ?? '版本未知',
       apiLevel: null,
-      model: '未知设备',
+      model: Platform.isAndroid ? '未知设备' : '未知设备类型',
     );
+  }
+
+  /// 限制公开系统版本长度，避免异常平台字符串污染诊断文本或意外带入换行。
+  static String _limitPublicSystemVersion(String value) {
+    return value.length <= 120 ? value : '${value.substring(0, 119)}…';
   }
 }
 

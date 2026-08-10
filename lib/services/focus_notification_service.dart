@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 
+import 'windows_focus_notification_service.dart';
+
 /// 汇总统一权限管理页需要的 Android 权限与后台运行状态。
 class AndroidPermissionOverview {
   /// 创建一份不会包含设备标识符的权限状态快照。
@@ -59,23 +61,47 @@ class AndroidPermissionOverview {
 /// 通过 Android 原生方法通道管理提醒通知、权限和系统设置入口。
 class FocusNotificationService {
   /// 创建通知服务；测试可注入自定义方法通道。
-  const FocusNotificationService({MethodChannel? channel})
-    : _usesDefaultChannel = channel == null,
-      _channel =
-          channel ??
-          const MethodChannel('com.focubili.app/focus_notifications');
+  const FocusNotificationService({
+    MethodChannel? channel,
+    WindowsFocusNotificationBackend? windowsBackend,
+  }) : _usesDefaultChannel = channel == null,
+       _windowsBackend = windowsBackend,
+       _channel =
+           channel ??
+           const MethodChannel('com.focubili.app/focus_notifications');
 
   final MethodChannel _channel;
   final bool _usesDefaultChannel;
+  final WindowsFocusNotificationBackend? _windowsBackend;
+
+  /// 判断本次服务是否应使用 Windows Toast，而不是 Android 方法通道。
+  bool get _usesWindowsBackend =>
+      _windowsBackend != null || (_usesDefaultChannel && Platform.isWindows);
+
+  /// 返回注入的测试后端或进程内共享的生产 Windows 通知后端。
+  WindowsFocusNotificationBackend get _resolvedWindowsBackend =>
+      _windowsBackend ?? WindowsFocusNotificationBackend.instance;
+
+  /// 供界面判断是否应展示 Windows 系统能力，而不是 Android 权限文案。
+  bool get usesWindowsBackend => _usesWindowsBackend;
+
+  /// 返回 Windows 是否已通过 MSIX 安装并获得完整通知查询与取消能力。
+  bool get hasWindowsPackageIdentity =>
+      _usesWindowsBackend && _resolvedWindowsBackend.hasPackageIdentity;
 
   /// Flutter 组件测试没有 Android 消息接收端，默认通道应直接使用安全返回值。
   bool get _skipDefaultChannelInFlutterTest =>
-      _usesDefaultChannel && Platform.environment['FLUTTER_TEST'] == 'true';
+      _usesDefaultChannel &&
+      _windowsBackend == null &&
+      Platform.environment['FLUTTER_TEST'] == 'true';
 
   /// 检查当前平台是否已经允许应用发送通知。
   Future<bool> hasPermission() async {
     if (_skipDefaultChannelInFlutterTest) {
       return false;
+    }
+    if (_usesWindowsBackend) {
+      return _resolvedWindowsBackend.isAvailable();
     }
     try {
       return await _channel.invokeMethod<bool>('hasPermission') ?? false;
@@ -91,6 +117,9 @@ class FocusNotificationService {
     if (_skipDefaultChannelInFlutterTest) {
       return false;
     }
+    if (_usesWindowsBackend) {
+      return _resolvedWindowsBackend.isAvailable();
+    }
     try {
       return await _channel.invokeMethod<bool>('requestPermission') ?? false;
     } on PlatformException {
@@ -105,6 +134,9 @@ class FocusNotificationService {
     if (_skipDefaultChannelInFlutterTest) {
       return false;
     }
+    if (_usesWindowsBackend) {
+      return _resolvedWindowsBackend.isAvailable();
+    }
     try {
       return await _channel.invokeMethod<bool>('hasExactAlarmPermission') ??
           false;
@@ -118,6 +150,10 @@ class FocusNotificationService {
   /// 打开 Android 的“闹钟和提醒”特殊访问页面，让用户亲自授予精确闹钟权限。
   Future<void> openExactAlarmSettings() async {
     if (_skipDefaultChannelInFlutterTest) {
+      return;
+    }
+    if (_usesWindowsBackend) {
+      await _resolvedWindowsBackend.openSettings();
       return;
     }
     try {
@@ -181,6 +217,9 @@ class FocusNotificationService {
     if (_skipDefaultChannelInFlutterTest) {
       return AndroidPermissionOverview.unavailable();
     }
+    if (_usesWindowsBackend) {
+      return AndroidPermissionOverview.unavailable();
+    }
     try {
       final Object? result = await _channel.invokeMethod<Object?>(
         'getPermissionOverview',
@@ -231,6 +270,9 @@ class FocusNotificationService {
     if (_skipDefaultChannelInFlutterTest) {
       return const <Object?, Object?>{};
     }
+    if (_usesWindowsBackend) {
+      return _resolvedWindowsBackend.getDiagnostics();
+    }
     try {
       final Object? result = await _channel.invokeMethod<Object?>(
         'getReminderDiagnostics',
@@ -250,6 +292,10 @@ class FocusNotificationService {
     if (_skipDefaultChannelInFlutterTest) {
       return;
     }
+    if (_usesWindowsBackend) {
+      await _resolvedWindowsBackend.clearDiagnostics();
+      return;
+    }
     try {
       await _channel.invokeMethod<void>('clearReminderDiagnostics');
     } on PlatformException {
@@ -264,6 +310,10 @@ class FocusNotificationService {
     if (_skipDefaultChannelInFlutterTest) {
       return;
     }
+    if (_usesWindowsBackend) {
+      await _resolvedWindowsBackend.openSettings();
+      return;
+    }
     try {
       await _channel.invokeMethod<void>('openSettings');
     } on PlatformException {
@@ -276,6 +326,10 @@ class FocusNotificationService {
   /// 播放一次短促上扬的完成音效；不支持原生通道的平台会安静跳过。
   Future<void> playCelebrationSound() async {
     if (_skipDefaultChannelInFlutterTest) {
+      return;
+    }
+    if (_usesWindowsBackend) {
+      // Windows 专注完成 Toast 已播放系统提示音，避免庆祝弹窗再次发出重复声音。
       return;
     }
     try {
@@ -296,6 +350,14 @@ class FocusNotificationService {
   }) async {
     if (_skipDefaultChannelInFlutterTest) {
       return false;
+    }
+    if (_usesWindowsBackend) {
+      return _resolvedWindowsBackend.scheduleReminder(
+        sessionId: sessionId,
+        goal: goal,
+        reason: reason,
+        reminderAt: reminderAt,
+      );
     }
     try {
       return await _channel
@@ -318,6 +380,10 @@ class FocusNotificationService {
     if (_skipDefaultChannelInFlutterTest) {
       return;
     }
+    if (_usesWindowsBackend) {
+      await _resolvedWindowsBackend.cancelReminder(sessionId);
+      return;
+    }
     try {
       await _channel.invokeMethod<void>('cancelReminder', <String, Object?>{
         'sessionId': sessionId,
@@ -327,5 +393,21 @@ class FocusNotificationService {
     } on MissingPluginException {
       // 非 Android 或测试环境没有原生实现时安全忽略。
     }
+  }
+
+  /// 在 Windows 显示专注完成 Toast；Android 继续使用现有弹窗、震动和原生完成音效。
+  Future<void> showFocusCompleted({
+    required String sessionId,
+    required String goal,
+    required int focusedMinutes,
+  }) async {
+    if (_skipDefaultChannelInFlutterTest || !_usesWindowsBackend) {
+      return;
+    }
+    await _resolvedWindowsBackend.showFocusCompleted(
+      sessionId: sessionId,
+      goal: goal,
+      focusedMinutes: focusedMinutes,
+    );
   }
 }

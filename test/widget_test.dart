@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart' show TapGestureRecognizer;
@@ -27,6 +28,7 @@ import 'package:focubili/services/danmaku_preferences_service.dart';
 import 'package:focubili/services/native_playback_service.dart';
 import 'package:focubili/services/player_overlay_service.dart';
 import 'package:focubili/services/playback_preferences_service.dart';
+import 'package:focubili/services/playback_video_surface.dart';
 import 'package:focubili/services/search_history_service.dart';
 import 'package:focubili/services/first_launch_service.dart';
 import 'package:focubili/services/focus_notification_service.dart';
@@ -277,6 +279,7 @@ class _FakePlaybackService implements PlaybackService {
   final bool emitReadyOnOpen;
   final bool emitLoadingDuringSeek;
   int pictureInPictureRequests = 0;
+  int playRequests = 0;
   int pauseRequests = 0;
   int seekByRequests = 0;
   int seekToRequests = 0;
@@ -323,6 +326,7 @@ class _FakePlaybackService implements PlaybackService {
   /// 模拟原生播放器开始播放并推送新状态。
   @override
   Future<void> play() async {
+    playRequests += 1;
     _isPlaying = true;
     _emit();
   }
@@ -483,6 +487,22 @@ class _FakePlaybackService implements PlaybackService {
   /// 关闭测试使用的状态流，模拟页面离开时释放播放器。
   @override
   Future<void> dispose() => _states.close();
+}
+
+/// 模拟能直接提供 Flutter 视频画面的 Windows 播放服务，用于验证桌面专属控件分支。
+class _FakeDesktopPlaybackService extends _FakePlaybackService
+    implements PlaybackVideoSurface {
+  /// 创建不访问 media_kit 或 Windows 插件的桌面播放器替身。
+  _FakeDesktopPlaybackService();
+
+  /// 返回固定黑色视频画面，让测试只检查播放器页面如何组合桌面画面与控制层。
+  @override
+  Widget buildVideoSurface() {
+    return const ColoredBox(
+      key: Key('fake-desktop-video-surface'),
+      color: Colors.black,
+    );
+  }
 }
 
 /// 为播放器组件测试提供固定章节和互动剧情，不访问真实 B 站接口。
@@ -937,19 +957,29 @@ void main() {
     expect(app.themeMode, ThemeMode.dark);
   });
 
-  /// 验证登录页默认选择手机号，并允许切换到不会明文展示内容的 Cookie 表单。
-  testWidgets('登录页提供手机号密码和Cookie入口', (WidgetTester tester) async {
+  /// 验证登录页按平台展示官方入口，并允许切换到不会明文展示内容的 Cookie 表单。
+  testWidgets('登录页提供平台官方登录和Cookie入口', (WidgetTester tester) async {
     await tester.pumpWidget(const MaterialApp(home: LoginPage()));
     await tester.pumpAndSettle();
 
-    expect(find.text('进入官方手机号登录'), findsOneWidget);
-    expect(find.text('密码'), findsOneWidget);
+    if (Platform.isWindows) {
+      expect(find.text('打开 B 站扫码登录'), findsOneWidget);
+      expect(find.text('扫码'), findsOneWidget);
+      expect(find.text('密码'), findsNothing);
+    } else {
+      expect(find.text('进入官方手机号登录'), findsOneWidget);
+      expect(find.text('密码'), findsOneWidget);
+    }
     expect(find.text('Cookie'), findsOneWidget);
 
     await tester.tap(find.text('Cookie'));
     await tester.pumpAndSettle();
     expect(find.text('使用 Cookie 登录'), findsOneWidget);
     expect(find.text('需要包含 SESSDATA'), findsOneWidget);
+    expect(
+      find.text(Platform.isWindows ? '打开 B 站扫码登录' : '打开 B 站网页登录'),
+      findsOneWidget,
+    );
   });
 
   /// 验证播放器只在真实就绪后写一次历史，并在切换分P后的下一次就绪更新同一视频。
@@ -1032,6 +1062,60 @@ void main() {
 
     expect(tester.widget<AnimatedOpacity>(controls).opacity, 0);
     expect(find.byTooltip('播放'), findsOneWidget);
+  });
+
+  /// 验证桌面键盘可控制播放、五秒跳转、音量和全屏，并由 Esc 退出全屏。
+  testWidgets('播放器支持桌面键盘快捷键', (WidgetTester tester) async {
+    final _FakePlaybackService service = _FakePlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: service,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.space);
+    await tester.pump();
+    expect(service.playRequests, 1);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pump();
+    expect(service.seekByRequests, 2);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pump();
+    expect(service.volume, closeTo(0.55, 0.001));
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(service.volume, closeTo(0.5, 0.001));
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyF);
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('退出全屏'), findsOneWidget);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('进入全屏'), findsOneWidget);
+  });
+
+  /// 验证 Windows 桌面视频后端会渲染自身画面，并隐藏当前无法实现的画中画入口。
+  testWidgets('桌面播放器隐藏不支持的画中画入口', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: _FakeDesktopPlaybackService(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('fake-desktop-video-surface')), findsOneWidget);
+    expect(find.byKey(const Key('picture-in-picture')), findsNothing);
   });
 
   /// 验证竖屏播放器右上角提供常用控制，并会随着详情页上滑连续收起至接近零高度。

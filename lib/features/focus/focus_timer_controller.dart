@@ -314,6 +314,13 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
     _finalizeSession(finished);
     await _persist();
     unawaited(_notificationService.cancelReminder(session.id));
+    unawaited(
+      _notificationService.showFocusCompleted(
+        sessionId: finished.id,
+        goal: finished.goal,
+        focusedMinutes: finished.accumulatedFocusDuration.inMinutes,
+      ),
+    );
     return true;
   }
 
@@ -587,6 +594,13 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
     );
     await _persist();
     unawaited(_notificationService.cancelReminder(session.id));
+    unawaited(
+      _notificationService.showFocusCompleted(
+        sessionId: session.id,
+        goal: session.goal,
+        focusedMinutes: session.plannedDuration.inMinutes,
+      ),
+    );
     _finishingExpiredSession = false;
   }
 
