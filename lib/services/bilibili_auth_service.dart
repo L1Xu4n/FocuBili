@@ -2,8 +2,13 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter/services.dart';
+
+import 'bilibili_cookie_store.dart';
+import 'bilibili_cookie_store_factory.dart';
+
+export 'bilibili_cookie_store.dart';
+export 'bilibili_cookie_store_factory.dart';
 
 /// 保存 B 站登录成功后“我的”页面需要展示的最小账号信息。
 class BilibiliAccount {
@@ -99,83 +104,6 @@ class BilibiliNavResponse {
 abstract interface class BilibiliAuthApi {
   /// 使用传入的 Cookie 请求官方账号状态接口，且不得记录 Cookie 内容。
   Future<BilibiliNavResponse> requestNavigation(String cookieHeader);
-}
-
-/// 抽象出 Android WebView Cookie 容器，防止业务层保存 Cookie 原文或账号列表。
-abstract interface class BilibiliCookieStore {
-  /// 读取 B 站域可用于请求的 Cookie 请求头。
-  Future<String> readCookies();
-
-  /// 清理旧 B 站 Cookie 后写入已验证的新 Cookie，完成单账号替换。
-  Future<void> replaceCookies(String cookieHeader);
-
-  /// 仅清理 B 站域 Cookie，不影响同一 WebView 中其他网站的数据。
-  Future<void> clearBilibiliCookies();
-}
-
-/// 通过 Android 方法通道访问应用 WebView Cookie 容器的默认实现。
-class PlatformBilibiliCookieStore implements BilibiliCookieStore {
-  /// 创建使用 FocuBili Android 登录通道的 Cookie 存储实现。
-  const PlatformBilibiliCookieStore();
-
-  static const MethodChannel _channel = MethodChannel('com.focubili.app/auth');
-
-  /// 从 Android WebView 的 B 站域读取 Cookie，不在 Dart 中持久化副本。
-  @override
-  Future<String> readCookies() async {
-    final String? cookie = await _channel.invokeMethod<String>('readCookies');
-    return cookie?.trim() ?? '';
-  }
-
-  /// 调用原生原子替换操作，只在新 Cookie 已被官方验证后保存。
-  @override
-  Future<void> replaceCookies(String cookieHeader) {
-    return _channel.invokeMethod<void>('replaceCookies', <String, Object?>{
-      'cookie': cookieHeader,
-    });
-  }
-
-  /// 调用原生仅清理 B 站域 Cookie 的操作，用于退出和切换账号。
-  @override
-  Future<void> clearBilibiliCookies() {
-    return _channel.invokeMethod<void>('clearBilibiliCookies');
-  }
-}
-
-/// 使用 Windows 凭据管理器保护的加密存储保存当前单账号 Cookie。
-class WindowsSecureBilibiliCookieStore implements BilibiliCookieStore {
-  /// 创建 Windows 安全 Cookie 存储；测试可以注入不会访问系统凭据的读写函数。
-  WindowsSecureBilibiliCookieStore({FlutterSecureStorage? storage})
-    : _storage = storage ?? const FlutterSecureStorage();
-
-  static const String _cookieKey = 'focubili_bilibili_cookie';
-  final FlutterSecureStorage _storage;
-
-  /// 从 Windows 加密存储读取 Cookie，并在不存在时返回空字符串。
-  @override
-  Future<String> readCookies() async {
-    return (await _storage.read(key: _cookieKey))?.trim() ?? '';
-  }
-
-  /// 把已经通过官方接口验证的 Cookie 原子写入 Windows 加密存储。
-  @override
-  Future<void> replaceCookies(String cookieHeader) {
-    return _storage.write(key: _cookieKey, value: cookieHeader.trim());
-  }
-
-  /// 删除 Windows 中唯一的 B 站会话，不影响应用其他本机设置。
-  @override
-  Future<void> clearBilibiliCookies() {
-    return _storage.delete(key: _cookieKey);
-  }
-}
-
-/// 根据当前系统选择 Android WebView Cookie 或 Windows 加密 Cookie 存储。
-BilibiliCookieStore createDefaultBilibiliCookieStore() {
-  if (Platform.isWindows) {
-    return WindowsSecureBilibiliCookieStore();
-  }
-  return const PlatformBilibiliCookieStore();
 }
 
 /// 使用 Dart HttpClient 请求官方账号状态接口的默认网络实现。

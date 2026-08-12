@@ -6,11 +6,13 @@ import 'package:flutter/widgets.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../platform/platform_capabilities.dart';
+import '../platform/platform_services.dart';
+
+export '../platform/platform_capabilities.dart' show AppUpdateTargetPlatform;
+
 /// 表示一次 GitHub Release 更新检查的最终状态。
 enum AppUpdateStatus { idle, disabled, checking, upToDate, available, failed }
-
-/// 指定更新检查应选择的安装包平台，测试可固定平台而不依赖运行测试的电脑。
-enum AppUpdateTargetPlatform { android, windows, other }
 
 /// 保存当前版本、远端版本和 Release 页面，供“关于”页统一展示。
 class AppUpdateResult {
@@ -161,15 +163,9 @@ class AppUpdateService {
     }
   }
 
-  /// 根据当前 Dart 平台返回更新安装包类型，未支持平台只保留 Release 页面入口。
+  /// 从统一能力表读取安装包类型，未支持平台只保留 Release 页面入口。
   static AppUpdateTargetPlatform _currentTargetPlatform() {
-    if (Platform.isWindows) {
-      return AppUpdateTargetPlatform.windows;
-    }
-    if (Platform.isAndroid) {
-      return AppUpdateTargetPlatform.android;
-    }
-    return AppUpdateTargetPlatform.other;
+    return PlatformServices.current.capabilities.updateTargetPlatform;
   }
 
   /// 从 Release 资产中选择当前平台安装包；Windows 不会退回选择 APK，Android 也不会选择 MSIX。

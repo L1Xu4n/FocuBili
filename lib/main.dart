@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -9,6 +8,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'app.dart';
 import 'core/theme/app_theme.dart';
+import 'platform/platform_services.dart';
 import 'services/problem_diagnostics_service.dart';
 
 /// 注册框架和 Dart 未捕获错误的最小诊断记录；只保存固定操作名与异常类型，绝不保存异常原文或堆栈。
@@ -39,9 +39,13 @@ void _installProblemDiagnostics() {
   };
 }
 
-/// 初始化 Windows 媒体后端与桌面窗口尺寸；Android 启动流程不会加载这些桌面行为。
-Future<void> _prepareWindowsDesktop() async {
-  if (!Platform.isWindows) {
+/// 按能力表初始化桌面媒体后端与窗口；移动平台不会加载这些桌面行为。
+Future<void> _prepareWindowsDesktop({
+  PlatformServices? platformServices,
+}) async {
+  final PlatformServices services =
+      platformServices ?? PlatformServices.current;
+  if (!services.capabilities.supportsDesktopWindow) {
     return;
   }
   MediaKit.ensureInitialized();

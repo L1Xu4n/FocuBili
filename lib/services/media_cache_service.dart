@@ -75,13 +75,6 @@ abstract interface class MediaCacheService {
   Future<MediaCacheStatus> clearCache();
 }
 
-/// 根据当前操作系统创建缓存实现，Windows 不会再调用 Android Media3 方法通道。
-MediaCacheService createMediaCacheService() {
-  return Platform.isWindows
-      ? WindowsMediaCacheService()
-      : NativeMediaCacheService();
-}
-
 /// 记录当前进程中仍存活的 Windows 播放器，防止清理正在被 libmpv 使用的缓冲文件。
 abstract final class WindowsMediaCacheRuntime {
   static int _activePlaybackSessions = 0;

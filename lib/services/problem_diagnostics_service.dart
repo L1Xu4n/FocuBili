@@ -1,10 +1,10 @@
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../platform/app_platform.dart';
 import 'focus_notification_service.dart';
 
 /// 定义读取问题诊断本机存储的可替换入口，便于单元测试使用内存偏好设置。
@@ -845,7 +845,7 @@ class ProblemDiagnosticsService {
 
   /// Android 读取现有设备状态通道，Windows 直接读取不含主机名的公开系统版本。
   static Future<DiagnosticDeviceInfo> _loadNativeDeviceInfo() async {
-    if (!Platform.isAndroid) {
+    if (AppPlatformDetector.current != AppPlatform.android) {
       return _fallbackDeviceInfo();
     }
     try {
@@ -867,10 +867,11 @@ class ProblemDiagnosticsService {
 
   /// 创建没有设备唯一标识符和主机名的环境回退值，供 Windows 或原生通道失败时展示。
   static DiagnosticDeviceInfo _fallbackDeviceInfo() {
-    final String rawSystemVersion = Platform.operatingSystemVersion
+    final AppPlatform platform = AppPlatformDetector.current;
+    final String rawSystemVersion = AppPlatformDetector.operatingSystemVersion
         .replaceAll(RegExp(r'[\r\n]+'), ' ')
         .trim();
-    if (Platform.isWindows) {
+    if (platform == AppPlatform.windows) {
       return DiagnosticDeviceInfo(
         platformName: 'Windows',
         systemVersion: rawSystemVersion.isEmpty
@@ -884,10 +885,21 @@ class ProblemDiagnosticsService {
       r'(\d+(?:\.\d+)*)',
     ).firstMatch(rawSystemVersion);
     return DiagnosticDeviceInfo(
-      platformName: Platform.isAndroid ? 'Android' : '未知系统',
-      systemVersion: releaseMatch?.group(1) ?? '版本未知',
+      platformName: platform.displayName,
+      systemVersion: platform == AppPlatform.android
+          ? releaseMatch?.group(1) ?? '版本未知'
+          : rawSystemVersion.isEmpty
+          ? '版本未知'
+          : _limitPublicSystemVersion(rawSystemVersion),
       apiLevel: null,
-      model: Platform.isAndroid ? '未知设备' : '未知设备类型',
+      model: switch (platform) {
+        AppPlatform.android => '未知设备',
+        AppPlatform.ios => 'iOS 设备',
+        AppPlatform.macos => 'Mac',
+        AppPlatform.linux => 'Linux 设备',
+        AppPlatform.windows => 'Windows PC',
+        AppPlatform.unsupported => '未知设备类型',
+      },
     );
   }
 

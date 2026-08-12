@@ -1,11 +1,13 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../core/layout/adaptive_page_frame.dart';
+import '../../platform/app_platform.dart';
+import '../../platform/platform_capabilities.dart';
+import '../../platform/platform_services.dart';
 import '../../services/bilibili_auth_service.dart';
 import '../../services/bilibili_qr_login_service.dart';
 import '../../services/bilibili_request_policy.dart';
@@ -15,11 +17,17 @@ enum _LoginMode { phone, password, cookie }
 
 /// 提供登录方式选择，并把账号密码与验证码交给 B 站官方页面处理。
 class LoginPage extends StatefulWidget {
-  /// 创建登录页面；账号切换时可在首帧后直接打开官方网页登录。
-  const LoginPage({super.key, this.openOfficialLoginOnStart = false});
+  /// 创建登录页面；测试可注入平台，账号切换时可自动打开官方登录。
+  const LoginPage({
+    super.key,
+    this.openOfficialLoginOnStart = false,
+    this.platformServices,
+  });
 
   /// 表示此页是否由“切换账号”打开，并应优先进入 B 站官方网页登录。
   final bool openOfficialLoginOnStart;
+
+  final PlatformServices? platformServices;
 
   /// 创建保存登录方式、Cookie 输入和提交状态的页面状态。
   @override
@@ -36,14 +44,25 @@ class _LoginPageState extends State<LoginPage> {
   bool _openedOfficialLoginOnStart = false;
   String? _errorMessage;
 
-  /// 判断当前是否应使用不依赖 WebView 的 Windows 官方扫码登录。
-  bool get _usesQrLogin => Platform.isWindows;
+  /// 返回注入的平台装配器或进程共享的真实平台装配器。
+  PlatformServices get _platformServices =>
+      widget.platformServices ?? PlatformServices.current;
+
+  /// 读取当前平台已经实现的登录体验。
+  LoginExperience get _loginExperience =>
+      _platformServices.capabilities.loginExperience;
+
+  /// 判断当前是否应使用不依赖 WebView 的官方扫码登录。
+  bool get _usesQrLogin => _loginExperience == LoginExperience.officialQrCode;
+
+  /// 判断当前平台是否还没有安全可用的登录实现。
+  bool get _loginUnavailable => _loginExperience == LoginExperience.unavailable;
 
   /// 首帧完成后根据账号切换入口打开官方登录页，避免在构建期间重复导航。
   @override
   void initState() {
     super.initState();
-    if (!widget.openOfficialLoginOnStart) {
+    if (!widget.openOfficialLoginOnStart || _loginUnavailable) {
       return;
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -76,6 +95,9 @@ class _LoginPageState extends State<LoginPage> {
 
   /// 打开 B 站官方登录页，成功抓取会话后把账号信息返回“我的”页面。
   Future<void> _openOfficialLogin() async {
+    if (_loginUnavailable) {
+      return;
+    }
     final BilibiliAccount? account = await Navigator.of(context).push(
       MaterialPageRoute<BilibiliAccount>(
         // Windows 使用官方扫码接口，Android 继续创建隔离的 WebView 登录页面。
@@ -97,6 +119,9 @@ class _LoginPageState extends State<LoginPage> {
 
   /// 验证用户主动粘贴的 Cookie，成功后返回账号信息且不在 Flutter 中持久化原文。
   Future<void> _loginWithCookie() async {
+    if (_loginUnavailable) {
+      return;
+    }
     FocusScope.of(context).unfocus();
     setState(() {
       _submitting = true;
@@ -245,9 +270,41 @@ class _LoginPageState extends State<LoginPage> {
     ];
   }
 
+  /// 为尚未接入登录与安全存储的平台创建不会触发网络或原生插件的说明页。
+  Widget _buildUnavailableLogin() {
+    return Scaffold(
+      appBar: AppBar(title: const Text('登录 B 站账号')),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              const Icon(Icons.no_accounts_outlined, size: 48),
+              const SizedBox(height: 16),
+              Text(
+                '${_platformServices.platform.displayName} 暂不支持账号登录',
+                style: Theme.of(context).textTheme.titleLarge,
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                '安全登录和 Cookie 存储接入完成后，这里才会开放登录入口。',
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   /// 创建登录方式选择、隐私说明和当前登录表单。
   @override
   Widget build(BuildContext context) {
+    if (_loginUnavailable) {
+      return _buildUnavailableLogin();
+    }
     return Scaffold(
       appBar: AppBar(title: const Text('登录 B 站账号')),
       body: AdaptivePageFrame(

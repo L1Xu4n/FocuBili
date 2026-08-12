@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 
@@ -85,10 +84,9 @@ class _PersonalizationSettingsPageState
       final FocusPreferences focusPreferences = await _focusPreferencesService
           .load();
       final bool hasDoNotDisturbAccess =
-          Platform.isWindows &&
-              widget.focusNotificationService.usesWindowsBackend
-          ? false
-          : await widget.focusNotificationService.hasDoNotDisturbAccess();
+          widget.focusNotificationService.supportsDoNotDisturb
+          ? await widget.focusNotificationService.hasDoNotDisturbAccess()
+          : false;
       if (!mounted) {
         return;
       }
@@ -115,8 +113,7 @@ class _PersonalizationSettingsPageState
 
   /// 查询当前勿扰权限并刷新副标题；查询失败时按未授权处理。
   Future<void> _refreshDoNotDisturbAccess() async {
-    if (Platform.isWindows &&
-        widget.focusNotificationService.usesWindowsBackend) {
+    if (!widget.focusNotificationService.supportsDoNotDisturb) {
       return;
     }
     final bool permitted = await widget.focusNotificationService
@@ -405,9 +402,8 @@ class _PersonalizationSettingsPageState
 
   /// 创建“播放与专注”设置卡，让横屏平板左栏只承载使用频率最高的行为开关。
   Widget _buildPlaybackAndFocusSection() {
-    final bool usesWindowsCapabilities =
-        Platform.isWindows &&
-        widget.focusNotificationService.usesWindowsBackend;
+    final bool supportsDoNotDisturb =
+        widget.focusNotificationService.supportsDoNotDisturb;
     return _buildSettingsSection(
       key: const Key('settings-playback-section'),
       icon: Icons.play_circle_outline_rounded,
@@ -424,7 +420,7 @@ class _PersonalizationSettingsPageState
           title: const Text('启用双击快进快退'),
           subtitle: const Text('关闭后，双击视频画面的任何位置都会切换播放或暂停。'),
         ),
-        if (!usesWindowsCapabilities)
+        if (supportsDoNotDisturb)
           SwitchListTile.adaptive(
             key: const Key('enable-focus-do-not-disturb'),
             value: _focusPreferences.enableDoNotDisturb,
@@ -449,6 +445,10 @@ class _PersonalizationSettingsPageState
     AppUpdateController updateController,
     AppThemeModeController themeModeController,
   ) {
+    final bool usesWindowsCapabilities =
+        widget.focusNotificationService.usesWindowsBackend;
+    final bool usesUnavailableCapabilities =
+        widget.focusNotificationService.usesUnavailableBackend;
     return _buildSettingsSection(
       key: const Key('settings-application-section'),
       icon: Icons.tune_rounded,
@@ -459,15 +459,15 @@ class _PersonalizationSettingsPageState
           key: const Key('open-android-permissions'),
           leading: const Icon(Icons.admin_panel_settings_outlined),
           title: Text(
-            Platform.isWindows &&
-                    widget.focusNotificationService.usesWindowsBackend
+            usesWindowsCapabilities || usesUnavailableCapabilities
                 ? '系统能力'
                 : '权限管理',
           ),
           subtitle: Text(
-            Platform.isWindows &&
-                    widget.focusNotificationService.usesWindowsBackend
+            usesWindowsCapabilities
                 ? '检查 Windows 通知、未来提醒和安装包身份'
+                : usesUnavailableCapabilities
+                ? '当前平台的系统能力尚未接入'
                 : '统一申请、检查、取消权限，并设置后台提醒保护',
           ),
           trailing: const Icon(Icons.chevron_right_rounded),

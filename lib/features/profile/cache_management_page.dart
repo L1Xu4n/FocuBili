@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/layout/adaptive_page_frame.dart';
 import '../../services/media_cache_service.dart';
+import '../../services/media_cache_service_factory.dart';
 
 /// 按平台展示 Android Media3 边播缓存或 Windows media_kit 播放缓冲。
 class CacheManagementPage extends StatefulWidget {

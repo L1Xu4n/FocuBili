@@ -1,12 +1,9 @@
-import 'dart:io';
-
+import '../platform/platform_services.dart';
 import 'native_playback_service.dart';
-import 'windows_playback_service.dart';
 
-/// 根据当前系统创建 Android Media3 或 Windows media_kit 播放服务。
-PlaybackService createDefaultPlaybackService() {
-  if (Platform.isWindows) {
-    return WindowsPlaybackService();
-  }
-  return NativePlaybackService();
+/// 通过统一平台装配器创建播放服务，未知平台不会回退到 Android。
+PlaybackService createDefaultPlaybackService({
+  PlatformServices? platformServices,
+}) {
+  return (platformServices ?? PlatformServices.current).createPlaybackService();
 }

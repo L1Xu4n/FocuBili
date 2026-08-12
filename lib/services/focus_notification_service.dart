@@ -1,7 +1,6 @@
-import 'dart:io';
-
 import 'package:flutter/services.dart';
 
+import '../platform/app_platform.dart';
 import 'windows_focus_notification_service.dart';
 
 /// 汇总统一权限管理页需要的 Android 权限与后台运行状态。
@@ -60,12 +59,14 @@ class AndroidPermissionOverview {
 
 /// 通过 Android 原生方法通道管理提醒通知、权限和系统设置入口。
 class FocusNotificationService {
-  /// 创建通知服务；测试可注入自定义方法通道。
+  /// 创建通知服务；测试可注入自定义方法通道、Windows 后端或明确平台。
   const FocusNotificationService({
     MethodChannel? channel,
     WindowsFocusNotificationBackend? windowsBackend,
+    AppPlatform? platform,
   }) : _usesDefaultChannel = channel == null,
        _windowsBackend = windowsBackend,
+       _platform = platform,
        _channel =
            channel ??
            const MethodChannel('com.focubili.app/focus_notifications');
@@ -73,10 +74,22 @@ class FocusNotificationService {
   final MethodChannel _channel;
   final bool _usesDefaultChannel;
   final WindowsFocusNotificationBackend? _windowsBackend;
+  final AppPlatform? _platform;
+
+  /// 返回测试指定的平台或当前进程的真实平台。
+  AppPlatform get _resolvedPlatform => _platform ?? AppPlatformDetector.current;
 
   /// 判断本次服务是否应使用 Windows Toast，而不是 Android 方法通道。
   bool get _usesWindowsBackend =>
-      _windowsBackend != null || (_usesDefaultChannel && Platform.isWindows);
+      _windowsBackend != null ||
+      (_usesDefaultChannel && _resolvedPlatform == AppPlatform.windows);
+
+  /// 判断默认服务是否运行在尚未实现通知后端的平台。
+  bool get _usesUnavailableBackend =>
+      _usesDefaultChannel &&
+      _windowsBackend == null &&
+      _resolvedPlatform != AppPlatform.android &&
+      _resolvedPlatform != AppPlatform.windows;
 
   /// 返回注入的测试后端或进程内共享的生产 Windows 通知后端。
   WindowsFocusNotificationBackend get _resolvedWindowsBackend =>
@@ -84,6 +97,13 @@ class FocusNotificationService {
 
   /// 供界面判断是否应展示 Windows 系统能力，而不是 Android 权限文案。
   bool get usesWindowsBackend => _usesWindowsBackend;
+
+  /// 供测试和不可用页面确认服务不会调用 Android 或 Windows 后端。
+  bool get usesUnavailableBackend => _usesUnavailableBackend;
+
+  /// 判断当前实现是否真正支持 Android 勿扰权限与状态切换。
+  bool get supportsDoNotDisturb =>
+      !_usesWindowsBackend && !_usesUnavailableBackend;
 
   /// 返回 Windows 是否已通过 MSIX 安装并获得完整通知查询与取消能力。
   bool get hasWindowsPackageIdentity =>
@@ -93,11 +113,11 @@ class FocusNotificationService {
   bool get _skipDefaultChannelInFlutterTest =>
       _usesDefaultChannel &&
       _windowsBackend == null &&
-      Platform.environment['FLUTTER_TEST'] == 'true';
+      AppPlatformDetector.isFlutterTest;
 
   /// 检查当前平台是否已经允许应用发送通知。
   Future<bool> hasPermission() async {
-    if (_skipDefaultChannelInFlutterTest) {
+    if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return false;
     }
     if (_usesWindowsBackend) {
@@ -114,7 +134,7 @@ class FocusNotificationService {
 
   /// 请求 Android 13 及以上通知权限，旧系统直接返回可用状态。
   Future<bool> requestPermission() async {
-    if (_skipDefaultChannelInFlutterTest) {
+    if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return false;
     }
     if (_usesWindowsBackend) {
@@ -131,7 +151,7 @@ class FocusNotificationService {
 
   /// 检查 Android 12 及以上是否允许应用安排可在待机和进程退出后准点触发的精确闹钟。
   Future<bool> hasExactAlarmPermission() async {
-    if (_skipDefaultChannelInFlutterTest) {
+    if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return false;
     }
     if (_usesWindowsBackend) {
@@ -149,7 +169,7 @@ class FocusNotificationService {
 
   /// 打开 Android 的“闹钟和提醒”特殊访问页面，让用户亲自授予精确闹钟权限。
   Future<void> openExactAlarmSettings() async {
-    if (_skipDefaultChannelInFlutterTest) {
+    if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return;
     }
     if (_usesWindowsBackend) {
@@ -167,7 +187,9 @@ class FocusNotificationService {
 
   /// 检查 Android 是否允许应用在专注期间切换系统勿扰模式。
   Future<bool> hasDoNotDisturbAccess() async {
-    if (_skipDefaultChannelInFlutterTest) {
+    if (_skipDefaultChannelInFlutterTest ||
+        _usesWindowsBackend ||
+        _usesUnavailableBackend) {
       return false;
     }
     try {
@@ -182,7 +204,9 @@ class FocusNotificationService {
 
   /// 打开 Android 勿扰模式特殊访问设置；用户必须亲自在系统页面授权。
   Future<void> openDoNotDisturbSettings() async {
-    if (_skipDefaultChannelInFlutterTest) {
+    if (_skipDefaultChannelInFlutterTest ||
+        _usesWindowsBackend ||
+        _usesUnavailableBackend) {
       return;
     }
     try {
@@ -196,7 +220,9 @@ class FocusNotificationService {
 
   /// 开启专注勿扰或恢复进入专注前的系统模式，并返回原生层是否成功执行。
   Future<bool> setFocusDoNotDisturb(bool enabled) async {
-    if (_skipDefaultChannelInFlutterTest) {
+    if (_skipDefaultChannelInFlutterTest ||
+        _usesWindowsBackend ||
+        _usesUnavailableBackend) {
       return false;
     }
     try {
@@ -214,7 +240,7 @@ class FocusNotificationService {
 
   /// 一次读取通知、精确闹钟、勿扰、电量与厂商后台自启动状态。
   Future<AndroidPermissionOverview> getPermissionOverview() async {
-    if (_skipDefaultChannelInFlutterTest) {
+    if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return AndroidPermissionOverview.unavailable();
     }
     if (_usesWindowsBackend) {
@@ -239,7 +265,9 @@ class FocusNotificationService {
 
   /// 打开小米后台自启动管理；其他系统会回退到当前应用详情页面。
   Future<void> openBackgroundAutostartSettings() async {
-    if (_skipDefaultChannelInFlutterTest) {
+    if (_skipDefaultChannelInFlutterTest ||
+        _usesWindowsBackend ||
+        _usesUnavailableBackend) {
       return;
     }
     try {
@@ -253,7 +281,9 @@ class FocusNotificationService {
 
   /// 打开当前应用详情和电量管理入口，让用户自行选择无限制后台运行或取消。
   Future<void> openBatterySettings() async {
-    if (_skipDefaultChannelInFlutterTest) {
+    if (_skipDefaultChannelInFlutterTest ||
+        _usesWindowsBackend ||
+        _usesUnavailableBackend) {
       return;
     }
     try {
@@ -267,7 +297,7 @@ class FocusNotificationService {
 
   /// 读取原生闹钟安排、恢复和触发事件，结果只包含脱敏状态字段。
   Future<Map<Object?, Object?>> getReminderDiagnostics() async {
-    if (_skipDefaultChannelInFlutterTest) {
+    if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return const <Object?, Object?>{};
     }
     if (_usesWindowsBackend) {
@@ -289,7 +319,7 @@ class FocusNotificationService {
 
   /// 清除原生闹钟诊断历史，但保留仍待触发的真实提醒。
   Future<void> clearReminderDiagnostics() async {
-    if (_skipDefaultChannelInFlutterTest) {
+    if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return;
     }
     if (_usesWindowsBackend) {
@@ -307,7 +337,7 @@ class FocusNotificationService {
 
   /// 打开当前应用的系统通知设置页，方便用户手动恢复权限。
   Future<void> openSettings() async {
-    if (_skipDefaultChannelInFlutterTest) {
+    if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return;
     }
     if (_usesWindowsBackend) {
@@ -325,7 +355,7 @@ class FocusNotificationService {
 
   /// 播放一次短促上扬的完成音效；不支持原生通道的平台会安静跳过。
   Future<void> playCelebrationSound() async {
-    if (_skipDefaultChannelInFlutterTest) {
+    if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return;
     }
     if (_usesWindowsBackend) {
@@ -348,7 +378,7 @@ class FocusNotificationService {
     required String reason,
     required DateTime reminderAt,
   }) async {
-    if (_skipDefaultChannelInFlutterTest) {
+    if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return false;
     }
     if (_usesWindowsBackend) {
@@ -377,7 +407,7 @@ class FocusNotificationService {
 
   /// 取消指定专注任务尚未触发的继续提醒。
   Future<void> cancelReminder(String sessionId) async {
-    if (_skipDefaultChannelInFlutterTest) {
+    if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return;
     }
     if (_usesWindowsBackend) {
