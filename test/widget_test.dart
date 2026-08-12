@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart' show TapGestureRecognizer;
@@ -39,6 +38,8 @@ import 'package:focubili/services/video_shot_service.dart';
 import 'package:focubili/services/video_note_service.dart';
 import 'package:focubili/services/bilibili_player_enhancement_service.dart';
 import 'package:focubili/models/player_overlay_data.dart';
+import 'package:focubili/platform/app_platform.dart';
+import 'package:focubili/platform/platform_services.dart';
 
 /// 记录视频详情请求地址并返回固定 JSON，验证服务解析时不依赖真实网络。
 class _RecordingJsonRequest {
@@ -957,29 +958,65 @@ void main() {
     expect(app.themeMode, ThemeMode.dark);
   });
 
-  /// 验证登录页按平台展示官方入口，并允许切换到不会明文展示内容的 Cookie 表单。
-  testWidgets('登录页提供平台官方登录和Cookie入口', (WidgetTester tester) async {
-    await tester.pumpWidget(const MaterialApp(home: LoginPage()));
+  /// 验证 Android 登录页展示官方手机号入口，并允许切换到 Cookie 表单。
+  testWidgets('Android 登录页提供官方登录和Cookie入口', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: LoginPage(
+          platformServices: PlatformServices.forPlatform(AppPlatform.android),
+        ),
+      ),
+    );
     await tester.pumpAndSettle();
 
-    if (Platform.isWindows) {
-      expect(find.text('打开 B 站扫码登录'), findsOneWidget);
-      expect(find.text('扫码'), findsOneWidget);
-      expect(find.text('密码'), findsNothing);
-    } else {
-      expect(find.text('进入官方手机号登录'), findsOneWidget);
-      expect(find.text('密码'), findsOneWidget);
-    }
+    expect(find.text('进入官方手机号登录'), findsOneWidget);
+    expect(find.text('密码'), findsOneWidget);
     expect(find.text('Cookie'), findsOneWidget);
 
     await tester.tap(find.text('Cookie'));
     await tester.pumpAndSettle();
     expect(find.text('使用 Cookie 登录'), findsOneWidget);
     expect(find.text('需要包含 SESSDATA'), findsOneWidget);
-    expect(
-      find.text(Platform.isWindows ? '打开 B 站扫码登录' : '打开 B 站网页登录'),
-      findsOneWidget,
+    expect(find.text('打开 B 站网页登录'), findsOneWidget);
+  });
+
+  /// 验证 Windows 登录页展示二维码入口，并允许切换到 Cookie 表单。
+  testWidgets('Windows 登录页提供扫码和Cookie入口', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: LoginPage(
+          platformServices: PlatformServices.forPlatform(AppPlatform.windows),
+        ),
+      ),
     );
+    await tester.pumpAndSettle();
+
+    expect(find.text('打开 B 站扫码登录'), findsOneWidget);
+    expect(find.text('扫码'), findsOneWidget);
+    expect(find.text('密码'), findsNothing);
+    expect(find.text('Cookie'), findsOneWidget);
+
+    await tester.tap(find.text('Cookie'));
+    await tester.pumpAndSettle();
+    expect(find.text('使用 Cookie 登录'), findsOneWidget);
+    expect(find.text('需要包含 SESSDATA'), findsOneWidget);
+    expect(find.text('打开 B 站扫码登录'), findsOneWidget);
+  });
+
+  /// 验证尚未接入的平台展示安全说明，不误用 Android 登录入口。
+  testWidgets('Linux 登录页显示暂不支持说明', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: LoginPage(
+          platformServices: PlatformServices.forPlatform(AppPlatform.linux),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Linux 暂不支持账号登录'), findsOneWidget);
+    expect(find.text('安全登录和 Cookie 存储接入完成后，这里才会开放登录入口。'), findsOneWidget);
+    expect(find.text('Cookie'), findsNothing);
   });
 
   /// 验证播放器只在真实就绪后写一次历史，并在切换分P后的下一次就绪更新同一视频。
