@@ -54,4 +54,34 @@ void main() {
     expect(service, contains('hasDecodedAudio: hasDecodedAudio'));
     expect(service, isNot(contains('_mediaErrorDuringOpen')));
   });
+
+  /// 历史续播必须先暂停并跳转视频，再等待较慢的外部音轨挂载，避免从零播放数秒。
+  test('Windows 历史位置在外部音轨挂载前恢复', () {
+    final String service = File(
+      'lib/services/windows_playback_service.dart',
+    ).readAsStringSync();
+    final int methodStart = service.indexOf('Future<void> _openMediaAttempt(');
+    final int methodEnd = service.indexOf(
+      'bool _needsResumePositionCorrection(',
+      methodStart,
+    );
+    final String methodBody = service.substring(methodStart, methodEnd);
+    final int pauseIndex = methodBody.indexOf('await _player.pause();');
+    final int openIndex = methodBody.indexOf('await _player.open(');
+    final int seekIndex = methodBody.indexOf(
+      'await _player.seek(resumePosition);',
+    );
+    final int audioIndex = methodBody.indexOf(
+      'await _player.setAudioTrack(audioTrack);',
+    );
+
+    expect(pauseIndex, greaterThanOrEqualTo(0));
+    expect(openIndex, greaterThan(pauseIndex));
+    expect(seekIndex, greaterThan(openIndex));
+    expect(audioIndex, greaterThan(seekIndex));
+    expect(
+      methodBody,
+      contains('_needsResumePositionCorrection(resumePosition)'),
+    );
+  });
 }

@@ -464,6 +464,7 @@ class _FakePlaybackService implements PlaybackService {
     PlaybackPhase phase = PlaybackPhase.ready,
     String? message,
     int? currentQuality,
+    bool isRestoringPosition = false,
   }) {
     _states.add(
       PlaybackSnapshot(
@@ -477,6 +478,7 @@ class _FakePlaybackService implements PlaybackService {
           PlaybackQuality(id: 64, label: '高清 720P'),
           PlaybackQuality(id: 32, label: '清晰 480P'),
         ],
+        isRestoringPosition: isRestoringPosition,
         message: message,
       ),
     );
@@ -490,6 +492,15 @@ class _FakePlaybackService implements PlaybackService {
   /// 向播放器页面推送加载快照，验证加载提示不会暴露可点击的重试入口。
   void emitLoading() {
     _emit(phase: PlaybackPhase.loading, message: '正在准备播放…');
+  }
+
+  /// 模拟 Windows 正在恢复历史位置，验证页面会遮住零秒画面但保留底层视频组件。
+  void emitRestoringPosition() {
+    _emit(
+      phase: PlaybackPhase.loading,
+      message: '正在恢复上次播放位置…',
+      isRestoringPosition: true,
+    );
   }
 
   /// 向播放器页面推送一次就绪快照，供观看记录只在真正可播放后写入的测试使用。
@@ -1194,6 +1205,35 @@ void main() {
 
     expect(find.byKey(const Key('fake-desktop-video-surface')), findsOneWidget);
     expect(find.byKey(const Key('picture-in-picture')), findsNothing);
+  });
+
+  /// 验证历史位置尚未定位时只遮住画面，定位完成后立即恢复同一个桌面视频表面。
+  testWidgets('桌面播放器恢复历史位置时遮住零秒画面', (WidgetTester tester) async {
+    final _FakeDesktopPlaybackService service = _FakeDesktopPlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: service,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    service.emitRestoringPosition();
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const Key('fake-desktop-video-surface')), findsOneWidget);
+    expect(
+      find.byKey(const Key('player-resume-position-gate')),
+      findsOneWidget,
+    );
+
+    service.emitReady();
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const Key('fake-desktop-video-surface')), findsOneWidget);
+    expect(find.byKey(const Key('player-resume-position-gate')), findsNothing);
   });
 
   /// 验证竖屏播放器右上角提供常用控制，并会随着详情页上滑连续收起至接近零高度。

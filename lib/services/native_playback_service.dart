@@ -85,6 +85,7 @@ class PlaybackSnapshot {
     this.availableQualities = const <PlaybackQuality>[],
     this.videoAspectRatio = 16 / 9,
     this.restoredPosition = Duration.zero,
+    this.isRestoringPosition = false,
     this.isInPictureInPicture = false,
     this.message,
   });
@@ -98,6 +99,7 @@ class PlaybackSnapshot {
   final List<PlaybackQuality> availableQualities;
   final double videoAspectRatio;
   final Duration restoredPosition;
+  final bool isRestoringPosition;
   final bool isInPictureInPicture;
   final String? message;
 
@@ -137,6 +139,7 @@ class PlaybackSnapshot {
       restoredPosition: Duration(
         milliseconds: (values['restoredPositionMs'] as num?)?.toInt() ?? 0,
       ),
+      isRestoringPosition: values['isRestoringPosition'] == true,
       isInPictureInPicture: values['isInPictureInPicture'] == true,
       message: values['message'] as String?,
     );
@@ -153,6 +156,7 @@ class PlaybackSnapshot {
     List<PlaybackQuality>? availableQualities,
     double? videoAspectRatio,
     Duration? restoredPosition,
+    bool? isRestoringPosition,
     bool? isInPictureInPicture,
     String? message,
     bool clearMessage = false,
@@ -167,6 +171,7 @@ class PlaybackSnapshot {
       availableQualities: availableQualities ?? this.availableQualities,
       videoAspectRatio: videoAspectRatio ?? this.videoAspectRatio,
       restoredPosition: restoredPosition ?? this.restoredPosition,
+      isRestoringPosition: isRestoringPosition ?? this.isRestoringPosition,
       isInPictureInPicture: isInPictureInPicture ?? this.isInPictureInPicture,
       message: clearMessage ? null : (message ?? this.message),
     );

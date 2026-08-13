@@ -172,6 +172,11 @@ extension _PlayerPageView on _PlayerPageState {
           _buildVideoOutput(),
           _buildDanmakuOverlay(),
           _buildSubtitleOverlay(),
+          if (_playbackSnapshot.isRestoringPosition)
+            const ColoredBox(
+              key: Key('player-resume-position-gate'),
+              color: Colors.black,
+            ),
         ],
       ),
     );
@@ -183,6 +188,7 @@ extension _PlayerPageView on _PlayerPageState {
     // 错误或选集展开时关闭画面手势，避免画面层干扰重试与选集按钮点击。
     final bool enableSurfaceGestures =
         _playbackSnapshot.phase != PlaybackPhase.error &&
+        !_playbackSnapshot.isRestoringPosition &&
         !_partSelectorExpanded &&
         !_controlsLocked;
     final Widget player = LayoutBuilder(

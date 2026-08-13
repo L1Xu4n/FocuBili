@@ -65,4 +65,23 @@ void main() {
 
     await first.dispose();
   });
+
+  /// 验证恢复门控字段能从平台状态读取并在页面复制快照时保持，旧平台缺字段则安全关闭。
+  test('播放快照兼容恢复位置门控字段', () {
+    final PlaybackSnapshot restoring = PlaybackSnapshot.fromPlatformMap(
+      <Object?, Object?>{'isRestoringPosition': true},
+    );
+    final PlaybackSnapshot legacy = PlaybackSnapshot.fromPlatformMap(
+      const <Object?, Object?>{},
+    );
+
+    expect(restoring.isRestoringPosition, isTrue);
+    expect(
+      restoring
+          .copyWith(position: const Duration(seconds: 8))
+          .isRestoringPosition,
+      isTrue,
+    );
+    expect(legacy.isRestoringPosition, isFalse);
+  });
 }

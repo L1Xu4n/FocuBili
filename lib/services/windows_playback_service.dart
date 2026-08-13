@@ -43,6 +43,7 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
   static const Duration _progressSaveInterval = Duration(seconds: 5);
   static const Duration _audioDecoderReadyTimeout = Duration(seconds: 5);
   static const Duration _mediaErrorHealthCheckTimeout = Duration(seconds: 1);
+  static const Duration _resumePositionTolerance = Duration(seconds: 1);
 
   final BilibiliDesktopPlaybackSourceService _sourceService;
   final Player _player;
@@ -64,6 +65,7 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
   DateTime? _lastProgressSavedAt;
   bool _disposed = false;
   bool _opening = false;
+  bool _restoringPosition = false;
   bool _handlingMediaError = false;
   bool _cacheConfigured = false;
   bool _shouldPlayAfterFallback = true;
@@ -497,6 +499,7 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
       return;
     }
     _opening = true;
+    _restoringPosition = resumePosition > Duration.zero;
     _emitPlayerState(
       phaseOverride: PlaybackPhase.loading,
       message: resumePosition > Duration.zero ? '正在恢复上次播放位置…' : '正在请求播放数据…',
@@ -528,12 +531,14 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
         return;
       }
       _opening = false;
+      _restoringPosition = false;
       _emitPlayerState(phaseOverride: PlaybackPhase.ready, clearMessage: true);
     } catch (error) {
       if (!_isCurrentSourceRequest(generation)) {
         return;
       }
       _opening = false;
+      _restoringPosition = false;
       final String message = error is DesktopPlaybackSourceException
           ? error.message
           : 'Windows 播放器暂时无法打开该视频，请重试。';
@@ -575,7 +580,7 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
     throw const DesktopPlaybackSourceException('播放数据没有返回安全的媒体地址。');
   }
 
-  /// 打开一组视频和外部音频地址，并在开始播放前恢复位置与用户原来的暂停状态。
+  /// 打开一组视频和外部音频地址，先暂停并恢复位置，再挂载音轨和恢复用户原来的播放状态。
   Future<void> _openMediaAttempt(
     WindowsDashMediaAttempt attempt, {
     required int generation,
@@ -589,6 +594,8 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
       _activeAudioMedia!,
       title: _activeAudioTrackToken,
     );
+    // 显式暂停旧媒体，避免新视频准备期间沿用上一条线路的播放状态。
+    await _player.pause();
     await _player.open(
       attempt.createVideoMedia(_activeMediaHeaders),
       play: false,
@@ -596,11 +603,25 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
     if (!_isCurrentSourceRequest(generation)) {
       return;
     }
+    if (resumePosition > Duration.zero) {
+      // 视频一打开就先定位，不能让较慢的外部音轨挂载把历史跳转拖到数秒之后。
+      await _player.seek(resumePosition);
+      if (!_isCurrentSourceRequest(generation)) {
+        return;
+      }
+      _restoringPosition = false;
+      _emitPlayerState(
+        phaseOverride: PlaybackPhase.loading,
+        message: '正在准备音视频…',
+      );
+    }
     await _player.setAudioTrack(audioTrack);
     if (!_isCurrentSourceRequest(generation)) {
       return;
     }
-    if (resumePosition > Duration.zero) {
+    // 外部音轨挂载可能改变底层时间轴；保持暂停并只在发生明显偏移时补一次跳转。
+    await _player.pause();
+    if (_needsResumePositionCorrection(resumePosition)) {
       await _player.seek(resumePosition);
     }
     if (!_isCurrentSourceRequest(generation)) {
@@ -619,6 +640,17 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
       throw const DesktopPlaybackSourceException('当前音视频线路未能建立解码。');
     }
     _externalAudioNeedsReload = false;
+  }
+
+  /// 判断外部音轨挂载后是否偏离目标历史位置，允许一秒内的播放器取整误差。
+  bool _needsResumePositionCorrection(Duration resumePosition) {
+    if (resumePosition <= Duration.zero) {
+      return false;
+    }
+    final int differenceMilliseconds =
+        (_player.state.position.inMilliseconds - resumePosition.inMilliseconds)
+            .abs();
+    return differenceMilliseconds > _resumePositionTolerance.inMilliseconds;
   }
 
   /// 等待 media_kit 暴露当前线路的音视频解码结果；零散底层错误只作为线索，不抢先否定已成功的播放。
@@ -799,6 +831,7 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
   /// 开始新的播放源请求并让先前仍在等待网络的分P或清晰度请求立即失效。
   int _beginSourceRequest() {
     _sourceGeneration += 1;
+    _restoringPosition = false;
     _activeAudioTrackToken = '';
     _externalAudioNeedsReload = false;
     return _sourceGeneration;
@@ -844,6 +877,7 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
       availableQualities: _availableQualities,
       videoAspectRatio: width > 0 && height > 0 ? width / height : 16 / 9,
       restoredPosition: _restoredPosition,
+      isRestoringPosition: _restoringPosition,
       message: clearMessage ? null : (message ?? _snapshot.message),
     );
     _stateController.add(_snapshot);
