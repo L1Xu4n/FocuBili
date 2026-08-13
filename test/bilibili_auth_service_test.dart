@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -151,6 +152,74 @@ void main() {
     expect(store.replacedCookie, newCookie);
   });
 
+  /// 验证 Windows 官方网页快照无需预判 Cookie 名，只以官方接口的已登录结果为准。
+  test('网页 Cookie 快照由官方接口确认后保存', () async {
+    final _RecordingCookieStore store = _RecordingCookieStore();
+    final _CallbackAuthApi api = _CallbackAuthApi(
+      (String _) async => _activeResponse(),
+    );
+    final BilibiliAuthService service = BilibiliAuthService(
+      cookieStore: store,
+      api: api,
+    );
+    const String webCookieSnapshot = 'DedeUserID=42; bili_jct=csrf';
+
+    final BilibiliSessionState session = await service
+        .verifyAndSaveWebCookieSnapshot(webCookieSnapshot);
+
+    expect(session.account?.mid, 42);
+    expect(api.requestedCookies, <String>[webCookieSnapshot]);
+    expect(store.replacedCookie, webCookieSnapshot);
+  });
+
+  /// 验证浏览器内部取得的 nav 成功响应可以保存包含 SESSDATA 的完整会话。
+  test('浏览器内部确认登录后保存完整 Cookie', () async {
+    final _RecordingCookieStore store = _RecordingCookieStore();
+    final BilibiliAuthService service = BilibiliAuthService(cookieStore: store);
+
+    final BilibiliSessionState session = await service
+        .saveBrowserVerifiedSession(
+          responseText: _activeResponse().body,
+          rawCookie: 'SESSDATA=browser-session; bili_jct=csrf',
+        );
+
+    expect(session.account?.mid, 42);
+    expect(store.replacedCookie, contains('SESSDATA=browser-session'));
+  });
+
+  /// 验证浏览器虽确认登录但未导出 SESSDATA 时不会保存不可恢复的半会话。
+  test('浏览器确认登录但缺少 SESSDATA 时拒绝保存', () async {
+    final _RecordingCookieStore store = _RecordingCookieStore();
+    final BilibiliAuthService service = BilibiliAuthService(cookieStore: store);
+
+    final BilibiliSessionState session = await service
+        .saveBrowserVerifiedSession(
+          responseText: _activeResponse().body,
+          rawCookie: 'DedeUserID=42; bili_jct=csrf',
+        );
+
+    expect(session.status, BilibiliSessionStatus.networkError);
+    expect(store.replaceCalls, 0);
+  });
+
+  /// 验证官方接口尚未确认登录时只继续等待，不会保存半成品 Cookie 快照。
+  test('未登录的网页 Cookie 快照不会覆盖本机会话', () async {
+    final _RecordingCookieStore store = _RecordingCookieStore(
+      cookies: 'SESSDATA=old-account',
+    );
+    final BilibiliAuthService service = BilibiliAuthService(
+      cookieStore: store,
+      api: _CallbackAuthApi((String _) async => _expiredResponse()),
+    );
+
+    final BilibiliSessionState session = await service
+        .verifyAndSaveWebCookieSnapshot('bili_jct=not-yet-logged-in');
+
+    expect(session.status, BilibiliSessionStatus.expired);
+    expect(store.replaceCalls, 0);
+    expect(store.cookies, 'SESSDATA=old-account');
+  });
+
   /// 验证失效 Cookie 不会覆盖当前登录状态，即使它本身包含 SESSDATA 字段。
   test('失效 Cookie 验证失败时不写入本机容器', () async {
     final _RecordingCookieStore store = _RecordingCookieStore(
@@ -190,5 +259,23 @@ void main() {
     expect(store.replaceCalls, 0);
     expect(store.clearCalls, 0);
     expect(store.cookies, 'SESSDATA=old-account');
+  });
+
+  /// 验证官方账号接口永久不返回时会按上限结束，登录轮询不会永远卡在同一次请求。
+  test('网页 Cookie 官方验证超时后返回网络错误', () async {
+    final _RecordingCookieStore store = _RecordingCookieStore();
+    final Completer<BilibiliNavResponse> pendingResponse =
+        Completer<BilibiliNavResponse>();
+    final BilibiliAuthService service = BilibiliAuthService(
+      cookieStore: store,
+      api: _CallbackAuthApi((String _) => pendingResponse.future),
+      requestTimeout: const Duration(milliseconds: 10),
+    );
+
+    final BilibiliSessionState session = await service
+        .verifyAndSaveWebCookieSnapshot('SESSDATA=pending-account');
+
+    expect(session.status, BilibiliSessionStatus.networkError);
+    expect(store.replaceCalls, 0);
   });
 }

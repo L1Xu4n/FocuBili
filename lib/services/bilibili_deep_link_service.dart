@@ -1,8 +1,13 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/services.dart';
 
 import '../core/utils/bilibili_id_converter.dart';
+
+/// 定义短链接展开函数，测试可以避免访问真实网络。
+typedef BilibiliShortLinkExpander = Future<Uri?> Function(Uri shortLink);
 
 /// 保存跨应用视频链接解析出的播放目标、分P和起始时间。
 class BilibiliVideoDeepLinkTarget {
@@ -155,6 +160,108 @@ abstract final class BilibiliDeepLinkParser {
       return null;
     }
     return Duration(milliseconds: (seconds * 1000).round());
+  }
+}
+
+/// 从系统分享文本或剪贴板文字中提取并解析可播放的 B站链接。
+class BilibiliIncomingLinkResolver {
+  /// 创建外部文本解析器；正式环境默认以受限网络请求展开 `b23.tv`。
+  BilibiliIncomingLinkResolver({BilibiliShortLinkExpander? expandShortLink})
+    : _expandShortLink = expandShortLink ?? _expandB23Link;
+
+  static final RegExp _webLinkPattern = RegExp(
+    r'https?://[^\s<>\u3000]+',
+    caseSensitive: false,
+  );
+  static const String _shortLinkHost = 'b23.tv';
+  static const String _trailingPunctuation = '.,!?;:"\'，。！？；：、）)]}》】」』';
+  final BilibiliShortLinkExpander _expandShortLink;
+
+  /// 解析完整 URI 或分享正文中的首个受支持链接，短链失败时安全返回空值。
+  Future<BilibiliVideoDeepLinkTarget?> resolve(String rawText) async {
+    final BilibiliVideoDeepLinkTarget? direct = BilibiliDeepLinkParser.parse(
+      rawText,
+    );
+    if (direct != null) {
+      return direct;
+    }
+    for (final Uri candidate in extractWebLinks(rawText)) {
+      final BilibiliVideoDeepLinkTarget? embedded =
+          BilibiliDeepLinkParser.parse(candidate.toString());
+      if (embedded != null) {
+        return embedded;
+      }
+      if (candidate.host.toLowerCase() != _shortLinkHost) {
+        continue;
+      }
+      try {
+        final Uri? expanded = await _expandShortLink(candidate);
+        final BilibiliVideoDeepLinkTarget? expandedTarget = expanded == null
+            ? null
+            : BilibiliDeepLinkParser.parse(expanded.toString());
+        if (expandedTarget != null) {
+          return expandedTarget;
+        }
+      } catch (_) {
+        // 分享入口不能因为短链网络失败而打断应用启动或剪贴板监听。
+      }
+    }
+    return null;
+  }
+
+  /// 提取文本中的 HTTP(S) 链接并去掉常见句末标点，保持原出现顺序。
+  static List<Uri> extractWebLinks(String rawText) {
+    final List<Uri> links = <Uri>[];
+    for (final RegExpMatch match in _webLinkPattern.allMatches(rawText)) {
+      String value = match.group(0)!;
+      while (value.isNotEmpty &&
+          _trailingPunctuation.contains(value[value.length - 1])) {
+        value = value.substring(0, value.length - 1);
+      }
+      final Uri? uri = Uri.tryParse(value);
+      if (uri != null && uri.host.isNotEmpty) {
+        links.add(uri);
+      }
+    }
+    return List<Uri>.unmodifiable(links);
+  }
+
+  /// 仅请求 `b23.tv` 并跟随有限次重定向，最终地址仍由严格视频解析器校验。
+  static Future<Uri?> _expandB23Link(Uri shortLink) async {
+    if (shortLink.scheme != 'https' ||
+        shortLink.host.toLowerCase() != _shortLinkHost) {
+      return null;
+    }
+    final HttpClient client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 5);
+    try {
+      final HttpClientRequest request = await client
+          .getUrl(shortLink)
+          .timeout(const Duration(seconds: 5));
+      request.followRedirects = true;
+      request.maxRedirects = 5;
+      request.headers.set(
+        HttpHeaders.userAgentHeader,
+        'Mozilla/5.0 FocuBili/1.4',
+      );
+      final HttpClientResponse response = await request.close().timeout(
+        const Duration(seconds: 5),
+      );
+      Uri resolved = shortLink;
+      for (final RedirectInfo redirect in response.redirects) {
+        resolved = resolved.resolveUri(redirect.location);
+      }
+      await response.drain<void>();
+      return resolved;
+    } on SocketException {
+      return null;
+    } on HttpException {
+      return null;
+    } on TimeoutException {
+      return null;
+    } finally {
+      client.close(force: true);
+    }
   }
 }
 

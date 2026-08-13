@@ -148,6 +148,106 @@ void main() {
     );
   });
 
+  test('DASH 缺少安全音频地址时拒绝生成无声播放源', () async {
+    final BilibiliDesktopPlaybackSourceService service =
+        BilibiliDesktopPlaybackSourceService(
+          authService: BilibiliAuthService(cookieStore: _MemoryCookieStore()),
+          // 固定响应保留安全视频但移除音频，验证 Windows 不会把纯视频误判为播放成功。
+          requestJson: (Uri _, Map<String, String> _) async {
+            return jsonEncode(<String, Object?>{
+              'code': 0,
+              'data': <String, Object?>{
+                'quality': 64,
+                'dash': <String, Object?>{
+                  'video': <Map<String, Object?>>[
+                    <String, Object?>{
+                      'id': 64,
+                      'codecs': 'avc1.64001F',
+                      'base_url': 'https://video.bilivideo.com/video.m4s',
+                    },
+                  ],
+                  'audio': <Object?>[],
+                },
+              },
+            });
+          },
+        );
+
+    await expectLater(
+      service.load(bvid: 'BV1GJ411x7h7', cid: 137649199, quality: 64),
+      throwsA(
+        isA<DesktopPlaybackSourceException>().having(
+          (DesktopPlaybackSourceException error) => error.message,
+          'message',
+          contains('安全的音频地址'),
+        ),
+      ),
+    );
+  });
+
+  test('Windows 优先 AAC 并保留其他音频表示作为后备', () async {
+    final BilibiliDesktopPlaybackSourceService service =
+        BilibiliDesktopPlaybackSourceService(
+          authService: BilibiliAuthService(cookieStore: _MemoryCookieStore()),
+          // 固定响应让高带宽增强音频排在 AAC 前，验证兼容性优先而非只看码率。
+          requestJson: (Uri _, Map<String, String> _) async {
+            return jsonEncode(<String, Object?>{
+              'code': 0,
+              'data': <String, Object?>{
+                'quality': 64,
+                'dash': <String, Object?>{
+                  'video': <Map<String, Object?>>[
+                    <String, Object?>{
+                      'id': 64,
+                      'codecs': 'avc1.64001F',
+                      'base_url': 'https://video.bilivideo.com/video.m4s',
+                    },
+                  ],
+                  'audio': <Map<String, Object?>>[
+                    <String, Object?>{
+                      'id': 30251,
+                      'bandwidth': 1500000,
+                      'codecs': 'ec-3',
+                      'base_url': 'https://audio.bilivideo.com/enhanced.m4s',
+                    },
+                    <String, Object?>{
+                      'id': 30216,
+                      'bandwidth': 900000,
+                      'codecs': 'mp4a.40.5',
+                      'base_url': 'https://audio.bilivideo.com/he-aac.m4s',
+                    },
+                    <String, Object?>{
+                      'id': 30280,
+                      'bandwidth': 192000,
+                      'codecs': 'mp4a.40.2',
+                      'base_url': 'https://audio.bilivideo.com/aac-main.m4s',
+                      'backup_url': <String>[
+                        'https://backup.bilivideo.cn/aac-backup.m4s',
+                      ],
+                    },
+                  ],
+                },
+              },
+            });
+          },
+        );
+
+    final DesktopPlaybackSources sources = await service.load(
+      bvid: 'BV1GJ411x7h7',
+      cid: 137649199,
+      quality: 64,
+    );
+
+    expect(sources.audioCodec, 'mp4a.40.2');
+    expect(sources.audioUrls, <String>[
+      'https://audio.bilivideo.com/aac-main.m4s',
+      'https://backup.bilivideo.cn/aac-backup.m4s',
+      'https://audio.bilivideo.com/he-aac.m4s',
+      'https://audio.bilivideo.com/enhanced.m4s',
+    ]);
+    expect(sources.audioCodecByUrl[sources.audioUrls.last], 'ec-3');
+  });
+
   test('接口错误码不会泄露响应或会话内容', () async {
     final BilibiliDesktopPlaybackSourceService service =
         BilibiliDesktopPlaybackSourceService(

@@ -15,6 +15,10 @@ DesktopPlaybackSources _createSources() {
       'https://audio-main.bilivideo.com/audio.m4s',
       'https://audio-backup.bilivideo.cn/audio.m4s',
     ],
+    audioCodecByUrl: <String, String>{
+      'https://audio-main.bilivideo.com/audio.m4s': 'mp4a.40.2',
+      'https://audio-backup.bilivideo.cn/audio.m4s': 'ec-3',
+    },
     referer: 'https://www.bilibili.com/video/BV1GJ411x7h7',
     cookieHeader: 'SESSDATA=test-session',
     actualQuality: 64,
@@ -34,10 +38,12 @@ void main() {
     expect(attempts, hasLength(4));
     expect(attempts[0].videoUrl, contains('video-main'));
     expect(attempts[0].audioUrl, contains('audio-main'));
-    expect(attempts[1].videoUrl, contains('video-backup'));
-    expect(attempts[1].audioUrl, contains('audio-main'));
-    expect(attempts[2].videoUrl, contains('video-main'));
-    expect(attempts[2].audioUrl, contains('audio-backup'));
+    expect(attempts[0].audioCodec, 'mp4a.40.2');
+    expect(attempts[1].videoUrl, contains('video-main'));
+    expect(attempts[1].audioUrl, contains('audio-backup'));
+    expect(attempts[1].audioCodec, 'ec-3');
+    expect(attempts[2].videoUrl, contains('video-backup'));
+    expect(attempts[2].audioUrl, contains('audio-main'));
     expect(attempts[3].videoUrl, contains('video-backup'));
     expect(attempts[3].audioUrl, contains('audio-backup'));
   });
@@ -49,18 +55,38 @@ void main() {
     ).first;
 
     final Media videoMedia = attempt.createVideoMedia(sources.mediaHeaders);
-    final AudioTrack? audioTrack = attempt.createAudioTrack(
-      sources.mediaHeaders,
+    final Media audioMedia = attempt.createAudioMedia(sources.mediaHeaders);
+    final AudioTrack audioTrack = attempt.createAudioTrack(
+      audioMedia,
+      title: 'FocuBili audio 1:0',
     );
 
     expect(videoMedia.httpHeaders, sources.mediaHeaders);
-    expect(audioTrack, isNotNull);
-    expect(audioTrack!.id, attempt.audioUrl);
+    expect(audioMedia.httpHeaders, sources.mediaHeaders);
+    expect(audioTrack.id, attempt.audioUrl);
+    expect(audioTrack.title, 'FocuBili audio 1:0');
     expect(Media(audioTrack.id).httpHeaders, sources.mediaHeaders);
     expect(
       Media(audioTrack.id).httpHeaders!['Cookie'],
       'SESSDATA=test-session',
     );
     expect(Media(audioTrack.id).httpHeaders!['Referer'], sources.referer);
+  });
+
+  test('缺少外部音频时不生成会静默播放的纯视频尝试', () {
+    final DesktopPlaybackSources sources = _createSources();
+    final DesktopPlaybackSources withoutAudio = DesktopPlaybackSources(
+      videoUrls: sources.videoUrls,
+      audioUrls: const <String>[],
+      audioCodecByUrl: const <String, String>{},
+      referer: sources.referer,
+      cookieHeader: sources.cookieHeader,
+      actualQuality: sources.actualQuality,
+      qualities: sources.qualities,
+      videoCodec: sources.videoCodec,
+      audioCodec: '',
+    );
+
+    expect(WindowsDashMediaPlan.build(withoutAudio), isEmpty);
   });
 }

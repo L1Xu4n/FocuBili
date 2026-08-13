@@ -3,6 +3,7 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:desktop_webview_window/desktop_webview_window.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -64,8 +65,12 @@ Future<void> _prepareWindowsDesktop({
 }
 
 /// 初始化 Flutter 绑定、系统栏样式，并启动焦点哔哩应用。
-Future<void> main() async {
+Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+  // WebView2 子窗口进程只绘制插件标题栏，不重复初始化完整焦点哔哩应用。
+  if (runWebViewTitleBarWidget(args)) {
+    return;
+  }
   _installProblemDiagnostics();
   await _prepareWindowsDesktop();
   // Android 启动方向由 MainActivity 在 Flutter 首帧前决定，避免未稳定的窗口尺寸把平板误判成手机。

@@ -24,6 +24,30 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
   bool _defaultQualityPending = true;
   Duration? _pendingInitialPosition;
 
+  /// 由页面状态提供循环播放开关。
+  bool get _playbackLoopEnabled;
+
+  /// 由页面状态更新循环播放开关。
+  set _playbackLoopEnabled(bool value);
+
+  /// 由页面状态提供“播放 N 次后暂停”的总次数。
+  int? get _pauseAfterPlayCount;
+
+  /// 由页面状态清除“播放 N 次后暂停”的设置。
+  set _pauseAfterPlayCount(int? value);
+
+  /// 由页面状态记录当前会话已经完整播放的次数。
+  int get _completedPlayCount;
+
+  /// 由页面状态更新已经完整播放的次数。
+  set _completedPlayCount(int value);
+
+  /// 由页面状态防止同一个 ended 边沿发起多个循环重启。
+  bool get _loopRestartInFlight;
+
+  /// 由页面状态更新循环重启保护标记。
+  set _loopRestartInFlight(bool value);
+
   /// 由播放器状态类提供当前平台的播放服务。
   PlaybackService get _playbackService;
 
@@ -131,8 +155,11 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
   /// 重新启动控制层自动隐藏计时器。
   void _restartControlsAutoHideTimer();
 
-  /// 把真实播放状态同步给专注计时器。
-  void _syncFocusPlaybackState(PlaybackSnapshot snapshot);
+  /// 把真实播放状态同步给专注计时器，并显式标记是否刚进入完播状态。
+  void _syncFocusPlaybackState(
+    PlaybackSnapshot snapshot, {
+    bool playbackJustEnded = false,
+  });
 
   /// 在播放就绪后按需询问是否关联当前专注任务。
   Future<void> _maybePromptFocusAssociation();
@@ -365,6 +392,23 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
         currentLearningEntry != null &&
         currentLearningEntry.matchesPart(_activeVideo.bvid, _currentPart.cid) &&
         currentLearningEntry.status != LearningListStatus.completed;
+    final bool interactiveCompletion =
+        justEnded && _playerEnhancementController.handlesPlaybackCompletion;
+    bool shouldRestartLoop = false;
+    bool shouldPauseAfterPlayCount = false;
+    if (justEnded && !interactiveCompletion) {
+      _completedPlayCount += 1;
+      final int? targetPlayCount = _pauseAfterPlayCount;
+      shouldPauseAfterPlayCount =
+          targetPlayCount != null && _completedPlayCount >= targetPlayCount;
+      shouldRestartLoop =
+          !shouldPauseAfterPlayCount &&
+          (_playbackLoopEnabled || targetPlayCount != null);
+      if (shouldPauseAfterPlayCount) {
+        _pauseAfterPlayCount = null;
+        _playbackLoopEnabled = false;
+      }
+    }
     setState(() {
       _playbackSnapshot = snapshot;
       _isRetrying = false;
@@ -400,10 +444,11 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
       }
       if (justEnded) {
         // 互动视频优先显示剧情选择；普通视频仅在当前分 P 已加入学习清单时显示完成操作。
-        _interactivePromptVisible =
-            _playerEnhancementController.handlesPlaybackCompletion;
+        _interactivePromptVisible = interactiveCompletion;
         _completionPromptVisible =
-            !_interactivePromptVisible && completedLearningEntry;
+            !_interactivePromptVisible &&
+            !shouldRestartLoop &&
+            completedLearningEntry;
         _completionLearningFinished = false;
         _showControls = true;
       }
@@ -436,6 +481,12 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     if (justEnded) {
       _flushCurrentWatchHistoryProgress();
       _flushCurrentLearningListProgress();
+      if (shouldPauseAfterPlayCount) {
+        unawaited(_playbackService.pause());
+        _showTransientSnackBar('已播放 $_completedPlayCount 次，视频已暂停');
+      } else if (shouldRestartLoop) {
+        unawaited(_restartPlaybackLoop());
+      }
     }
     _scheduleInteractiveChoicePrompt(snapshot);
     if (_danmakuEnabled && snapshot.phase == PlaybackPhase.ready) {
@@ -446,11 +497,28 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     } else if (_showControls && !_controlsAutoHideScheduled) {
       _restartControlsAutoHideTimer();
     }
-    _syncFocusPlaybackState(snapshot);
+    _syncFocusPlaybackState(snapshot, playbackJustEnded: justEnded);
     if (snapshot.phase == PlaybackPhase.ready) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         unawaited(_maybePromptFocusAssociation());
       });
+    }
+  }
+
+  /// 从零开始下一轮播放，并用保护标记避免同一完播状态重复执行。
+  Future<void> _restartPlaybackLoop() async {
+    if (_loopRestartInFlight || !mounted) {
+      return;
+    }
+    _loopRestartInFlight = true;
+    try {
+      await _seekNativeTo(Duration.zero);
+      await _playbackService.play();
+    } on Object {
+      _playbackLoopEnabled = false;
+      _showTransientSnackBar('循环播放启动失败，已自动关闭');
+    } finally {
+      _loopRestartInFlight = false;
     }
   }
 

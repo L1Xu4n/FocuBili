@@ -3,13 +3,15 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../core/router/app_router.dart';
+import '../../platform/app_platform.dart';
 import '../../services/focus_preferences_service.dart';
 
-/// 第一次打开播放器专注时说明自动勿扰能力，并允许用户直接进入应用设置。
+/// 第一次打开播放器专注时按平台说明勿扰边界，并允许用户直接进入应用设置。
 Future<void> showPlayerFocusDoNotDisturbGuideIfNeeded(
   BuildContext context, {
   FocusPreferencesService? preferencesService,
   Future<void> Function()? openSettings,
+  AppPlatform? appPlatform,
 }) async {
   final FocusPreferencesService service =
       preferencesService ?? FocusPreferencesService();
@@ -21,13 +23,17 @@ Future<void> showPlayerFocusDoNotDisturbGuideIfNeeded(
   if (!context.mounted) {
     return;
   }
+  final bool isWindows =
+      (appPlatform ?? AppPlatformDetector.current) == AppPlatform.windows;
   final bool? shouldOpenSettings = await showDialog<bool>(
     context: context,
     builder: (BuildContext dialogContext) => AlertDialog(
       icon: const Icon(Icons.do_not_disturb_on_outlined),
-      title: const Text('专注时可以自动开启勿扰'),
-      content: const Text(
-        '你可以在“我的 → 设置 → 个性化设置”中开启“专注状态将手机设为勿扰模式”。开启后，专注视频播放时进入勿扰，暂停或结束时恢复；快进、快退不会反复切换。',
+      title: Text(isWindows ? 'Windows 系统专注需要手动启动' : '专注时可以自动开启勿扰'),
+      content: Text(
+        isWindows
+            ? 'Windows 自动启动系统专注需要微软单独授权。你可以在“我的 → 设置 → 个性化设置”中开启开始提醒，之后从 Windows“时钟”手动启动。'
+            : '你可以在“我的 → 设置 → 个性化设置”中开启专注勿扰。开启后，专注视频播放时进入勿扰，暂停或结束时恢复；快进、快退不会反复切换。',
       ),
       actions: <Widget>[
         TextButton(

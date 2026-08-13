@@ -178,6 +178,24 @@ extension _PlayerControlsView on _PlayerPageState {
         ),
       ),
       const PopupMenuDivider(),
+      CheckedPopupMenuItem<_PlayerMoreMenuAction>(
+        key: const Key('playback-loop-menu-item'),
+        value: _PlayerMoreMenuAction.playbackLoop,
+        checked: _playbackLoopEnabled,
+        child: Text(_playbackLoopEnabled ? '循环播放（已开启）' : '循环播放'),
+      ),
+      PopupMenuItem<_PlayerMoreMenuAction>(
+        key: const Key('sleep-timer-menu-item'),
+        value: _PlayerMoreMenuAction.sleepTimer,
+        child: Row(
+          children: <Widget>[
+            const Icon(Icons.bedtime_outlined),
+            const SizedBox(width: 8),
+            Expanded(child: Text(_sleepTimerSummary)),
+          ],
+        ),
+      ),
+      const PopupMenuDivider(),
       const PopupMenuItem<_PlayerMoreMenuAction>(
         key: Key('danmaku-settings-menu-item'),
         value: _PlayerMoreMenuAction.danmakuSettings,

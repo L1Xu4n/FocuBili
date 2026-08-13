@@ -80,6 +80,8 @@ enum _VideoFitMode { contain, cover, stretch }
 enum _PlayerMoreMenuAction {
   subtitles,
   danmakuSettings,
+  playbackLoop,
+  sleepTimer,
   fitContain,
   fitCover,
   fitStretch,
@@ -111,6 +113,7 @@ class PlayerPage extends StatefulWidget {
     this.playerEnhancementService,
     this.focusTimerController,
     this.externalLinkLauncher,
+    this.appPlatform,
     this.initialPartCid,
     this.initialPosition,
     this.initialPositionSource = PlayerInitialPositionSource.note,
@@ -131,6 +134,7 @@ class PlayerPage extends StatefulWidget {
   final BilibiliPlayerEnhancementService? playerEnhancementService;
   final FocusTimerController? focusTimerController;
   final ExternalLinkLauncher? externalLinkLauncher;
+  final AppPlatform? appPlatform;
   final int? initialPartCid;
   final Duration? initialPosition;
   final PlayerInitialPositionSource initialPositionSource;
@@ -162,6 +166,8 @@ class _PlayerPageState extends State<PlayerPage>
   late final LearningListService _learningListService;
   @override
   late final DeviceStatusService _deviceStatusService;
+  @override
+  late final AppPlatform _appPlatform;
   @override
   late final BilibiliService _bilibiliService;
   @override
@@ -202,9 +208,21 @@ class _PlayerPageState extends State<PlayerPage>
   @override
   Timer? _playerStatusTimer;
   @override
+  Timer? _sleepTimer;
+  @override
   double _playbackSpeed = 1;
   @override
   String? _playerNotice;
+  @override
+  bool _playbackLoopEnabled = false;
+  @override
+  DateTime? _sleepTimerDeadline;
+  @override
+  int? _pauseAfterPlayCount;
+  @override
+  int _completedPlayCount = 0;
+  @override
+  bool _loopRestartInFlight = false;
   @override
   bool _partSelectorExpanded = false;
   @override
@@ -297,6 +315,7 @@ class _PlayerPageState extends State<PlayerPage>
             ? BilibiliVideoShotService()
             : const EmptyVideoShotService());
     _videoNoteService = widget.videoNoteService ?? VideoNoteService();
+    _appPlatform = widget.appPlatform ?? AppPlatformDetector.current;
     _problemDiagnosticsService = ProblemDiagnosticsService();
     _playbackPreferencesService =
         widget.playbackPreferencesService ?? const PlaybackPreferencesService();

@@ -658,9 +658,6 @@ mixin _PlayerOverlayCoordinator
 
   /// 打开弹幕编辑面板；所有滑块、开关和关键词输入都逐次回写父页面，因此当前画面无需重开即可更新。
   Future<void> _showDanmakuSettings() async {
-    final TextEditingController keywordsController = TextEditingController(
-      text: _danmakuPreferences.blockedKeywords.join('，'),
-    );
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -677,6 +674,7 @@ mixin _PlayerOverlayCoordinator
 
             /// 创建带单位、当前值与范围文案的滑块行，透明度等比例值不会被误显示为“0–1”。
             Widget sliderRow({
+              required Key sliderKey,
               required String label,
               required String valueLabel,
               required String rangeLabel,
@@ -691,10 +689,13 @@ mixin _PlayerOverlayCoordinator
                 children: <Widget>[
                   Text('$label：$valueLabel（范围：$rangeLabel）'),
                   Slider(
+                    key: sliderKey,
                     value: value,
                     min: min,
                     max: max,
                     divisions: divisions,
+                    // 禁止轻点轨道直接跳值；只有明确水平拖动才调节，竖滑优先交给面板滚动。
+                    allowedInteraction: SliderInteraction.slideOnly,
                     onChanged: onChanged,
                   ),
                 ],
@@ -767,6 +768,7 @@ mixin _PlayerOverlayCoordinator
                             update(value.copyWith(mergeRepeated: enabled)),
                       ),
                       sliderRow(
+                        sliderKey: const Key('danmaku-opacity-slider'),
                         label: '透明度',
                         valueLabel: '${(value.opacity * 100).round()}%',
                         rangeLabel: '20%–100%',
@@ -778,6 +780,7 @@ mixin _PlayerOverlayCoordinator
                             update(value.copyWith(opacity: item)),
                       ),
                       sliderRow(
+                        sliderKey: const Key('danmaku-display-area-slider'),
                         label: '显示区域',
                         valueLabel: '顶部 ${(value.displayArea * 100).round()}%',
                         rangeLabel: '25%–100%',
@@ -789,6 +792,7 @@ mixin _PlayerOverlayCoordinator
                             update(value.copyWith(displayArea: item)),
                       ),
                       sliderRow(
+                        sliderKey: const Key('danmaku-font-size-slider'),
                         label: '字号',
                         valueLabel: '${value.fontSize.round()} 逻辑像素',
                         rangeLabel: '10–30 逻辑像素',
@@ -800,6 +804,7 @@ mixin _PlayerOverlayCoordinator
                             update(value.copyWith(fontSize: item)),
                       ),
                       sliderRow(
+                        sliderKey: const Key('danmaku-lane-count-slider'),
                         label: '轨道数量',
                         valueLabel: '${value.laneCount} 条',
                         rangeLabel: '1–24 条',
@@ -811,6 +816,7 @@ mixin _PlayerOverlayCoordinator
                             update(value.copyWith(laneCount: item.round())),
                       ),
                       sliderRow(
+                        sliderKey: const Key('danmaku-scroll-duration-slider'),
                         label: '滚动时长',
                         valueLabel:
                             '${value.scrollDurationSeconds.round()} 秒/穿屏（越小越快）',
@@ -823,6 +829,7 @@ mixin _PlayerOverlayCoordinator
                             update(value.copyWith(scrollDurationSeconds: item)),
                       ),
                       sliderRow(
+                        sliderKey: const Key('danmaku-stroke-width-slider'),
                         label: '文字描边',
                         valueLabel: value.strokeWidth == 0
                             ? '关闭'
@@ -835,9 +842,10 @@ mixin _PlayerOverlayCoordinator
                         onChanged: (double item) =>
                             update(value.copyWith(strokeWidth: item)),
                       ),
-                      TextField(
+                      TextFormField(
                         key: const Key('danmaku-blocked-keywords'),
-                        controller: keywordsController,
+                        // 让输入框 State 自己管理控制器，弹层退场动画结束后再随组件一起安全释放。
+                        initialValue: value.blockedKeywords.join('，'),
                         decoration: const InputDecoration(
                           labelText: '屏蔽关键词',
                           helperText: '用逗号或换行分隔；忽略大小写、首尾空格和重复项',
@@ -865,6 +873,5 @@ mixin _PlayerOverlayCoordinator
         );
       },
     );
-    keywordsController.dispose();
   }
 }

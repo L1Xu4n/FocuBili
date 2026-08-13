@@ -34,6 +34,9 @@ dependencies:
   archive: ^4.0.9
   cached_network_image: ^3.4.1
   crypto: ^3.0.7
+  # Windows 账号密码登录使用仓库内已修复导航时序的 WebView2 插件；App 不接触密码正文。
+  desktop_webview_window:
+    path: third_party/desktop_webview_window
   file_picker: ^11.0.2
   flutter:
     sdk: flutter

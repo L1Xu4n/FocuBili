@@ -31,7 +31,7 @@ abstract interface class DeviceStatusService {
   Future<DeviceNetworkType> loadNetworkType();
 }
 
-/// 通过 Android 方法通道读取无权限的当前设备电量百分比。
+/// 通过 Android/Windows 方法通道读取无权限的当前设备电量百分比。
 class NativeDeviceStatusService implements DeviceStatusService {
   const NativeDeviceStatusService();
 
@@ -39,7 +39,7 @@ class NativeDeviceStatusService implements DeviceStatusService {
     'com.focubili.app/device_status',
   );
 
-  /// 读取并校验原生返回的电量，测试或非 Android 平台没有通道时安全返回空值。
+  /// 读取并校验原生返回的电量，系统没有可靠读数时安全返回空值。
   @override
   Future<int?> loadBatteryPercent() async {
     try {
@@ -55,7 +55,7 @@ class NativeDeviceStatusService implements DeviceStatusService {
     }
   }
 
-  /// 读取 Android 当前活动网络，只区分连接类型，不读取 SSID、运营商或 IP。
+  /// 读取平台当前活动网络，只区分连接类型，不读取 SSID、运营商或 IP。
   @override
   Future<DeviceNetworkType> loadNetworkType() async {
     try {

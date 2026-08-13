@@ -12,6 +12,33 @@ Future<void> handleDoNotDisturbAfterFocusStart(
   if (!context.mounted || result == FocusDoNotDisturbResult.disabled) {
     return;
   }
+  if (result == FocusDoNotDisturbResult.manualWindowsRequired) {
+    final bool? openSettings = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) => AlertDialog(
+        title: const Text('请手动启动 Windows 系统专注'),
+        content: const Text(
+          'Windows 只允许获得微软专用授权的应用自动启动系统专注。焦点哔哩当前会保留计时，但需要你在 Windows“时钟”中手动开始系统专注；也可以先打开勿扰设置。',
+        ),
+        actions: <Widget>[
+          TextButton(
+            // 知道了按钮只关闭说明，当前焦点哔哩专注任务继续运行。
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('知道了'),
+          ),
+          FilledButton(
+            // 设置按钮请求控制器打开微软公开支持的 Windows 勿扰设置页。
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('打开勿扰设置'),
+          ),
+        ],
+      ),
+    );
+    if (openSettings == true) {
+      await controller.openDoNotDisturbSettings();
+    }
+    return;
+  }
   if (result == FocusDoNotDisturbResult.permissionRequired) {
     final bool? openSettings = await showDialog<bool>(
       context: context,
@@ -43,6 +70,7 @@ Future<void> handleDoNotDisturbAfterFocusStart(
     FocusDoNotDisturbResult.enabled => '视频播放时已进入勿扰；暂停或专注结束后会恢复原设置',
     FocusDoNotDisturbResult.failed => '暂时无法启用勿扰模式，请检查系统权限',
     FocusDoNotDisturbResult.disabled ||
+    FocusDoNotDisturbResult.manualWindowsRequired ||
     FocusDoNotDisturbResult.permissionRequired => '',
   };
   if (message.isEmpty || !context.mounted) {

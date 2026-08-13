@@ -11,6 +11,7 @@ class _FullscreenDeviceStatus extends StatelessWidget {
     required this.clock,
     required this.batteryPercent,
     required this.networkTypeLabel,
+    required this.showNetworkType,
   });
 
   final FocusTimerController? focusController;
@@ -20,6 +21,7 @@ class _FullscreenDeviceStatus extends StatelessWidget {
   final DateTime clock;
   final int? batteryPercent;
   final String networkTypeLabel;
+  final bool showNetworkType;
 
   /// 把本地时间格式化为播放器状态栏使用的“时:分”。
   String _formatClock() {
@@ -100,9 +102,6 @@ class _FullscreenDeviceStatus extends StatelessWidget {
   /// 构建三段互不遮挡的播放器状态栏，并只监听左侧专注数据刷新。
   @override
   Widget build(BuildContext context) {
-    final String batteryText = batteryPercent == null
-        ? '--'
-        : '$batteryPercent%';
     return SizedBox(
       key: const Key('fullscreen-device-status'),
       height: 15,
@@ -140,39 +139,44 @@ class _FullscreenDeviceStatus extends StatelessWidget {
                     height: 1,
                   ),
                 ),
-                Positioned(
-                  right: 0,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: <Widget>[
-                      Text(
-                        networkTypeLabel,
-                        key: const Key('player-network-type'),
-                        style: const TextStyle(
-                          color: Colors.white70,
-                          fontSize: 10,
-                          height: 1,
-                        ),
-                      ),
-                      const SizedBox(width: 7),
-                      const Icon(
-                        Icons.battery_full_rounded,
-                        color: Colors.white70,
-                        size: 12,
-                      ),
-                      const SizedBox(width: 2),
-                      Text(
-                        batteryText,
-                        key: const Key('fullscreen-battery'),
-                        style: const TextStyle(
-                          color: Colors.white70,
-                          fontSize: 10,
-                          height: 1,
-                        ),
-                      ),
-                    ],
+                if (showNetworkType || batteryPercent != null)
+                  Positioned(
+                    right: 0,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        if (showNetworkType) ...<Widget>[
+                          Text(
+                            networkTypeLabel,
+                            key: const Key('player-network-type'),
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 10,
+                              height: 1,
+                            ),
+                          ),
+                          const SizedBox(width: 7),
+                        ],
+                        if (batteryPercent != null) ...<Widget>[
+                          const Icon(
+                            Icons.battery_full_rounded,
+                            color: Colors.white70,
+                            size: 12,
+                          ),
+                          const SizedBox(width: 2),
+                          Text(
+                            '$batteryPercent%',
+                            key: const Key('fullscreen-battery'),
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 10,
+                              height: 1,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
                   ),
-                ),
               ],
             );
           },

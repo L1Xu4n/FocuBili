@@ -6,6 +6,9 @@ enum _PlayerSystemUiLayout { standard, landscapePlayer, fullscreen }
 /// 封装播放器方向策略、系统栏模式、移动端自动全屏和桌面窗口全屏。
 mixin _PlayerViewportCoordinator
     on State<PlayerPage>, _PlayerGestureCoordinator, _PlayerNotesWorkspace {
+  /// 由播放器状态提供当前运行平台，供窗口与移动端方向策略分流。
+  AppPlatform get _appPlatform;
+
   @override
   bool _fullscreen = false;
   bool _controlsLocked = false;
@@ -17,11 +20,17 @@ mixin _PlayerViewportCoordinator
   _PlayerSystemUiLayout? _pendingSystemUiLayout;
   _PlayerSystemUiLayout? _appliedSystemUiLayout;
 
+  /// 判断当前是否需要 Android 的旋转与系统栏联动，桌面窗口只响应用户主动全屏。
+  bool get _usesMobileViewportPolicy => _appPlatform == AppPlatform.android;
+
   /// 由播放器状态类重新锚定弹幕，使尺寸变化前后的弹幕位置保持连续。
   void _reanchorDanmakuForViewportChange();
 
   /// 播放页存活期间让手机可旋转全屏，并让 Android 平板继续保持横屏工作台。
   Future<void> _allowPlayerOrientations() async {
+    if (!_usesMobileViewportPolicy) {
+      return;
+    }
     final List<FlutterView> views = WidgetsBinding
         .instance
         .platformDispatcher
@@ -33,7 +42,7 @@ mixin _PlayerViewportCoordinator
     final List<DeviceOrientation> orientations =
         DeviceOrientationPolicy.playerOrientations(
           logicalSize: DeviceOrientationPolicy.logicalSizeForView(views.first),
-          isAndroid: AppPlatformDetector.current == AppPlatform.android,
+          isAndroid: true,
         );
     if (orientations.isNotEmpty) {
       await SystemChrome.setPreferredOrientations(orientations);
@@ -43,7 +52,9 @@ mixin _PlayerViewportCoordinator
   /// 把多次系统尺寸变化合并到一帧处理，避免旋转动画中反复进出全屏。
   @override
   void _scheduleOrientationSync() {
-    if (widget.playbackService != null || _orientationSyncScheduled) {
+    if (!_usesMobileViewportPolicy ||
+        widget.playbackService != null ||
+        _orientationSyncScheduled) {
       return;
     }
     _orientationSyncScheduled = true;
@@ -55,7 +66,7 @@ mixin _PlayerViewportCoordinator
 
   /// 把构建期得到的横屏状态延后到帧末同步，避免在 build 中直接修改 Android 系统栏。
   void _schedulePlayerSystemUiSync({required bool landscapeLayout}) {
-    if (widget.playbackService != null) {
+    if (!_usesMobileViewportPolicy || widget.playbackService != null) {
       return;
     }
     _pendingSystemUiLayout = _fullscreen
@@ -99,7 +110,7 @@ mixin _PlayerViewportCoordinator
 
   /// 临时打开普通系统栏供下层页面使用，并让播放页返回后重新计算横屏系统栏状态。
   Future<void> _showStandardSystemUiForNestedRoute() async {
-    if (widget.playbackService != null) {
+    if (!_usesMobileViewportPolicy || widget.playbackService != null) {
       return;
     }
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
@@ -229,13 +240,13 @@ mixin _PlayerViewportCoordinator
         .platformDispatcher
         .views
         .toList();
-    if (views.isNotEmpty) {
+    if (_usesMobileViewportPolicy && views.isNotEmpty) {
       final List<DeviceOrientation> orientations =
           DeviceOrientationPolicy.startupOrientations(
             logicalSize: DeviceOrientationPolicy.logicalSizeForView(
               views.first,
             ),
-            isAndroid: AppPlatformDetector.current == AppPlatform.android,
+            isAndroid: true,
           );
       if (orientations.isNotEmpty) {
         await SystemChrome.setPreferredOrientations(orientations);

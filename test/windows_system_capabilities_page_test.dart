@@ -57,6 +57,7 @@ void main() {
     final FocusNotificationService service = FocusNotificationService(
       windowsBackend: WindowsFocusNotificationBackend(client: client),
     );
+    expect(await service.hasPermission(), isTrue);
 
     await tester.pumpWidget(
       MaterialApp(
@@ -68,15 +69,26 @@ void main() {
     expect(find.text('Windows 桌面能力'), findsOneWidget);
     expect(find.text('未来继续提醒'), findsOneWidget);
     expect(find.text('当前为普通 exe'), findsOneWidget);
+    expect(find.text('需要手动启动'), findsOneWidget);
+    expect(find.textContaining('受限功能授权'), findsOneWidget);
+    expect(find.textContaining('Windows 11 可自动切换'), findsNothing);
     expect(find.textContaining('精确闹钟权限'), findsNothing);
     expect(find.textContaining('电量优化'), findsNothing);
     expect(find.textContaining('后台自启动'), findsNothing);
 
-    await tester.tap(find.text('发送测试通知'));
+    final FilledButton testNotificationButton = tester.widget<FilledButton>(
+      find.byKey(const Key('send-windows-test-notification')),
+    );
+    expect(testNotificationButton.onPressed, isNotNull);
+    testNotificationButton.onPressed!();
     await tester.pumpAndSettle();
     expect(client.shownCount, 1);
 
-    await tester.tap(find.text('系统通知设置'));
+    final OutlinedButton notificationSettingsButton = tester
+        .widget<OutlinedButton>(
+          find.byKey(const Key('open-windows-notification-settings')),
+        );
+    notificationSettingsButton.onPressed!();
     await tester.pumpAndSettle();
     expect(client.settingsCount, 1);
   });

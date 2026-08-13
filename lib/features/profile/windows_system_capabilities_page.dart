@@ -39,12 +39,13 @@ class _WindowsSystemCapabilitiesPageState
     if (mounted) {
       setState(() => _loading = true);
     }
-    final bool available = await widget.notificationService.hasPermission();
+    final bool notificationAvailable = await widget.notificationService
+        .hasPermission();
     if (!mounted) {
       return;
     }
     setState(() {
-      _notificationAvailable = available;
+      _notificationAvailable = notificationAvailable;
       _loading = false;
     });
   }
@@ -108,10 +109,12 @@ class _WindowsSystemCapabilitiesPageState
               description: '专注完成时显示 Toast，也可以发送一条测试通知。',
               actions: <Widget>[
                 OutlinedButton(
+                  key: const Key('open-windows-notification-settings'),
                   onPressed: _openNotificationSettings,
                   child: const Text('系统通知设置'),
                 ),
                 FilledButton.tonal(
+                  key: const Key('send-windows-test-notification'),
                   onPressed: _notificationAvailable && !_sendingTestNotification
                       ? _sendTestNotification
                       : null,
@@ -138,9 +141,26 @@ class _WindowsSystemCapabilitiesPageState
             const _WindowsCapabilityCard(
               key: Key('windows-focus-assist-boundary'),
               icon: Icons.do_not_disturb_on_outlined,
-              title: 'Windows 专注助手',
-              status: '不自动修改',
-              description: '焦点哔哩不会替你开启或关闭系统专注助手，避免改变电脑的全局通知规则。',
+              title: 'Windows 系统专注',
+              status: '需要手动启动',
+              description:
+                  '自动启动需要微软单独批准的受限功能授权。当前版本不会再修改旧通知注册表来模拟成功；请从 Windows“时钟”启动系统专注。',
+            ),
+            _WindowsCapabilityCard(
+              key: const Key('windows-do-not-disturb-settings-entry'),
+              icon: Icons.settings_outlined,
+              title: 'Windows 勿扰设置',
+              status: '可打开',
+              description: '打开微软公开支持的系统设置页，手动调整勿扰和自动规则。',
+              actions: <Widget>[
+                OutlinedButton(
+                  key: const Key('open-windows-focus-settings'),
+                  // 按钮函数只打开 Windows 设置，不声称已经启动系统专注。
+                  onPressed:
+                      widget.notificationService.openDoNotDisturbSettings,
+                  child: const Text('打开勿扰设置'),
+                ),
+              ],
             ),
           ],
         ),

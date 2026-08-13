@@ -15,6 +15,7 @@ class DesktopPlaybackSources {
   const DesktopPlaybackSources({
     required this.videoUrls,
     required this.audioUrls,
+    this.audioCodecByUrl = const <String, String>{},
     required this.referer,
     required this.cookieHeader,
     required this.actualQuality,
@@ -25,6 +26,7 @@ class DesktopPlaybackSources {
 
   final List<String> videoUrls;
   final List<String> audioUrls;
+  final Map<String, String> audioCodecByUrl;
   final String referer;
   final String cookieHeader;
   final int actualQuality;
@@ -163,13 +165,26 @@ class BilibiliDesktopPlaybackSourceService {
       dash['video'],
       preferredQuality: actualQuality,
     );
-    final _DesktopMediaTrack audioTrack = _selectTrack(dash['audio']);
+    final List<_DesktopMediaTrack> audioTracks = _selectAudioTracks(
+      dash['audio'],
+    );
     if (videoTrack.urls.isEmpty) {
       throw const DesktopPlaybackSourceException('播放数据没有返回安全的视频地址。');
     }
+    if (audioTracks.isEmpty) {
+      throw const DesktopPlaybackSourceException('播放数据没有返回安全的音频地址。');
+    }
+    final List<String> audioUrls = <String>[
+      for (final _DesktopMediaTrack track in audioTracks) ...track.urls,
+    ];
+    final Map<String, String> audioCodecByUrl = <String, String>{
+      for (final _DesktopMediaTrack track in audioTracks)
+        for (final String url in track.urls) url: track.codec,
+    };
     return DesktopPlaybackSources(
       videoUrls: videoTrack.urls,
-      audioUrls: audioTrack.urls,
+      audioUrls: List<String>.unmodifiable(audioUrls),
+      audioCodecByUrl: Map<String, String>.unmodifiable(audioCodecByUrl),
       referer: referer,
       cookieHeader: cookieHeader,
       actualQuality: actualQuality > 0 ? actualQuality : requestedQuality,
@@ -179,7 +194,7 @@ class BilibiliDesktopPlaybackSourceService {
         actualQuality > 0 ? actualQuality : requestedQuality,
       ),
       videoCodec: videoTrack.codec,
-      audioCodec: audioTrack.codec,
+      audioCodec: audioTracks.first.codec,
     );
   }
 
@@ -283,6 +298,51 @@ class BilibiliDesktopPlaybackSourceService {
       urls: _readMediaUrls(selected),
       codec: _readText(selected['codecs']),
     );
+  }
+
+  /// 按 Windows 兼容性排列全部安全音频表示；通用 AAC 优先，其余编码保留为失败后的后备。
+  List<_DesktopMediaTrack> _selectAudioTracks(Object? rawTracks) {
+    if (rawTracks is! List) {
+      return const <_DesktopMediaTrack>[];
+    }
+    final List<({int order, _DesktopMediaTrack track, int score})> candidates =
+        <({int order, _DesktopMediaTrack track, int score})>[];
+    for (int index = 0; index < rawTracks.length; index += 1) {
+      final Object? rawTrack = rawTracks[index];
+      if (rawTrack is! Map) {
+        continue;
+      }
+      final Map<Object?, Object?> track = Map<Object?, Object?>.from(rawTrack);
+      final List<String> urls = _readMediaUrls(track);
+      if (urls.isEmpty) {
+        continue;
+      }
+      final String codec = _readText(track['codecs']);
+      final int bandwidth = (track['bandwidth'] as num?)?.toInt() ?? 0;
+      candidates.add((
+        order: index,
+        track: _DesktopMediaTrack(urls: urls, codec: codec),
+        score: _audioCompatibilityScore(codec, bandwidth),
+      ));
+    }
+    candidates.sort((left, right) {
+      final int scoreOrder = right.score.compareTo(left.score);
+      return scoreOrder != 0 ? scoreOrder : left.order.compareTo(right.order);
+    });
+    return List<_DesktopMediaTrack>.unmodifiable(
+      candidates.map((candidate) => candidate.track),
+    );
+  }
+
+  /// 给桌面音频编码计算稳定优先级：AAC-LC 最通用，其他 AAC 次之，未知增强编码最后尝试。
+  int _audioCompatibilityScore(String codec, int bandwidth) {
+    final String normalized = codec.trim().toLowerCase();
+    final int compatibility = normalized.contains('mp4a.40.2')
+        ? 3
+        : normalized.contains('mp4a') || normalized.contains('aac')
+        ? 2
+        : 1;
+    return compatibility * 1000000000 + bandwidth.clamp(0, 999999999);
   }
 
   /// 从主地址与备用地址中去重，只保留 B 站媒体 CDN 的 HTTPS 地址。

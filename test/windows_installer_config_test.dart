@@ -59,4 +59,16 @@ void main() {
     expect(windowRunner, contains('kMinimumWindowHeight = 640'));
     expect(windowRunner, contains('case WM_GETMINMAXINFO'));
   });
+
+  /// 检查官方登录 WebView 标题栏子进程不会被主应用的单实例互斥锁提前拦截。
+  test('Windows Runner 仅为 WebView 标题栏子进程绕过单实例锁', () {
+    final String mainRunner = File(
+      'windows/runner/main.cpp',
+    ).readAsStringSync();
+
+    expect(mainRunner, contains('IsWebViewTitleBarProcess()'));
+    expect(mainRunner, contains('L"web_view_title_bar"'));
+    expect(mainRunner, contains('if (!is_webview_title_bar)'));
+    expect(mainRunner, contains(r'L"Local\\FocuBili.SingleInstance"'));
+  });
 }

@@ -112,7 +112,7 @@ class BilibiliHttpAuthApi implements BilibiliAuthApi {
   BilibiliHttpAuthApi({HttpClient Function()? clientFactory})
     : _clientFactory = clientFactory ?? HttpClient.new;
 
-  static final Uri _accountEndpoint = Uri.https(
+  static final Uri accountEndpoint = Uri.https(
     'api.bilibili.com',
     '/x/web-interface/nav',
   );
@@ -128,7 +128,7 @@ class BilibiliHttpAuthApi implements BilibiliAuthApi {
   Future<BilibiliNavResponse> requestNavigation(String cookieHeader) async {
     final HttpClient client = _clientFactory();
     try {
-      final HttpClientRequest request = await client.getUrl(_accountEndpoint);
+      final HttpClientRequest request = await client.getUrl(accountEndpoint);
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
       request.headers.set(HttpHeaders.cookieHeader, cookieHeader);
       request.headers.set(HttpHeaders.userAgentHeader, desktopUserAgent);
@@ -150,12 +150,17 @@ class BilibiliHttpAuthApi implements BilibiliAuthApi {
 /// 验证 B 站会话、导入已验证 Cookie，并且永不保存多账号或密码资料。
 class BilibiliAuthService {
   /// 创建可替换网络和 Cookie 容器的登录服务，默认使用当前平台安全存储与真实官方接口。
-  BilibiliAuthService({BilibiliCookieStore? cookieStore, BilibiliAuthApi? api})
-    : _cookieStore = cookieStore ?? createDefaultBilibiliCookieStore(),
-      _api = api ?? BilibiliHttpAuthApi();
+  BilibiliAuthService({
+    BilibiliCookieStore? cookieStore,
+    BilibiliAuthApi? api,
+    Duration requestTimeout = const Duration(seconds: 12),
+  }) : _cookieStore = cookieStore ?? createDefaultBilibiliCookieStore(),
+       _api = api ?? BilibiliHttpAuthApi(),
+       _requestTimeout = requestTimeout;
 
   final BilibiliCookieStore _cookieStore;
   final BilibiliAuthApi _api;
+  final Duration _requestTimeout;
 
   /// 读取当前 WebView 会话，并明确返回未登录、已过期、可用或暂时不可用。
   Future<BilibiliSessionState> loadCurrentSession() async {
@@ -202,16 +207,52 @@ class BilibiliAuthService {
     if (!verifiedSession.isActive) {
       throw const BilibiliAuthException('Cookie 已失效，B 站没有确认登录状态。');
     }
-    try {
-      await _cookieStore.replaceCookies(cookie);
-    } on PlatformException {
-      throw const BilibiliAuthException('Cookie 已验证，但暂时无法保存到本机，请重试。');
-    } on MissingPluginException {
-      throw const BilibiliAuthException('当前设备暂不支持保存 Cookie，请稍后重试。');
-    } catch (_) {
-      throw const BilibiliAuthException('Cookie 已验证，但暂时无法保存到本机，请重试。');
-    }
+    await _saveVerifiedCookies(cookie);
     return verifiedSession.account!;
+  }
+
+  /// 检查 Windows 官方网页产生的 Cookie 快照，返回可区分成功、未登录和网络故障的结果。
+  Future<BilibiliSessionState> verifyAndSaveWebCookieSnapshot(
+    String rawCookie,
+  ) async {
+    final String cookie = rawCookie.trim();
+    if (cookie.isEmpty) {
+      return const BilibiliSessionState.signedOut();
+    }
+    final BilibiliSessionState verifiedSession = await _requestCurrentSession(
+      cookie,
+    );
+    if (!verifiedSession.isActive) {
+      return verifiedSession;
+    }
+    await _saveVerifiedCookies(cookie);
+    return verifiedSession;
+  }
+
+  /// 接收同一 WebView2 会话直接取得的官方 nav 响应，并在成功时保存完整浏览器 Cookie。
+  Future<BilibiliSessionState> saveBrowserVerifiedSession({
+    required String responseText,
+    required String rawCookie,
+  }) async {
+    final BilibiliSessionState verifiedSession;
+    try {
+      verifiedSession = _parseCurrentSession(responseText);
+    } on FormatException {
+      return const BilibiliSessionState.networkError(
+        message: '网页登录状态数据无法解析，请重新打开登录窗口。',
+      );
+    }
+    if (!verifiedSession.isActive) {
+      return verifiedSession;
+    }
+    final String cookie = rawCookie.trim();
+    if (!_containsSessionCookie(cookie)) {
+      return const BilibiliSessionState.networkError(
+        message: '网页已确认登录，但没有读取到完整会话，请重新打开登录窗口。',
+      );
+    }
+    await _saveVerifiedCookies(cookie);
+    return verifiedSession;
   }
 
   /// 从当前平台的安全会话容器读取 Cookie 请求头，不创建额外明文副本。
@@ -232,14 +273,27 @@ class BilibiliAuthService {
     return match?.group(2)?.trim().isNotEmpty ?? false;
   }
 
+  /// 把已经通过官方接口确认的 Cookie 保存到当前平台的安全单账号容器。
+  Future<void> _saveVerifiedCookies(String cookie) async {
+    try {
+      await _cookieStore.replaceCookies(cookie);
+    } on PlatformException {
+      throw const BilibiliAuthException('Cookie 已验证，但暂时无法保存到本机，请重试。');
+    } on MissingPluginException {
+      throw const BilibiliAuthException('当前设备暂不支持保存 Cookie，请稍后重试。');
+    } catch (_) {
+      throw const BilibiliAuthException('Cookie 已验证，但暂时无法保存到本机，请重试。');
+    }
+  }
+
   /// 请求账号状态接口，并把官方明确的未登录结果和暂时故障分开处理。
   Future<BilibiliSessionState> _requestCurrentSession(
     String cookieHeader,
   ) async {
     try {
-      final BilibiliNavResponse response = await _api.requestNavigation(
-        cookieHeader,
-      );
+      final BilibiliNavResponse response = await _api
+          .requestNavigation(cookieHeader)
+          .timeout(_requestTimeout);
       if (response.statusCode != HttpStatus.ok) {
         return BilibiliSessionState.networkError(
           message: '登录状态服务暂时不可用（HTTP ${response.statusCode}）。',

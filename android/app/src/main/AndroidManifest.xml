@@ -61,6 +61,12 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- 接收 B站 App 分享出的纯文本，让用户可以从系统分享面板直接选择焦点哔哩。 -->
+            <intent-filter android:label="焦点哔哩">
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
             <!-- B站网页唤起 bilibili://video 时，让系统在官方客户端和焦点哔哩间选择。 -->
             <intent-filter android:label="焦点哔哩">
                 <action android:name="android.intent.action.VIEW" />

@@ -384,6 +384,8 @@ extension _PlayerPageView on _PlayerPageState {
                                         clock: _playerClock,
                                         batteryPercent: _batteryPercent,
                                         networkTypeLabel: _networkType.label,
+                                        showNetworkType:
+                                            _appPlatform != AppPlatform.windows,
                                       ),
                                     Expanded(
                                       child: Row(

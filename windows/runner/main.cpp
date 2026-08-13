@@ -1,6 +1,7 @@
 #include <flutter/dart_project.h>
 #include <flutter/flutter_view_controller.h>
 #include <flutter_windows.h>
+#include <shellapi.h>
 #include <windows.h>
 
 #include <algorithm>
@@ -40,6 +41,21 @@ Win32Window::Point CalculateCenteredOrigin(const Win32Window::Size& size) {
   return Win32Window::Point(logical_x, logical_y);
 }
 
+// 判断当前进程是否由桌面 WebView 插件创建，仅此子进程可绕过主应用单实例锁。
+bool IsWebViewTitleBarProcess() {
+  int argument_count = 0;
+  LPWSTR* arguments =
+      ::CommandLineToArgvW(::GetCommandLineW(), &argument_count);
+  if (arguments == nullptr) {
+    return false;
+  }
+  const bool is_title_bar =
+      argument_count > 1 &&
+      std::wstring(arguments[1]) == L"web_view_title_bar";
+  ::LocalFree(arguments);
+  return is_title_bar;
+}
+
 }  // namespace
 
 // 激活已经运行的焦点哔哩窗口，避免用户重复启动多个播放器和计时器实例。
@@ -58,15 +74,19 @@ void FocusExistingWindow() {
 // 创建进程级唯一互斥锁并启动 Flutter Windows 主消息循环。
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
                       _In_ wchar_t *command_line, _In_ int show_command) {
-  HANDLE single_instance_mutex =
-      ::CreateMutex(nullptr, TRUE, L"Local\\FocuBili.SingleInstance");
-  if (single_instance_mutex == nullptr) {
-    return EXIT_FAILURE;
-  }
-  if (::GetLastError() == ERROR_ALREADY_EXISTS) {
-    FocusExistingWindow();
-    ::CloseHandle(single_instance_mutex);
-    return EXIT_SUCCESS;
+  const bool is_webview_title_bar = IsWebViewTitleBarProcess();
+  HANDLE single_instance_mutex = nullptr;
+  if (!is_webview_title_bar) {
+    single_instance_mutex =
+        ::CreateMutex(nullptr, TRUE, L"Local\\FocuBili.SingleInstance");
+    if (single_instance_mutex == nullptr) {
+      return EXIT_FAILURE;
+    }
+    if (::GetLastError() == ERROR_ALREADY_EXISTS) {
+      FocusExistingWindow();
+      ::CloseHandle(single_instance_mutex);
+      return EXIT_SUCCESS;
+    }
   }
 
   // Attach to console when present (e.g., 'flutter run') or create a
@@ -90,7 +110,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   Win32Window::Size size(1280, 800);
   Win32Window::Point origin = CalculateCenteredOrigin(size);
   if (!window.Create(L"焦点哔哩", origin, size)) {
-    ::CloseHandle(single_instance_mutex);
+    if (single_instance_mutex != nullptr) {
+      ::CloseHandle(single_instance_mutex);
+    }
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);
@@ -102,7 +124,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   }
 
   ::CoUninitialize();
-  ::ReleaseMutex(single_instance_mutex);
-  ::CloseHandle(single_instance_mutex);
+  if (single_instance_mutex != nullptr) {
+    ::ReleaseMutex(single_instance_mutex);
+    ::CloseHandle(single_instance_mutex);
+  }
   return EXIT_SUCCESS;
 }

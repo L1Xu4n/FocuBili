@@ -55,6 +55,9 @@ class _LoginPageState extends State<LoginPage> {
   /// 判断当前是否应使用不依赖 WebView 的官方扫码登录。
   bool get _usesQrLogin => _loginExperience == LoginExperience.officialQrCode;
 
+  /// 判断当前页是否运行在 Windows，并需要额外提供官方账号密码入口。
+  bool get _isWindows => _platformServices.platform == AppPlatform.windows;
+
   /// 判断当前平台是否还没有安全可用的登录实现。
   bool get _loginUnavailable => _loginExperience == LoginExperience.unavailable;
 
@@ -93,9 +96,13 @@ class _LoginPageState extends State<LoginPage> {
     });
   }
 
-  /// 打开 B 站官方登录页，成功抓取会话后把账号信息返回“我的”页面。
-  Future<void> _openOfficialLogin() async {
+  /// 打开当前选择对应的 B 站官方登录页，成功后把账号信息返回“我的”页面。
+  Future<void> _openOfficialLogin({_LoginMode? requestedMode}) async {
     if (_loginUnavailable) {
+      return;
+    }
+    final _LoginMode mode = requestedMode ?? _mode;
+    if (_isWindows && mode == _LoginMode.password) {
       return;
     }
     final BilibiliAccount? account = await Navigator.of(context).push(
@@ -198,7 +205,7 @@ class _LoginPageState extends State<LoginPage> {
         ],
       );
     }
-    if (_usesQrLogin) {
+    if (_usesQrLogin && _mode != _LoginMode.password) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
@@ -206,9 +213,30 @@ class _LoginPageState extends State<LoginPage> {
           const SizedBox(height: 14),
           FilledButton.icon(
             // Windows 扫码按钮函数打开官方二维码并在确认后安全保存会话。
-            onPressed: _openOfficialLogin,
+            onPressed: () =>
+                _openOfficialLogin(requestedMode: _LoginMode.phone),
             icon: const Icon(Icons.qr_code_2_rounded),
             label: const Text('打开 B 站扫码登录'),
+          ),
+        ],
+      );
+    }
+    if (_isWindows && _mode == _LoginMode.password) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          const Text(
+            'Windows 密码登录：待开发',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 10),
+          const Text('当前网页登录会话接管仍不稳定，暂不开放。请使用扫码登录或 Cookie 登录。'),
+          const SizedBox(height: 14),
+          FilledButton.icon(
+            // 待开发按钮函数为空，避免用户继续进入不稳定的 WebView2 登录流程。
+            onPressed: null,
+            icon: const Icon(Icons.construction_rounded),
+            label: const Text('密码登录待开发'),
           ),
         ],
       );
@@ -220,12 +248,14 @@ class _LoginPageState extends State<LoginPage> {
         Text(
           phoneMode
               ? '手机号登录为默认入口。短信、人机验证和账号信息都在 B 站官方页面中填写。'
+              : _isWindows
+              ? '密码不会交给 FocuBili。Windows 官方页面也支持短信和 QQ 登录。'
               : '密码不会交给 FocuBili。账号、密码和人机验证都由 B 站官方页面直接处理。',
         ),
         const SizedBox(height: 14),
         FilledButton.icon(
           // 官方登录按钮函数打开支持手机号、密码和验证码的 B 站页面。
-          onPressed: _openOfficialLogin,
+          onPressed: () => _openOfficialLogin(requestedMode: _mode),
           icon: Icon(
             phoneMode ? Icons.phone_android_rounded : Icons.password_rounded,
           ),
@@ -235,7 +265,7 @@ class _LoginPageState extends State<LoginPage> {
     );
   }
 
-  /// 根据平台创建登录方式选项；Windows 只展示扫码与 Cookie，避免出现不可用的桌面 WebView 密码入口。
+  /// 根据平台创建登录方式选项；Windows 用“扫码”代替手机号并额外提供官方密码网页。
   List<ButtonSegment<_LoginMode>> _buildLoginSegments() {
     if (_usesQrLogin) {
       return const <ButtonSegment<_LoginMode>>[
@@ -243,6 +273,11 @@ class _LoginPageState extends State<LoginPage> {
           value: _LoginMode.phone,
           icon: Icon(Icons.qr_code_2_rounded),
           label: Text('扫码'),
+        ),
+        ButtonSegment<_LoginMode>(
+          value: _LoginMode.password,
+          icon: Icon(Icons.password_rounded),
+          label: Text('密码'),
         ),
         ButtonSegment<_LoginMode>(
           value: _LoginMode.cookie,
@@ -333,7 +368,8 @@ class _LoginPageState extends State<LoginPage> {
               const SizedBox(height: 12),
               OutlinedButton.icon(
                 // Cookie 模式的备用官方入口函数按平台打开扫码或 B 站完整网页流程。
-                onPressed: _openOfficialLogin,
+                onPressed: () =>
+                    _openOfficialLogin(requestedMode: _LoginMode.phone),
                 icon: Icon(
                   _usesQrLogin
                       ? Icons.qr_code_2_rounded
@@ -345,7 +381,7 @@ class _LoginPageState extends State<LoginPage> {
             const SizedBox(height: 10),
             Text(
               _usesQrLogin
-                  ? '说明：扫码由 B 站官方接口完成；确认后的会话通过 Windows 加密存储保护。'
+                  ? '说明：Windows 密码登录仍在开发；扫码登录可用，成功会话通过 Windows 加密存储保护。'
                   : '说明：当前原生手机号/密码接口尚未直接接入；这样可以避免 App 接触密码，并确保验证码由官方页面完成。',
               style: TextStyle(fontSize: 12),
             ),

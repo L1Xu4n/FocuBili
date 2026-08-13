@@ -18,6 +18,7 @@ import 'models/video_preview.dart';
 import 'services/app_update_service.dart';
 import 'services/bilibili_deep_link_service.dart';
 import 'services/bilibili_service.dart';
+import 'services/windows_clipboard_link_service.dart';
 
 /// 焦点哔哩的根组件，统一配置主题、路由和调试标记。
 class FocuBiliApp extends StatefulWidget {
@@ -28,6 +29,8 @@ class FocuBiliApp extends StatefulWidget {
     this.appUpdateController,
     this.appThemeModeController,
     this.deepLinkService,
+    this.incomingLinkResolver,
+    this.clipboardLinkMonitor,
     this.videoService,
     this.checkForUpdatesOnStart = false,
   });
@@ -36,6 +39,8 @@ class FocuBiliApp extends StatefulWidget {
   final AppUpdateController? appUpdateController;
   final AppThemeModeController? appThemeModeController;
   final IncomingDeepLinkService? deepLinkService;
+  final BilibiliIncomingLinkResolver? incomingLinkResolver;
+  final ClipboardLinkMonitor? clipboardLinkMonitor;
   final BilibiliService? videoService;
   final bool checkForUpdatesOnStart;
 
@@ -45,7 +50,7 @@ class FocuBiliApp extends StatefulWidget {
 }
 
 /// 初始化并释放全应用唯一的专注计时控制器。
-class _FocuBiliAppState extends State<FocuBiliApp> {
+class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
   late final FocusTimerController _focusTimerController;
   late final bool _ownsFocusTimerController;
   late final AppUpdateController _appUpdateController;
@@ -53,6 +58,8 @@ class _FocuBiliAppState extends State<FocuBiliApp> {
   late final AppThemeModeController _appThemeModeController;
   late final bool _ownsAppThemeModeController;
   late final IncomingDeepLinkService _deepLinkService;
+  late final BilibiliIncomingLinkResolver _incomingLinkResolver;
+  late final ClipboardLinkMonitor _clipboardLinkMonitor;
   late final BilibiliService _videoService;
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   final GlobalKey<ScaffoldMessengerState> _scaffoldMessengerKey =
@@ -61,12 +68,14 @@ class _FocuBiliAppState extends State<FocuBiliApp> {
   bool _completionDialogOpen = false;
   bool _firstLaunchReady = false;
   bool _deepLinkOpening = false;
+  bool _clipboardLinkDialogOpen = false;
   BilibiliVideoDeepLinkTarget? _pendingDeepLink;
 
   /// 初始化专注控制器并异步恢复本机未结束的计时。
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _ownsFocusTimerController = widget.focusTimerController == null;
     _focusTimerController =
         widget.focusTimerController ?? FocusTimerController();
@@ -80,11 +89,21 @@ class _FocuBiliAppState extends State<FocuBiliApp> {
     _appThemeModeController.addListener(_handleThemeModeChanged);
     unawaited(_appThemeModeController.initialize());
     _deepLinkService = widget.deepLinkService ?? BilibiliDeepLinkService();
+    _incomingLinkResolver =
+        widget.incomingLinkResolver ?? BilibiliIncomingLinkResolver();
+    _clipboardLinkMonitor =
+        widget.clipboardLinkMonitor ?? WindowsClipboardLinkMonitor();
     _videoService = widget.videoService ?? BilibiliVideoInfoService();
     unawaited(_initializeDeepLinks());
     if (widget.checkForUpdatesOnStart) {
       unawaited(_initializeUpdateCheck());
     }
+  }
+
+  /// 仅在应用前台允许剪贴板监听器读取内容，后台和锁屏期间完全停止读取。
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _clipboardLinkMonitor.setForeground(state == AppLifecycleState.resumed);
   }
 
   /// 主题控制器变化时重建 MaterialApp，让整套界面立即切换配色。
@@ -103,11 +122,18 @@ class _FocuBiliAppState extends State<FocuBiliApp> {
     }
   }
 
-  /// 解析外部链接并保留最后一个有效视频目标，协议未同意前不会执行导航。
+  /// 安排解析外部链接或分享文本，避免原生运行期回调等待网络重定向。
   void _handleIncomingDeepLink(String rawLink) {
-    final BilibiliVideoDeepLinkTarget? target = BilibiliDeepLinkParser.parse(
-      rawLink,
-    );
+    unawaited(_resolveIncomingDeepLink(rawLink));
+  }
+
+  /// 解析外部链接并保留最后一个有效视频目标，协议未同意前不会执行导航。
+  Future<void> _resolveIncomingDeepLink(String rawLink) async {
+    final BilibiliVideoDeepLinkTarget? target = await _incomingLinkResolver
+        .resolve(rawLink);
+    if (!mounted) {
+      return;
+    }
     if (target == null) {
       if (_firstLaunchReady) {
         _showDeepLinkMessage('这条外部链接不是当前支持的 B站公开视频。');
@@ -120,9 +146,55 @@ class _FocuBiliAppState extends State<FocuBiliApp> {
     }
   }
 
+  /// 解析 Windows 剪贴板文本，并在用户明确同意后复用外部视频导航流程。
+  Future<void> _handleClipboardText(String rawText) async {
+    if (!_firstLaunchReady || _clipboardLinkDialogOpen) {
+      return;
+    }
+    final BilibiliVideoDeepLinkTarget? target = await _incomingLinkResolver
+        .resolve(rawText);
+    final BuildContext? dialogContext = _navigatorKey.currentContext;
+    if (!mounted ||
+        target == null ||
+        dialogContext == null ||
+        !dialogContext.mounted ||
+        _clipboardLinkDialogOpen) {
+      return;
+    }
+    _clipboardLinkDialogOpen = true;
+    try {
+      final bool? shouldOpen = await showDialog<bool>(
+        context: dialogContext,
+        builder: (BuildContext context) => AlertDialog(
+          title: const Text('打开剪贴板中的 B站视频？'),
+          content: Text('检测到视频 ${target.bvid}，是否使用焦点哔哩打开？'),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('打开'),
+            ),
+          ],
+        ),
+      );
+      if (shouldOpen == true && mounted) {
+        _pendingDeepLink = target;
+        unawaited(_openPendingDeepLink());
+      }
+    } finally {
+      _clipboardLinkDialogOpen = false;
+    }
+  }
+
   /// 首次使用协议通过后开放外部导航，并继续处理冷启动时暂存的视频链接。
   void _handleFirstLaunchReady() {
     _firstLaunchReady = true;
+    _clipboardLinkMonitor.start(
+      (String text) => unawaited(_handleClipboardText(text)),
+    );
     unawaited(_openPendingDeepLink());
   }
 
@@ -302,6 +374,8 @@ class _FocuBiliAppState extends State<FocuBiliApp> {
   /// 仅释放由应用自己创建的控制器，测试注入实例仍由测试负责回收。
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _clipboardLinkMonitor.dispose();
     _focusTimerController.removeListener(_handleFocusTimerChanged);
     if (_ownsFocusTimerController) {
       _focusTimerController.dispose();

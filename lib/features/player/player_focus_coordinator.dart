@@ -18,6 +18,9 @@ mixin _PlayerFocusCoordinator on State<PlayerPage> {
   /// 由播放器状态类提供当前平台的播放服务。
   PlaybackService get _playbackService;
 
+  /// 由播放器状态类提供明确平台，首次专注引导据此区分 Windows 与 Android 文案。
+  AppPlatform get _appPlatform;
+
   /// 由播放会话协调器提供最近一次真实播放快照。
   PlaybackSnapshot get _playbackSnapshot;
 
@@ -90,11 +93,16 @@ mixin _PlayerFocusCoordinator on State<PlayerPage> {
     }
     final FocusSession? active = controller.activeSession;
     if (active != null) {
+      final bool isNewSession = _observedFocusSessionId != active.id;
       final bool visualStateChanged =
-          _observedFocusSessionId != active.id ||
-          _observedFocusStatus != active.status;
+          isNewSession || _observedFocusStatus != active.status;
       _observedFocusSessionId = active.id;
       _observedFocusStatus = active.status;
+      if (isNewSession) {
+        // 新任务必须重新接收当前真实播放状态，不能被上一条任务留下的页面级去重键跳过。
+        _resetFocusPlaybackIdentity();
+        _syncFocusPlaybackState(_playbackSnapshot);
+      }
       if (visualStateChanged && mounted) {
         setState(() {});
       }
@@ -139,13 +147,16 @@ mixin _PlayerFocusCoordinator on State<PlayerPage> {
     setState(() {});
   }
 
-  /// 只在播放状态、视频或分 P 真正变化时同步专注控制器，避免重复写本机存储。
-  void _syncFocusPlaybackState(PlaybackSnapshot snapshot) {
+  /// 只消费新的真实完播边沿，并在播放身份变化时同步专注控制器。
+  void _syncFocusPlaybackState(
+    PlaybackSnapshot snapshot, {
+    bool playbackJustEnded = false,
+  }) {
     final FocusTimerController? controller = _boundFocusController;
     if (controller == null) {
       return;
     }
-    if (snapshot.phase == PlaybackPhase.ended) {
+    if (playbackJustEnded) {
       unawaited(
         controller.completeForPlaybackPart(
           bvid: _activeVideo.bvid,
@@ -339,7 +350,10 @@ mixin _PlayerFocusCoordinator on State<PlayerPage> {
       _showPlayerNotice('专注控制器尚未准备好');
       return;
     }
-    await showPlayerFocusDoNotDisturbGuideIfNeeded(context);
+    await showPlayerFocusDoNotDisturbGuideIfNeeded(
+      context,
+      appPlatform: _appPlatform,
+    );
     if (!mounted) {
       return;
     }

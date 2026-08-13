@@ -12,7 +12,13 @@ import '../../services/focus_preferences_service.dart';
 typedef FocusClock = DateTime Function();
 
 /// 描述一次专注开始时勿扰模式的检查结果，界面据此提示权限或启用状态。
-enum FocusDoNotDisturbResult { disabled, enabled, permissionRequired, failed }
+enum FocusDoNotDisturbResult {
+  disabled,
+  enabled,
+  manualWindowsRequired,
+  permissionRequired,
+  failed,
+}
 
 /// 管理全应用唯一的专注任务、视频播放联动、打断记录和本机持久化。
 class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
@@ -168,16 +174,24 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
     return true;
   }
 
-  /// 每次开始专注都检查本机开关与系统权限；只有任务正在计时时才进入勿扰。
+  /// 每次开始专注都检查本机开关；Windows 立即提示手动启动，Android 仅在真实计时时申请勿扰。
   Future<FocusDoNotDisturbResult> ensureDoNotDisturbForActiveFocus() async {
     final FocusSession? session = _activeSession;
-    if (session == null || session.status != FocusSessionStatus.running) {
+    if (session == null) {
       return FocusDoNotDisturbResult.disabled;
     }
     try {
       final FocusPreferences preferences = await _focusPreferencesService
           .load();
       if (!preferences.enableDoNotDisturb) {
+        return FocusDoNotDisturbResult.disabled;
+      }
+      if (!_notificationService.supportsDoNotDisturb) {
+        return _notificationService.usesWindowsBackend
+            ? FocusDoNotDisturbResult.manualWindowsRequired
+            : FocusDoNotDisturbResult.failed;
+      }
+      if (session.status != FocusSessionStatus.running) {
         return FocusDoNotDisturbResult.disabled;
       }
       if (!await _notificationService.hasDoNotDisturbAccess()) {
@@ -639,7 +653,7 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
 
   /// 根据最新专注状态异步进入或恢复勿扰模式，并用代次号忽略过期权限检查结果。
   Future<void> _syncDoNotDisturbForCurrentState() async {
-    if (!_ready) {
+    if (!_ready || !_notificationService.supportsDoNotDisturb) {
       return;
     }
     final int generation = ++_doNotDisturbSyncGeneration;

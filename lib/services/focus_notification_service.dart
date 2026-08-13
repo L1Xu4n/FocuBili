@@ -2,6 +2,7 @@ import 'package:flutter/services.dart';
 
 import '../platform/app_platform.dart';
 import 'windows_focus_notification_service.dart';
+import 'windows_do_not_disturb_service.dart';
 
 /// 汇总统一权限管理页需要的 Android 权限与后台运行状态。
 class AndroidPermissionOverview {
@@ -63,9 +64,12 @@ class FocusNotificationService {
   const FocusNotificationService({
     MethodChannel? channel,
     WindowsFocusNotificationBackend? windowsBackend,
+    WindowsDoNotDisturbService windowsDoNotDisturbService =
+        const WindowsDoNotDisturbService(),
     AppPlatform? platform,
   }) : _usesDefaultChannel = channel == null,
        _windowsBackend = windowsBackend,
+       _windowsDoNotDisturbService = windowsDoNotDisturbService,
        _platform = platform,
        _channel =
            channel ??
@@ -74,6 +78,7 @@ class FocusNotificationService {
   final MethodChannel _channel;
   final bool _usesDefaultChannel;
   final WindowsFocusNotificationBackend? _windowsBackend;
+  final WindowsDoNotDisturbService _windowsDoNotDisturbService;
   final AppPlatform? _platform;
 
   /// 返回测试指定的平台或当前进程的真实平台。
@@ -101,7 +106,7 @@ class FocusNotificationService {
   /// 供测试和不可用页面确认服务不会调用 Android 或 Windows 后端。
   bool get usesUnavailableBackend => _usesUnavailableBackend;
 
-  /// 判断当前实现是否真正支持 Android 勿扰权限与状态切换。
+  /// 判断当前平台是否已经兑现自动勿扰切换；Windows 在取得微软受限功能授权前只提供手动入口。
   bool get supportsDoNotDisturb =>
       !_usesWindowsBackend && !_usesUnavailableBackend;
 
@@ -187,10 +192,11 @@ class FocusNotificationService {
 
   /// 检查 Android 是否允许应用在专注期间切换系统勿扰模式。
   Future<bool> hasDoNotDisturbAccess() async {
-    if (_skipDefaultChannelInFlutterTest ||
-        _usesWindowsBackend ||
-        _usesUnavailableBackend) {
+    if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return false;
+    }
+    if (_usesWindowsBackend) {
+      return _windowsDoNotDisturbService.isSupported();
     }
     try {
       return await _channel.invokeMethod<bool>('hasDoNotDisturbAccess') ??
@@ -204,9 +210,11 @@ class FocusNotificationService {
 
   /// 打开 Android 勿扰模式特殊访问设置；用户必须亲自在系统页面授权。
   Future<void> openDoNotDisturbSettings() async {
-    if (_skipDefaultChannelInFlutterTest ||
-        _usesWindowsBackend ||
-        _usesUnavailableBackend) {
+    if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
+      return;
+    }
+    if (_usesWindowsBackend) {
+      await _windowsDoNotDisturbService.openSettings();
       return;
     }
     try {
@@ -220,10 +228,11 @@ class FocusNotificationService {
 
   /// 开启专注勿扰或恢复进入专注前的系统模式，并返回原生层是否成功执行。
   Future<bool> setFocusDoNotDisturb(bool enabled) async {
-    if (_skipDefaultChannelInFlutterTest ||
-        _usesWindowsBackend ||
-        _usesUnavailableBackend) {
+    if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return false;
+    }
+    if (_usesWindowsBackend) {
+      return _windowsDoNotDisturbService.setEnabled(enabled);
     }
     try {
       return await _channel.invokeMethod<bool>(
