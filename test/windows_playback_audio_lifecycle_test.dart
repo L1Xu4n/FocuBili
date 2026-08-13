@@ -84,4 +84,20 @@ void main() {
       contains('_needsResumePositionCorrection(resumePosition)'),
     );
   });
+
+  /// Flutter 观看记录提供的位置必须优先于 Windows 后端旧位置，确保搜索入口恢复同一份进度。
+  test('Windows 打开视频优先使用调用方初始位置', () {
+    final String service = File(
+      'lib/services/windows_playback_service.dart',
+    ).readAsStringSync();
+
+    expect(
+      service,
+      contains(
+        'initialPosition ??\n'
+        '        (savedState?.cid == targetPart.cid',
+      ),
+    );
+    expect(service, contains('initialPosition?.isNegative ?? false'));
+  });
 }

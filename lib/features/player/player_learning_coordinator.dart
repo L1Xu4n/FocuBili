@@ -19,6 +19,7 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
       const <String, WatchHistoryEntry>{};
 
   /// 由播放器状态类提供本机观看记录服务。
+  @override
   WatchHistoryService get _watchHistoryService;
 
   /// 由播放器状态类提供本机学习清单服务。

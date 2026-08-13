@@ -51,6 +51,9 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
   /// 由播放器状态类提供当前平台的播放服务。
   PlaybackService get _playbackService;
 
+  /// 由播放器状态类提供本机观看记录，供后端续播记录缺失时安全兜底。
+  WatchHistoryService get _watchHistoryService;
+
   /// 由播放器状态类提供设备网络和电量服务。
   DeviceStatusService get _deviceStatusService;
 
@@ -241,13 +244,33 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
       );
       final SavedPlaybackState? savedState = await _playbackService
           .loadSavedPlaybackState(_activeVideo.bvid);
+      final VideoPart? savedPart = _findPartByCid(savedState?.cid);
+      final bool hasBackendResumePosition =
+          savedPart != null && savedState!.position > Duration.zero;
+      final WatchHistoryEntry? historyEntry =
+          widget.initialPartCid == null &&
+              widget.initialPosition == null &&
+              !hasBackendResumePosition
+          ? await _loadWatchHistoryResumeEntry()
+          : null;
       final SystemPlaybackLevels levels = await _playbackService
           .getSystemPlaybackLevels();
-      final VideoPart restoredPart = _findInitialPart(savedState);
+      final VideoPart restoredPart = _findInitialPart(
+        savedPart: savedPart,
+        historyEntry: historyEntry,
+      );
+      final bool historyFallbackMatched =
+          widget.initialPartCid == null &&
+          widget.initialPosition == null &&
+          !hasBackendResumePosition &&
+          historyEntry != null &&
+          historyEntry.lastPosition > Duration.zero &&
+          restoredPart.pageNumber == historyEntry.lastPartPageNumber;
       final bool restoredPartMatched =
           widget.initialPartCid == null &&
-          savedState != null &&
-          restoredPart.cid == savedState.cid;
+          !historyFallbackMatched &&
+          savedPart != null &&
+          restoredPart.cid == savedPart.cid;
       if (!mounted) {
         return;
       }
@@ -259,7 +282,8 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
       );
       unawaited(_loadCurrentLearningListEntry());
       unawaited(_loadPlayerEnhancements());
-      if (restoredPartMatched && _activeVideo.parts.length > 1) {
+      if ((restoredPartMatched || historyFallbackMatched) &&
+          _activeVideo.parts.length > 1) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _showPartRestoreSnackBar(restoredPart.pageNumber);
         });
@@ -273,6 +297,9 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
         _activeVideo,
         part: _currentPart,
         quality: preferredQuality,
+        initialPosition: historyFallbackMatched
+            ? historyEntry.lastPosition
+            : null,
       );
     } on PlatformException catch (error) {
       _showPlaybackError('无法启动播放器：${error.message ?? error.code}');
@@ -283,29 +310,63 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     }
   }
 
-  /// 在视频分 P 列表中查找本机保存的 cid，失效时回退到接口默认分 P。
-  VideoPart _findSavedPart(SavedPlaybackState? savedState) {
-    if (savedState != null) {
-      for (final VideoPart part in _activeVideo.parts) {
-        if (part.cid == savedState.cid) {
-          return part;
-        }
+  /// 在当前视频的完整分P中查找指定 cid，缺失或失效时返回空值。
+  VideoPart? _findPartByCid(int? cid) {
+    if (cid == null || cid <= 0) {
+      return null;
+    }
+    for (final VideoPart part in _activeVideo.parts) {
+      if (part.cid == cid) {
+        return part;
       }
     }
-    return _activeVideo.initialPart;
+    return null;
   }
 
-  /// 优先定位外部入口指定的分 P，没有指定或编号失效时再恢复本机观看分 P。
-  VideoPart _findInitialPart(SavedPlaybackState? savedState) {
-    final int? requestedCid = widget.initialPartCid;
-    if (requestedCid != null) {
-      for (final VideoPart part in _activeVideo.parts) {
-        if (part.cid == requestedCid) {
-          return part;
+  /// 读取当前视频的观看记录；读取失败或没有匹配 BV 时返回空值，不阻止播放器启动。
+  Future<WatchHistoryEntry?> _loadWatchHistoryResumeEntry() async {
+    try {
+      final String targetBvid = _activeVideo.bvid.trim().toUpperCase();
+      final List<WatchHistoryEntry> entries = await _watchHistoryService
+          .loadHistory();
+      for (final WatchHistoryEntry entry in entries) {
+        if (entry.bvid.trim().toUpperCase() == targetBvid &&
+            entry.lastPosition > Duration.zero) {
+          return entry;
         }
       }
+    } catch (_) {
+      // 观看记录只是播放器自身进度缺失时的兜底，读取异常不能阻止正常从头播放。
     }
-    return _findSavedPart(savedState);
+    return null;
+  }
+
+  /// 按观看记录的一基分P序号查找完整分P；旧记录序号失效时返回空值。
+  VideoPart? _findHistoryPart(WatchHistoryEntry? historyEntry) {
+    if (historyEntry == null || historyEntry.lastPartPageNumber <= 0) {
+      return null;
+    }
+    for (final VideoPart part in _activeVideo.parts) {
+      if (part.pageNumber == historyEntry.lastPartPageNumber) {
+        return part;
+      }
+    }
+    return null;
+  }
+
+  /// 按“外部明确分P、有效观看记录分P、后端分P、默认分P”的顺序选择首次打开目标。
+  VideoPart _findInitialPart({
+    required VideoPart? savedPart,
+    required WatchHistoryEntry? historyEntry,
+  }) {
+    final int? requestedCid = widget.initialPartCid;
+    final VideoPart? requestedPart = _findPartByCid(requestedCid);
+    if (requestedPart != null) {
+      return requestedPart;
+    }
+    return _findHistoryPart(historyEntry) ??
+        savedPart ??
+        _activeVideo.initialPart;
   }
 
   /// 使用系统风格提示告知用户已经定位到上次观看的分 P。

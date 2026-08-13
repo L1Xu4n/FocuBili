@@ -103,6 +103,7 @@ class _UnavailablePlaybackService implements PlaybackService {
     VideoPreview video, {
     VideoPart? part,
     int quality = 64,
+    Duration? initialPosition,
   }) async {}
 
   /// 未支持平台没有可继续的播放会话。

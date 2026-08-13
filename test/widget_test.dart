@@ -292,6 +292,7 @@ class _FakePlaybackService implements PlaybackService {
   final List<String> openedBvids = <String>[];
   final List<int> openedCids = <int>[];
   final List<int> openedQualities = <int>[];
+  final List<Duration?> openedInitialPositions = <Duration?>[];
   final List<int> selectedQualities = <int>[];
   Completer<void>? retryOpenCompleter;
   final SavedPlaybackState? savedState;
@@ -323,6 +324,7 @@ class _FakePlaybackService implements PlaybackService {
     VideoPreview video, {
     VideoPart? part,
     int quality = 64,
+    Duration? initialPosition,
   }) async {
     final VideoPart targetPart = part ?? video.initialPart;
     openVideoRequests += 1;
@@ -331,6 +333,7 @@ class _FakePlaybackService implements PlaybackService {
     openedBvids.add(video.bvid);
     openedCids.add(targetPart.cid);
     openedQualities.add(quality);
+    openedInitialPositions.add(initialPosition);
     final Completer<void>? pendingRetry = retryOpenCompleter;
     if (openVideoRequests > 1 &&
         pendingRetry != null &&
@@ -338,8 +341,15 @@ class _FakePlaybackService implements PlaybackService {
       await pendingRetry.future;
     }
     _quality = quality;
+    final Duration? effectiveInitialPosition =
+        initialPosition ??
+        (savedState?.cid == targetPart.cid ? savedState?.position : null);
+    if (effectiveInitialPosition != null &&
+        effectiveInitialPosition > Duration.zero) {
+      _position = effectiveInitialPosition;
+    }
     if (emitReadyOnOpen) {
-      _emit();
+      _emit(restoredPosition: effectiveInitialPosition ?? Duration.zero);
     }
   }
 
@@ -465,6 +475,7 @@ class _FakePlaybackService implements PlaybackService {
     String? message,
     int? currentQuality,
     bool isRestoringPosition = false,
+    Duration restoredPosition = Duration.zero,
   }) {
     _states.add(
       PlaybackSnapshot(
@@ -479,6 +490,7 @@ class _FakePlaybackService implements PlaybackService {
           PlaybackQuality(id: 32, label: '清晰 480P'),
         ],
         isRestoringPosition: isRestoringPosition,
+        restoredPosition: restoredPosition,
         message: message,
       ),
     );
@@ -2682,6 +2694,171 @@ void main() {
 
     expect(service.openedCid, 137649200);
     expect(find.text('已跳转到上次分P：P2'), findsOneWidget);
+  });
+
+  /// 验证搜索等普通入口在播放器后端记录缺失时，会使用观看记录的分P和时间点直接打开。
+  testWidgets('播放器使用观看记录兜底恢复搜索入口进度', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final VideoPreview video = _createMultiPartVideo();
+    final WatchHistoryService historyService = WatchHistoryService();
+    await historyService.record(
+      WatchHistoryEntry(
+        bvid: video.bvid,
+        title: video.title,
+        ownerName: video.ownerName,
+        lastPartTitle: video.parts[1].title,
+        lastPartPageNumber: video.parts[1].pageNumber,
+        watchedAt: DateTime(2026, 8, 13, 12),
+        lastPosition: const Duration(seconds: 47),
+      ),
+    );
+    final _FakePlaybackService playbackService = _FakePlaybackService(
+      savedState: SavedPlaybackState(
+        cid: video.parts[0].cid,
+        pageNumber: video.parts[0].pageNumber,
+        position: Duration.zero,
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: video,
+          playbackService: playbackService,
+          watchHistoryService: historyService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(playbackService.openedCid, video.parts[1].cid);
+    expect(
+      playbackService.openedInitialPositions.single,
+      const Duration(seconds: 47),
+    );
+    expect(playbackService._position, const Duration(seconds: 47));
+    expect(find.text('已跳转到上次进度：0:47'), findsOneWidget);
+  });
+
+  /// 验证播放器后端已有合法续播记录时不会被较旧的观看记录覆盖。
+  testWidgets('播放器自身续播记录优先于观看记录兜底', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final VideoPreview video = _createMultiPartVideo();
+    final WatchHistoryService historyService = WatchHistoryService();
+    await historyService.record(
+      WatchHistoryEntry(
+        bvid: video.bvid,
+        title: video.title,
+        ownerName: video.ownerName,
+        lastPartTitle: video.parts[0].title,
+        lastPartPageNumber: video.parts[0].pageNumber,
+        watchedAt: DateTime(2026, 8, 13, 12),
+        lastPosition: const Duration(seconds: 47),
+      ),
+    );
+    final _FakePlaybackService playbackService = _FakePlaybackService(
+      savedState: SavedPlaybackState(
+        cid: video.parts[1].cid,
+        pageNumber: video.parts[1].pageNumber,
+        position: const Duration(seconds: 12),
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: video,
+          playbackService: playbackService,
+          watchHistoryService: historyService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(playbackService.openedCid, video.parts[1].cid);
+    expect(playbackService.openedInitialPositions.single, isNull);
+    expect(playbackService._position, const Duration(seconds: 12));
+  });
+
+  /// 验证外部链接明确指定时间但没有指定分P时，仍使用后端分P且不被观看记录改写。
+  testWidgets('外部初始时间点阻止观看记录兜底覆盖分P', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final VideoPreview video = _createMultiPartVideo();
+    final WatchHistoryService historyService = WatchHistoryService();
+    await historyService.record(
+      WatchHistoryEntry(
+        bvid: video.bvid,
+        title: video.title,
+        ownerName: video.ownerName,
+        lastPartTitle: video.parts[1].title,
+        lastPartPageNumber: video.parts[1].pageNumber,
+        watchedAt: DateTime(2026, 8, 13, 12),
+        lastPosition: const Duration(seconds: 47),
+      ),
+    );
+    final _FakePlaybackService playbackService = _FakePlaybackService(
+      savedState: SavedPlaybackState(
+        cid: video.parts[0].cid,
+        pageNumber: video.parts[0].pageNumber,
+        position: Duration.zero,
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: video,
+          playbackService: playbackService,
+          watchHistoryService: historyService,
+          initialPosition: const Duration(seconds: 20),
+          initialPositionSource: PlayerInitialPositionSource.externalLink,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(playbackService.openedCid, video.parts[0].cid);
+    expect(playbackService.openedInitialPositions.single, isNull);
+    expect(playbackService._position, const Duration(seconds: 20));
+  });
+
+  /// 验证零秒观看记录不覆盖播放器最后分P，避免“刚打开就退出”的记录制造错误跳转。
+  testWidgets('零秒观看记录不覆盖播放器后端分P', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final VideoPreview video = _createMultiPartVideo();
+    final WatchHistoryService historyService = WatchHistoryService();
+    await historyService.record(
+      WatchHistoryEntry(
+        bvid: video.bvid,
+        title: video.title,
+        ownerName: video.ownerName,
+        lastPartTitle: video.parts[1].title,
+        lastPartPageNumber: video.parts[1].pageNumber,
+        watchedAt: DateTime(2026, 8, 13, 12),
+      ),
+    );
+    final _FakePlaybackService playbackService = _FakePlaybackService(
+      savedState: SavedPlaybackState(
+        cid: video.parts[0].cid,
+        pageNumber: video.parts[0].pageNumber,
+        position: Duration.zero,
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: video,
+          playbackService: playbackService,
+          watchHistoryService: historyService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(playbackService.openedCid, video.parts[0].cid);
+    expect(playbackService.openedInitialPositions.single, isNull);
+    expect(playbackService._position, Duration.zero);
   });
 
   /// 验证只有一个分P的视频不会显示无意义的选集区域。

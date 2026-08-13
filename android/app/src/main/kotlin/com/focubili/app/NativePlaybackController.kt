@@ -237,6 +237,7 @@ class NativePlaybackController(
                 val cid = call.argument<Number>("cid")?.toLong()
                 val pageNumber = call.argument<Number>("pageNumber")?.toInt() ?: 1
                 val quality = call.argument<Number>("quality")?.toInt() ?: DEFAULT_QUALITY
+                val initialPositionMs = call.argument<Number>("initialPositionMs")?.toLong()
                 if (buildVideoPageUrl(bvid) == null) {
                     result.error("invalid_bvid", "请输入有效的 BV 号。", null)
                 } else if (cid == null || cid <= 0L) {
@@ -245,6 +246,8 @@ class NativePlaybackController(
                     result.error("invalid_page", "请选择有效的分P。", null)
                 } else if (quality <= 0) {
                     result.error("invalid_quality", "请选择有效的清晰度。", null)
+                } else if (initialPositionMs != null && initialPositionMs < 0L) {
+                    result.error("invalid_position", "初始播放位置不能为负数。", null)
                 } else {
                     openVideo(
                         bvid = bvid,
@@ -254,6 +257,7 @@ class NativePlaybackController(
                         title = call.argument<String>("title").orEmpty(),
                         partTitle = call.argument<String>("partTitle").orEmpty(),
                         ownerName = call.argument<String>("ownerName").orEmpty(),
+                        initialPositionMs = initialPositionMs,
                     )
                     result.success(null)
                 }
@@ -907,7 +911,7 @@ class NativePlaybackController(
         )
     }
 
-    /** 保存旧分P、重置播放器，并请求新分P所选清晰度的 DASH 地址。 */
+    /** 保存旧分P、重置播放器，并优先按 Flutter 兜底位置请求新分P的 DASH 地址。 */
     private fun openVideo(
         bvid: String,
         cid: Long,
@@ -916,6 +920,7 @@ class NativePlaybackController(
         title: String,
         partTitle: String,
         ownerName: String,
+        initialPositionMs: Long?,
     ) {
         ensurePlayer()
         ensureTexture()
@@ -932,7 +937,7 @@ class NativePlaybackController(
         currentOwnerName = ownerName
         requestedQuality = quality
         currentQuality = quality
-        pendingStartPositionMs = loadSavedPlaybackPosition(bvid, cid)
+        pendingStartPositionMs = initialPositionMs ?: loadSavedPlaybackPosition(bvid, cid)
         restoredPositionMs = pendingStartPositionMs
         saveCurrentPartSelection()
         resumeAfterPrepare = true

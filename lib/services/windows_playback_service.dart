@@ -107,12 +107,13 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
     return _videoController.id.value;
   }
 
-  /// 保存上一支视频进度、请求新分P的 DASH 地址并恢复该分P上次位置。
+  /// 保存上一支视频进度、请求新分P的 DASH 地址，并优先使用调用方提供的安全恢复位置。
   @override
   Future<void> openVideo(
     VideoPreview video, {
     VideoPart? part,
     int quality = 64,
+    Duration? initialPosition,
   }) async {
     _ensureAvailable();
     final VideoPart targetPart = part ?? video.initialPart;
@@ -121,6 +122,13 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
     }
     if (quality <= 0) {
       throw ArgumentError.value(quality, 'quality', '需要有效的清晰度编号。');
+    }
+    if (initialPosition?.isNegative ?? false) {
+      throw ArgumentError.value(
+        initialPosition,
+        'initialPosition',
+        '初始位置不能为负数。',
+      );
     }
     final int generation = _beginSourceRequest();
     await _saveCurrentProgress(force: true);
@@ -136,9 +144,11 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
     if (!_isCurrentSourceRequest(generation)) {
       return;
     }
-    _restoredPosition = savedState?.cid == targetPart.cid
-        ? savedState!.position
-        : Duration.zero;
+    _restoredPosition =
+        initialPosition ??
+        (savedState?.cid == targetPart.cid
+            ? savedState!.position
+            : Duration.zero);
     await _openCurrentSource(
       generation: generation,
       video: video,

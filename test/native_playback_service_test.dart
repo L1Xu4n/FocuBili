@@ -1,6 +1,7 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/services/native_playback_service.dart';
 
 /// 注册原生播放服务的倍速范围与方法通道参数回归测试。
@@ -83,5 +84,22 @@ void main() {
       isTrue,
     );
     expect(legacy.isRestoringPosition, isFalse);
+  });
+
+  /// 验证 Flutter 的观看记录兜底位置会随打开命令交给 Android，在 prepare 前直接定位。
+  test('原生播放服务发送调用方提供的初始位置', () async {
+    final NativePlaybackService service = NativePlaybackService();
+
+    await service.openVideo(
+      VideoPreview.placeholder(),
+      initialPosition: const Duration(seconds: 47),
+    );
+
+    final Map<Object?, Object?> arguments = Map<Object?, Object?>.from(
+      calls.single.arguments as Map,
+    );
+    expect(calls.single.method, 'open');
+    expect(arguments['initialPositionMs'], 47000);
+    await service.dispose();
   });
 }

@@ -186,11 +186,12 @@ abstract interface class PlaybackService {
   /// 创建原生播放器并返回 Flutter 用来绘制视频画面的纹理编号。
   Future<int?> initialize();
 
-  /// 让原生层打开指定分P，并按所选清晰度直接请求播放数据。
+  /// 让原生层打开指定分P，并可用调用方提供的位置覆盖后端缺失的本机进度。
   Future<void> openVideo(
     VideoPreview video, {
     VideoPart? part,
     int quality = 64,
+    Duration? initialPosition,
   });
 
   /// 继续原生播放器播放。
@@ -281,12 +282,13 @@ class NativePlaybackService implements PlaybackService {
     return (values['textureId'] as num?)?.toInt();
   }
 
-  /// 检查视频、分P和清晰度后，让 Android 层直接请求本次播放需要的 DASH 数据。
+  /// 检查视频、分P、清晰度和可选初始位置后，让 Android 层请求本次播放需要的 DASH 数据。
   @override
   Future<void> openVideo(
     VideoPreview video, {
     VideoPart? part,
     int quality = 64,
+    Duration? initialPosition,
   }) async {
     if (!_bvidPattern.hasMatch(video.bvid.trim())) {
       throw ArgumentError.value(video.bvid, 'video.bvid', '需要有效的 BV 号。');
@@ -298,6 +300,13 @@ class NativePlaybackService implements PlaybackService {
     if (quality <= 0) {
       throw ArgumentError.value(quality, 'quality', '需要有效的清晰度编号。');
     }
+    if (initialPosition?.isNegative ?? false) {
+      throw ArgumentError.value(
+        initialPosition,
+        'initialPosition',
+        '初始位置不能为负数。',
+      );
+    }
     await _invokeVoid('open', <String, Object?>{
       'bvid': video.bvid.trim(),
       'cid': targetPart.cid,
@@ -306,6 +315,7 @@ class NativePlaybackService implements PlaybackService {
       'title': video.title,
       'partTitle': targetPart.title,
       'ownerName': video.ownerName,
+      'initialPositionMs': initialPosition?.inMilliseconds,
     });
   }
 
