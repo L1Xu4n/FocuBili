@@ -8,6 +8,7 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
 
   int? _recordedHistoryPartCid;
   Duration _lastHistorySavedPosition = Duration.zero;
+  Future<void> _watchHistorySaveQueue = Future<void>.value();
   @override
   LearningListEntry? _learningListEntry;
   bool _learningListLoading = false;
@@ -534,46 +535,51 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
     unawaited(_saveCurrentWatchHistory(snapshot.position));
   }
 
-  /// 在离开或切换分P前补存有变化的位置，保证短时间观看也能出现在历史缩略图中。
+  /// 在离开、切换分P或完播时补存位置；完播可显式写零，避免下次直接跳到结尾。
   @override
-  void _flushCurrentWatchHistoryProgress() {
+  void _flushCurrentWatchHistoryProgress({Duration? positionOverride}) {
     if (_recordedHistoryPartCid != _currentPart.cid ||
-        _playbackSnapshot.position == _lastHistorySavedPosition) {
+        (positionOverride == null &&
+            _playbackSnapshot.position == _lastHistorySavedPosition)) {
       return;
     }
-    unawaited(_saveCurrentWatchHistory(_playbackSnapshot.position));
+    unawaited(
+      _saveCurrentWatchHistory(positionOverride ?? _playbackSnapshot.position),
+    );
   }
 
-  /// 把当前视频、分P、封面和播放位置交给本机历史服务，写入失败不影响播放。
+  /// 固定当前视频、分P、封面和位置，并把写入按调用顺序排队，防止旧进度覆盖新进度。
   Future<void> _saveCurrentWatchHistory(Duration position) async {
     final Duration safePosition = position.isNegative
         ? Duration.zero
         : position;
     _lastHistorySavedPosition = safePosition;
-    try {
-      final WatchHistoryEntry entry = WatchHistoryEntry(
-        bvid: _activeVideo.bvid,
-        title: _activeVideo.title,
-        ownerName: _activeVideo.ownerName,
-        lastPartTitle: _currentPart.title,
-        lastPartPageNumber: _currentPart.pageNumber,
-        watchedAt: DateTime.now(),
-        thumbnailUrl: _activeVideo.thumbnailUrl,
-        lastPosition: safePosition,
-      );
-      final List<WatchHistoryEntry> updated = await _watchHistoryService.record(
-        entry,
-      );
-      if (mounted) {
-        setState(() {
-          _watchHistoryByBvid = <String, WatchHistoryEntry>{
-            for (final WatchHistoryEntry item in updated) item.bvid: item,
-          };
-        });
+    final WatchHistoryEntry entry = WatchHistoryEntry(
+      bvid: _activeVideo.bvid,
+      title: _activeVideo.title,
+      ownerName: _activeVideo.ownerName,
+      lastPartTitle: _currentPart.title,
+      lastPartPageNumber: _currentPart.pageNumber,
+      watchedAt: DateTime.now(),
+      thumbnailUrl: _activeVideo.thumbnailUrl,
+      lastPosition: safePosition,
+    );
+    _watchHistorySaveQueue = _watchHistorySaveQueue.then((_) async {
+      try {
+        final List<WatchHistoryEntry> updated = await _watchHistoryService
+            .record(entry);
+        if (mounted) {
+          setState(() {
+            _watchHistoryByBvid = <String, WatchHistoryEntry>{
+              for (final WatchHistoryEntry item in updated) item.bvid: item,
+            };
+          });
+        }
+      } catch (_) {
+        // 本地偏好设置异常不能中断播放器；后续换P或重新打开时仍会再次尝试保存。
       }
-    } catch (_) {
-      // 本地偏好设置异常不能中断播放器；后续换P或重新打开时仍会再次尝试保存。
-    }
+    });
+    await _watchHistorySaveQueue;
   }
 
   /// 切换分 P、互动节点或活动视频时统一清空旧进度身份，并可预置下一项学习任务。

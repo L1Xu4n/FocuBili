@@ -22,7 +22,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
   bool _interactivePromptVisible = false;
   int _preferredOpeningQuality = PreferredPlaybackQuality.p720.id;
   bool _defaultQualityPending = true;
-  Duration? _pendingInitialPosition;
+  PlaybackResumePlan? _openingResumePlan;
 
   /// 由页面状态提供循环播放开关。
   bool get _playbackLoopEnabled;
@@ -140,8 +140,8 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
   /// 在播放过程中按间隔保存学习清单进度。
   void _recordLearningListProgressWhenNeeded(PlaybackSnapshot snapshot);
 
-  /// 立即补存当前观看记录进度。
-  void _flushCurrentWatchHistoryProgress();
+  /// 立即补存当前观看记录进度；完播时可显式写零，避免下次跳到结尾。
+  void _flushCurrentWatchHistoryProgress({Duration? positionOverride});
 
   /// 立即补存当前学习清单进度。
   void _flushCurrentLearningListProgress();
@@ -176,13 +176,12 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
   /// 把总秒数格式化为播放器使用的时间文字。
   String _formatSeconds(int totalSeconds);
 
-  /// 保存初始跳转位置、监听播放状态流并启动当前视频会话。
+  /// 监听播放状态流，并把外部位置交给统一续播计划后启动当前视频会话。
   void _startPlayerPlaybackSession(Duration? initialPosition) {
-    _pendingInitialPosition = initialPosition;
     _playbackSubscription = _playbackService.states.listen(
       _applyPlaybackSnapshot,
     );
-    unawaited(_initializePlaybackSession());
+    unawaited(_initializePlaybackSession(initialPosition));
   }
 
   /// 取消播放状态订阅和续播计时器，供页面销毁流程统一调用。
@@ -234,7 +233,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
   }
 
   /// 初始化当前平台播放表面，并按恢复分 P、网络偏好和初始位置打开视频。
-  Future<void> _initializePlaybackSession() async {
+  Future<void> _initializePlaybackSession(Duration? requestedPosition) async {
     try {
       final PlaybackPreferences preferences = await _loadPlaybackPreferences();
       final DeviceNetworkType networkType = await _loadNetworkTypeSafely();
@@ -246,46 +245,43 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
           .loadSavedPlaybackState(_activeVideo.bvid);
       final VideoPart? savedPart = _findPartByCid(savedState?.cid);
       final bool hasBackendResumePosition =
-          savedPart != null && savedState!.position > Duration.zero;
+          savedPart != null &&
+          savedState != null &&
+          PlaybackResumePlan.normalizeStoredPosition(
+                savedState.position,
+                savedPart.duration,
+              ) >
+              Duration.zero;
       final WatchHistoryEntry? historyEntry =
           widget.initialPartCid == null &&
-              widget.initialPosition == null &&
+              requestedPosition == null &&
               !hasBackendResumePosition
-          ? await _loadWatchHistoryResumeEntry()
+          ? await _loadWatchHistoryResumeEntry(_activeVideo.bvid)
           : null;
       final SystemPlaybackLevels levels = await _playbackService
           .getSystemPlaybackLevels();
-      final VideoPart restoredPart = _findInitialPart(
-        savedPart: savedPart,
+      final PlaybackResumePlan resumePlan = PlaybackResumePlan.resolve(
+        video: _activeVideo,
+        requestedPartCid: widget.initialPartCid,
+        requestedPosition: requestedPosition,
+        savedState: savedState,
         historyEntry: historyEntry,
       );
-      final bool historyFallbackMatched =
-          widget.initialPartCid == null &&
-          widget.initialPosition == null &&
-          !hasBackendResumePosition &&
-          historyEntry != null &&
-          historyEntry.lastPosition > Duration.zero &&
-          restoredPart.pageNumber == historyEntry.lastPartPageNumber;
-      final bool restoredPartMatched =
-          widget.initialPartCid == null &&
-          !historyFallbackMatched &&
-          savedPart != null &&
-          restoredPart.cid == savedPart.cid;
       if (!mounted) {
         return;
       }
+      _openingResumePlan = resumePlan;
       _applyInitialPlaybackConfiguration(
-        part: restoredPart,
+        part: resumePlan.part,
         levels: levels,
         networkType: networkType,
         preferredQuality: preferredQuality,
       );
       unawaited(_loadCurrentLearningListEntry());
       unawaited(_loadPlayerEnhancements());
-      if ((restoredPartMatched || historyFallbackMatched) &&
-          _activeVideo.parts.length > 1) {
+      if (resumePlan.shouldShowPartNotice && _activeVideo.parts.length > 1) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          _showPartRestoreSnackBar(restoredPart.pageNumber);
+          _showPartRestoreSnackBar(resumePlan.part.pageNumber);
         });
       }
       final int? textureId = await _playbackService.initialize();
@@ -297,9 +293,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
         _activeVideo,
         part: _currentPart,
         quality: preferredQuality,
-        initialPosition: historyFallbackMatched
-            ? historyEntry.lastPosition
-            : null,
+        initialPosition: resumePlan.position,
       );
     } on PlatformException catch (error) {
       _showPlaybackError('无法启动播放器：${error.message ?? error.code}');
@@ -324,9 +318,9 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
   }
 
   /// 读取当前视频的观看记录；读取失败或没有匹配 BV 时返回空值，不阻止播放器启动。
-  Future<WatchHistoryEntry?> _loadWatchHistoryResumeEntry() async {
+  Future<WatchHistoryEntry?> _loadWatchHistoryResumeEntry(String bvid) async {
     try {
-      final String targetBvid = _activeVideo.bvid.trim().toUpperCase();
+      final String targetBvid = bvid.trim().toUpperCase();
       final List<WatchHistoryEntry> entries = await _watchHistoryService
           .loadHistory();
       for (final WatchHistoryEntry entry in entries) {
@@ -339,34 +333,6 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
       // 观看记录只是播放器自身进度缺失时的兜底，读取异常不能阻止正常从头播放。
     }
     return null;
-  }
-
-  /// 按观看记录的一基分P序号查找完整分P；旧记录序号失效时返回空值。
-  VideoPart? _findHistoryPart(WatchHistoryEntry? historyEntry) {
-    if (historyEntry == null || historyEntry.lastPartPageNumber <= 0) {
-      return null;
-    }
-    for (final VideoPart part in _activeVideo.parts) {
-      if (part.pageNumber == historyEntry.lastPartPageNumber) {
-        return part;
-      }
-    }
-    return null;
-  }
-
-  /// 按“外部明确分P、有效观看记录分P、后端分P、默认分P”的顺序选择首次打开目标。
-  VideoPart _findInitialPart({
-    required VideoPart? savedPart,
-    required WatchHistoryEntry? historyEntry,
-  }) {
-    final int? requestedCid = widget.initialPartCid;
-    final VideoPart? requestedPart = _findPartByCid(requestedCid);
-    if (requestedPart != null) {
-      return requestedPart;
-    }
-    return _findHistoryPart(historyEntry) ??
-        savedPart ??
-        _activeVideo.initialPart;
   }
 
   /// 使用系统风格提示告知用户已经定位到上次观看的分 P。
@@ -402,18 +368,13 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
         snapshot.phase == PlaybackPhase.error &&
         (previousSnapshot.phase != PlaybackPhase.error ||
             previousSnapshot.message != snapshot.message);
-    final Duration? requestedInitialPosition = _pendingInitialPosition;
-    final bool shouldSeekToInitialPosition =
-        requestedInitialPosition != null &&
-        snapshot.phase == PlaybackPhase.ready;
+    final PlaybackResumePlan? resumePlan = _openingResumePlan;
     final bool shouldShowResumeNotice =
-        requestedInitialPosition == null &&
         snapshot.phase == PlaybackPhase.ready &&
-        snapshot.restoredPosition > Duration.zero &&
+        resumePlan != null &&
+        resumePlan.part.cid == _currentPart.cid &&
+        resumePlan.shouldShowPositionNotice &&
         _shownRestoredCid != _currentPart.cid;
-    if (shouldSeekToInitialPosition) {
-      _pendingInitialPosition = null;
-    }
     final int? pendingQuality = _pendingQualitySelection;
     final bool sawQualityLoading =
         pendingQuality != null &&
@@ -530,17 +491,17 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     }
     if (shouldShowResumeNotice) {
       _shownRestoredCid = _currentPart.cid;
-      _showResumeNotice(snapshot.restoredPosition);
+      if (resumePlan.positionSource == PlaybackResumePositionSource.requested) {
+        _showRequestedInitialPositionNotice(resumePlan.position);
+      } else {
+        _showResumeNotice(resumePlan.position);
+      }
     }
-    if (shouldSeekToInitialPosition) {
-      unawaited(_seekToRequestedInitialPosition(requestedInitialPosition));
-    } else {
-      _recordWatchHistoryWhenReady(snapshot);
-      _recordWatchHistoryProgressWhenNeeded(snapshot);
-      _recordLearningListProgressWhenNeeded(snapshot);
-    }
+    _recordWatchHistoryWhenReady(snapshot);
+    _recordWatchHistoryProgressWhenNeeded(snapshot);
+    _recordLearningListProgressWhenNeeded(snapshot);
     if (justEnded) {
-      _flushCurrentWatchHistoryProgress();
+      _flushCurrentWatchHistoryProgress(positionOverride: Duration.zero);
       _flushCurrentLearningListProgress();
       if (shouldPauseAfterPlayCount) {
         unawaited(_playbackService.pause());
@@ -623,25 +584,18 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     );
   }
 
-  /// 在播放器首次就绪后跳转到外部入口要求的时间点，并显示准确来源文案。
-  Future<void> _seekToRequestedInitialPosition(Duration position) async {
+  /// 在播放器首次就绪后显示外部入口已经由底层直接定位完成的准确来源文案。
+  void _showRequestedInitialPositionNotice(Duration position) {
     final String sourceLabel = switch (widget.initialPositionSource) {
       PlayerInitialPositionSource.note => '笔记位置',
       PlayerInitialPositionSource.focus => '专注位置',
       PlayerInitialPositionSource.learning => '学习清单位置',
       PlayerInitialPositionSource.externalLink => '外部链接位置',
     };
-    try {
-      await _seekNativeTo(position);
-      if (mounted) {
-        _showTransientSnackBar(
-          '已跳转到$sourceLabel：${formatVideoNotePosition(position)}',
-        );
-      }
-    } catch (_) {
-      if (mounted) {
-        _showTransientSnackBar('视频已打开，但暂时无法跳转到$sourceLabel。');
-      }
+    if (mounted) {
+      _showTransientSnackBar(
+        '已跳转到$sourceLabel：${formatVideoNotePosition(position)}',
+      );
     }
   }
 
@@ -681,10 +635,20 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     }
     setState(() => _isRetrying = true);
     try {
+      final PlaybackResumePlan retryPlan =
+          _playbackSnapshot.position > Duration.zero
+          ? PlaybackResumePlan.direct(
+              part: _currentPart,
+              position: _playbackSnapshot.position,
+              positionSource: PlaybackResumePositionSource.internalRecovery,
+            )
+          : _openingResumePlan ?? PlaybackResumePlan.direct(part: _currentPart);
+      _openingResumePlan = retryPlan;
       await _playbackService.openVideo(
         _activeVideo,
         part: _currentPart,
         quality: _currentQuality,
+        initialPosition: retryPlan.position,
       );
     } catch (_) {
       if (mounted) {

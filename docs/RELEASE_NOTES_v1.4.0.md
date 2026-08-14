@@ -1,13 +1,13 @@
 # FocuBili v1.4.0 发布说明
 
-发布日期：待正式发布
+发布日期：2026-08-14
 版本号：`1.4.0+15`
 Windows 包版本：`1.4.0.15`
 
 <!-- focubili-update-summary:start -->
-- 首个完整 Windows 客户端，支持搜索、DASH 播放、字幕弹幕、扫码登录与专注工具。
-- Windows 增加桌面快捷键、真实全屏、Toast 提醒、播放缓冲管理和平台更新包选择。
-- Android 补齐通知插件的 Java 核心库兼容配置，继续保持原有播放与提醒链路。
+- 正式发布 Windows 端。
+- 添加循环播放和定时关闭功能，支持从 B 站分享到焦点哔哩后直接跳转。
+- 进行了一些代码重构。
 <!-- focubili-update-summary:end -->
 
 ## Windows 客户端
@@ -27,6 +27,13 @@ Windows 包版本：`1.4.0.15`
 
 - Windows 通知依赖同时包含 Android 实现，因此项目已按插件要求启用 core library desugaring，并把 Java/Kotlin 目标统一为 11。
 - Android 继续使用现有 Media3、WebView Cookie、AlarmManager、勿扰、画中画和缓存链路，不改用 Windows 后端。
+- Android 已注册系统文本分享入口；从 B 站分享标准链接或 `b23.tv` 短链时，可展开目标并直接进入焦点哔哩播放器。
+
+## 播放体验与代码重构
+
+- 播放器新增当前分 P 循环播放，以及按分钟或播放次数定时暂停；互动视频仍优先显示剧情选择。
+- 首次打开、搜索、学习清单和观看历史统一通过续播计划决定分 P 与位置，避免就绪后再次跳转。
+- Android、Windows 与 Flutter 观看历史采用一致的完播边界，并串行保存进度，降低旧异步状态覆盖新位置的风险。
 
 ## 产物与校验
 

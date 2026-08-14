@@ -38,8 +38,11 @@ FocuBili 希望保留“主动找到一支视频并认真看完”这件事本�
 - 提供无需管理员权限的 x64 EXE 安装器和带 VC++ 运行库的便携 ZIP；安装、覆盖更新、启动、单实例和卸载闭环均已在本机通过。
 - MSIX 身份、图标和 Toast 激活结构已经完成，但正式 MSIX 仍需可信代码签名或 Microsoft Store 签名。
 - Android 补齐通知插件要求的 Java 核心库 desugaring，Windows 依赖不会再阻断 Android 构建。
+- 播放器新增当前分 P 循环播放，以及按分钟或播放次数定时暂停。
+- Android 支持从 B 站系统分享面板直接跳转焦点哔哩，并可安全展开 `b23.tv` 短链。
+- 重构跨端续播与进度保存逻辑，统一首次定位、完播归零和异步保存顺序。
 
-Windows EXE 安装器、便携版与 Android APK 将从 [GitHub Releases](https://github.com/L1Xu4n/FocuBili/releases) 提供。完整变化与校验结果见 [v1.4.0 发布说明](docs/RELEASE_NOTES_v1.4.0.md)。
+Windows EXE 安装器、便携版与 Android APK 可从 [GitHub Release v1.4.0](https://github.com/L1Xu4n/FocuBili/releases/tag/v1.4.0) 下载。完整变化与校验结果见 [v1.4.0 发布说明](docs/RELEASE_NOTES_v1.4.0.md)。
 
 ## v1.3.1 更新内容
 

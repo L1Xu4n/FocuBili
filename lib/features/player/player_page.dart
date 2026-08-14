@@ -53,6 +53,7 @@ import 'enhancements/interactive_video_overlay.dart';
 import 'enhancements/playback_completion_overlay.dart';
 import 'enhancements/player_enhancement_controller.dart';
 import 'enhancements/video_chapter_widgets.dart';
+import 'playback_resume_plan.dart';
 import 'widgets/player_control_widgets.dart';
 
 part 'player_collection_sheet.dart';

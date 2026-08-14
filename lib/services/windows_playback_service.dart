@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -7,7 +6,6 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:screen_brightness/screen_brightness.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:volume_controller/volume_controller.dart';
 
 import '../models/video_preview.dart';
@@ -18,6 +16,7 @@ import 'native_playback_service.dart';
 import 'playback_video_surface.dart';
 import 'windows_dash_media_plan.dart';
 import 'windows_playback_recovery_policy.dart';
+import 'windows_playback_progress_store.dart';
 
 /// 使用 media_kit 与 Windows 系统能力实现 FocuBili 的桌面播放接口。
 class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
@@ -25,7 +24,9 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
   WindowsPlaybackService({
     BilibiliDesktopPlaybackSourceService? sourceService,
     Player? player,
+    WindowsPlaybackProgressStore? progressStore,
   }) : _sourceService = sourceService ?? BilibiliDesktopPlaybackSourceService(),
+       _progressStore = progressStore ?? const WindowsPlaybackProgressStore(),
        _player =
            player ??
            Player(
@@ -39,13 +40,13 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
     _subscribeToPlayer();
   }
 
-  static const Duration _completedResumeThreshold = Duration(seconds: 3);
   static const Duration _progressSaveInterval = Duration(seconds: 5);
   static const Duration _audioDecoderReadyTimeout = Duration(seconds: 5);
   static const Duration _mediaErrorHealthCheckTimeout = Duration(seconds: 1);
   static const Duration _resumePositionTolerance = Duration(seconds: 1);
 
   final BilibiliDesktopPlaybackSourceService _sourceService;
+  final WindowsPlaybackProgressStore _progressStore;
   final Player _player;
   late final VideoController _videoController;
   final FlutterVideoFrameCapture _frameCapture = FlutterVideoFrameCapture();
@@ -63,6 +64,7 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
   int _currentQuality = 64;
   Duration _restoredPosition = Duration.zero;
   DateTime? _lastProgressSavedAt;
+  Future<void> _progressSaveQueue = Future<void>.value();
   bool _disposed = false;
   bool _opening = false;
   bool _restoringPosition = false;
@@ -301,32 +303,8 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
 
   /// 从 Windows 本机偏好读取该视频最后分P和位置，接近结尾时从头开始。
   @override
-  Future<SavedPlaybackState?> loadSavedPlaybackState(String bvid) async {
-    final SharedPreferences preferences = await SharedPreferences.getInstance();
-    final String? encoded = preferences.getString(_progressKey(bvid));
-    if (encoded == null || encoded.isEmpty) {
-      return null;
-    }
-    try {
-      final Object? decoded = jsonDecode(encoded);
-      if (decoded is! Map) {
-        return null;
-      }
-      final int cid = (decoded['cid'] as num?)?.toInt() ?? 0;
-      final int pageNumber = (decoded['pageNumber'] as num?)?.toInt() ?? 0;
-      final int positionMs = (decoded['positionMs'] as num?)?.toInt() ?? 0;
-      if (cid <= 0 || pageNumber <= 0 || positionMs < 0) {
-        return null;
-      }
-      return SavedPlaybackState(
-        cid: cid,
-        pageNumber: pageNumber,
-        position: Duration(milliseconds: positionMs),
-      );
-    } on FormatException {
-      return null;
-    }
-  }
+  Future<SavedPlaybackState?> loadSavedPlaybackState(String bvid) =>
+      _progressStore.load(bvid);
 
   /// 读取 Windows 应用亮度与系统媒体音量；插件不可用时返回安全中间值。
   @override
@@ -543,12 +521,14 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
       _opening = false;
       _restoringPosition = false;
       _emitPlayerState(phaseOverride: PlaybackPhase.ready, clearMessage: true);
+      _restoredPosition = Duration.zero;
     } catch (error) {
       if (!_isCurrentSourceRequest(generation)) {
         return;
       }
       _opening = false;
       _restoringPosition = false;
+      _restoredPosition = Duration.zero;
       final String message = error is DesktopPlaybackSourceException
           ? error.message
           : 'Windows 播放器暂时无法打开该视频，请重试。';
@@ -619,7 +599,6 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
       if (!_isCurrentSourceRequest(generation)) {
         return;
       }
-      _restoringPosition = false;
       _emitPlayerState(
         phaseOverride: PlaybackPhase.loading,
         message: '正在准备音视频…',
@@ -797,6 +776,7 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
     final Duration resumePosition = _player.state.position;
     final bool shouldPlay = _player.state.playing || _shouldPlayAfterFallback;
     _opening = true;
+    _restoringPosition = resumePosition > Duration.zero;
     _emitPlayerState(
       phaseOverride: PlaybackPhase.loading,
       message: '当前播放线路不可用，正在切换备用线路…',
@@ -817,6 +797,7 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
             return;
           }
           _opening = false;
+          _restoringPosition = false;
           _emitPlayerState(
             phaseOverride: PlaybackPhase.ready,
             clearMessage: true,
@@ -828,6 +809,7 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
       }
       if (!_disposed && generation == _sourceGeneration) {
         _opening = false;
+        _restoringPosition = false;
         _emitPlayerState(
           phaseOverride: PlaybackPhase.error,
           message: '主线路和备用线路均无法播放，请重试或切换清晰度。',
@@ -842,6 +824,7 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
   int _beginSourceRequest() {
     _sourceGeneration += 1;
     _restoringPosition = false;
+    _restoredPosition = Duration.zero;
     _activeAudioTrackToken = '';
     _externalAudioNeedsReload = false;
     return _sourceGeneration;
@@ -905,26 +888,22 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
       return;
     }
     _lastProgressSavedAt = now;
-    Duration position = _player.state.position;
-    final Duration duration = _player.state.duration;
-    if (duration > Duration.zero &&
-        duration - position <= _completedResumeThreshold) {
-      position = Duration.zero;
-    }
-    final SharedPreferences preferences = await SharedPreferences.getInstance();
-    await preferences.setString(
-      _progressKey(_currentVideo!.bvid),
-      jsonEncode(<String, int>{
-        'cid': _currentPart!.cid,
-        'pageNumber': _currentPart!.pageNumber,
-        'positionMs': position.inMilliseconds.clamp(0, 1 << 31),
-      }),
-    );
-  }
-
-  /// 为单支 BV 视频生成不会与 Android 原生偏好冲突的 Windows 恢复键。
-  String _progressKey(String bvid) {
-    return 'windows_playback_state_${bvid.trim().toUpperCase()}';
+    final WindowsPlaybackProgressSnapshot progress =
+        WindowsPlaybackProgressSnapshot(
+          bvid: _currentVideo!.bvid,
+          cid: _currentPart!.cid,
+          pageNumber: _currentPart!.pageNumber,
+          position: _player.state.position,
+          duration: _player.state.duration,
+        );
+    _progressSaveQueue = _progressSaveQueue.then((_) async {
+      try {
+        await _progressStore.save(progress);
+      } catch (_) {
+        // 本机偏好写入失败不能中断播放；队列继续处理下一次更新。
+      }
+    });
+    await _progressSaveQueue;
   }
 
   /// 在服务已释放后阻止晚到的页面操作继续访问底层播放器。

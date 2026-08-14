@@ -100,4 +100,15 @@ void main() {
     );
     expect(service, contains('initialPosition?.isNegative ?? false'));
   });
+
+  /// Windows 每次异步写入必须先固定视频身份与位置，再按调用顺序进入保存队列。
+  test('Windows 播放进度使用固定快照串行保存', () {
+    final String service = File(
+      'lib/services/windows_playback_service.dart',
+    ).readAsStringSync();
+
+    expect(service, contains('WindowsPlaybackProgressSnapshot('));
+    expect(service, contains('_progressSaveQueue = _progressSaveQueue.then'));
+    expect(service, contains('await _progressStore.save(progress);'));
+  });
 }

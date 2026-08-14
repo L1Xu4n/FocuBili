@@ -131,6 +131,7 @@ mixin _PlayerVideoCoordinator
       _interactivePromptVisible = false;
     });
     _shownRestoredCid = null;
+    _openingResumePlan = PlaybackResumePlan.direct(part: part);
     _resumeNoticeTimer?.cancel();
     _resetFocusPlaybackIdentity();
     unawaited(_loadCurrentLearningListEntry());
@@ -140,6 +141,7 @@ mixin _PlayerVideoCoordinator
         _activeVideo,
         part: part,
         quality: _currentQuality,
+        initialPosition: Duration.zero,
       );
     } on PlatformException catch (error) {
       _showPlaybackError('无法切换分P：${error.message ?? error.code}');
@@ -178,6 +180,7 @@ mixin _PlayerVideoCoordinator
       _resetPlaybackProgressTracking();
     });
     _shownRestoredCid = null;
+    _openingResumePlan = PlaybackResumePlan.direct(part: branchPart);
     unawaited(_loadCurrentLearningListEntry());
     unawaited(_playerEnhancementController.selectChoice(choice));
     try {
@@ -185,6 +188,7 @@ mixin _PlayerVideoCoordinator
         _activeVideo,
         part: branchPart,
         quality: _currentQuality,
+        initialPosition: Duration.zero,
       );
     } on PlatformException catch (error) {
       _showPlaybackError('无法打开互动剧情：${error.message ?? error.code}');
@@ -279,10 +283,16 @@ mixin _PlayerVideoCoordinator
           message: '正在恢复原视频…',
         );
       });
+      _openingResumePlan = PlaybackResumePlan.direct(
+        part: _currentPart,
+        position: _playbackSnapshot.position,
+        positionSource: PlaybackResumePositionSource.internalRecovery,
+      );
       await service.openVideo(
         _activeVideo,
         part: _currentPart,
         quality: _currentQuality,
+        initialPosition: _openingResumePlan!.position,
       );
       if (_playbackSpeed != 1) {
         await service.setPlaybackSpeed(_playbackSpeed);
@@ -374,29 +384,40 @@ mixin _PlayerVideoCoordinator
     await _playbackService.pause();
     final SavedPlaybackState? savedState = await _playbackService
         .loadSavedPlaybackState(video.bvid);
-    VideoPart targetPart = video.initialPart;
     final LearningListEntry? requestedLearningEntry =
         learningEntry != null && learningEntry.bvid == video.bvid
         ? learningEntry
         : null;
+    int? requestedPartCid;
     if (requestedLearningEntry != null) {
       for (final VideoPart part in video.parts) {
         if (part.cid == requestedLearningEntry.partCid) {
-          targetPart = part;
+          requestedPartCid = part.cid;
           break;
         }
         if (part.pageNumber == requestedLearningEntry.partPageNumber) {
-          targetPart = part;
-        }
-      }
-    } else if (savedState != null) {
-      for (final VideoPart part in video.parts) {
-        if (part.cid == savedState.cid) {
-          targetPart = part;
-          break;
+          requestedPartCid = part.cid;
         }
       }
     }
+    final WatchHistoryEntry? historyEntry = requestedLearningEntry == null
+        ? await _loadWatchHistoryResumeEntry(video.bvid)
+        : null;
+    final PlaybackResumePlan resolvedPlan = PlaybackResumePlan.resolve(
+      video: video,
+      requestedPartCid: requestedPartCid,
+      requestedPosition: requestedLearningEntry?.position,
+      savedState: savedState,
+      historyEntry: historyEntry,
+    );
+    final PlaybackResumePlan resumePlan = requestedLearningEntry == null
+        ? resolvedPlan
+        : PlaybackResumePlan.direct(
+            part: resolvedPlan.part,
+            position: resolvedPlan.position,
+            positionSource: PlaybackResumePositionSource.requested,
+          );
+    final VideoPart targetPart = resumePlan.part;
     _clearSubtitlesForPart();
     _clearDanmakuForPart();
     _resetVideoShotPreview();
@@ -437,11 +458,7 @@ mixin _PlayerVideoCoordinator
       _interactiveChoiceOpening = false;
     });
     _shownRestoredCid = null;
-    _pendingInitialPosition =
-        requestedLearningEntry != null &&
-            requestedLearningEntry.position > Duration.zero
-        ? requestedLearningEntry.position
-        : null;
+    _openingResumePlan = resumePlan;
     _resumeNoticeTimer?.cancel();
     _resetFocusPlaybackIdentity();
     unawaited(_loadCurrentLearningListEntry());
@@ -450,10 +467,9 @@ mixin _PlayerVideoCoordinator
       video,
       part: targetPart,
       quality: _currentQuality,
+      initialPosition: resumePlan.position,
     );
-    if (requestedLearningEntry == null &&
-        savedState != null &&
-        video.parts.length > 1) {
+    if (resumePlan.shouldShowPartNotice && video.parts.length > 1) {
       _showPartRestoreSnackBar(targetPart.pageNumber);
     }
   }

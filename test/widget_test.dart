@@ -2611,7 +2611,11 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(playbackService.openedCid, 137649200);
-    expect(playbackService.seekToRequests, 1);
+    expect(
+      playbackService.openedInitialPositions.single,
+      const Duration(seconds: 42),
+    );
+    expect(playbackService.seekToRequests, 0);
     expect(playbackService._position, const Duration(seconds: 42));
   });
 
@@ -2776,7 +2780,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(playbackService.openedCid, video.parts[1].cid);
-    expect(playbackService.openedInitialPositions.single, isNull);
+    expect(
+      playbackService.openedInitialPositions.single,
+      const Duration(seconds: 12),
+    );
     expect(playbackService._position, const Duration(seconds: 12));
   });
 
@@ -2818,7 +2825,11 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(playbackService.openedCid, video.parts[0].cid);
-    expect(playbackService.openedInitialPositions.single, isNull);
+    expect(
+      playbackService.openedInitialPositions.single,
+      const Duration(seconds: 20),
+    );
+    expect(playbackService.seekToRequests, 0);
     expect(playbackService._position, const Duration(seconds: 20));
   });
 
@@ -2857,8 +2868,32 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(playbackService.openedCid, video.parts[0].cid);
-    expect(playbackService.openedInitialPositions.single, isNull);
+    expect(playbackService.openedInitialPositions.single, Duration.zero);
     expect(playbackService._position, Duration.zero);
+  });
+
+  /// 验证完播边沿最后写入零位置，避免下一次由 Flutter 历史直接恢复到视频结尾。
+  testWidgets('播放器完播时把观看历史位置归零', (WidgetTester tester) async {
+    final _FakePlaybackService playbackService = _FakePlaybackService();
+    final _RecordingWatchHistoryService historyService =
+        _RecordingWatchHistoryService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: playbackService,
+          watchHistoryService: historyService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    playbackService.emitPosition(const Duration(seconds: 30));
+    await tester.pumpAndSettle();
+    playbackService.emitEnded();
+    await tester.pumpAndSettle();
+
+    expect(historyService.recordedEntries.last.lastPosition, Duration.zero);
   });
 
   /// 验证只有一个分P的视频不会显示无意义的选集区域。
