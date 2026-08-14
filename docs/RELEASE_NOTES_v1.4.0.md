@@ -40,33 +40,37 @@ Windows 包版本：`1.4.0.15`
 ### Windows x64 EXE 安装器
 
 - 文件：`FocuBili-v1.4.0-windows-x64-setup.exe`
-- 大小：27,697,419 字节
-- SHA-256：`73E47992424742E847BE201A33F9736CCCD2AAE88CBD8CC282A3030D1C98A781`
+- 大小：27,777,254 字节
+- SHA-256：`4F241B0BA5C1B5712F6EE7E4CA397CE983ACF30783CD62DCDD855D45336471FB`
 - 使用：按当前用户安装到本机，不需要管理员权限；提供开始菜单入口、可选桌面快捷方式和标准卸载程序。
 - 签名：当前候选包尚未使用商业代码签名证书，Windows 可能显示“未知发布者”，但不需要导入测试根证书。
 
 ### Windows x64 便携版
 
 - 文件：`FocuBili-v1.4.0-windows-x64-portable.zip`
-- 大小：37,673,369 字节
-- SHA-256：`E1F6784609E633C32C41639953C4C357279B8D44F8E40DAF605C41494B696300`
+- 大小：37,853,371 字节
+- SHA-256：`DE81C02EB558AC2BB23F2D59F7109B89768FAE3969D6FCCD0B89C46432E984C7`
 - 使用：完整解压后运行目录内的 `FocuBili.exe`，不能只复制单个 exe。
 
-### Windows x64 MSIX 候选包
+### Android APK
 
-- 文件：`FocuBili-v1.4.0-windows-x64.msix`
-- 大小：43,867,885 字节
-- SHA-256：`63312CFCC2A394A07DB9188858BA2924DC596EC2E79E71FD8544ED43C501EA3F`
-- 清单已包含稳定身份、x64 架构、Windows 10 1809 下限、网络能力、完整信任和 Toast COM 激活器。
-- 当前包仅使用 `msix` 工具的测试证书，证书链不受 Windows 信任，因此不会作为正式下载提供，也不会要求用户导入测试根证书。
+- 文件：`FocuBili-v1.4.0-android.apk`
+- 大小：68,992,603 字节
+- SHA-256：`1F48C7E7DEA4007137B54B327512DF4C39E1FA2C84127E1B01EC0D77951AAF76`
+- 版本：`1.4.0 (15)`；包名：`com.focubili.app`；最低 Android 7.0 / API 24。
+- 签名：APK Signature Scheme v2 校验通过；当前项目仍沿用 Android Debug 证书签署 Release，不适合作为应用商店正式签名。
 
-Android 正式 APK 需在代码合并到 `master` 后按发布流程重新构建、签名并补充最终大小与 SHA-256。
+### 未公开分发的 Windows MSIX
+
+- MSIX 候选包仅使用测试证书，证书链不受 Windows 信任，因此本次正式 Release 不包含 MSIX，也不会要求用户导入测试根证书。
 
 ## 已完成验证
 
 - `flutter analyze --no-pub`：无问题。
-- `flutter test --no-pub`：340 项全部通过。
-- Android `:app:testDebugUnitTest`：11 项全部通过。
+- `flutter test --no-pub`：437 项全部通过。
+- Android `:app:testDebugUnitTest`：全部通过；Android Release APK 使用 Android Studio JDK 21 构建成功。
+- `dev` GitHub Actions 运行 `31779907888`：Dart 质量、Android Debug 和 Windows Debug 全部通过。
+- Windows Release 为 `1.4.0+15`；便携 ZIP 共 53 个条目，主程序、Flutter 引擎、`app.so`、libmpv 与 VC 运行库齐全。
 - Windows Debug 真实网络：公开搜索、视频详情、DASH 画面、控制层、自然播完和返回搜索页通过。
 - Windows 官方扫码页：二维码生成成功；没有扫描、确认或写入测试账号会话。
 - Windows v1.4.0 便携版：从独立目录启动、首页渲染和单实例保护通过。
@@ -78,10 +82,11 @@ Android 正式 APK 需在代码合并到 `master` 后按发布流程重新构建
 
 - EXE 安装器已经完成功能验收；消除 Windows“未知发布者”提示仍需要可信代码签名证书。
 - 正式 MSIX 安装、升级和卸载验收必须等待可信代码签名证书或 Microsoft Store 签名，当前不会向用户分发测试签名 MSIX。
+- Android Release APK 当前由 Debug 证书签署；本次构建时没有 ADB 在线设备，因此未对这一个最终 APK 重做安装冒烟。
 - Windows 当前隐藏未实现的画中画入口；浏览器 `focubili:` 协议尚未注册。
 - 已验证一支公开视频完整播放；备用线路实际故障切换和一小时以上长视频仍应继续在更多网络环境观察。
 - 真实账号最终扫码确认、收藏/关注/订阅读取需要用户自愿登录后验收，开发测试不会代替用户扫码。
 
 ## 发布顺序
 
-正式发布严格执行：本地提交 → 普通 SSH push 到 `dev` → 合并到 `master` → 构建正式产物 → 创建 Release。当前说明记录的是发布候选验证，不代表已经推送、合并或公开发布。
+正式发布严格执行：本地提交 → 普通 SSH push 到 `dev` → 合并到 `master` → 构建正式产物 → 创建 Release。本次 GitHub Release 只提供 Android APK、Windows x64 EXE 安装器和 Windows x64 便携 ZIP。
