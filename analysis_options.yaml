@@ -9,6 +9,11 @@
 # packages, and plugins designed to encourage good coding practices.
 include: package:flutter_lints/flutter.yaml
 
+analyzer:
+  exclude:
+    # 仓库内第三方插件的示例应用不属于 FocuBili 产品代码，避免上游示例 lint 阻塞本项目检查。
+    - third_party/**/example/**
+
 linter:
   # The lint rules applied to this project can be customized in the
   # section below to disable rules from the `package:flutter_lints/flutter.yaml`

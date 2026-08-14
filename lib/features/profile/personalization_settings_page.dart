@@ -10,6 +10,8 @@ import '../../services/playback_preferences_service.dart';
 import '../../services/app_update_service.dart';
 import '../../services/focus_notification_service.dart';
 import '../../services/focus_preferences_service.dart';
+import '../../services/windows_clipboard_link_service.dart';
+import '../../platform/app_platform.dart';
 import 'app_theme_mode_controller.dart';
 
 /// 展示焦点哔哩的个性化选项，并把播放器手势偏好保存在当前设备。
@@ -20,11 +22,16 @@ class PersonalizationSettingsPage extends StatefulWidget {
     this.preferencesService = const PlaybackPreferencesService(),
     this.focusPreferencesService,
     this.focusNotificationService = const FocusNotificationService(),
+    this.windowsClipboardPreferencesService,
+    this.appPlatform,
   });
 
   final PlaybackPreferencesService preferencesService;
   final FocusPreferencesService? focusPreferencesService;
   final FocusNotificationService focusNotificationService;
+  final WindowsClipboardLinkPreferencesService?
+  windowsClipboardPreferencesService;
+  final AppPlatform? appPlatform;
 
   /// 创建负责加载和保存设置的页面状态。
   @override
@@ -43,9 +50,18 @@ class _PersonalizationSettingsPageState
   bool _savingDoNotDisturb = false;
   bool _hasDoNotDisturbAccess = false;
   bool _savingUpdatePreference = false;
+  bool _windowsClipboardDetectionEnabled = false;
+  bool _savingWindowsClipboardPreference = false;
   late final AppUpdateController _fallbackUpdateController;
   late final AppThemeModeController _fallbackThemeModeController;
   late final FocusPreferencesService _focusPreferencesService;
+  late final WindowsClipboardLinkPreferencesService
+  _windowsClipboardPreferencesService;
+
+  /// 判断页面是否明确运行在 Windows，测试可通过构造参数稳定覆盖。
+  bool get _isWindows =>
+      (widget.appPlatform ?? AppPlatformDetector.current) ==
+      AppPlatform.windows;
 
   /// 页面创建后读取设备里已经保存的播放器偏好。
   @override
@@ -54,6 +70,9 @@ class _PersonalizationSettingsPageState
     WidgetsBinding.instance.addObserver(this);
     _focusPreferencesService =
         widget.focusPreferencesService ?? FocusPreferencesService();
+    _windowsClipboardPreferencesService =
+        widget.windowsClipboardPreferencesService ??
+        WindowsClipboardLinkPreferencesService();
     _fallbackUpdateController = AppUpdateController()
       ..addListener(_handleFallbackUpdateChanged);
     _fallbackThemeModeController = AppThemeModeController()
@@ -83,20 +102,56 @@ class _PersonalizationSettingsPageState
           .load();
       final FocusPreferences focusPreferences = await _focusPreferencesService
           .load();
-      final bool hasDoNotDisturbAccess = await widget.focusNotificationService
-          .hasDoNotDisturbAccess();
+      final bool windowsClipboardDetectionEnabled =
+          await _windowsClipboardPreferencesService.loadEnabled();
+      final bool hasDoNotDisturbAccess =
+          widget.focusNotificationService.supportsDoNotDisturb
+          ? await widget.focusNotificationService.hasDoNotDisturbAccess()
+          : false;
       if (!mounted) {
         return;
       }
       setState(() {
         _preferences = preferences;
         _focusPreferences = focusPreferences;
+        _windowsClipboardDetectionEnabled = windowsClipboardDetectionEnabled;
         _hasDoNotDisturbAccess = hasDoNotDisturbAccess;
         _loading = false;
       });
     } catch (_) {
       if (mounted) {
         setState(() => _loading = false);
+      }
+    }
+  }
+
+  /// 保存 Windows 剪贴板检测开关；失败时恢复原值并显示说明。
+  Future<void> _setWindowsClipboardDetectionEnabled(bool enabled) async {
+    if (_savingWindowsClipboardPreference) {
+      return;
+    }
+    final bool previous = _windowsClipboardDetectionEnabled;
+    setState(() {
+      _windowsClipboardDetectionEnabled = enabled;
+      _savingWindowsClipboardPreference = true;
+    });
+    try {
+      final bool saved = await _windowsClipboardPreferencesService.saveEnabled(
+        enabled,
+      );
+      if (!saved) {
+        throw StateError('无法保存 Windows 剪贴板开关');
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _windowsClipboardDetectionEnabled = previous);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('剪贴板检测设置保存失败，请稍后重试。')));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _savingWindowsClipboardPreference = false);
       }
     }
   }
@@ -111,6 +166,9 @@ class _PersonalizationSettingsPageState
 
   /// 查询当前勿扰权限并刷新副标题；查询失败时按未授权处理。
   Future<void> _refreshDoNotDisturbAccess() async {
+    if (!widget.focusNotificationService.supportsDoNotDisturb) {
+      return;
+    }
     final bool permitted = await widget.focusNotificationService
         .hasDoNotDisturbAccess();
     if (mounted) {
@@ -139,6 +197,36 @@ class _PersonalizationSettingsPageState
       }
       if (!enabled) {
         await widget.focusNotificationService.setFocusDoNotDisturb(false);
+        return;
+      }
+      if (_isWindows) {
+        if (!mounted) {
+          return;
+        }
+        final bool? openSettings = await showDialog<bool>(
+          context: context,
+          builder: (BuildContext dialogContext) => AlertDialog(
+            title: const Text('Windows 系统专注需要手动启动'),
+            content: const Text(
+              '微软把自动启动系统专注设为受限功能，焦点哔哩当前没有对应授权。开启后，应用会在每次专注开始时提醒你前往 Windows“时钟”手动启动，不会再用注册表模拟开启。',
+            ),
+            actions: <Widget>[
+              TextButton(
+                // 仅保存提醒开关，不离开当前个性化设置页。
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('知道了'),
+              ),
+              FilledButton(
+                // 打开微软公开的勿扰设置入口，方便用户完成手动配置。
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('打开勿扰设置'),
+              ),
+            ],
+          ),
+        );
+        if (openSettings == true) {
+          await widget.focusNotificationService.openDoNotDisturbSettings();
+        }
         return;
       }
       final bool permitted = await widget.focusNotificationService
@@ -397,6 +485,8 @@ class _PersonalizationSettingsPageState
 
   /// 创建“播放与专注”设置卡，让横屏平板左栏只承载使用频率最高的行为开关。
   Widget _buildPlaybackAndFocusSection() {
+    final bool supportsDoNotDisturb =
+        widget.focusNotificationService.supportsDoNotDisturb;
     return _buildSettingsSection(
       key: const Key('settings-playback-section'),
       icon: Icons.play_circle_outline_rounded,
@@ -413,21 +503,40 @@ class _PersonalizationSettingsPageState
           title: const Text('启用双击快进快退'),
           subtitle: const Text('关闭后，双击视频画面的任何位置都会切换播放或暂停。'),
         ),
-        SwitchListTile.adaptive(
-          key: const Key('enable-focus-do-not-disturb'),
-          value: _focusPreferences.enableDoNotDisturb,
-          // 勿扰开关函数保存用户选择，并在首次开启时说明 Android 特殊访问权限。
-          onChanged: _savingDoNotDisturb ? null : _setDoNotDisturbEnabled,
-          secondary: const Icon(Icons.do_not_disturb_on_outlined),
-          title: const Text('专注状态将手机设为勿扰模式'),
-          subtitle: Text(
-            !_focusPreferences.enableDoNotDisturb
-                ? '关闭时不会修改手机的勿扰状态。'
-                : _hasDoNotDisturbAccess
-                ? '已授权；播放时开启，暂停或结束时恢复，快进不会反复切换。'
-                : '尚未授权；每次开始专注都会检查并提示。',
+        if (_isWindows)
+          SwitchListTile.adaptive(
+            key: const Key('enable-windows-clipboard-link-detection'),
+            value: _windowsClipboardDetectionEnabled,
+            // 剪贴板开关只保存本机选择，关闭时根监听器不会读取任何内容。
+            onChanged: _savingWindowsClipboardPreference
+                ? null
+                : _setWindowsClipboardDetectionEnabled,
+            secondary: const Icon(Icons.content_paste_search_rounded),
+            title: const Text('检测剪贴板中的 B站链接'),
+            subtitle: const Text('仅在焦点哔哩位于前台时检查；发现可播放视频后先询问，不会自动打开。'),
           ),
-        ),
+        if (supportsDoNotDisturb || _isWindows)
+          SwitchListTile.adaptive(
+            key: const Key('enable-focus-do-not-disturb'),
+            value: _focusPreferences.enableDoNotDisturb,
+            // 开关函数在 Android 保存自动勿扰选择，在 Windows 保存手动启动提醒选择。
+            onChanged: _savingDoNotDisturb ? null : _setDoNotDisturbEnabled,
+            secondary: const Icon(Icons.do_not_disturb_on_outlined),
+            title: Text(_isWindows ? '开始时提醒开启 Windows 系统专注' : '专注状态将手机设为勿扰模式'),
+            subtitle: _isWindows
+                ? Text(
+                    _focusPreferences.enableDoNotDisturb
+                        ? '已开启提醒；请在 Windows“时钟”中手动启动系统专注。'
+                        : '关闭后不再提醒；焦点哔哩不会修改 Windows 的全局通知设置。',
+                  )
+                : Text(
+                    !_focusPreferences.enableDoNotDisturb
+                        ? '关闭时不会修改手机的勿扰状态。'
+                        : _hasDoNotDisturbAccess
+                        ? '已授权；播放时开启，暂停或结束时恢复，快进不会反复切换。'
+                        : '尚未授权；每次开始专注都会检查并提示。',
+                  ),
+          ),
       ],
     );
   }
@@ -437,6 +546,10 @@ class _PersonalizationSettingsPageState
     AppUpdateController updateController,
     AppThemeModeController themeModeController,
   ) {
+    final bool usesWindowsCapabilities =
+        widget.focusNotificationService.usesWindowsBackend;
+    final bool usesUnavailableCapabilities =
+        widget.focusNotificationService.usesUnavailableBackend;
     return _buildSettingsSection(
       key: const Key('settings-application-section'),
       icon: Icons.tune_rounded,
@@ -446,12 +559,22 @@ class _PersonalizationSettingsPageState
         ListTile(
           key: const Key('open-android-permissions'),
           leading: const Icon(Icons.admin_panel_settings_outlined),
-          title: const Text('权限管理'),
-          subtitle: const Text('统一申请、检查、取消权限，并设置后台提醒保护'),
+          title: Text(
+            usesWindowsCapabilities || usesUnavailableCapabilities
+                ? '系统能力'
+                : '权限管理',
+          ),
+          subtitle: Text(
+            usesWindowsCapabilities
+                ? '检查 Windows 通知、未来提醒和安装包身份'
+                : usesUnavailableCapabilities
+                ? '当前平台的系统能力尚未接入'
+                : '统一申请、检查、取消权限，并设置后台提醒保护',
+          ),
           trailing: const Icon(Icons.chevron_right_rounded),
           // 权限管理入口函数打开统一页面，原有勿扰开关和功能内申请入口继续保留。
           onTap: () =>
-              Navigator.of(context).pushNamed(AppRoutes.androidPermissions),
+              Navigator.of(context).pushNamed(AppRoutes.systemCapabilities),
         ),
         SwitchListTile.adaptive(
           key: const Key('enable-startup-update-check'),

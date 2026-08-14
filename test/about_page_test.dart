@@ -33,9 +33,17 @@ void main() {
       versionProvider: _VersionProvider(),
       preferencesService: _Preferences(),
       updateService: AppUpdateService(
+        targetPlatform: AppUpdateTargetPlatform.windows,
         releaseLoader: () async => <String, Object?>{
           'tag_name': 'v0.3.0',
           'html_url': 'https://github.com/L1Xu4n/FocuBili/releases/tag/v0.3.0',
+          'assets': <Map<String, Object?>>[
+            <String, Object?>{
+              'name': 'FocuBili-v0.3.0-x64.msix',
+              'browser_download_url':
+                  'https://github.com/L1Xu4n/FocuBili/releases/download/v0.3.0/FocuBili-v0.3.0-x64.msix',
+            },
+          ],
           'body': '''
 <!-- focubili-update-summary:start -->
 - 优化平板播放器空间利用
@@ -66,6 +74,7 @@ void main() {
     expect(find.byKey(const Key('about-update-highlights')), findsOneWidget);
     expect(find.text('优化平板播放器空间利用'), findsOneWidget);
     expect(find.text('修复画幅设置'), findsOneWidget);
+    expect(find.text('下载 Windows 安装包'), findsOneWidget);
     expect(find.byKey(const Key('open-problem-diagnostics')), findsOneWidget);
     await tester.ensureVisible(find.byKey(const Key('open-project-qq-group')));
     await tester.tap(find.byKey(const Key('open-project-qq-group')));
@@ -73,7 +82,7 @@ void main() {
     expect(openedUri, Uri.parse('https://qm.qq.com/q/szv665wx7W'));
     await tester.tap(find.byKey(const Key('open-release-page')));
     await tester.pump();
-    expect(openedUri?.path, contains('/releases/tag/v0.3.0'));
+    expect(openedUri?.path, endsWith('/FocuBili-v0.3.0-x64.msix'));
     controller.dispose();
   });
 }

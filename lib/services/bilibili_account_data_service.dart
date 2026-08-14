@@ -74,7 +74,7 @@ class BilibiliHttpAccountDataApi implements BilibiliAccountDataApi {
 
 /// 抽象当前账号会话的只读能力，使账号数据服务不依赖登录页面或 Cookie 存储细节。
 abstract interface class BilibiliAccountSessionProvider {
-  /// 验证并返回当前 WebView 会话状态，不会自动清除 Cookie。
+  /// 验证并返回当前平台会话状态，不会自动清除 Cookie。
   Future<BilibiliSessionState> loadCurrentSession();
 
   /// 只在账号数据请求进行时读取一次临时 Cookie 请求头。
@@ -84,7 +84,7 @@ abstract interface class BilibiliAccountSessionProvider {
 /// 把现有 BilibiliAuthService 适配为账号数据服务的默认安全会话来源。
 class AuthBackedAccountSessionProvider
     implements BilibiliAccountSessionProvider {
-  /// 创建复用现有官方网页登录会话的适配器，不保存 Cookie 副本。
+  /// 创建复用 Android WebView 或 Windows 加密登录会话的适配器，不保存 Cookie 副本。
   AuthBackedAccountSessionProvider({BilibiliAuthService? authService})
     : _authService = authService ?? BilibiliAuthService();
 
@@ -96,7 +96,7 @@ class AuthBackedAccountSessionProvider
     return _authService.loadCurrentSession();
   }
 
-  /// 按需读取 Android WebView 的 B 站 Cookie，不写入 Flutter 本地存储。
+  /// 按需读取当前平台的 B 站 Cookie，不在账号服务中持久化副本。
   @override
   Future<String> readCookieHeader() {
     return _authService.readCookieHeader();

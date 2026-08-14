@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:focubili/features/focus/player_focus_onboarding.dart';
+import 'package:focubili/platform/app_platform.dart';
 import 'package:focubili/services/focus_preferences_service.dart';
 
 /// 注册播放器专注首次勿扰说明的显示、设置入口和只展示一次测试。
@@ -30,6 +31,7 @@ void main() {
                   context,
                   preferencesService: service,
                   openSettings: () async => settingsOpenCount += 1,
+                  appPlatform: AppPlatform.android,
                 ),
               ),
               child: const Text('打开播放器专注'),
@@ -51,5 +53,40 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('专注时可以自动开启勿扰'), findsNothing);
     expect(settingsOpenCount, 1);
+  });
+
+  /// 验证 Windows 首次引导只说明手动启动，不再展示 Android 自动勿扰承诺。
+  testWidgets('播放器专注首次引导说明 Windows 手动启动', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final FocusPreferencesService service = FocusPreferencesService(
+      preferencesLoader: () async => preferences,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (BuildContext context) => FilledButton(
+              // 测试按钮函数以明确 Windows 平台打开首次专注引导。
+              onPressed: () => unawaited(
+                showPlayerFocusDoNotDisturbGuideIfNeeded(
+                  context,
+                  preferencesService: service,
+                  appPlatform: AppPlatform.windows,
+                ),
+              ),
+              child: const Text('打开 Windows 专注'),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('打开 Windows 专注'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Windows 系统专注需要手动启动'), findsOneWidget);
+    expect(find.textContaining('微软单独授权'), findsOneWidget);
+    expect(find.text('专注时可以自动开启勿扰'), findsNothing);
   });
 }

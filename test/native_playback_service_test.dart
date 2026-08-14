@@ -1,6 +1,7 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/services/native_playback_service.dart';
 
 /// 注册原生播放服务的倍速范围与方法通道参数回归测试。
@@ -64,5 +65,41 @@ void main() {
     expect(first.ownsPlatformChannel, isTrue);
 
     await first.dispose();
+  });
+
+  /// 验证恢复门控字段能从平台状态读取并在页面复制快照时保持，旧平台缺字段则安全关闭。
+  test('播放快照兼容恢复位置门控字段', () {
+    final PlaybackSnapshot restoring = PlaybackSnapshot.fromPlatformMap(
+      <Object?, Object?>{'isRestoringPosition': true},
+    );
+    final PlaybackSnapshot legacy = PlaybackSnapshot.fromPlatformMap(
+      const <Object?, Object?>{},
+    );
+
+    expect(restoring.isRestoringPosition, isTrue);
+    expect(
+      restoring
+          .copyWith(position: const Duration(seconds: 8))
+          .isRestoringPosition,
+      isTrue,
+    );
+    expect(legacy.isRestoringPosition, isFalse);
+  });
+
+  /// 验证 Flutter 的观看记录兜底位置会随打开命令交给 Android，在 prepare 前直接定位。
+  test('原生播放服务发送调用方提供的初始位置', () async {
+    final NativePlaybackService service = NativePlaybackService();
+
+    await service.openVideo(
+      VideoPreview.placeholder(),
+      initialPosition: const Duration(seconds: 47),
+    );
+
+    final Map<Object?, Object?> arguments = Map<Object?, Object?>.from(
+      calls.single.arguments as Map,
+    );
+    expect(calls.single.method, 'open');
+    expect(arguments['initialPositionMs'], 47000);
+    await service.dispose();
   });
 }

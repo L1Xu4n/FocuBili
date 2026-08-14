@@ -11,6 +11,8 @@ import 'package:focubili/services/focus_notification_service.dart';
 import 'package:focubili/services/focus_preferences_service.dart';
 import 'package:focubili/services/playback_preferences_service.dart';
 import 'package:focubili/services/app_theme_mode_service.dart';
+import 'package:focubili/services/windows_clipboard_link_service.dart';
+import 'package:focubili/platform/app_platform.dart';
 
 /// 为设置页更新摘要测试提供固定的已安装版本。
 class _SettingsVersionProvider implements AppVersionProvider {
@@ -68,6 +70,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: PersonalizationSettingsPage(
+          appPlatform: AppPlatform.android,
           focusPreferencesService: preferencesService,
           focusNotificationService: FocusNotificationService(channel: channel),
         ),
@@ -187,6 +190,7 @@ void main() {
       find.byKey(const Key('theme-mode-segmented-button')),
     );
     expect(selector.selected, <ThemeMode>{ThemeMode.system});
+    await tester.ensureVisible(find.byKey(const Key('theme-mode-dark-option')));
     await tester.tap(find.byKey(const Key('theme-mode-dark-option')));
     await tester.pumpAndSettle();
 
@@ -196,5 +200,62 @@ void main() {
     expect(selector.selected, <ThemeMode>{ThemeMode.dark});
     expect(controller.mode, ThemeMode.dark);
     expect(await service.load(), ThemeMode.dark);
+  });
+
+  /// 验证 Windows 设置页显示剪贴板检测开关，并将用户选择保存到本机。
+  testWidgets('Windows 设置页保存剪贴板链接检测开关', (WidgetTester tester) async {
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final WindowsClipboardLinkPreferencesService service =
+        WindowsClipboardLinkPreferencesService(
+          preferencesLoader: () async => preferences,
+        );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PersonalizationSettingsPage(
+          appPlatform: AppPlatform.windows,
+          windowsClipboardPreferencesService: service,
+          focusNotificationService: FocusNotificationService(channel: channel),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final Finder toggle = find.byKey(
+      const Key('enable-windows-clipboard-link-detection'),
+    );
+    expect(toggle, findsOneWidget);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+
+    expect(await service.loadEnabled(), isTrue);
+  });
+
+  /// 验证 Windows 开关只保存“开始时提醒”，不会继续声称能够自动修改系统专注。
+  testWidgets('Windows 设置页如实说明系统专注需要手动启动', (WidgetTester tester) async {
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final FocusPreferencesService preferencesService = FocusPreferencesService(
+      preferencesLoader: () async => preferences,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PersonalizationSettingsPage(
+          appPlatform: AppPlatform.windows,
+          focusPreferencesService: preferencesService,
+          focusNotificationService: FocusNotificationService(channel: channel),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final Finder toggle = find.byKey(const Key('enable-focus-do-not-disturb'));
+    expect(toggle, findsOneWidget);
+    expect(find.text('开始时提醒开启 Windows 系统专注'), findsOneWidget);
+    expect(find.textContaining('自动切换'), findsNothing);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Windows 系统专注需要手动启动'), findsOneWidget);
+    expect(find.textContaining('受限功能'), findsOneWidget);
+    expect((await preferencesService.load()).enableDoNotDisturb, isTrue);
   });
 }

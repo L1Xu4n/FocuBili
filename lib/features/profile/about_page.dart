@@ -273,10 +273,19 @@ class _AboutPageState extends State<AboutPage> {
                           FilledButton.icon(
                             key: const Key('open-release-page'),
                             onPressed: () => _open(
-                              result.releaseUrl ?? AppUpdateService.releasesUri,
+                              result.downloadUrl ??
+                                  result.releaseUrl ??
+                                  AppUpdateService.releasesUri,
+                              failureMessage: result.downloadUrl == null
+                                  ? '无法打开 Release 页面。'
+                                  : '无法打开安装包下载地址，请前往 Release 页面重试。',
                             ),
-                            icon: const Icon(Icons.open_in_new_rounded),
-                            label: const Text('前往 Release'),
+                            icon: Icon(
+                              result.downloadUrl == null
+                                  ? Icons.open_in_new_rounded
+                                  : Icons.download_rounded,
+                            ),
+                            label: Text(result.downloadActionLabel),
                           ),
                       ],
                     ),

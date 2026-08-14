@@ -30,12 +30,14 @@ android {
     ndkVersion "28.2.13676358"
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        // Windows Toast 插件也包含 Android 实现；启用核心库 desugaring，兼容旧 Android 的现代 Java API。
+        coreLibraryDesugaringEnabled true
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
     }
 
     kotlinOptions {
-        jvmTarget = '1.8'
+        jvmTarget = '11'
     }
 
     sourceSets {
@@ -68,6 +70,8 @@ flutter {
 }
 
 dependencies {
+    // flutter_local_notifications 22.x 官方要求使用 2.1.4，在旧 Android 上回填所需的 Java 核心库 API。
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'
     // Media3 统一使用 1.10.1，修复旧版提取器、回退和播放状态中的多项崩溃问题。
     def media3Version = "1.10.1"
     // 使用 Android 官方 Media3 播放 DASH 的独立音视频轨道。

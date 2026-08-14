@@ -1,17 +1,26 @@
-import 'package:flutter/services.dart';
+import 'dart:io';
 
-/// 保存 Android 原生边播边缓存的可展示状态。
+import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+/// 区分 Android 持久边播缓存和 Windows media_kit 临时播放缓冲，供页面展示准确说明。
+enum MediaCacheStorageKind { androidPersistent, windowsPlaybackBuffer }
+
+/// 保存当前平台视频缓存或播放缓冲的可展示状态。
 class MediaCacheStatus {
   /// 创建一个包含当前占用、容量上限和播放器占用状态的缓存快照。
   const MediaCacheStatus({
     required this.usedBytes,
     required this.capacityBytes,
     required this.isPlaybackActive,
+    this.storageKind = MediaCacheStorageKind.androidPersistent,
   });
 
   final int usedBytes;
   final int capacityBytes;
   final bool isPlaybackActive;
+  final MediaCacheStorageKind storageKind;
 
   /// 把 Android 方法通道返回的字典转换为经过边界保护的 Dart 数据。
   factory MediaCacheStatus.fromPlatformMap(Map<Object?, Object?> values) {
@@ -24,6 +33,7 @@ class MediaCacheStatus {
           ? capacityBytes
           : defaultMediaCacheBytes,
       isPlaybackActive: values['isPlaybackActive'] == true,
+      storageKind: MediaCacheStorageKind.androidPersistent,
     );
   }
 }
@@ -63,6 +73,213 @@ abstract interface class MediaCacheService {
 
   /// 删除所有可清理的边播边缓存，并返回清理后的最新状态。
   Future<MediaCacheStatus> clearCache();
+}
+
+/// 记录当前进程中仍存活的 Windows 播放器，防止清理正在被 libmpv 使用的缓冲文件。
+abstract final class WindowsMediaCacheRuntime {
+  static int _activePlaybackSessions = 0;
+
+  /// 在 Windows 播放服务创建后登记一个活跃会话。
+  static void registerPlaybackSession() {
+    _activePlaybackSessions += 1;
+  }
+
+  /// 在 Windows 播放服务释放后注销会话，并防止异常重复释放产生负数。
+  static void unregisterPlaybackSession() {
+    if (_activePlaybackSessions > 0) {
+      _activePlaybackSessions -= 1;
+    }
+  }
+
+  /// 返回当前是否仍有播放器可能占用 media_kit 缓冲目录。
+  static bool get isPlaybackActive => _activePlaybackSessions > 0;
+}
+
+/// 定义 Windows 缓冲目录读取函数，单元测试可注入独立临时目录。
+typedef WindowsMediaCacheDirectoryLoader = Future<Directory> Function();
+
+/// 在应用专属缓存目录中统计和清理 media_kit 的磁盘播放缓冲。
+class WindowsMediaCacheService implements MediaCacheService {
+  /// 创建 Windows 缓冲服务；测试可替换目录、偏好设置和播放器占用状态。
+  WindowsMediaCacheService({
+    WindowsMediaCacheDirectoryLoader? directoryLoader,
+    Future<SharedPreferences> Function()? preferencesLoader,
+    bool Function()? playbackActiveLoader,
+  }) : _directoryLoader = directoryLoader ?? _loadDefaultCacheDirectory,
+       _preferencesLoader = preferencesLoader ?? SharedPreferences.getInstance,
+       _playbackActiveLoader =
+           playbackActiveLoader ??
+           (() => WindowsMediaCacheRuntime.isPlaybackActive);
+
+  static const String cacheDirectoryName = 'media_kit_video_cache';
+  static const String _capacityPreferenceKey =
+      'windows_media_cache_capacity_bytes';
+
+  final WindowsMediaCacheDirectoryLoader _directoryLoader;
+  final Future<SharedPreferences> Function() _preferencesLoader;
+  final bool Function() _playbackActiveLoader;
+
+  /// 读取应用专属缓冲目录的实际文件大小、容量设置和当前占用状态。
+  @override
+  Future<MediaCacheStatus> loadStatus() async {
+    final Directory directory = await resolveCacheDirectory();
+    final int capacityBytes = await loadCapacityBytes();
+    final int usedBytes = await _calculateDirectorySize(directory);
+    return MediaCacheStatus(
+      usedBytes: usedBytes,
+      capacityBytes: capacityBytes,
+      isPlaybackActive: _playbackActiveLoader(),
+      storageKind: MediaCacheStorageKind.windowsPlaybackBuffer,
+    );
+  }
+
+  /// 保存受支持的新容量，并在播放器未占用目录时按最后修改时间清理超出容量的旧文件。
+  @override
+  Future<MediaCacheStatus> setCapacityBytes(int capacityBytes) async {
+    if (!supportedMediaCacheBytes.contains(capacityBytes)) {
+      throw const MediaCacheException(
+        'invalid_cache_capacity',
+        '请选择支持的视频缓存上限。',
+      );
+    }
+    _ensurePlaybackIdle();
+    try {
+      final SharedPreferences preferences = await _preferencesLoader();
+      await preferences.setInt(_capacityPreferenceKey, capacityBytes);
+      final Directory directory = await resolveCacheDirectory();
+      await _trimToCapacity(directory, capacityBytes);
+      return loadStatus();
+    } on MediaCacheException {
+      rethrow;
+    } catch (_) {
+      throw const MediaCacheException(
+        'cache_error',
+        'Windows 视频缓冲上限暂时无法保存，请稍后重试。',
+      );
+    }
+  }
+
+  /// 删除应用专属 media_kit 缓冲目录内的内容，不触碰账号、笔记、截图或其他用户文件。
+  @override
+  Future<MediaCacheStatus> clearCache() async {
+    _ensurePlaybackIdle();
+    try {
+      final Directory directory = await resolveCacheDirectory();
+      await for (final FileSystemEntity entity in directory.list(
+        followLinks: false,
+      )) {
+        await entity.delete(recursive: true);
+      }
+      return loadStatus();
+    } on MediaCacheException {
+      rethrow;
+    } catch (_) {
+      throw const MediaCacheException(
+        'cache_error',
+        'Windows 视频缓冲暂时无法清空，请稍后重试。',
+      );
+    }
+  }
+
+  /// 读取已保存容量，缺失或损坏时使用 512MB 安全默认值。
+  Future<int> loadCapacityBytes() async {
+    try {
+      final SharedPreferences preferences = await _preferencesLoader();
+      final int? value = preferences.getInt(_capacityPreferenceKey);
+      return supportedMediaCacheBytes.contains(value)
+          ? value!
+          : defaultMediaCacheBytes;
+    } catch (_) {
+      return defaultMediaCacheBytes;
+    }
+  }
+
+  /// 解析并创建唯一允许管理的应用缓冲目录，同时拒绝文件系统根目录等宽泛目标。
+  Future<Directory> resolveCacheDirectory() async {
+    final Directory directory = (await _directoryLoader()).absolute;
+    final String normalizedPath = directory.path.replaceAll('\\', '/');
+    final List<String> segments = normalizedPath
+        .split('/')
+        .where((String segment) => segment.isNotEmpty)
+        .toList(growable: false);
+    if (segments.isEmpty ||
+        segments.last.toLowerCase() != cacheDirectoryName.toLowerCase() ||
+        directory.parent.path == directory.path) {
+      throw const MediaCacheException(
+        'unsafe_cache_path',
+        'Windows 视频缓冲目录不安全，已停止操作。',
+      );
+    }
+    await directory.create(recursive: true);
+    return directory;
+  }
+
+  /// 在有播放器会话存活时阻止容量调整或清理，避免 libmpv 读取到一半的文件被删除。
+  void _ensurePlaybackIdle() {
+    if (_playbackActiveLoader()) {
+      throw const MediaCacheException('cache_busy', '视频播放中，停止播放并退出播放页后才能管理缓存。');
+    }
+  }
+
+  /// 递归统计目录中的普通文件，符号链接不会被跟随到应用目录之外。
+  Future<int> _calculateDirectorySize(Directory directory) async {
+    int total = 0;
+    try {
+      await for (final FileSystemEntity entity in directory.list(
+        recursive: true,
+        followLinks: false,
+      )) {
+        if (entity is File) {
+          total += await entity.length();
+        }
+      }
+      return total;
+    } catch (_) {
+      throw const MediaCacheException('cache_error', 'Windows 视频缓冲用量暂时无法读取。');
+    }
+  }
+
+  /// 按最后修改时间从旧到新删除超出新上限的缓冲文件，容量内文件保持不变。
+  Future<void> _trimToCapacity(Directory directory, int capacityBytes) async {
+    final List<File> files = <File>[];
+    await for (final FileSystemEntity entity in directory.list(
+      recursive: true,
+      followLinks: false,
+    )) {
+      if (entity is File) {
+        files.add(entity);
+      }
+    }
+    final List<({File file, int size, DateTime modified})> entries =
+        <({File file, int size, DateTime modified})>[];
+    int total = 0;
+    for (final File file in files) {
+      final FileStat stat = await file.stat();
+      total += stat.size;
+      entries.add((file: file, size: stat.size, modified: stat.modified));
+    }
+    entries.sort(
+      (
+        ({File file, DateTime modified, int size}) left,
+        ({File file, DateTime modified, int size}) right,
+      ) => left.modified.compareTo(right.modified),
+    );
+    for (final ({File file, int size, DateTime modified}) entry in entries) {
+      if (total <= capacityBytes) {
+        break;
+      }
+      await entry.file.delete();
+      total -= entry.size;
+    }
+  }
+
+  /// 在 path_provider 返回的应用缓存目录下追加固定子目录，确保卸载和系统清理边界明确。
+  static Future<Directory> _loadDefaultCacheDirectory() async {
+    final Directory applicationCache = await getApplicationCacheDirectory();
+    return Directory(
+      '${applicationCache.path}${Platform.pathSeparator}$cacheDirectoryName',
+    );
+  }
 }
 
 /// 通过既有原生播放通道管理 Media3 的边播边缓存。

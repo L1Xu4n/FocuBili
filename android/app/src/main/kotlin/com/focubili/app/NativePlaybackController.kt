@@ -237,6 +237,7 @@ class NativePlaybackController(
                 val cid = call.argument<Number>("cid")?.toLong()
                 val pageNumber = call.argument<Number>("pageNumber")?.toInt() ?: 1
                 val quality = call.argument<Number>("quality")?.toInt() ?: DEFAULT_QUALITY
+                val initialPositionMs = call.argument<Number>("initialPositionMs")?.toLong()
                 if (buildVideoPageUrl(bvid) == null) {
                     result.error("invalid_bvid", "请输入有效的 BV 号。", null)
                 } else if (cid == null || cid <= 0L) {
@@ -245,6 +246,8 @@ class NativePlaybackController(
                     result.error("invalid_page", "请选择有效的分P。", null)
                 } else if (quality <= 0) {
                     result.error("invalid_quality", "请选择有效的清晰度。", null)
+                } else if (initialPositionMs != null && initialPositionMs < 0L) {
+                    result.error("invalid_position", "初始播放位置不能为负数。", null)
                 } else {
                     openVideo(
                         bvid = bvid,
@@ -254,6 +257,7 @@ class NativePlaybackController(
                         title = call.argument<String>("title").orEmpty(),
                         partTitle = call.argument<String>("partTitle").orEmpty(),
                         ownerName = call.argument<String>("ownerName").orEmpty(),
+                        initialPositionMs = initialPositionMs,
                     )
                     result.success(null)
                 }
@@ -610,6 +614,10 @@ class NativePlaybackController(
                 }
                 refreshPictureInPictureParams()
                 emitPlaybackState()
+                if (playbackState == Player.STATE_READY) {
+                    // ready 快照携带一次恢复结果供 Flutter 提示，后续心跳不再重复传播旧位置。
+                    restoredPositionMs = 0L
+                }
             }
 
             /** 倍速由 App 或系统控制端改变时同步最新数值。 */
@@ -907,7 +915,7 @@ class NativePlaybackController(
         )
     }
 
-    /** 保存旧分P、重置播放器，并请求新分P所选清晰度的 DASH 地址。 */
+    /** 保存旧分P、重置播放器，并优先按 Flutter 兜底位置请求新分P的 DASH 地址。 */
     private fun openVideo(
         bvid: String,
         cid: Long,
@@ -916,6 +924,7 @@ class NativePlaybackController(
         title: String,
         partTitle: String,
         ownerName: String,
+        initialPositionMs: Long?,
     ) {
         ensurePlayer()
         ensureTexture()
@@ -932,7 +941,9 @@ class NativePlaybackController(
         currentOwnerName = ownerName
         requestedQuality = quality
         currentQuality = quality
-        pendingStartPositionMs = loadSavedPlaybackPosition(bvid, cid)
+        pendingStartPositionMs = initialPositionMs
+            ?.let(PlaybackResumePolicy::normalizeRequestedPosition)
+            ?: loadSavedPlaybackPosition(bvid, cid)
         restoredPositionMs = pendingStartPositionMs
         saveCurrentPartSelection()
         resumeAfterPrepare = true
@@ -2218,6 +2229,10 @@ class NativePlaybackController(
                 },
                 "aspectRatio" to videoAspectRatio.toDouble(),
                 "restoredPositionMs" to restoredPositionMs,
+                "isRestoringPosition" to PlaybackResumePolicy.shouldReportRestoring(
+                    restoredPositionMs = restoredPositionMs,
+                    playbackPrepared = playbackPrepared,
+                ),
                 "isInPictureInPicture" to isInPictureInPicture,
                 "message" to playbackMessage,
             ),
@@ -2227,6 +2242,8 @@ class NativePlaybackController(
     /** 将错误状态连同用户能理解的说明发送到 Flutter 播放页面。 */
     private fun reportError(message: String) {
         playbackPrepared = false
+        pendingStartPositionMs = 0L
+        restoredPositionMs = 0L
         playbackPhase = PHASE_ERROR
         playbackMessage = message
         resumeAfterPrepare = false
@@ -2254,7 +2271,7 @@ class NativePlaybackController(
             return
         }
         lastProgressSaveElapsedMs = now
-        if (duration - position <= COMPLETED_REMAINING_MS) {
+        if (PlaybackResumePolicy.shouldClearStoredPosition(position, duration)) {
             clearSavedPlaybackProgress(currentBvid, currentCid)
             return
         }
@@ -2268,14 +2285,12 @@ class NativePlaybackController(
     private fun loadSavedPlaybackPosition(bvid: String, cid: Long): Long {
         val position = progressPreferences.getLong(progressPositionKey(bvid, cid), 0L)
         val duration = progressPreferences.getLong(progressDurationKey(bvid, cid), 0L)
-        if (position < MIN_RESUME_POSITION_MS ||
-            duration <= 0L ||
-            duration - position <= COMPLETED_REMAINING_MS
-        ) {
+        val normalizedPosition = PlaybackResumePolicy.normalizeStoredPosition(position, duration)
+        if (normalizedPosition == 0L) {
             clearSavedPlaybackProgress(bvid, cid)
             return 0L
         }
-        return position.coerceAtMost(duration)
+        return normalizedPosition
     }
 
     /** 保存整支视频最后观看的分P，使下次进入时先打开同一分P。 */
@@ -2492,8 +2507,6 @@ class NativePlaybackController(
         private const val CACHE_CAPACITY_PREFERENCE_KEY = "media_cache_capacity_bytes"
         private const val STATE_TICK_INTERVAL_MS = 500L
         private const val PROGRESS_SAVE_INTERVAL_MS = 500L
-        private const val MIN_RESUME_POSITION_MS = 1L
-        private const val COMPLETED_REMAINING_MS = 3_000L
         private const val NETWORK_TIMEOUT_MS = 15_000
         private const val MEDIA_CONNECT_TIMEOUT_MS = 20_000
         private const val MEDIA_READ_TIMEOUT_MS = 25_000

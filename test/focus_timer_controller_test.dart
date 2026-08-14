@@ -8,6 +8,7 @@ import 'package:focubili/models/focus_session.dart';
 import 'package:focubili/services/focus_session_service.dart';
 import 'package:focubili/services/focus_notification_service.dart';
 import 'package:focubili/services/focus_preferences_service.dart';
+import 'package:focubili/services/windows_focus_notification_service.dart';
 
 /// 提供可手动推进的本地时间，测试无需真实等待几十分钟。
 class _MutableFocusClock {
@@ -303,6 +304,36 @@ void main() {
     );
   });
 
+  /// 验证 Windows 未取得微软受限功能授权时只要求手动启动，且不会调用伪切换通道。
+  test('Windows 专注未授权时返回手动启动结果', () async {
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final FocusPreferencesService focusPreferencesService =
+        FocusPreferencesService(preferencesLoader: () async => preferences);
+    await focusPreferencesService.saveDoNotDisturbEnabled(true);
+    final FocusTimerController controller = FocusTimerController(
+      tickInterval: const Duration(days: 1),
+      notificationService: FocusNotificationService(
+        windowsBackend: WindowsFocusNotificationBackend(
+          client: _ControllerWindowsNotificationClient(),
+        ),
+      ),
+      focusPreferencesService: focusPreferencesService,
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await controller.startFocus(
+      goal: 'Windows 手动专注',
+      duration: const Duration(minutes: 25),
+      sourceBvid: 'BV1WINDOWS',
+      sourcePartCid: 26100,
+    );
+
+    expect(
+      await controller.ensureDoNotDisturbForActiveFocus(),
+      FocusDoNotDisturbResult.manualWindowsRequired,
+    );
+  });
+
   /// 验证首页“今日专注”只计算午夜后的部分，不把整段跨日任务算到今天。
   test('今日专注时长正确拆分跨午夜活动任务', () async {
     final _MutableFocusClock clock = _MutableFocusClock(
@@ -419,4 +450,41 @@ void main() {
       const Duration(minutes: 15),
     );
   });
+}
+
+/// 为控制器测试提供不接触真实 Windows Toast 的最小通知客户端。
+class _ControllerWindowsNotificationClient
+    implements WindowsNotificationClient {
+  /// 控制器测试不需要 MSIX 包身份。
+  @override
+  bool get hasPackageIdentity => false;
+
+  /// 模拟 Toast 后端可初始化，系统专注能力仍由独立服务保守报告。
+  @override
+  Future<bool> initialize() async => true;
+
+  /// 控制器测试不会真正显示通知。
+  @override
+  Future<void> show({
+    required int id,
+    required String title,
+    required String body,
+  }) async {}
+
+  /// 控制器测试不会安排未来通知。
+  @override
+  Future<void> schedule({
+    required int id,
+    required String title,
+    required String body,
+    required DateTime scheduledAt,
+  }) async {}
+
+  /// 控制器测试没有需要取消的通知。
+  @override
+  Future<void> cancel(int id) async {}
+
+  /// 控制器测试不会打开真实 Windows 设置。
+  @override
+  Future<void> openSettings() async {}
 }

@@ -62,7 +62,7 @@ class MainActivity : FlutterActivity() {
         deferredDeepLink = null
     }
 
-    /** `singleTask` Activity 收到新 VIEW Intent 时复用现有 Flutter 页面处理链接。 */
+    /** `singleTask` Activity 收到新链接或分享文本时复用现有 Flutter 页面处理。 */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -75,12 +75,18 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    /** 只接受 Android VIEW 操作的数据 URI，启动器 Intent 不会被误当成深链。 */
+    /** 从 VIEW 数据或 SEND 纯文本中读取外部内容，启动器 Intent 不会被误当成深链。 */
     private fun externalLinkFromIntent(intent: Intent?): String? {
-        if (intent?.action != Intent.ACTION_VIEW) {
-            return null
+        val rawValue = when (intent?.action) {
+            Intent.ACTION_VIEW -> intent.dataString
+            Intent.ACTION_SEND -> if (intent.type == "text/plain") {
+                intent.getStringExtra(Intent.EXTRA_TEXT)
+            } else {
+                null
+            }
+            else -> null
         }
-        return intent.dataString?.trim()?.takeIf(String::isNotEmpty)
+        return rawValue?.trim()?.takeIf(String::isNotEmpty)
     }
 
     /** 把 Android 13 通知权限结果交给专注通知控制器，再保留 Flutter 默认处理。 */

@@ -6,7 +6,7 @@ import '../../features/notes/video_notes_page.dart';
 import '../../features/profile/cache_management_page.dart';
 import '../../features/profile/about_page.dart';
 import '../../features/profile/problem_diagnostics_page.dart';
-import '../../features/profile/android_permission_management_page.dart';
+import '../../features/profile/system_capabilities_page.dart';
 import '../../features/profile/login_page.dart';
 import '../../features/profile/personalization_settings_page.dart';
 import '../../features/profile/watch_history_page.dart';
@@ -21,7 +21,8 @@ abstract final class AppRoutes {
   static const String cacheManagement = '/settings/cache';
   static const String about = '/settings/about';
   static const String problemDiagnostics = '/settings/about/diagnostics';
-  static const String androidPermissions = '/settings/permissions';
+  static const String systemCapabilities = '/settings/permissions';
+  static const String androidPermissions = systemCapabilities;
   static const String personalizationSettings = '/settings/personalization';
   static const String watchHistory = '/history';
   static const String videoNotes = '/notes';
@@ -73,11 +74,10 @@ abstract final class AppRouter {
           builder: (BuildContext context) => const ProblemDiagnosticsPage(),
           settings: settings,
         );
-      case AppRoutes.androidPermissions:
+      case AppRoutes.systemCapabilities:
         return MaterialPageRoute<void>(
-          // 权限管理页构建函数集中展示申请、检查、取消入口和后台提醒保护说明。
-          builder: (BuildContext context) =>
-              const AndroidPermissionManagementPage(),
+          // 系统能力页构建函数按平台展示 Android 权限或 Windows Toast 与包身份。
+          builder: (BuildContext context) => const SystemCapabilitiesPage(),
           settings: settings,
         );
       case AppRoutes.personalizationSettings:

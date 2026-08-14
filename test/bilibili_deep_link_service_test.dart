@@ -70,6 +70,51 @@ void main() {
     expect(target?.initialPosition, const Duration(milliseconds: 9500));
   });
 
+  /// B站 App 的整段分享文案应提取短链、展开后复用标准视频解析规则。
+  test('解析 B站 App 分享文本中的 b23 短链', () async {
+    final BilibiliIncomingLinkResolver resolver = BilibiliIncomingLinkResolver(
+      expandShortLink: (Uri shortLink) async {
+        expect(shortLink, Uri.parse('https://b23.tv/JIiOlgT'));
+        return Uri.parse(
+          'https://www.bilibili.com/video/BV1GJ411x7h7/?p=2&t=9.5',
+        );
+      },
+    );
+
+    final BilibiliVideoDeepLinkTarget? target = await resolver.resolve(
+      '这可能是你最后一次看关于行动力的视频 https://b23.tv/JIiOlgT',
+    );
+
+    expect(target?.bvid, 'BV1GJ411x7h7');
+    expect(target?.partPageNumber, 2);
+    expect(target?.initialPosition, const Duration(milliseconds: 9500));
+  });
+
+  /// 分享正文中的标准链接和中文句末标点应被正确分开，不需要短链网络请求。
+  test('提取分享文本中的标准 B站链接', () async {
+    final BilibiliIncomingLinkResolver resolver = BilibiliIncomingLinkResolver(
+      expandShortLink: (Uri _) async => fail('标准链接不应展开短链'),
+    );
+
+    final BilibiliVideoDeepLinkTarget? target = await resolver.resolve(
+      '推荐：https://www.bilibili.com/video/BV1GJ411x7h7/。',
+    );
+
+    expect(target?.bvid, 'BV1GJ411x7h7');
+  });
+
+  /// 非 B站短链即使含有伪造 BV 字样也不能绕过主机白名单。
+  test('拒绝其他网站分享文本', () async {
+    final BilibiliIncomingLinkResolver resolver = BilibiliIncomingLinkResolver(
+      expandShortLink: (Uri _) async => fail('其他网站不应展开短链'),
+    );
+
+    expect(
+      await resolver.resolve('看看 https://example.com/video/BV1GJ411x7h7'),
+      isNull,
+    );
+  });
+
   /// 非视频 Scheme、其他网站和损坏编号不能触发应用内导航。
   test('拒绝非视频或非 B站链接', () {
     expect(BilibiliDeepLinkParser.parse('bilibili://space/123'), isNull);

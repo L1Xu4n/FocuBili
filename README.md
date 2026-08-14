@@ -5,14 +5,15 @@
 <h1 align="center">FocuBili · 焦点哔哩</h1>
 
 <p align="center">
-  一个强调主动搜索与专注观看的第三方 B 站 Android 客户端。
+  一个强调主动搜索与专注观看的第三方 B 站 Android 与 Windows 客户端。
 </p>
 
 <p align="center">
   <a href="https://github.com/L1Xu4n/FocuBili/releases"><img src="https://img.shields.io/github/v/release/L1Xu4n/FocuBili?display_name=tag&sort=semver" alt="GitHub Release"></a>
-  <img src="https://img.shields.io/badge/version-v1.3.1-2EA44F" alt="Current version v1.3.1">
+  <img src="https://img.shields.io/badge/version-v1.4.0-2EA44F" alt="Current version v1.4.0">
   <img src="https://img.shields.io/badge/Flutter-3.44.6-02569B?logo=flutter" alt="Flutter 3.44.6">
   <img src="https://img.shields.io/badge/Android-7.0+-3DDC84?logo=android" alt="Android 7.0+">
+  <img src="https://img.shields.io/badge/Windows-10%201809+-0078D4?logo=windows" alt="Windows 10 1809+">
   <a href="https://qm.qq.com/q/szv665wx7W"><img src="https://img.shields.io/badge/QQ%E7%BE%A4-1055054828-12B7F5?logo=tencentqq&logoColor=white" alt="官方QQ群 1055054828"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="GPL-3.0"></a>
 </p>
@@ -28,6 +29,20 @@ FocuBili 希望保留“主动找到一支视频并认真看完”这件事本�
 - 搜索、BV 号和视频链接是主要入口；
 - 播放页优先保留视频、选集、简介和必要控制；
 - 账号数据功能以只读为主，不伪装点赞、投币、收藏或关注写操作。
+
+## v1.4.0 更新内容
+
+- 首个完整 Windows 客户端：原生桌面窗口、单实例保护、B 站 DASH 播放、画质与倍速、字幕弹幕、全屏和键盘快捷键均已接入。
+- Windows 使用 B 站官方扫码登录，并把确认后的 Cookie 写入系统加密凭据存储；播放、收藏、关注、订阅和 UP 主页共用同一登录态。
+- 专注完成与未来提醒接入 Windows Toast；设置页按平台展示系统能力、播放缓冲、诊断和更新入口，不再显示 Android 专属权限文案。
+- 提供无需管理员权限的 x64 EXE 安装器和带 VC++ 运行库的便携 ZIP；安装、覆盖更新、启动、单实例和卸载闭环均已在本机通过。
+- MSIX 身份、图标和 Toast 激活结构已经完成，但正式 MSIX 仍需可信代码签名或 Microsoft Store 签名。
+- Android 补齐通知插件要求的 Java 核心库 desugaring，Windows 依赖不会再阻断 Android 构建。
+- 播放器新增当前分 P 循环播放，以及按分钟或播放次数定时暂停。
+- Android 支持从 B 站系统分享面板直接跳转焦点哔哩，并可安全展开 `b23.tv` 短链。
+- 重构跨端续播与进度保存逻辑，统一首次定位、完播归零和异步保存顺序。
+
+Windows EXE 安装器、便携版与 Android APK 可从 [GitHub Release v1.4.0](https://github.com/L1Xu4n/FocuBili/releases/tag/v1.4.0) 下载。完整变化与校验结果见 [v1.4.0 发布说明](docs/RELEASE_NOTES_v1.4.0.md)。
 
 ## v1.3.1 更新内容
 
@@ -225,10 +240,11 @@ APK SHA-256：`4998C8EB9EF7F69C336F2A0BA50EF1772D6F154899506B4D2C10FFF5F91CFE95`
 - 不同 Android 厂商的全屏安全区、画中画和后台恢复仍需要更多真机验证。
 - Android 提醒已支持重启恢复和厂商后台保护引导，但不同品牌的自启动、电量限制和待机调度仍需在更多真机持续验收。
 - Release APK 目前使用本机现有签名配置，仅适合学习测试；正式长期分发前应配置并妥善保存独立签名密钥。
+- Windows EXE 安装器和便携 ZIP 均可使用，但未进行商业代码签名时 Windows 可能显示“未知发布者”；MSIX 在取得可信代码签名或 Microsoft Store 签名前不会作为正式安装包分发，也不会要求用户信任测试根证书。
 
 ## 下载
 
-可以在 [GitHub Releases](https://github.com/L1Xu4n/FocuBili/releases) 下载公开构建。
+可以在 [GitHub Releases](https://github.com/L1Xu4n/FocuBili/releases) 下载 Android APK、Windows x64 EXE 安装器与便携 ZIP。普通用户优先使用安装器；便携版请完整解压后运行 `FocuBili.exe`，不要只复制单个 exe。
 
 ## 本地构建
 
@@ -239,6 +255,9 @@ APK SHA-256：`4998C8EB9EF7F69C336F2A0BA50EF1772D6F154899506B4D2C10FFF5F91CFE95`
 - JDK 21
 - Android SDK 36
 - Android NDK 28.2.13676358
+- Windows 10 1809 或更高版本
+- Visual Studio 2022 Build Tools（使用 C++ 的桌面开发、Windows SDK 与 ATL）
+- Inno Setup 6（仅在生成 Windows EXE 安装器时需要）
 
 Android 构建链固定为 Gradle 8.14.3、Android Gradle Plugin 8.11.1 和 Kotlin 2.2.20；最低支持 Android 7.0（API 24）。项目当前使用 Flutter 3.44.6，构建命令见上方说明。
 
@@ -251,6 +270,14 @@ flutter pub get
 dart analyze
 flutter test
 flutter build apk --release
+flutter build windows --release
+dart run msix:create --build-windows false
+```
+
+Windows Release 编译完成后，在 PowerShell 生成包含 VC++ 运行库的便携 ZIP 和普通用户 EXE 安装器：
+
+```powershell
+.\windows\installer\build_windows_packages.ps1
 ```
 
 Release APK 默认生成在：
@@ -258,6 +285,17 @@ Release APK 默认生成在：
 ```text
 build/app/outputs/flutter-apk/app-release.apk
 ```
+
+Windows Release 目录和安装产物默认生成在：
+
+```text
+build/windows/x64/runner/Release/
+build/windows/x64/installer/FocuBili-v1.4.0-windows-x64-setup.exe
+build/windows/x64/installer/FocuBili-v1.4.0-windows-x64-portable.zip
+build/windows/x64/installer/FocuBili-v1.4.0-windows-x64.msix
+```
+
+打包脚本会从 `pubspec.yaml` 自动读取版本，并把 Visual C++ 运行库加入安装器和便携版。`FocuBili.exe` 依赖同目录的 DLL 与 `data/`，不能单独分发。正式 MSIX 必须改用与清单 Publisher 一致的可信证书签名。
 
 ### 发布新版本时的 App 更新摘要
 
@@ -273,12 +311,13 @@ build/app/outputs/flutter-apk/app-release.apk
 
 标记外可以继续编写完整更新日志；App 不会把整篇 Markdown 或未标记正文显示在启动提示中。
 
-Windows 用户建议把仓库放在不含中文和空格的目录。若必须使用中文目录，可以先映射英文盘符再构建：
+建议把仓库放在不含中文和空格的目录。若构建工具遇到路径编码问题，可以先映射英文盘符再构建：
 
 ```powershell
 subst X: "C:\path\to\FocuBili"
 Set-Location X:\
 flutter build apk --release
+flutter build windows --release
 ```
 
 ## 项目结构

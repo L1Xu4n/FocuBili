@@ -1,10 +1,15 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../core/layout/adaptive_page_frame.dart';
+import '../../platform/app_platform.dart';
+import '../../platform/platform_capabilities.dart';
+import '../../platform/platform_services.dart';
 import '../../services/bilibili_auth_service.dart';
+import '../../services/bilibili_qr_login_service.dart';
 import '../../services/bilibili_request_policy.dart';
 
 /// 标识登录首页提供的手机号、密码和 Cookie 三种入口。
@@ -12,11 +17,17 @@ enum _LoginMode { phone, password, cookie }
 
 /// 提供登录方式选择，并把账号密码与验证码交给 B 站官方页面处理。
 class LoginPage extends StatefulWidget {
-  /// 创建登录页面；账号切换时可在首帧后直接打开官方网页登录。
-  const LoginPage({super.key, this.openOfficialLoginOnStart = false});
+  /// 创建登录页面；测试可注入平台，账号切换时可自动打开官方登录。
+  const LoginPage({
+    super.key,
+    this.openOfficialLoginOnStart = false,
+    this.platformServices,
+  });
 
   /// 表示此页是否由“切换账号”打开，并应优先进入 B 站官方网页登录。
   final bool openOfficialLoginOnStart;
+
+  final PlatformServices? platformServices;
 
   /// 创建保存登录方式、Cookie 输入和提交状态的页面状态。
   @override
@@ -33,11 +44,28 @@ class _LoginPageState extends State<LoginPage> {
   bool _openedOfficialLoginOnStart = false;
   String? _errorMessage;
 
+  /// 返回注入的平台装配器或进程共享的真实平台装配器。
+  PlatformServices get _platformServices =>
+      widget.platformServices ?? PlatformServices.current;
+
+  /// 读取当前平台已经实现的登录体验。
+  LoginExperience get _loginExperience =>
+      _platformServices.capabilities.loginExperience;
+
+  /// 判断当前是否应使用不依赖 WebView 的官方扫码登录。
+  bool get _usesQrLogin => _loginExperience == LoginExperience.officialQrCode;
+
+  /// 判断当前页是否运行在 Windows，并需要额外提供官方账号密码入口。
+  bool get _isWindows => _platformServices.platform == AppPlatform.windows;
+
+  /// 判断当前平台是否还没有安全可用的登录实现。
+  bool get _loginUnavailable => _loginExperience == LoginExperience.unavailable;
+
   /// 首帧完成后根据账号切换入口打开官方登录页，避免在构建期间重复导航。
   @override
   void initState() {
     super.initState();
-    if (!widget.openOfficialLoginOnStart) {
+    if (!widget.openOfficialLoginOnStart || _loginUnavailable) {
       return;
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -68,12 +96,21 @@ class _LoginPageState extends State<LoginPage> {
     });
   }
 
-  /// 打开 B 站官方登录页，成功抓取会话后把账号信息返回“我的”页面。
-  Future<void> _openOfficialLogin() async {
+  /// 打开当前选择对应的 B 站官方登录页，成功后把账号信息返回“我的”页面。
+  Future<void> _openOfficialLogin({_LoginMode? requestedMode}) async {
+    if (_loginUnavailable) {
+      return;
+    }
+    final _LoginMode mode = requestedMode ?? _mode;
+    if (_isWindows && mode == _LoginMode.password) {
+      return;
+    }
     final BilibiliAccount? account = await Navigator.of(context).push(
       MaterialPageRoute<BilibiliAccount>(
-        // 官方网页登录构建函数创建隔离的 WebView 登录页面。
-        builder: (BuildContext context) => const _OfficialWebLoginPage(),
+        // Windows 使用官方扫码接口，Android 继续创建隔离的 WebView 登录页面。
+        builder: (BuildContext context) => _usesQrLogin
+            ? const _OfficialQrLoginPage()
+            : const _OfficialWebLoginPage(),
       ),
     );
     if (!mounted || account == null) {
@@ -89,6 +126,9 @@ class _LoginPageState extends State<LoginPage> {
 
   /// 验证用户主动粘贴的 Cookie，成功后返回账号信息且不在 Flutter 中持久化原文。
   Future<void> _loginWithCookie() async {
+    if (_loginUnavailable) {
+      return;
+    }
     FocusScope.of(context).unfocus();
     setState(() {
       _submitting = true;
@@ -130,7 +170,11 @@ class _LoginPageState extends State<LoginPage> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          const Text('仅粘贴你自己账号的 Cookie。内容只写入本应用的 WebView 会话容器。'),
+          Text(
+            _usesQrLogin
+                ? '仅粘贴你自己账号的 Cookie。内容只写入 Windows 加密凭据存储。'
+                : '仅粘贴你自己账号的 Cookie。内容只写入本应用的 WebView 会话容器。',
+          ),
           const SizedBox(height: 14),
           TextField(
             controller: _cookieController,
@@ -161,6 +205,42 @@ class _LoginPageState extends State<LoginPage> {
         ],
       );
     }
+    if (_usesQrLogin && _mode != _LoginMode.password) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          const Text('使用手机 B 站 App 扫描官方二维码并确认。FocuBili 不会接触账号密码。'),
+          const SizedBox(height: 14),
+          FilledButton.icon(
+            // Windows 扫码按钮函数打开官方二维码并在确认后安全保存会话。
+            onPressed: () =>
+                _openOfficialLogin(requestedMode: _LoginMode.phone),
+            icon: const Icon(Icons.qr_code_2_rounded),
+            label: const Text('打开 B 站扫码登录'),
+          ),
+        ],
+      );
+    }
+    if (_isWindows && _mode == _LoginMode.password) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          const Text(
+            'Windows 密码登录：待开发',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 10),
+          const Text('当前网页登录会话接管仍不稳定，暂不开放。请使用扫码登录或 Cookie 登录。'),
+          const SizedBox(height: 14),
+          FilledButton.icon(
+            // 待开发按钮函数为空，避免用户继续进入不稳定的 WebView2 登录流程。
+            onPressed: null,
+            icon: const Icon(Icons.construction_rounded),
+            label: const Text('密码登录待开发'),
+          ),
+        ],
+      );
+    }
     final bool phoneMode = _mode == _LoginMode.phone;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -168,12 +248,14 @@ class _LoginPageState extends State<LoginPage> {
         Text(
           phoneMode
               ? '手机号登录为默认入口。短信、人机验证和账号信息都在 B 站官方页面中填写。'
+              : _isWindows
+              ? '密码不会交给 FocuBili。Windows 官方页面也支持短信和 QQ 登录。'
               : '密码不会交给 FocuBili。账号、密码和人机验证都由 B 站官方页面直接处理。',
         ),
         const SizedBox(height: 14),
         FilledButton.icon(
           // 官方登录按钮函数打开支持手机号、密码和验证码的 B 站页面。
-          onPressed: _openOfficialLogin,
+          onPressed: () => _openOfficialLogin(requestedMode: _mode),
           icon: Icon(
             phoneMode ? Icons.phone_android_rounded : Icons.password_rounded,
           ),
@@ -183,9 +265,81 @@ class _LoginPageState extends State<LoginPage> {
     );
   }
 
+  /// 根据平台创建登录方式选项；Windows 用“扫码”代替手机号并额外提供官方密码网页。
+  List<ButtonSegment<_LoginMode>> _buildLoginSegments() {
+    if (_usesQrLogin) {
+      return const <ButtonSegment<_LoginMode>>[
+        ButtonSegment<_LoginMode>(
+          value: _LoginMode.phone,
+          icon: Icon(Icons.qr_code_2_rounded),
+          label: Text('扫码'),
+        ),
+        ButtonSegment<_LoginMode>(
+          value: _LoginMode.password,
+          icon: Icon(Icons.password_rounded),
+          label: Text('密码'),
+        ),
+        ButtonSegment<_LoginMode>(
+          value: _LoginMode.cookie,
+          icon: Icon(Icons.cookie_outlined),
+          label: Text('Cookie'),
+        ),
+      ];
+    }
+    return const <ButtonSegment<_LoginMode>>[
+      ButtonSegment<_LoginMode>(
+        value: _LoginMode.phone,
+        icon: Icon(Icons.phone_android_rounded),
+        label: Text('手机号'),
+      ),
+      ButtonSegment<_LoginMode>(
+        value: _LoginMode.password,
+        icon: Icon(Icons.password_rounded),
+        label: Text('密码'),
+      ),
+      ButtonSegment<_LoginMode>(
+        value: _LoginMode.cookie,
+        icon: Icon(Icons.cookie_outlined),
+        label: Text('Cookie'),
+      ),
+    ];
+  }
+
+  /// 为尚未接入登录与安全存储的平台创建不会触发网络或原生插件的说明页。
+  Widget _buildUnavailableLogin() {
+    return Scaffold(
+      appBar: AppBar(title: const Text('登录 B 站账号')),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              const Icon(Icons.no_accounts_outlined, size: 48),
+              const SizedBox(height: 16),
+              Text(
+                '${_platformServices.platform.displayName} 暂不支持账号登录',
+                style: Theme.of(context).textTheme.titleLarge,
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                '安全登录和 Cookie 存储接入完成后，这里才会开放登录入口。',
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   /// 创建登录方式选择、隐私说明和当前登录表单。
   @override
   Widget build(BuildContext context) {
+    if (_loginUnavailable) {
+      return _buildUnavailableLogin();
+    }
     return Scaffold(
       appBar: AppBar(title: const Text('登录 B 站账号')),
       body: AdaptivePageFrame(
@@ -194,23 +348,7 @@ class _LoginPageState extends State<LoginPage> {
           padding: const EdgeInsets.all(20),
           children: <Widget>[
             SegmentedButton<_LoginMode>(
-              segments: const <ButtonSegment<_LoginMode>>[
-                ButtonSegment<_LoginMode>(
-                  value: _LoginMode.phone,
-                  icon: Icon(Icons.phone_android_rounded),
-                  label: Text('手机号'),
-                ),
-                ButtonSegment<_LoginMode>(
-                  value: _LoginMode.password,
-                  icon: Icon(Icons.password_rounded),
-                  label: Text('密码'),
-                ),
-                ButtonSegment<_LoginMode>(
-                  value: _LoginMode.cookie,
-                  icon: Icon(Icons.cookie_outlined),
-                  label: Text('Cookie'),
-                ),
-              ],
+              segments: _buildLoginSegments(),
               selected: <_LoginMode>{_mode},
               // 登录方式选择函数切换当前表单但不自动提交任何数据。
               onSelectionChanged: _selectMode,
@@ -226,19 +364,243 @@ class _LoginPageState extends State<LoginPage> {
             ],
             const SizedBox(height: 24),
             const Divider(),
-            const SizedBox(height: 12),
-            OutlinedButton.icon(
-              // 网页登录入口函数允许用户直接使用 B 站完整官方登录流程。
-              onPressed: _openOfficialLogin,
-              icon: const Icon(Icons.language_rounded),
-              label: const Text('打开 B 站网页登录'),
-            ),
+            if (_mode == _LoginMode.cookie) ...<Widget>[
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                // Cookie 模式的备用官方入口函数按平台打开扫码或 B 站完整网页流程。
+                onPressed: () =>
+                    _openOfficialLogin(requestedMode: _LoginMode.phone),
+                icon: Icon(
+                  _usesQrLogin
+                      ? Icons.qr_code_2_rounded
+                      : Icons.language_rounded,
+                ),
+                label: Text(_usesQrLogin ? '打开 B 站扫码登录' : '打开 B 站网页登录'),
+              ),
+            ],
             const SizedBox(height: 10),
-            const Text(
-              '说明：当前原生手机号/密码接口尚未直接接入；这样可以避免 App 接触密码，并确保验证码由官方页面完成。',
+            Text(
+              _usesQrLogin
+                  ? '说明：Windows 密码登录仍在开发；扫码登录可用，成功会话通过 Windows 加密存储保护。'
+                  : '说明：当前原生手机号/密码接口尚未直接接入；这样可以避免 App 接触密码，并确保验证码由官方页面完成。',
               style: TextStyle(fontSize: 12),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 在 Windows 中展示 B 站官方扫码二维码，并在手机确认后验证和保存账号会话。
+class _OfficialQrLoginPage extends StatefulWidget {
+  /// 创建不接触账号密码的 Windows 扫码登录页面。
+  const _OfficialQrLoginPage();
+
+  /// 创建二维码会话、轮询计时器和状态文字。
+  @override
+  State<_OfficialQrLoginPage> createState() => _OfficialQrLoginPageState();
+}
+
+/// 管理二维码生成、两秒轮询、过期刷新和登录成功返回。
+class _OfficialQrLoginPageState extends State<_OfficialQrLoginPage> {
+  final BilibiliQrLoginService _qrService = BilibiliQrLoginService();
+  final BilibiliAuthService _authService = BilibiliAuthService();
+  BilibiliQrLoginSession? _session;
+  Timer? _pollTimer;
+  bool _loading = true;
+  bool _polling = false;
+  bool _expired = false;
+  String _statusMessage = '正在生成官方登录二维码…';
+
+  /// 首次进入页面时立即生成二维码。
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_refreshQrCode());
+  }
+
+  /// 停止轮询计时器，避免页面关闭后继续访问网络。
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
+  }
+
+  /// 请求新二维码并启动固定两秒轮询；失败时保留可重试按钮。
+  Future<void> _refreshQrCode() async {
+    _pollTimer?.cancel();
+    setState(() {
+      _loading = true;
+      _expired = false;
+      _session = null;
+      _statusMessage = '正在生成官方登录二维码…';
+    });
+    try {
+      final BilibiliQrLoginSession session = await _qrService.generate();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _session = session;
+        _loading = false;
+        _statusMessage = '请使用手机 B 站 App 扫描二维码。';
+      });
+      _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+        unawaited(_pollLoginState());
+      });
+      unawaited(_pollLoginState());
+    } on BilibiliQrLoginException catch (error) {
+      _showFailure(error.message);
+    } catch (_) {
+      _showFailure('暂时无法生成二维码，请检查网络后重试。');
+    }
+  }
+
+  /// 轮询一次扫码状态；确认成功后再调用账号接口验证 Cookie 并写入加密存储。
+  Future<void> _pollLoginState() async {
+    final BilibiliQrLoginSession? session = _session;
+    if (_polling || session == null || _expired) {
+      return;
+    }
+    _polling = true;
+    try {
+      final BilibiliQrLoginPollResult result = await _qrService.poll(
+        session.key,
+      );
+      if (!mounted || _session?.key != session.key) {
+        return;
+      }
+      if (result.status == BilibiliQrLoginStatus.expired) {
+        _pollTimer?.cancel();
+        setState(() {
+          _expired = true;
+          _statusMessage = result.message;
+        });
+        return;
+      }
+      setState(() => _statusMessage = result.message);
+      if (result.status != BilibiliQrLoginStatus.confirmed) {
+        return;
+      }
+      _pollTimer?.cancel();
+      final BilibiliAccount account = await _authService.loginWithCookie(
+        result.cookieHeader,
+      );
+      if (mounted) {
+        Navigator.of(context).pop(account);
+      }
+    } on BilibiliAuthException catch (error) {
+      _showFailure(error.message);
+    } on BilibiliQrLoginException catch (error) {
+      _showFailure(error.message);
+    } catch (_) {
+      _showFailure('扫码登录暂时失败，请刷新二维码后重试。');
+    } finally {
+      _polling = false;
+    }
+  }
+
+  /// 停止当前轮询并展示不包含 Cookie 或二维码密钥的错误说明。
+  void _showFailure(String message) {
+    if (!mounted) {
+      return;
+    }
+    _pollTimer?.cancel();
+    setState(() {
+      _loading = false;
+      _expired = true;
+      _statusMessage = message;
+    });
+  }
+
+  /// 创建二维码、当前状态和手动刷新入口，并限制内容宽度适配桌面窗口。
+  @override
+  Widget build(BuildContext context) {
+    final BilibiliQrLoginSession? session = _session;
+    return Scaffold(
+      appBar: AppBar(title: const Text('B 站扫码登录')),
+      body: AdaptivePageFrame(
+        maxWidth: 620,
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Card(
+              child: Padding(
+                padding: const EdgeInsets.all(28),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    Text(
+                      '使用手机 B 站 App 扫码',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 20),
+                    SizedBox.square(
+                      dimension: 260,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: session == null
+                              ? Center(
+                                  child: _loading
+                                      ? const CircularProgressIndicator()
+                                      : const Icon(
+                                          Icons.qr_code_2_rounded,
+                                          size: 96,
+                                          color: Colors.black26,
+                                        ),
+                                )
+                              : QrImageView(
+                                  key: const Key('bilibili-login-qr-code'),
+                                  data: session.url,
+                                  version: QrVersions.auto,
+                                  backgroundColor: Colors.white,
+                                  eyeStyle: const QrEyeStyle(
+                                    eyeShape: QrEyeShape.square,
+                                    color: Colors.black,
+                                  ),
+                                  dataModuleStyle: const QrDataModuleStyle(
+                                    dataModuleShape: QrDataModuleShape.square,
+                                    color: Colors.black,
+                                  ),
+                                ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Text(
+                      _statusMessage,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: _expired
+                            ? Theme.of(context).colorScheme.error
+                            : null,
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    if (_expired)
+                      FilledButton.icon(
+                        // 刷新按钮函数废弃旧键并生成全新的官方二维码。
+                        onPressed: _loading ? null : _refreshQrCode,
+                        icon: const Icon(Icons.refresh_rounded),
+                        label: const Text('刷新二维码'),
+                      ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      '二维码和确认均由 B 站官方接口处理；FocuBili 不会读取你的密码或验证码。',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     );
