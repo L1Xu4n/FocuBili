@@ -28,7 +28,9 @@ void main() {
 
     expect(
       workflow,
-      contains("startsWith(github.event.head_commit.message, 'release: publish v')"),
+      contains(
+        "startsWith(github.event.head_commit.message, 'release: publish v')",
+      ),
     );
     expect(workflow, contains('git tag -a'));
     expect(workflow, contains('gh release create'));
