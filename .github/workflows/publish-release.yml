@@ -1,0 +1,95 @@
+name: Publish FocuBili Release
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - docs/RELEASE_NOTES_v*.md
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: focubili-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: "${{ startsWith(github.event.head_commit.message, 'release: publish v') }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout final release metadata
+        uses: actions/checkout@v6
+
+      - name: Resolve version and successful build
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          version="$(sed -nE 's/^version: ([0-9]+\.[0-9]+\.[0-9]+)\+[0-9]+$/\1/p' pubspec.yaml)"
+          test -n "$version"
+          notes="docs/RELEASE_NOTES_v${version}.md"
+          test -f "$notes"
+          run_id="$(gh run list --workflow 'FocuBili Release Build' --branch master --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'tag=v%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'notes=%s\n' "$notes" >> "$GITHUB_OUTPUT"
+          printf 'run_id=%s\n' "$run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Download verified build artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.release.outputs.run_id }}
+        shell: bash
+        run: |
+          gh run download "$RUN_ID" --name focubili-release-android --dir staging/android
+          gh run download "$RUN_ID" --name focubili-release-windows --dir staging/windows
+
+      - name: Prepare public release assets
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        shell: bash
+        run: |
+          mkdir release
+          mv staging/android/app-release.apk "release/FocuBili-v${VERSION}-android.apk"
+          mv "staging/windows/FocuBili-v${VERSION}-windows-x64-setup.exe" release/
+          mv "staging/windows/FocuBili-v${VERSION}-windows-x64-portable.zip" release/
+          test "$(find release -maxdepth 1 -type f | wc -l)" -eq 3
+          sha256sum release/*
+
+      - name: Create annotated release tag
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG"; then
+            git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+            test "$(git rev-list -n 1 "$TAG")" = "$GITHUB_SHA"
+          else
+            git tag -a "$TAG" -m "FocuBili v${VERSION}" "$GITHUB_SHA"
+            git push origin "$TAG"
+          fi
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+          NOTES: ${{ steps.release.outputs.notes }}
+        shell: bash
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "FocuBili v${VERSION}" --notes-file "$NOTES"
+            gh release upload "$TAG" release/* --clobber
+          else
+            gh release create "$TAG" release/* --verify-tag --title "FocuBili v${VERSION}" --notes-file "$NOTES"
+          fi
