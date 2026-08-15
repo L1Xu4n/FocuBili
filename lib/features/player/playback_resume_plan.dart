@@ -59,7 +59,7 @@ class PlaybackResumePlan {
     final VideoPart? savedPart = _findPartByCid(video.parts, savedState?.cid);
     final Duration savedPosition = savedPart == null || savedState == null
         ? Duration.zero
-        : normalizeStoredPosition(savedState.position, savedPart.duration);
+        : normalizeBackendPosition(savedState.position);
     final bool canUseHistory =
         requestedPartCid == null &&
         requestedPosition == null &&
@@ -144,6 +144,11 @@ class PlaybackResumePlan {
     Duration duration,
   ) {
     return PlaybackResumePolicy.normalizeStoredPosition(position, duration);
+  }
+
+  /// 接收播放后端已按真实媒体时长校验的位置，只再次拦截非正数而不依赖详情接口时长。
+  static Duration normalizeBackendPosition(Duration position) {
+    return PlaybackResumePolicy.normalizeRequestedPosition(position);
   }
 
   /// 校验用户明确指定的位置；最终上限由掌握真实媒体时长的平台播放器裁剪。

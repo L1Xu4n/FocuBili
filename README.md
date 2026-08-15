@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/L1Xu4n/FocuBili/releases"><img src="https://img.shields.io/github/v/release/L1Xu4n/FocuBili?display_name=tag&sort=semver" alt="GitHub Release"></a>
-  <img src="https://img.shields.io/badge/version-v1.4.0-2EA44F" alt="Current version v1.4.0">
+  <img src="https://img.shields.io/badge/version-v1.4.1-2EA44F" alt="Current version v1.4.1">
   <img src="https://img.shields.io/badge/Flutter-3.44.6-02569B?logo=flutter" alt="Flutter 3.44.6">
   <img src="https://img.shields.io/badge/Android-7.0+-3DDC84?logo=android" alt="Android 7.0+">
   <img src="https://img.shields.io/badge/Windows-10%201809+-0078D4?logo=windows" alt="Windows 10 1809+">
@@ -29,6 +29,15 @@ FocuBili 希望保留“主动找到一支视频并认真看完”这件事本�
 - 搜索、BV 号和视频链接是主要入口；
 - 播放页优先保留视频、选集、简介和必要控制；
 - 账号数据功能以只读为主，不伪装点赞、投币、收藏或关注写操作。
+
+## v1.4.1 更新内容
+
+- 修复 Android 端记笔记时，自动保存会导致输入法意外关闭的问题。
+- 修复从观看记录进入视频或切换分 P 时，无法正确跳转到已保存播放位置的问题。
+- Windows 画面亮度改用播放器内的软件遮罩调节，不再意外修改显示器硬件亮度。
+- 更新简报不再限制最多三条，可以完整展示任意行数的版本摘要。
+
+Windows EXE 安装器、便携版与 Android APK 可从 [GitHub Release v1.4.1](https://github.com/L1Xu4n/FocuBili/releases/tag/v1.4.1) 下载。完整变化与校验结果见 [v1.4.1 发布说明](docs/RELEASE_NOTES_v1.4.1.md)。
 
 ## v1.4.0 更新内容
 
@@ -290,22 +299,23 @@ Windows Release 目录和安装产物默认生成在：
 
 ```text
 build/windows/x64/runner/Release/
-build/windows/x64/installer/FocuBili-v1.4.0-windows-x64-setup.exe
-build/windows/x64/installer/FocuBili-v1.4.0-windows-x64-portable.zip
-build/windows/x64/installer/FocuBili-v1.4.0-windows-x64.msix
+build/windows/x64/installer/FocuBili-v1.4.1-windows-x64-setup.exe
+build/windows/x64/installer/FocuBili-v1.4.1-windows-x64-portable.zip
+build/windows/x64/installer/FocuBili-v1.4.1-windows-x64.msix
 ```
 
 打包脚本会从 `pubspec.yaml` 自动读取版本，并把 Visual C++ 运行库加入安装器和便携版。`FocuBili.exe` 依赖同目录的 DLL 与 `data/`，不能单独分发。正式 MSIX 必须改用与清单 Publisher 一致的可信证书签名。
 
 ### 发布新版本时的 App 更新摘要
 
-更新检查会读取 GitHub 最新 Release 正文，但只展示以下两个固定标记之间的最多三条内容。以后发布每个正式版本时，都必须把简短、面向普通用户的更新内容放在 Release 正文开头：
+更新检查会读取 GitHub 最新 Release 正文，并保留以下两个固定标记之间的全部条目。关于页会完整展示这些内容；冷启动提示只显示第一条，并提供“查看”入口。以后发布每个正式版本时，都必须把简短、面向普通用户的更新内容放在 Release 正文开头：
 
 ```markdown
 <!-- focubili-update-summary:start -->
 - 第一条重要更新，建议不超过 80 个字
 - 第二条重要更新
 - 第三条重要更新
+- 后续可以继续添加任意条目
 <!-- focubili-update-summary:end -->
 ```
 

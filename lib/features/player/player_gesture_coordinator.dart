@@ -27,9 +27,9 @@ mixin _PlayerGestureCoordinator on State<PlayerPage> {
   VideoShotPreview? _videoShotPreview;
   bool _videoShotLoading = false;
   int _videoShotRequestToken = 0;
-  double _brightness = 0.5;
+  double _brightness = 1;
   double _volume = 0.5;
-  double _verticalGestureStartLevel = 0.5;
+  double _verticalGestureStartLevel = 1;
   double _verticalGestureDelta = 0;
   _VerticalAdjustmentMode _verticalAdjustmentMode =
       _VerticalAdjustmentMode.none;

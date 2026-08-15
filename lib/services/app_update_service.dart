@@ -46,7 +46,7 @@ class AppUpdateResult {
   final Uri? downloadUrl;
   final String downloadActionLabel;
 
-  /// 保存 Release 正文中专门提供给 App 展示的最多三条简短更新内容。
+  /// 保存 Release 正文中专门提供给 App 展示的全部简短更新内容。
   final List<String> releaseHighlights;
   final String? message;
 
@@ -114,7 +114,6 @@ class AppUpdateService {
       '<!-- focubili-update-summary:start -->';
   static const String releaseSummaryEndMarker =
       '<!-- focubili-update-summary:end -->';
-  static const int _maximumReleaseHighlights = 3;
   static const int _maximumReleaseHighlightLength = 80;
 
   final Future<Map<String, Object?>> Function()? _releaseLoader;
@@ -298,9 +297,6 @@ class AppUpdateService {
         continue;
       }
       highlights.add(highlight);
-      if (highlights.length >= _maximumReleaseHighlights) {
-        break;
-      }
     }
     return List<String>.unmodifiable(highlights);
   }

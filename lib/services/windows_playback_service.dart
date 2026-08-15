@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:screen_brightness/screen_brightness.dart';
 import 'package:volume_controller/volume_controller.dart';
 
 import '../models/video_preview.dart';
@@ -44,6 +43,10 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
   static const Duration _audioDecoderReadyTimeout = Duration(seconds: 5);
   static const Duration _mediaErrorHealthCheckTimeout = Duration(seconds: 1);
   static const Duration _resumePositionTolerance = Duration(seconds: 1);
+  static const Duration _resumePositionCorrectionTimeout = Duration(seconds: 2);
+  static const Duration _resumePositionPollInterval = Duration(
+    milliseconds: 100,
+  );
 
   final BilibiliDesktopPlaybackSourceService _sourceService;
   final WindowsPlaybackProgressStore _progressStore;
@@ -79,6 +82,7 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
   Media? _activeAudioMedia;
   String _activeAudioTrackToken = '';
   bool _externalAudioNeedsReload = false;
+  Duration _pendingResumePositionAfterDecode = Duration.zero;
 
   /// 返回 Windows 播放状态流，页面只读且不能直接控制底层 Player。
   @override
@@ -109,7 +113,7 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
     return _videoController.id.value;
   }
 
-  /// 保存上一支视频进度、请求新分P的 DASH 地址，并优先使用调用方提供的安全恢复位置。
+  /// 保存旧分P并打开目标分P；调用方未指定位置时读取该 CID 自己的 Windows 进度。
   @override
   Future<void> openVideo(
     VideoPreview video, {
@@ -137,15 +141,20 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
     if (!_isCurrentSourceRequest(generation)) {
       return;
     }
-    _currentVideo = video;
-    _currentPart = targetPart;
-    _currentQuality = quality;
-    final SavedPlaybackState? savedState = await loadSavedPlaybackState(
-      video.bvid,
-    );
+    // 先暂停旧媒体并保留旧身份，避免加载新记录期间把旧视频位置写到新 BV。
+    await _player.pause();
     if (!_isCurrentSourceRequest(generation)) {
       return;
     }
+    final SavedPlaybackState? savedState = initialPosition == null
+        ? await _progressStore.loadPart(video.bvid, targetPart.cid)
+        : null;
+    if (!_isCurrentSourceRequest(generation)) {
+      return;
+    }
+    _currentVideo = video;
+    _currentPart = targetPart;
+    _currentQuality = quality;
     _restoredPosition =
         initialPosition ??
         (savedState?.cid == targetPart.cid
@@ -173,10 +182,18 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
       return;
     }
     await _player.play();
-    if (_activeAudioMedia != null &&
-        _isCurrentSourceRequest(generation) &&
-        !await _waitForDecodedAudio(generation)) {
-      await _handleMediaError();
+    if (_activeAudioMedia != null && _isCurrentSourceRequest(generation)) {
+      if (!await _waitForDecodedAudio(generation)) {
+        await _handleMediaError();
+        return;
+      }
+      await _restoreResumePositionAfterDecode(
+        generation,
+        _pendingResumePositionAfterDecode,
+      );
+      if (_isCurrentSourceRequest(generation)) {
+        _pendingResumePositionAfterDecode = Duration.zero;
+      }
     }
   }
 
@@ -189,7 +206,7 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
     await _saveCurrentProgress(force: true);
   }
 
-  /// 把相对快进量加到当前位置并限制在视频有效范围内。
+  /// 把相对快进量加到当前位置，并同步暂停清晰度重开仍待复核的目标位置。
   @override
   Future<void> seekBy(Duration offset) async {
     _ensureAvailable();
@@ -204,10 +221,14 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
       Duration(milliseconds: targetMilliseconds),
       duration,
     );
-    await _player.seek(Duration(milliseconds: targetMilliseconds));
+    final Duration targetPosition = Duration(milliseconds: targetMilliseconds);
+    await _player.seek(targetPosition);
+    if (_pendingResumePositionAfterDecode > Duration.zero) {
+      _pendingResumePositionAfterDecode = targetPosition;
+    }
   }
 
-  /// 跳转到指定绝对位置，并限制负数或超过结尾的请求。
+  /// 跳转到指定绝对位置，并同步暂停清晰度重开仍待复核的目标位置。
   @override
   Future<void> seekTo(Duration position) async {
     _ensureAvailable();
@@ -220,7 +241,11 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
       Duration(milliseconds: targetMilliseconds),
       duration,
     );
-    await _player.seek(Duration(milliseconds: targetMilliseconds));
+    final Duration targetPosition = Duration(milliseconds: targetMilliseconds);
+    await _player.seek(targetPosition);
+    if (_pendingResumePositionAfterDecode > Duration.zero) {
+      _pendingResumePositionAfterDecode = targetPosition;
+    }
   }
 
   /// 从完播状态再次点击播放时回到零点，并先广播 ready 以建立新的播放轮次。
@@ -306,34 +331,27 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
   Future<SavedPlaybackState?> loadSavedPlaybackState(String bvid) =>
       _progressStore.load(bvid);
 
-  /// 读取 Windows 应用亮度与系统媒体音量；插件不可用时返回安全中间值。
+  /// 返回软件亮度覆盖层的默认值，并读取 Windows 系统媒体音量。
   @override
   Future<SystemPlaybackLevels> getSystemPlaybackLevels() async {
-    double brightness = 0.5;
     double volume = 0.5;
-    try {
-      brightness = await ScreenBrightness.instance.application;
-    } catch (_) {
-      brightness = 0.5;
-    }
     try {
       volume = await VolumeController.instance.getVolume();
     } catch (_) {
       volume = 0.5;
     }
     return SystemPlaybackLevels(
-      brightness: brightness.clamp(0.01, 1).toDouble(),
+      // Windows 不再读取或写入物理显示器亮度，画面亮度由播放器覆盖层处理。
+      brightness: 1,
       volume: volume.clamp(0, 1).toDouble(),
     );
   }
 
-  /// 调整当前 FocuBili 窗口亮度，不修改 Windows 的全局显示器设置。
+  /// 保留统一播放接口；Windows 的亮度实际由页面软件覆盖层绘制。
   @override
   Future<void> setScreenBrightness(double brightness) {
     _ensureAvailable();
-    return ScreenBrightness.instance.setApplicationScreenBrightness(
-      brightness.clamp(0.01, 1).toDouble(),
-    );
+    return Future<void>.value();
   }
 
   /// 调整 Windows 系统媒体音量，并隐藏移动端专用的系统音量浮层请求。
@@ -372,7 +390,7 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
     return output.path;
   }
 
-  /// 保存最后进度、释放 media_kit 与全部订阅，并恢复应用窗口默认亮度。
+  /// 保存最后进度、释放 media_kit 与全部订阅，不触碰 Windows 显示器亮度。
   @override
   Future<void> dispose() async {
     if (_disposed) {
@@ -389,11 +407,6 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
         await subscription.cancel();
       }
       _subscriptions.clear();
-      try {
-        await ScreenBrightness.instance.resetApplicationScreenBrightness();
-      } catch (_) {
-        // Windows 亮度插件不可用时无需阻塞播放器资源释放。
-      }
       await _player.dispose();
     } finally {
       _activeAudioMedia = null;
@@ -608,6 +621,7 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
     if (!_isCurrentSourceRequest(generation)) {
       return;
     }
+    _pendingResumePositionAfterDecode = resumePosition;
     // 外部音轨挂载可能改变底层时间轴；保持暂停并只在发生明显偏移时补一次跳转。
     await _player.pause();
     if (_needsResumePositionCorrection(resumePosition)) {
@@ -616,7 +630,7 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
     if (!_isCurrentSourceRequest(generation)) {
       return;
     }
-    if (shouldPlay) {
+    if (shouldPlay && _shouldPlayAfterFallback) {
       await _player.play();
     } else {
       await _player.pause();
@@ -625,8 +639,14 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
       return;
     }
     // media_kit 的命令返回只代表已接收；实际播放时还要等音视频解码都建立，避免把残缺线路当成功。
-    if (shouldPlay && !await _waitForDecodedAudio(generation)) {
-      throw const DesktopPlaybackSourceException('当前音视频线路未能建立解码。');
+    if (shouldPlay && _shouldPlayAfterFallback) {
+      if (!await _waitForDecodedAudio(generation)) {
+        throw const DesktopPlaybackSourceException('当前音视频线路未能建立解码。');
+      }
+      await _restoreResumePositionAfterDecode(generation, resumePosition);
+      if (_isCurrentSourceRequest(generation)) {
+        _pendingResumePositionAfterDecode = Duration.zero;
+      }
     }
     _externalAudioNeedsReload = false;
   }
@@ -640,6 +660,60 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
         (_player.state.position.inMilliseconds - resumePosition.inMilliseconds)
             .abs();
     return differenceMilliseconds > _resumePositionTolerance.inMilliseconds;
+  }
+
+  /// 音频真正建立解码后再次检查时间轴；若被外部音轨拉回目标之前，则暂停、重试定位并恢复播放。
+  Future<void> _restoreResumePositionAfterDecode(
+    int generation,
+    Duration resumePosition,
+  ) async {
+    if (!_isCurrentSourceRequest(generation) ||
+        !_isResumePositionBehindTarget(resumePosition)) {
+      return;
+    }
+    await _player.pause();
+    if (!_isCurrentSourceRequest(generation)) {
+      return;
+    }
+    final Duration targetPosition = _clampResumePositionToMediaDuration(
+      resumePosition,
+    );
+    final DateTime deadline = DateTime.now().add(
+      _resumePositionCorrectionTimeout,
+    );
+    do {
+      await _player.seek(targetPosition);
+      if (!_isCurrentSourceRequest(generation)) {
+        return;
+      }
+      await Future<void>.delayed(_resumePositionPollInterval);
+    } while (_isResumePositionBehindTarget(targetPosition) &&
+        DateTime.now().isBefore(deadline));
+    if (!_isCurrentSourceRequest(generation)) {
+      return;
+    }
+    if (_shouldPlayAfterFallback) {
+      await _player.play();
+    } else {
+      await _player.pause();
+    }
+  }
+
+  /// 只把明显落在目标之前视为恢复失败；正常播放超过目标位置不需要向后跳。
+  bool _isResumePositionBehindTarget(Duration resumePosition) {
+    if (resumePosition <= Duration.zero) {
+      return false;
+    }
+    return _player.state.position + _resumePositionTolerance < resumePosition;
+  }
+
+  /// 使用播放器已经解析出的真实时长裁剪越界目标，避免外部明确位置或旧记录让纠偏永远无法完成。
+  Duration _clampResumePositionToMediaDuration(Duration resumePosition) {
+    final Duration duration = _player.state.duration;
+    if (duration > Duration.zero && resumePosition > duration) {
+      return duration;
+    }
+    return resumePosition;
   }
 
   /// 等待 media_kit 暴露当前线路的音视频解码结果；零散底层错误只作为线索，不抢先否定已成功的播放。
@@ -827,6 +901,7 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
     _restoredPosition = Duration.zero;
     _activeAudioTrackToken = '';
     _externalAudioNeedsReload = false;
+    _pendingResumePositionAfterDecode = Duration.zero;
     return _sourceGeneration;
   }
 
@@ -876,9 +951,21 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
     _stateController.add(_snapshot);
   }
 
-  /// 按固定间隔把当前分P与位置写入偏好；离开、暂停和切换时可强制立即保存。
+  /// 保存稳定进度；待解码时仅允许暂停或退出用目标位置强制保存，避免写入瞬态零值。
   Future<void> _saveCurrentProgress({bool force = false}) async {
-    if (_disposed || _currentVideo == null || _currentPart == null) {
+    if (_disposed ||
+        _opening ||
+        _restoringPosition ||
+        _currentVideo == null ||
+        _currentPart == null) {
+      return;
+    }
+    final Duration pendingResumePosition = _pendingResumePositionAfterDecode;
+    if (!force && pendingResumePosition > Duration.zero) {
+      return;
+    }
+    final Duration duration = _player.state.duration;
+    if (duration <= Duration.zero) {
       return;
     }
     final DateTime now = DateTime.now();
@@ -893,8 +980,10 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
           bvid: _currentVideo!.bvid,
           cid: _currentPart!.cid,
           pageNumber: _currentPart!.pageNumber,
-          position: _player.state.position,
-          duration: _player.state.duration,
+          position: pendingResumePosition > Duration.zero
+              ? pendingResumePosition
+              : _player.state.position,
+          duration: duration,
         );
     _progressSaveQueue = _progressSaveQueue.then((_) async {
       try {

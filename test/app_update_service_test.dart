@@ -47,7 +47,8 @@ void main() {
     );
   });
 
-  test('GitHub 最新版本高于安装版本时返回 Release 地址', () async {
+  /// 验证更新检查返回 Release 地址，并完整保留超过三条的简报内容。
+  test('GitHub 最新版本高于安装版本时返回全部更新简报', () async {
     final AppUpdateService service = AppUpdateService(
       releaseLoader: () async => <String, Object?>{
         'tag_name': 'v0.3.0',
@@ -58,7 +59,8 @@ void main() {
 - 优化平板播放器和账号卡片
 - 修复画幅设置，并查看 [完整说明](https://example.com)
 - 增加简略更新内容
-- 第四条不会进入 App
+- 支持任意行数的更新简报
+- 第五条也会进入 App
 <!-- focubili-update-summary:end -->
 ''',
       },
@@ -73,6 +75,8 @@ void main() {
       '优化平板播放器和账号卡片',
       '修复画幅设置，并查看 完整说明',
       '增加简略更新内容',
+      '支持任意行数的更新简报',
+      '第五条也会进入 App',
     ]);
   });
 

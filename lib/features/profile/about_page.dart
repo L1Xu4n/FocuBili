@@ -83,7 +83,7 @@ class _AboutPageState extends State<AboutPage> {
     };
   }
 
-  /// 把 Release 摘要绘制为最多三条紧凑列表，未按约定提供摘要时不显示空区域。
+  /// 把 Release 摘要全部绘制为紧凑列表，未按约定提供摘要时不显示空区域。
   Widget _buildUpdateHighlights(AppUpdateResult result) {
     return Column(
       key: const Key('about-update-highlights'),

@@ -106,7 +106,7 @@ mixin _PlayerVideoCoordinator
     );
   }
 
-  /// 保存旧分P进度后打开新分P，并等待新分P就绪后更新同一 BV 号的观看记录。
+  /// 保存旧分P后打开新分P，由播放后端按目标 CID 恢复该分P自己的进度。
   @override
   Future<void> _changePart(VideoPart part) async {
     if (part.cid == _currentPart.cid) {
@@ -141,7 +141,6 @@ mixin _PlayerVideoCoordinator
         _activeVideo,
         part: part,
         quality: _currentQuality,
-        initialPosition: Duration.zero,
       );
     } on PlatformException catch (error) {
       _showPlaybackError('无法切换分P：${error.message ?? error.code}');
@@ -443,6 +442,8 @@ mixin _PlayerVideoCoordinator
       _notesOpen = false;
       _notesLoading = false;
       _noteSaving = false;
+      _noteAutoSaving = false;
+      _noteAutoSavePending = false;
       _currentVideoNotes = const <VideoNote>[];
       _editingVideoNote = null;
       _noteTitleController.clear();
