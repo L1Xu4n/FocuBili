@@ -49,6 +49,17 @@ jobs:
       - name: Build release APK
         run: flutter build apk --release --no-pub
 
+      - name: Verify release APK metadata
+        shell: bash
+        run: |
+          apk='build/app/outputs/flutter-apk/app-release.apk'
+          build_tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          test -f "$apk"
+          printf 'APK_SIZE=%s\n' "$(stat -c '%s' "$apk")"
+          printf 'APK_SHA256=%s\n' "$(sha256sum "$apk" | cut -d ' ' -f 1 | tr '[:lower:]' '[:upper:]')"
+          "$build_tools/aapt" dump badging "$apk" | grep '^package:'
+          "$build_tools/apksigner" verify --verbose --print-certs "$apk"
+
       - name: Upload release APK
         uses: actions/upload-artifact@v4
         with:
