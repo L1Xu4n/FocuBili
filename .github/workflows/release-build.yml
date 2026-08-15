@@ -7,6 +7,7 @@ on:
     paths:
       - pubspec.yaml
       - .github/workflows/release-build.yml
+      - windows/installer/build_windows_packages.ps1
   workflow_dispatch:
 
 permissions:
