@@ -67,38 +67,59 @@ function Find-InnoCompiler {
 
 <#
 .SYNOPSIS
-Finds the newest x64 Visual C++ runtime bundled with Visual Studio 2022.
+Finds the newest x64 Visual C++ runtime bundled with an installed Visual Studio.
 #>
 function Find-VcRuntimeDirectory {
-    $visualStudioRoots = @(
-        @(
-            (Join-Path $env:ProgramFiles 'Microsoft Visual Studio\2022'),
-            (Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\2022')
-        ) | Where-Object { Test-Path -LiteralPath $_ -PathType Container }
-    )
-    if ($visualStudioRoots.Count -eq 0) {
-        throw 'Visual Studio 2022 was not found, so the portable VC++ runtime cannot be bundled.'
+    $installationPaths = @()
+    $vswhereCommand = Get-Command 'vswhere.exe' -ErrorAction SilentlyContinue
+    $vswherePath = if ($null -ne $vswhereCommand) {
+        $vswhereCommand.Source
+    } else {
+        Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    }
+    if (Test-Path -LiteralPath $vswherePath -PathType Leaf) {
+        $vswhereInstallations = & $vswherePath -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath -format value
+        $installationPaths += @(
+            $vswhereInstallations |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        )
     }
 
-    $runtimeDirectories = $visualStudioRoots |
-        ForEach-Object {
-            Get-ChildItem -LiteralPath $_ -Directory
-        } |
-        ForEach-Object {
-            $redistRoot = Join-Path $_.FullName 'VC\Redist\MSVC'
-            if (Test-Path -LiteralPath $redistRoot -PathType Container) {
-                Get-ChildItem -LiteralPath $redistRoot -Directory |
-                    ForEach-Object {
-                        Join-Path $_.FullName 'x64\Microsoft.VC143.CRT'
-                    } |
-                    Where-Object { Test-Path -LiteralPath $_ -PathType Container }
+    foreach ($programFilesRoot in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        if ([string]::IsNullOrWhiteSpace($programFilesRoot)) {
+            continue
+        }
+        $visualStudioRoot = Join-Path $programFilesRoot 'Microsoft Visual Studio'
+        if (-not (Test-Path -LiteralPath $visualStudioRoot -PathType Container)) {
+            continue
+        }
+        Get-ChildItem -LiteralPath $visualStudioRoot -Directory |
+            ForEach-Object {
+                Get-ChildItem -LiteralPath $_.FullName -Directory
+            } |
+            ForEach-Object {
+                $installationPaths += $_.FullName
             }
-        } |
-        Sort-Object -Descending
+    }
 
-    $runtimeDirectory = $runtimeDirectories | Select-Object -First 1
+    $runtimeDirectories = foreach ($installationPath in ($installationPaths | Sort-Object -Unique)) {
+        $redistRoot = Join-Path $installationPath 'VC\Redist\MSVC'
+        if (-not (Test-Path -LiteralPath $redistRoot -PathType Container)) {
+            continue
+        }
+        foreach ($redistVersion in (Get-ChildItem -LiteralPath $redistRoot -Directory)) {
+            $x64Root = Join-Path $redistVersion.FullName 'x64'
+            if (-not (Test-Path -LiteralPath $x64Root -PathType Container)) {
+                continue
+            }
+            Get-ChildItem -LiteralPath $x64Root -Directory -Filter 'Microsoft.VC*.CRT' |
+                ForEach-Object { $_.FullName }
+        }
+    }
+
+    $runtimeDirectory = $runtimeDirectories | Sort-Object -Descending | Select-Object -First 1
     if ([string]::IsNullOrWhiteSpace($runtimeDirectory)) {
-        throw 'The x64 Microsoft.VC143.CRT runtime directory was not found.'
+        throw 'An x64 Visual C++ runtime directory was not found in the installed Visual Studio instances.'
     }
     return (Resolve-Path -LiteralPath $runtimeDirectory).Path
 }
