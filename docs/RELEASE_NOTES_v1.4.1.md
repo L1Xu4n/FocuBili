@@ -40,25 +40,25 @@ Windows 包版本：`1.4.1.16`
 ### Windows x64 EXE 安装器
 
 - 文件：`FocuBili-v1.4.1-windows-x64-setup.exe`
-- 大小：待正式构建后填写。
-- SHA-256：待正式构建后填写。
+- 大小：27,809,763 字节。
+- SHA-256：`403FAB155025E5AAE0DB005336CE3DCADD629D4A56DC6E53CC9F5B6D66D222E6`。
 - 使用：按当前用户安装到本机，不需要管理员权限；提供开始菜单入口、可选桌面快捷方式和标准卸载程序。
 - 签名：当前候选包未使用商业代码签名证书，Windows 可能显示“未知发布者”，但不需要导入测试根证书。
 
 ### Windows x64 便携版
 
 - 文件：`FocuBili-v1.4.1-windows-x64-portable.zip`
-- 大小：待正式构建后填写。
-- SHA-256：待正式构建后填写。
+- 大小：37,867,610 字节。
+- SHA-256：`743D9847B7063A4B845F25F54B2CC280C1E56B638D8027960E1A22D1C0594013`。
 - 使用：完整解压后运行目录内的 `FocuBili.exe`，不能只复制单个 exe。
 
 ### Android APK
 
 - 文件：`FocuBili-v1.4.1-android.apk`
-- 大小：待正式构建后填写。
-- SHA-256：待正式构建后填写。
+- 大小：68,975,671 字节。
+- SHA-256：`73E019677C90FF2DBA984A6690095C840D7FC9FDFBF5356DC4CED39C35687C30`。
 - 版本：`1.4.1 (16)`；包名：`com.focubili.app`；最低 Android 7.0 / API 24。
-- 签名：待正式构建后校验；当前项目仍沿用 Android Debug 证书签署 Release，不适合作为应用商店正式签名。
+- 签名：APK Signature Scheme v2 校验通过，单一签名者为 `C=US, O=Android, CN=Android Debug`，证书 SHA-256 为 `BCD0F91A1F1511DE8A8A5C952346D41FA0097E930181D4F0687490E63B6CCDC8`；不适合作为应用商店正式签名。
 
 ### 未公开分发的 Windows MSIX
 
@@ -70,7 +70,10 @@ Windows 包版本：`1.4.1.16`
 - `flutter analyze --no-pub`：无问题。
 - `flutter test --no-pub`：444 项全部通过。
 - Android `:app:testDebugUnitTest`：使用 Android Studio JDK 21 构建并全部通过。
-- 待完成 Android 与 Windows Release 构建、产物校验和实机冒烟。
+- `dev` 最终 CI `31908798641`：Dart quality（含 445 项测试）、Android Debug 与 Windows Debug 全部通过。
+- `master` 最终 CI `31909197738` 与 Release Build `31909197723` 全部通过；Windows Server 2025 / Visual Studio 2026 Runner 成功生成 EXE 安装器和便携 ZIP。
+- Android APK 版本、包名、v2 签名、文件大小和 SHA-256 已由 Release Build 校验；Windows 两项产物的大小和 SHA-256 已由打包脚本校验。
+- `adb devices -l` 当前没有在线设备，因此本轮无法执行最终 APK 安装冒烟；当前受限环境也无法把 Actions 中转 ZIP 下载到本机执行 Windows 安装/启动冒烟。
 
 ## 已知边界
 
