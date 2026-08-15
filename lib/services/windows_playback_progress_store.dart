@@ -28,10 +28,32 @@ class WindowsPlaybackProgressStore {
   /// 创建使用 SharedPreferences 的 Windows 播放进度仓库。
   const WindowsPlaybackProgressStore();
 
-  /// 读取最后分P和安全续播位置；旧数据缺少时长时保留分P但从零开始。
+  /// 读取该 BV 最后播放的分P和安全续播位置，用于播放器首次打开时选择分P。
   Future<SavedPlaybackState?> load(String bvid) async {
     final SharedPreferences preferences = await SharedPreferences.getInstance();
-    final String? encoded = preferences.getString(_progressKey(bvid));
+    return _decodeSavedState(preferences.getString(_progressKey(bvid)));
+  }
+
+  /// 按 BV 与 CID 读取目标分P进度；没有新键时兼容仍保存在 BV 单槽中的旧记录。
+  Future<SavedPlaybackState?> loadPart(String bvid, int cid) async {
+    if (cid <= 0) {
+      return null;
+    }
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final SavedPlaybackState? partState = _decodeSavedState(
+      preferences.getString(_partProgressKey(bvid, cid)),
+    );
+    if (partState?.cid == cid) {
+      return partState;
+    }
+    final SavedPlaybackState? legacyState = _decodeSavedState(
+      preferences.getString(_progressKey(bvid)),
+    );
+    return legacyState?.cid == cid ? legacyState : null;
+  }
+
+  /// 把单条 JSON 记录转换成安全播放状态，损坏或旧版缺少时长时采用保守结果。
+  SavedPlaybackState? _decodeSavedState(String? encoded) {
     if (encoded == null || encoded.isEmpty) {
       return null;
     }
@@ -62,26 +84,52 @@ class WindowsPlaybackProgressStore {
     }
   }
 
-  /// 写入固定快照，并在接近结尾或时长未知时把位置归零但保留最后分P。
+  /// 同时写入最后分P与独立分P进度；时长未知时保留旧记录，避免瞬态覆盖。
   Future<void> save(WindowsPlaybackProgressSnapshot snapshot) async {
+    if (snapshot.duration <= Duration.zero) {
+      return;
+    }
     final Duration position = PlaybackResumePolicy.normalizeStoredPosition(
       snapshot.position,
       snapshot.duration,
     );
     final SharedPreferences preferences = await SharedPreferences.getInstance();
-    await preferences.setString(
-      _progressKey(snapshot.bvid),
-      jsonEncode(<String, int>{
-        'cid': snapshot.cid,
-        'pageNumber': snapshot.pageNumber,
-        'positionMs': position.inMilliseconds.clamp(0, 1 << 31),
-        'durationMs': snapshot.duration.inMilliseconds.clamp(0, 1 << 31),
-      }),
+    final String latestProgressKey = _progressKey(snapshot.bvid);
+    final String? previousEncoded = preferences.getString(latestProgressKey);
+    final SavedPlaybackState? previousState = _decodeSavedState(
+      previousEncoded,
     );
+    if (previousEncoded != null &&
+        previousState != null &&
+        previousState.cid != snapshot.cid) {
+      final String previousPartKey = _partProgressKey(
+        snapshot.bvid,
+        previousState.cid,
+      );
+      if (!preferences.containsKey(previousPartKey)) {
+        await preferences.setString(previousPartKey, previousEncoded);
+      }
+    }
+    final String encoded = jsonEncode(<String, int>{
+      'cid': snapshot.cid,
+      'pageNumber': snapshot.pageNumber,
+      'positionMs': position.inMilliseconds.clamp(0, 1 << 31),
+      'durationMs': snapshot.duration.inMilliseconds.clamp(0, 1 << 31),
+    });
+    await preferences.setString(
+      _partProgressKey(snapshot.bvid, snapshot.cid),
+      encoded,
+    );
+    await preferences.setString(latestProgressKey, encoded);
   }
 
   /// 为单支 BV 视频生成与 Android 原生偏好相互隔离的 Windows 恢复键。
   String _progressKey(String bvid) {
     return 'windows_playback_state_${bvid.trim().toUpperCase()}';
+  }
+
+  /// 为同一 BV 下的单个 CID 生成独立进度键，防止不同分P互相覆盖。
+  String _partProgressKey(String bvid, int cid) {
+    return '${_progressKey(bvid)}_cid_$cid';
   }
 }

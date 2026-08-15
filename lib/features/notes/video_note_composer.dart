@@ -46,6 +46,7 @@ class VideoNoteComposer extends StatelessWidget {
     this.onDelete,
     this.compact = false,
     this.borderless = false,
+    this.inputEnabled,
   });
 
   final TextEditingController titleController;
@@ -74,6 +75,9 @@ class VideoNoteComposer extends StatelessWidget {
   final VoidCallback? onDelete;
   final bool compact;
   final bool borderless;
+
+  /// 控制标题和正文是否可编辑；为空时沿用 saving 状态，播放器自动保存时传入 true。
+  final bool? inputEnabled;
 
   /// 创建全屏使用的单行紧凑头部，把标题、时间和操作压缩到同一行。
   Widget _buildCompactHeader(BuildContext context) {
@@ -461,7 +465,7 @@ class VideoNoteComposer extends StatelessWidget {
         TextField(
           key: const Key('note-title-field'),
           controller: titleController,
-          enabled: !saving,
+          enabled: inputEnabled ?? !saving,
           // 标题变化函数只通知外层安排自动保存，不在输入每个字符时直接写磁盘。
           onChanged: onTitleChanged,
           maxLength: 80,
@@ -489,7 +493,7 @@ class VideoNoteComposer extends StatelessWidget {
         TextField(
           key: const Key('note-body-field'),
           controller: bodyController,
-          enabled: !saving,
+          enabled: inputEnabled ?? !saving,
           // 正文变化函数只通知外层安排自动保存，不在输入每个字符时直接写磁盘。
           onChanged: onBodyChanged,
           minLines: borderless ? (compact ? 4 : 3) : (compact ? 3 : 4),

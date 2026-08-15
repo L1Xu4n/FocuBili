@@ -45,6 +45,22 @@ void main() {
     expect(plan.positionSource, PlaybackResumePositionSource.platform);
   });
 
+  /// 平台后端已用真实媒体时长校验过位置，详情接口缺失时长不能把它再次清零。
+  test('平台合法进度不依赖详情接口时长', () {
+    final PlaybackResumePlan plan = PlaybackResumePlan.resolve(
+      video: _video(secondPartDuration: Duration.zero),
+      savedState: const SavedPlaybackState(
+        cid: 202,
+        pageNumber: 2,
+        position: Duration(seconds: 20),
+      ),
+    );
+
+    expect(plan.part.cid, 202);
+    expect(plan.position, const Duration(seconds: 20));
+    expect(plan.positionSource, PlaybackResumePositionSource.platform);
+  });
+
   /// 平台只有最后分P而没有合法时间点时，观看历史可以提供完整兜底。
   test('平台零进度时使用观看历史兜底', () {
     final PlaybackResumePlan plan = PlaybackResumePlan.resolve(
@@ -62,14 +78,14 @@ void main() {
     expect(plan.positionSource, PlaybackResumePositionSource.watchHistory);
   });
 
-  /// 平台记录距结尾三秒时只记住最后分P，不再恢复时间点。
-  test('距结尾三秒的平台进度从头播放', () {
+  /// 平台后端会先把距结尾三秒的记录归零，页面只恢复最后分P。
+  test('平台归零的完播进度只恢复最后分P', () {
     final PlaybackResumePlan plan = PlaybackResumePlan.resolve(
       video: _video(),
       savedState: const SavedPlaybackState(
         cid: 202,
         pageNumber: 2,
-        position: Duration(seconds: 117),
+        position: Duration.zero,
       ),
     );
 
@@ -90,17 +106,31 @@ void main() {
     expect(plan.position, Duration.zero);
     expect(plan.positionSource, PlaybackResumePositionSource.none);
   });
+
+  /// 观看历史缺少独立总时长，详情时长未知时应保守从头播放，避免直接落到结尾。
+  test('详情时长未知时观看历史不直接恢复', () {
+    final PlaybackResumePlan plan = PlaybackResumePlan.resolve(
+      video: _video(secondPartDuration: Duration.zero),
+      historyEntry: _history(position: const Duration(seconds: 30)),
+    );
+
+    expect(plan.part.cid, 101);
+    expect(plan.position, Duration.zero);
+    expect(plan.positionSource, PlaybackResumePositionSource.none);
+  });
 }
 
-/// 创建两个两分钟分P的稳定测试视频。
-VideoPreview _video() {
-  return const VideoPreview(
+/// 创建两个稳定测试分P，并允许模拟详情接口缺失第二P时长。
+VideoPreview _video({
+  Duration secondPartDuration = const Duration(minutes: 2),
+}) {
+  return VideoPreview(
     bvid: 'BV1GJ411x7h7',
     cid: 101,
     title: '续播测试视频',
     ownerName: '测试作者',
     parts: <VideoPart>[
-      VideoPart(
+      const VideoPart(
         pageNumber: 1,
         cid: 101,
         title: '第一P',
@@ -110,7 +140,7 @@ VideoPreview _video() {
         pageNumber: 2,
         cid: 202,
         title: '第二P',
-        duration: Duration(minutes: 2),
+        duration: secondPartDuration,
       ),
     ],
   );

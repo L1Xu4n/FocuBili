@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.4.0+15
+version: 1.4.1+16
 
 environment:
   # Flutter 3.44 随附 Dart 3.12；明确下限可避免旧工具链误用新的依赖锁定结果。
@@ -60,8 +60,6 @@ dependencies:
   media_kit: ^1.2.6
   media_kit_libs_windows_video: ^1.0.11
   media_kit_video: ^2.0.1
-  # 桌面播放页把亮度与系统音量手势映射到 Windows 可用实现。
-  screen_brightness: ^2.1.11
   shared_preferences: ^2.5.5
   timezone: ^0.11.1
   url_launcher: ^6.3.2
@@ -138,7 +136,7 @@ msix_config:
   display_name: 焦点哔哩
   publisher_display_name: L1Xu4n
   identity_name: com.focubili.app
-  msix_version: 1.4.0.15
+  msix_version: 1.4.1.16
   logo_path: assets/icon/focubili_icon.png
   trim_logo: false
   capabilities: internetClient
@@ -146,7 +144,7 @@ msix_config:
   architecture: x64
   os_min_version: 10.0.17763.0
   output_path: build/windows/x64/installer
-  output_name: FocuBili-v1.4.0-windows-x64
+  output_name: FocuBili-v1.4.1-windows-x64
   store: false
   install_certificate: false
   toast_activator:

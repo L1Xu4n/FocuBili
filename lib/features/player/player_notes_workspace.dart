@@ -19,6 +19,8 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
   bool _notesOverlayMounted = false;
   bool _notesLoading = false;
   bool _noteSaving = false;
+  bool _noteAutoSaving = false;
+  bool _noteAutoSavePending = false;
   bool _includeCurrentFrame = false;
   String? _noteFramePath;
   bool _fullscreenNoteListCollapsed = false;
@@ -228,7 +230,11 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
 
   /// 在标题或正文停止输入片刻后自动保存，避免频繁写入本机偏好设置。
   void _handleVideoNoteDraftChanged(String value) {
-    if (!_notesOpen || _noteSaving) {
+    if (!_notesOpen) {
+      return;
+    }
+    if (_noteAutoSaving || _noteSaving) {
+      _noteAutoSavePending = true;
       return;
     }
     _scheduleVideoNoteAutoSave();
@@ -306,8 +312,15 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
 
   /// 保存标题、正文、自动记录时间、视频位置和可选画面；自动保存不会反复弹出提示。
   Future<void> _saveVideoNote({bool automatic = false}) async {
-    if (_noteSaving) {
-      return;
+    if (automatic) {
+      if (_noteSaving || _noteAutoSaving) {
+        _noteAutoSavePending = true;
+        return;
+      }
+    } else {
+      if (_noteSaving || _noteAutoSaving) {
+        return;
+      }
     }
     final String enteredTitle = _noteTitleController.text.trim();
     final String body = _noteBodyController.text.trim();
@@ -318,13 +331,19 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
     if (enteredTitle.isEmpty && body.isEmpty) {
       return;
     }
+    if (automatic) {
+      _noteAutoSaving = true;
+    } else {
+      _noteSaving = true;
+    }
     final String title = enteredTitle.isEmpty ? '未命名笔记' : enteredTitle;
     final VideoNote? existing = _editingVideoNote;
     final int draftRevision = _noteDraftRevision;
     final bool includeFrame = _includeCurrentFrame;
     final int notePartCid = _notePartCid;
     final Duration notePosition = _notePosition;
-    setState(() => _noteSaving = true);
+    // 自动保存只锁定保存按钮，不禁用输入框，避免输入过程中键盘失去焦点。
+    setState(() {});
     String? framePath = includeFrame ? _noteFramePath : null;
     try {
       if (includeFrame && framePath == null && !automatic) {
@@ -367,15 +386,21 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
       if (!mounted) {
         return;
       }
+      final bool retryAutomaticSave = _noteAutoSavePending;
       setState(() {
         if (draftRevision == _noteDraftRevision) {
           _editingVideoNote = note;
           _noteFramePath = note.framePath;
         }
         _noteSaving = false;
+        _noteAutoSaving = false;
+        _noteAutoSavePending = false;
         _notesLoading = true;
       });
       await _loadCurrentVideoNotes();
+      if (retryAutomaticSave && mounted) {
+        _scheduleVideoNoteAutoSave();
+      }
       if (mounted && !automatic) {
         _showTransientSnackBar('笔记已保存到本机。');
       }
@@ -383,13 +408,29 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
       if (!mounted) {
         return;
       }
-      setState(() => _noteSaving = false);
+      final bool retryAutomaticSave = _noteAutoSavePending;
+      setState(() {
+        _noteSaving = false;
+        _noteAutoSaving = false;
+        _noteAutoSavePending = false;
+      });
+      if (retryAutomaticSave && mounted) {
+        _scheduleVideoNoteAutoSave();
+      }
       _showTransientSnackBar(error.message ?? '截取当前视频画面失败。');
     } catch (_) {
       if (!mounted) {
         return;
       }
-      setState(() => _noteSaving = false);
+      final bool retryAutomaticSave = _noteAutoSavePending;
+      setState(() {
+        _noteSaving = false;
+        _noteAutoSaving = false;
+        _noteAutoSavePending = false;
+      });
+      if (retryAutomaticSave && mounted) {
+        _scheduleVideoNoteAutoSave();
+      }
       _showTransientSnackBar('保存笔记失败，请稍后再试。');
     }
   }
@@ -457,7 +498,8 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
       createdAt: _editingVideoNote?.createdAt,
       includeFrame: _includeCurrentFrame,
       framePath: _noteFramePath,
-      saving: _noteSaving,
+      saving: _noteSaving || _noteAutoSaving,
+      inputEnabled: !_noteSaving,
       onIncludeFrameChanged: _setIncludeCurrentFrame,
       // 保存函数自动写入记录时间、视频时间点和用户选择的当前画面。
       onSave: () => unawaited(_saveVideoNote()),

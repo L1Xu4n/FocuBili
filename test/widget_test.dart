@@ -1784,13 +1784,14 @@ void main() {
     expect(find.byKey(const Key('retry-playback')), findsNothing);
   });
 
-  /// 验证播放器下方的两行选集能切换到第二P的 cid。
+  /// 验证页面内往返切分P时不传零位置，让后端恢复每个 CID 自己的进度。
   testWidgets('播放器可以切换多P', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final _FakePlaybackService service = _FakePlaybackService();
     await tester.pumpWidget(
       MaterialApp(
+        theme: ThemeData(splashFactory: NoSplash.splashFactory),
         home: PlayerPage(
           video: _createMultiPartVideo(),
           playbackService: service,
@@ -1810,6 +1811,13 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(service.openedCid, 137649200);
+    expect(service.openedInitialPositions.last, isNull);
+
+    await tester.tap(find.byKey(const Key('part-1')));
+    await tester.pumpAndSettle();
+
+    expect(service.openedCid, 137649199);
+    expect(service.openedInitialPositions.last, isNull);
   });
 
   /// 验证首页创建的任务只在用户确认关联且当前分P实际播放后开始计时。
@@ -2372,9 +2380,16 @@ void main() {
     expect(playerAfterDrag, playerBeforeDrag);
 
     await tester.enterText(find.byKey(const Key('note-title-field')), '关键观点');
-    await tester.enterText(find.byKey(const Key('note-body-field')), '这是正文内容。');
+    final Finder portraitBodyField = find.byKey(const Key('note-body-field'));
+    await tester.tap(portraitBodyField);
+    await tester.enterText(portraitBodyField, '这是正文内容。');
+    await tester.pump();
+    expect(tester.testTextInput.isVisible, isTrue);
+    // 自动保存到期会刷新笔记列表，但不能禁用正文输入或收起键盘。
+    await tester.pump(const Duration(milliseconds: 900));
+    expect(tester.testTextInput.isVisible, isTrue);
+    expect(tester.widget<TextField>(portraitBodyField).enabled, isTrue);
     // 停止输入后，草稿会在去抖时间内自动写入本机，不依赖手动保存按钮。
-    await tester.pump(const Duration(seconds: 1));
     await tester.pumpAndSettle();
     expect(await noteService.loadNotes(), hasLength(1));
     expect((await noteService.loadNotes()).single.body, '这是正文内容。');
