@@ -10,10 +10,10 @@ void main() {
       '.github/workflows/release-build.yml',
     ).readAsStringSync();
 
-    expect(workflow, contains("stat -c '%s' \"\$apk\""));
-    expect(workflow, contains('sha256sum \"\$apk\"'));
-    expect(workflow, contains('aapt\" dump badging'));
-    expect(workflow, contains('apksigner\" verify --verbose --print-certs'));
+    expect(workflow, contains(r'''stat -c '%s' "$apk"'''));
+    expect(workflow, contains(r'''sha256sum "$apk"'''));
+    expect(workflow, contains('aapt" dump badging'));
+    expect(workflow, contains('apksigner" verify --verbose --print-certs'));
     expect(
       workflow,
       contains(r'.\windows\installer\build_windows_packages.ps1'),
