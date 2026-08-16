@@ -84,9 +84,13 @@ jobs:
           "$build_tools/aapt" dump badging "$apk" | grep '^package:'
           signer_output="$("$build_tools/apksigner" verify --verbose --print-certs "$apk")"
           printf '%s\n' "$signer_output"
-          signer_count="$(printf '%s\n' "$signer_output" | grep -Ec '^Signer #[0-9]+ certificate SHA-256 digest:')"
+          # Newer apksigner versions report V2 Signer lines; keep the legacy format as a fallback.
+          signer_count="$(printf '%s\n' "$signer_output" | sed -nE 's/^Number of signers: ([0-9]+)$/\1/p')"
+          if test -z "$signer_count"; then
+            signer_count="$(printf '%s\n' "$signer_output" | grep -Ec '^Signer #[0-9]+ certificate SHA-256 digest:' || true)"
+          fi
           test "$signer_count" -eq 1
-          cert_sha256="$(printf '%s\n' "$signer_output" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr '[:lower:]' '[:upper:]')"
+          cert_sha256="$(printf '%s\n' "$signer_output" | sed -nE 's/^(Signer #[0-9]+|V[0-9.]+ Signer):? certificate SHA-256 digest: //p' | tr '[:lower:]' '[:upper:]' | sort -u)"
           test "$cert_sha256" = "$ANDROID_RELEASE_CERT_SHA256"
 
       - name: Upload release APK
