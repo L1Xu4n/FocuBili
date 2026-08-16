@@ -56,9 +56,9 @@ Windows 包版本：`1.4.1.16`
 
 - 文件：`FocuBili-v1.4.1-android.apk`
 - 大小：68,975,671 字节。
-- SHA-256：`73E019677C90FF2DBA984A6690095C840D7FC9FDFBF5356DC4CED39C35687C30`。
+- SHA-256：`6FEAC1862939C1F89E9B86E24D6E8D0FC19E4C99B71CDAE9B1495E72AC603F3C`。
 - 版本：`1.4.1 (16)`；包名：`com.focubili.app`；最低 Android 7.0 / API 24。
-- 签名：APK Signature Scheme v2 校验通过，单一签名者为 `C=US, O=Android, CN=Android Debug`，证书 SHA-256 为 `BCD0F91A1F1511DE8A8A5C952346D41FA0097E930181D4F0687490E63B6CCDC8`；不适合作为应用商店正式签名。
+- 签名：APK Signature Scheme v2 校验通过，单一签名者为历史发布证书 `C=US, O=Android, CN=Android Debug`，证书 SHA-256 为 `65EF1FB301FB1121C1803E752F5B1EB24E55846502D8B5478F0FC11F58E9A8A9`；与 v1.0.0 至 v1.4.0 已安装版本相同，可以直接覆盖升级。
 
 ### 未公开分发的 Windows MSIX
 
@@ -66,20 +66,22 @@ Windows 包版本：`1.4.1.16`
 
 ## 已完成验证
 
-- `dart format --output=none --set-exit-if-changed lib test`：223 个 Dart 文件格式检查通过。
+- `dart format --output=none --set-exit-if-changed lib test`：224 个 Dart 文件格式检查通过。
 - `flutter analyze --no-pub`：无问题。
-- `flutter test --no-pub`：444 项全部通过。
+- `flutter test --no-pub`：446 项全部通过。
 - Android `:app:testDebugUnitTest`：使用 Android Studio JDK 21 构建并全部通过。
-- `dev` 最终 CI `31908798641`：Dart quality（含 445 项测试）、Android Debug 与 Windows Debug 全部通过。
-- `master` 最终 CI `31909197738` 与 Release Build `31909197723` 全部通过；Windows Server 2025 / Visual Studio 2026 Runner 成功生成 EXE 安装器和便携 ZIP。
-- Android APK 版本、包名、v2 签名、文件大小和 SHA-256 已由 Release Build 校验；Windows 两项产物的大小和 SHA-256 已由打包脚本校验。
-- `adb devices -l` 当前没有在线设备，因此本轮无法执行最终 APK 安装冒烟；当前受限环境也无法把 Actions 中转 ZIP 下载到本机执行 Windows 安装/启动冒烟。
+- `dev` 最终 CI `31930036428`：Dart quality、Android Debug（含 JVM 测试）与 Windows Debug 全部通过。
+- `master` 最终 CI `31930384058` 与 Release Build `31930384051` 全部通过；Android 固定签名断言、APK 上传和 Windows 正式构建成功。
+- Actions Android artifact 已下载到本机；文件大小、SHA-256、版本、包名、最低 SDK、v2 签名、唯一签名者和证书指纹均与 Runner 输出一致。
+- 真机通过 `adb install -r` 从 v1.4.0 覆盖升级到 v1.4.1；UID `10294` 与首次安装时间 `2026-07-14 02:39:35` 均不变，确认没有卸载且应用数据身份保留。
+- ADB 冷启动主活动成功，应用进程保持存活且主界面位于前台，未发现 FocuBili、Flutter 或 AndroidRuntime 崩溃日志。
+- GitHub Release 中只替换 Android APK；Windows EXE 与 ZIP 的 asset ID、大小和 SHA-256 均保持不变，Release 仍仅包含三项公开资产。
 
 ## 已知边界
 
 - EXE 安装器消除 Windows“未知发布者”提示仍需要可信代码签名证书。
 - 正式 MSIX 安装、升级和卸载验收必须等待可信代码签名证书或 Microsoft Store 签名，当前不会向用户分发测试签名 MSIX。
-- Android Release APK 当前由 Debug 证书签署，不适合作为应用商店正式签名。
+- Android Release APK 为兼容既有安装用户继续使用历史 Debug 证书；该密钥现已固定为后续直接分发 APK 的应用身份，但不适合作为应用商店新上架签名。
 
 ## 发布顺序
 
