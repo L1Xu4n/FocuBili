@@ -29,10 +29,7 @@ void main() {
     expect(workflow, contains('aapt" dump badging'));
     expect(workflow, contains('apksigner" verify --verbose --print-certs'));
     expect(workflow, contains('Number of signers:'));
-    expect(
-      workflow,
-      contains(r'^Signer #[0-9]+ certificate SHA-256 digest:'),
-    );
+    expect(workflow, contains(r'^Signer #[0-9]+ certificate SHA-256 digest:'));
     expect(workflow, contains(r'V[0-9.]+ Signer'));
     expect(workflow, contains('sort -u'));
     expect(workflow, contains(r'test "$cert_sha256" ='));
