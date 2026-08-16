@@ -6,6 +6,7 @@ on:
       - master
     paths:
       - pubspec.yaml
+      - android/app/build.gradle
       - .github/workflows/release-build.yml
       - windows/installer/build_windows_packages.ps1
   workflow_dispatch:
@@ -19,6 +20,7 @@ concurrency:
 
 env:
   FLUTTER_VERSION: '3.44.6'
+  ANDROID_RELEASE_CERT_SHA256: '65EF1FB301FB1121C1803E752F5B1EB24E55846502D8B5478F0FC11F58E9A8A9'
 
 jobs:
   android:
@@ -43,6 +45,28 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
 
+      - name: Restore Android release signing key
+        shell: bash
+        env:
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+          ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+          ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+        run: |
+          test -n "$ANDROID_RELEASE_KEYSTORE_BASE64"
+          test -n "$ANDROID_RELEASE_STORE_PASSWORD"
+          test -n "$ANDROID_RELEASE_KEY_PASSWORD"
+          test -n "$ANDROID_RELEASE_KEY_ALIAS"
+          keystore="$RUNNER_TEMP/focubili-release.keystore"
+          printf '%s' "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          {
+            printf 'storeFile=%s\n' "$keystore"
+            printf 'storePassword=%s\n' "$ANDROID_RELEASE_STORE_PASSWORD"
+            printf 'keyPassword=%s\n' "$ANDROID_RELEASE_KEY_PASSWORD"
+            printf 'keyAlias=%s\n' "$ANDROID_RELEASE_KEY_ALIAS"
+          } > android/key.properties
+          chmod 600 "$keystore" android/key.properties
+
       - name: Install dependencies
         run: flutter pub get
 
@@ -58,7 +82,12 @@ jobs:
           printf 'APK_SIZE=%s\n' "$(stat -c '%s' "$apk")"
           printf 'APK_SHA256=%s\n' "$(sha256sum "$apk" | cut -d ' ' -f 1 | tr '[:lower:]' '[:upper:]')"
           "$build_tools/aapt" dump badging "$apk" | grep '^package:'
-          "$build_tools/apksigner" verify --verbose --print-certs "$apk"
+          signer_output="$("$build_tools/apksigner" verify --verbose --print-certs "$apk")"
+          printf '%s\n' "$signer_output"
+          signer_count="$(printf '%s\n' "$signer_output" | grep -Ec '^Signer #[0-9]+ certificate SHA-256 digest:')"
+          test "$signer_count" -eq 1
+          cert_sha256="$(printf '%s\n' "$signer_output" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr '[:lower:]' '[:upper:]')"
+          test "$cert_sha256" = "$ANDROID_RELEASE_CERT_SHA256"
 
       - name: Upload release APK
         uses: actions/upload-artifact@v4
