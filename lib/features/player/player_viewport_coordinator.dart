@@ -9,6 +9,13 @@ mixin _PlayerViewportCoordinator
   /// 由播放器状态提供当前运行平台，供窗口与移动端方向策略分流。
   AppPlatform get _appPlatform;
 
+  /// 由播放器状态提供控制层可见性，供桌面鼠标光标和窗口布局同步使用。
+  bool get _showControls;
+
+  /// 更新播放器控制层可见性，供退出窗口全屏时恢复控制层。
+  @override
+  set _showControls(bool value);
+
   @override
   bool _fullscreen = false;
   bool _controlsLocked = false;
@@ -17,11 +24,65 @@ mixin _PlayerViewportCoordinator
   bool _restoreOrientationChoicesOnPortrait = false;
   bool _orientationSyncScheduled = false;
   bool _systemUiSyncScheduled = false;
+  bool? _windowWasMaximizedBeforePlayerFullscreen;
   _PlayerSystemUiLayout? _pendingSystemUiLayout;
   _PlayerSystemUiLayout? _appliedSystemUiLayout;
 
   /// 判断当前是否需要 Android 的旋转与系统栏联动，桌面窗口只响应用户主动全屏。
   bool get _usesMobileViewportPolicy => _appPlatform == AppPlatform.android;
+
+  /// 在 Windows 进入播放器全屏前记录窗口化状态，退出时恢复用户原来的窗口布局。
+  Future<void> _rememberDesktopWindowState() async {
+    if (_appPlatform != AppPlatform.windows ||
+        _playbackService is! PlaybackVideoSurface ||
+        _windowWasMaximizedBeforePlayerFullscreen != null) {
+      return;
+    }
+    try {
+      _windowWasMaximizedBeforePlayerFullscreen = await windowManager
+          .isMaximized();
+    } on MissingPluginException {
+      // 组件测试没有窗口插件时不记录状态，播放器内部全屏仍可继续工作。
+    } on PlatformException {
+      // 原生窗口状态读取失败时保留空值，退出时不会误最大化窗口。
+    } on Object {
+      // 测试环境可能返回空布尔值；任何异常都不应阻止播放器进入全屏。
+    }
+  }
+
+  /// 返回播放器当前应使用的鼠标光标，控制层收起时让 Windows 光标不可见。
+  MouseCursor get _playerMouseCursor {
+    return _appPlatform == AppPlatform.windows &&
+            _fullscreen &&
+            (!_showControls || _controlsLocked)
+        ? SystemMouseCursors.none
+        : MouseCursor.defer;
+  }
+
+  /// 切换 Windows 原生窗口全屏；最大化窗口先还原，避免插件保留工作区边界而无法覆盖任务栏。
+  Future<void> _setDesktopWindowFullscreen(bool fullscreen) async {
+    if (_appPlatform != AppPlatform.windows ||
+        _playbackService is! PlaybackVideoSurface) {
+      return;
+    }
+    try {
+      if (fullscreen && _windowWasMaximizedBeforePlayerFullscreen == true) {
+        await windowManager.unmaximize();
+      }
+      await windowManager.setFullScreen(fullscreen);
+      if (!fullscreen && _windowWasMaximizedBeforePlayerFullscreen == true) {
+        await windowManager.maximize();
+      }
+    } on MissingPluginException {
+      // 组件测试或插件暂不可用时仍保留播放器内部全屏布局。
+    } on PlatformException {
+      // Windows 拒绝窗口切换或窗口已经销毁时，不影响应用内播放器状态。
+    } finally {
+      if (!fullscreen) {
+        _windowWasMaximizedBeforePlayerFullscreen = null;
+      }
+    }
+  }
 
   /// 由播放器状态类重新锚定弹幕，使尺寸变化前后的弹幕位置保持连续。
   void _reanchorDanmakuForViewportChange();
@@ -184,6 +245,9 @@ mixin _PlayerViewportCoordinator
     if (!mounted || _fullscreen == nextFullscreen) {
       return;
     }
+    if (nextFullscreen) {
+      await _rememberDesktopWindowState();
+    }
     _reanchorDanmakuForViewportChange();
     setState(() {
       _fullscreen = nextFullscreen;
@@ -194,15 +258,7 @@ mixin _PlayerViewportCoordinator
       _notesOverlayMounted = nextFullscreen && _notesOpen;
     });
     _restartControlsAutoHideTimer();
-    if (_playbackService is PlaybackVideoSurface) {
-      try {
-        await windowManager.setFullScreen(nextFullscreen);
-      } on MissingPluginException {
-        // 组件测试或插件暂不可用时仍保留播放器内部全屏布局。
-      } on PlatformException {
-        // Windows 拒绝窗口全屏切换时仍允许用户使用应用内全屏控制层。
-      }
-    }
+    await _setDesktopWindowFullscreen(nextFullscreen);
     if (nextFullscreen) {
       if (updateOrientation) {
         await SystemChrome.setPreferredOrientations(<DeviceOrientation>[
@@ -226,14 +282,8 @@ mixin _PlayerViewportCoordinator
 
   /// 离开全屏后恢复手机竖屏或平板横屏，并重新启用 edge-to-edge 系统栏。
   Future<void> _restoreSystemUi() async {
-    if (_playbackService is PlaybackVideoSurface) {
-      try {
-        await windowManager.setFullScreen(false);
-      } on MissingPluginException {
-        // 组件测试没有窗口插件时无需恢复系统窗口状态。
-      } on PlatformException {
-        // 窗口已经销毁时恢复请求可能失败，不影响播放器资源释放。
-      }
+    if (_fullscreen || _windowWasMaximizedBeforePlayerFullscreen != null) {
+      await _setDesktopWindowFullscreen(false);
     }
     final List<FlutterView> views = WidgetsBinding
         .instance

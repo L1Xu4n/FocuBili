@@ -42,6 +42,22 @@ class WindowsOfficialLoginCookie {
   final DateTime? expires;
 }
 
+/// 定义按指定 B站地址读取 Windows WebView Cookie 的可测试函数。
+typedef WindowsBilibiliLoginCookieReader =
+    Future<List<WindowsOfficialLoginCookie>> Function(Uri uri);
+
+/// 保存三域 Cookie 合并后的请求头和原始条目数量，不暴露具体会话值到日志。
+class WindowsBilibiliLoginCookieSnapshot {
+  /// 创建一次可交给账号验证服务的完整 Cookie 快照。
+  const WindowsBilibiliLoginCookieSnapshot({
+    required this.cookieHeader,
+    required this.cookieCount,
+  });
+
+  final String cookieHeader;
+  final int cookieCount;
+}
+
 const Set<String> _allowedQqLoginHosts = <String>{
   'graph.qq.com',
   'xui.ptlogin2.qq.com',
@@ -202,6 +218,26 @@ String buildMergedBilibiliLoginCookieHeader(
       .join('; ');
 }
 
+/// 按 Android 相同顺序读取三个 B站子域，并返回去重后的完整登录 Cookie 快照。
+Future<WindowsBilibiliLoginCookieSnapshot>
+readMergedBilibiliLoginCookieSnapshot(
+  WindowsBilibiliLoginCookieReader readCookies, {
+  DateTime? now,
+}) async {
+  final List<List<WindowsOfficialLoginCookie>> cookieGroups =
+      <List<WindowsOfficialLoginCookie>>[];
+  int cookieCount = 0;
+  for (final Uri uri in buildBilibiliLoginCookieProbeUris()) {
+    final List<WindowsOfficialLoginCookie> cookies = await readCookies(uri);
+    cookieGroups.add(cookies);
+    cookieCount += cookies.length;
+  }
+  return WindowsBilibiliLoginCookieSnapshot(
+    cookieHeader: buildMergedBilibiliLoginCookieHeader(cookieGroups, now: now),
+    cookieCount: cookieCount,
+  );
+}
+
 /// 判断单条 Cookie 能否安全进入 B站请求头，不读取或输出其敏感值。
 bool _isUsableBilibiliLoginCookie(
   WindowsOfficialLoginCookie cookie,
@@ -296,15 +332,16 @@ class WindowsOfficialLoginService implements WindowsOfficialLoginLauncher {
       }
       checking = true;
       try {
-        final List<WindowsOfficialLoginCookie> allCookies =
-            (await webview
-                    .getCookiesForUrl(
-                      BilibiliHttpAuthApi.accountEndpoint.toString(),
-                    )
-                    .timeout(const Duration(seconds: 4)))
-                .map(WindowsOfficialLoginCookie.fromWebviewCookie)
-                .toList();
-        final String cookieHeader = buildBilibiliLoginCookieHeader(allCookies);
+        final WindowsBilibiliLoginCookieSnapshot cookieSnapshot =
+            await readMergedBilibiliLoginCookieSnapshot((Uri uri) async {
+              final List<WebviewCookie> cookies = await webview
+                  .getCookiesForUrl(uri.toString())
+                  .timeout(const Duration(seconds: 4));
+              return cookies
+                  .map(WindowsOfficialLoginCookie.fromWebviewCookie)
+                  .toList(growable: false);
+            });
+        final String cookieHeader = cookieSnapshot.cookieHeader;
         cookieReadFailures = 0;
         if (!_containsBilibiliSessionCookie(cookieHeader)) {
           final DateTime? submittedAt = loginSubmitSucceededAt;
@@ -317,7 +354,7 @@ class WindowsOfficialLoginService implements WindowsOfficialLoginLauncher {
                 _recordLoginDiagnostic(
                   operation: 'windows_login_cookie_missing',
                   stage: 'official_redirect_no_session',
-                  cookieCount: allCookies.length,
+                  cookieCount: cookieSnapshot.cookieCount,
                 ),
               );
               result.completeError(
@@ -386,7 +423,7 @@ class WindowsOfficialLoginService implements WindowsOfficialLoginLauncher {
             _recordLoginDiagnostic(
               operation: 'windows_login_nav_rejected',
               stage: session.status.name,
-              cookieCount: allCookies.length,
+              cookieCount: cookieSnapshot.cookieCount,
             ),
           );
           result.completeError(

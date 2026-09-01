@@ -48,6 +48,9 @@ void main() {
 <!-- focubili-update-summary:start -->
 - 优化平板播放器空间利用
 - 修复画幅设置
+- 增加启动更新提醒
+- 改进安装包下载入口
+- 第五条更新简报
 <!-- focubili-update-summary:end -->
 ''',
         },
@@ -58,6 +61,7 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        theme: ThemeData(splashFactory: NoSplash.splashFactory),
         home: AboutPage(
           controller: controller,
           externalUrlLauncher: (Uri uri) async {
@@ -74,6 +78,9 @@ void main() {
     expect(find.byKey(const Key('about-update-highlights')), findsOneWidget);
     expect(find.text('优化平板播放器空间利用'), findsOneWidget);
     expect(find.text('修复画幅设置'), findsOneWidget);
+    expect(find.text('增加启动更新提醒'), findsOneWidget);
+    expect(find.text('改进安装包下载入口'), findsOneWidget);
+    expect(find.text('第五条更新简报'), findsOneWidget);
     expect(find.text('下载 Windows 安装包'), findsOneWidget);
     expect(find.byKey(const Key('open-problem-diagnostics')), findsOneWidget);
     await tester.ensureVisible(find.byKey(const Key('open-project-qq-group')));

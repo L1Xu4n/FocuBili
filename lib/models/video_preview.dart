@@ -14,6 +14,22 @@ class VideoPart {
   final Duration duration;
 }
 
+/// 保存视频作者的公开资料；合作视频可以通过多个作者对象同时展示参与者。
+class VideoAuthor {
+  /// 创建一位作者的编号、昵称、头像和可选角色。
+  const VideoAuthor({
+    required this.mid,
+    required this.name,
+    this.avatarUrl = '',
+    this.role = '',
+  });
+
+  final int mid;
+  final String name;
+  final String avatarUrl;
+  final String role;
+}
+
 /// 保存视频或合集条目的公开互动统计，只用于只读展示。
 class VideoStats {
   /// 创建一组公开统计；接口缺失字段时对应数值保持为零。
@@ -227,6 +243,7 @@ class VideoPreview {
     this.aid = 0,
     this.ownerMid = 0,
     this.ownerAvatarUrl = '',
+    this.authors = const <VideoAuthor>[],
     this.description = '',
     this.descriptionSegments = const <VideoDescriptionSegment>[],
     this.publishedAt,
@@ -244,6 +261,7 @@ class VideoPreview {
   final String ownerName;
   final int ownerMid;
   final String ownerAvatarUrl;
+  final List<VideoAuthor> authors;
   final String description;
   final List<VideoDescriptionSegment> descriptionSegments;
   final DateTime? publishedAt;
@@ -266,6 +284,7 @@ class VideoPreview {
       ownerName: ownerName,
       ownerMid: ownerMid,
       ownerAvatarUrl: ownerAvatarUrl,
+      authors: authors,
       description: description,
       descriptionSegments: descriptionSegments,
       publishedAt: publishedAt,

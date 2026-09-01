@@ -18,6 +18,12 @@ mixin _PlayerVideoCoordinator
   /// 更新当前正在播放的分 P。
   set _currentPart(VideoPart value);
 
+  /// 重置当前视频的互动状态并异步读取新视频的互动状态。
+  void _resetVideoInteractionState();
+
+  /// 在视频状态更新完成后启动互动状态读取。
+  void _startVideoInteractionStateLoad();
+
   /// 响应独立增强控制器变化，刷新章节界面，并处理已完播或即将到结尾的互动选择。
   void _handlePlayerEnhancementChanged() {
     if (!mounted) {
@@ -106,7 +112,7 @@ mixin _PlayerVideoCoordinator
     );
   }
 
-  /// 保存旧分P进度后打开新分P，并等待新分P就绪后更新同一 BV 号的观看记录。
+  /// 保存旧分P后打开新分P，由播放后端按目标 CID 恢复该分P自己的进度。
   @override
   Future<void> _changePart(VideoPart part) async {
     if (part.cid == _currentPart.cid) {
@@ -141,7 +147,6 @@ mixin _PlayerVideoCoordinator
         _activeVideo,
         part: part,
         quality: _currentQuality,
-        initialPosition: Duration.zero,
       );
     } on PlatformException catch (error) {
       _showPlaybackError('无法切换分P：${error.message ?? error.code}');
@@ -307,9 +312,16 @@ mixin _PlayerVideoCoordinator
     }
   }
 
-  /// 暂停当前视频后打开 UP 主公开主页，返回时重建被下层播放器占用的原生会话。
-  Future<void> _openOwnerProfile() async {
-    if (_activeVideo.ownerMid <= 0) {
+  /// 暂停当前视频后打开指定作者主页，返回时重建被下层播放器占用的原生会话。
+  Future<void> _openOwnerProfile([VideoAuthor? selectedAuthor]) async {
+    final VideoAuthor author =
+        selectedAuthor ??
+        VideoAuthor(
+          mid: _activeVideo.ownerMid,
+          name: _activeVideo.ownerName,
+          avatarUrl: _activeVideo.ownerAvatarUrl,
+        );
+    if (author.mid <= 0) {
       _showPlayerNotice('暂时没有这个 UP 主的主页编号');
       return;
     }
@@ -328,9 +340,9 @@ mixin _PlayerVideoCoordinator
       MaterialPageRoute<void>(
         // 用户主页构建函数传入已有昵称头像，并复用公开内容服务。
         builder: (BuildContext context) => UserProfilePage(
-          mid: _activeVideo.ownerMid,
-          initialName: _activeVideo.ownerName,
-          initialAvatarUrl: _activeVideo.ownerAvatarUrl,
+          mid: author.mid,
+          initialName: author.name,
+          initialAvatarUrl: author.avatarUrl,
           publicContentService: _publicContentService,
           videoService: _bilibiliService,
           learningListService: _learningListService,
@@ -443,6 +455,8 @@ mixin _PlayerVideoCoordinator
       _notesOpen = false;
       _notesLoading = false;
       _noteSaving = false;
+      _noteAutoSaving = false;
+      _noteAutoSavePending = false;
       _currentVideoNotes = const <VideoNote>[];
       _editingVideoNote = null;
       _noteTitleController.clear();
@@ -456,12 +470,14 @@ mixin _PlayerVideoCoordinator
       _resetPlaybackProgressTracking(learningEntry: requestedLearningEntry);
       _interactivePromptVisible = false;
       _interactiveChoiceOpening = false;
+      _resetVideoInteractionState();
     });
     _shownRestoredCid = null;
     _openingResumePlan = resumePlan;
     _resumeNoticeTimer?.cancel();
     _resetFocusPlaybackIdentity();
     unawaited(_loadCurrentLearningListEntry());
+    _startVideoInteractionStateLoad();
     unawaited(_loadPlayerEnhancements());
     await _playbackService.openVideo(
       video,

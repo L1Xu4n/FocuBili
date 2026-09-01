@@ -153,6 +153,47 @@ void main() {
     expect(header, isNot(contains('SESSDATA=www-session')));
   });
 
+  /// 验证正式快照读取函数确实访问三个子域，并让后读到的同名 CSRF 与会话覆盖旧值。
+  test('实际 Cookie 快照读取三个子域并合并同名值', () async {
+    final List<Uri> requestedUris = <Uri>[];
+
+    final WindowsBilibiliLoginCookieSnapshot snapshot =
+        await readMergedBilibiliLoginCookieSnapshot((Uri uri) async {
+          requestedUris.add(uri);
+          if (uri.host == 'www.bilibili.com') {
+            return <WindowsOfficialLoginCookie>[
+              cookie('SESSDATA', 'www-session'),
+              cookie('bili_jct', 'www-csrf'),
+            ];
+          }
+          if (uri.host == 'api.bilibili.com') {
+            return <WindowsOfficialLoginCookie>[
+              cookie('DedeUserID', '42', domain: 'api.bilibili.com'),
+              cookie('bili_jct', 'api-csrf', domain: 'api.bilibili.com'),
+            ];
+          }
+          return <WindowsOfficialLoginCookie>[
+            cookie(
+              'SESSDATA',
+              'passport-session',
+              domain: 'passport.bilibili.com',
+            ),
+          ];
+        });
+
+    expect(requestedUris.map((Uri uri) => uri.host), <String>[
+      'www.bilibili.com',
+      'api.bilibili.com',
+      'passport.bilibili.com',
+    ]);
+    expect(snapshot.cookieCount, 5);
+    expect(snapshot.cookieHeader, contains('DedeUserID=42'));
+    expect(snapshot.cookieHeader, contains('bili_jct=api-csrf'));
+    expect(snapshot.cookieHeader, isNot(contains('bili_jct=www-csrf')));
+    expect(snapshot.cookieHeader, contains('SESSDATA=passport-session'));
+    expect(snapshot.cookieHeader, isNot(contains('SESSDATA=www-session')));
+  });
+
   /// 验证原生层给会话 Cookie 返回零时间时，Dart 不会把它误判成 1970 年已过期。
   test('WebView 会话 Cookie 不使用零时间作为过期时间', () {
     final WebviewCookie sessionCookie =

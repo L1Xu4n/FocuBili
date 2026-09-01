@@ -38,6 +38,13 @@ void main() {
       contains("@('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll')"),
     );
     expect(buildScript, contains('Compress-Archive'));
+    expect(buildScript, contains('vswhere.exe'));
+    expect(
+      buildScript,
+      contains('Microsoft.VisualStudio.Component.VC.Tools.x86.x64'),
+    );
+    expect(buildScript, contains("-Filter 'Microsoft.VC*.CRT'"));
+    expect(buildScript, isNot(contains(r'Microsoft Visual Studio\2022')));
     expect(
       buildScript,
       contains('Inno Setup did not produce the expected installer'),

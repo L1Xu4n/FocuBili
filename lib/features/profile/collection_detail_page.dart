@@ -83,6 +83,7 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
   String? _errorMessage;
   String? _openingBvid;
   String? _addingBvid;
+  Set<String> _learningListBvids = const <String>{};
 
   /// 初始化服务、滚动监听，并读取合集第一页。
   @override
@@ -94,6 +95,17 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
     _learningListService = widget.learningListService ?? LearningListService();
     _scrollController.addListener(_loadMoreNearBottom);
     unawaited(_loadFirstPage());
+    unawaited(_loadLearningListMembership());
+  }
+
+  /// 读取本机学习清单中的 BV 集合，供合集条目右侧图标显示当前状态。
+  Future<void> _loadLearningListMembership() async {
+    final entries = await _learningListService.loadEntries();
+    if (mounted) {
+      setState(() {
+        _learningListBvids = entries.map((entry) => entry.bvid).toSet();
+      });
+    }
   }
 
   /// 移除滚动监听并释放控制器。
@@ -206,6 +218,7 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
         return;
       }
       await Navigator.of(context).pushNamed(AppRoutes.player, arguments: video);
+      await _loadLearningListMembership();
     } catch (error) {
       if (mounted) {
         _showMessage('无法打开视频：$error');
@@ -226,21 +239,60 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
       );
   }
 
-  /// 查询合集条目的完整视频和分P资料后加入学习清单，避免保存轻量列表数据。
-  Future<void> _addVideoToLearningList(CreatorVideo item) async {
+  /// 确认是否移除合集视频对应的学习任务，避免误触图标直接丢失本机进度。
+  Future<bool> _confirmLearningListRemoval(CreatorVideo item) async {
+    return await showDialog<bool>(
+          context: context,
+          builder: (BuildContext dialogContext) => AlertDialog(
+            title: const Text('取消加入学习清单？'),
+            content: Text('将从学习清单移除“${item.title}”。'),
+            actions: <Widget>[
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('保留'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('取消加入'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+  }
+
+  /// 根据合集条目当前成员状态加入或取消学习清单；加入前查询完整视频与分P资料。
+  Future<void> _toggleVideoLearningList(CreatorVideo item) async {
     if (_openingBvid != null || _addingBvid != null) {
+      return;
+    }
+    final bool alreadyAdded = _learningListBvids.contains(item.bvid);
+    if (alreadyAdded && !await _confirmLearningListRemoval(item)) {
       return;
     }
     setState(() => _addingBvid = item.bvid);
     try {
-      final VideoPreview video = await _videoService.lookupVideo(item.bvid);
-      await _learningListService.addVideo(video);
+      if (alreadyAdded) {
+        await _learningListService.remove(item.bvid);
+      } else {
+        final VideoPreview video = await _videoService.lookupVideo(item.bvid);
+        await _learningListService.addVideo(video);
+      }
       if (mounted) {
-        _showMessage('已加入学习清单，可在首页继续学习。');
+        setState(() {
+          final Set<String> nextBvids = _learningListBvids.toSet();
+          if (alreadyAdded) {
+            nextBvids.remove(item.bvid);
+          } else {
+            nextBvids.add(item.bvid);
+          }
+          _learningListBvids = Set<String>.unmodifiable(nextBvids);
+        });
+        _showMessage(alreadyAdded ? '已取消加入学习清单。' : '已加入学习清单，可在首页继续学习。');
       }
     } catch (_) {
       if (mounted) {
-        _showMessage('加入学习清单失败，请检查网络后重试。');
+        _showMessage(alreadyAdded ? '取消加入失败，请稍后重试。' : '加入学习清单失败，请检查网络后重试。');
       }
     } finally {
       if (mounted) {
@@ -351,6 +403,7 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
   Widget _buildVideoTile(CreatorVideo item) {
     final bool opening = _openingBvid == item.bvid;
     final bool adding = _addingBvid == item.bvid;
+    final bool added = _learningListBvids.contains(item.bvid);
     return Card(
       key: Key('collection-video-${item.bvid}'),
       margin: EdgeInsets.zero,
@@ -395,29 +448,6 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
                           style: const TextStyle(fontWeight: FontWeight.w600),
                         ),
                       ),
-                      OutlinedButton.icon(
-                        key: Key('add-learning-collection-${item.bvid}'),
-                        style: OutlinedButton.styleFrom(
-                          visualDensity: VisualDensity.compact,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 2,
-                          ),
-                        ),
-                        // 合集条目加入函数先查询完整视频，再把任务写入本机清单。
-                        onPressed: opening || adding
-                            ? null
-                            : () => unawaited(_addVideoToLearningList(item)),
-                        icon: adding
-                            ? const SizedBox.square(
-                                dimension: 15,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Icon(Icons.playlist_add_rounded, size: 17),
-                        label: const Text('加入学习清单'),
-                      ),
                     ],
                   ),
                 ),
@@ -431,18 +461,27 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 ),
               )
-            else if (adding)
-              const Padding(
-                padding: EdgeInsets.all(12),
-                child: SizedBox.square(
-                  dimension: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-              )
             else
-              const Padding(
-                padding: EdgeInsets.all(12),
-                child: Icon(Icons.play_arrow_rounded),
+              Padding(
+                padding: const EdgeInsets.all(6),
+                child: IconButton(
+                  key: Key('add-learning-collection-${item.bvid}'),
+                  tooltip: added ? '取消加入学习清单' : '加入学习清单',
+                  // 右侧学习清单图标函数替代播放三角，并独立处理加入或确认取消。
+                  onPressed: adding
+                      ? null
+                      : () => unawaited(_toggleVideoLearningList(item)),
+                  icon: adding
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Icon(
+                          added
+                              ? Icons.playlist_add_check_rounded
+                              : Icons.playlist_add_rounded,
+                        ),
+                ),
               ),
           ],
         ),

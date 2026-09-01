@@ -12,6 +12,7 @@ import '../../models/public_profile.dart';
 import '../../models/video_preview.dart';
 import '../../models/watch_history_entry.dart';
 import '../../services/bilibili_public_content_service.dart';
+import '../../services/bilibili_interaction_service.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/learning_list_service.dart';
 import '../../services/watch_history_service.dart';
@@ -28,6 +29,7 @@ class UserProfilePage extends StatefulWidget {
     this.initialSign = '',
     this.initialOfficialDescription = '',
     this.publicContentService,
+    this.interactionService,
     this.videoService,
     this.learningListService,
     this.watchHistoryService,
@@ -39,6 +41,7 @@ class UserProfilePage extends StatefulWidget {
   final String initialSign;
   final String initialOfficialDescription;
   final BilibiliPublicContentService? publicContentService;
+  final BilibiliInteractionService? interactionService;
   final BilibiliService? videoService;
   final LearningListService? learningListService;
   final WatchHistoryService? watchHistoryService;
@@ -59,6 +62,7 @@ class _UserProfilePageState extends State<UserProfilePage>
   late final BilibiliService _videoService;
   late final LearningListService _learningListService;
   late final WatchHistoryService _watchHistoryService;
+  late final BilibiliInteractionService _interactionService;
   late final TabController _tabController;
   final TextEditingController _videoSearchController = TextEditingController();
   CreatorProfile? _profile;
@@ -71,8 +75,11 @@ class _UserProfilePageState extends State<UserProfilePage>
   bool _loadingMore = false;
   String? _profileError;
   String? _contentError;
+  bool? _isFollowing;
+  bool _followBusy = false;
   String? _openingBvid;
   String? _addingBvid;
+  Set<String> _learningListBvids = const <String>{};
   String _videoKeyword = '';
   CreatorVideoOrder _videoOrder = CreatorVideoOrder.latest;
   int _totalCount = 0;
@@ -94,11 +101,66 @@ class _UserProfilePageState extends State<UserProfilePage>
     _videoService = widget.videoService ?? BilibiliVideoInfoService();
     _learningListService = widget.learningListService ?? LearningListService();
     _watchHistoryService = widget.watchHistoryService ?? WatchHistoryService();
+    _interactionService =
+        widget.interactionService ?? BilibiliInteractionService();
     _tabController = TabController(length: 3, vsync: this)
       ..addListener(_handleTabChanged);
     unawaited(_loadProfile());
+    unawaited(_loadFollowingState());
     unawaited(_loadFirstContentPage());
     unawaited(_loadWatchHistory());
+    unawaited(_loadLearningListMembership());
+  }
+
+  /// 读取本机学习清单中的 BV 集合，供投稿卡片显示加入或已加入图标。
+  Future<void> _loadLearningListMembership() async {
+    final entries = await _learningListService.loadEntries();
+    if (mounted) {
+      setState(() {
+        _learningListBvids = entries.map((entry) => entry.bvid).toSet();
+      });
+    }
+  }
+
+  /// 读取当前账号对该 UP 主的关注状态，未登录时保留未确定而不显示错误页。
+  Future<void> _loadFollowingState() async {
+    try {
+      final bool following = await _interactionService.loadFollowingState(
+        widget.mid,
+      );
+      if (mounted) {
+        setState(() => _isFollowing = following);
+      }
+    } on Object {
+      // 关注状态属于增强信息，读取失败不影响公开主页和投稿列表展示。
+    }
+  }
+
+  /// 关注或取消关注当前 UP 主，并在写操作成功后更新按钮文字。
+  Future<void> _toggleFollowing() async {
+    if (_followBusy || widget.mid <= 0) {
+      return;
+    }
+    final bool following = _isFollowing == true;
+    setState(() => _followBusy = true);
+    try {
+      await _interactionService.setFollowing(
+        mid: widget.mid,
+        following: !following,
+      );
+      if (mounted) {
+        setState(() => _isFollowing = !following);
+        _showMessage(following ? '已取消关注' : '已关注');
+      }
+    } on Object catch (error) {
+      if (mounted) {
+        _showMessage(error.toString());
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _followBusy = false);
+      }
+    }
   }
 
   /// 读取本机观看记录并按 BV 号建立索引，让投稿封面能快速判断是否看过。
@@ -517,6 +579,7 @@ class _UserProfilePageState extends State<UserProfilePage>
       }
       await Navigator.of(context).pushNamed(AppRoutes.player, arguments: video);
       await _loadWatchHistory();
+      await _loadLearningListMembership();
     } catch (error) {
       if (mounted) {
         _showMessage('无法打开视频：$error');
@@ -528,21 +591,60 @@ class _UserProfilePageState extends State<UserProfilePage>
     }
   }
 
-  /// 查询投稿完整分P后加入学习清单，保证主页轻量数据不会丢失真实 CID 和进度信息。
-  Future<void> _addVideoToLearningList(CreatorVideo item) async {
+  /// 确认是否移除投稿对应的学习任务，避免误触图标直接丢失本机进度。
+  Future<bool> _confirmLearningListRemoval(CreatorVideo item) async {
+    return await showDialog<bool>(
+          context: context,
+          builder: (BuildContext dialogContext) => AlertDialog(
+            title: const Text('取消加入学习清单？'),
+            content: Text('将从学习清单移除“${item.title}”。'),
+            actions: <Widget>[
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('保留'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('取消加入'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+  }
+
+  /// 根据投稿当前成员状态加入或取消学习清单；加入前查询完整分P以保存真实 CID。
+  Future<void> _toggleVideoLearningList(CreatorVideo item) async {
     if (_openingBvid != null || _addingBvid != null) {
+      return;
+    }
+    final bool alreadyAdded = _learningListBvids.contains(item.bvid);
+    if (alreadyAdded && !await _confirmLearningListRemoval(item)) {
       return;
     }
     setState(() => _addingBvid = item.bvid);
     try {
-      final VideoPreview video = await _videoService.lookupVideo(item.bvid);
-      await _learningListService.addVideo(video);
+      if (alreadyAdded) {
+        await _learningListService.remove(item.bvid);
+      } else {
+        final VideoPreview video = await _videoService.lookupVideo(item.bvid);
+        await _learningListService.addVideo(video);
+      }
       if (mounted) {
-        _showMessage('已加入学习清单，可在首页继续学习。');
+        setState(() {
+          final Set<String> nextBvids = _learningListBvids.toSet();
+          if (alreadyAdded) {
+            nextBvids.remove(item.bvid);
+          } else {
+            nextBvids.add(item.bvid);
+          }
+          _learningListBvids = Set<String>.unmodifiable(nextBvids);
+        });
+        _showMessage(alreadyAdded ? '已取消加入学习清单。' : '已加入学习清单，可在首页继续学习。');
       }
     } catch (_) {
       if (mounted) {
-        _showMessage('加入学习清单失败，请检查网络后重试。');
+        _showMessage(alreadyAdded ? '取消加入失败，请稍后重试。' : '加入学习清单失败，请检查网络后重试。');
       }
     } finally {
       if (mounted) {
@@ -564,6 +666,7 @@ class _UserProfilePageState extends State<UserProfilePage>
         ),
       ),
     );
+    await _loadLearningListMembership();
   }
 
   /// 显示统一三秒轻量提示，不改变主页已加载内容。
@@ -669,6 +772,32 @@ class _UserProfilePageState extends State<UserProfilePage>
         const SizedBox(height: 2),
         Text(label, style: Theme.of(context).textTheme.bodySmall),
       ],
+    );
+  }
+
+  /// 创建关注操作按钮；紧凑模式限制高度，使手机头像统计行不会被按钮向下撑开。
+  Widget _buildFollowButton({bool compact = false}) {
+    return OutlinedButton.icon(
+      key: const Key('creator-follow-button'),
+      style: compact
+          ? OutlinedButton.styleFrom(
+              minimumSize: const Size(0, 32),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            )
+          : null,
+      onPressed: _followBusy ? null : () => unawaited(_toggleFollowing()),
+      icon: _followBusy
+          ? const SizedBox.square(
+              dimension: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : Icon(
+              _isFollowing == true
+                  ? Icons.person_remove_alt_1_rounded
+                  : Icons.person_add_alt_1_rounded,
+            ),
+      label: Text(_isFollowing == true ? '取消关注' : '关注'),
     );
   }
 
@@ -822,7 +951,9 @@ class _UserProfilePageState extends State<UserProfilePage>
                         sign: sign,
                       ),
                     ),
-                    const SizedBox(width: 24),
+                    const SizedBox(width: 18),
+                    _buildFollowButton(compact: true),
+                    const SizedBox(width: 18),
                     SizedBox(
                       key: const Key('creator-profile-wide-stats'),
                       width: 320,
@@ -849,9 +980,16 @@ class _UserProfilePageState extends State<UserProfilePage>
                         ),
                         const SizedBox(width: 14),
                         Expanded(
-                          child: _buildProfileStatsPanel(
-                            displayProfile,
-                            showLoading: profile == null && _loadingProfile,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: <Widget>[
+                              _buildProfileStatsPanel(
+                                displayProfile,
+                                showLoading: profile == null && _loadingProfile,
+                              ),
+                              const SizedBox(height: 4),
+                              _buildFollowButton(compact: true),
+                            ],
                           ),
                         ),
                       ],
@@ -965,14 +1103,15 @@ class _UserProfilePageState extends State<UserProfilePage>
       final double contentHeight = descriptionHeight.clamp(96, double.infinity);
       return kToolbarHeight + kTextTabBarHeight + contentHeight + 34;
     }
-    // 手机仍需先放头像统计行，再放完整文字区，因此保留原有纵向高度计算。
-    return 240 + descriptionHeight;
+    // 手机先放头像统计行再放文字区，并保留 2dp 字体取整余量避免不同渲染器产生单像素溢出。
+    return 242 + descriptionHeight;
   }
 
   /// 创建横向投稿列表项，左侧使用 16:9 封面，右侧显示标题、日期和公开统计。
   Widget _buildVideoCard(CreatorVideo item) {
     final bool opening = _openingBvid == item.bvid;
     final bool adding = _addingBvid == item.bvid;
+    final bool added = _learningListBvids.contains(item.bvid);
     final WatchHistoryEntry? watchHistory = _watchHistoryByBvid[item.bvid];
     _schedulePartCountFallback(item);
     final int partCount = _partCountFor(item);
@@ -1142,33 +1281,33 @@ class _UserProfilePageState extends State<UserProfilePage>
                               ),
                             ),
                             const SizedBox(width: 4),
-                            TextButton.icon(
-                              key: Key('add-creator-video-${item.bvid}'),
-                              // 学习清单按钮函数读取完整视频资料后保存第一分P或最近观看分P。
-                              onPressed: opening || adding
-                                  ? null
-                                  : () => unawaited(
-                                      _addVideoToLearningList(item),
-                                    ),
-                              style: TextButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 6,
-                                ),
-                                visualDensity: VisualDensity.compact,
-                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                              ),
-                              icon: adding
-                                  ? const SizedBox.square(
-                                      dimension: 16,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
+                            SizedBox.square(
+                              dimension: 36,
+                              child: IconButton(
+                                key: Key('add-creator-video-${item.bvid}'),
+                                tooltip: added ? '取消加入学习清单' : '加入学习清单',
+                                // 学习清单图标函数按当前 BV 状态执行加入或确认取消。
+                                onPressed: opening || adding
+                                    ? null
+                                    : () => unawaited(
+                                        _toggleVideoLearningList(item),
                                       ),
-                                    )
-                                  : const Icon(
-                                      Icons.playlist_add_rounded,
-                                      size: 18,
-                                    ),
-                              label: const Text('加入学习清单'),
+                                padding: EdgeInsets.zero,
+                                visualDensity: VisualDensity.compact,
+                                icon: adding
+                                    ? const SizedBox.square(
+                                        dimension: 16,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : Icon(
+                                        added
+                                            ? Icons.playlist_add_check_rounded
+                                            : Icons.playlist_add_rounded,
+                                        size: 20,
+                                      ),
+                              ),
                             ),
                           ],
                         ),

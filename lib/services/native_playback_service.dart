@@ -26,9 +26,9 @@ class PlaybackQuality {
   }
 }
 
-/// 保存一支视频最后观看的分P和该分P可恢复的播放位置。
+/// 保存一支视频最后观看的分P，以及平台后端按真实媒体时长校验后的可恢复位置。
 class SavedPlaybackState {
-  /// 创建一条稳定的本地播放记忆。
+  /// 创建一条稳定的本地播放记忆；position 应由提供它的平台后端先完成有效性校验。
   const SavedPlaybackState({
     required this.cid,
     required this.pageNumber,
@@ -212,7 +212,7 @@ abstract interface class PlaybackService {
   /// 保留当前进度并重新请求指定清晰度的播放数据。
   Future<void> selectQuality(int quality);
 
-  /// 读取该视频最后观看的分P和可恢复进度。
+  /// 读取该视频最后观看的分P和已由平台后端校验的可恢复进度。
   Future<SavedPlaybackState?> loadSavedPlaybackState(String bvid);
 
   /// 读取播放器竖向手势所需的当前亮度和媒体音量。
@@ -361,7 +361,7 @@ class NativePlaybackService implements PlaybackService {
     return _invokeVoid('selectQuality', <String, Object?>{'quality': quality});
   }
 
-  /// 从 Android 本地偏好设置读取一支视频最后观看的分P状态。
+  /// 从 Android 本地偏好设置读取最后分P，以及原生层已校验的可恢复位置。
   @override
   Future<SavedPlaybackState?> loadSavedPlaybackState(String bvid) async {
     final Object? result = await _invokeResult(

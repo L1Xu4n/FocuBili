@@ -247,10 +247,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
       final bool hasBackendResumePosition =
           savedPart != null &&
           savedState != null &&
-          PlaybackResumePlan.normalizeStoredPosition(
-                savedState.position,
-                savedPart.duration,
-              ) >
+          PlaybackResumePlan.normalizeBackendPosition(savedState.position) >
               Duration.zero;
       final WatchHistoryEntry? historyEntry =
           widget.initialPartCid == null &&

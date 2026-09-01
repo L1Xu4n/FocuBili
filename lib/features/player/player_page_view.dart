@@ -172,6 +172,13 @@ extension _PlayerPageView on _PlayerPageState {
           _buildVideoOutput(),
           _buildDanmakuOverlay(),
           _buildSubtitleOverlay(),
+          if (_appPlatform == AppPlatform.windows && _brightness < 1)
+            IgnorePointer(
+              key: const Key('software-brightness-overlay'),
+              child: ColoredBox(
+                color: Colors.black.withValues(alpha: 1 - _brightness),
+              ),
+            ),
           if (_playbackSnapshot.isRestoringPosition)
             const ColoredBox(
               key: Key('player-resume-position-gate'),
@@ -830,7 +837,11 @@ extension _PlayerPageView on _PlayerPageState {
       child: Focus(
         autofocus: true,
         onKeyEvent: _handlePlayerKeyEvent,
-        child: pageScaffold,
+        child: MouseRegion(
+          key: const Key('player-mouse-region'),
+          cursor: _playerMouseCursor,
+          child: pageScaffold,
+        ),
       ),
     );
   }

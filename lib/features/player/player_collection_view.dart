@@ -293,37 +293,88 @@ extension _PlayerCollectionView on _PlayerPageState {
     );
   }
 
-  /// 创建可进入公开主页的 UP 主资料卡，不提供关注或私信写操作。
+  /// 创建可进入公开主页的作者资料卡，合作视频会展示全部作者。
   Widget _buildOwnerPanel() {
+    final List<VideoAuthor> authors = _activeVideo.authors.isEmpty
+        ? <VideoAuthor>[
+            VideoAuthor(
+              mid: _activeVideo.ownerMid,
+              name: _activeVideo.ownerName,
+              avatarUrl: _activeVideo.ownerAvatarUrl,
+            ),
+          ]
+        : _activeVideo.authors;
     return Card(
       margin: EdgeInsets.zero,
       clipBehavior: Clip.antiAlias,
-      child: ListTile(
+      child: Column(
         key: const Key('video-owner-card'),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        leading: ClipOval(
-          child: _buildDetailImage(
-            _activeVideo.ownerAvatarUrl,
-            width: 52,
-            height: 52,
-            fit: BoxFit.cover,
-            placeholderIcon: Icons.person_rounded,
-          ),
-        ),
-        title: Text(
-          _activeVideo.ownerName,
-          style: const TextStyle(fontWeight: FontWeight.w700),
-        ),
-        subtitle: Text(
-          _activeVideo.ownerMid > 0 ? 'UID：${_activeVideo.ownerMid}' : 'UP 主',
-        ),
-        trailing: _activeVideo.ownerMid > 0
-            ? const Icon(Icons.chevron_right_rounded)
-            : null,
-        // UP 主卡点击函数暂停视频后进入公开主页。
-        onTap: _activeVideo.ownerMid > 0
-            ? () => unawaited(_openOwnerProfile())
-            : null,
+        children: <Widget>[
+          if (authors.length > 1)
+            const ListTile(dense: true, title: Text('作者')),
+          ...authors.asMap().entries.map((MapEntry<int, VideoAuthor> entry) {
+            final VideoAuthor author = entry.value;
+            return ListTile(
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 4,
+              ),
+              leading: ClipOval(
+                child: _buildDetailImage(
+                  author.avatarUrl,
+                  width: 52,
+                  height: 52,
+                  fit: BoxFit.cover,
+                  placeholderIcon: Icons.person_rounded,
+                ),
+              ),
+              title: Text(
+                author.name,
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              subtitle: Text(
+                author.role.isNotEmpty
+                    ? author.role
+                    : author.mid > 0
+                    ? 'UID：${author.mid}'
+                    : 'UP 主',
+              ),
+              trailing: _buildOwnerTrailing(author),
+              // 作者卡点击函数暂停视频后进入对应公开主页。
+              onTap: author.mid > 0
+                  ? () => unawaited(_openOwnerProfile(author))
+                  : null,
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
+  /// 为每一位有效作者显示独立的关注按钮，已关注时再次点击可取消。
+  Widget? _buildOwnerTrailing(VideoAuthor author) {
+    if (author.mid <= 0) {
+      return null;
+    }
+    final bool busy = _authorFollowActions.contains(author.mid);
+    final bool following =
+        _authorFollowingStates[author.mid] ??
+        (author.mid == _activeVideo.ownerMid && _interactionState.isFollowing);
+    return SizedBox(
+      width: 84,
+      child: TextButton(
+        key: author.mid == _activeVideo.ownerMid
+            ? const Key('video-owner-follow-button')
+            : Key('video-author-follow-button-${author.mid}'),
+        onPressed: _interactionLoading || _interactionAction != null || busy
+            ? null
+            : () => unawaited(_toggleVideoFollow(author)),
+        child: busy
+            ? const SizedBox.square(
+                dimension: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : Text(following ? '已关注' : '关注'),
       ),
     );
   }

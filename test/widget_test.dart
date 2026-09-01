@@ -21,6 +21,7 @@ import 'package:focubili/models/learning_list_entry.dart';
 import 'package:focubili/models/player_enhancement.dart';
 import 'package:focubili/models/playback_preferences.dart';
 import 'package:focubili/services/bilibili_service.dart';
+import 'package:focubili/services/bilibili_interaction_service.dart';
 import 'package:focubili/services/app_theme_mode_service.dart';
 import 'package:focubili/services/device_status_service.dart';
 import 'package:focubili/services/danmaku_preferences_service.dart';
@@ -556,6 +557,101 @@ class _FakeDesktopPlaybackService extends _FakePlaybackService
       key: Key('fake-desktop-video-surface'),
       color: Colors.black,
     );
+  }
+}
+
+/// 为播放器互动组件提供可记录的关注、投币和收藏服务，不访问真实账号接口。
+class _FakePlayerInteractionService extends BilibiliInteractionService {
+  bool following = false;
+  final Map<int, bool> followingByMid = <int, bool>{};
+  int coinCount = 0;
+  int? lastCoinMultiply;
+  String? createdFolderTitle;
+  int? lastFavoriteMediaId;
+  bool? lastFavoriteValue;
+  Set<int> lastAddedFavoriteMediaIds = <int>{};
+  Set<int> lastDeletedFavoriteMediaIds = <int>{};
+  List<BilibiliFavoriteFolder> folders = <BilibiliFavoriteFolder>[
+    const BilibiliFavoriteFolder(mediaId: 501, title: '学习收藏', mediaCount: 6),
+  ];
+
+  /// 返回测试内存中的互动状态。
+  @override
+  Future<BilibiliInteractionState> loadVideoState({
+    required String bvid,
+    required int aid,
+    required int ownerMid,
+  }) async {
+    final Set<int> favoriteMediaIds = folders
+        .where((BilibiliFavoriteFolder folder) => folder.containsVideo)
+        .map((BilibiliFavoriteFolder folder) => folder.mediaId)
+        .toSet();
+    return BilibiliInteractionState(
+      isFollowing: followingByMid[ownerMid] ?? following,
+      coinCount: coinCount,
+      isFavorited: favoriteMediaIds.isNotEmpty,
+      favoriteMediaId: favoriteMediaIds.isEmpty ? null : favoriteMediaIds.first,
+      favoriteMediaIds: favoriteMediaIds,
+    );
+  }
+
+  /// 返回指定作者在测试内存中的独立关注状态。
+  @override
+  Future<bool> loadFollowingState(int mid) async {
+    return followingByMid[mid] ?? false;
+  }
+
+  /// 记录播放器作者卡发出的关注或取消关注操作。
+  @override
+  Future<void> setFollowing({required int mid, required bool following}) async {
+    followingByMid[mid] = following;
+    this.following = following;
+  }
+
+  /// 记录用户在投币面板中选择的硬币数量。
+  @override
+  Future<void> addCoin({required int aid, int multiply = 1}) async {
+    lastCoinMultiply = multiply;
+    coinCount += multiply;
+  }
+
+  /// 返回测试准备的收藏夹列表。
+  @override
+  Future<List<BilibiliFavoriteFolder>> loadFavoriteFolders({
+    required int aid,
+  }) async {
+    return folders;
+  }
+
+  /// 记录新收藏夹名称并返回固定目录编号。
+  @override
+  Future<BilibiliFavoriteFolder> createFavoriteFolder({
+    required String title,
+  }) async {
+    createdFolderTitle = title;
+    return BilibiliFavoriteFolder(mediaId: 999, title: title);
+  }
+
+  /// 记录视频最终加入或移出的收藏夹编号。
+  @override
+  Future<void> setFavoriteFolder({
+    required int aid,
+    required int mediaId,
+    required bool favorited,
+  }) async {
+    lastFavoriteMediaId = mediaId;
+    lastFavoriteValue = favorited;
+  }
+
+  /// 记录一次多收藏夹提交中的新增和移除编号。
+  @override
+  Future<void> setFavoriteFolders({
+    required int aid,
+    Iterable<int> addMediaIds = const <int>[],
+    Iterable<int> deleteMediaIds = const <int>[],
+  }) async {
+    lastAddedFavoriteMediaIds = addMediaIds.toSet();
+    lastDeletedFavoriteMediaIds = deleteMediaIds.toSet();
   }
 }
 
@@ -1219,6 +1315,118 @@ void main() {
     expect(find.byKey(const Key('picture-in-picture')), findsNothing);
   });
 
+  /// 验证 Windows 全屏时控制层收起会隐藏鼠标，单击画面唤出控制层后恢复鼠标。
+  testWidgets('Windows 全屏控制层收起时隐藏鼠标', (WidgetTester tester) async {
+    const MethodChannel windowChannel = MethodChannel('window_manager');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(windowChannel, (MethodCall call) async {
+          return call.method == 'isMaximized' ? false : null;
+        });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(windowChannel, null);
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: _FakeDesktopPlaybackService(),
+          appPlatform: AppPlatform.windows,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    MouseRegion mouseRegion = tester.widget<MouseRegion>(
+      find.byKey(const Key('player-mouse-region')),
+    );
+    expect(mouseRegion.cursor, MouseCursor.defer);
+
+    tester
+        .widget<IconButton>(
+          find.byWidgetPredicate(
+            (Widget widget) => widget is IconButton && widget.tooltip == '进入全屏',
+          ),
+        )
+        .onPressed!();
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('退出全屏'), findsOneWidget);
+
+    tester
+        .widget<GestureDetector>(find.byKey(const Key('player-surface')))
+        .onTap!();
+    await tester.pump();
+    expect(
+      tester
+          .widget<AnimatedOpacity>(find.byKey(const Key('player-controls')))
+          .opacity,
+      0,
+    );
+    mouseRegion = tester.widget<MouseRegion>(
+      find.byKey(const Key('player-mouse-region')),
+    );
+    expect(mouseRegion.cursor, SystemMouseCursors.none);
+
+    tester
+        .widget<GestureDetector>(find.byKey(const Key('player-surface')))
+        .onTap!();
+    await tester.pump();
+    mouseRegion = tester.widget<MouseRegion>(
+      find.byKey(const Key('player-mouse-region')),
+    );
+    expect(mouseRegion.cursor, MouseCursor.defer);
+  });
+
+  /// 验证 Windows 最大化窗口先还原再进入播放器全屏，并在退出后恢复最大化布局。
+  testWidgets('Windows 最大化窗口可完全进入播放器全屏并恢复', (WidgetTester tester) async {
+    const MethodChannel windowChannel = MethodChannel('window_manager');
+    final List<MethodCall> windowCalls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(windowChannel, (MethodCall call) async {
+          windowCalls.add(call);
+          if (call.method == 'isMaximized') {
+            return true;
+          }
+          return null;
+        });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(windowChannel, null);
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: _FakeDesktopPlaybackService(),
+          appPlatform: AppPlatform.windows,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('进入全屏'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('退出全屏'));
+    await tester.pumpAndSettle();
+
+    expect(windowCalls.map((MethodCall call) => call.method), <String>[
+      'isMaximized',
+      'unmaximize',
+      'setFullScreen',
+      'setFullScreen',
+      'maximize',
+    ]);
+    expect(
+      windowCalls
+          .where((MethodCall call) => call.method == 'setFullScreen')
+          .map((MethodCall call) => call.arguments),
+      <Object?>[
+        <String, Object?>{'isFullScreen': true},
+        <String, Object?>{'isFullScreen': false},
+      ],
+    );
+  });
+
   /// 验证历史位置尚未定位时只遮住画面，定位完成后立即恢复同一个桌面视频表面。
   testWidgets('桌面播放器恢复历史位置时遮住零秒画面', (WidgetTester tester) async {
     final _FakeDesktopPlaybackService service = _FakeDesktopPlaybackService();
@@ -1784,13 +1992,14 @@ void main() {
     expect(find.byKey(const Key('retry-playback')), findsNothing);
   });
 
-  /// 验证播放器下方的两行选集能切换到第二P的 cid。
+  /// 验证页面内往返切分P时不传零位置，让后端恢复每个 CID 自己的进度。
   testWidgets('播放器可以切换多P', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final _FakePlaybackService service = _FakePlaybackService();
     await tester.pumpWidget(
       MaterialApp(
+        theme: ThemeData(splashFactory: NoSplash.splashFactory),
         home: PlayerPage(
           video: _createMultiPartVideo(),
           playbackService: service,
@@ -1810,6 +2019,13 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(service.openedCid, 137649200);
+    expect(service.openedInitialPositions.last, isNull);
+
+    await tester.tap(find.byKey(const Key('part-1')));
+    await tester.pumpAndSettle();
+
+    expect(service.openedCid, 137649199);
+    expect(service.openedInitialPositions.last, isNull);
   });
 
   /// 验证首页创建的任务只在用户确认关联且当前分P实际播放后开始计时。
@@ -2144,6 +2360,240 @@ void main() {
     expect(find.text('已复制 BV1GJ411x7h7'), findsOneWidget);
   });
 
+  /// 验证互动栏保留公开数量，并给主作者和合作作者分别显示可取消的关注按钮。
+  testWidgets('播放器互动显示数量且所有作者都有关注按钮', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final _FakePlayerInteractionService interactionService =
+        _FakePlayerInteractionService();
+    final VideoPreview video = VideoPreview(
+      aid: 123,
+      bvid: 'BV1GJ411x7h7',
+      cid: 137649199,
+      title: '互动数量测试',
+      ownerName: '测试作者',
+      ownerMid: 42,
+      authors: const <VideoAuthor>[
+        VideoAuthor(mid: 42, name: '测试作者'),
+        VideoAuthor(mid: 84, name: '合作作者', role: '参演'),
+      ],
+      stats: const VideoStats(
+        likeCount: 345,
+        coinCount: 89,
+        favoriteCount: 67,
+        shareCount: 12,
+      ),
+      parts: const <VideoPart>[
+        VideoPart(
+          pageNumber: 1,
+          cid: 137649199,
+          title: '第一P',
+          duration: Duration(minutes: 1),
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: video,
+          playbackService: _FakePlaybackService(),
+          interactionService: interactionService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('345'), findsOneWidget);
+    expect(find.text('89'), findsOneWidget);
+    expect(find.text('67'), findsOneWidget);
+    expect(find.text('12'), findsOneWidget);
+    expect(find.byKey(const Key('video-follow-button')), findsNothing);
+    expect(find.byKey(const Key('video-owner-follow-button')), findsOneWidget);
+    expect(
+      find.byKey(const Key('video-author-follow-button-84')),
+      findsOneWidget,
+    );
+    expect(find.text('关注'), findsNWidgets(2));
+
+    await tester.tap(find.byKey(const Key('video-owner-follow-button')));
+    await tester.pumpAndSettle();
+    expect(interactionService.following, isTrue);
+    expect(find.text('已关注'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('video-owner-follow-button')));
+    await tester.pumpAndSettle();
+    expect(interactionService.following, isFalse);
+    expect(find.text('关注'), findsNWidgets(2));
+
+    await tester.tap(find.byKey(const Key('video-author-follow-button-84')));
+    await tester.pumpAndSettle();
+    expect(interactionService.followingByMid[84], isTrue);
+    expect(find.text('已关注'), findsOneWidget);
+  });
+
+  /// 验证投币面板可以选择两枚，并把成功数量反映到公开计数。
+  testWidgets('播放器投币弹窗支持选择两枚', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final _FakePlayerInteractionService interactionService =
+        _FakePlayerInteractionService();
+    final VideoPreview video = VideoPreview(
+      aid: 123,
+      bvid: 'BV1GJ411x7h7',
+      cid: 137649199,
+      title: '投币弹窗测试',
+      ownerName: '测试作者',
+      ownerMid: 42,
+      stats: const VideoStats(coinCount: 89),
+      parts: const <VideoPart>[
+        VideoPart(
+          pageNumber: 1,
+          cid: 137649199,
+          title: '第一P',
+          duration: Duration(minutes: 1),
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: video,
+          playbackService: _FakePlaybackService(),
+          interactionService: interactionService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('video-coin-button')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('coin-option-1')), findsOneWidget);
+    expect(find.byKey(const Key('coin-option-2')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('coin-option-2')));
+    await tester.pumpAndSettle();
+    expect(interactionService.lastCoinMultiply, 2);
+    expect(find.text('91'), findsOneWidget);
+  });
+
+  /// 验证收藏面板展示已有目录，并能创建新目录后直接收藏当前视频。
+  testWidgets('播放器收藏弹窗支持创建新收藏夹', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final _FakePlayerInteractionService interactionService =
+        _FakePlayerInteractionService();
+    final VideoPreview video = VideoPreview(
+      aid: 123,
+      bvid: 'BV1GJ411x7h7',
+      cid: 137649199,
+      title: '收藏弹窗测试',
+      ownerName: '测试作者',
+      ownerMid: 42,
+      stats: const VideoStats(favoriteCount: 67),
+      parts: const <VideoPart>[
+        VideoPart(
+          pageNumber: 1,
+          cid: 137649199,
+          title: '第一P',
+          duration: Duration(minutes: 1),
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: video,
+          playbackService: _FakePlaybackService(),
+          interactionService: interactionService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('video-favorite-button')));
+    await tester.pumpAndSettle();
+    expect(find.text('学习收藏'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('create-favorite-folder')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('favorite-folder-name')),
+      '新建目录',
+    );
+    await tester.pump();
+    await tester.tap(find.widgetWithText(FilledButton, '创建'));
+    await tester.pumpAndSettle();
+
+    expect(interactionService.createdFolderTitle, '新建目录');
+    expect(interactionService.lastAddedFavoriteMediaIds, <int>{999});
+    expect(interactionService.lastDeletedFavoriteMediaIds, isEmpty);
+    expect(find.text('68'), findsOneWidget);
+  });
+
+  /// 验证收藏弹窗可以在一次提交中同时新增和移除多个收藏夹。
+  testWidgets('播放器收藏弹窗支持多选并批量更新', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final _FakePlayerInteractionService interactionService =
+        _FakePlayerInteractionService()
+          ..folders = <BilibiliFavoriteFolder>[
+            const BilibiliFavoriteFolder(
+              mediaId: 111,
+              title: '默认收藏夹',
+              mediaCount: 73,
+              containsVideo: true,
+            ),
+            const BilibiliFavoriteFolder(
+              mediaId: 222,
+              title: '做菜',
+              mediaCount: 10,
+            ),
+            const BilibiliFavoriteFolder(
+              mediaId: 333,
+              title: '保留目录',
+              mediaCount: 2,
+              containsVideo: true,
+            ),
+          ];
+    final VideoPreview video = VideoPreview(
+      aid: 123,
+      bvid: 'BV1GJ411x7h7',
+      cid: 137649199,
+      title: '收藏多选测试',
+      ownerName: '测试作者',
+      ownerMid: 42,
+      stats: const VideoStats(favoriteCount: 67),
+      parts: const <VideoPart>[
+        VideoPart(
+          pageNumber: 1,
+          cid: 137649199,
+          title: '第一P',
+          duration: Duration(minutes: 1),
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: video,
+          playbackService: _FakePlaybackService(),
+          interactionService: interactionService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('video-favorite-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('favorite-folder-111')));
+    await tester.tap(find.byKey(const Key('favorite-folder-222')));
+    await tester.tap(find.byKey(const Key('confirm-favorite-folders')));
+    await tester.pumpAndSettle();
+
+    expect(interactionService.lastAddedFavoriteMediaIds, <int>{222});
+    expect(interactionService.lastDeletedFavoriteMediaIds, <int>{111});
+    expect(find.text('67'), findsOneWidget);
+  });
+
   /// 验证结构化简介把 @UP 和链接标蓝，且外链必须确认风险后才交给默认浏览器启动器。
   testWidgets('视频简介提及可点击且外链先确认风险', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
@@ -2372,9 +2822,16 @@ void main() {
     expect(playerAfterDrag, playerBeforeDrag);
 
     await tester.enterText(find.byKey(const Key('note-title-field')), '关键观点');
-    await tester.enterText(find.byKey(const Key('note-body-field')), '这是正文内容。');
+    final Finder portraitBodyField = find.byKey(const Key('note-body-field'));
+    await tester.tap(portraitBodyField);
+    await tester.enterText(portraitBodyField, '这是正文内容。');
+    await tester.pump();
+    expect(tester.testTextInput.isVisible, isTrue);
+    // 自动保存到期会刷新笔记列表，但不能禁用正文输入或收起键盘。
+    await tester.pump(const Duration(milliseconds: 900));
+    expect(tester.testTextInput.isVisible, isTrue);
+    expect(tester.widget<TextField>(portraitBodyField).enabled, isTrue);
     // 停止输入后，草稿会在去抖时间内自动写入本机，不依赖手动保存按钮。
-    await tester.pump(const Duration(seconds: 1));
     await tester.pumpAndSettle();
     expect(await noteService.loadNotes(), hasLength(1));
     expect((await noteService.loadNotes()).single.body, '这是正文内容。');
