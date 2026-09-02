@@ -55,7 +55,13 @@ Windows 包版本：`1.5.0.17`
 
 ## 发布资产
 
-正式构建完成后，本节会记录 Android APK、Windows x64 EXE 安装器和 Windows x64 便携 ZIP 的大小与 SHA-256 校验值。正式 Release 不包含测试签名 MSIX。
+正式构建运行 `33623600224` 已成功，构建提交为 `68b34db2d60a29c25413963bf23e127b4956928f`。以下校验值由 Actions artifact 下载后在本机独立计算，正式 Release 不包含测试签名 MSIX。
+
+| 文件 | 大小（字节） | SHA-256 |
+| --- | ---: | --- |
+| `FocuBili-v1.5.0-android.apk` | `69221843` | `E23109500A808888E2F5A70B7B9566DDDABF5BF2B953BA9CEB0A004DCA5E49E2` |
+| `FocuBili-v1.5.0-windows-x64-setup.exe` | `27842460` | `EF6A03B45818A571982F076BC92EC31BA88ADAF613808B5E7F9A10F24B6D5652` |
+| `FocuBili-v1.5.0-windows-x64-portable.zip` | `37918923` | `D3EE92EA95F57982DF6163BA87F6279A20CD038883C2E92554426C2FAAD0315C` |
 
 ## 发布顺序
 
