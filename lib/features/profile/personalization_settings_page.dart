@@ -2,10 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../../core/layout/adaptive_layout.dart';
 import '../../core/layout/adaptive_page_frame.dart';
 import '../../core/router/app_router.dart';
 import '../../models/playback_preferences.dart';
+import '../../services/app_behavior_preferences_service.dart';
 import '../../services/playback_preferences_service.dart';
 import '../../services/app_update_service.dart';
 import '../../services/focus_notification_service.dart';
@@ -13,6 +13,14 @@ import '../../services/focus_preferences_service.dart';
 import '../../services/windows_clipboard_link_service.dart';
 import '../../platform/app_platform.dart';
 import 'app_theme_mode_controller.dart';
+
+/// 标识个性化设置当前显示首页还是某个二级分类页面。
+enum _SettingsLevel {
+  overview,
+  accountAndPrivacy,
+  playbackAndFocus,
+  appearanceAndApplication,
+}
 
 /// 展示焦点哔哩的个性化选项，并把播放器手势偏好保存在当前设备。
 class PersonalizationSettingsPage extends StatefulWidget {
@@ -23,6 +31,7 @@ class PersonalizationSettingsPage extends StatefulWidget {
     this.focusPreferencesService,
     this.focusNotificationService = const FocusNotificationService(),
     this.windowsClipboardPreferencesService,
+    this.behaviorPreferencesService,
     this.appPlatform,
   });
 
@@ -31,6 +40,7 @@ class PersonalizationSettingsPage extends StatefulWidget {
   final FocusNotificationService focusNotificationService;
   final WindowsClipboardLinkPreferencesService?
   windowsClipboardPreferencesService;
+  final AppBehaviorPreferencesService? behaviorPreferencesService;
   final AppPlatform? appPlatform;
 
   /// 创建负责加载和保存设置的页面状态。
@@ -52,16 +62,29 @@ class _PersonalizationSettingsPageState
   bool _savingUpdatePreference = false;
   bool _windowsClipboardDetectionEnabled = false;
   bool _savingWindowsClipboardPreference = false;
+  bool _accountReadOnly = true;
+  bool _searchHistoryEnabled = true;
+  bool _watchHistoryEnabled = true;
+  bool _savingBehaviorPreference = false;
+  _SettingsLevel _settingsLevel = _SettingsLevel.overview;
   late final AppUpdateController _fallbackUpdateController;
   late final AppThemeModeController _fallbackThemeModeController;
   late final FocusPreferencesService _focusPreferencesService;
   late final WindowsClipboardLinkPreferencesService
   _windowsClipboardPreferencesService;
+  late final AppBehaviorPreferencesService _behaviorPreferencesService;
 
   /// 判断页面是否明确运行在 Windows，测试可通过构造参数稳定覆盖。
   bool get _isWindows =>
       (widget.appPlatform ?? AppPlatformDetector.current) ==
       AppPlatform.windows;
+
+  /// 判断当前平台是否支持前台剪贴板链接检测。
+  bool get _supportsClipboardDetection {
+    final AppPlatform platform =
+        widget.appPlatform ?? AppPlatformDetector.current;
+    return platform == AppPlatform.windows || platform == AppPlatform.android;
+  }
 
   /// 页面创建后读取设备里已经保存的播放器偏好。
   @override
@@ -73,6 +96,8 @@ class _PersonalizationSettingsPageState
     _windowsClipboardPreferencesService =
         widget.windowsClipboardPreferencesService ??
         WindowsClipboardLinkPreferencesService();
+    _behaviorPreferencesService =
+        widget.behaviorPreferencesService ?? AppBehaviorPreferencesService();
     _fallbackUpdateController = AppUpdateController()
       ..addListener(_handleFallbackUpdateChanged);
     _fallbackThemeModeController = AppThemeModeController()
@@ -104,6 +129,12 @@ class _PersonalizationSettingsPageState
           .load();
       final bool windowsClipboardDetectionEnabled =
           await _windowsClipboardPreferencesService.loadEnabled();
+      final bool accountReadOnly = await _behaviorPreferencesService
+          .loadAccountReadOnly();
+      final bool searchHistoryEnabled = await _behaviorPreferencesService
+          .loadSearchHistoryEnabled();
+      final bool watchHistoryEnabled = await _behaviorPreferencesService
+          .loadWatchHistoryEnabled();
       final bool hasDoNotDisturbAccess =
           widget.focusNotificationService.supportsDoNotDisturb
           ? await widget.focusNotificationService.hasDoNotDisturbAccess()
@@ -115,6 +146,9 @@ class _PersonalizationSettingsPageState
         _preferences = preferences;
         _focusPreferences = focusPreferences;
         _windowsClipboardDetectionEnabled = windowsClipboardDetectionEnabled;
+        _accountReadOnly = accountReadOnly;
+        _searchHistoryEnabled = searchHistoryEnabled;
+        _watchHistoryEnabled = watchHistoryEnabled;
         _hasDoNotDisturbAccess = hasDoNotDisturbAccess;
         _loading = false;
       });
@@ -125,7 +159,73 @@ class _PersonalizationSettingsPageState
     }
   }
 
-  /// 保存 Windows 剪贴板检测开关；失败时恢复原值并显示说明。
+  /// 保存账号只读开关；关闭后账号互动服务才允许提交写请求。
+  Future<void> _setAccountReadOnly(bool enabled) async {
+    await _saveBehaviorPreference(
+      enabled: enabled,
+      previous: _accountReadOnly,
+      applyValue: (bool value) => _accountReadOnly = value,
+      saveValue: _behaviorPreferencesService.saveAccountReadOnly,
+      failureMessage: '账号只读设置保存失败，请稍后重试。',
+    );
+  }
+
+  /// 保存搜索记录开关；关闭后保留已有记录但不再新增。
+  Future<void> _setSearchHistoryEnabled(bool enabled) async {
+    await _saveBehaviorPreference(
+      enabled: enabled,
+      previous: _searchHistoryEnabled,
+      applyValue: (bool value) => _searchHistoryEnabled = value,
+      saveValue: _behaviorPreferencesService.saveSearchHistoryEnabled,
+      failureMessage: '搜索记录设置保存失败，请稍后重试。',
+    );
+  }
+
+  /// 保存观看记录开关；关闭后保留已有记录但不再新增。
+  Future<void> _setWatchHistoryEnabled(bool enabled) async {
+    await _saveBehaviorPreference(
+      enabled: enabled,
+      previous: _watchHistoryEnabled,
+      applyValue: (bool value) => _watchHistoryEnabled = value,
+      saveValue: _behaviorPreferencesService.saveWatchHistoryEnabled,
+      failureMessage: '观看记录设置保存失败，请稍后重试。',
+    );
+  }
+
+  /// 统一执行行为开关的乐观更新、持久化和失败回滚。
+  Future<void> _saveBehaviorPreference({
+    required bool enabled,
+    required bool previous,
+    required ValueChanged<bool> applyValue,
+    required Future<bool> Function(bool enabled) saveValue,
+    required String failureMessage,
+  }) async {
+    if (_savingBehaviorPreference) {
+      return;
+    }
+    setState(() {
+      applyValue(enabled);
+      _savingBehaviorPreference = true;
+    });
+    try {
+      if (!await saveValue(enabled)) {
+        throw StateError('无法保存应用行为偏好');
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => applyValue(previous));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(failureMessage)));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _savingBehaviorPreference = false);
+      }
+    }
+  }
+
+  /// 保存前台剪贴板检测开关；失败时恢复原值并显示说明。
   Future<void> _setWindowsClipboardDetectionEnabled(bool enabled) async {
     if (_savingWindowsClipboardPreference) {
       return;
@@ -140,7 +240,7 @@ class _PersonalizationSettingsPageState
         enabled,
       );
       if (!saved) {
-        throw StateError('无法保存 Windows 剪贴板开关');
+        throw StateError('无法保存剪贴板开关');
       }
     } catch (_) {
       if (mounted) {
@@ -483,7 +583,59 @@ class _PersonalizationSettingsPageState
     );
   }
 
-  /// 创建“播放与专注”设置卡，让横屏平板左栏只承载使用频率最高的行为开关。
+  /// 创建“账号与隐私”设置卡，集中管理账号写入和本机行为记录。
+  Widget _buildAccountAndPrivacySection() {
+    return _buildSettingsSection(
+      key: const Key('settings-account-privacy-section'),
+      icon: Icons.admin_panel_settings_outlined,
+      title: '账号与隐私',
+      children: <Widget>[
+        SwitchListTile.adaptive(
+          key: const Key('enable-account-read-only'),
+          value: _accountReadOnly,
+          // 账号只读开关函数保存后会被所有 B站写请求统一检查。
+          onChanged: _savingBehaviorPreference ? null : _setAccountReadOnly,
+          secondary: const Icon(Icons.lock_outline_rounded),
+          title: const Text('账号只读'),
+          subtitle: const Text('开启后将无法进行点赞、投币、收藏等对账号写入的操作。'),
+        ),
+        SwitchListTile.adaptive(
+          key: const Key('enable-search-history'),
+          value: _searchHistoryEnabled,
+          // 搜索记录开关函数只控制后续新增，已有记录仍可查看和清除。
+          onChanged: _savingBehaviorPreference
+              ? null
+              : _setSearchHistoryEnabled,
+          secondary: const Icon(Icons.manage_search_rounded),
+          title: const Text('启用搜索记录'),
+          subtitle: const Text('关闭后不再新增搜索记录，已有记录会继续保留。'),
+        ),
+        SwitchListTile.adaptive(
+          key: const Key('enable-watch-history'),
+          value: _watchHistoryEnabled,
+          // 观看记录开关函数只控制播放器后续写入，不阻止用户删除旧记录。
+          onChanged: _savingBehaviorPreference ? null : _setWatchHistoryEnabled,
+          secondary: const Icon(Icons.history_rounded),
+          title: const Text('启用观看记录'),
+          subtitle: const Text('关闭后不再新增或更新观看进度，已有记录会继续保留。'),
+        ),
+        if (_supportsClipboardDetection)
+          SwitchListTile.adaptive(
+            key: const Key('enable-windows-clipboard-link-detection'),
+            value: _windowsClipboardDetectionEnabled,
+            // 剪贴板开关只保存本机选择，关闭时根监听器不会读取任何内容。
+            onChanged: _savingWindowsClipboardPreference
+                ? null
+                : _setWindowsClipboardDetectionEnabled,
+            secondary: const Icon(Icons.content_paste_search_rounded),
+            title: const Text('检测剪贴板中的 B站链接'),
+            subtitle: const Text('仅在焦点哔哩位于前台时检查；发现可播放视频后先询问，不会自动打开。'),
+          ),
+      ],
+    );
+  }
+
+  /// 创建“播放与专注”设置卡，集中播放器行为、清晰度和专注系统能力。
   Widget _buildPlaybackAndFocusSection() {
     final bool supportsDoNotDisturb =
         widget.focusNotificationService.supportsDoNotDisturb;
@@ -503,18 +655,6 @@ class _PersonalizationSettingsPageState
           title: const Text('启用双击快进快退'),
           subtitle: const Text('关闭后，双击视频画面的任何位置都会切换播放或暂停。'),
         ),
-        if (_isWindows)
-          SwitchListTile.adaptive(
-            key: const Key('enable-windows-clipboard-link-detection'),
-            value: _windowsClipboardDetectionEnabled,
-            // 剪贴板开关只保存本机选择，关闭时根监听器不会读取任何内容。
-            onChanged: _savingWindowsClipboardPreference
-                ? null
-                : _setWindowsClipboardDetectionEnabled,
-            secondary: const Icon(Icons.content_paste_search_rounded),
-            title: const Text('检测剪贴板中的 B站链接'),
-            subtitle: const Text('仅在焦点哔哩位于前台时检查；发现可播放视频后先询问，不会自动打开。'),
-          ),
         if (supportsDoNotDisturb || _isWindows)
           SwitchListTile.adaptive(
             key: const Key('enable-focus-do-not-disturb'),
@@ -541,7 +681,7 @@ class _PersonalizationSettingsPageState
     );
   }
 
-  /// 创建“应用与存储”设置卡，把权限、更新、缓存和版本入口集中到横屏右栏。
+  /// 创建“外观与应用”设置卡，把主题、权限、更新、缓存和版本入口集中展示。
   Widget _buildApplicationSection(
     AppUpdateController updateController,
     AppThemeModeController themeModeController,
@@ -553,7 +693,7 @@ class _PersonalizationSettingsPageState
     return _buildSettingsSection(
       key: const Key('settings-application-section'),
       icon: Icons.tune_rounded,
-      title: '应用与存储',
+      title: '外观与应用',
       children: <Widget>[
         _buildThemeModeTile(themeModeController),
         ListTile(
@@ -671,43 +811,111 @@ class _PersonalizationSettingsPageState
     );
   }
 
-  /// 根据窗口宽度在平板使用双栏设置面板，在手机继续使用易滚动的单栏卡片。
+  /// 创建设置首页的单个分类入口，并显示该分类包含的主要内容。
+  Widget _buildSettingsCategoryTile({
+    required Key key,
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required _SettingsLevel level,
+  }) {
+    return ListTile(
+      key: key,
+      leading: Icon(icon),
+      title: Text(title),
+      subtitle: Text(subtitle),
+      trailing: const Icon(Icons.chevron_right_rounded),
+      // 分类入口函数在当前设置路由内切换层级，保留已经加载的设置状态。
+      onTap: () => setState(() => _settingsLevel = level),
+    );
+  }
+
+  /// 创建由三个分类入口组成的设置首页。
+  Widget _buildSettingsOverview() {
+    return SingleChildScrollView(
+      key: const Key('settings-overview-list'),
+      padding: const EdgeInsets.all(16),
+      child: Card(
+        margin: EdgeInsets.zero,
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          children: <Widget>[
+            _buildSettingsCategoryTile(
+              key: const Key('open-account-privacy-settings'),
+              icon: Icons.admin_panel_settings_outlined,
+              title: '账号与隐私',
+              subtitle: '账号只读、剪贴板与本机记录',
+              level: _SettingsLevel.accountAndPrivacy,
+            ),
+            const Divider(height: 1),
+            _buildSettingsCategoryTile(
+              key: const Key('open-playback-focus-settings'),
+              icon: Icons.play_circle_outline_rounded,
+              title: '播放与专注',
+              subtitle: '清晰度、播放器手势与专注模式',
+              level: _SettingsLevel.playbackAndFocus,
+            ),
+            const Divider(height: 1),
+            _buildSettingsCategoryTile(
+              key: const Key('open-appearance-application-settings'),
+              icon: Icons.tune_rounded,
+              title: '外观与应用',
+              subtitle: '主题、权限、更新、缓存与版本',
+              level: _SettingsLevel.appearanceAndApplication,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 根据当前层级创建设置首页或对应二级页面内容。
   Widget _buildSettingsBody(
     AppUpdateController updateController,
     AppThemeModeController themeModeController,
   ) {
-    final bool workspace = AdaptiveLayout.usesWorkspace(
-      MediaQuery.sizeOf(context),
-    );
-    final Widget playbackSection = _buildPlaybackAndFocusSection();
-    final Widget applicationSection = _buildApplicationSection(
-      updateController,
-      themeModeController,
-    );
+    if (_settingsLevel == _SettingsLevel.overview) {
+      return _buildSettingsOverview();
+    }
+    final Widget section = switch (_settingsLevel) {
+      _SettingsLevel.accountAndPrivacy => _buildAccountAndPrivacySection(),
+      _SettingsLevel.playbackAndFocus => _buildPlaybackAndFocusSection(),
+      _SettingsLevel.appearanceAndApplication => _buildApplicationSection(
+        updateController,
+        themeModeController,
+      ),
+      _SettingsLevel.overview => const SizedBox.shrink(),
+    };
     return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-      child: workspace
-          ? Row(
-              key: const Key('settings-workspace-layout'),
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Expanded(child: playbackSection),
-                const SizedBox(width: 16),
-                Expanded(child: applicationSection),
-              ],
-            )
-          : Column(
-              key: const Key('settings-single-column-layout'),
-              children: <Widget>[
-                playbackSection,
-                const SizedBox(height: 16),
-                applicationSection,
-              ],
-            ),
+      key: const Key('settings-detail-page'),
+      padding: const EdgeInsets.all(16),
+      child: section,
     );
   }
 
-  /// 创建个性化设置页面，并在平板横屏把播放与应用设置分成左右两组。
+  /// 返回当前层级对应的页面标题。
+  String get _pageTitle {
+    return switch (_settingsLevel) {
+      _SettingsLevel.overview => '个性化设置',
+      _SettingsLevel.accountAndPrivacy => '账号与隐私',
+      _SettingsLevel.playbackAndFocus => '播放与专注',
+      _SettingsLevel.appearanceAndApplication => '外观与应用',
+    };
+  }
+
+  /// 二级页面收到返回操作时先回到设置首页，不立即退出整个设置路由。
+  void _returnToSettingsOverview() {
+    setState(() => _settingsLevel = _SettingsLevel.overview);
+  }
+
+  /// 处理系统返回键；仅在二级页面尚未弹出路由时切回设置首页。
+  void _handleSettingsPop(bool didPop, Object? result) {
+    if (!didPop && _settingsLevel != _SettingsLevel.overview) {
+      _returnToSettingsOverview();
+    }
+  }
+
+  /// 创建带分类首页和二级内容页的个性化设置页面。
   @override
   Widget build(BuildContext context) {
     final AppUpdateController updateController =
@@ -717,13 +925,28 @@ class _PersonalizationSettingsPageState
     if (!updateController.loaded && !updateController.checking) {
       unawaited(updateController.initialize(checkOnStart: false));
     }
-    return Scaffold(
-      appBar: AppBar(title: const Text('个性化设置')),
-      body: AdaptivePageFrame(
-        maxWidth: 900,
-        child: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : _buildSettingsBody(updateController, themeModeController),
+    return PopScope<Object?>(
+      canPop: _settingsLevel == _SettingsLevel.overview,
+      onPopInvokedWithResult: _handleSettingsPop,
+      child: Scaffold(
+        appBar: AppBar(
+          leading: _settingsLevel == _SettingsLevel.overview
+              ? null
+              : IconButton(
+                  key: const Key('settings-level-back-button'),
+                  // 顶部返回函数回到设置首页，并保留本页已经加载的开关状态。
+                  onPressed: _returnToSettingsOverview,
+                  icon: const Icon(Icons.arrow_back_rounded),
+                  tooltip: '返回设置首页',
+                ),
+          title: Text(_pageTitle),
+        ),
+        body: AdaptivePageFrame(
+          maxWidth: 900,
+          child: _loading
+              ? const Center(child: CircularProgressIndicator())
+              : _buildSettingsBody(updateController, themeModeController),
+        ),
       ),
     );
   }

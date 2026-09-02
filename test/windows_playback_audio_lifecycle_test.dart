@@ -49,6 +49,19 @@ void main() {
     expect(service, isNot(contains('_mediaErrorDuringOpen')));
   });
 
+  /// 视频画面已经解码但音频仍缺失时应缩短等待，尽快进入下一条媒体组合。
+  test('Windows 首次有画面无声音时两秒内开始切换备用线路', () {
+    final String service = _readWindowsPlaybackService();
+
+    expect(
+      service,
+      contains('_audioAfterVideoReadyTimeout = Duration(seconds: 2)'),
+    );
+    expect(service, contains('DateTime? videoReadyAt;'));
+    expect(service, contains('videoReadyAt ??= DateTime.now();'));
+    expect(service, contains('videoReadyAt.add(_audioAfterVideoReadyTimeout)'));
+  });
+
   /// 历史续播必须先暂停并跳转视频，再等待较慢的外部音轨挂载，避免从零播放数秒。
   test('Windows 历史位置在外部音轨挂载前恢复', () {
     final String service = _readWindowsPlaybackService();

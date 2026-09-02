@@ -3,12 +3,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:focubili/features/profile/subscribed_collections_page.dart';
+import 'package:focubili/features/profile/collection_detail_page.dart';
 import 'package:focubili/features/profile/user_profile_page.dart';
 import 'package:focubili/models/account_collection.dart';
 import 'package:focubili/models/public_profile.dart';
 import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/models/watch_history_entry.dart';
 import 'package:focubili/services/bilibili_account_data_service.dart';
+import 'package:focubili/services/bilibili_interaction_service.dart';
 import 'package:focubili/services/bilibili_public_content_service.dart';
 import 'package:focubili/services/bilibili_service.dart';
 import 'package:focubili/services/learning_list_service.dart';
@@ -249,6 +251,23 @@ class _PartCountFallbackVideoService extends _FakeVideoService {
   }
 }
 
+/// 提供可切换的关注状态，让主页按钮测试不访问真实账号接口。
+class _FakeInteractionService extends BilibiliInteractionService {
+  bool following = false;
+  int writeRequests = 0;
+
+  /// 返回测试内存中的当前关注状态。
+  @override
+  Future<bool> loadFollowingState(int mid) async => following;
+
+  /// 记录关注写操作并同步测试内存状态。
+  @override
+  Future<void> setFollowing({required int mid, required bool following}) async {
+    writeRequests += 1;
+    this.following = following;
+  }
+}
+
 /// 创建使用 Material 主题的测试宿主。
 Widget _host(Widget child) {
   return MaterialApp(home: child);
@@ -303,6 +322,33 @@ void main() {
     expect(find.text('测试合集'), findsOneWidget);
   });
 
+  /// 验证主页关注按钮调用真实服务边界，并在成功后切换为取消关注。
+  testWidgets('UP主页支持关注和取消关注', (WidgetTester tester) async {
+    final _FakeInteractionService interactionService =
+        _FakeInteractionService();
+    await tester.binding.setSurfaceSize(const Size(450, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      _host(
+        UserProfilePage(
+          mid: 7,
+          publicContentService: _FakePublicContentService(),
+          interactionService: interactionService,
+          videoService: _FakeVideoService(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('关注'), findsWidgets);
+    await tester.tap(find.byKey(const Key('creator-follow-button')));
+    await tester.pumpAndSettle();
+
+    expect(interactionService.writeRequests, 1);
+    expect(interactionService.following, isTrue);
+    expect(find.text('取消关注'), findsOneWidget);
+  });
+
   /// 验证本机看过的投稿会在封面显示“上次看过”和最近进度。
   testWidgets('UP主页投稿封面显示本机观看记录', (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
@@ -337,8 +383,8 @@ void main() {
     expect(find.text('上次看过 1:23'), findsOneWidget);
   });
 
-  /// 验证投稿卡片直接显示学习清单按钮，并把完整视频分P资料保存到本机清单。
-  testWidgets('UP主页投稿可直接加入学习清单', (WidgetTester tester) async {
+  /// 验证投稿卡片只显示可切换图标，并能加入和确认取消学习清单。
+  testWidgets('UP主页投稿学习清单图标支持加入和取消', (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
     final SharedPreferences preferences = await SharedPreferences.getInstance();
     final LearningListService learningListService = LearningListService(
@@ -359,13 +405,86 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('加入学习清单'), findsWidgets);
+    expect(find.text('加入学习清单'), findsNothing);
+    expect(find.byTooltip('加入学习清单'), findsWidgets);
     expect(find.byIcon(Icons.more_vert_rounded), findsNothing);
     await tester.tap(find.byKey(const Key('add-creator-video-BV1GJ411x7h7')));
     await tester.pumpAndSettle();
 
     expect(await learningListService.loadEntries(), hasLength(1));
     expect(find.textContaining('已加入学习清单'), findsOneWidget);
+    expect(find.byIcon(Icons.playlist_add_check_rounded), findsWidgets);
+
+    await tester.tap(find.byKey(const Key('add-creator-video-BV1GJ411x7h7')));
+    await tester.pumpAndSettle();
+    expect(find.text('取消加入学习清单？'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, '取消加入'));
+    await tester.pumpAndSettle();
+
+    expect(await learningListService.loadEntries(), isEmpty);
+    expect(find.byTooltip('加入学习清单'), findsWidgets);
+  });
+
+  /// 验证合集条目右侧播放图标被学习清单图标替换，并支持再次点击取消。
+  testWidgets('合集详情右侧学习清单图标支持加入和取消', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final LearningListService learningListService = LearningListService(
+      preferencesLoader: () async => preferences,
+      watchHistoryService: WatchHistoryService(
+        preferencesLoader: () async => preferences,
+      ),
+    );
+    await tester.pumpWidget(
+      _host(
+        CollectionDetailPage(
+          collection: const CreatorCollection(
+            id: 900,
+            ownerMid: 7,
+            title: '测试合集',
+            coverUrl: '',
+            description: '多支独立视频',
+            totalCount: 2,
+            previewVideos: <CreatorVideo>[],
+          ),
+          publicContentService: _FakePublicContentService(),
+          videoService: _FakeVideoService(),
+          learningListService: learningListService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final Finder firstTile = find.byKey(
+      const Key('collection-video-BV1GJ411x7h7'),
+    );
+    expect(
+      find.descendant(
+        of: firstTile,
+        matching: find.byIcon(Icons.play_arrow_rounded),
+      ),
+      findsNothing,
+    );
+    await tester.tap(
+      find.byKey(const Key('add-learning-collection-BV1GJ411x7h7')),
+    );
+    await tester.pumpAndSettle();
+    expect(await learningListService.loadEntries(), hasLength(1));
+    expect(
+      find.descendant(
+        of: firstTile,
+        matching: find.byIcon(Icons.playlist_add_check_rounded),
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(
+      find.byKey(const Key('add-learning-collection-BV1GJ411x7h7')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '取消加入'));
+    await tester.pumpAndSettle();
+    expect(await learningListService.loadEntries(), isEmpty);
   });
 
   /// 验证投稿接口和标题都没有集数时，页面会从完整详情补出真实分P数。

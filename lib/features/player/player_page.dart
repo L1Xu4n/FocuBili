@@ -34,6 +34,7 @@ import '../../services/player_overlay_service.dart';
 import '../../services/player_overlay_service_factory.dart';
 import '../../services/problem_diagnostics_service.dart';
 import '../../services/bilibili_public_content_service.dart';
+import '../../services/bilibili_interaction_service.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/watch_history_service.dart';
 import '../../services/learning_list_service.dart';
@@ -107,6 +108,7 @@ class PlayerPage extends StatefulWidget {
     this.playerOverlayService,
     this.bilibiliService,
     this.publicContentService,
+    this.interactionService,
     this.videoShotService,
     this.videoNoteService,
     this.danmakuPreferencesService,
@@ -128,6 +130,7 @@ class PlayerPage extends StatefulWidget {
   final PlayerOverlayService? playerOverlayService;
   final BilibiliService? bilibiliService;
   final BilibiliPublicContentService? publicContentService;
+  final BilibiliInteractionService? interactionService;
   final VideoShotService? videoShotService;
   final VideoNoteService? videoNoteService;
   final DanmakuPreferencesService? danmakuPreferencesService;
@@ -173,6 +176,7 @@ class _PlayerPageState extends State<PlayerPage>
   late final BilibiliService _bilibiliService;
   @override
   late final BilibiliPublicContentService _publicContentService;
+  late final BilibiliInteractionService _interactionService;
   @override
   late final VideoShotService _videoShotService;
   @override
@@ -183,6 +187,14 @@ class _PlayerPageState extends State<PlayerPage>
   late VideoPreview _activeVideo;
   @override
   late VideoPart _currentPart;
+  BilibiliInteractionState _interactionState = const BilibiliInteractionState();
+  bool _interactionLoading = false;
+  String? _interactionAction;
+  final Map<int, bool> _authorFollowingStates = <int, bool>{};
+  final Set<int> _authorFollowActions = <int>{};
+  int _likeCountDelta = 0;
+  int _coinCountDelta = 0;
+  int _favoriteCountDelta = 0;
   @override
   final List<VideoPreview> _collectionVideoBackStack = <VideoPreview>[];
   @override
@@ -196,6 +208,32 @@ class _PlayerPageState extends State<PlayerPage>
       <String, TapGestureRecognizer>{};
   @override
   bool _showControls = true;
+
+  /// 清理上一支视频的互动状态，并开始读取新视频对应的账号状态。
+  @override
+  void _resetVideoInteractionState() {
+    _interactionState = const BilibiliInteractionState();
+    _interactionAction = null;
+    _authorFollowingStates.clear();
+    _authorFollowActions.clear();
+    _likeCountDelta = 0;
+    _coinCountDelta = 0;
+    _favoriteCountDelta = 0;
+  }
+
+  /// 在视频切换完成后异步读取当前视频的互动状态，避开 setState 回调中的异步副作用。
+  @override
+  void _startVideoInteractionStateLoad() {
+    unawaited(_loadVideoInteractionState());
+  }
+
+  /// 为播放器各个视图扩展提供统一的状态更新入口，避免扩展直接访问 State 的保护成员。
+  void _updatePlayerState(VoidCallback update) {
+    if (mounted) {
+      setState(update);
+    }
+  }
+
   @override
   bool _isDraggingProgress = false;
   @override
@@ -310,6 +348,8 @@ class _PlayerPageState extends State<PlayerPage>
     _bilibiliService = widget.bilibiliService ?? BilibiliVideoInfoService();
     _publicContentService =
         widget.publicContentService ?? BilibiliHttpPublicContentService();
+    _interactionService =
+        widget.interactionService ?? BilibiliInteractionService();
     _videoShotService =
         widget.videoShotService ??
         (widget.playbackService == null
@@ -330,6 +370,7 @@ class _PlayerPageState extends State<PlayerPage>
     _startPlayerPlaybackSession(widget.initialPosition);
     unawaited(_loadWatchHistoryBadges());
     unawaited(_loadCurrentLearningListEntry());
+    _startVideoInteractionStateLoad();
     unawaited(_loadDanmakuPreferences());
     if (widget.playbackService == null) {
       unawaited(_allowPlayerOrientations());

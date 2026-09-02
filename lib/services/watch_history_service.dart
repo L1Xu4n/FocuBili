@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/watch_history_entry.dart';
+import 'app_behavior_preferences_service.dart';
 
 /// 定义读取本机偏好设置的可替换入口，方便单元测试使用内存存储。
 typedef WatchHistoryPreferencesLoader = Future<SharedPreferences> Function();
@@ -10,8 +11,13 @@ typedef WatchHistoryPreferencesLoader = Future<SharedPreferences> Function();
 /// 在设备本地保存最近观看过的视频，不上传或保存任何会话敏感数据。
 class WatchHistoryService {
   /// 创建观看记录服务；未传入读取器时使用真实的 SharedPreferences。
-  WatchHistoryService({WatchHistoryPreferencesLoader? preferencesLoader})
-    : _preferencesLoader = preferencesLoader ?? SharedPreferences.getInstance;
+  WatchHistoryService({
+    WatchHistoryPreferencesLoader? preferencesLoader,
+    AppBehaviorPreferencesService? behaviorPreferencesService,
+  }) : _preferencesLoader = preferencesLoader ?? SharedPreferences.getInstance,
+       _behaviorPreferencesService =
+           behaviorPreferencesService ??
+           AppBehaviorPreferencesService(preferencesLoader: preferencesLoader);
 
   static const String _storageKey = 'focubili_watch_history';
 
@@ -19,6 +25,7 @@ class WatchHistoryService {
   static const int maximumEntries = 50;
 
   final WatchHistoryPreferencesLoader _preferencesLoader;
+  final AppBehaviorPreferencesService _behaviorPreferencesService;
 
   /// 读取观看记录，跳过损坏条目、重复 BV 号和超过上限的旧数据。
   Future<List<WatchHistoryEntry>> loadHistory() async {
@@ -33,6 +40,9 @@ class WatchHistoryService {
 
   /// 保存一次观看状态，并将同一 BV 号的旧记录替换为最新的一条。
   Future<List<WatchHistoryEntry>> record(WatchHistoryEntry entry) async {
+    if (!await _behaviorPreferencesService.loadWatchHistoryEnabled()) {
+      return loadHistory();
+    }
     final WatchHistoryEntry? normalizedEntry = _normalizeEntry(entry);
     if (normalizedEntry == null) {
       return loadHistory();

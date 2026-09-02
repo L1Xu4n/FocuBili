@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/L1Xu4n/FocuBili/releases"><img src="https://img.shields.io/github/v/release/L1Xu4n/FocuBili?display_name=tag&sort=semver" alt="GitHub Release"></a>
-  <img src="https://img.shields.io/badge/version-v1.4.1-2EA44F" alt="Current version v1.4.1">
+  <img src="https://img.shields.io/badge/version-v1.5.0-2EA44F" alt="Current version v1.5.0">
   <img src="https://img.shields.io/badge/Flutter-3.44.6-02569B?logo=flutter" alt="Flutter 3.44.6">
   <img src="https://img.shields.io/badge/Android-7.0+-3DDC84?logo=android" alt="Android 7.0+">
   <img src="https://img.shields.io/badge/Windows-10%201809+-0078D4?logo=windows" alt="Windows 10 1809+">
@@ -28,7 +28,16 @@ FocuBili 希望保留“主动找到一支视频并认真看完”这件事本�
 - 首页不提供无限推荐流；
 - 搜索、BV 号和视频链接是主要入口；
 - 播放页优先保留视频、选集、简介和必要控制；
-- 账号数据功能以只读为主，不伪装点赞、投币、收藏或关注写操作。
+- 账号数据功能默认只读；关闭保护后才允许点赞、投币、收藏和关注等账号写操作。
+
+## v1.5.0 更新内容
+
+- 增加点赞、投币、收藏、关注等功能，并支持数量显示、投币数量选择和收藏夹选择。
+- 增加对合作视频的适配，现在会显示多位作者，并可分别关注作者。
+- 添加搜索记录和观看记录的开关，账号写入默认受到“账号只读”保护。
+- 修复 Windows 全屏、搜索候选、视频简介链接、分段进度条和多分P标题等问题，并完成多处功能与 UI 优化。
+
+Windows EXE 安装器、便携版与 Android APK 可从 [GitHub Release v1.5.0](https://github.com/L1Xu4n/FocuBili/releases/tag/v1.5.0) 下载。完整变化与校验结果见 [v1.5.0 发布说明](docs/RELEASE_NOTES_v1.5.0.md)。
 
 ## v1.4.1 更新内容
 
@@ -299,12 +308,11 @@ Windows Release 目录和安装产物默认生成在：
 
 ```text
 build/windows/x64/runner/Release/
-build/windows/x64/installer/FocuBili-v1.4.1-windows-x64-setup.exe
-build/windows/x64/installer/FocuBili-v1.4.1-windows-x64-portable.zip
-build/windows/x64/installer/FocuBili-v1.4.1-windows-x64.msix
+build/windows/x64/installer/FocuBili-v1.5.0-windows-x64-setup.exe
+build/windows/x64/installer/FocuBili-v1.5.0-windows-x64-portable.zip
 ```
 
-打包脚本会从 `pubspec.yaml` 自动读取版本，并把 Visual C++ 运行库加入安装器和便携版。`FocuBili.exe` 依赖同目录的 DLL 与 `data/`，不能单独分发。正式 MSIX 必须改用与清单 Publisher 一致的可信证书签名。
+打包脚本会从 `pubspec.yaml` 自动读取版本，并把 Visual C++ 运行库加入安装器和便携版。`FocuBili.exe` 依赖同目录的 DLL 与 `data/`，不能单独分发。当前正式发布包含 Windows 安装器和便携版，不包含 MSIX。
 
 ### 发布新版本时的 App 更新摘要
 

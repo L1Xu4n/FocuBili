@@ -327,6 +327,7 @@ class BilibiliVideoInfoService
         : descriptionSegments
               .map((VideoDescriptionSegment segment) => segment.text)
               .join();
+    final List<VideoAuthor> authors = _parseVideoAuthors(data, owner);
     return VideoPreview(
       aid: _readIdentifier(data['aid']),
       bvid: resolvedBvid,
@@ -335,6 +336,7 @@ class BilibiliVideoInfoService
       ownerName: _readText(owner['name'], '未知 UP 主'),
       ownerMid: _readIdentifier(owner['mid']),
       ownerAvatarUrl: _normalizeImageUrl(_readText(owner['face'], '')),
+      authors: authors,
       description: resolvedDescription,
       descriptionSegments: descriptionSegments,
       publishedAt: _parseUnixTime(data['pubdate']),
@@ -344,6 +346,58 @@ class BilibiliVideoInfoService
       thumbnailUrl: _normalizeThumbnailUrl(_readText(data['pic'], '')),
       parts: parts,
     );
+  }
+
+  /// 解析合作视频作者数组并去重，始终把详情接口的主作者放在第一位。
+  List<VideoAuthor> _parseVideoAuthors(
+    Map<Object?, Object?> data,
+    Map<Object?, Object?> owner,
+  ) {
+    final List<VideoAuthor> authors = <VideoAuthor>[];
+    final int ownerMid = _readIdentifier(owner['mid']);
+    final String ownerName = _readText(owner['name'], '未知 UP 主');
+    authors.add(
+      VideoAuthor(
+        mid: ownerMid,
+        name: ownerName,
+        avatarUrl: _normalizeImageUrl(_readText(owner['face'], '')),
+      ),
+    );
+    final Object? rawStaff =
+        data['staff'] ?? data['staffs'] ?? data['cooperate'];
+    if (rawStaff is! List) {
+      return List<VideoAuthor>.unmodifiable(authors);
+    }
+    for (final Object? rawAuthor in rawStaff) {
+      final Map<Object?, Object?> author = _readObject(rawAuthor);
+      final int mid = _readIdentifier(author['mid'] ?? author['uid']);
+      final String name = _readText(
+        author['name'] ?? author['uname'] ?? author['username'],
+        '',
+      );
+      if ((mid <= 0 && name.isEmpty) ||
+          (mid > 0 && mid == ownerMid) ||
+          authors.any(
+            (VideoAuthor item) =>
+                (mid > 0 && item.mid == mid) || (mid <= 0 && item.name == name),
+          )) {
+        continue;
+      }
+      authors.add(
+        VideoAuthor(
+          mid: mid,
+          name: name.isEmpty ? '合作作者' : name,
+          avatarUrl: _normalizeImageUrl(
+            _readText(
+              author['face'] ?? author['avatar'] ?? author['face_url'],
+              '',
+            ),
+          ),
+          role: _readText(author['title'] ?? author['role'], ''),
+        ),
+      );
+    }
+    return List<VideoAuthor>.unmodifiable(authors);
   }
 
   /// 解析结构化简介；以完整 desc 为正文、desc_v2 为提及元数据，并额外识别 HTTP(S) 链接。
@@ -463,20 +517,44 @@ class BilibiliVideoInfoService
     if (text.isEmpty) {
       return;
     }
-    final RegExp urlPattern = RegExp(
-      r'https?://[^\s<>\u3000]+',
+    final RegExp linkPattern = RegExp(
+      r'https?://[^\s<>\u3000，。！？；：、（）【】《》「」『』]+'
+      r'|BV[0-9A-Za-z]{10}',
       caseSensitive: false,
     );
     const String trailingPunctuation = '.,!?;:"\'，。！？；：、）)]}》】」』';
     int cursor = 0;
-    for (final RegExpMatch match in urlPattern.allMatches(text)) {
+    for (final RegExpMatch match in linkPattern.allMatches(text)) {
+      if (match.start < cursor) {
+        continue;
+      }
+      final String matchedText = match.group(0)!;
+      final bool isBareBvid =
+          matchedText.length == 12 &&
+          matchedText.substring(0, 2).toLowerCase() == 'bv';
+      if (isBareBvid &&
+          ((match.start > 0 &&
+                  RegExp(r'[0-9A-Za-z]').hasMatch(text[match.start - 1])) ||
+              (match.end < text.length &&
+                  RegExp(r'[0-9A-Za-z]').hasMatch(text[match.end])))) {
+        continue;
+      }
       int linkEnd = match.end;
-      while (linkEnd > match.start &&
-          trailingPunctuation.contains(text[linkEnd - 1])) {
-        linkEnd -= 1;
+      if (!isBareBvid) {
+        while (linkEnd > match.start &&
+            trailingPunctuation.contains(text[linkEnd - 1])) {
+          linkEnd -= 1;
+        }
       }
       final String linkText = text.substring(match.start, linkEnd);
-      final Uri? uri = Uri.tryParse(linkText);
+      Uri? uri;
+      if (isBareBvid) {
+        uri = Uri.tryParse(
+          'https://www.bilibili.com/video/${linkText.substring(0, 12)}',
+        );
+      } else {
+        uri = Uri.tryParse(linkText);
+      }
       if (uri == null ||
           uri.host.isEmpty ||
           (uri.scheme != 'http' && uri.scheme != 'https')) {

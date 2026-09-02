@@ -13,6 +13,7 @@ import 'flutter_video_frame_capture.dart';
 import 'media_cache_service.dart';
 import 'native_playback_service.dart';
 import 'playback_video_surface.dart';
+import 'video_shot_service.dart';
 import 'windows_dash_media_plan.dart';
 import 'windows_playback_recovery_policy.dart';
 import 'windows_playback_progress_store.dart';
@@ -22,9 +23,11 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
   /// 创建 Windows 播放服务并立即订阅底层播放器状态；测试可注入播放源服务。
   WindowsPlaybackService({
     BilibiliDesktopPlaybackSourceService? sourceService,
+    BilibiliVideoShotService? videoShotService,
     Player? player,
     WindowsPlaybackProgressStore? progressStore,
   }) : _sourceService = sourceService ?? BilibiliDesktopPlaybackSourceService(),
+       _videoShotService = videoShotService ?? BilibiliVideoShotService(),
        _progressStore = progressStore ?? const WindowsPlaybackProgressStore(),
        _player =
            player ??
@@ -41,6 +44,7 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
 
   static const Duration _progressSaveInterval = Duration(seconds: 5);
   static const Duration _audioDecoderReadyTimeout = Duration(seconds: 5);
+  static const Duration _audioAfterVideoReadyTimeout = Duration(seconds: 2);
   static const Duration _mediaErrorHealthCheckTimeout = Duration(seconds: 1);
   static const Duration _resumePositionTolerance = Duration(seconds: 1);
   static const Duration _resumePositionCorrectionTimeout = Duration(seconds: 2);
@@ -49,6 +53,7 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
   );
 
   final BilibiliDesktopPlaybackSourceService _sourceService;
+  final BilibiliVideoShotService _videoShotService;
   final WindowsPlaybackProgressStore _progressStore;
   final Player _player;
   late final VideoController _videoController;
@@ -369,11 +374,20 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
     return false;
   }
 
-  /// 从 Flutter 已绘制的视频画面读取 PNG，绕开可能直接终止进程的 libmpv 原生截图。
+  /// 优先读取 Flutter 已绘制画面，失败时裁切 B 站时间点雪碧图，始终绕开会终止进程的原生截图。
   @override
   Future<String?> captureCurrentFrame() async {
     _ensureAvailable();
-    final List<int>? bytes = await _frameCapture.capturePngBytes();
+    List<int>? bytes = await _frameCapture.capturePngBytes(pixelRatio: 1.5);
+    final VideoPreview? video = _currentVideo;
+    final VideoPart? part = _currentPart;
+    if ((bytes == null || bytes.isEmpty) && video != null && part != null) {
+      bytes = await _videoShotService.captureFramePngBytes(
+        bvid: video.bvid,
+        cid: part.cid,
+        position: _player.state.position,
+      );
+    }
     if (bytes == null || bytes.isEmpty) {
       return null;
     }
@@ -719,10 +733,19 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
   /// 等待 media_kit 暴露当前线路的音视频解码结果；零散底层错误只作为线索，不抢先否定已成功的播放。
   Future<bool> _waitForDecodedAudio(int generation) async {
     final DateTime deadline = DateTime.now().add(_audioDecoderReadyTimeout);
+    DateTime? videoReadyAt;
     while (_isCurrentSourceRequest(generation) &&
         DateTime.now().isBefore(deadline)) {
-      if (_hasDecodedVideo() && await _hasDecodedAudio()) {
-        return true;
+      if (_hasDecodedVideo()) {
+        if (await _hasDecodedAudio()) {
+          return true;
+        }
+        videoReadyAt ??= DateTime.now();
+        if (!DateTime.now().isBefore(
+          videoReadyAt.add(_audioAfterVideoReadyTimeout),
+        )) {
+          return false;
+        }
       }
       await Future<void>.delayed(const Duration(milliseconds: 100));
     }
