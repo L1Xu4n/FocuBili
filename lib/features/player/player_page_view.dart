@@ -13,7 +13,7 @@ extension _PlayerPageView on _PlayerPageState {
     final double fullscreenSafeBottom = _fullscreen
         ? MediaQuery.paddingOf(context).bottom
         : 0;
-    final double horizontalInset = _fullscreen && aboveControls ? 12 : 0;
+    final double horizontalInset = aboveControls ? 12 : 0;
     final double bottom = (aboveControls ? 54 : 4) + fullscreenSafeBottom;
     return Positioned(
       left: horizontalInset,
@@ -412,7 +412,14 @@ extension _PlayerPageView on _PlayerPageState {
                                           if (_fullscreen)
                                             Expanded(
                                               child: _AutoScrollingText(
-                                                text: _activeVideo.title,
+                                                key: const Key(
+                                                  'player-bar-title',
+                                                ),
+                                                text:
+                                                    _activeVideo.parts.length >
+                                                        1
+                                                    ? _currentPart.title
+                                                    : _activeVideo.title,
                                                 style: const TextStyle(
                                                   color: Colors.white,
                                                   fontSize: 14,
@@ -541,6 +548,9 @@ extension _PlayerPageView on _PlayerPageState {
                                       child: SizedBox(
                                         height: 15,
                                         child: Slider(
+                                          key: const Key(
+                                            'player-progress-slider',
+                                          ),
                                           value: _progress,
                                           // 开始拖动函数暂停自动收起，便于精确调整进度。
                                           onChangeStart: _startProgressDrag,

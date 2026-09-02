@@ -613,11 +613,14 @@ extension _PlayerDetailsView on _PlayerPageState {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        Text(
-          _activeVideo.title,
-          style: Theme.of(
-            context,
-          ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+        SelectionArea(
+          child: Text(
+            _activeVideo.title,
+            key: const Key('video-title'),
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+          ),
         ),
         const SizedBox(height: 10),
         Wrap(
@@ -788,13 +791,15 @@ extension _PlayerDetailsView on _PlayerPageState {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            Text.rich(
-              TextSpan(style: style, children: _buildDescriptionSpans(style)),
-              key: const Key('video-description'),
-              maxLines: _descriptionExpanded ? null : 3,
-              overflow: _descriptionExpanded
-                  ? TextOverflow.visible
-                  : TextOverflow.ellipsis,
+            SelectionArea(
+              child: Text.rich(
+                TextSpan(style: style, children: _buildDescriptionSpans(style)),
+                key: const Key('video-description'),
+                maxLines: _descriptionExpanded ? null : 3,
+                overflow: _descriptionExpanded
+                    ? TextOverflow.visible
+                    : TextOverflow.ellipsis,
+              ),
             ),
             if (exceedsThreeLines || _descriptionExpanded)
               TextButton(

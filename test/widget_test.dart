@@ -2281,6 +2281,13 @@ void main() {
     );
     fullscreenButton.onPressed!();
     await tester.pumpAndSettle();
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('player-bar-title')),
+        matching: find.text('第一P'),
+      ),
+      findsOneWidget,
+    );
     final Rect partSelectorRect = tester.getRect(
       find.byKey(const Key('part-selector-button')),
     );
@@ -2301,6 +2308,13 @@ void main() {
     await tester.pumpAndSettle();
     expect(service.openedCid, 137649200);
     expect(find.byKey(const Key('fullscreen-part-selector')), findsNothing);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('player-bar-title')),
+        matching: find.text('第二P'),
+      ),
+      findsOneWidget,
+    );
   });
 
   /// 验证播放器日期包含时间、长简介收起时省略，并能长按复制 BV 号。
@@ -2350,6 +2364,20 @@ void main() {
     expect(find.text('2024-01-02 03:04'), findsOneWidget);
     final Text descriptionText = tester.widget<Text>(
       find.byKey(const Key('video-description')),
+    );
+    expect(
+      find.ancestor(
+        of: find.byKey(const Key('video-title')),
+        matching: find.byType(SelectionArea),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.ancestor(
+        of: find.byKey(const Key('video-description')),
+        matching: find.byType(SelectionArea),
+      ),
+      findsOneWidget,
     );
     expect(descriptionText.maxLines, 3);
     expect(descriptionText.overflow, TextOverflow.ellipsis);
@@ -2639,6 +2667,10 @@ void main() {
     await tester.pumpAndSettle();
 
     final Finder description = find.byKey(const Key('video-description'));
+    expect(
+      find.ancestor(of: description, matching: find.byType(SelectionArea)),
+      findsOneWidget,
+    );
     final Text descriptionText = tester.widget<Text>(description);
     final TextSpan rootSpan = descriptionText.textSpan! as TextSpan;
     final List<InlineSpan> spans = rootSpan.children!;
@@ -3671,9 +3703,20 @@ void main() {
     final Rect chapterStripBounds = tester.getRect(
       find.byKey(const Key('video-chapter-strip')),
     );
+    final Rect progressSliderBounds = tester.getRect(
+      find.byKey(const Key('player-progress-slider')),
+    );
     expect(chapterStripBounds.top, greaterThanOrEqualTo(playerBounds.top));
     expect(chapterStripBounds.bottom, lessThanOrEqualTo(playerBounds.bottom));
     expect(chapterStripBounds.height, 24);
+    expect(
+      chapterStripBounds.left,
+      closeTo(progressSliderBounds.left + 8, 0.1),
+    );
+    expect(
+      chapterStripBounds.right,
+      closeTo(progressSliderBounds.right - 8, 0.1),
+    );
     expect(find.byKey(const Key('video-chapter-button')), findsOneWidget);
     expect(find.text('王朝的接力'), findsOneWidget);
 
@@ -3685,6 +3728,20 @@ void main() {
     fullscreenButton.onPressed!();
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('video-chapter-strip')), findsOneWidget);
+    final Rect fullscreenVisibleChapterBounds = tester.getRect(
+      find.byKey(const Key('video-chapter-strip')),
+    );
+    final Rect fullscreenProgressSliderBounds = tester.getRect(
+      find.byKey(const Key('player-progress-slider')),
+    );
+    expect(
+      fullscreenVisibleChapterBounds.left,
+      closeTo(fullscreenProgressSliderBounds.left + 8, 0.1),
+    );
+    expect(
+      fullscreenVisibleChapterBounds.right,
+      closeTo(fullscreenProgressSliderBounds.right - 8, 0.1),
+    );
     await tester.tapAt(
       tester.getRect(find.byKey(const Key('player-surface'))).center,
     );

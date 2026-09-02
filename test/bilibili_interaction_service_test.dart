@@ -1,7 +1,20 @@
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:focubili/services/app_behavior_preferences_service.dart';
 import 'package:focubili/services/bilibili_auth_service.dart';
 import 'package:focubili/services/bilibili_interaction_service.dart';
+
+/// 为互动服务测试提供可控的账号只读状态。
+class _InteractionBehaviorPreferences extends AppBehaviorPreferencesService {
+  /// 创建指定只读状态的测试偏好服务。
+  _InteractionBehaviorPreferences({required this.readOnly});
+
+  final bool readOnly;
+
+  /// 返回当前测试指定的账号只读状态。
+  @override
+  Future<bool> loadAccountReadOnly() async => readOnly;
+}
 
 /// 提供内存 Cookie 容器，让互动服务测试可以模拟已登录和未登录状态。
 class _InteractionCookieStore implements BilibiliCookieStore {
@@ -84,6 +97,7 @@ Map<String, String> _formFields(String? body) {
 BilibiliInteractionService _createInteractionService({
   required _RecordedInteractionRequest request,
   String cookies = 'SESSDATA=session; bili_jct=csrf-token',
+  bool readOnly = false,
 }) {
   return BilibiliInteractionService(
     authService: BilibiliAuthService(
@@ -91,10 +105,34 @@ BilibiliInteractionService _createInteractionService({
       api: _InteractionAuthApi(),
     ),
     request: request.call,
+    behaviorPreferencesService: _InteractionBehaviorPreferences(
+      readOnly: readOnly,
+    ),
   );
 }
 
 void main() {
+  /// 验证默认只读门禁会在真正发起账号写请求前拒绝操作。
+  test('账号只读开启时不发起互动写请求', () async {
+    final _RecordedInteractionRequest request = _RecordedInteractionRequest();
+    final BilibiliInteractionService service = _createInteractionService(
+      request: request,
+      readOnly: true,
+    );
+
+    await expectLater(
+      service.setLiked(aid: 123, liked: true),
+      throwsA(
+        isA<BilibiliInteractionException>().having(
+          (BilibiliInteractionException error) => error.message,
+          'message',
+          contains('账号只读'),
+        ),
+      ),
+    );
+    expect(request.endpoints, isEmpty);
+  });
+
   /// 验证未登录时不会调用任何互动写接口。
   test('未登录时不发起互动请求', () async {
     final _RecordedInteractionRequest request = _RecordedInteractionRequest();

@@ -1389,24 +1389,26 @@ class _SearchPageState extends State<SearchPage> {
     if (!_searchFocusNode.hasFocus || _suggestions.isEmpty) {
       return const SizedBox.shrink();
     }
-    return Column(
-      key: const Key('search-suggestions-section'),
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: List<Widget>.generate(_suggestions.take(10).length, (
-        int index,
-      ) {
-        final String suggestion = _suggestions[index];
-        return InkWell(
-          key: ValueKey<String>('search-suggestion-$index-$suggestion'),
-          // 候选词点击函数立即执行所选关键词搜索。
-          onTap: () => _selectSuggestedQuery(suggestion),
-          borderRadius: BorderRadius.circular(8),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-            child: _buildHighlightedSuggestion(suggestion),
-          ),
-        );
-      }, growable: false),
+    return TextFieldTapRegion(
+      child: Column(
+        key: const Key('search-suggestions-section'),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: List<Widget>.generate(_suggestions.take(10).length, (
+          int index,
+        ) {
+          final String suggestion = _suggestions[index];
+          return InkWell(
+            key: ValueKey<String>('search-suggestion-$index-$suggestion'),
+            // 候选词点击函数立即执行所选关键词搜索。
+            onTap: () => _selectSuggestedQuery(suggestion),
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+              child: _buildHighlightedSuggestion(suggestion),
+            ),
+          );
+        }, growable: false),
+      ),
     );
   }
 

@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/features/profile/personalization_settings_page.dart';
 import 'package:focubili/features/profile/app_theme_mode_controller.dart';
 import 'package:focubili/models/playback_preferences.dart';
+import 'package:focubili/services/app_behavior_preferences_service.dart';
 import 'package:focubili/services/app_update_service.dart';
 import 'package:focubili/services/focus_notification_service.dart';
 import 'package:focubili/services/focus_preferences_service.dart';
@@ -30,6 +31,12 @@ class _SettingsUpdatePreferences extends AppUpdatePreferencesService {
   /// 测试不验证开关持久化，因此保存操作保持为空。
   @override
   Future<void> saveEnabled(bool enabled) async {}
+}
+
+/// 从设置首页进入指定分类，并等待二级页面完成重建。
+Future<void> _openSettingsLevel(WidgetTester tester, Key entryKey) async {
+  await tester.tap(find.byKey(entryKey));
+  await tester.pumpAndSettle();
 }
 
 /// 注册设置页专注勿扰开关、说明和系统权限入口测试。
@@ -78,7 +85,14 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await _openSettingsLevel(
+      tester,
+      const Key('open-appearance-application-settings'),
+    );
     expect(find.byKey(const Key('open-android-permissions')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('settings-level-back-button')));
+    await tester.pumpAndSettle();
+    await _openSettingsLevel(tester, const Key('open-playback-focus-settings'));
     final Finder toggle = find.byKey(const Key('enable-focus-do-not-disturb'));
     expect(toggle, findsOneWidget);
     await tester.tap(toggle);
@@ -128,6 +142,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await _openSettingsLevel(
+      tester,
+      const Key('open-appearance-application-settings'),
+    );
     expect(find.text('新版本：优化平板播放器和账号卡片'), findsOneWidget);
   });
 
@@ -145,6 +163,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await _openSettingsLevel(tester, const Key('open-playback-focus-settings'));
     expect(find.textContaining('自动选择下一档更低清晰度'), findsNWidgets(2));
     await tester.tap(find.byKey(const Key('wifi-default-quality-dropdown')));
     await tester.pumpAndSettle();
@@ -186,6 +205,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await _openSettingsLevel(
+      tester,
+      const Key('open-appearance-application-settings'),
+    );
     SegmentedButton<ThemeMode> selector = tester.widget(
       find.byKey(const Key('theme-mode-segmented-button')),
     );
@@ -220,6 +243,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await _openSettingsLevel(
+      tester,
+      const Key('open-account-privacy-settings'),
+    );
     final Finder toggle = find.byKey(
       const Key('enable-windows-clipboard-link-detection'),
     );
@@ -228,6 +255,96 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(await service.loadEnabled(), isTrue);
+  });
+
+  /// 验证 Android 设置页也提供剪贴板链接检测开关并可保存。
+  testWidgets('Android 设置页保存剪贴板链接检测开关', (WidgetTester tester) async {
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final WindowsClipboardLinkPreferencesService service =
+        WindowsClipboardLinkPreferencesService(
+          preferencesLoader: () async => preferences,
+        );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PersonalizationSettingsPage(
+          appPlatform: AppPlatform.android,
+          windowsClipboardPreferencesService: service,
+          focusNotificationService: FocusNotificationService(channel: channel),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await _openSettingsLevel(
+      tester,
+      const Key('open-account-privacy-settings'),
+    );
+
+    final Finder toggle = find.byKey(
+      const Key('enable-windows-clipboard-link-detection'),
+    );
+    expect(toggle, findsOneWidget);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+
+    expect(await service.loadEnabled(), isTrue);
+  });
+
+  /// 验证账号与隐私二级页使用要求的默认值，并把三个行为开关独立保存。
+  testWidgets('账号与隐私设置使用默认值并可保存', (WidgetTester tester) async {
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final AppBehaviorPreferencesService behaviorService =
+        AppBehaviorPreferencesService(
+          preferencesLoader: () async => preferences,
+        );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PersonalizationSettingsPage(
+          appPlatform: AppPlatform.android,
+          behaviorPreferencesService: behaviorService,
+          focusNotificationService: FocusNotificationService(channel: channel),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('settings-overview-list')), findsOneWidget);
+    await _openSettingsLevel(
+      tester,
+      const Key('open-account-privacy-settings'),
+    );
+
+    expect(
+      tester
+          .widget<SwitchListTile>(
+            find.byKey(const Key('enable-account-read-only')),
+          )
+          .value,
+      isTrue,
+    );
+    expect(
+      tester
+          .widget<SwitchListTile>(
+            find.byKey(const Key('enable-search-history')),
+          )
+          .value,
+      isTrue,
+    );
+    expect(
+      tester
+          .widget<SwitchListTile>(find.byKey(const Key('enable-watch-history')))
+          .value,
+      isTrue,
+    );
+
+    await tester.tap(find.byKey(const Key('enable-account-read-only')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('enable-search-history')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('enable-watch-history')));
+    await tester.pumpAndSettle();
+
+    expect(await behaviorService.loadAccountReadOnly(), isFalse);
+    expect(await behaviorService.loadSearchHistoryEnabled(), isFalse);
+    expect(await behaviorService.loadWatchHistoryEnabled(), isFalse);
   });
 
   /// 验证 Windows 开关只保存“开始时提醒”，不会继续声称能够自动修改系统专注。
@@ -247,6 +364,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await _openSettingsLevel(tester, const Key('open-playback-focus-settings'));
     final Finder toggle = find.byKey(const Key('enable-focus-do-not-disturb'));
     expect(toggle, findsOneWidget);
     expect(find.text('开始时提醒开启 Windows 系统专注'), findsOneWidget);

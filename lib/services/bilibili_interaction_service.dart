@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'app_behavior_preferences_service.dart';
 import 'bilibili_auth_service.dart';
 
 /// 保存一次 B 站互动接口的 HTTP 状态和 JSON 正文，测试时可替换真实网络。
@@ -125,8 +126,11 @@ class BilibiliInteractionService {
   BilibiliInteractionService({
     BilibiliAuthService? authService,
     BilibiliInteractionRequest? request,
+    AppBehaviorPreferencesService? behaviorPreferencesService,
   }) : _authService = authService ?? BilibiliAuthService(),
-       _request = request ?? _requestDefault;
+       _request = request ?? _requestDefault,
+       _behaviorPreferencesService =
+           behaviorPreferencesService ?? AppBehaviorPreferencesService();
 
   static const String _apiHost = 'api.bilibili.com';
   static final RegExp _csrfPattern = RegExp(
@@ -136,6 +140,7 @@ class BilibiliInteractionService {
 
   final BilibiliAuthService _authService;
   final BilibiliInteractionRequest _request;
+  final AppBehaviorPreferencesService _behaviorPreferencesService;
 
   /// 读取视频和作者当前状态，单个可选状态接口失败时保留其他已成功状态。
   Future<BilibiliInteractionState> loadVideoState({
@@ -598,6 +603,11 @@ class BilibiliInteractionService {
     _InteractionSession session,
     Map<String, String> fields,
   ) async {
+    if (await _behaviorPreferencesService.loadAccountReadOnly()) {
+      throw const BilibiliInteractionException(
+        '账号只读已开启，请先在“设置 - 账号与隐私”中关闭后再操作。',
+      );
+    }
     final Map<String, String> payload = <String, String>{
       ...fields,
       'csrf': session.csrf,

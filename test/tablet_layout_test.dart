@@ -101,23 +101,33 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  /// 个性化设置在横屏把高频播放选项和应用维护入口分栏，避免形成一条过宽长列表。
-  testWidgets('平板设置页使用播放和应用双栏', (WidgetTester tester) async {
+  /// 个性化设置在横屏仍使用清晰的分类首页，并只展示进入的单个二级分类。
+  testWidgets('平板设置页使用分类首页和单个二级页面', (WidgetTester tester) async {
     _configureTestWindow(tester, const Size(1280, 800));
     await tester.pumpWidget(
       const MaterialApp(home: PersonalizationSettingsPage()),
     );
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('settings-workspace-layout')), findsOneWidget);
-    final Rect playbackRect = tester.getRect(
-      find.byKey(const Key('settings-playback-section')),
+    expect(find.byKey(const Key('settings-overview-list')), findsOneWidget);
+    expect(
+      find.byKey(const Key('open-account-privacy-settings')),
+      findsOneWidget,
     );
-    final Rect applicationRect = tester.getRect(
-      find.byKey(const Key('settings-application-section')),
+    expect(
+      find.byKey(const Key('open-playback-focus-settings')),
+      findsOneWidget,
     );
-    expect(playbackRect.left, lessThan(applicationRect.left));
-    expect(playbackRect.width, applicationRect.width);
+    expect(
+      find.byKey(const Key('open-appearance-application-settings')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const Key('open-playback-focus-settings')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('settings-playback-section')), findsOneWidget);
+    expect(find.byKey(const Key('settings-application-section')), findsNothing);
     expect(tester.takeException(), isNull);
   });
 

@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:focubili/models/watch_history_entry.dart';
+import 'package:focubili/services/app_behavior_preferences_service.dart';
 import 'package:focubili/services/watch_history_service.dart';
 
 /// 创建带缩略图和观看位置的测试观看记录，便于聚焦验证本地存储行为。
@@ -223,5 +224,29 @@ void main() {
     expect(await service.clear(), isEmpty);
     expect(await service.loadHistory(), isEmpty);
     expect(preferences.containsKey('focubili_watch_history'), isFalse);
+  });
+
+  /// 验证关闭观看记录后播放器不会新增或更新记录，但已有记录仍能读取。
+  test('关闭观看记录后不再写入新进度', () async {
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final AppBehaviorPreferencesService behaviorService =
+        AppBehaviorPreferencesService(
+          preferencesLoader: () async => preferences,
+        );
+    final WatchHistoryService service = WatchHistoryService(
+      preferencesLoader: () async => preferences,
+      behaviorPreferencesService: behaviorService,
+    );
+    await service.record(_entry(bvid: 'BVexisting'));
+    await behaviorService.saveWatchHistoryEnabled(false);
+
+    final List<WatchHistoryEntry> history = await service.record(
+      _entry(bvid: 'BVblocked'),
+    );
+
+    expect(history.map((WatchHistoryEntry item) => item.bvid), <String>[
+      'BVexisting',
+    ]);
+    expect(await service.loadHistory(), hasLength(1));
   });
 }

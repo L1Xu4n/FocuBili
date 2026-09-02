@@ -146,7 +146,7 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
     }
   }
 
-  /// 解析 Windows 剪贴板文本，并在用户明确同意后复用外部视频导航流程。
+  /// 解析 Windows 或 Android 剪贴板文本，并在用户明确同意后复用外部视频导航流程。
   Future<void> _handleClipboardText(String rawText) async {
     if (!_firstLaunchReady || _clipboardLinkDialogOpen) {
       return;

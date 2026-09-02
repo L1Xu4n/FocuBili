@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -98,13 +99,14 @@ TextSpan _findTextSpan(TextSpan root, String text) {
   throw StateError('没有找到文字片段：$text');
 }
 
-/// 在固定手机尺寸中打开搜索页，并等待本地历史和学习清单完成初始化。
+/// 在固定测试尺寸中打开搜索页，并等待本地历史和学习清单完成初始化。
 Future<void> _pumpSearchPage(
   WidgetTester tester, {
   required BilibiliService service,
   LearningListService? learningListService,
+  Size surfaceSize = const Size(420, 900),
 }) async {
-  await tester.binding.setSurfaceSize(const Size(420, 900));
+  await tester.binding.setSurfaceSize(surfaceSize);
   addTearDown(() => tester.binding.setSurfaceSize(null));
   await tester.pumpWidget(
     MaterialApp(
@@ -207,6 +209,44 @@ void main() {
       Theme.of(tester.element(find.byType(SearchPage))).scaffoldBackgroundColor,
     );
     expect(tester.takeException(), isNull);
+  });
+
+  /// 验证桌面鼠标按下候选词时输入框不会先失焦并移除候选，完整点击会发起搜索。
+  testWidgets('Windows鼠标点击搜索候选会立即发起搜索', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final _SearchPageTestService service = _SearchPageTestService(
+      suggestions: const <String>['星球动画'],
+      results: const <VideoSearchResult>[],
+      video: _createVideo('BV1GJ411x7h7'),
+    );
+    await _pumpSearchPage(
+      tester,
+      service: service,
+      surfaceSize: const Size(1280, 800),
+    );
+
+    await tester.enterText(find.byKey(const Key('search-input-field')), '星球');
+    await tester.pump(const Duration(milliseconds: 351));
+    await tester.pump();
+    final Finder suggestion = find.byKey(
+      const ValueKey<String>('search-suggestion-0-星球动画'),
+    );
+    expect(suggestion, findsOneWidget);
+
+    final TestGesture mouse = await tester.startGesture(
+      tester.getCenter(suggestion),
+      kind: PointerDeviceKind.mouse,
+    );
+    await tester.pump();
+    expect(suggestion, findsOneWidget);
+    await mouse.up();
+    await tester.pumpAndSettle();
+
+    expect(service.searchRequests, <String>['星球动画']);
+    final TextField input = tester.widget<TextField>(
+      find.byKey(const Key('search-input-field')),
+    );
+    expect(input.controller?.text, '星球动画');
   });
 
   /// 验证清空搜索历史必须二次确认，取消时不会误删本机记录。
