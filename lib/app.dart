@@ -342,8 +342,8 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
       locale: const Locale('zh', 'CN'),
       supportedLocales: const <Locale>[Locale('zh', 'CN')],
       localizationsDelegates: GlobalMaterialLocalizations.delegates,
-      theme: AppTheme.light(),
-      darkTheme: AppTheme.dark(),
+      theme: AppTheme.light(seedColor: _appThemeModeController.seedColor),
+      darkTheme: AppTheme.dark(seedColor: _appThemeModeController.seedColor),
       themeMode: _appThemeModeController.mode,
       home: FirstLaunchGate(
         onReady: _handleFirstLaunchReady,

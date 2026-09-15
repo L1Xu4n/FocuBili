@@ -10,6 +10,7 @@ import '../../models/user_search.dart';
 import '../../models/learning_list_entry.dart';
 import '../../models/video_preview.dart';
 import '../../services/bilibili_service.dart';
+import '../../services/learning_filter_preferences_service.dart';
 import '../../services/learning_list_service.dart';
 import '../../services/problem_diagnostics_service.dart';
 import '../../services/search_history_service.dart';
@@ -38,12 +39,16 @@ class SearchPage extends StatefulWidget {
     this.service,
     this.userSearchService,
     this.learningListService,
+    this.learningFilterPreferencesService,
     this.onBackRequested,
   });
 
   final BilibiliService? service;
   final BilibiliUserSearchService? userSearchService;
   final LearningListService? learningListService;
+
+  /// 可选的本地学习过滤名单服务；不传时使用设备默认存储。
+  final LearningFilterPreferencesService? learningFilterPreferencesService;
 
   /// 可选的首页返回回调；独立打开搜索页时保持原有无返回按钮的布局。
   final VoidCallback? onBackRequested;
@@ -96,6 +101,7 @@ class _SearchPageState extends State<SearchPage> {
   late final BilibiliService _service;
   late final BilibiliUserSearchService _userSearchService;
   late final LearningListService _learningListService;
+  late final LearningFilterPreferencesService _learningFilterPreferencesService;
   late final ProblemDiagnosticsService _problemDiagnosticsService;
   Timer? _suggestionDebounce;
   VideoPreview? _directResult;
@@ -110,8 +116,13 @@ class _SearchPageState extends State<SearchPage> {
   bool _hasSubmitted = false;
   int _currentPage = 0;
   int _totalPages = 0;
+
+  /// 学习过滤累计隐藏的非学习内容条数，用于结果区提示用户过滤行为。
+  int _filteredOutCount = 0;
   int _activeEpisodeCountLookups = 0;
   VideoSearchFilter _filter = const VideoSearchFilter();
+  Set<String> _customCreatorWhitelist = const <String>{};
+  Set<String> _customCreatorBlacklist = const <String>{};
   UserSearchFilter _userFilter = const UserSearchFilter();
   List<UserSearchResult> _userResults = const <UserSearchResult>[];
   _SearchMode _searchMode = _SearchMode.videos;
@@ -125,6 +136,9 @@ class _SearchPageState extends State<SearchPage> {
     super.initState();
     _service = widget.service ?? BilibiliVideoInfoService();
     _learningListService = widget.learningListService ?? LearningListService();
+    _learningFilterPreferencesService =
+        widget.learningFilterPreferencesService ??
+        LearningFilterPreferencesService();
     _problemDiagnosticsService = ProblemDiagnosticsService();
     _userSearchService =
         widget.userSearchService ??
@@ -135,7 +149,29 @@ class _SearchPageState extends State<SearchPage> {
     _searchFocusNode.addListener(_handleSearchFocusChange);
     _loadSearchHistory();
     unawaited(_loadLearningListMembership());
+    unawaited(_loadLearningFilterLists());
   }
+
+  /// 从本机加载用户自定义的学习过滤白名单与黑名单。
+  Future<void> _loadLearningFilterLists() async {
+    final List<String> whitelist =
+        await _learningFilterPreferencesService.loadCustomWhitelist();
+    final List<String> blacklist =
+        await _learningFilterPreferencesService.loadCustomBlacklist();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _customCreatorWhitelist = whitelist.toSet();
+      _customCreatorBlacklist = blacklist.toSet();
+    });
+  }
+
+  /// 返回叠加自定义白/黑名单后的筛选条件，用于发起搜索结果请求。
+  VideoSearchFilter get _effectiveFilter => _filter.copyWith(
+    whitelistedCreators: _customCreatorWhitelist,
+    blacklistedCreators: _customCreatorBlacklist,
+  );
 
   /// 释放输入、焦点、滚动和候选词计时器，避免页面销毁后继续请求。
   @override
@@ -214,6 +250,7 @@ class _SearchPageState extends State<SearchPage> {
       _activeQuery = input;
       _currentPage = 0;
       _totalPages = 0;
+      _filteredOutCount = 0;
     });
     try {
       if (input.isEmpty) {
@@ -232,7 +269,7 @@ class _SearchPageState extends State<SearchPage> {
       final VideoSearchPage? searchPage =
           opensDirectly || _searchMode == _SearchMode.users
           ? null
-          : await _service.searchVideos(input, page: 1, filter: _filter);
+          : await _service.searchVideos(input, page: 1, filter: _effectiveFilter);
       final UserSearchPage? userPage = _searchMode == _SearchMode.users
           ? await _userSearchService.searchUsers(
               input,
@@ -250,6 +287,7 @@ class _SearchPageState extends State<SearchPage> {
         _userResults = userPage?.results ?? const <UserSearchResult>[];
         _currentPage = searchPage?.page ?? userPage?.page ?? 0;
         _totalPages = searchPage?.totalPages ?? userPage?.totalPages ?? 0;
+        _filteredOutCount = searchPage?.filteredOutCount ?? 0;
         _loading = false;
       });
       if (_resultScrollController.hasClients) {
@@ -323,7 +361,7 @@ class _SearchPageState extends State<SearchPage> {
       final VideoSearchPage nextPage = await _service.searchVideos(
         _activeQuery,
         page: _currentPage + 1,
-        filter: _filter,
+        filter: _effectiveFilter,
       );
       if (!mounted) {
         return;
@@ -340,6 +378,7 @@ class _SearchPageState extends State<SearchPage> {
         ];
         _currentPage = nextPage.page;
         _totalPages = nextPage.totalPages;
+        _filteredOutCount += nextPage.filteredOutCount;
         _loadingMore = false;
       });
     } catch (_) {
@@ -1631,20 +1670,32 @@ class _SearchPageState extends State<SearchPage> {
       );
     }
     if (_searchResults.isNotEmpty) {
+      final bool showFilterBanner = _filteredOutCount > 0;
       return ListView.separated(
         controller: _resultScrollController,
-        itemCount: _searchResults.length + 1,
+        itemCount: _searchResults.length + 1 + (showFilterBanner ? 1 : 0),
         separatorBuilder: (BuildContext context, int index) =>
             const SizedBox(height: 6),
         itemBuilder: (BuildContext context, int index) {
-          if (index == _searchResults.length) {
+          if (showFilterBanner && index == 0) {
+            return _buildLearningFilterBanner();
+          }
+          final int resultIndex = showFilterBanner ? index - 1 : index;
+          if (resultIndex == _searchResults.length) {
             return _buildLoadMoreFooter();
           }
-          return _buildSearchResultCard(_searchResults[index]);
+          return _buildSearchResultCard(_searchResults[resultIndex]);
         },
       );
     }
     if (_hasSubmitted) {
+      if (_filteredOutCount > 0 && _searchMode == _SearchMode.videos) {
+        return _SearchMessage(
+          icon: Icons.school_rounded,
+          text: '“$_activeQuery”下的结果均与学习无关，已为你全部隐藏。'
+              '本应用只展示知识、科技、纪录片等学习向内容。',
+        );
+      }
       return _SearchMessage(
         icon: Icons.search_off_rounded,
         text: _searchMode == _SearchMode.videos
@@ -1653,6 +1704,36 @@ class _SearchPageState extends State<SearchPage> {
       );
     }
     return const _SearchEmptyState();
+  }
+
+  /// 创建学习过滤提示条，说明本页已隐藏的非学习内容数量。
+  Widget _buildLearningFilterBanner() {
+    return Card(
+      margin: EdgeInsets.zero,
+      color: Theme.of(context).colorScheme.primaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          children: <Widget>[
+            Icon(
+              Icons.school_rounded,
+              size: 18,
+              color: Theme.of(context).colorScheme.onPrimaryContainer,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '已为你过滤 $_filteredOutCount 条与学习无关的内容，'
+                '只保留知识、科技、纪录片等学习向视频。',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onPrimaryContainer,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// 创建用户头像、等级、粉丝数、投稿数、认证和签名组成的搜索卡片。

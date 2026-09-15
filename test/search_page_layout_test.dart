@@ -15,11 +15,15 @@ class _SearchPageTestService implements BilibiliService {
     required this.suggestions,
     required this.results,
     required this.video,
+    this.filteredOutCount = 0,
   });
 
   final List<String> suggestions;
   final List<VideoSearchResult> results;
   final VideoPreview video;
+
+  /// 模拟学习过滤在本页隐藏的非学习内容条数，用于验证过滤提示条。
+  final int filteredOutCount;
   final List<String> lookupRequests = <String>[];
   final List<String> searchRequests = <String>[];
 
@@ -38,7 +42,12 @@ class _SearchPageTestService implements BilibiliService {
     VideoSearchFilter filter = const VideoSearchFilter(),
   }) async {
     searchRequests.add(keyword);
-    return VideoSearchPage(results: results, page: page, totalPages: page);
+    return VideoSearchPage(
+      results: results,
+      page: page,
+      totalPages: page,
+      filteredOutCount: filteredOutCount,
+    );
   }
 
   /// 返回固定候选词，让测试可以检查候选布局和前缀高亮。
@@ -327,11 +336,53 @@ void main() {
     await tester.tap(find.byKey(const Key('more-search-$bvid')));
     await tester.pumpAndSettle();
     expect(find.text('取消加入学习清单'), findsOneWidget);
-    await tester.tap(find.byKey(const Key('add-learning-search-$bvid')));
+    await tester.tap(find.byKey(const Key('more-search-$bvid')));
     await tester.pumpAndSettle();
     expect(find.text('取消加入学习清单？'), findsOneWidget);
     expect(find.text('保留'), findsOneWidget);
     expect(find.text('取消加入'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  /// 验证学习过滤隐藏部分结果后，结果区顶部展示过滤提示条且不影响结果列表。
+  testWidgets('学习过滤生效时结果区顶部展示过滤提示条', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final _SearchPageTestService service = _SearchPageTestService(
+      suggestions: const <String>[],
+      results: <VideoSearchResult>[_createSearchResult('BV1GJ411x7h8')],
+      video: _createVideo('BV1GJ411x7h8'),
+      filteredOutCount: 3,
+    );
+    await _pumpSearchPage(tester, service: service);
+
+    await tester.enterText(find.byKey(const Key('search-input-field')), '景德镇');
+    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('已为你过滤 3 条与学习无关的内容'), findsOneWidget);
+    expect(find.byKey(const Key('search-BV1GJ411x7h8')), findsOneWidget);
+    expect(service.searchRequests, <String>['景德镇']);
+    expect(tester.takeException(), isNull);
+  });
+
+  /// 验证全部结果都被过滤时，搜索空态改为解释学习过滤已生效的提示。
+  testWidgets('全部结果被过滤时展示学习过滤空态说明', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final _SearchPageTestService service = _SearchPageTestService(
+      suggestions: const <String>[],
+      results: const <VideoSearchResult>[],
+      video: _createVideo('BV1GJ411x7h7'),
+      filteredOutCount: 5,
+    );
+    await _pumpSearchPage(tester, service: service);
+
+    await tester.enterText(find.byKey(const Key('search-input-field')), '原神');
+    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('均与学习无关'), findsOneWidget);
+    expect(find.textContaining('只展示知识、科技、纪录片等学习向内容'), findsOneWidget);
+    expect(find.byIcon(Icons.school_rounded), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

@@ -10,6 +10,7 @@ import 'package:focubili/services/app_behavior_preferences_service.dart';
 import 'package:focubili/services/app_update_service.dart';
 import 'package:focubili/services/focus_notification_service.dart';
 import 'package:focubili/services/focus_preferences_service.dart';
+import 'package:focubili/services/learning_filter_preferences_service.dart';
 import 'package:focubili/services/playback_preferences_service.dart';
 import 'package:focubili/services/app_theme_mode_service.dart';
 import 'package:focubili/services/windows_clipboard_link_service.dart';
@@ -126,7 +127,9 @@ void main() {
       ),
     );
     addTearDown(updateController.dispose);
-    await updateController.initialize(checkOnStart: true);
+    // 当前版本强制关闭启动自动检查，页面测试改用一次手动检查进入可更新状态。
+    await updateController.initialize(checkOnStart: false);
+    await updateController.checkNow();
 
     await tester.pumpWidget(
       MaterialApp(
@@ -375,5 +378,116 @@ void main() {
     expect(find.text('Windows 系统专注需要手动启动'), findsOneWidget);
     expect(find.textContaining('受限功能'), findsOneWidget);
     expect((await preferencesService.load()).enableDoNotDisturb, isTrue);
+  });
+
+  /// 验证设置页可进入学习过滤分区并看到两个名单管理入口。
+  testWidgets('设置页学习过滤分区展示名单管理入口', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PersonalizationSettingsPage(
+          appPlatform: AppPlatform.android,
+          focusNotificationService: FocusNotificationService(channel: channel),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await _openSettingsLevel(
+      tester,
+      const Key('open-learning-filter-settings'),
+    );
+    expect(
+      find.byKey(const Key('settings-learning-filter-section')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('edit-custom-creator-whitelist')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('edit-custom-creator-blacklist')),
+      findsOneWidget,
+    );
+  });
+
+  /// 验证自定义白名单可添加并保存，保存后副标题和本机存储同步更新。
+  testWidgets('设置页保存自定义白名单并展示数量', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PersonalizationSettingsPage(
+          appPlatform: AppPlatform.android,
+          learningFilterPreferencesService: LearningFilterPreferencesService(
+            preferencesLoader: () async => preferences,
+          ),
+          focusNotificationService: FocusNotificationService(channel: channel),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await _openSettingsLevel(
+      tester,
+      const Key('open-learning-filter-settings'),
+    );
+    await tester.tap(find.byKey(const Key('edit-custom-creator-whitelist')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('creator-list-editor-input')),
+      findsOneWidget,
+    );
+
+    await tester.enterText(
+      find.byKey(const Key('creator-list-editor-input')),
+      '宋浩',
+    );
+    await tester.tap(find.byKey(const Key('save-creator-list')));
+    await tester.pumpAndSettle();
+
+    expect(
+      preferences.getStringList('learning_filter.custom_creator_whitelist'),
+      <String>['宋浩'],
+    );
+    expect(find.text('已添加 1 位 UP 主'), findsOneWidget);
+  });
+
+  /// 验证自定义黑名单可添加并保存，保存后副标题和本机存储同步更新。
+  testWidgets('设置页保存自定义黑名单并展示数量', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PersonalizationSettingsPage(
+          appPlatform: AppPlatform.android,
+          learningFilterPreferencesService: LearningFilterPreferencesService(
+            preferencesLoader: () async => preferences,
+          ),
+          focusNotificationService: FocusNotificationService(channel: channel),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await _openSettingsLevel(
+      tester,
+      const Key('open-learning-filter-settings'),
+    );
+    await tester.tap(find.byKey(const Key('edit-custom-creator-blacklist')));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.byKey(const Key('creator-list-editor-input')),
+      '营销号',
+    );
+    await tester.tap(find.byKey(const Key('save-creator-list')));
+    await tester.pumpAndSettle();
+
+    expect(
+      preferences.getStringList('learning_filter.custom_creator_blacklist'),
+      <String>['营销号'],
+    );
+    expect(find.text('已屏蔽 1 位 UP 主'), findsOneWidget);
   });
 }

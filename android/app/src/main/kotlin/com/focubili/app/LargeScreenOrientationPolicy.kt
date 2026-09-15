@@ -6,12 +6,12 @@ import android.content.pm.ActivityInfo
 internal object LargeScreenOrientationPolicy {
     private const val TABLET_SMALLEST_WIDTH_DP = 600
 
-    /** 最短边达到 600dp 时请求传感器横屏，否则保持手机竖屏。 */
+    /** 最短边达到 600dp 时请求传感器横屏，手机保持可旋转的传感器方向。 */
     fun preferredOrientation(smallestScreenWidthDp: Int): Int {
         return if (smallestScreenWidthDp >= TABLET_SMALLEST_WIDTH_DP) {
             ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         } else {
-            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
     }
 }

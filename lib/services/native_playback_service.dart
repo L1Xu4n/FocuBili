@@ -319,6 +319,30 @@ class NativePlaybackService implements PlaybackService {
     });
   }
 
+  /// 直接播放本机离线视频文件，不请求任何网络播放数据。
+  Future<void> openLocalFile({
+    required String filePath,
+    String title = '',
+    Duration? initialPosition,
+  }) async {
+    final String normalizedPath = filePath.trim();
+    if (normalizedPath.isEmpty) {
+      throw ArgumentError.value(filePath, 'filePath', '需要有效的本地文件路径。');
+    }
+    if (initialPosition?.isNegative ?? false) {
+      throw ArgumentError.value(
+        initialPosition,
+        'initialPosition',
+        '初始位置不能为负数。',
+      );
+    }
+    await _invokeVoid('openLocal', <String, Object?>{
+      'filePath': normalizedPath,
+      'title': title,
+      'initialPositionMs': initialPosition?.inMilliseconds,
+    });
+  }
+
   /// 向 Android 原生播放器发送继续播放命令。
   @override
   Future<void> play() => _invokeVoid('play');

@@ -59,6 +59,53 @@ class BilibiliVideoInfoService
   static const String _videoTagsPath = '/x/tag/archive/tags';
   static const String _videoSearchPath = '/x/web-interface/wbi/search/type';
   static const String _searchSuggestPath = '/main/suggest';
+
+  /// 学习过滤允许展示的顶级分区名称白名单：知识、科技、纪录片。
+  ///
+  /// 视频搜索接口的 parent_area_name 字段携带顶级分区名，搜索与学习无关的
+  /// 关键词时，命中娱乐、游戏等分区的结果会被隐藏，只保留学习向内容。
+  static const Set<String> _learningParentAreaNames = <String>{
+    '知识',
+    '科技',
+    '纪录片',
+  };
+
+  /// 学习过滤允许展示的二级分区编号白名单，用于兜底顶级分区名缺失的情况。
+  ///
+  /// 涵盖知识区（科学科普 201、社科·法律·心理 124、人文历史 228、财经商业
+  /// 207、校园学习 208、职业职场 209、设计·创意 229、野生技能协会 122）、
+  /// 科技区（数码 95、软件应用 230、计算机技术 231、工业·工程·机械 232、
+  /// 极客DIY 233）、纪录片区（人文·历史 37、科学·探索·自然 178、军事 179、
+  /// 社会·美食·旅行 180）以及散落在其他分区的学习向子分区（舞蹈教程 156、
+  /// 教程演示 127、绘画 162、手工 161、音乐教学 244、汽车知识科普 258、
+  /// 健身 164、美食制作 76）。
+  static const Set<int> _learningCategoryIds = <int>{
+    201,
+    124,
+    228,
+    207,
+    208,
+    209,
+    229,
+    122,
+    95,
+    230,
+    231,
+    232,
+    233,
+    37,
+    178,
+    179,
+    180,
+    156,
+    127,
+    162,
+    161,
+    244,
+    258,
+    164,
+    76,
+  };
   static const String _desktopUserAgent =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
       'AppleWebKit/537.36 (KHTML, like Gecko) '
@@ -151,7 +198,11 @@ class BilibiliVideoInfoService
     _appendPublishedRange(query, filter.publishedRange);
     final Uri endpoint = Uri.https(_apiHost, _videoSearchPath, query);
     final String responseText = await _requestJson(endpoint);
-    return _parseVideoSearchPage(responseText, safePage);
+    return _applyLearningFilter(
+      _parseVideoSearchPage(responseText, safePage),
+      customWhitelist: filter.whitelistedCreators,
+      customBlacklist: filter.blacklistedCreators,
+    );
   }
 
   /// 请求 B 站搜索建议接口，并返回去重后的候选词列表。
@@ -704,6 +755,7 @@ class BilibiliVideoInfoService
       if (!_bvidPattern.hasMatch(bvid)) {
         continue;
       }
+      final int parentCategoryId = _readInteger(item['parent_area_id']);
       results.add(
         VideoSearchResult(
           bvid: bvid,
@@ -717,6 +769,12 @@ class BilibiliVideoInfoService
           episodeCountText: _stripHtml(
             _readText(item['episode_count_text'], ''),
           ),
+          categoryId: _readInteger(item['typeid']),
+          categoryName: _stripHtml(_readText(item['typename'], '')),
+          parentCategoryId: parentCategoryId,
+          parentCategoryName: _stripHtml(
+            _readText(item['parent_area_name'], ''),
+          ),
         ),
       );
     }
@@ -729,6 +787,52 @@ class BilibiliVideoInfoService
       page: page == 1 && requestedPage > 1 ? requestedPage : page,
       totalPages: totalPages,
     );
+  }
+
+  /// 从搜索结果中隐藏与学习无关分区的内容，并返回过滤后的分页与隐藏数量。
+  ///
+  /// 命中学习白名单的条件：UP 主在用户自定义白名单内，或顶级分区名在
+  /// 白名单内，或二级分区编号在白名单内（用于兜底顶级分区名缺失的旧接口
+  /// 数据）。UP 主命中自定义黑名单时优先隐藏，即使其内容处于学习分区。
+  /// 被隐藏的结果计入 filteredOutCount，供界面提示用户学习过滤生效。
+  VideoSearchPage _applyLearningFilter(
+    VideoSearchPage page, {
+    Set<String> customWhitelist = const <String>{},
+    Set<String> customBlacklist = const <String>{},
+  }) {
+    final List<VideoSearchResult> kept = <VideoSearchResult>[];
+    int filteredOut = 0;
+    for (final VideoSearchResult result in page.results) {
+      if (_matchesAnyCreator(result.ownerName, customBlacklist)) {
+        filteredOut += 1;
+      } else if (_matchesAnyCreator(result.ownerName, customWhitelist) ||
+          _learningParentAreaNames.contains(result.parentCategoryName) ||
+          _learningCategoryIds.contains(result.categoryId)) {
+        kept.add(result);
+      } else {
+        filteredOut += 1;
+      }
+    }
+    if (filteredOut == 0) {
+      return page;
+    }
+    return VideoSearchPage(
+      results: List<VideoSearchResult>.unmodifiable(kept),
+      page: page.page,
+      totalPages: page.totalPages,
+      filteredOutCount: page.filteredOutCount + filteredOut,
+    );
+  }
+
+  /// 判断 UP 主名与名单中的任一名字互相包含，兼容全名与简称两种写法。
+  bool _matchesAnyCreator(String ownerName, Set<String> names) {
+    for (final String name in names) {
+      if (name.isNotEmpty &&
+          (ownerName.contains(name) || name.contains(ownerName))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /// 解析候选词接口的 result.tag 数组，并按原顺序去重。

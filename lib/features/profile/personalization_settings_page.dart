@@ -6,6 +6,7 @@ import '../../core/layout/adaptive_page_frame.dart';
 import '../../core/router/app_router.dart';
 import '../../models/playback_preferences.dart';
 import '../../services/app_behavior_preferences_service.dart';
+import '../../services/learning_filter_preferences_service.dart';
 import '../../services/playback_preferences_service.dart';
 import '../../services/app_update_service.dart';
 import '../../services/focus_notification_service.dart';
@@ -14,12 +15,24 @@ import '../../services/windows_clipboard_link_service.dart';
 import '../../platform/app_platform.dart';
 import 'app_theme_mode_controller.dart';
 
+/// 可选择的主题强调色预设，供设置页以色块形式展示。
+const List<(String, int)> _themeColorOptions = <(String, int)>[
+  ('默认蓝', 0xFF1677FF),
+  ('B站粉', 0xFFFB7299),
+  ('玫红', 0xFFE91E63),
+  ('珊瑚橙', 0xFFFF7043),
+  ('翠绿', 0xFF00A870),
+  ('湖蓝', 0xFF00B8D4),
+  ('薰衣草紫', 0xFF7C4DFF),
+];
+
 /// 标识个性化设置当前显示首页还是某个二级分类页面。
 enum _SettingsLevel {
   overview,
   accountAndPrivacy,
   playbackAndFocus,
   appearanceAndApplication,
+  learningFilter,
 }
 
 /// 展示焦点哔哩的个性化选项，并把播放器手势偏好保存在当前设备。
@@ -32,6 +45,7 @@ class PersonalizationSettingsPage extends StatefulWidget {
     this.focusNotificationService = const FocusNotificationService(),
     this.windowsClipboardPreferencesService,
     this.behaviorPreferencesService,
+    this.learningFilterPreferencesService,
     this.appPlatform,
   });
 
@@ -41,6 +55,9 @@ class PersonalizationSettingsPage extends StatefulWidget {
   final WindowsClipboardLinkPreferencesService?
   windowsClipboardPreferencesService;
   final AppBehaviorPreferencesService? behaviorPreferencesService;
+
+  /// 可选的本地学习过滤名单服务；不传时使用设备默认存储。
+  final LearningFilterPreferencesService? learningFilterPreferencesService;
   final AppPlatform? appPlatform;
 
   /// 创建负责加载和保存设置的页面状态。
@@ -73,6 +90,10 @@ class _PersonalizationSettingsPageState
   late final WindowsClipboardLinkPreferencesService
   _windowsClipboardPreferencesService;
   late final AppBehaviorPreferencesService _behaviorPreferencesService;
+  late final LearningFilterPreferencesService
+  _learningFilterPreferencesService;
+  List<String> _customCreatorWhitelist = const <String>[];
+  List<String> _customCreatorBlacklist = const <String>[];
 
   /// 判断页面是否明确运行在 Windows，测试可通过构造参数稳定覆盖。
   bool get _isWindows =>
@@ -98,6 +119,9 @@ class _PersonalizationSettingsPageState
         WindowsClipboardLinkPreferencesService();
     _behaviorPreferencesService =
         widget.behaviorPreferencesService ?? AppBehaviorPreferencesService();
+    _learningFilterPreferencesService =
+        widget.learningFilterPreferencesService ??
+        LearningFilterPreferencesService();
     _fallbackUpdateController = AppUpdateController()
       ..addListener(_handleFallbackUpdateChanged);
     _fallbackThemeModeController = AppThemeModeController()
@@ -135,6 +159,10 @@ class _PersonalizationSettingsPageState
           .loadSearchHistoryEnabled();
       final bool watchHistoryEnabled = await _behaviorPreferencesService
           .loadWatchHistoryEnabled();
+      final List<String> customWhitelist = await _learningFilterPreferencesService
+          .loadCustomWhitelist();
+      final List<String> customBlacklist = await _learningFilterPreferencesService
+          .loadCustomBlacklist();
       final bool hasDoNotDisturbAccess =
           widget.focusNotificationService.supportsDoNotDisturb
           ? await widget.focusNotificationService.hasDoNotDisturbAccess()
@@ -149,6 +177,8 @@ class _PersonalizationSettingsPageState
         _accountReadOnly = accountReadOnly;
         _searchHistoryEnabled = searchHistoryEnabled;
         _watchHistoryEnabled = watchHistoryEnabled;
+        _customCreatorWhitelist = customWhitelist;
+        _customCreatorBlacklist = customBlacklist;
         _hasDoNotDisturbAccess = hasDoNotDisturbAccess;
         _loading = false;
       });
@@ -583,6 +613,115 @@ class _PersonalizationSettingsPageState
     );
   }
 
+  /// 创建主题强调色选择区，点按色块后整套应用立即换色并持久化。
+  Widget _buildThemeColorTile(AppThemeModeController controller) {
+    return Padding(
+      key: const Key('theme-color-setting'),
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          const Row(
+            children: <Widget>[
+              Icon(Icons.palette_outlined),
+              SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text('主题颜色'),
+                    SizedBox(height: 2),
+                    Text(
+                      '选择整套界面的强调色，切换后立即应用并在重启后保留',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 12,
+            runSpacing: 10,
+            children: <Widget>[
+              for (final (String label, int value) in _themeColorOptions)
+                Tooltip(
+                  message: label,
+                  child: InkWell(
+                    key: Key('theme-color-option-${value.toRadixString(16)}'),
+                    customBorder: const CircleBorder(),
+                    onTap: controller.saving
+                        ? null
+                        : () => unawaited(
+                            _setThemeColor(
+                              controller,
+                              Color(value),
+                            ),
+                          ),
+                    child: Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: Color(value),
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: controller.seedColor.toARGB32() == value
+                              ? Theme.of(context).colorScheme.onSurface
+                              : Colors.transparent,
+                          width: 2,
+                        ),
+                      ),
+                      child: controller.seedColor.toARGB32() == value
+                          ? const Icon(
+                              Icons.check_rounded,
+                              color: Colors.white,
+                              size: 20,
+                            )
+                          : null,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              key: const Key('reset-theme-color'),
+              onPressed: controller.saving
+                  ? null
+                  : () => unawaited(_resetThemeColor(controller)),
+              child: const Text('恢复默认'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 保存新的主题强调色；失败时控制器会恢复旧值并向用户说明。
+  Future<void> _setThemeColor(
+    AppThemeModeController controller,
+    Color color,
+  ) async {
+    final bool saved = await controller.setSeedColor(color);
+    if (!saved && mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('主题颜色保存失败，请稍后重试。')));
+    }
+  }
+
+  /// 恢复默认主题颜色，失败时提示用户稍后重试。
+  Future<void> _resetThemeColor(AppThemeModeController controller) async {
+    final bool saved = await controller.resetSeedColor();
+    if (!saved && mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('主题颜色恢复失败，请稍后重试。')));
+    }
+  }
+
   /// 创建“账号与隐私”设置卡，集中管理账号写入和本机行为记录。
   Widget _buildAccountAndPrivacySection() {
     return _buildSettingsSection(
@@ -696,6 +835,7 @@ class _PersonalizationSettingsPageState
       title: '外观与应用',
       children: <Widget>[
         _buildThemeModeTile(themeModeController),
+        _buildThemeColorTile(themeModeController),
         ListTile(
           key: const Key('open-android-permissions'),
           leading: const Icon(Icons.admin_panel_settings_outlined),
@@ -719,14 +859,18 @@ class _PersonalizationSettingsPageState
         SwitchListTile.adaptive(
           key: const Key('enable-startup-update-check'),
           value: updateController.enabled,
-          // 更新开关函数把用户选择交给全应用更新控制器保存。
-          onChanged: _savingUpdatePreference
+          // 强制关闭版本忽略用户切换，开关保持禁用态并说明原因。
+          onChanged: AppUpdateController.forcedOff
+              ? null
+              : _savingUpdatePreference
               ? null
               : (bool enabled) =>
                     _setUpdateCheckEnabled(updateController, enabled),
           secondary: const Icon(Icons.system_update_alt_rounded),
           title: const Text('启动时检查更新'),
-          subtitle: const Text('每次启动从 GitHub Release 检查新的正式版本。'),
+          subtitle: AppUpdateController.forcedOff
+              ? const Text('此版本已停用自动更新检查，请留意软件发布页的新版本。')
+              : const Text('每次启动从 GitHub Release 检查新的正式版本。'),
         ),
         ListTile(
           leading: const Icon(Icons.storage_outlined),
@@ -811,6 +955,203 @@ class _PersonalizationSettingsPageState
     );
   }
 
+  /// 创建“学习过滤”设置卡，展示过滤说明并管理自定义白名单与黑名单。
+  Widget _buildLearningFilterSection() {
+    return _buildSettingsSection(
+      key: const Key('settings-learning-filter-section'),
+      icon: Icons.school_rounded,
+      title: '学习过滤',
+      children: <Widget>[
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: Text(
+            '搜索结果只保留学习向内容：命中黑名单的 UP 主一律隐藏，命中白名单或学习分区（知识、科技、纪录片等）的内容保留。',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+        ListTile(
+          key: const Key('edit-custom-creator-whitelist'),
+          leading: const Icon(Icons.check_circle_outline_rounded),
+          title: const Text('自定义白名单'),
+          subtitle: Text(
+            _customCreatorWhitelist.isEmpty
+                ? '添加学习 UP 主，其内容不受分区限制'
+                : '已添加 ${_customCreatorWhitelist.length} 位 UP 主',
+          ),
+          trailing: const Icon(Icons.chevron_right_rounded),
+          onTap: () => _showCreatorListEditor(
+            title: '自定义白名单',
+            hint: '输入学习 UP 主名称',
+            names: _customCreatorWhitelist,
+            onSave: _saveCustomWhitelist,
+          ),
+        ),
+        ListTile(
+          key: const Key('edit-custom-creator-blacklist'),
+          leading: const Icon(Icons.block_rounded),
+          title: const Text('自定义黑名单'),
+          subtitle: Text(
+            _customCreatorBlacklist.isEmpty
+                ? '屏蔽不想看到的 UP 主，其内容一律隐藏'
+                : '已屏蔽 ${_customCreatorBlacklist.length} 位 UP 主',
+          ),
+          trailing: const Icon(Icons.chevron_right_rounded),
+          onTap: () => _showCreatorListEditor(
+            title: '自定义黑名单',
+            hint: '输入要屏蔽的 UP 主名称',
+            names: _customCreatorBlacklist,
+            onSave: _saveCustomBlacklist,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 保存自定义白名单并刷新页面。
+  Future<void> _saveCustomWhitelist(List<String> names) async {
+    await _saveLearningFilterList(
+      names: names,
+      applyValue: (List<String> value) => _customCreatorWhitelist = value,
+      saveValue: _learningFilterPreferencesService.saveCustomWhitelist,
+    );
+  }
+
+  /// 保存自定义黑名单并刷新页面。
+  Future<void> _saveCustomBlacklist(List<String> names) async {
+    await _saveLearningFilterList(
+      names: names,
+      applyValue: (List<String> value) => _customCreatorBlacklist = value,
+      saveValue: _learningFilterPreferencesService.saveCustomBlacklist,
+    );
+  }
+
+  /// 保存学习过滤名单，失败时提示用户而不回退已编辑内容。
+  Future<void> _saveLearningFilterList({
+    required List<String> names,
+    required ValueChanged<List<String>> applyValue,
+    required Future<bool> Function(List<String>) saveValue,
+  }) async {
+    final bool saved = await saveValue(names);
+    if (!mounted) {
+      return;
+    }
+    setState(() => applyValue(names));
+    if (!saved) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('学习过滤名单保存失败，请稍后重试。')),
+      );
+    }
+  }
+
+  /// 打开管理自定义名单的对话框：可添加、删除并立即保存。
+  void _showCreatorListEditor({
+    required String title,
+    required String hint,
+    required List<String> names,
+    required Future<void> Function(List<String>) onSave,
+  }) {
+    final TextEditingController inputController = TextEditingController();
+    showDialog<void>(
+      context: context,
+      builder: (BuildContext dialogContext) => StatefulBuilder(
+        builder: (BuildContext context, StateSetter setDialogState) {
+          return AlertDialog(
+            title: Text(title),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  TextField(
+                    key: const Key('creator-list-editor-input'),
+                    controller: inputController,
+                    decoration: InputDecoration(
+                      hintText: hint,
+                      prefixIcon: const Icon(Icons.person_add_alt_1_outlined),
+                      border: const OutlineInputBorder(),
+                    ),
+                    onSubmitted: (String value) {
+                      final String trimmed = value.trim();
+                      if (trimmed.isEmpty) {
+                        return;
+                      }
+                      setDialogState(() {
+                        if (!names.contains(trimmed)) {
+                          names = <String>[...names, trimmed];
+                        }
+                      });
+                      inputController.clear();
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  if (names.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      child: Text(
+                        '还没有内容，添加后立即生效。',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    )
+                  else
+                    Flexible(
+                      child: ListView(
+                        shrinkWrap: true,
+                        children: <Widget>[
+                          for (final String name in names)
+                            ListTile(
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              leading: const Icon(
+                                Icons.person_outline_rounded,
+                              ),
+                              title: Text(name),
+                              trailing: IconButton(
+                                tooltip: '移除',
+                                icon: const Icon(Icons.close_rounded),
+                                onPressed: () => setDialogState(() {
+                                  names = names
+                                      .where((String item) => item != name)
+                                      .toList();
+                                }),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            actions: <Widget>[
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                key: const Key('save-creator-list'),
+                onPressed: () async {
+                  // 先把输入框中未提交的名字也加入名单，避免直接点保存丢失输入。
+                  final String pending = inputController.text.trim();
+                  if (pending.isNotEmpty && !names.contains(pending)) {
+                    names = <String>[...names, pending];
+                  }
+                  Navigator.of(dialogContext).pop();
+                  await onSave(names);
+                },
+                child: const Text('保存'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   /// 创建设置首页的单个分类入口，并显示该分类包含的主要内容。
   Widget _buildSettingsCategoryTile({
     required Key key,
@@ -863,6 +1204,14 @@ class _PersonalizationSettingsPageState
               subtitle: '主题、权限、更新、缓存与版本',
               level: _SettingsLevel.appearanceAndApplication,
             ),
+            const Divider(height: 1),
+            _buildSettingsCategoryTile(
+              key: const Key('open-learning-filter-settings'),
+              icon: Icons.school_rounded,
+              title: '学习过滤',
+              subtitle: '搜索白名单、黑名单与学习内容控制',
+              level: _SettingsLevel.learningFilter,
+            ),
           ],
         ),
       ),
@@ -884,6 +1233,7 @@ class _PersonalizationSettingsPageState
         updateController,
         themeModeController,
       ),
+      _SettingsLevel.learningFilter => _buildLearningFilterSection(),
       _SettingsLevel.overview => const SizedBox.shrink(),
     };
     return SingleChildScrollView(
@@ -900,6 +1250,7 @@ class _PersonalizationSettingsPageState
       _SettingsLevel.accountAndPrivacy => '账号与隐私',
       _SettingsLevel.playbackAndFocus => '播放与专注',
       _SettingsLevel.appearanceAndApplication => '外观与应用',
+      _SettingsLevel.learningFilter => '学习过滤',
     };
   }
 

@@ -233,7 +233,94 @@ class _SearchJsonRequest {
               "pubdate": 1704067200,
               "play": 120000,
               "danmaku": 321,
-              "episode_count_text": "全12集"
+              "episode_count_text": "全12集",
+              "typeid": "231",
+              "typename": "计算机技术",
+              "parent_area_id": 188,
+              "parent_area_name": "科技"
+            }
+          ]
+        }
+      }
+    ''';
+  }
+}
+
+/// 返回一条知识区结果和一条游戏区结果的混合搜索 JSON，验证学习过滤行为。
+class _MixedSearchJsonRequest {
+  /// 保存搜索地址，并返回跨分区的搜索结果。
+  Future<String> call(Uri uri) async {
+    return '''
+      {
+        "code": 0,
+        "message": "OK",
+        "data": {
+          "page": 1,
+          "numPages": 2,
+          "result": [
+            {
+              "bvid": "BV1xx411x7h1",
+              "title": "原神考据解析",
+              "author": "UP 甲",
+              "duration": "10:00",
+              "pic": "//i0.hdslb.com/a.jpg",
+              "pubdate": 1704067200,
+              "play": 100,
+              "danmaku": 1,
+              "episode_count_text": "",
+              "typeid": "124",
+              "typename": "社科·法律·心理",
+              "parent_area_id": 36,
+              "parent_area_name": "知识"
+            },
+            {
+              "bvid": "BV1yy411x7h2",
+              "title": "原神角色攻略",
+              "author": "UP 乙",
+              "duration": "10:00",
+              "pic": "//i0.hdslb.com/b.jpg",
+              "pubdate": 1704067200,
+              "play": 200,
+              "danmaku": 2,
+              "episode_count_text": "",
+              "typeid": "172",
+              "typename": "手机游戏",
+              "parent_area_id": 4,
+              "parent_area_name": "游戏"
+            }
+          ]
+        }
+      }
+    ''';
+  }
+}
+
+/// 返回一条位于游戏区的搜索 JSON，验证非学习分区内容的过滤与白名单放行。
+class _GameAreaCreatorSearchJsonRequest {
+  /// 保存搜索地址，并返回游戏区的 UP 主结果。
+  Future<String> call(Uri uri) async {
+    return '''
+      {
+        "code": 0,
+        "message": "OK",
+        "data": {
+          "page": 1,
+          "numPages": 1,
+          "result": [
+            {
+              "bvid": "BV1zz411x7h3",
+              "title": "英语兔游戏实况",
+              "author": "英语兔",
+              "duration": "10:00",
+              "pic": "//i0.hdslb.com/c.jpg",
+              "pubdate": 1704067200,
+              "play": 100,
+              "danmaku": 1,
+              "episode_count_text": "",
+              "typeid": "172",
+              "typename": "手机游戏",
+              "parent_area_id": 4,
+              "parent_area_name": "游戏"
             }
           ]
         }
@@ -1025,6 +1112,91 @@ void main() {
     expect(results.single.danmakuCount, 321);
     expect(results.single.episodeCountText, '全12集');
     expect(resultPage.totalPages, 3);
+  });
+
+  /// 验证学习过滤只保留知识、科技、纪录片分区的结果，并统计隐藏数量。
+  test('关键词搜索会过滤掉非学习分区结果', () async {
+    final _MixedSearchJsonRequest requester = _MixedSearchJsonRequest();
+    final BilibiliVideoInfoService service = BilibiliVideoInfoService(
+      requestJson: requester.call,
+    );
+
+    final VideoSearchPage resultPage = await service.searchVideos('原神');
+
+    expect(resultPage.results, hasLength(1));
+    expect(resultPage.results.single.title, '原神考据解析');
+    expect(resultPage.results.single.parentCategoryName, '知识');
+    expect(resultPage.filteredOutCount, 1);
+  });
+
+  /// 验证自定义白名单可以让非学习分区的 UP 主结果保留。
+  test('自定义白名单可以放行非学习分区内容', () async {
+    final _MixedSearchJsonRequest requester = _MixedSearchJsonRequest();
+    final BilibiliVideoInfoService service = BilibiliVideoInfoService(
+      requestJson: requester.call,
+    );
+
+    final VideoSearchPage resultPage = await service.searchVideos(
+      '原神',
+      filter: const VideoSearchFilter(
+        whitelistedCreators: <String>{'UP 乙'},
+      ),
+    );
+
+    expect(resultPage.results, hasLength(2));
+    expect(resultPage.filteredOutCount, 0);
+  });
+
+  /// 验证自定义黑名单优先于分区判断，学习分区内的 UP 主也会被隐藏。
+  test('自定义黑名单优先于学习分区过滤', () async {
+    final _MixedSearchJsonRequest requester = _MixedSearchJsonRequest();
+    final BilibiliVideoInfoService service = BilibiliVideoInfoService(
+      requestJson: requester.call,
+    );
+
+    final VideoSearchPage resultPage = await service.searchVideos(
+      '原神',
+      filter: const VideoSearchFilter(
+        blacklistedCreators: <String>{'UP 甲'},
+      ),
+    );
+
+    expect(resultPage.results, isEmpty);
+    expect(resultPage.filteredOutCount, 2);
+  });
+
+  /// 验证未加入自定义白名单的非学习分区 UP 主默认会被学习过滤隐藏。
+  test('非学习分区内容默认会被学习过滤隐藏', () async {
+    final _GameAreaCreatorSearchJsonRequest requester =
+        _GameAreaCreatorSearchJsonRequest();
+    final BilibiliVideoInfoService service = BilibiliVideoInfoService(
+      requestJson: requester.call,
+    );
+
+    final VideoSearchPage resultPage = await service.searchVideos('英语兔');
+
+    expect(resultPage.results, isEmpty);
+    expect(resultPage.filteredOutCount, 1);
+  });
+
+  /// 验证自定义白名单中的 UP 主即使发布非学习分区内容也会被保留。
+  test('自定义白名单会放行其非学习分区内容', () async {
+    final _GameAreaCreatorSearchJsonRequest requester =
+        _GameAreaCreatorSearchJsonRequest();
+    final BilibiliVideoInfoService service = BilibiliVideoInfoService(
+      requestJson: requester.call,
+    );
+
+    final VideoSearchPage resultPage = await service.searchVideos(
+      '英语兔',
+      filter: const VideoSearchFilter(
+        whitelistedCreators: <String>{'英语兔'},
+      ),
+    );
+
+    expect(resultPage.results, hasLength(1));
+    expect(resultPage.results.single.ownerName, '英语兔');
+    expect(resultPage.filteredOutCount, 0);
   });
 
   /// 验证下一页、排序、日期、时长和分区都会转换成真实搜索参数。

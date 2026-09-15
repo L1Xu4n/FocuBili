@@ -21,19 +21,19 @@ abstract final class AppTheme {
   }
 
   /// 创建跟随品牌蓝色的浅色 Material 3 主题。
-  static ThemeData light() {
-    return _buildTheme(Brightness.light);
+  static ThemeData light({Color seedColor = _brandColor}) {
+    return _buildTheme(Brightness.light, seedColor);
   }
 
   /// 创建适合夜间观看的深色 Material 3 主题。
-  static ThemeData dark() {
-    return _buildTheme(Brightness.dark);
+  static ThemeData dark({Color seedColor = _brandColor}) {
+    return _buildTheme(Brightness.dark, seedColor);
   }
 
   /// 根据明暗模式生成共享的圆角、颜色和导航栏样式。
-  static ThemeData _buildTheme(Brightness brightness) {
+  static ThemeData _buildTheme(Brightness brightness, Color seedColor) {
     final ColorScheme colors = ColorScheme.fromSeed(
-      seedColor: _brandColor,
+      seedColor: seedColor,
       brightness: brightness,
     );
     return ThemeData(

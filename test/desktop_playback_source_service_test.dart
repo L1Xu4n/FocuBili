@@ -103,6 +103,8 @@ void main() {
     expect(sources.videoUrls, <String>[
       'https://upos-sz.bilivideo.com/video.m4s',
       'https://backup.bilivideo.cn/video.m4s',
+      // CDN 节点会使用 B 站侧指定的非标准端口，合法主机名应被保留。
+      'https://backup.bilivideo.cn:8443/video.m4s',
     ]);
     expect(sources.audioUrls.single, contains('audio.bilivideo.com'));
     expect(

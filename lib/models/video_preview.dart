@@ -120,6 +120,10 @@ class VideoSearchResult {
     required this.playCount,
     required this.danmakuCount,
     required this.episodeCountText,
+    this.categoryId = 0,
+    this.categoryName = '',
+    this.parentCategoryId = 0,
+    this.parentCategoryName = '',
   });
 
   final String bvid;
@@ -131,6 +135,18 @@ class VideoSearchResult {
   final int playCount;
   final int danmakuCount;
   final String episodeCountText;
+
+  /// 搜索接口返回的二级分区编号，如 208 表示校园学习；缺失时回退为 0。
+  final int categoryId;
+
+  /// 搜索接口返回的二级分区名称，如“校园学习”；缺失时为空字符串。
+  final String categoryName;
+
+  /// 搜索接口返回的顶级分区编号，如 36 表示知识；缺失时回退为 0。
+  final int parentCategoryId;
+
+  /// 搜索接口返回的顶级分区名称，如“知识”；缺失时为空字符串。
+  final String parentCategoryName;
 }
 
 /// 定义关键词视频搜索的排序方式。
@@ -163,6 +179,8 @@ class VideoSearchFilter {
     this.durationRange = VideoDurationRange.any,
     this.categoryId,
     this.categoryLabel = '全部',
+    this.whitelistedCreators = const <String>{},
+    this.blacklistedCreators = const <String>{},
   });
 
   final VideoSearchOrder order;
@@ -170,6 +188,12 @@ class VideoSearchFilter {
   final VideoDurationRange durationRange;
   final int? categoryId;
   final String categoryLabel;
+
+  /// 学习过滤自定义白名单：命中这些 UP 主的结果即使不在学习分区也保留。
+  final Set<String> whitelistedCreators;
+
+  /// 学习过滤自定义黑名单：命中这些 UP 主的结果一律隐藏。
+  final Set<String> blacklistedCreators;
 
   /// 返回替换指定字段后的新筛选对象，并支持显式清除内容分区。
   VideoSearchFilter copyWith({
@@ -179,6 +203,8 @@ class VideoSearchFilter {
     int? categoryId,
     String? categoryLabel,
     bool clearCategory = false,
+    Set<String>? whitelistedCreators,
+    Set<String>? blacklistedCreators,
   }) {
     return VideoSearchFilter(
       order: order ?? this.order,
@@ -186,22 +212,28 @@ class VideoSearchFilter {
       durationRange: durationRange ?? this.durationRange,
       categoryId: clearCategory ? null : (categoryId ?? this.categoryId),
       categoryLabel: categoryLabel ?? this.categoryLabel,
+      whitelistedCreators: whitelistedCreators ?? this.whitelistedCreators,
+      blacklistedCreators: blacklistedCreators ?? this.blacklistedCreators,
     );
   }
 }
 
 /// 保存一页关键词搜索结果以及继续加载所需的页码信息。
 class VideoSearchPage {
-  /// 创建包含当前页、总页数和结果列表的搜索分页对象。
+  /// 创建包含当前页、总页数、结果列表和被过滤数量的搜索分页对象。
   const VideoSearchPage({
     required this.results,
     required this.page,
     required this.totalPages,
+    this.filteredOutCount = 0,
   });
 
   final List<VideoSearchResult> results;
   final int page;
   final int totalPages;
+
+  /// 本页中被学习过滤规则隐藏的非学习内容数量，用于界面向用户说明过滤行为。
+  final int filteredOutCount;
 
   /// 判断服务端是否仍有下一页结果可以加载。
   bool get hasMore => page < totalPages;

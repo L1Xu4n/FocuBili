@@ -366,13 +366,15 @@ class BilibiliDesktopPlaybackSourceService {
     return List<String>.unmodifiable(urls);
   }
 
-  /// 判断地址是否属于允许送入本机播放器的 B 站 HTTPS 媒体域名。
+  /// 判断地址是否属于允许送入本机播放器的 B 站官方 HTTPS 媒体域名。
+  ///
+  /// 播放接口会在不同 CDN 节点间切换（bilivideo / mcdn / mountaintoys），
+  /// 端口也由 B 站侧指定，因此只校验主机名而不限制端口。
   bool _isSafeMediaUrl(String value) {
     final Uri? uri = Uri.tryParse(value);
     if (uri == null ||
         uri.scheme.toLowerCase() != 'https' ||
         uri.userInfo.isNotEmpty ||
-        (uri.hasPort && uri.port != 443) ||
         uri.fragment.isNotEmpty) {
       return false;
     }
@@ -380,7 +382,8 @@ class BilibiliDesktopPlaybackSourceService {
     return host == 'bilivideo.com' ||
         host.endsWith('.bilivideo.com') ||
         host == 'bilivideo.cn' ||
-        host.endsWith('.bilivideo.cn');
+        host.endsWith('.bilivideo.cn') ||
+        host.endsWith('.edge.mountaintoys.cn');
   }
 
   /// 为常见 B 站清晰度编号生成稳定中文名称。

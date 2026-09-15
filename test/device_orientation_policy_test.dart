@@ -35,15 +35,16 @@ void main() {
     );
   });
 
-  /// 验证 Android 手机仍以竖屏启动，并能在播放器中旋转到横屏。
-  test('Android 手机保持竖屏启动并允许播放器横屏', () {
-    expect(
-      DeviceOrientationPolicy.startupOrientations(
-        logicalSize: const Size(393, 852),
-        isAndroid: true,
-      ),
-      const <DeviceOrientation>[DeviceOrientation.portraitUp],
-    );
+  /// 验证 Android 手机支持横竖屏启动，并能在播放器中旋转到横屏。
+  test('Android 手机支持横竖屏启动并允许播放器横屏', () {
+    final List<DeviceOrientation> startup = DeviceOrientationPolicy
+        .startupOrientations(
+          logicalSize: const Size(393, 852),
+          isAndroid: true,
+        );
+    expect(startup, contains(DeviceOrientation.portraitUp));
+    expect(startup, contains(DeviceOrientation.landscapeLeft));
+    expect(startup, contains(DeviceOrientation.landscapeRight));
     expect(
       DeviceOrientationPolicy.playerOrientations(
         logicalSize: const Size(393, 852),

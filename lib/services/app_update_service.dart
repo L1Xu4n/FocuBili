@@ -416,6 +416,9 @@ class _ParsedVersion {
 
 /// 统一管理启动检查、手动重试、红点和设置开关。
 class AppUpdateController extends ChangeNotifier {
+  /// 此版本强制关闭启动自动更新检查。全部代码与数据保留，仅不再发起网络检查。
+  static const bool forcedOff = true;
+
   /// 创建更新状态控制器，并允许测试替换网络、存储和版本读取服务。
   AppUpdateController({
     AppUpdateService? updateService,
@@ -453,7 +456,7 @@ class AppUpdateController extends ChangeNotifier {
   /// 返回设置入口是否应显示新版本红点。
   bool get hasUpdate => _result.updateAvailable;
 
-  /// 启动时读取开关和安装版本；仅在用户启用时访问 GitHub。
+  /// 启动时读取开关和安装版本；仅在用户启用且未强制关闭时访问 GitHub。
   Future<void> initialize({bool checkOnStart = true}) async {
     if (!_loaded) {
       _loadingFuture ??= _loadInitialState();
@@ -468,12 +471,19 @@ class AppUpdateController extends ChangeNotifier {
   /// 合并并发初始化请求，页面快速重建时不会重复访问平台插件。
   Future<void> _loadInitialState() async {
     try {
-      _enabled = await _preferencesService.loadEnabled();
+      // 强制关闭时忽略本机开关，始终按关闭状态初始化。
+      _enabled = forcedOff
+          ? false
+          : await _preferencesService.loadEnabled();
       final String currentVersion = await _versionProvider.loadVersion();
       _result = AppUpdateResult(
         status: _enabled ? AppUpdateStatus.idle : AppUpdateStatus.disabled,
         currentVersion: currentVersion,
-        message: _enabled ? null : '已关闭启动时检查更新',
+        message: _enabled
+            ? null
+            : forcedOff
+            ? '此版本已停用启动时检查更新'
+            : '已关闭启动时检查更新',
       );
     } catch (_) {
       _result = const AppUpdateResult(
@@ -486,8 +496,11 @@ class AppUpdateController extends ChangeNotifier {
     _notify();
   }
 
-  /// 保存开关；重新开启时立即检查一次，不必等到下次启动。
+  /// 保存开关；强制关闭时忽略用户操作，重新开启时立即检查一次。
   Future<void> setEnabled(bool enabled) async {
+    if (forcedOff) {
+      return;
+    }
     if (!_loaded) {
       await initialize(checkOnStart: false);
     }
