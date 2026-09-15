@@ -366,24 +366,62 @@ class BilibiliDesktopPlaybackSourceService {
     return List<String>.unmodifiable(urls);
   }
 
-  /// 判断地址是否属于允许送入本机播放器的 B 站官方 HTTPS 媒体域名。
+  /// 判断地址是否可安全送入本机播放器。
   ///
-  /// 播放接口会在不同 CDN 节点间切换（bilivideo / mcdn / mountaintoys），
-  /// 端口也由 B 站侧指定，因此只校验主机名而不限制端口。
+  /// 与 yt-dlp / Seal 的做法一致：地址来自 B 站官方接口，本身已可信，不再
+  /// 按域名过滤（B 站 CDN 域名会持续变化，维护白名单只会误伤）。只保留
+  /// 最小校验：必须 http/https、不带用户信息或片段，且不能指向本机或
+  /// 内网的字面 IP（防 SSRF），其余公开主机名一律放行。
   bool _isSafeMediaUrl(String value) {
     final Uri? uri = Uri.tryParse(value);
+    final String scheme = uri?.scheme.toLowerCase() ?? '';
     if (uri == null ||
-        uri.scheme.toLowerCase() != 'https' ||
+        (scheme != 'https' && scheme != 'http') ||
         uri.userInfo.isNotEmpty ||
         uri.fragment.isNotEmpty) {
       return false;
     }
     final String host = uri.host.toLowerCase();
-    return host == 'bilivideo.com' ||
-        host.endsWith('.bilivideo.com') ||
-        host == 'bilivideo.cn' ||
-        host.endsWith('.bilivideo.cn') ||
-        host.endsWith('.edge.mountaintoys.cn');
+    if (host.isEmpty || host.contains(RegExp(r'\s'))) {
+      return false;
+    }
+    final InternetAddress? address = InternetAddress.tryParse(host);
+    if (address == null) {
+      // 非字面 IP 的公开主机名：放行，解析交给系统与 CDN。
+      return true;
+    }
+    if (address.isLoopback || address.isLinkLocal || address.isMulticast) {
+      return false;
+    }
+    if (address.type == InternetAddressType.IPv4 && _isPrivateIpv4(host)) {
+      return false;
+    }
+    return true;
+  }
+
+  /// 判断点分 IPv4 文本是否属于私有或保留网段。
+  static bool _isPrivateIpv4(String host) {
+    final List<int> parts = <int>[];
+    for (final String part in host.split('.')) {
+      final int? value = int.tryParse(part);
+      if (value == null || value < 0 || value > 255) {
+        return false;
+      }
+      parts.add(value);
+    }
+    if (parts.length != 4) {
+      return false;
+    }
+    final int first = parts[0];
+    final int second = parts[1];
+    return first == 0 ||
+        first == 10 ||
+        first == 127 ||
+        (first == 100 && second >= 64 && second <= 127) ||
+        (first == 169 && second == 254) ||
+        (first == 172 && second >= 16 && second <= 31) ||
+        (first == 192 && second == 168) ||
+        (first == 198 && (second == 18 || second == 19));
   }
 
   /// 为常见 B 站清晰度编号生成稳定中文名称。

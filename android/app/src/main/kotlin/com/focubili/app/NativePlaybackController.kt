@@ -2557,12 +2557,60 @@ class NativePlaybackController(
         return "https://www.bilibili.com/video/$normalized"
     }
 
-    /** 仅接受 B 站 CDN 的 HTTPS 媒体地址，避免任意链接进入播放器。 */
+    /** 与 yt-dlp / Seal 一致：地址来自官方接口即视为可信，不做域名白名单；仅拦截非 http(s)、带用户信息/片段或指向内网字面 IP 的地址（防 SSRF）。 */
     private fun isSafeMediaUrl(url: String): Boolean {
         val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return false
         val host = uri.host?.lowercase(Locale.ROOT) ?: return false
-        return uri.scheme.equals("https", ignoreCase = true) &&
-            (host.endsWith(".bilivideo.com") || host.endsWith(".bilivideo.cn"))
+        val scheme = uri.scheme?.lowercase(Locale.ROOT)
+        if (scheme != "https" && scheme != "http") {
+            return false
+        }
+        if (!uri.userInfo.isNullOrEmpty() || !uri.fragment.isNullOrEmpty()) {
+            return false
+        }
+        if (host.isEmpty() || host.any { it.isWhitespace() }) {
+            return false
+        }
+        if (host.contains(':')) {
+            // IPv6 字面地址：只放行公网全局单播，拒绝回环/链路本地/组播/ULA。
+            val lower = host
+            val blockedIpv6 = lower == "::1" ||
+                lower.startsWith("fe8") ||
+                lower.startsWith("fe9") ||
+                lower.startsWith("fea") ||
+                lower.startsWith("feb") ||
+                lower.startsWith("ff") ||
+                lower.startsWith("fc") ||
+                lower.startsWith("fd")
+            return !blockedIpv6
+        }
+        return !isPrivateIpv4(host)
+    }
+
+    /** 判断点分 IPv4 文本是否属于私有或保留网段。 */
+    private fun isPrivateIpv4(host: String): Boolean {
+        val parts = host.split(".")
+        if (parts.size != 4) {
+            return false
+        }
+        val values = ArrayList<Int>(4)
+        for (part in parts) {
+            val value = part.toIntOrNull() ?: return false
+            if (value < 0 || value > 255) {
+                return false
+            }
+            values.add(value)
+        }
+        val first = values[0]
+        val second = values[1]
+        return first == 0 ||
+            first == 10 ||
+            first == 127 ||
+            (first == 100 && second in 64..127) ||
+            (first == 169 && second == 254) ||
+            (first == 172 && second in 16..31) ||
+            (first == 192 && second == 168) ||
+            (first == 198 && (second == 18 || second == 19))
     }
 
     companion object {

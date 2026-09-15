@@ -146,40 +146,53 @@ class OfflineVideoService {
     final File output = File('${directory.path}${Platform.pathSeparator}video.mp4');
     final String referer = 'https://www.bilibili.com/video/$bvid';
     final String cookieHeader = await _cookieStore.readCookies();
-    final Uri playurl = Uri.https(
-      'api.bilibili.com',
-      '/x/player/playurl',
-      <String, String>{
-        'bvid': bvid,
-        'cid': '$cid',
-        'qn': '$quality',
-        'fnval': '0',
-        'fourk': '0',
-      },
-    );
-    final String responseText = await _requestText(
-      playurl,
-      <String, String>{
-        'Accept': 'application/json',
-        'Referer': referer,
-        'User-Agent': _userAgent,
-        if (cookieHeader.isNotEmpty) 'Cookie': cookieHeader,
-      },
-    );
-    final _ProgressivePlayInfo playInfo = _parseProgressiveInfo(responseText);
-    final int sizeBytes = await _downloadWithFallback(
-      playInfo.urls,
-      headers: <String, String>{
-        'Accept': '*/*',
-        'Accept-Encoding': 'identity',
-        'Origin': 'https://www.bilibili.com',
-        'Referer': referer,
-        'User-Agent': _userAgent,
-        if (cookieHeader.isNotEmpty) 'Cookie': cookieHeader,
-      },
-      output: output,
-      onProgress: onProgress ?? (int received, int? total) {},
-    );
+    final Map<String, String> requestHeaders = <String, String>{
+      'Accept': 'application/json',
+      'Referer': referer,
+      'User-Agent': _userAgent,
+      if (cookieHeader.isNotEmpty) 'Cookie': cookieHeader,
+    };
+    final Map<String, String> mediaHeaders = <String, String>{
+      'Accept': '*/*',
+      'Accept-Encoding': 'identity',
+      'Origin': 'https://www.bilibili.com',
+      'Referer': referer,
+      'User-Agent': _userAgent,
+      if (cookieHeader.isNotEmpty) 'Cookie': cookieHeader,
+    };
+    // CDN 节点偶发故障或签名失效时，重新请求一次播放接口拿到带新签名的
+    // 地址再试，行为与 yt-dlp 在下载失败后重新提取一致。
+    late int sizeBytes;
+    _ProgressivePlayInfo playInfo;
+    for (int attempt = 0; ; attempt += 1) {
+      final Uri playurl = Uri.https(
+        'api.bilibili.com',
+        '/x/player/playurl',
+        <String, String>{
+          'bvid': bvid,
+          'cid': '$cid',
+          'qn': '$quality',
+          'fnval': '0',
+          'fourk': '0',
+        },
+      );
+      final String responseText = await _requestText(playurl, requestHeaders);
+      playInfo = _parseProgressiveInfo(responseText);
+      try {
+        sizeBytes = await _downloadWithFallback(
+          playInfo.urls,
+          headers: mediaHeaders,
+          output: output,
+          onProgress: onProgress ?? (int received, int? total) {},
+        );
+        break;
+      } on OfflineVideoException {
+        if (attempt >= 1) {
+          rethrow;
+        }
+        // 第一次主备地址全部失败时继续循环，重新拉取播放地址后重试。
+      }
+    }
     final OfflineVideoDownload download = OfflineVideoDownload(
       bvid: bvid,
       cid: cid,
@@ -201,7 +214,7 @@ class OfflineVideoService {
         .where(
           (OfflineVideoDownload existing) => existing.bvid != bvid,
         )
-        .toList(growable: false)
+        .toList()
       ..add(download);
     await _writeStorage(updated);
     return download;
@@ -288,7 +301,7 @@ class OfflineVideoService {
     throw const OfflineVideoException('视频下载失败，请稍后重试。');
   }
 
-  /// 解析渐进式播放响应，返回经过域名校验的媒体地址列表与真实清晰度。
+  /// 解析渐进式播放响应，返回经过安全校验的媒体地址列表与真实清晰度。
   _ProgressivePlayInfo _parseProgressiveInfo(String responseText) {
     final Object? decoded;
     try {
@@ -347,25 +360,62 @@ class OfflineVideoService {
     );
   }
 
-  /// 判断地址是否属于允许下载的 B 站官方 HTTPS 媒体域名。
+  /// 判断地址是否可安全下载。
   ///
-  /// 播放接口会在不同 CDN 节点间切换（bilivideo / mcdn / mountaintoys），
-  /// 端口也由 B 站侧指定，因此只校验主机名而不限制端口。
+  /// 与 yt-dlp / Seal 的做法一致：地址来自 B 站官方接口，本身已可信，不再
+  /// 按域名过滤（B 站 CDN 域名会持续变化，维护白名单只会误伤）。只保留
+  /// 最小校验：必须 http/https、不带用户信息或片段，且不能指向本机或
+  /// 内网的字面 IP（防 SSRF），其余公开主机名一律放行。
   bool _isSafeMediaUrl(String value) {
     final Uri? uri = Uri.tryParse(value);
+    final String scheme = uri?.scheme.toLowerCase() ?? '';
     if (uri == null ||
-        uri.scheme.toLowerCase() != 'https' ||
+        (scheme != 'https' && scheme != 'http') ||
         uri.userInfo.isNotEmpty ||
         uri.fragment.isNotEmpty) {
       return false;
     }
     final String host = uri.host.toLowerCase();
-    return host == 'bilivideo.com' ||
-        host.endsWith('.bilivideo.com') ||
-        host == 'bilivideo.cn' ||
-        host.endsWith('.bilivideo.cn') ||
-        host.endsWith('.akamaized.net') ||
-        host.endsWith('.edge.mountaintoys.cn');
+    if (host.isEmpty || host.contains(RegExp(r'\s'))) {
+      return false;
+    }
+    final InternetAddress? address = InternetAddress.tryParse(host);
+    if (address == null) {
+      // 非字面 IP 的公开主机名：放行，解析交给系统与 CDN。
+      return true;
+    }
+    if (address.isLoopback || address.isLinkLocal || address.isMulticast) {
+      return false;
+    }
+    if (address.type == InternetAddressType.IPv4 && _isPrivateIpv4(host)) {
+      return false;
+    }
+    return true;
+  }
+
+  /// 判断点分 IPv4 文本是否属于私有或保留网段。
+  static bool _isPrivateIpv4(String host) {
+    final List<int> parts = <int>[];
+    for (final String part in host.split('.')) {
+      final int? value = int.tryParse(part);
+      if (value == null || value < 0 || value > 255) {
+        return false;
+      }
+      parts.add(value);
+    }
+    if (parts.length != 4) {
+      return false;
+    }
+    final int first = parts[0];
+    final int second = parts[1];
+    return first == 0 ||
+        first == 10 ||
+        first == 127 ||
+        (first == 100 && second >= 64 && second <= 127) ||
+        (first == 169 && second == 254) ||
+        (first == 172 && second >= 16 && second <= 31) ||
+        (first == 192 && second == 168) ||
+        (first == 198 && (second == 18 || second == 19));
   }
 
   /// 解析并创建唯一允许管理的下载目录，拒绝指向文件系统根目录等宽泛目标。
