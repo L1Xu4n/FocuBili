@@ -988,4 +988,106 @@ extension _PlayerDetailsView on _PlayerPageState {
       ).showSnackBar(const SnackBar(content: Text('无法打开默认浏览器，请稍后重试。')));
     }
   }
+
+  /// 读取当前视频是否已有离线缓存，失败时保持未缓存显示。
+  Future<void> _loadOfflineState() async {
+    final String bvid = _activeVideo.bvid;
+    if (bvid.isEmpty) {
+      return;
+    }
+    try {
+      final bool downloaded = await _offlineVideoService.isDownloaded(bvid);
+      if (mounted && _activeVideo.bvid == bvid) {
+        _updatePlayerState(() => _currentVideoDownloaded = downloaded);
+      }
+    } on Object {
+      // 本机离线记录读取失败时保持未缓存显示，不影响播放器其他功能。
+    }
+  }
+
+  /// 切换当前视频的离线缓存：未缓存时下载，已缓存时确认删除。
+  Future<void> _toggleOfflineDownload() async {
+    if (_offlineDownloading || _activeVideo.bvid.isEmpty) {
+      return;
+    }
+    if (_currentVideoDownloaded) {
+      final bool? confirmed = await showDialog<bool>(
+        context: context,
+        builder: (BuildContext dialogContext) => AlertDialog(
+          title: const Text('删除离线缓存'),
+          content: const Text('将删除这支视频已下载的离线缓存。'),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('删除'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) {
+        return;
+      }
+      final bool deleted = await _offlineVideoService.delete(_activeVideo.bvid);
+      if (mounted) {
+        _updatePlayerState(() => _currentVideoDownloaded = !deleted);
+        _showTransientSnackBar(deleted ? '已删除离线缓存' : '删除失败，请稍后重试。');
+      }
+      return;
+    }
+    _updatePlayerState(() => _offlineDownloading = true);
+    try {
+      await _offlineVideoService.download(_activeVideo);
+      if (mounted) {
+        _updatePlayerState(() => _currentVideoDownloaded = true);
+        _showTransientSnackBar('已下载到离线缓存，可在无网络时播放。');
+      }
+    } on Object catch (error) {
+      if (mounted) {
+        _showTransientSnackBar(error.toString());
+      }
+    } finally {
+      if (mounted) {
+        _updatePlayerState(() => _offlineDownloading = false);
+      }
+    }
+  }
+
+  /// 创建“离线缓存”按钮，并根据下载状态切换图标与文字。
+  Widget _buildOfflineDownloadButton() {
+    return Tooltip(
+      message: _currentVideoDownloaded ? '删除离线缓存' : '下载离线缓存',
+      child: TextButton.icon(
+        key: const Key('current-video-offline-download-button'),
+        style: TextButton.styleFrom(
+          visualDensity: VisualDensity.compact,
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+        ),
+        onPressed: _offlineDownloading
+            ? null
+            : () => unawaited(_toggleOfflineDownload()),
+        icon: _offlineDownloading
+            ? const SizedBox.square(
+                dimension: 17,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : Icon(
+                _currentVideoDownloaded
+                    ? Icons.offline_pin_rounded
+                    : Icons.download_for_offline_outlined,
+                size: 20,
+              ),
+        label: Text(
+          _offlineDownloading
+              ? '下载中…'
+              : _currentVideoDownloaded
+              ? '已缓存'
+              : '离线缓存',
+        ),
+      ),
+    );
+  }
 }

@@ -388,23 +388,31 @@ extension _PlayerCollectionView on _PlayerPageState {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           const SizedBox(height: 12),
-          Row(
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              Expanded(
-                child: Text(
-                  '简介',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
+              Text(
+                '简介',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
               ),
-              _buildCurrentVideoLearningListButton(),
-              TextButton.icon(
-                key: const Key('portrait-note-button'),
-                // 竖屏记笔记按钮函数在播放器下方打开编辑区，并固定播放器高度。
-                onPressed: () => unawaited(_openVideoNotes()),
-                icon: const Icon(Icons.edit_note_rounded, size: 20),
-                label: const Text('记笔记'),
+              const SizedBox(height: 4),
+              Wrap(
+                spacing: 4,
+                runSpacing: 4,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: <Widget>[
+                  _buildCurrentVideoLearningListButton(),
+                  _buildOfflineDownloadButton(),
+                  TextButton.icon(
+                    key: const Key('portrait-note-button'),
+                    // 竖屏记笔记按钮函数在播放器下方打开编辑区，并固定播放器高度。
+                    onPressed: () => unawaited(_openVideoNotes()),
+                    icon: const Icon(Icons.edit_note_rounded, size: 20),
+                    label: const Text('记笔记'),
+                  ),
+                ],
               ),
             ],
           ),

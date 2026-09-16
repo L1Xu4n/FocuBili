@@ -7,6 +7,7 @@ import '../../services/app_update_service.dart';
 import 'favorite_folders_page.dart';
 import 'followed_creators_page.dart';
 import 'login_page.dart';
+import 'offline_videos_page.dart';
 import 'subscribed_collections_page.dart';
 
 /// 标识已登录账号菜单中可执行的安全会话操作。
@@ -187,6 +188,16 @@ class _ProfilePageState extends State<ProfilePage> {
       MaterialPageRoute<void>(
         // 收藏夹页面构建函数只读取当前账号公开可见的收藏数据，不执行写操作。
         builder: (BuildContext context) => const FavoriteFoldersPage(),
+      ),
+    );
+  }
+
+  /// 打开本机离线缓存列表，可播放已下载视频并管理占用空间。
+  Future<void> _openOfflineVideos() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        // 离线缓存页面构建函数只读写本机下载文件，不访问账号数据。
+        builder: (BuildContext context) => const OfflineVideosPage(),
       ),
     );
   }
@@ -452,6 +463,12 @@ class _ProfilePageState extends State<ProfilePage> {
         title: '我的收藏',
         // 收藏入口函数打开真实收藏夹列表，具体会话错误由目标页面明确显示。
         onTap: () => _openFavoriteFolders(),
+      ),
+      _ProfileTile(
+        icon: Icons.offline_pin_rounded,
+        title: '离线缓存',
+        // 离线缓存入口函数打开已下载到本机的视频列表。
+        onTap: () => _openOfflineVideos(),
       ),
       _ProfileTile(
         icon: Icons.subscriptions_outlined,
