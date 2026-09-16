@@ -9,7 +9,7 @@ abstract final class DeviceOrientationPolicy {
     return view.physicalSize / view.devicePixelRatio;
   }
 
-  /// 返回播放器退出后应恢复的方向：Android 平板横屏，Android 手机横竖屏均可。
+  /// 返回播放器退出后应恢复的方向：Android 平板横屏，Android 手机竖屏。
   ///
   /// 非 Android 平台返回空列表，让 Windows 等桌面系统自由调整窗口大小。
   static List<DeviceOrientation> startupOrientations({
@@ -25,11 +25,7 @@ abstract final class DeviceOrientationPolicy {
         DeviceOrientation.landscapeRight,
       ];
     }
-    return const <DeviceOrientation>[
-      DeviceOrientation.portraitUp,
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ];
+    return const <DeviceOrientation>[DeviceOrientation.portraitUp];
   }
 
   /// 返回播放器期间的方向：平板维持横屏，手机可以旋转进入横屏全屏。

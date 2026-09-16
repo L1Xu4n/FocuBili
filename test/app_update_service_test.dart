@@ -86,8 +86,7 @@ void main() {
       targetPlatform: AppUpdateTargetPlatform.windows,
       releaseLoader: () async => <String, Object?>{
         'tag_name': 'v1.4.0',
-        'html_url':
-            'https://github.com/L1Xu4n/FocuBili/releases/tag/v1.4.0',
+        'html_url': 'https://github.com/L1Xu4n/FocuBili/releases/tag/v1.4.0',
         'assets': <Map<String, Object?>>[
           <String, Object?>{
             'name': 'FocuBili-v1.4.0-release.apk',
@@ -145,7 +144,7 @@ void main() {
     expect(result.releaseHighlights, isEmpty);
   });
 
-  test('强制关闭版本忽略开关并停用启动检查', () async {
+  test('控制器保存关闭状态并停止自动检查', () async {
     int requestCount = 0;
     final _MemoryUpdatePreferences preferences = _MemoryUpdatePreferences(true);
     final AppUpdateController controller = AppUpdateController(
@@ -162,10 +161,8 @@ void main() {
     await controller.initialize(checkOnStart: true);
     await controller.setEnabled(false);
 
-    // 强制关闭版本的启动检查不发起网络请求，开关操作也不会写入设备。
-    expect(requestCount, 0);
-    expect(preferences.value, isTrue);
-    expect(controller.enabled, isFalse);
+    expect(requestCount, 1);
+    expect(preferences.value, isFalse);
     expect(controller.result.status, AppUpdateStatus.disabled);
     controller.dispose();
   });
@@ -194,7 +191,7 @@ void main() {
     controller.dispose();
   });
 
-  test('强制关闭版本下手动检查仍返回结果且开关操作不抛错', () async {
+  test('开关保存失败时保留正在执行的检查结果', () async {
     final Completer<Map<String, Object?>> release =
         Completer<Map<String, Object?>>();
     final AppUpdateController controller = AppUpdateController(
@@ -206,12 +203,11 @@ void main() {
     final Future<void> checking = controller.checkNow();
     await Future<void>.delayed(Duration.zero);
 
-    // 强制关闭版本忽略开关保存，即使底层保存会失败也不向上抛出。
-    await expectLater(controller.setEnabled(false), completes);
+    await expectLater(controller.setEnabled(false), throwsStateError);
     release.complete(<String, Object?>{'tag_name': 'v0.2.2'});
     await checking;
 
-    expect(controller.enabled, isFalse);
+    expect(controller.enabled, isTrue);
     expect(controller.checking, isFalse);
     expect(controller.result.status, AppUpdateStatus.upToDate);
     controller.dispose();

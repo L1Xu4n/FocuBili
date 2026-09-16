@@ -104,9 +104,6 @@ android {
             if (hasReleaseSigning) {
                 signingConfig signingConfigs.release
             }
-            // 低内存沙箱中 R8 压缩会触发 OOM；关闭压缩与资源裁剪后仍可正常打包安装。
-            minifyEnabled false
-            shrinkResources false
         }
     }
 }

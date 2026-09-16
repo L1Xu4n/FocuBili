@@ -2,9 +2,6 @@ buildscript {
     // Kotlin 构建插件版本需与 Flutter 3.44、Android Gradle 插件和 Gradle 保持兼容。
     ext.kotlin_version = '2.2.20'
     repositories {
-        // 沙箱构建临时前置镜像，避免官方仓库走代理挂起；构建完成后还原。
-        maven { url 'https://maven.aliyun.com/repository/google' }
-        maven { url 'https://maven.aliyun.com/repository/public' }
         google()
         mavenCentral()
     }
@@ -16,9 +13,6 @@ buildscript {
 
 allprojects {
     repositories {
-        // 沙箱构建临时前置镜像，避免官方仓库走代理挂起；构建完成后还原。
-        maven { url 'https://maven.aliyun.com/repository/google' }
-        maven { url 'https://maven.aliyun.com/repository/public' }
         google()
         mavenCentral()
     }

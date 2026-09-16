@@ -36,8 +36,7 @@ void main() {
         targetPlatform: AppUpdateTargetPlatform.windows,
         releaseLoader: () async => <String, Object?>{
           'tag_name': 'v0.3.0',
-          'html_url':
-              'https://github.com/L1Xu4n/FocuBili/releases/tag/v0.3.0',
+          'html_url': 'https://github.com/L1Xu4n/FocuBili/releases/tag/v0.3.0',
           'assets': <Map<String, Object?>>[
             <String, Object?>{
               'name': 'FocuBili-v0.3.0-x64.msix',
@@ -57,9 +56,7 @@ void main() {
         },
       ),
     );
-    // 当前版本强制关闭启动自动检查，页面测试改用一次手动检查进入可更新状态。
-    await controller.initialize(checkOnStart: false);
-    await controller.checkNow();
+    await controller.initialize(checkOnStart: true);
     Uri? openedUri;
 
     await tester.pumpWidget(

@@ -296,7 +296,7 @@ class OfflineVideoService {
       }
     }
     if (lastError is OfflineVideoException) {
-      throw lastError as OfflineVideoException;
+      throw lastError;
     }
     throw const OfflineVideoException('视频下载失败，请稍后重试。');
   }

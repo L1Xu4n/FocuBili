@@ -34,9 +34,6 @@ key.properties
 .env.*
 *.log
 
-# 构建产物（APK 等）不进入公开仓库。
-dist/
-
 # Flutter/Android 生成目录。
 .packages
 .pub-cache/

@@ -859,18 +859,13 @@ class _PersonalizationSettingsPageState
         SwitchListTile.adaptive(
           key: const Key('enable-startup-update-check'),
           value: updateController.enabled,
-          // 强制关闭版本忽略用户切换，开关保持禁用态并说明原因。
-          onChanged: AppUpdateController.forcedOff
-              ? null
-              : _savingUpdatePreference
+          onChanged: _savingUpdatePreference
               ? null
               : (bool enabled) =>
                     _setUpdateCheckEnabled(updateController, enabled),
           secondary: const Icon(Icons.system_update_alt_rounded),
           title: const Text('启动时检查更新'),
-          subtitle: AppUpdateController.forcedOff
-              ? const Text('此版本已停用自动更新检查，请留意软件发布页的新版本。')
-              : const Text('每次启动从 GitHub Release 检查新的正式版本。'),
+          subtitle: const Text('每次启动从 GitHub Release 检查新的正式版本。'),
         ),
         ListTile(
           leading: const Icon(Icons.storage_outlined),
