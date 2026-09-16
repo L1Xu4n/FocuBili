@@ -399,6 +399,7 @@ extension _PlayerCollectionView on _PlayerPageState {
                 ),
               ),
               _buildCurrentVideoLearningListButton(),
+              _buildAppFavoriteButton(),
               TextButton.icon(
                 key: const Key('portrait-note-button'),
                 // 竖屏记笔记按钮函数在播放器下方打开编辑区，并固定播放器高度。

@@ -21,6 +21,7 @@ import '../../features/profile/user_profile_page.dart';
 import '../../models/video_note.dart';
 import '../../platform/app_platform.dart';
 import '../../models/video_preview.dart';
+import '../../models/app_favorite.dart';
 import '../../models/player_enhancement.dart';
 import '../../models/video_shot_preview.dart';
 import '../../models/watch_history_entry.dart';
@@ -38,6 +39,7 @@ import '../../services/bilibili_interaction_service.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/watch_history_service.dart';
 import '../../services/learning_list_service.dart';
+import '../../services/app_favorites_service.dart';
 import '../../services/video_shot_service.dart';
 import '../../services/video_note_service.dart';
 import '../../models/player_overlay_data.dart';
@@ -114,6 +116,7 @@ class PlayerPage extends StatefulWidget {
     this.danmakuPreferencesService,
     this.playbackPreferencesService,
     this.playerEnhancementService,
+    this.appFavoritesService,
     this.focusTimerController,
     this.externalLinkLauncher,
     this.appPlatform,
@@ -136,6 +139,7 @@ class PlayerPage extends StatefulWidget {
   final DanmakuPreferencesService? danmakuPreferencesService;
   final PlaybackPreferencesService? playbackPreferencesService;
   final BilibiliPlayerEnhancementService? playerEnhancementService;
+  final AppFavoritesService? appFavoritesService;
   final FocusTimerController? focusTimerController;
   final ExternalLinkLauncher? externalLinkLauncher;
   final AppPlatform? appPlatform;
@@ -219,12 +223,15 @@ class _PlayerPageState extends State<PlayerPage>
     _likeCountDelta = 0;
     _coinCountDelta = 0;
     _favoriteCountDelta = 0;
+    _appFavoriteFolderIds = const <String>{};
+    _appFavoriteBusy = false;
   }
 
   /// 在视频切换完成后异步读取当前视频的互动状态，避开 setState 回调中的异步副作用。
   @override
   void _startVideoInteractionStateLoad() {
     unawaited(_loadVideoInteractionState());
+    unawaited(_loadAppFavoriteState());
   }
 
   /// 为播放器各个视图扩展提供统一的状态更新入口，避免扩展直接访问 State 的保护成员。
@@ -290,6 +297,10 @@ class _PlayerPageState extends State<PlayerPage>
   late final PlaybackPreferencesService _playbackPreferencesService;
   @override
   late final PlayerEnhancementController _playerEnhancementController;
+  late final AppFavoritesService _appFavoritesService;
+  Set<String> _appFavoriteFolderIds = const <String>{};
+  bool _appFavoriteLoading = false;
+  bool _appFavoriteBusy = false;
   @override
   PlaybackPreferences _playbackPreferences = const PlaybackPreferences();
 
@@ -360,6 +371,7 @@ class _PlayerPageState extends State<PlayerPage>
     _problemDiagnosticsService = ProblemDiagnosticsService();
     _playbackPreferencesService =
         widget.playbackPreferencesService ?? const PlaybackPreferencesService();
+    _appFavoritesService = widget.appFavoritesService ?? AppFavoritesService();
     _playerEnhancementController = PlayerEnhancementController(
       service:
           widget.playerEnhancementService ??
