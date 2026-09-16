@@ -12,6 +12,10 @@
 
 对于小型 Bug 修复、文档修改等，可以直接提交 PR。
 
+> [!IMPORTANT]
+> 请将 Pull Request 的目标分支（base branch）设置为 `dev`，
+> 除特殊情况外，请勿直接向 `main` 提交 PR。
+
 ## Pull Request 要求
 
 提交 PR 时，请尽量做到：
