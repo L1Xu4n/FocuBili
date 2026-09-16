@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../services/app_theme_mode_service.dart';
 
-/// 管理全应用外观模式，并在切换后通知根组件立即换色。
+/// 管理全应用外观模式与主题强调色，并在切换后通知根组件立即换色。
 class AppThemeModeController extends ChangeNotifier {
   /// 创建主题控制器；测试可注入只使用内存的主题存储服务。
   AppThemeModeController({AppThemeModeService? service})
@@ -10,26 +10,31 @@ class AppThemeModeController extends ChangeNotifier {
 
   final AppThemeModeService _service;
   ThemeMode _mode = ThemeMode.system;
+  Color _seedColor = const Color(defaultThemeSeedColorValue);
   bool _loaded = false;
-  bool _saving = false;
+  bool _savingMode = false;
+  bool _savingColor = false;
   bool _disposed = false;
   Future<void>? _loadingFuture;
 
   /// 返回当前实际选择，首次读取前也默认跟随系统。
   ThemeMode get mode => _mode;
 
+  /// 返回当前主题强调色，首次读取前使用应用默认品牌蓝。
+  Color get seedColor => _seedColor;
+
   /// 返回本地偏好是否已经读取完毕。
   bool get loaded => _loaded;
 
   /// 返回当前是否正在把新选择写入设备。
-  bool get saving => _saving;
+  bool get saving => _savingMode || _savingColor;
 
   /// 只执行一次本地读取；多个页面同时请求时共用同一个异步任务。
   Future<void> initialize() async {
     if (_loaded) {
       return;
     }
-    _loadingFuture ??= _loadInitialMode();
+    _loadingFuture ??= _loadInitialPreferences();
     await _loadingFuture;
     _loadingFuture = null;
   }
@@ -39,12 +44,12 @@ class AppThemeModeController extends ChangeNotifier {
     if (!_loaded) {
       await initialize();
     }
-    if (_saving || mode == _mode) {
-      return !_saving;
+    if (_savingMode || mode == _mode) {
+      return !_savingMode;
     }
     final ThemeMode previous = _mode;
     _mode = mode;
-    _saving = true;
+    _savingMode = true;
     _notify();
     try {
       await _service.save(mode);
@@ -53,17 +58,51 @@ class AppThemeModeController extends ChangeNotifier {
       _mode = previous;
       return false;
     } finally {
-      _saving = false;
+      _savingMode = false;
       _notify();
     }
   }
 
-  /// 从设备恢复主题；读取异常时继续使用默认“跟随系统”，保证应用可启动。
-  Future<void> _loadInitialMode() async {
+  /// 立即应用新的主题强调色并持久化；保存失败时恢复旧颜色并返回 false。
+  Future<bool> setSeedColor(Color color) async {
+    if (!_loaded) {
+      await initialize();
+    }
+    if (_savingColor || color.toARGB32() == _seedColor.toARGB32()) {
+      return !_savingColor;
+    }
+    final Color previous = _seedColor;
+    _seedColor = color;
+    _savingColor = true;
+    _notify();
+    try {
+      await _service.saveColor(color);
+      return true;
+    } on Object {
+      _seedColor = previous;
+      return false;
+    } finally {
+      _savingColor = false;
+      _notify();
+    }
+  }
+
+  /// 恢复应用默认主题强调色，并立即通知界面更新。
+  Future<bool> resetSeedColor() async {
+    return setSeedColor(const Color(defaultThemeSeedColorValue));
+  }
+
+  /// 从设备恢复主题与强调色；读取异常时继续使用默认值，保证应用可启动。
+  Future<void> _loadInitialPreferences() async {
     try {
       _mode = await _service.load();
     } on Object {
       _mode = ThemeMode.system;
+    }
+    try {
+      _seedColor = await _service.loadColor();
+    } on Object {
+      _seedColor = const Color(defaultThemeSeedColorValue);
     }
     _loaded = true;
     _notify();

@@ -262,6 +262,23 @@ class NativePlaybackController(
                     result.success(null)
                 }
             }
+            "openLocal" -> {
+                val filePath = call.argument<String>("filePath")?.trim().orEmpty()
+                val title = call.argument<String>("title").orEmpty()
+                val initialPositionMs = call.argument<Number>("initialPositionMs")?.toLong()
+                if (filePath.isEmpty()) {
+                    result.error("invalid_path", "请选择有效的本地视频文件。", null)
+                } else if (initialPositionMs != null && initialPositionMs < 0L) {
+                    result.error("invalid_position", "初始播放位置不能为负数。", null)
+                } else {
+                    openLocalVideo(
+                        filePath = filePath,
+                        title = title,
+                        initialPositionMs = initialPositionMs,
+                    )
+                    result.success(null)
+                }
+            }
             "play" -> {
                 resumeAfterPrepare = true
                 player?.play()
@@ -961,6 +978,75 @@ class NativePlaybackController(
         }
         emitPlaybackState()
         requestPlaybackSources(bvid, cid, quality)
+    }
+
+    /** 直接播放本机离线视频文件，不请求任何网络播放数据。 */
+    private fun openLocalVideo(
+        filePath: String,
+        title: String,
+        initialPositionMs: Long?,
+    ) {
+        ensurePlayer()
+        ensureTexture()
+        saveCurrentPlaybackProgress(force = true)
+        invalidatePlaybackRequests()
+        clearSubtitleTrackSession()
+        player?.stop()
+        player?.clearMediaItems()
+        currentBvid = ""
+        currentCid = 0L
+        currentPageNumber = 1
+        currentTitle = title.ifBlank { "离线视频" }
+        currentPartTitle = ""
+        currentOwnerName = ""
+        requestedQuality = 0
+        currentQuality = 0
+        pendingStartPositionMs = initialPositionMs ?: 0L
+        restoredPositionMs = pendingStartPositionMs
+        resumeAfterPrepare = true
+        playbackPrepared = false
+        resumeWhenForeground = false
+        playbackDataRefreshCount = 0
+        playbackCandidateAttempt = 0
+        bypassMediaCacheForPlayback = true
+        latestPlaybackSources = null
+        playbackPhase = PHASE_LOADING
+        playbackMessage = "正在打开离线视频…"
+        emitPlaybackState()
+        val localFile = File(filePath)
+        if (!localFile.exists() || !localFile.isFile) {
+            reportError("离线视频文件不存在或已被移动。")
+            return
+        }
+        val nativePlayer = player ?: return
+        val uri = Uri.fromFile(localFile)
+        val mediaItem = MediaItem.Builder()
+            .setMediaId("offline:${localFile.absolutePath}")
+            .setUri(uri)
+            .setMediaMetadata(
+                MediaMetadata.Builder()
+                    .setTitle(currentTitle.ifBlank { "离线视频" })
+                    .setArtist(currentOwnerName.ifBlank { "焦点哔哩离线缓存" })
+                    .build(),
+            )
+            .build()
+        val sourceFactory = ProgressiveMediaSource.Factory(
+            createMediaDataSourceFactory(
+                referer = "",
+                bypassCache = true,
+            ),
+        ).setLoadErrorHandlingPolicy(
+            DefaultLoadErrorHandlingPolicy(MEDIA_MINIMUM_RETRY_COUNT),
+        )
+        nativePlayer.setMediaSource(sourceFactory.createMediaSource(mediaItem))
+        if (pendingStartPositionMs > 0L) {
+            nativePlayer.seekTo(pendingStartPositionMs)
+        }
+        pendingStartPositionMs = 0L
+        nativePlayer.playbackParameters = PlaybackParameters(playbackSpeed)
+        nativePlayer.prepare()
+        nativePlayer.play()
+        emitPlaybackState()
     }
 
     /** 保留当前位置与播放状态，再重新请求指定清晰度。 */
@@ -2471,12 +2557,60 @@ class NativePlaybackController(
         return "https://www.bilibili.com/video/$normalized"
     }
 
-    /** 仅接受 B 站 CDN 的 HTTPS 媒体地址，避免任意链接进入播放器。 */
+    /** 与 yt-dlp / Seal 一致：地址来自官方接口即视为可信，不做域名白名单；仅拦截非 http(s)、带用户信息/片段或指向内网字面 IP 的地址（防 SSRF）。 */
     private fun isSafeMediaUrl(url: String): Boolean {
         val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return false
         val host = uri.host?.lowercase(Locale.ROOT) ?: return false
-        return uri.scheme.equals("https", ignoreCase = true) &&
-            (host.endsWith(".bilivideo.com") || host.endsWith(".bilivideo.cn"))
+        val scheme = uri.scheme?.lowercase(Locale.ROOT)
+        if (scheme != "https" && scheme != "http") {
+            return false
+        }
+        if (!uri.userInfo.isNullOrEmpty() || !uri.fragment.isNullOrEmpty()) {
+            return false
+        }
+        if (host.isEmpty() || host.any { it.isWhitespace() }) {
+            return false
+        }
+        if (host.contains(':')) {
+            // IPv6 字面地址：只放行公网全局单播，拒绝回环/链路本地/组播/ULA。
+            val lower = host
+            val blockedIpv6 = lower == "::1" ||
+                lower.startsWith("fe8") ||
+                lower.startsWith("fe9") ||
+                lower.startsWith("fea") ||
+                lower.startsWith("feb") ||
+                lower.startsWith("ff") ||
+                lower.startsWith("fc") ||
+                lower.startsWith("fd")
+            return !blockedIpv6
+        }
+        return !isPrivateIpv4(host)
+    }
+
+    /** 判断点分 IPv4 文本是否属于私有或保留网段。 */
+    private fun isPrivateIpv4(host: String): Boolean {
+        val parts = host.split(".")
+        if (parts.size != 4) {
+            return false
+        }
+        val values = ArrayList<Int>(4)
+        for (part in parts) {
+            val value = part.toIntOrNull() ?: return false
+            if (value < 0 || value > 255) {
+                return false
+            }
+            values.add(value)
+        }
+        val first = values[0]
+        val second = values[1]
+        return first == 0 ||
+            first == 10 ||
+            first == 127 ||
+            (first == 100 && second in 64..127) ||
+            (first == 169 && second == 254) ||
+            (first == 172 && second in 16..31) ||
+            (first == 192 && second == 168) ||
+            (first == 198 && (second == 18 || second == 19))
     }
 
     companion object {

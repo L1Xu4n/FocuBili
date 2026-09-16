@@ -14,6 +14,17 @@ import '../../services/windows_clipboard_link_service.dart';
 import '../../platform/app_platform.dart';
 import 'app_theme_mode_controller.dart';
 
+/// 可选择的主题强调色预设，供设置页以色块形式展示。
+const List<(String, int)> _themeColorOptions = <(String, int)>[
+  ('默认蓝', 0xFF1677FF),
+  ('B站粉', 0xFFFB7299),
+  ('玫红', 0xFFE91E63),
+  ('珊瑚橙', 0xFFFF7043),
+  ('翠绿', 0xFF00A870),
+  ('湖蓝', 0xFF00B8D4),
+  ('薰衣草紫', 0xFF7C4DFF),
+];
+
 /// 标识个性化设置当前显示首页还是某个二级分类页面。
 enum _SettingsLevel {
   overview,
@@ -583,6 +594,112 @@ class _PersonalizationSettingsPageState
     );
   }
 
+  /// 创建主题强调色选择区，点按色块后整套应用立即换色并持久化。
+  Widget _buildThemeColorTile(AppThemeModeController controller) {
+    return Padding(
+      key: const Key('theme-color-setting'),
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          const Row(
+            children: <Widget>[
+              Icon(Icons.palette_outlined),
+              SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text('主题颜色'),
+                    SizedBox(height: 2),
+                    Text(
+                      '选择整套界面的强调色，切换后立即应用并在重启后保留',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 12,
+            runSpacing: 10,
+            children: <Widget>[
+              for (final (String label, int value) in _themeColorOptions)
+                Tooltip(
+                  message: label,
+                  child: InkWell(
+                    key: Key('theme-color-option-${value.toRadixString(16)}'),
+                    customBorder: const CircleBorder(),
+                    onTap: controller.saving
+                        ? null
+                        : () => unawaited(
+                            _setThemeColor(controller, Color(value)),
+                          ),
+                    child: Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: Color(value),
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: controller.seedColor.toARGB32() == value
+                              ? Theme.of(context).colorScheme.onSurface
+                              : Colors.transparent,
+                          width: 2,
+                        ),
+                      ),
+                      child: controller.seedColor.toARGB32() == value
+                          ? const Icon(
+                              Icons.check_rounded,
+                              color: Colors.white,
+                              size: 20,
+                            )
+                          : null,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              key: const Key('reset-theme-color'),
+              onPressed: controller.saving
+                  ? null
+                  : () => unawaited(_resetThemeColor(controller)),
+              child: const Text('恢复默认'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 保存新的主题强调色；失败时控制器会恢复旧值并向用户说明。
+  Future<void> _setThemeColor(
+    AppThemeModeController controller,
+    Color color,
+  ) async {
+    final bool saved = await controller.setSeedColor(color);
+    if (!saved && mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('主题颜色保存失败，请稍后重试。')));
+    }
+  }
+
+  /// 恢复默认主题颜色，失败时提示用户稍后重试。
+  Future<void> _resetThemeColor(AppThemeModeController controller) async {
+    final bool saved = await controller.resetSeedColor();
+    if (!saved && mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('主题颜色恢复失败，请稍后重试。')));
+    }
+  }
+
   /// 创建“账号与隐私”设置卡，集中管理账号写入和本机行为记录。
   Widget _buildAccountAndPrivacySection() {
     return _buildSettingsSection(
@@ -696,6 +813,7 @@ class _PersonalizationSettingsPageState
       title: '外观与应用',
       children: <Widget>[
         _buildThemeModeTile(themeModeController),
+        _buildThemeColorTile(themeModeController),
         ListTile(
           key: const Key('open-android-permissions'),
           leading: const Icon(Icons.admin_panel_settings_outlined),
