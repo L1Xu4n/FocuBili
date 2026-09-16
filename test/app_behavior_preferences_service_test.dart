@@ -36,4 +36,45 @@ void main() {
     expect(await service.loadSearchHistoryEnabled(), isFalse);
     expect(await service.loadWatchHistoryEnabled(), isFalse);
   });
+
+  /// 验证播放量过滤默认关闭，且阈值回退到一万档。
+  test('播放量过滤默认关闭并使用默认档位', () async {
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final AppBehaviorPreferencesService service = AppBehaviorPreferencesService(
+      preferencesLoader: () async => preferences,
+    );
+
+    expect(await service.loadPlayCountFilterEnabled(), isFalse);
+    expect(
+      await service.loadPlayCountFilterThreshold(),
+      AppBehaviorPreferencesService.defaultPlayCountFilterThreshold,
+    );
+  });
+
+  /// 验证播放量过滤开关与滑块档位均可持久化并重新读取。
+  test('播放量过滤开关和档位可以独立持久化', () async {
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final AppBehaviorPreferencesService service = AppBehaviorPreferencesService(
+      preferencesLoader: () async => preferences,
+    );
+
+    expect(await service.savePlayCountFilterEnabled(true), isTrue);
+    expect(await service.savePlayCountFilterThreshold(500000), isTrue);
+    expect(await service.loadPlayCountFilterEnabled(), isTrue);
+    expect(await service.loadPlayCountFilterThreshold(), 500000);
+  });
+
+  /// 验证滑块档位之外的非法阈值会被拒绝，并保留原档位。
+  test('播放量过滤拒绝非法档位', () async {
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final AppBehaviorPreferencesService service = AppBehaviorPreferencesService(
+      preferencesLoader: () async => preferences,
+    );
+
+    expect(await service.savePlayCountFilterThreshold(12345), isFalse);
+    expect(
+      await service.loadPlayCountFilterThreshold(),
+      AppBehaviorPreferencesService.defaultPlayCountFilterThreshold,
+    );
+  });
 }

@@ -15,6 +15,23 @@ class AppBehaviorPreferencesService {
       'app_behavior.search_history_enabled';
   static const String _watchHistoryEnabledKey =
       'app_behavior.watch_history_enabled';
+  static const String _playCountFilterEnabledKey =
+      'app_behavior.play_count_filter_enabled';
+  static const String _playCountFilterThresholdKey =
+      'app_behavior.play_count_filter_threshold';
+
+  /// 播放量过滤可选的档位（播放量下限），与设置页滑块一一对应。
+  static const List<int> playCountFilterOptions = <int>[
+    10000,
+    50000,
+    100000,
+    200000,
+    500000,
+    1000000,
+  ];
+
+  /// 播放量过滤默认档位，首次使用或没有旧配置时采用一万。
+  static const int defaultPlayCountFilterThreshold = 10000;
 
   final AppBehaviorPreferencesLoader _preferencesLoader;
 
@@ -46,6 +63,45 @@ class AppBehaviorPreferencesService {
   /// 保存是否允许新增本机观看记录。
   Future<bool> saveWatchHistoryEnabled(bool enabled) async {
     return _saveBool(_watchHistoryEnabledKey, enabled);
+  }
+
+  /// 读取播放量过滤开关；没有旧配置时默认关闭以保留全部搜索结果。
+  Future<bool> loadPlayCountFilterEnabled() async {
+    return _loadBool(_playCountFilterEnabledKey, defaultValue: false);
+  }
+
+  /// 保存播放量过滤开关，并返回底层存储是否写入成功。
+  Future<bool> savePlayCountFilterEnabled(bool enabled) async {
+    return _saveBool(_playCountFilterEnabledKey, enabled);
+  }
+
+  /// 读取播放量过滤阈值；只接受设置页滑块档位，非法值回退到默认档位。
+  Future<int> loadPlayCountFilterThreshold() async {
+    try {
+      final SharedPreferences preferences = await _preferencesLoader();
+      final int? value = preferences.getInt(_playCountFilterThresholdKey);
+      if (value == null) {
+        return defaultPlayCountFilterThreshold;
+      }
+      return playCountFilterOptions.contains(value)
+          ? value
+          : defaultPlayCountFilterThreshold;
+    } catch (_) {
+      return defaultPlayCountFilterThreshold;
+    }
+  }
+
+  /// 保存播放量过滤阈值；只允许写入滑块档位，非法值按保存失败处理。
+  Future<bool> savePlayCountFilterThreshold(int value) async {
+    if (!playCountFilterOptions.contains(value)) {
+      return false;
+    }
+    try {
+      final SharedPreferences preferences = await _preferencesLoader();
+      return preferences.setInt(_playCountFilterThresholdKey, value);
+    } catch (_) {
+      return false;
+    }
   }
 
   /// 从本机读取布尔偏好；存储不可用时使用调用方指定的安全默认值。

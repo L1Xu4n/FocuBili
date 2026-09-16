@@ -9,6 +9,7 @@ import '../../core/router/app_router.dart';
 import '../../models/user_search.dart';
 import '../../models/learning_list_entry.dart';
 import '../../models/video_preview.dart';
+import '../../services/app_behavior_preferences_service.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/learning_list_service.dart';
 import '../../services/problem_diagnostics_service.dart';
@@ -97,6 +98,10 @@ class _SearchPageState extends State<SearchPage> {
   late final BilibiliUserSearchService _userSearchService;
   late final LearningListService _learningListService;
   late final ProblemDiagnosticsService _problemDiagnosticsService;
+  late final AppBehaviorPreferencesService _behaviorPreferencesService;
+  bool _playCountFilterEnabled = false;
+  int _playCountFilterThreshold =
+      AppBehaviorPreferencesService.defaultPlayCountFilterThreshold;
   Timer? _suggestionDebounce;
   VideoPreview? _directResult;
   List<VideoSearchResult> _searchResults = const <VideoSearchResult>[];
@@ -126,6 +131,7 @@ class _SearchPageState extends State<SearchPage> {
     _service = widget.service ?? BilibiliVideoInfoService();
     _learningListService = widget.learningListService ?? LearningListService();
     _problemDiagnosticsService = ProblemDiagnosticsService();
+    _behaviorPreferencesService = AppBehaviorPreferencesService();
     _userSearchService =
         widget.userSearchService ??
         (_service is BilibiliUserSearchService
@@ -134,6 +140,7 @@ class _SearchPageState extends State<SearchPage> {
     _resultScrollController.addListener(_handleResultScroll);
     _searchFocusNode.addListener(_handleSearchFocusChange);
     _loadSearchHistory();
+    unawaited(_loadPlayCountFilterState());
     unawaited(_loadLearningListMembership());
   }
 
@@ -165,6 +172,34 @@ class _SearchPageState extends State<SearchPage> {
     if (mounted) {
       setState(() {});
     }
+  }
+
+  /// 读取本机保存的播放量过滤开关与阈值，失败时保持默认不过滤。
+  Future<void> _loadPlayCountFilterState() async {
+    final bool enabled = await _behaviorPreferencesService
+        .loadPlayCountFilterEnabled();
+    final int threshold = await _behaviorPreferencesService
+        .loadPlayCountFilterThreshold();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _playCountFilterEnabled = enabled;
+      _playCountFilterThreshold = threshold;
+    });
+  }
+
+  /// 返回经过播放量过滤后实际展示的视频结果，仅隐藏不修改原始列表。
+  List<VideoSearchResult> get _visibleSearchResults {
+    if (!_playCountFilterEnabled || _directResult != null) {
+      return _searchResults;
+    }
+    return _searchResults
+        .where(
+          (VideoSearchResult result) =>
+              result.playCount >= _playCountFilterThreshold,
+        )
+        .toList(growable: false);
   }
 
   /// 输入变化后延迟请求候选词，避免每输入一个字符都立即访问网络。
@@ -1631,16 +1666,23 @@ class _SearchPageState extends State<SearchPage> {
       );
     }
     if (_searchResults.isNotEmpty) {
+      final List<VideoSearchResult> visibleResults = _visibleSearchResults;
+      if (visibleResults.isEmpty) {
+        return _SearchMessage(
+          icon: Icons.filter_alt_off_rounded,
+          text: '当前播放量过滤下没有符合条件的视频，可以调低阈值或关闭过滤。',
+        );
+      }
       return ListView.separated(
         controller: _resultScrollController,
-        itemCount: _searchResults.length + 1,
+        itemCount: visibleResults.length + 1,
         separatorBuilder: (BuildContext context, int index) =>
             const SizedBox(height: 6),
         itemBuilder: (BuildContext context, int index) {
-          if (index == _searchResults.length) {
+          if (index == visibleResults.length) {
             return _buildLoadMoreFooter();
           }
-          return _buildSearchResultCard(_searchResults[index]);
+          return _buildSearchResultCard(visibleResults[index]);
         },
       );
     }

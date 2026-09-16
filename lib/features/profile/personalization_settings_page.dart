@@ -65,6 +65,9 @@ class _PersonalizationSettingsPageState
   bool _accountReadOnly = true;
   bool _searchHistoryEnabled = true;
   bool _watchHistoryEnabled = true;
+  bool _playCountFilterEnabled = false;
+  int _playCountFilterThreshold =
+      AppBehaviorPreferencesService.defaultPlayCountFilterThreshold;
   bool _savingBehaviorPreference = false;
   _SettingsLevel _settingsLevel = _SettingsLevel.overview;
   late final AppUpdateController _fallbackUpdateController;
@@ -135,6 +138,10 @@ class _PersonalizationSettingsPageState
           .loadSearchHistoryEnabled();
       final bool watchHistoryEnabled = await _behaviorPreferencesService
           .loadWatchHistoryEnabled();
+      final bool playCountFilterEnabled = await _behaviorPreferencesService
+          .loadPlayCountFilterEnabled();
+      final int playCountFilterThreshold = await _behaviorPreferencesService
+          .loadPlayCountFilterThreshold();
       final bool hasDoNotDisturbAccess =
           widget.focusNotificationService.supportsDoNotDisturb
           ? await widget.focusNotificationService.hasDoNotDisturbAccess()
@@ -149,6 +156,8 @@ class _PersonalizationSettingsPageState
         _accountReadOnly = accountReadOnly;
         _searchHistoryEnabled = searchHistoryEnabled;
         _watchHistoryEnabled = watchHistoryEnabled;
+        _playCountFilterEnabled = playCountFilterEnabled;
+        _playCountFilterThreshold = playCountFilterThreshold;
         _hasDoNotDisturbAccess = hasDoNotDisturbAccess;
         _loading = false;
       });
@@ -190,6 +199,47 @@ class _PersonalizationSettingsPageState
       saveValue: _behaviorPreferencesService.saveWatchHistoryEnabled,
       failureMessage: '观看记录设置保存失败，请稍后重试。',
     );
+  }
+
+  /// 保存播放量过滤开关；失败时恢复原值并显示说明。
+  Future<void> _setPlayCountFilterEnabled(bool enabled) async {
+    await _saveBehaviorPreference(
+      enabled: enabled,
+      previous: _playCountFilterEnabled,
+      applyValue: (bool value) => _playCountFilterEnabled = value,
+      saveValue: _behaviorPreferencesService.savePlayCountFilterEnabled,
+      failureMessage: '播放量过滤设置保存失败，请稍后重试。',
+    );
+  }
+
+  /// 保存播放量过滤阈值；只接受滑块档位，失败时恢复原值。
+  Future<void> _setPlayCountFilterThreshold(int value) async {
+    if (_savingBehaviorPreference) {
+      return;
+    }
+    final int previous = _playCountFilterThreshold;
+    setState(() {
+      _playCountFilterThreshold = value;
+      _savingBehaviorPreference = true;
+    });
+    try {
+      final bool saved = await _behaviorPreferencesService
+          .savePlayCountFilterThreshold(value);
+      if (!saved) {
+        throw StateError('无法保存播放量过滤阈值');
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _playCountFilterThreshold = previous);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('播放量过滤设置保存失败，请稍后重试。')));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _savingBehaviorPreference = false);
+      }
+    }
   }
 
   /// 统一执行行为开关的乐观更新、持久化和失败回滚。
@@ -583,6 +633,111 @@ class _PersonalizationSettingsPageState
     );
   }
 
+  /// 创建播放量过滤设置项：开关控制过滤是否生效，滑块选择播放量下限。
+  Widget _buildPlayCountFilterTile() {
+    final int selectedIndex = AppBehaviorPreferencesService
+        .playCountFilterOptions
+        .indexOf(_playCountFilterThreshold);
+    final int sliderValue = selectedIndex < 0 ? 0 : selectedIndex;
+    return Column(
+      key: const Key('play-count-filter-setting'),
+      children: <Widget>[
+        SwitchListTile.adaptive(
+          key: const Key('enable-play-count-filter'),
+          value: _playCountFilterEnabled,
+          // 播放量过滤开关函数只保存本机选择，关闭时搜索页展示全部结果。
+          onChanged: _savingBehaviorPreference
+              ? null
+              : _setPlayCountFilterEnabled,
+          secondary: const Icon(Icons.filter_alt_outlined),
+          title: const Text('搜索结果过滤'),
+          subtitle: const Text('隐藏播放量低于所选档位的搜索结果。'),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  Text(
+                    _formatPlayCountThreshold(_playCountFilterThreshold),
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const Spacer(),
+                  if (_playCountFilterEnabled)
+                    const Text(
+                      '仅显示播放量不低于此值的视频',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                ],
+              ),
+              Slider(
+                key: const Key('play-count-filter-slider'),
+                value: sliderValue.toDouble(),
+                min: 0,
+                max:
+                    (AppBehaviorPreferencesService
+                                .playCountFilterOptions
+                                .length -
+                            1)
+                        .toDouble(),
+                divisions:
+                    AppBehaviorPreferencesService
+                        .playCountFilterOptions
+                        .length -
+                    1,
+                label: _formatPlayCountThreshold(_playCountFilterThreshold),
+                // 滑块函数只允许落在预设档位上，松开后立即保存。
+                onChanged: _savingBehaviorPreference || !_playCountFilterEnabled
+                    ? null
+                    : (double value) {
+                        final int index = value.round().clamp(
+                          0,
+                          AppBehaviorPreferencesService
+                                  .playCountFilterOptions
+                                  .length -
+                              1,
+                        );
+                        unawaited(
+                          _setPlayCountFilterThreshold(
+                            AppBehaviorPreferencesService
+                                .playCountFilterOptions[index],
+                          ),
+                        );
+                      },
+              ),
+              Wrap(
+                spacing: 8,
+                children: <Widget>[
+                  for (final int option
+                      in AppBehaviorPreferencesService.playCountFilterOptions)
+                    Text(
+                      _formatPlayCountThreshold(option),
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: Theme.of(context).colorScheme.outline,
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 把播放量数字格式化为万或亿的紧凑中文单位。
+  String _formatPlayCountThreshold(int value) {
+    if (value >= 100000000) {
+      return '${(value / 100000000).toStringAsFixed(0)}亿';
+    }
+    if (value >= 10000) {
+      return '${(value / 10000).toStringAsFixed(0)}万';
+    }
+    return value.toString();
+  }
+
   /// 创建“账号与隐私”设置卡，集中管理账号写入和本机行为记录。
   Widget _buildAccountAndPrivacySection() {
     return _buildSettingsSection(
@@ -619,6 +774,7 @@ class _PersonalizationSettingsPageState
           title: const Text('启用观看记录'),
           subtitle: const Text('关闭后不再新增或更新观看进度，已有记录会继续保留。'),
         ),
+        _buildPlayCountFilterTile(),
         if (_supportsClipboardDetection)
           SwitchListTile.adaptive(
             key: const Key('enable-windows-clipboard-link-detection'),
