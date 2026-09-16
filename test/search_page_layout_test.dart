@@ -334,4 +334,68 @@ void main() {
     expect(find.text('取消加入'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  /// 验证开启播放量过滤后，低于阈值的搜索结果被隐藏，高于阈值的保留。
+  testWidgets('开启播放量过滤时隐藏低播放量结果', (WidgetTester tester) async {
+    const String popularBvid = 'BV1GJ411x7h9';
+    const String unpopularBvid = 'BV1GJ411x7hA';
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'app_behavior.play_count_filter_enabled': true,
+      'app_behavior.play_count_filter_threshold': 500000,
+    });
+    final _SearchPageTestService service = _SearchPageTestService(
+      suggestions: const <String>[],
+      results: <VideoSearchResult>[
+        _createSearchResultWithPlayCount(popularBvid, 563000),
+        _createSearchResultWithPlayCount(unpopularBvid, 120000),
+      ],
+      video: _createVideo(popularBvid),
+    );
+    await _pumpSearchPage(tester, service: service);
+
+    await tester.enterText(find.byKey(const Key('search-input-field')), '景德镇');
+    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('search-$popularBvid')), findsOneWidget);
+    expect(find.byKey(const Key('search-$unpopularBvid')), findsNothing);
+  });
+
+  /// 验证播放量过滤关闭时，低播放量结果也正常展示。
+  testWidgets('关闭播放量过滤时展示全部结果', (WidgetTester tester) async {
+    const String popularBvid = 'BV1GJ411x7hB';
+    const String unpopularBvid = 'BV1GJ411x7hC';
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final _SearchPageTestService service = _SearchPageTestService(
+      suggestions: const <String>[],
+      results: <VideoSearchResult>[
+        _createSearchResultWithPlayCount(popularBvid, 563000),
+        _createSearchResultWithPlayCount(unpopularBvid, 120000),
+      ],
+      video: _createVideo(popularBvid),
+    );
+    await _pumpSearchPage(tester, service: service);
+
+    await tester.enterText(find.byKey(const Key('search-input-field')), '景德镇');
+    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('search-$popularBvid')), findsOneWidget);
+    expect(find.byKey(const Key('search-$unpopularBvid')), findsOneWidget);
+  });
+}
+
+/// 创建指定播放量的搜索结果，供播放量过滤测试构造高低的对比。
+VideoSearchResult _createSearchResultWithPlayCount(String bvid, int playCount) {
+  return VideoSearchResult(
+    bvid: bvid,
+    title: '测试视频',
+    ownerName: '星球研究所',
+    duration: const Duration(minutes: 15, seconds: 22),
+    thumbnailUrl: '',
+    publishedAt: DateTime(2026, 7, 25),
+    playCount: playCount,
+    danmakuCount: 1692,
+    episodeCountText: '全1集',
+  );
 }

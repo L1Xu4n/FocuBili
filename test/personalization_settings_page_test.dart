@@ -376,4 +376,43 @@ void main() {
     expect(find.textContaining('受限功能'), findsOneWidget);
     expect((await preferencesService.load()).enableDoNotDisturb, isTrue);
   });
+
+  /// 验证播放量过滤开关与滑块联动，滑块只落在预设档位并持久化。
+  testWidgets('设置页开启播放量过滤并保存滑块档位', (WidgetTester tester) async {
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final AppBehaviorPreferencesService service = AppBehaviorPreferencesService(
+      preferencesLoader: () async => preferences,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PersonalizationSettingsPage(
+          focusNotificationService: FocusNotificationService(channel: channel),
+          behaviorPreferencesService: service,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await _openSettingsLevel(
+      tester,
+      const Key('open-account-privacy-settings'),
+    );
+    final Finder toggle = find.byKey(const Key('enable-play-count-filter'));
+    expect(toggle, findsOneWidget);
+    expect(find.byKey(const Key('play-count-filter-slider')), findsOneWidget);
+    expect(find.text('100万'), findsOneWidget);
+
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(await service.loadPlayCountFilterEnabled(), isTrue);
+
+    final Slider slider = tester.widget<Slider>(
+      find.byKey(const Key('play-count-filter-slider')),
+    );
+    expect(slider.value, 0.0);
+    expect(slider.divisions, 5);
+    await tester.tap(find.byKey(const Key('play-count-filter-slider')));
+    await tester.pumpAndSettle();
+    expect(await service.loadPlayCountFilterThreshold(), isNotNull);
+  });
 }
