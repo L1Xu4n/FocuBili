@@ -295,14 +295,16 @@ void main() {
                     <String, Object?>{
                       'id': 64,
                       'codecs': 'avc1.64001F',
-                      'base_url': 'https://cdn-01.new-bilibili-cdn.example/video.m4s',
+                      'base_url':
+                          'https://cdn-01.new-bilibili-cdn.example/video.m4s',
                     },
                   ],
                   'audio': <Map<String, Object?>>[
                     <String, Object?>{
                       'id': 30280,
                       'codecs': 'mp4a.40.2',
-                      'base_url': 'https://cdn-02.new-bilibili-cdn.example/audio.m4s',
+                      'base_url':
+                          'https://cdn-02.new-bilibili-cdn.example/audio.m4s',
                     },
                   ],
                 },

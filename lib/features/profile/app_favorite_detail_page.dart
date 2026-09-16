@@ -85,7 +85,9 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
         return;
       }
       setState(() => _openingBvid = null);
-      await Navigator.of(context).pushNamed(AppRoutes.player, arguments: preview);
+      await Navigator.of(
+        context,
+      ).pushNamed(AppRoutes.player, arguments: preview);
     } on BilibiliLookupException catch (error) {
       if (mounted) {
         setState(() => _openingBvid = null);
@@ -151,9 +153,7 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
                 maxWidthDiskCache: 512,
                 fadeInDuration: const Duration(milliseconds: 120),
                 placeholder: (BuildContext context, String url) => ColoredBox(
-                  color: Theme.of(
-                    context,
-                  ).colorScheme.surfaceContainerHighest,
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
                 ),
                 errorWidget: (BuildContext context, String url, Object error) =>
                     ColoredBox(
@@ -272,10 +272,7 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text(widget.folder.name)),
-      body: AdaptivePageFrame(
-        maxWidth: 1180,
-        child: _buildBody(),
-      ),
+      body: AdaptivePageFrame(maxWidth: 1180, child: _buildBody()),
     );
   }
 }

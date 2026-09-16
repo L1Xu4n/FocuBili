@@ -175,9 +175,7 @@ class _OfflinePlayerPageState extends State<OfflinePlayerPage> {
             children: <Widget>[
               Text(_formatPosition(_snapshot.position)),
               const Spacer(),
-              Text(
-                durationMs > 0 ? _formatPosition(duration) : '时长未知',
-              ),
+              Text(durationMs > 0 ? _formatPosition(duration) : '时长未知'),
             ],
           ),
         ),
@@ -188,15 +186,9 @@ class _OfflinePlayerPageState extends State<OfflinePlayerPage> {
               key: const Key('offline-player-speed'),
               // 倍速按钮函数在 0.75、1、1.25、1.5、2 之间循环。
               onPressed: () {
-                const List<double> speeds = <double>[
-                  0.75,
-                  1,
-                  1.25,
-                  1.5,
-                  2,
-                ];
-                final int nextIndex = (speeds.indexOf(_playbackSpeed) + 1) %
-                    speeds.length;
+                const List<double> speeds = <double>[0.75, 1, 1.25, 1.5, 2];
+                final int nextIndex =
+                    (speeds.indexOf(_playbackSpeed) + 1) % speeds.length;
                 final double nextSpeed = speeds[nextIndex];
                 setState(() => _playbackSpeed = nextSpeed);
                 unawaited(_playbackService.setPlaybackSpeed(nextSpeed));
@@ -255,11 +247,7 @@ class _OfflinePlayerPageState extends State<OfflinePlayerPage> {
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
-        title: Text(
-          widget.title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
+        title: Text(widget.title, maxLines: 1, overflow: TextOverflow.ellipsis),
       ),
       body: SafeArea(
         child: Column(
@@ -271,10 +259,7 @@ class _OfflinePlayerPageState extends State<OfflinePlayerPage> {
                     : _buildVideoSurface(),
               ),
             ),
-            Material(
-              color: Colors.black,
-              child: _buildControls(),
-            ),
+            Material(color: Colors.black, child: _buildControls()),
           ],
         ),
       ),

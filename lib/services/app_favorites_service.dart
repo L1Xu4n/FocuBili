@@ -13,9 +13,8 @@ typedef AppFavoritesPreferencesLoader = Future<SharedPreferences> Function();
 /// 收藏数据导出为 JSON 文件或从 JSON 文件恢复。
 class AppFavoritesService {
   /// 创建软件收藏夹服务；未传入读取器时使用设备上的 SharedPreferences。
-  AppFavoritesService({
-    AppFavoritesPreferencesLoader? preferencesLoader,
-  }) : _preferencesLoader = preferencesLoader ?? SharedPreferences.getInstance;
+  AppFavoritesService({AppFavoritesPreferencesLoader? preferencesLoader})
+    : _preferencesLoader = preferencesLoader ?? SharedPreferences.getInstance;
 
   static const String _storageKey = 'focubili_app_favorites_v1';
 
@@ -36,15 +35,16 @@ class AppFavoritesService {
   /// 读取指定收藏夹内的全部条目，按收藏时间从新到旧排序。
   Future<List<AppFavoriteItem>> loadItems(String folderId) async {
     final _AppFavoriteSnapshot snapshot = await _loadSnapshot();
-    final List<AppFavoriteItem> items = snapshot.items
-        .where((AppFavoriteItem item) => item.folderId == folderId)
-        .toList(growable: false)
-      ..sort((AppFavoriteItem left, AppFavoriteItem right) {
-        final int addedComparison = right.addedAt.compareTo(left.addedAt);
-        return addedComparison != 0
-            ? addedComparison
-            : left.bvid.compareTo(right.bvid);
-      });
+    final List<AppFavoriteItem> items =
+        snapshot.items
+            .where((AppFavoriteItem item) => item.folderId == folderId)
+            .toList(growable: false)
+          ..sort((AppFavoriteItem left, AppFavoriteItem right) {
+            final int addedComparison = right.addedAt.compareTo(left.addedAt);
+            return addedComparison != 0
+                ? addedComparison
+                : left.bvid.compareTo(right.bvid);
+          });
     return List<AppFavoriteItem>.unmodifiable(items);
   }
 
@@ -109,7 +109,9 @@ class AppFavoritesService {
       return false;
     }
     final _AppFavoriteSnapshot snapshot = await _loadSnapshot();
-    if (!snapshot.folders.any((AppFavoriteFolder folder) => folder.id == folderId)) {
+    if (!snapshot.folders.any(
+      (AppFavoriteFolder folder) => folder.id == folderId,
+    )) {
       return false;
     }
     await _saveSnapshot(
@@ -139,8 +141,7 @@ class AppFavoritesService {
     }
     if (snapshot.items.any(
       (AppFavoriteItem existing) =>
-          existing.folderId == item.folderId &&
-          existing.bvid == normalizedBvid,
+          existing.folderId == item.folderId && existing.bvid == normalizedBvid,
     )) {
       return false;
     }
@@ -325,8 +326,7 @@ class AppFavoritesService {
         continue;
       }
       final String key = '$targetFolderId:${item.bvid}';
-      if (existingKeys.contains(key) ||
-          mergedItems.length >= maximumItems) {
+      if (existingKeys.contains(key) || mergedItems.length >= maximumItems) {
         continue;
       }
       existingKeys.add(key);
@@ -381,9 +381,7 @@ class AppFavoritesService {
       if (decoded is! Map) {
         return const _AppFavoriteSnapshot();
       }
-      return _AppFavoriteSnapshot.fromJson(
-        Map<String, dynamic>.from(decoded),
-      );
+      return _AppFavoriteSnapshot.fromJson(Map<String, dynamic>.from(decoded));
     } on Object {
       // 本地数据暂时不可读时按空收藏夹处理，不阻止用户重新开始收藏。
       return const _AppFavoriteSnapshot();

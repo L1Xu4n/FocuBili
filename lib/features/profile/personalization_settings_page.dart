@@ -90,8 +90,7 @@ class _PersonalizationSettingsPageState
   late final WindowsClipboardLinkPreferencesService
   _windowsClipboardPreferencesService;
   late final AppBehaviorPreferencesService _behaviorPreferencesService;
-  late final LearningFilterPreferencesService
-  _learningFilterPreferencesService;
+  late final LearningFilterPreferencesService _learningFilterPreferencesService;
   List<String> _customCreatorWhitelist = const <String>[];
   List<String> _customCreatorBlacklist = const <String>[];
 
@@ -159,10 +158,10 @@ class _PersonalizationSettingsPageState
           .loadSearchHistoryEnabled();
       final bool watchHistoryEnabled = await _behaviorPreferencesService
           .loadWatchHistoryEnabled();
-      final List<String> customWhitelist = await _learningFilterPreferencesService
-          .loadCustomWhitelist();
-      final List<String> customBlacklist = await _learningFilterPreferencesService
-          .loadCustomBlacklist();
+      final List<String> customWhitelist =
+          await _learningFilterPreferencesService.loadCustomWhitelist();
+      final List<String> customBlacklist =
+          await _learningFilterPreferencesService.loadCustomBlacklist();
       final bool hasDoNotDisturbAccess =
           widget.focusNotificationService.supportsDoNotDisturb
           ? await widget.focusNotificationService.hasDoNotDisturbAccess()
@@ -654,10 +653,7 @@ class _PersonalizationSettingsPageState
                     onTap: controller.saving
                         ? null
                         : () => unawaited(
-                            _setThemeColor(
-                              controller,
-                              Color(value),
-                            ),
+                            _setThemeColor(controller, Color(value)),
                           ),
                     child: Container(
                       width: 36,
@@ -1034,9 +1030,9 @@ class _PersonalizationSettingsPageState
     }
     setState(() => applyValue(names));
     if (!saved) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('学习过滤名单保存失败，请稍后重试。')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('学习过滤名单保存失败，请稍后重试。')));
     }
   }
 
@@ -1102,9 +1098,7 @@ class _PersonalizationSettingsPageState
                             ListTile(
                               dense: true,
                               contentPadding: EdgeInsets.zero,
-                              leading: const Icon(
-                                Icons.person_outline_rounded,
-                              ),
+                              leading: const Icon(Icons.person_outline_rounded),
                               title: Text(name),
                               trailing: IconButton(
                                 tooltip: '移除',

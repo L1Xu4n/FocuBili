@@ -120,10 +120,7 @@ class AppFavoriteItem {
   final String? sourceLabel;
 
   /// 返回一份修改了文件夹和来源的新条目，其余字段保持不变。
-  AppFavoriteItem copyWith({
-    String? folderId,
-    String? sourceLabel,
-  }) {
+  AppFavoriteItem copyWith({String? folderId, String? sourceLabel}) {
     return AppFavoriteItem(
       folderId: folderId ?? this.folderId,
       bvid: bvid,
@@ -146,7 +143,8 @@ class AppFavoriteItem {
       'ownerName': ownerName,
       'durationText': durationText,
       'addedAt': addedAt.toIso8601String(),
-      if (sourceLabel != null && sourceLabel!.isNotEmpty) 'sourceLabel': sourceLabel,
+      if (sourceLabel != null && sourceLabel!.isNotEmpty)
+        'sourceLabel': sourceLabel,
     };
   }
 

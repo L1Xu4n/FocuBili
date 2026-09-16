@@ -108,9 +108,9 @@ class OfflineVideoDownload {
         milliseconds: (json['durationMs'] as num?)?.toInt() ?? 0,
       ),
       downloadedAt: downloadedAt,
-      status: OfflineDownloadStatus.values.asNameMap()[
-            json['status']?.toString()
-          ] ??
+      status:
+          OfflineDownloadStatus.values.asNameMap()[json['status']
+              ?.toString()] ??
           OfflineDownloadStatus.failed,
     );
   }

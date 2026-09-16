@@ -47,10 +47,7 @@ String _playResponse(String url, {int quality = 64}) {
     'data': <String, Object?>{
       'quality': quality,
       'durl': <Map<String, Object?>>[
-        <String, Object?>{
-          'url': url,
-          'backup_url': <String>[],
-        },
+        <String, Object?>{'url': url, 'backup_url': <String>[]},
       ],
     },
   });
@@ -79,17 +76,18 @@ void main() {
           'https://cdn-01.new-bilibili-cdn.example:4483/video.mp4',
         );
       },
-      downloadFile: (
-        Uri uri,
-        Map<String, String> headers,
-        File output,
-        void Function(int received, int? total) onProgress,
-      ) async {
-        downloadedUri = uri;
-        await output.writeAsBytes(List<int>.filled(1024, 1));
-        onProgress(1024, 1024);
-        return 1024;
-      },
+      downloadFile:
+          (
+            Uri uri,
+            Map<String, String> headers,
+            File output,
+            void Function(int received, int? total) onProgress,
+          ) async {
+            downloadedUri = uri;
+            await output.writeAsBytes(List<int>.filled(1024, 1));
+            onProgress(1024, 1024);
+            return 1024;
+          },
     );
 
     final OfflineVideoDownload download = await service.download(_preview());
@@ -117,16 +115,17 @@ void main() {
       requestText: (Uri _, Map<String, String> _) async {
         return _playResponse('http://node-http.bilivideo.com/video.mp4');
       },
-      downloadFile: (
-        Uri uri,
-        Map<String, String> headers,
-        File output,
-        void Function(int received, int? total) onProgress,
-      ) async {
-        downloadedUri = uri;
-        await output.writeAsBytes(List<int>.filled(64, 1));
-        return 64;
-      },
+      downloadFile:
+          (
+            Uri uri,
+            Map<String, String> headers,
+            File output,
+            void Function(int received, int? total) onProgress,
+          ) async {
+            downloadedUri = uri;
+            await output.writeAsBytes(List<int>.filled(64, 1));
+            return 64;
+          },
     );
 
     final OfflineVideoDownload download = await service.download(_preview());
@@ -151,28 +150,25 @@ void main() {
       requestText: (Uri _, Map<String, String> _) async {
         requestCount += 1;
         if (requestCount == 1) {
-          return _playResponse(
-            'https://node-a.bilivideo.com/video.mp4',
-          );
+          return _playResponse('https://node-a.bilivideo.com/video.mp4');
         }
-        return _playResponse(
-          'https://node-b.bilivideo.com/video.mp4',
-        );
+        return _playResponse('https://node-b.bilivideo.com/video.mp4');
       },
-      downloadFile: (
-        Uri uri,
-        Map<String, String> headers,
-        File output,
-        void Function(int received, int? total) onProgress,
-      ) async {
-        if (downloadedUris.isEmpty) {
-          downloadedUris.add(uri);
-          throw const OfflineVideoException('下载连接中断，请检查网络后重试。');
-        }
-        downloadedUris.add(uri);
-        await output.writeAsBytes(List<int>.filled(512, 1));
-        return 512;
-      },
+      downloadFile:
+          (
+            Uri uri,
+            Map<String, String> headers,
+            File output,
+            void Function(int received, int? total) onProgress,
+          ) async {
+            if (downloadedUris.isEmpty) {
+              downloadedUris.add(uri);
+              throw const OfflineVideoException('下载连接中断，请检查网络后重试。');
+            }
+            downloadedUris.add(uri);
+            await output.writeAsBytes(List<int>.filled(512, 1));
+            return 512;
+          },
     );
 
     final OfflineVideoDownload download = await service.download(_preview());
@@ -198,14 +194,15 @@ void main() {
         requestCount += 1;
         return _playResponse('https://node-a.bilivideo.com/video.mp4');
       },
-      downloadFile: (
-        Uri uri,
-        Map<String, String> headers,
-        File output,
-        void Function(int received, int? total) onProgress,
-      ) async {
-        throw const OfflineVideoException('视频下载超时，请稍后重试。');
-      },
+      downloadFile:
+          (
+            Uri uri,
+            Map<String, String> headers,
+            File output,
+            void Function(int received, int? total) onProgress,
+          ) async {
+            throw const OfflineVideoException('视频下载超时，请稍后重试。');
+          },
     );
 
     await expectLater(
@@ -233,14 +230,15 @@ void main() {
       requestText: (Uri _, Map<String, String> _) async {
         return _playResponse('https://192.168.0.3/video.mp4');
       },
-      downloadFile: (
-        Uri uri,
-        Map<String, String> headers,
-        File output,
-        void Function(int received, int? total) onProgress,
-      ) async {
-        fail('内网地址不应被下载');
-      },
+      downloadFile:
+          (
+            Uri uri,
+            Map<String, String> headers,
+            File output,
+            void Function(int received, int? total) onProgress,
+          ) async {
+            fail('内网地址不应被下载');
+          },
     );
 
     await expectLater(

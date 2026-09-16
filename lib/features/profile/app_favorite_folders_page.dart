@@ -87,7 +87,9 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
     if (name == null || !mounted) {
       return;
     }
-    final AppFavoriteFolder? folder = await _favoritesService.createFolder(name);
+    final AppFavoriteFolder? folder = await _favoritesService.createFolder(
+      name,
+    );
     if (!mounted) {
       return;
     }
@@ -265,8 +267,11 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
         int pageNumber = 1;
         var hasMore = true;
         while (hasMore && mounted) {
-          final AccountDataPage<FavoriteVideo> videos = await _accountDataService
-              .loadFavoriteVideos(folder.mediaId, page: pageNumber);
+          final AccountDataPage<FavoriteVideo> videos =
+              await _accountDataService.loadFavoriteVideos(
+                folder.mediaId,
+                page: pageNumber,
+              );
           if (!videos.isSuccess) {
             break;
           }
@@ -320,7 +325,8 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
 
   /// 在软件收藏夹中查找同名目录，不存在时自动创建。
   Future<AppFavoriteFolder?> _findOrCreateFolderByName(String name) async {
-    final List<AppFavoriteFolder> folders = await _favoritesService.loadFolders();
+    final List<AppFavoriteFolder> folders = await _favoritesService
+        .loadFolders();
     for (final AppFavoriteFolder folder in folders) {
       if (folder.name == name) {
         return folder;
@@ -330,9 +336,7 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
   }
 
   /// 展示 B 站收藏夹多选面板，并返回选中的收藏夹编号集合。
-  Future<Set<int>?> _showAccountFolderPicker(
-    List<FavoriteFolder> folders,
-  ) {
+  Future<Set<int>?> _showAccountFolderPicker(List<FavoriteFolder> folders) {
     final Set<int> selected = <int>{};
     return showModalBottomSheet<Set<int>>(
       context: context,
@@ -395,8 +399,9 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
                           key: const Key('confirm-import-account-folders'),
                           onPressed: selected.isEmpty
                               ? null
-                              : () =>
-                                    Navigator.of(sheetContext).pop(Set<int>.of(selected)),
+                              : () => Navigator.of(
+                                  sheetContext,
+                                ).pop(Set<int>.of(selected)),
                           child: Text('导入 ${selected.length} 个'),
                         ),
                       ],
@@ -482,8 +487,10 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
       if (imported.isEmpty) {
         _showMessage('文件中没有可导入的新内容。');
       } else {
-        _showMessage('已恢复 ${imported.folderCount} 个收藏夹，'
-            '${imported.itemCount} 条视频。');
+        _showMessage(
+          '已恢复 ${imported.folderCount} 个收藏夹，'
+          '${imported.itemCount} 条视频。',
+        );
       }
     } on Object {
       if (mounted) {
@@ -522,10 +529,7 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
   }
 
   /// 创建收藏夹封面占位图，并叠加条目数量角标。
-  Widget _buildFolderCard(
-    AppFavoriteFolder folder,
-    int itemCount,
-  ) {
+  Widget _buildFolderCard(AppFavoriteFolder folder, int itemCount) {
     return Card(
       key: Key('app-favorite-folder-${folder.id}'),
       clipBehavior: Clip.antiAlias,
@@ -541,12 +545,11 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(10),
                   child: ColoredBox(
-                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.surfaceContainerHighest,
                     child: const Center(
-                      child: Icon(
-                        Icons.star_rounded,
-                        color: Colors.black45,
-                      ),
+                      child: Icon(Icons.star_rounded, color: Colors.black45),
                     ),
                   ),
                 ),
@@ -677,9 +680,13 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
           children: <Widget>[
             FutureBuilder<Map<String, int>>(
               future: _loadFolderItemCounts(),
-              builder: (BuildContext context, AsyncSnapshot<Map<String, int>> snapshot) {
-                return _buildBody(snapshot.data ?? const <String, int>{});
-              },
+              builder:
+                  (
+                    BuildContext context,
+                    AsyncSnapshot<Map<String, int>> snapshot,
+                  ) {
+                    return _buildBody(snapshot.data ?? const <String, int>{});
+                  },
             ),
             if (_busy || _importingAccountFolders)
               const Positioned.fill(

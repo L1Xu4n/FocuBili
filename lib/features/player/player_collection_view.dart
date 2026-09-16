@@ -393,9 +393,9 @@ extension _PlayerCollectionView on _PlayerPageState {
             children: <Widget>[
               Text(
                 '简介',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w800,
-                ),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
               ),
               const SizedBox(height: 4),
               Wrap(

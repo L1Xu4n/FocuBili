@@ -1068,7 +1068,9 @@ extension _PlayerDetailsView on _PlayerPageState {
                           ),
                         ),
                         TextButton.icon(
-                          key: const Key('create-app-favorite-folder-from-player'),
+                          key: const Key(
+                            'create-app-favorite-folder-from-player',
+                          ),
                           onPressed: () => Navigator.of(sheetContext).pop(
                             _AppFavoriteFolderSelection(
                               selectedIds: selected,
@@ -1127,9 +1129,7 @@ extension _PlayerDetailsView on _PlayerPageState {
                         FilledButton(
                           key: const Key('confirm-app-favorite-folders'),
                           onPressed: () => Navigator.of(sheetContext).pop(
-                            _AppFavoriteFolderSelection(
-                              selectedIds: selected,
-                            ),
+                            _AppFavoriteFolderSelection(selectedIds: selected),
                           ),
                           child: const Text('完成'),
                         ),
@@ -1194,10 +1194,7 @@ extension _PlayerDetailsView on _PlayerPageState {
     }
     final Set<String> initialIds = Set<String>.of(_appFavoriteFolderIds);
     final _AppFavoriteFolderSelection? selection =
-        await _showAppFavoriteFolderSheet(
-          folders,
-          selectedIds: initialIds,
-        );
+        await _showAppFavoriteFolderSheet(folders, selectedIds: initialIds);
     if (!mounted || selection == null) {
       return;
     }
@@ -1237,7 +1234,10 @@ extension _PlayerDetailsView on _PlayerPageState {
         }
       }
       for (final String folderId in removals) {
-        if (await _appFavoritesService.removeItem(folderId, _activeVideo.bvid)) {
+        if (await _appFavoritesService.removeItem(
+          folderId,
+          _activeVideo.bvid,
+        )) {
           removedCount += 1;
         }
       }
@@ -1365,7 +1365,9 @@ extension _PlayerDetailsView on _PlayerPageState {
                 child: CircularProgressIndicator(strokeWidth: 2),
               )
             : Icon(
-                favorited ? Icons.bookmark_rounded : Icons.bookmark_add_outlined,
+                favorited
+                    ? Icons.bookmark_rounded
+                    : Icons.bookmark_add_outlined,
                 size: 20,
               ),
         label: Text(favorited ? '已收藏' : '软件收藏'),

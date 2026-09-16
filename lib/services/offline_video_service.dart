@@ -30,10 +30,7 @@ class OfflineVideoException implements Exception {
 /// 保存解析渐进式播放响应后的可下载地址列表与真实清晰度。
 class _ProgressivePlayInfo {
   /// 创建包含按优先顺序排列的媒体地址与接口返回清晰度的信息。
-  const _ProgressivePlayInfo({
-    required this.urls,
-    required this.actualQuality,
-  });
+  const _ProgressivePlayInfo({required this.urls, required this.actualQuality});
 
   final List<String> urls;
   final int actualQuality;
@@ -49,8 +46,7 @@ class OfflineVideoService {
     OfflineVideoPreferencesLoader? preferencesLoader,
     OfflineVideoDirectoryLoader? directoryLoader,
     BilibiliCookieStore? cookieStore,
-    Future<String> Function(Uri uri, Map<String, String> headers)?
-    requestText,
+    Future<String> Function(Uri uri, Map<String, String> headers)? requestText,
     Future<int> Function(
       Uri uri,
       Map<String, String> headers,
@@ -92,17 +88,18 @@ class OfflineVideoService {
     final List<OfflineVideoDownload> downloads = _decodeDownloads(
       await _readStorage(),
     );
-    final List<OfflineVideoDownload> ready = downloads
-        .where(
-          (OfflineVideoDownload download) =>
-              download.status != OfflineDownloadStatus.failed &&
-              File(download.filePath).existsSync(),
-        )
-        .toList(growable: false)
-      ..sort(
-        (OfflineVideoDownload left, OfflineVideoDownload right) =>
-            right.downloadedAt.compareTo(left.downloadedAt),
-      );
+    final List<OfflineVideoDownload> ready =
+        downloads
+            .where(
+              (OfflineVideoDownload download) =>
+                  download.status != OfflineDownloadStatus.failed &&
+                  File(download.filePath).existsSync(),
+            )
+            .toList(growable: false)
+          ..sort(
+            (OfflineVideoDownload left, OfflineVideoDownload right) =>
+                right.downloadedAt.compareTo(left.downloadedAt),
+          );
     return List<OfflineVideoDownload>.unmodifiable(ready);
   }
 
@@ -143,7 +140,9 @@ class OfflineVideoService {
       throw const OfflineVideoException('该视频没有可下载的分P编号。');
     }
     final Directory directory = await _resolveDownloadDirectory(bvid);
-    final File output = File('${directory.path}${Platform.pathSeparator}video.mp4');
+    final File output = File(
+      '${directory.path}${Platform.pathSeparator}video.mp4',
+    );
     final String referer = 'https://www.bilibili.com/video/$bvid';
     final String cookieHeader = await _cookieStore.readCookies();
     final Map<String, String> requestHeaders = <String, String>{
@@ -210,12 +209,11 @@ class OfflineVideoService {
     final List<OfflineVideoDownload> downloads = _decodeDownloads(
       await _readStorage(),
     );
-    final List<OfflineVideoDownload> updated = downloads
-        .where(
-          (OfflineVideoDownload existing) => existing.bvid != bvid,
-        )
-        .toList()
-      ..add(download);
+    final List<OfflineVideoDownload> updated =
+        downloads
+            .where((OfflineVideoDownload existing) => existing.bvid != bvid)
+            .toList()
+          ..add(download);
     await _writeStorage(updated);
     return download;
   }
@@ -523,9 +521,7 @@ class OfflineVideoService {
       );
       final String body = await response.transform(utf8.decoder).join();
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw OfflineVideoException(
-          '下载服务暂时不可用（HTTP ${response.statusCode}）。',
-        );
+        throw OfflineVideoException('下载服务暂时不可用（HTTP ${response.statusCode}）。');
       }
       if (body.trim().isEmpty) {
         throw const OfflineVideoException('下载服务返回了空内容。');
@@ -556,9 +552,7 @@ class OfflineVideoService {
         const Duration(seconds: 30),
       );
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw OfflineVideoException(
-          '视频下载失败（HTTP ${response.statusCode}）。',
-        );
+        throw OfflineVideoException('视频下载失败（HTTP ${response.statusCode}）。');
       }
       final int? total = response.contentLength > 0
           ? response.contentLength

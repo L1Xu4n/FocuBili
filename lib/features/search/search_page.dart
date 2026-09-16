@@ -154,10 +154,10 @@ class _SearchPageState extends State<SearchPage> {
 
   /// 从本机加载用户自定义的学习过滤白名单与黑名单。
   Future<void> _loadLearningFilterLists() async {
-    final List<String> whitelist =
-        await _learningFilterPreferencesService.loadCustomWhitelist();
-    final List<String> blacklist =
-        await _learningFilterPreferencesService.loadCustomBlacklist();
+    final List<String> whitelist = await _learningFilterPreferencesService
+        .loadCustomWhitelist();
+    final List<String> blacklist = await _learningFilterPreferencesService
+        .loadCustomBlacklist();
     if (!mounted) {
       return;
     }
@@ -269,7 +269,11 @@ class _SearchPageState extends State<SearchPage> {
       final VideoSearchPage? searchPage =
           opensDirectly || _searchMode == _SearchMode.users
           ? null
-          : await _service.searchVideos(input, page: 1, filter: _effectiveFilter);
+          : await _service.searchVideos(
+              input,
+              page: 1,
+              filter: _effectiveFilter,
+            );
       final UserSearchPage? userPage = _searchMode == _SearchMode.users
           ? await _userSearchService.searchUsers(
               input,
@@ -1692,7 +1696,8 @@ class _SearchPageState extends State<SearchPage> {
       if (_filteredOutCount > 0 && _searchMode == _SearchMode.videos) {
         return _SearchMessage(
           icon: Icons.school_rounded,
-          text: '“$_activeQuery”下的结果均与学习无关，已为你全部隐藏。'
+          text:
+              '“$_activeQuery”下的结果均与学习无关，已为你全部隐藏。'
               '本应用只展示知识、科技、纪录片等学习向内容。',
         );
       }

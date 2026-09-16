@@ -434,10 +434,7 @@ void main() {
     );
     await tester.tap(find.byKey(const Key('edit-custom-creator-whitelist')));
     await tester.pumpAndSettle();
-    expect(
-      find.byKey(const Key('creator-list-editor-input')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const Key('creator-list-editor-input')), findsOneWidget);
 
     await tester.enterText(
       find.byKey(const Key('creator-list-editor-input')),

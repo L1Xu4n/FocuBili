@@ -180,9 +180,7 @@ class _OfflineVideosPageState extends State<OfflineVideosPage> {
                 maxWidthDiskCache: 512,
                 fadeInDuration: const Duration(milliseconds: 120),
                 placeholder: (BuildContext context, String url) => ColoredBox(
-                  color: Theme.of(
-                    context,
-                  ).colorScheme.surfaceContainerHighest,
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
                 ),
                 errorWidget: (BuildContext context, String url, Object error) =>
                     ColoredBox(

@@ -1138,9 +1138,7 @@ void main() {
 
     final VideoSearchPage resultPage = await service.searchVideos(
       '原神',
-      filter: const VideoSearchFilter(
-        whitelistedCreators: <String>{'UP 乙'},
-      ),
+      filter: const VideoSearchFilter(whitelistedCreators: <String>{'UP 乙'}),
     );
 
     expect(resultPage.results, hasLength(2));
@@ -1156,9 +1154,7 @@ void main() {
 
     final VideoSearchPage resultPage = await service.searchVideos(
       '原神',
-      filter: const VideoSearchFilter(
-        blacklistedCreators: <String>{'UP 甲'},
-      ),
+      filter: const VideoSearchFilter(blacklistedCreators: <String>{'UP 甲'}),
     );
 
     expect(resultPage.results, isEmpty);
@@ -1189,9 +1185,7 @@ void main() {
 
     final VideoSearchPage resultPage = await service.searchVideos(
       '英语兔',
-      filter: const VideoSearchFilter(
-        whitelistedCreators: <String>{'英语兔'},
-      ),
+      filter: const VideoSearchFilter(whitelistedCreators: <String>{'英语兔'}),
     );
 
     expect(resultPage.results, hasLength(1));
