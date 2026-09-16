@@ -5,6 +5,7 @@ import '../../core/router/app_router.dart';
 import '../../services/bilibili_auth_service.dart';
 import '../../services/app_update_service.dart';
 import 'favorite_folders_page.dart';
+import 'app_favorite_folders_page.dart';
 import 'followed_creators_page.dart';
 import 'login_page.dart';
 import 'subscribed_collections_page.dart';
@@ -187,6 +188,16 @@ class _ProfilePageState extends State<ProfilePage> {
       MaterialPageRoute<void>(
         // 收藏夹页面构建函数只读取当前账号公开可见的收藏数据，不执行写操作。
         builder: (BuildContext context) => const FavoriteFoldersPage(),
+      ),
+    );
+  }
+
+  /// 打开软件内独立收藏夹列表，可新建与在看视频时收藏。
+  Future<void> _openAppFavoriteFolders() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        // 软件收藏夹页面构建函数只读写本机数据，不修改 B 站账号收藏。
+        builder: (BuildContext context) => const AppFavoriteFoldersPage(),
       ),
     );
   }
@@ -452,6 +463,12 @@ class _ProfilePageState extends State<ProfilePage> {
         title: '我的收藏',
         // 收藏入口函数打开真实收藏夹列表，具体会话错误由目标页面明确显示。
         onTap: () => _openFavoriteFolders(),
+      ),
+      _ProfileTile(
+        icon: Icons.bookmark_added_rounded,
+        title: '软件收藏夹',
+        // 软件收藏夹入口函数打开本机独立收藏夹，不依赖 B 站登录状态。
+        onTap: () => _openAppFavoriteFolders(),
       ),
       _ProfileTile(
         icon: Icons.subscriptions_outlined,

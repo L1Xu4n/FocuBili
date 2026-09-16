@@ -1,5 +1,17 @@
 part of 'player_page.dart';
 
+/// 保存软件收藏夹多选面板的最终勾选结果，以及用户是否希望继续创建新目录。
+class _AppFavoriteFolderSelection {
+  /// 创建一份不会再被弹窗内部修改的软件收藏夹选择结果。
+  _AppFavoriteFolderSelection({
+    required Set<String> selectedIds,
+    this.createNewFolder = false,
+  }) : selectedIds = Set<String>.unmodifiable(selectedIds);
+
+  final Set<String> selectedIds;
+  final bool createNewFolder;
+}
+
 /// 保存收藏夹多选面板的最终勾选结果，以及用户是否希望继续创建新目录。
 class _FavoriteFolderSelection {
   /// 创建一份不会再被弹窗内部修改的收藏夹选择结果。
@@ -987,5 +999,312 @@ extension _PlayerDetailsView on _PlayerPageState {
         context,
       ).showSnackBar(const SnackBar(content: Text('无法打开默认浏览器，请稍后重试。')));
     }
+  }
+
+  /// 读取当前视频在软件收藏夹中的收藏状态，失败时保持未收藏显示。
+  Future<void> _loadAppFavoriteState() async {
+    final String bvid = _activeVideo.bvid;
+    if (bvid.isEmpty) {
+      return;
+    }
+    if (mounted) {
+      _updatePlayerState(() => _appFavoriteLoading = true);
+    }
+    try {
+      final List<AppFavoriteFolder> folders = await _appFavoritesService
+          .loadFolders();
+      final Set<String> containing = <String>{};
+      for (final AppFavoriteFolder folder in folders) {
+        final List<AppFavoriteItem> items = await _appFavoritesService
+            .loadItems(folder.id);
+        if (items.any((AppFavoriteItem item) => item.bvid == bvid)) {
+          containing.add(folder.id);
+        }
+      }
+      if (mounted && _activeVideo.bvid == bvid) {
+        _updatePlayerState(() {
+          _appFavoriteFolderIds = containing;
+        });
+      }
+    } on Object {
+      // 本机收藏读取失败时保持未收藏显示，不影响播放器其他功能。
+    } finally {
+      if (mounted) {
+        _updatePlayerState(() => _appFavoriteLoading = false);
+      }
+    }
+  }
+
+  /// 显示可多选的软件收藏夹面板，并保留当前已包含视频的预选状态。
+  Future<_AppFavoriteFolderSelection?> _showAppFavoriteFolderSheet(
+    List<AppFavoriteFolder> folders, {
+    required Set<String> selectedIds,
+  }) {
+    final Set<String> selected = Set<String>.of(selectedIds);
+    return showModalBottomSheet<_AppFavoriteFolderSelection>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (BuildContext sheetContext) => StatefulBuilder(
+        builder: (BuildContext context, StateSetter setSheetState) {
+          return SafeArea(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.76,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 4, 12, 8),
+                    child: Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: Text(
+                            '收藏到软件收藏夹',
+                            style: Theme.of(sheetContext).textTheme.titleMedium
+                                ?.copyWith(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                        TextButton.icon(
+                          key: const Key(
+                            'create-app-favorite-folder-from-player',
+                          ),
+                          onPressed: () => Navigator.of(sheetContext).pop(
+                            _AppFavoriteFolderSelection(
+                              selectedIds: selected,
+                              createNewFolder: true,
+                            ),
+                          ),
+                          icon: const Icon(Icons.add_rounded),
+                          label: const Text('新建收藏夹'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (folders.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 18,
+                      ),
+                      child: Text('当前还没有软件收藏夹，可以先创建一个。'),
+                    )
+                  else
+                    Flexible(
+                      child: ListView.builder(
+                        itemCount: folders.length,
+                        itemBuilder: (BuildContext context, int index) {
+                          final AppFavoriteFolder folder = folders[index];
+                          final bool checked = selected.contains(folder.id);
+                          return CheckboxListTile(
+                            key: Key('app-favorite-folder-${folder.id}'),
+                            value: checked,
+                            controlAffinity: ListTileControlAffinity.trailing,
+                            title: Text(folder.name),
+                            onChanged: (bool? value) {
+                              setSheetState(() {
+                                if (value ?? false) {
+                                  selected.add(folder.id);
+                                } else {
+                                  selected.remove(folder.id);
+                                }
+                              });
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: <Widget>[
+                        TextButton(
+                          onPressed: () => Navigator.of(sheetContext).pop(),
+                          child: const Text('取消'),
+                        ),
+                        const SizedBox(width: 8),
+                        FilledButton(
+                          key: const Key('confirm-app-favorite-folders'),
+                          onPressed: () => Navigator.of(sheetContext).pop(
+                            _AppFavoriteFolderSelection(selectedIds: selected),
+                          ),
+                          child: const Text('完成'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// 请求输入新软件收藏夹名称，空名称时禁用创建按钮。
+  Future<String?> _showCreateAppFavoriteFolderDialog() {
+    String title = '';
+    return showDialog<String>(
+      context: context,
+      builder: (BuildContext dialogContext) => StatefulBuilder(
+        builder: (BuildContext context, StateSetter setDialogState) {
+          return AlertDialog(
+            title: const Text('创建软件收藏夹'),
+            content: TextField(
+              key: const Key('app-favorite-folder-name-input'),
+              autofocus: true,
+              maxLength: 20,
+              decoration: const InputDecoration(hintText: '输入收藏夹名称'),
+              onChanged: (String value) {
+                setDialogState(() => title = value.trim());
+              },
+            ),
+            actions: <Widget>[
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                key: const Key('confirm-create-app-favorite-folder'),
+                onPressed: title.isEmpty
+                    ? null
+                    : () => Navigator.of(dialogContext).pop(title),
+                child: const Text('创建'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  /// 打开软件收藏夹多选面板，一次提交新增和移除目录，也允许创建新目录后共同提交。
+  Future<void> _toggleAppFavorite() async {
+    if (_appFavoriteBusy || _activeVideo.bvid.isEmpty) {
+      return;
+    }
+    final List<AppFavoriteFolder> folders = await _appFavoritesService
+        .loadFolders();
+    if (!mounted) {
+      return;
+    }
+    final Set<String> initialIds = Set<String>.of(_appFavoriteFolderIds);
+    final _AppFavoriteFolderSelection? selection =
+        await _showAppFavoriteFolderSheet(folders, selectedIds: initialIds);
+    if (!mounted || selection == null) {
+      return;
+    }
+    final Set<String> selectedIds = selection.selectedIds.toSet();
+    String? newFolderName;
+    if (selection.createNewFolder) {
+      newFolderName = await _showCreateAppFavoriteFolderDialog();
+      if (!mounted || newFolderName == null) {
+        return;
+      }
+    }
+    _updatePlayerState(() => _appFavoriteBusy = true);
+    try {
+      if (newFolderName != null) {
+        final AppFavoriteFolder? created = await _appFavoritesService
+            .createFolder(newFolderName);
+        if (created != null) {
+          selectedIds.add(created.id);
+        }
+      }
+      final Set<String> additions = selectedIds.difference(initialIds);
+      final Set<String> removals = initialIds.difference(selectedIds);
+      int addedCount = 0;
+      int removedCount = 0;
+      for (final String folderId in additions) {
+        final AppFavoriteItem item = AppFavoriteItem(
+          folderId: folderId,
+          bvid: _activeVideo.bvid,
+          title: _activeVideo.title,
+          coverUrl: _activeVideo.thumbnailUrl,
+          ownerName: _activeVideo.ownerName,
+          durationText: _formatDurationText(_displayDuration),
+          addedAt: DateTime.now(),
+        );
+        if (await _appFavoritesService.addItem(item)) {
+          addedCount += 1;
+        }
+      }
+      for (final String folderId in removals) {
+        if (await _appFavoritesService.removeItem(
+          folderId,
+          _activeVideo.bvid,
+        )) {
+          removedCount += 1;
+        }
+      }
+      if (mounted) {
+        _updatePlayerState(() {
+          _appFavoriteFolderIds = Set<String>.unmodifiable(selectedIds);
+        });
+        if (addedCount == 0 && removedCount == 0) {
+          _showTransientSnackBar('收藏夹没有变化');
+        } else {
+          _showTransientSnackBar(
+            '已更新软件收藏夹：新增 $addedCount 个，移除 $removedCount 个',
+          );
+        }
+      }
+    } on Object {
+      if (mounted) {
+        _showTransientSnackBar('软件收藏夹操作失败，请稍后重试。');
+      }
+    } finally {
+      if (mounted) {
+        _updatePlayerState(() => _appFavoriteBusy = false);
+      }
+    }
+  }
+
+  /// 把时长格式化为小时分钟秒文本，未知时长返回空字符串。
+  String _formatDurationText(Duration duration) {
+    if (duration <= Duration.zero) {
+      return '';
+    }
+    final int hours = duration.inHours;
+    final int minutes = duration.inMinutes % 60;
+    final int seconds = duration.inSeconds % 60;
+    final String minuteText = minutes.toString().padLeft(2, '0');
+    final String secondText = seconds.toString().padLeft(2, '0');
+    return hours > 0
+        ? '$hours:$minuteText:$secondText'
+        : '$minutes:$secondText';
+  }
+
+  /// 创建“收藏到软件收藏夹”按钮，并根据已收藏状态切换图标与文字。
+  Widget _buildAppFavoriteButton() {
+    final bool busy = _appFavoriteLoading || _appFavoriteBusy;
+    final bool favorited = _appFavoriteFolderIds.isNotEmpty;
+    return Tooltip(
+      message: favorited ? '已加入软件收藏夹' : '收藏到软件收藏夹',
+      child: TextButton.icon(
+        key: const Key('current-video-app-favorite-button'),
+        style: TextButton.styleFrom(
+          visualDensity: VisualDensity.compact,
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+        ),
+        onPressed: busy ? null : () => unawaited(_toggleAppFavorite()),
+        icon: busy
+            ? const SizedBox.square(
+                dimension: 17,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : Icon(
+                favorited
+                    ? Icons.bookmark_rounded
+                    : Icons.bookmark_add_outlined,
+                size: 20,
+              ),
+        label: Text(favorited ? '已收藏' : '软件收藏'),
+      ),
+    );
   }
 }
