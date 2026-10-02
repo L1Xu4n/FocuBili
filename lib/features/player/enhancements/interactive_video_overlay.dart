@@ -13,6 +13,7 @@ class InteractiveVideoChoiceOverlay extends StatelessWidget {
     required this.bottomInset,
     required this.onChoiceSelected,
     required this.onRetry,
+    this.embedded = false,
   });
 
   final InteractiveVideoNode? node;
@@ -21,27 +22,30 @@ class InteractiveVideoChoiceOverlay extends StatelessWidget {
   final double bottomInset;
   final ValueChanged<InteractiveVideoChoice> onChoiceSelected;
   final VoidCallback onRetry;
+  final bool embedded;
 
-  /// 创建贴近画面底部的半透明分支按钮，并随播放栏显示状态平滑改变高度。
+  /// 创建剧情卡片；嵌入统一提示区时由父级负责位置和控制栏避让。
   @override
   Widget build(BuildContext context) {
+    final content = Center(
+      child: ConstrainedBox(
+        key: const Key('interactive-video-choice-overlay'),
+        constraints: const BoxConstraints(maxWidth: 620),
+        child: Semantics(
+          container: true,
+          label: node?.title.isNotEmpty == true ? node!.title : '请选择剧情走向',
+          child: _buildContent(),
+        ),
+      ),
+    );
+    if (embedded) return content;
     return AnimatedPositioned(
       duration: const Duration(milliseconds: 180),
       curve: Curves.easeOutCubic,
       left: 16,
       right: 16,
       bottom: bottomInset,
-      child: Center(
-        child: ConstrainedBox(
-          key: const Key('interactive-video-choice-overlay'),
-          constraints: const BoxConstraints(maxWidth: 620),
-          child: Semantics(
-            container: true,
-            label: node?.title.isNotEmpty == true ? node!.title : '请选择剧情走向',
-            child: _buildContent(),
-          ),
-        ),
-      ),
+      child: content,
     );
   }
 

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -133,11 +134,253 @@ DesktopPlayerOverlayService _createService(
 
 /// 验证 Windows 字幕和弹幕服务只访问官方端点并返回经过限制的数据。
 void main() {
+  /// 构造包含视频归属和独立正文地址的轨道响应，用于模拟并发元数据请求。
+  DesktopOverlayHttpResponse metadata(String bvid, int cid, String path) {
+    return _jsonResponse({
+      'code': 0,
+      'data': {
+        'bvid': bvid,
+        'cid': cid,
+        'subtitle': {
+          'subtitles': [
+            {
+              'id_str': '11',
+              'lan': 'zh-CN',
+              'subtitle_url': 'https://aisubtitle.hdslb.com/$path',
+            },
+          ],
+        },
+      },
+    });
+  }
+
+  /// 两个视频使用同一轨道编号，旧请求晚到仍须保留各自的正文地址。
+  test('字幕并发反序返回按 BV/CID 隔离', () async {
+    final oldMetadata = Completer<DesktopOverlayHttpResponse>();
+    final newMetadata = Completer<DesktopOverlayHttpResponse>();
+    final requestsStarted = Completer<void>();
+    int requests = 0;
+    final service = DesktopPlayerOverlayService(
+      authService: BilibiliAuthService(cookieStore: _MemoryCookieStore('')),
+      request: (endpoint, headers, maximumBytes) async {
+        if (endpoint.path == '/x/player/v2') {
+          requests++;
+          if (requests == 2) requestsStarted.complete();
+          return endpoint.queryParameters['cid'] == '123'
+              ? oldMetadata.future
+              : newMetadata.future;
+        }
+        return _jsonResponse({
+          'body': [
+            {'from': 0, 'to': 2, 'content': endpoint.path},
+          ],
+        });
+      },
+    );
+    final oldRequest = service.loadSubtitleTracks(
+      bvid: 'BV1xx411c7mD',
+      cid: 123,
+    );
+    final newRequest = service.loadSubtitleTracks(
+      bvid: 'BV1GJ411x7h7',
+      cid: 456,
+    );
+    await requestsStarted.future;
+    newMetadata.complete(metadata('BV1GJ411x7h7', 456, 'new.json'));
+    await newRequest;
+    oldMetadata.complete(metadata('BV1xx411c7mD', 123, 'old.json'));
+    await oldRequest;
+    final newCues = await service.loadSubtitleCues(
+      bvid: 'BV1GJ411x7h7',
+      cid: 456,
+      trackId: '11',
+    );
+    final oldCues = await service.loadSubtitleCues(
+      bvid: 'BV1xx411c7mD',
+      cid: 123,
+      trackId: '11',
+    );
+    expect(newCues.cues.single.content, '/new.json');
+    expect(oldCues.cues.single.content, '/old.json');
+  });
+
+  /// 同一视频刷新后旧请求晚到，不能使已刷新地址退回旧地址。
+  test('同视频旧字幕请求晚到不能覆盖刷新结果', () async {
+    final stale = Completer<DesktopOverlayHttpResponse>();
+    final started = Completer<void>();
+    int reads = 0;
+    final service = DesktopPlayerOverlayService(
+      authService: BilibiliAuthService(cookieStore: _MemoryCookieStore('')),
+      request: (endpoint, headers, maximumBytes) async {
+        if (endpoint.path == '/x/player/v2') {
+          if (++reads == 1) {
+            started.complete();
+            return stale.future;
+          }
+          return metadata('BV1xx411c7mD', 123, 'fresh.json');
+        }
+        return _jsonResponse({
+          'body': [
+            {'from': 0, 'to': 2, 'content': endpoint.path},
+          ],
+        });
+      },
+    );
+    final pending = service.loadSubtitleTracks(bvid: 'BV1xx411c7mD', cid: 123);
+    await started.future;
+    await service.loadSubtitleTracks(bvid: 'BV1xx411c7mD', cid: 123);
+    stale.complete(metadata('BV1xx411c7mD', 123, 'stale.json'));
+    expect((await pending).status, SubtitleLoadStatus.unavailable);
+    final cues = await service.loadSubtitleCues(
+      bvid: 'BV1xx411c7mD',
+      cid: 123,
+      trackId: '11',
+    );
+    expect(cues.cues.single.content, '/fresh.json');
+  });
+
+  /// 响应中的 BV 或 CID 与请求不一致时，禁止读取其中的字幕正文。
+  test('字幕接口返回其他视频或分 P 时拒绝使用', () async {
+    final server = _FakeOverlayServer();
+    final service = _createService(server);
+    for (final response in [
+      metadata('BV1GJ411x7h7', 123, 'wrong.json'),
+      metadata('BV1xx411c7mD', 456, 'wrong.json'),
+    ]) {
+      server.responses['/x/player/v2'] = response;
+      expect(
+        (await service.loadSubtitleTracks(
+          bvid: 'BV1xx411c7mD',
+          cid: 123,
+        )).status,
+        SubtitleLoadStatus.unavailable,
+      );
+      expect(
+        (await service.loadSubtitleCues(
+          bvid: 'BV1xx411c7mD',
+          cid: 123,
+          trackId: '11',
+        )).status,
+        SubtitleLoadStatus.locked,
+      );
+    }
+    expect(server.requests, hasLength(2));
+  });
+
+  /// 失败的刷新不能抹掉同一视频原本可读的正文地址。
+  test('字幕列表刷新失败仍可使用之前成功的轨道', () async {
+    final server = _FakeOverlayServer();
+    final service = _createService(server);
+    server.responses['/x/player/v2'] = metadata(
+      'BV1xx411c7mD',
+      123,
+      'kept.json',
+    );
+    server.responses['/kept.json'] = _jsonResponse({
+      'body': [
+        {'from': 0, 'to': 2, 'content': '已读取的视频字幕'},
+      ],
+    });
+    await service.loadSubtitleTracks(bvid: 'BV1xx411c7mD', cid: 123);
+    server.responses['/x/player/v2'] = DesktopOverlayHttpResponse(
+      statusCode: 503,
+      bodyBytes: Uint8List(0),
+    );
+    expect(
+      (await service.loadSubtitleTracks(bvid: 'BV1xx411c7mD', cid: 123)).status,
+      SubtitleLoadStatus.unavailable,
+    );
+    final cues = await service.loadSubtitleCues(
+      bvid: 'BV1xx411c7mD',
+      cid: 123,
+      trackId: '11',
+    );
+    expect(cues.cues.single.content, '已读取的视频字幕');
+  });
+
+  /// 正文地址过期时重新获取同一 BV/CID 的地址，并且不对 CDN 携带 Cookie。
+  test('字幕临时地址过期自动更新并重试一次', () async {
+    var metadataReads = 0;
+    final documents = <String>[];
+    final service = DesktopPlayerOverlayService(
+      authService: BilibiliAuthService(
+        cookieStore: _MemoryCookieStore('SESSDATA=test'),
+      ),
+      request: (endpoint, headers, maximumBytes) async {
+        if (endpoint.path == '/x/player/v2') {
+          expect(endpoint.queryParameters['cid'], '123');
+          return metadata(
+            'BV1xx411c7mD',
+            123,
+            ++metadataReads == 1 ? 'expired.json' : 'fresh.json',
+          );
+        }
+        expect(headers.containsKey('cookie'), isFalse);
+        documents.add(endpoint.path);
+        if (endpoint.path == '/expired.json') {
+          return DesktopOverlayHttpResponse(
+            statusCode: 403,
+            bodyBytes: Uint8List(0),
+          );
+        }
+        return _jsonResponse({
+          'body': [
+            {'from': 0, 'to': 1, 'content': '当前视频的新地址'},
+          ],
+        });
+      },
+    );
+    await service.loadSubtitleTracks(bvid: 'BV1xx411c7mD', cid: 123);
+    final cues = await service.loadSubtitleCues(
+      bvid: 'BV1xx411c7mD',
+      cid: 123,
+      trackId: '11',
+    );
+    expect(cues.cues.single.content, '当前视频的新地址');
+    expect(metadataReads, 2);
+    expect(documents, ['/expired.json', '/fresh.json']);
+  });
+
+  /// 没有归属字段的响应不能被默认当作当前视频。
+  test('字幕元数据缺少视频身份时拒绝使用', () async {
+    final server = _FakeOverlayServer();
+    server.responses['/x/player/v2'] = _jsonResponse({
+      'code': 0,
+      'data': {
+        'subtitle': {
+          'subtitles': [
+            {
+              'id': 11,
+              'lan': 'zh',
+              'subtitle_url': 'https://aisubtitle.hdslb.com/unknown.json',
+            },
+          ],
+        },
+      },
+    });
+    final service = _createService(server);
+    expect(
+      (await service.loadSubtitleTracks(bvid: 'BV1xx411c7mD', cid: 123)).status,
+      SubtitleLoadStatus.unavailable,
+    );
+    expect(
+      (await service.loadSubtitleCues(
+        bvid: 'BV1xx411c7mD',
+        cid: 123,
+        trackId: '11',
+      )).status,
+      SubtitleLoadStatus.locked,
+    );
+    expect(server.requests, hasLength(1));
+  });
+
   test('字幕轨道临时地址留在服务内存且字幕条目按时间排序', () async {
     final _FakeOverlayServer server = _FakeOverlayServer();
     server.responses['/x/player/v2'] = _jsonResponse(<String, Object?>{
       'code': 0,
       'data': <String, Object?>{
+        'bvid': 'BV1xx411c7mD',
+        'cid': 123,
         'subtitle': <String, Object?>{
           'subtitles': <Object?>[
             <String, Object?>{
@@ -200,6 +443,8 @@ void main() {
     server.responses['/x/player/v2'] = _jsonResponse(<String, Object?>{
       'code': 0,
       'data': <String, Object?>{
+        'bvid': 'BV1xx411c7mD',
+        'cid': 123,
         'subtitle': <String, Object?>{
           'subtitles': <Object?>[
             <String, Object?>{

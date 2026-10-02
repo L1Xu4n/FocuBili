@@ -20,9 +20,16 @@ mixin _PlayerOverlayCoordinator
   SubtitleTrackLoadResult? _subtitleTrackResult;
   SubtitleTrack? _selectedSubtitleTrack;
   List<SubtitleCue> _subtitleCues = const <SubtitleCue>[];
-  bool _subtitleTracksLoading = false;
   bool _subtitleCuesLoading = false;
   int _subtitleRequestToken = 0;
+  int _subtitleTracksRequestToken = 0;
+  int _subtitleCuesRequestToken = 0;
+  (String, int)? _subtitleTrackIdentity;
+  (String, int)? _subtitleCueIdentity;
+  @override
+  bool _subtitleSelectorOpen = false;
+  int _subtitleFontRevision = 0;
+  Future<void> _subtitleFontSizeWrites = Future<void>.value();
   final Map<int, List<DanmakuEntry>> _rawDanmakuSegments =
       <int, List<DanmakuEntry>>{};
   final Map<int, List<DanmakuEntry>> _danmakuSegments =
@@ -172,13 +179,14 @@ mixin _PlayerOverlayCoordinator
     }
   }
 
-  /// 以最新原生位置作为弹幕时间锚点，并在播放期间用 Flutter 帧时钟平滑补齐帧间位移。
+  /// 以最新位置锚定弹幕；听视频期间停止帧动画，避免后台仍逐帧计算画面。
   @override
   void _syncDanmakuAnimation(PlaybackSnapshot snapshot) {
     _danmakuPositionAnchor = snapshot.position;
     _danmakuFrameController.stop();
     _danmakuFrameController.value = 0;
     if (_danmakuEnabled &&
+        !snapshot.audioOnly &&
         snapshot.phase == PlaybackPhase.ready &&
         snapshot.isPlaying &&
         !snapshot.isInPictureInPicture) {
@@ -387,9 +395,11 @@ mixin _PlayerOverlayCoordinator
     return _danmakuSegments[segmentIndex] ?? const <DanmakuEntry>[];
   }
 
-  /// 创建显示真实弹幕的不可点击画布，避免弹幕层阻挡控制栏和播放器手势。
+  /// 视频模式绘制不可点击的弹幕；听视频隐藏画布但保留用户原有弹幕偏好。
   Widget _buildDanmakuOverlay() {
-    if (!_danmakuEnabled || _playbackSnapshot.isInPictureInPicture) {
+    if (!_danmakuEnabled ||
+        _playbackSnapshot.audioOnly ||
+        _playbackSnapshot.isInPictureInPicture) {
       return const SizedBox.shrink();
     }
     return Positioned.fill(
@@ -416,109 +426,112 @@ mixin _PlayerOverlayCoordinator
   /// 清空旧分P的字幕和进行中的请求，避免切换分P后短暂显示错误字幕。
   void _clearSubtitlesForPart() {
     _subtitleRequestToken += 1;
+    _subtitleTracksRequestToken++;
+    _subtitleCuesRequestToken++;
     if (!mounted) {
       return;
     }
     setState(() {
       _subtitleTrackResult = null;
+      _subtitleTrackIdentity = null;
+      _subtitleCueIdentity = null;
       _selectedSubtitleTrack = null;
       _subtitleCues = const <SubtitleCue>[];
-      _subtitleTracksLoading = false;
       _subtitleCuesLoading = false;
     });
   }
 
-  /// 请求当前 BV 和分P可用的字幕轨道；结果只含文字元数据，不会包含字幕地址或 Cookie。
-  Future<void> _loadSubtitleTracks() async {
-    final int requestToken = ++_subtitleRequestToken;
-    if (mounted) {
-      setState(() => _subtitleTracksLoading = true);
+  /// 单独管理轨道请求代次，刷新列表不再取消正在读取的字幕正文。
+  Future<SubtitleTrackLoadResult> _loadSubtitleTracks() async {
+    final String bvid = _activeVideo.bvid;
+    final int cid = _currentPart.cid;
+    final int requestToken = ++_subtitleTracksRequestToken;
+    SubtitleTrackLoadResult result;
+    try {
+      result = await _playerOverlayService.loadSubtitleTracks(
+        bvid: bvid,
+        cid: cid,
+      );
+    } catch (_) {
+      result = const SubtitleTrackLoadResult.unavailable();
     }
-    final SubtitleTrackLoadResult result = await _playerOverlayService
-        .loadSubtitleTracks(bvid: _activeVideo.bvid, cid: _currentPart.cid);
-    if (!mounted || requestToken != _subtitleRequestToken) {
-      return;
+    if (!mounted ||
+        requestToken != _subtitleTracksRequestToken ||
+        bvid != _activeVideo.bvid ||
+        cid != _currentPart.cid) {
+      return const SubtitleTrackLoadResult.unavailable(
+        message: '视频已切换，请重新打开字幕设置。',
+      );
     }
     setState(() {
-      _subtitleTracksLoading = false;
-      _subtitleTrackResult = result;
+      // 临时失败保留同一视频成功读取过的列表，面板仍明确显示刷新失败。
+      if (result.status != SubtitleLoadStatus.unavailable ||
+          _subtitleTrackIdentity != (bvid, cid) ||
+          _subtitleTrackResult?.status != SubtitleLoadStatus.available) {
+        _subtitleTrackResult = result;
+        _subtitleTrackIdentity = (bvid, cid);
+      }
     });
+    return result;
   }
 
-  /// 打开字幕选择面板；首次点开时按需读取轨道，避免进入视频就自动下载全部字幕。
+  /// 立即打开字幕面板，同一分 P 复用成功列表，并提供明确刷新与字号入口。
   Future<void> _showSubtitleSelector() async {
     _showPlayerControls();
-    if (_subtitleTrackResult == null && !_subtitleTracksLoading) {
-      await _loadSubtitleTracks();
-    }
-    if (!mounted) {
-      return;
-    }
-    if (_subtitleTracksLoading) {
-      _showTransientSnackBar('正在读取字幕轨道…');
-      return;
-    }
-    final SubtitleTrackLoadResult? result = _subtitleTrackResult;
-    if (result == null || result.status != SubtitleLoadStatus.available) {
-      _showTransientSnackBar(result?.message ?? '字幕暂时无法读取，请稍后重试。');
-      return;
-    }
-    final String? selectedTrackId = await showModalBottomSheet<String>(
-      context: context,
-      showDragHandle: true,
-      builder: (BuildContext sheetContext) {
-        return SafeArea(
-          top: false,
-          child: ListView(
-            shrinkWrap: true,
-            children: <Widget>[
-              const ListTile(
-                title: Text('字幕'),
-                subtitle: Text('字幕内容由当前视频提供，临时地址不会离开原生层。'),
-              ),
-              ListTile(
-                leading: const Icon(Icons.subtitles_off_rounded),
-                title: const Text('关闭字幕'),
-                trailing: _selectedSubtitleTrack == null
-                    ? const Icon(Icons.check_rounded)
-                    : null,
-                // 关闭字幕函数只移除本页显示内容，不修改视频或账号数据。
-                onTap: () => Navigator.of(sheetContext).pop(_subtitleOffValue),
-              ),
-              for (final SubtitleTrack track in result.tracks)
-                ListTile(
-                  enabled: !track.isLocked,
-                  leading: Icon(
-                    track.isLocked
-                        ? Icons.lock_outline_rounded
-                        : Icons.subtitles_rounded,
-                  ),
-                  title: Text(track.label),
-                  subtitle: track.language.isEmpty
-                      ? (track.isLocked ? const Text('当前不可用') : null)
-                      : Text(track.language),
-                  trailing: _selectedSubtitleTrack?.id == track.id
-                      ? const Icon(Icons.check_rounded)
-                      : null,
-                  // 轨道选择函数只返回不敏感编号，真正字幕地址始终保留在平台服务内存。
-                  onTap: track.isLocked
-                      ? null
-                      : () => Navigator.of(sheetContext).pop(track.id),
+    if (_subtitleSelectorOpen) return;
+    final String bvid = _activeVideo.bvid;
+    final int cid = _currentPart.cid;
+    final int selectorToken = _subtitleRequestToken;
+    final videoLabel = 'P${_currentPart.pageNumber} · ${_activeVideo.title}';
+    final initialResult =
+        _subtitleTrackIdentity == (bvid, cid) &&
+            _subtitleTrackResult?.status == SubtitleLoadStatus.available
+        ? _subtitleTrackResult
+        : null;
+    final selectedId = _selectedSubtitleTrack?.id;
+
+    /// 列表加载、选项点击和面板返回均核对打开时的视频身份与代次。
+    bool isCurrentVideo() =>
+        mounted &&
+        selectorToken == _subtitleRequestToken &&
+        bvid == _activeVideo.bvid &&
+        cid == _currentPart.cid;
+    _subtitleSelectorOpen = true;
+    String? selectedTrackId;
+    try {
+      selectedTrackId = await showModalBottomSheet<String>(
+        context: context,
+        showDragHandle: true,
+        isScrollControlled: true,
+        builder: (sheetContext) => PlayerSubtitleSheet(
+          videoLabel: videoLabel,
+          offValue: _subtitleOffValue,
+          initialResult: initialResult,
+          selectedTrackId: selectedId,
+          fontSize: _playbackPreferences.subtitleFontSize,
+          isCurrentVideo: isCurrentVideo,
+          // 旧面板不能借刷新入口加载新视频的数据。
+          reloadTracks: () async => isCurrentVideo()
+              ? _loadSubtitleTracks()
+              : const SubtitleTrackLoadResult.unavailable(
+                  message: '视频已切换，请重新打开字幕设置。',
                 ),
-            ],
-          ),
-        );
-      },
-    );
-    if (!mounted || selectedTrackId == null) {
-      return;
+          onPreviewFontSize: _previewSubtitleFontSize,
+          onCommitFontSize: _commitSubtitleFontSize,
+        ),
+      );
+    } finally {
+      _subtitleSelectorOpen = false;
+      if (mounted) _showPlayerControls();
     }
+    if (!isCurrentVideo() || selectedTrackId == null) return;
     if (selectedTrackId == _subtitleOffValue) {
       _disableSubtitles();
       return;
     }
     SubtitleTrack? selectedTrack;
-    for (final SubtitleTrack track in result.tracks) {
+    for (final SubtitleTrack track
+        in _subtitleTrackResult?.tracks ?? const <SubtitleTrack>[]) {
       if (track.id == selectedTrackId) {
         selectedTrack = track;
         break;
@@ -529,31 +542,99 @@ mixin _PlayerOverlayCoordinator
     }
   }
 
-  /// 请求并启用一个用户选择的字幕轨道，失败时保留已经在显示的旧字幕。
+  /// 字号立即应用于当前画面，并记录用户修改以防初始偏好读取迟到覆盖。
+  void _previewSubtitleFontSize(double value) {
+    if (!mounted) return;
+    _savedSubtitleFontSize ??= _playbackPreferences.subtitleFontSize;
+    final size = PlaybackPreferences.normalizeSubtitleFontSize(value);
+    _subtitleFontRevision++;
+    _subtitleFontSizeOverride = size;
+    setState(
+      () => _playbackPreferences = _playbackPreferences.copyWith(
+        subtitleFontSize: size,
+      ),
+    );
+  }
+
+  /// 松手后串行保存字号，失败时仅回退当前这次修改，保留其他播放偏好。
+  Future<double> _commitSubtitleFontSize(double value) async {
+    final size = PlaybackPreferences.normalizeSubtitleFontSize(value);
+    if (_playbackPreferences.subtitleFontSize != size) {
+      _previewSubtitleFontSize(size);
+    }
+    final revision = _subtitleFontRevision;
+    final operation = _subtitleFontSizeWrites.then((_) async {
+      final previous =
+          _savedSubtitleFontSize ?? PlaybackPreferences.defaultSubtitleFontSize;
+      try {
+        await _playbackPreferencesService.saveSubtitleFontSize(size);
+        _savedSubtitleFontSize = size;
+      } catch (_) {
+        if (mounted && revision == _subtitleFontRevision) {
+          _subtitleFontSizeOverride = previous;
+          setState(
+            () => _playbackPreferences = _playbackPreferences.copyWith(
+              subtitleFontSize: previous,
+            ),
+          );
+          _showTransientSnackBar('字幕字号保存失败，已恢复上次设置。');
+        }
+      }
+    });
+    _subtitleFontSizeWrites = operation;
+    await operation;
+    return _playbackPreferences.subtitleFontSize;
+  }
+
+  /// 读取当前视频的选中轨道；晚到的其他分 P 结果不能覆盖当前字幕。
   Future<void> _selectSubtitleTrack(SubtitleTrack track) async {
     if (track.isLocked) {
       _showTransientSnackBar('此字幕当前不可用。');
       return;
     }
-    final int requestToken = ++_subtitleRequestToken;
+    final int requestToken = ++_subtitleCuesRequestToken;
+    final String bvid = _activeVideo.bvid;
+    final int cid = _currentPart.cid;
+    if (_selectedSubtitleTrack?.id == track.id &&
+        _subtitleCueIdentity == (bvid, cid) &&
+        _subtitleCues.isNotEmpty) {
+      return;
+    }
     setState(() => _subtitleCuesLoading = true);
-    final SubtitleCueLoadResult result = await _playerOverlayService
-        .loadSubtitleCues(
-          bvid: _activeVideo.bvid,
-          cid: _currentPart.cid,
-          trackId: track.id,
-        );
-    if (!mounted || requestToken != _subtitleRequestToken) {
+    SubtitleCueLoadResult result;
+    try {
+      result = await _playerOverlayService.loadSubtitleCues(
+        bvid: bvid,
+        cid: cid,
+        trackId: track.id,
+      );
+    } catch (_) {
+      result = const SubtitleCueLoadResult.unavailable();
+    }
+    if (!mounted ||
+        requestToken != _subtitleCuesRequestToken ||
+        bvid != _activeVideo.bvid ||
+        cid != _currentPart.cid) {
       return;
     }
     setState(() => _subtitleCuesLoading = false);
     if (result.status != SubtitleLoadStatus.available || result.cues.isEmpty) {
+      if (result.status == SubtitleLoadStatus.locked ||
+          result.status == SubtitleLoadStatus.loginRequired) {
+        _subtitleTrackResult = null;
+        _subtitleTrackIdentity = null;
+      }
       _showTransientSnackBar(result.message);
       return;
     }
     setState(() {
       _selectedSubtitleTrack = track;
-      _subtitleCues = result.cues;
+      _subtitleCueIdentity = (bvid, cid);
+      _subtitleCues = List<SubtitleCue>.of(result.cues)
+        ..sort(
+          (SubtitleCue left, SubtitleCue right) =>
+              left.from.compareTo(right.from),
+        );
     });
     _showAdjustmentFeedback('字幕：${track.label}');
     _scheduleSeekFeedbackClear();
@@ -561,9 +642,10 @@ mixin _PlayerOverlayCoordinator
 
   /// 关闭当前字幕显示并撤销晚到的字幕请求，不改变播放器进度或原生播放状态。
   void _disableSubtitles() {
-    _subtitleRequestToken += 1;
+    _subtitleCuesRequestToken++;
     setState(() {
       _selectedSubtitleTrack = null;
+      _subtitleCueIdentity = null;
       _subtitleCues = const <SubtitleCue>[];
       _subtitleCuesLoading = false;
     });
@@ -571,7 +653,9 @@ mixin _PlayerOverlayCoordinator
 
   /// 从已经排序的字幕列表二分查找当前播放位置对应的一条字幕，避免每次状态刷新遍历全表。
   SubtitleCue? _activeSubtitleCue() {
-    if (_selectedSubtitleTrack == null || _subtitleCues.isEmpty) {
+    if (_selectedSubtitleTrack == null ||
+        _subtitleCues.isEmpty ||
+        _subtitleCueIdentity != (_activeVideo.bvid, _currentPart.cid)) {
       return null;
     }
     final Duration position = _playbackSnapshot.position;
@@ -592,20 +676,17 @@ mixin _PlayerOverlayCoordinator
     return position < candidate.to ? candidate : null;
   }
 
-  /// 创建紧贴控制栏上方的字幕显示层，控制栏展开时自动上移而不遮挡进度条。
+  /// 创建字幕内容卡，由统一提示布局按播放栏实际高度避让。
   Widget _buildSubtitleOverlay() {
-    if (_subtitleCuesLoading && !_playbackSnapshot.isInPictureInPicture) {
-      return const Positioned(
-        left: 24,
-        right: 24,
-        bottom: 76,
-        child: IgnorePointer(
-          child: Center(
-            child: Text(
-              '正在加载字幕…',
-              key: Key('subtitle-loading'),
-              style: TextStyle(color: Colors.white70, fontSize: 13),
-            ),
+    if (_subtitleCuesLoading &&
+        _subtitleCues.isEmpty &&
+        !_playbackSnapshot.isInPictureInPicture) {
+      return const IgnorePointer(
+        child: Center(
+          child: Text(
+            '正在加载字幕…',
+            key: Key('subtitle-loading'),
+            style: TextStyle(color: Colors.white70, fontSize: 13),
           ),
         ),
       );
@@ -614,39 +695,31 @@ mixin _PlayerOverlayCoordinator
     if (cue == null || _playbackSnapshot.isInPictureInPicture) {
       return const SizedBox.shrink();
     }
-    return Positioned(
-      left: 24,
-      right: 24,
-      bottom: _showControls ? 76 : 28,
-      child: IgnorePointer(
-        child: Semantics(
-          liveRegion: true,
-          label: '字幕：${cue.content}',
-          child: Center(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.62),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 5,
-                ),
-                child: Text(
-                  cue.content,
-                  key: const Key('active-subtitle'),
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    height: 1.28,
-                    shadows: <Shadow>[
-                      Shadow(color: Colors.black, blurRadius: 3),
-                    ],
-                  ),
+    return IgnorePointer(
+      child: Semantics(
+        liveRegion: true,
+        label: '字幕：${cue.content}',
+        child: Center(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.62),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              child: Text(
+                cue.content,
+                key: const Key('active-subtitle'),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: _playbackPreferences.subtitleFontSize,
+                  height: 1.28,
+                  shadows: const <Shadow>[
+                    Shadow(color: Colors.black, blurRadius: 3),
+                  ],
                 ),
               ),
             ),

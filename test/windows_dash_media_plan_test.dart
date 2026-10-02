@@ -68,7 +68,7 @@ void main() {
     expect(Media(audioTrack.id).httpHeaders, sources.mediaHeaders);
     expect(
       Media(audioTrack.id).httpHeaders!['Cookie'],
-      'SESSDATA=test-session',
+      isNull,
     );
     expect(Media(audioTrack.id).httpHeaders!['Referer'], sources.referer);
   });

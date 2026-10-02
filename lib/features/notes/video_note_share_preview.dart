@@ -47,7 +47,7 @@ class _VideoNoteSharePreviewDialogState
   final GlobalKey _boundaryKey = GlobalKey();
   bool _sharing = false;
 
-  /// 将完整卡片捕获为 PNG 并唤起系统分享面板。
+  /// Copies the rendered note on Windows and uses the system share sheet elsewhere.
   Future<void> _share() async {
     if (_sharing) {
       return;
@@ -64,6 +64,10 @@ class _VideoNoteSharePreviewDialogState
         text: '来自焦点哔哩的时间点笔记：${widget.note.title}',
         sharePositionOrigin: origin,
       );
+      if (mounted && widget.shareService.copiesToClipboard) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('图片已复制到剪贴板'), duration: Duration(seconds: 3)));
+      }
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -127,8 +131,8 @@ class _VideoNoteSharePreviewDialogState
                           dimension: 18,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
-                      : const Icon(Icons.ios_share_rounded),
-                  label: Text(_sharing ? '正在生成长图…' : '分享图片'),
+                      : Icon(widget.shareService.copiesToClipboard ? Icons.copy : Icons.ios_share_rounded),
+                  label: Text(_sharing ? '正在生成长图…' : widget.shareService.copiesToClipboard ? '复制图片' : '分享图片'),
                 ),
               ),
             ],

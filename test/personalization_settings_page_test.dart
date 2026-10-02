@@ -33,6 +33,15 @@ class _SettingsUpdatePreferences extends AppUpdatePreferencesService {
   Future<void> saveEnabled(bool enabled) async {}
 }
 
+/// 模拟笔记标记开关保存失败，检查界面是否恢复原值。
+class _FailNoteMarkerPreferences extends PlaybackPreferencesService {
+  /// 拒绝写入用于覆盖设置页失败回滚分支。
+  @override
+  Future<void> saveShowNoteTimeMarkers(bool enabled) async {
+    throw StateError('测试写入失败');
+  }
+}
+
 /// 从设置首页进入指定分类，并等待二级页面完成重建。
 Future<void> _openSettingsLevel(WidgetTester tester, Key entryKey) async {
   await tester.tap(find.byKey(entryKey));
@@ -41,6 +50,38 @@ Future<void> _openSettingsLevel(WidgetTester tester, Key entryKey) async {
 
 /// 注册设置页专注勿扰开关、说明和系统权限入口测试。
 void main() {
+  /// 笔记开关可以搜索、即时保存；失败后保留原值。
+  for (final fail in [false, true]) {
+    testWidgets('笔记标记开关搜索并${fail ? '失败回滚' : '立即保存'}', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PersonalizationSettingsPage(
+            appPlatform: AppPlatform.windows,
+            preferencesService: fail
+                ? _FailNoteMarkerPreferences()
+                : const PlaybackPreferencesService(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('settings-search')),
+        '笔记时间标记',
+      );
+      await tester.pumpAndSettle();
+      final toggle = find.byKey(const Key('show-note-time-markers'));
+      expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      expect(tester.widget<SwitchListTile>(toggle).value, fail);
+      expect(
+        (await const PlaybackPreferencesService().load()).showNoteTimeMarkers,
+        fail,
+      );
+      if (fail) expect(find.text('设置保存失败，请重试。'), findsOneWidget);
+    });
+  }
+
   TestWidgetsFlutterBinding.ensureInitialized();
   const MethodChannel channel = MethodChannel(
     'com.focubili.app/test_settings_focus_notifications',
@@ -95,6 +136,7 @@ void main() {
     await _openSettingsLevel(tester, const Key('open-playback-focus-settings'));
     final Finder toggle = find.byKey(const Key('enable-focus-do-not-disturb'));
     expect(toggle, findsOneWidget);
+    await tester.ensureVisible(toggle);
     await tester.tap(toggle);
     await tester.pumpAndSettle();
     expect(find.text('允许控制勿扰模式'), findsOneWidget);
@@ -107,6 +149,31 @@ void main() {
       isTrue,
     );
     expect(find.textContaining('尚未授权'), findsOneWidget);
+  });
+
+  /// Shows the mobile reset description and persists the default-on gesture switch immediately.
+  testWidgets('移动端双指缩放开关默认开启并说明双击复位', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PersonalizationSettingsPage(
+          appPlatform: AppPlatform.android,
+          focusNotificationService: FocusNotificationService(channel: channel),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await _openSettingsLevel(tester, const Key('open-playback-focus-settings'));
+    final toggle = find.byKey(const Key('enable-two-finger-video-transform'));
+    await tester.ensureVisible(toggle);
+    expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
+    expect(find.text('全屏时双指拖动、缩放画面；双指双击恢复画面。'), findsOneWidget);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(
+      (await const PlaybackPreferencesService().load())
+          .enableTwoFingerVideoTransform,
+      isFalse,
+    );
   });
 
   /// 验证检测到新版本后，设置页“关于”入口直接展示第一条简略更新内容。
@@ -369,11 +436,86 @@ void main() {
     expect(toggle, findsOneWidget);
     expect(find.text('开始时提醒开启 Windows 系统专注'), findsOneWidget);
     expect(find.textContaining('自动切换'), findsNothing);
+    // 新设置增加卡片高度，按用户滚动到可见范围后的实际点击验证。
+    await tester.ensureVisible(toggle);
     await tester.tap(toggle);
     await tester.pumpAndSettle();
 
     expect(find.text('Windows 系统专注需要手动启动'), findsOneWidget);
     expect(find.textContaining('受限功能'), findsOneWidget);
     expect((await preferencesService.load()).enableDoNotDisturb, isTrue);
+  });
+
+  /// Searches actionable settings on the first level without retaining the removed filter UI.
+  testWidgets('设置首页搜索具体项目并直接修改倍速', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PersonalizationSettingsPage(
+          focusNotificationService: FocusNotificationService(channel: channel),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byKey(const Key('settings-search')), '倍速');
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('playback-speeds-preference')), findsOneWidget);
+    expect(find.byKey(const Key('playback-source-preference')), findsNothing);
+    expect(find.byKey(const Key('enable-play-count-filter')), findsNothing);
+    await tester.tap(find.byKey(const Key('playback-speeds-preference')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('custom-playback-speed-input')),
+      '4.5',
+    );
+    await tester.tap(find.byKey(const Key('add-playback-speed')));
+    await tester.pump();
+    await tester.tap(find.byTooltip('关闭'));
+    await tester.pumpAndSettle();
+    expect(
+      (await const PlaybackPreferencesService().load()).playbackSpeeds,
+      contains(4.5),
+    );
+    await tester.enterText(
+      find.byKey(const Key('settings-search')),
+      'not-a-setting',
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('没有匹配的设置项目'), findsOneWidget);
+  });
+
+  /// 新增项目可按标题、说明和别名搜索，平台隐藏项目不会留下空白结果。
+  testWidgets('设置自动搜索新增项目并过滤平台不可用项目', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PersonalizationSettingsPage(
+          appPlatform: AppPlatform.windows,
+          focusNotificationService: FocusNotificationService(channel: channel),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    for (final (query, key) in <(String, Key)>[
+      ('自定义双击触发区', const Key('double-tap-regions-preference')),
+      ('双击 区域', const Key('double-tap-regions-preference')),
+      ('分割线', const Key('double-tap-regions-preference')),
+      ('播放暂停动画', const Key('show-playback-action-animation')),
+      ('画面中央短暂', const Key('show-playback-action-animation')),
+      ('控制栏', const Key('player-control-size-preference')),
+      ('PLAYBACK BAR', const Key('player-control-size-preference')),
+      ('主题颜色', const Key('theme-color-setting')),
+    ]) {
+      await tester.enterText(find.byKey(const Key('settings-search')), query);
+      await tester.pumpAndSettle();
+      expect(find.byKey(key), findsOneWidget, reason: query);
+      expect(find.text('没有匹配的设置项目'), findsNothing, reason: query);
+    }
+    await tester.enterText(find.byKey(const Key('settings-search')), '双指缩放');
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('enable-two-finger-video-transform')),
+      findsNothing,
+    );
+    expect(find.text('没有匹配的设置项目'), findsOneWidget);
   });
 }

@@ -161,15 +161,46 @@ class BilibiliAuthService {
   final BilibiliCookieStore _cookieStore;
   final BilibiliAuthApi _api;
   final Duration _requestTimeout;
+  String? _checkedWebSession;
+  BilibiliSessionState? _checkedWebSessionState;
 
-  /// 读取当前 WebView 会话，并明确返回未登录、已过期、可用或暂时不可用。
-  Future<BilibiliSessionState> loadCurrentSession() async {
+  /// 正常页面每次都验证当前会话，保留现有账号读取接口。
+  Future<BilibiliSessionState> loadCurrentSession() =>
+      _loadCurrentSession(reuseUnchangedSession: false);
+
+  /// 登录页轮询复用未变化的已确认结果，手动检测和网络失败仍允许重试。
+  Future<BilibiliSessionState> loadCurrentSessionForWebLogin({
+    bool force = false,
+  }) => _loadCurrentSession(reuseUnchangedSession: !force);
+
+  /// 限时读取 Cookie，并按调用场景决定是否复用本次页面生命周期内的验证结果。
+  Future<BilibiliSessionState> _loadCurrentSession({
+    required bool reuseUnchangedSession,
+  }) async {
     try {
-      final String cookieHeader = await readCookieHeader();
+      final String cookieHeader = await readCookieHeader().timeout(
+        _requestTimeout,
+      );
       if (!_containsSessionCookie(cookieHeader)) {
+        _checkedWebSession = null;
+        _checkedWebSessionState = null;
         return const BilibiliSessionState.signedOut();
       }
-      return _requestCurrentSession(cookieHeader);
+      final token = _sessionCookieValue(cookieHeader);
+      if (reuseUnchangedSession &&
+          token == _checkedWebSession &&
+          _checkedWebSessionState != null) {
+        return _checkedWebSessionState!;
+      }
+      final state = await _requestCurrentSession(cookieHeader);
+      if (state.status == BilibiliSessionStatus.networkError) {
+        _checkedWebSession = null;
+        _checkedWebSessionState = null;
+      } else {
+        _checkedWebSession = token;
+        _checkedWebSessionState = state;
+      }
+      return state;
     } on PlatformException {
       return const BilibiliSessionState.networkError(
         message: '暂时无法读取本机登录状态，请稍后重试。',
@@ -266,11 +297,16 @@ class BilibiliAuthService {
 
   /// 判断 Cookie 请求头中是否包含非空的登录会话标识，不读取或输出具体值。
   bool _containsSessionCookie(String cookie) {
+    return _sessionCookieValue(cookie).isNotEmpty;
+  }
+
+  /// 仅在内存中比较会话标识，避免网页登录轮询反复请求相同的过期会话。
+  String _sessionCookieValue(String cookie) {
     final RegExpMatch? match = RegExp(
       r'(^|;\s*)SESSDATA=([^;]+)',
       caseSensitive: false,
     ).firstMatch(cookie);
-    return match?.group(2)?.trim().isNotEmpty ?? false;
+    return match?.group(2)?.trim() ?? '';
   }
 
   /// 把已经通过官方接口确认的 Cookie 保存到当前平台的安全单账号容器。

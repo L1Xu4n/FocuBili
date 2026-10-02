@@ -9,9 +9,27 @@ mixin _PlayerVideoCoordinator
         _PlayerFocusCoordinator,
         _PlayerGestureCoordinator,
         _PlayerNotesWorkspace,
+        _PlayerNoteFlagsCoordinator,
         _PlayerViewportCoordinator,
         _PlayerOverlayCoordinator,
         _PlayerControlsCoordinator {
+  int _partSwitchGeneration = 0;
+
+  /// 所有切视频、切分 P 与剧情跳转共用代次，新操作撤销仍在等待的旧操作。
+  int _beginVideoNavigation() {
+    final generation = ++_partSwitchGeneration;
+    if (mounted && _interactiveChoiceOpening) {
+      setState(() => _interactiveChoiceOpening = false);
+    }
+    return generation;
+  }
+
+  /// 在每个异步边界后同时核对操作代次和原视频，拒绝将旧 CID 写入新 BV。
+  bool _isCurrentVideoNavigation(int generation, {String? bvid}) =>
+      mounted &&
+      generation == _partSwitchGeneration &&
+      (bvid == null || bvid == _activeVideo.bvid);
+
   /// 更新当前正在展示的视频资料。
   set _activeVideo(VideoPreview value);
 
@@ -23,6 +41,10 @@ mixin _PlayerVideoCoordinator
 
   /// 在视频状态更新完成后启动互动状态读取。
   void _startVideoInteractionStateLoad();
+
+  /// Reloads local offline membership after changing the current CID.
+  @override
+  void _refreshOfflinePartState();
 
   /// 响应独立增强控制器变化，刷新章节界面，并处理已完播或即将到结尾的互动选择。
   void _handlePlayerEnhancementChanged() {
@@ -115,13 +137,32 @@ mixin _PlayerVideoCoordinator
   /// 保存旧分P后打开新分P，由播放后端按目标 CID 恢复该分P自己的进度。
   @override
   Future<void> _changePart(VideoPart part) async {
+    final video = _activeVideo;
+    if (!video.parts.any((candidate) => candidate.cid == part.cid) &&
+        !(video.parts.isEmpty && video.cid == part.cid)) {
+      _showPlayerNotice('视频已变化，请重新选择当前视频的分 P。');
+      return;
+    }
+    final generation = _beginVideoNavigation();
     if (part.cid == _currentPart.cid) {
       if (_partSelectorExpanded) {
         _closePartSelector();
       }
       return;
     }
+    try {
+      await _checkPlaybackPart(video, part);
+    } catch (_) {
+      if (_isCurrentVideoNavigation(generation, bvid: video.bvid)) {
+        _showPlayerNotice('该分 P 没有可用的本地缓存，仍保留当前分 P。');
+      }
+      return;
+    }
+    if (!_isCurrentVideoNavigation(generation, bvid: video.bvid)) return;
     await _deactivateFocusPlaybackForCurrentPart();
+    if (!_isCurrentVideoNavigation(generation, bvid: video.bvid)) return;
+    await _playbackService.pause();
+    if (!_isCurrentVideoNavigation(generation, bvid: video.bvid)) return;
     _flushCurrentWatchHistoryProgress();
     _flushCurrentLearningListProgress();
     _clearSubtitlesForPart();
@@ -136,22 +177,24 @@ mixin _PlayerVideoCoordinator
       _resetPlaybackProgressTracking();
       _interactivePromptVisible = false;
     });
+    _refreshPlayerNoteIdentity();
     _shownRestoredCid = null;
     _openingResumePlan = PlaybackResumePlan.direct(part: part);
+    _refreshOfflinePartState();
     _resumeNoticeTimer?.cancel();
     _resetFocusPlaybackIdentity();
     unawaited(_loadCurrentLearningListEntry());
     unawaited(_loadPlayerEnhancements());
     try {
-      await _playbackService.openVideo(
-        _activeVideo,
-        part: part,
-        quality: _currentQuality,
-      );
+      await _openPlaybackSource(video, part: part, quality: _currentQuality);
     } on PlatformException catch (error) {
-      _showPlaybackError('无法切换分P：${error.message ?? error.code}');
+      if (_isCurrentVideoNavigation(generation, bvid: video.bvid)) {
+        _showPlaybackError('无法切换分P：${error.message ?? error.code}');
+      }
     } catch (error) {
-      _showPlaybackError('无法切换分P：$error');
+      if (_isCurrentVideoNavigation(generation, bvid: video.bvid)) {
+        _showPlaybackError('无法切换分P：$error');
+      }
     }
   }
 
@@ -160,12 +203,15 @@ mixin _PlayerVideoCoordinator
     if (_interactiveChoiceOpening) {
       return;
     }
+    final video = _activeVideo;
+    final generation = _beginVideoNavigation();
     setState(() {
       _interactiveChoiceOpening = true;
       _interactivePromptVisible = false;
       _completionPromptVisible = false;
     });
     await _deactivateFocusPlaybackForCurrentPart();
+    if (!_isCurrentVideoNavigation(generation, bvid: video.bvid)) return;
     _flushCurrentWatchHistoryProgress();
     _flushCurrentLearningListProgress();
     _clearSubtitlesForPart();
@@ -184,23 +230,29 @@ mixin _PlayerVideoCoordinator
       _resumeNotice = null;
       _resetPlaybackProgressTracking();
     });
+    _refreshPlayerNoteIdentity();
     _shownRestoredCid = null;
     _openingResumePlan = PlaybackResumePlan.direct(part: branchPart);
+    _refreshOfflinePartState();
     unawaited(_loadCurrentLearningListEntry());
     unawaited(_playerEnhancementController.selectChoice(choice));
     try {
-      await _playbackService.openVideo(
-        _activeVideo,
+      await _openPlaybackSource(
+        video,
         part: branchPart,
         quality: _currentQuality,
         initialPosition: Duration.zero,
       );
     } on PlatformException catch (error) {
-      _showPlaybackError('无法打开互动剧情：${error.message ?? error.code}');
+      if (_isCurrentVideoNavigation(generation, bvid: video.bvid)) {
+        _showPlaybackError('无法打开互动剧情：${error.message ?? error.code}');
+      }
     } catch (error) {
-      _showPlaybackError('无法打开互动剧情：$error');
+      if (_isCurrentVideoNavigation(generation, bvid: video.bvid)) {
+        _showPlaybackError('无法打开互动剧情：$error');
+      }
     } finally {
-      if (mounted) {
+      if (_isCurrentVideoNavigation(generation, bvid: video.bvid)) {
         setState(() => _interactiveChoiceOpening = false);
       }
     }
@@ -268,6 +320,7 @@ mixin _PlayerVideoCoordinator
   }
 
   /// 当下层播放器夺走唯一原生通道时，重新创建纹理并打开当前视频，恢复原页面的播放所有权。
+  @override
   Future<void> _restorePlaybackAfterNestedPlayer({
     required bool shouldResume,
   }) async {
@@ -275,6 +328,10 @@ mixin _PlayerVideoCoordinator
     if (service is! NativePlaybackService || service.ownsPlatformChannel) {
       return;
     }
+    // 初始化会推送空状态，必须先保存原视频位置、清晰度和倍速。
+    final position = _playbackSnapshot.position;
+    final quality = _currentQuality;
+    final speed = _playbackSpeed;
     try {
       final int? textureId = await service.initialize();
       if (!mounted) {
@@ -290,18 +347,16 @@ mixin _PlayerVideoCoordinator
       });
       _openingResumePlan = PlaybackResumePlan.direct(
         part: _currentPart,
-        position: _playbackSnapshot.position,
+        position: position,
         positionSource: PlaybackResumePositionSource.internalRecovery,
       );
-      await service.openVideo(
+      await _openPlaybackSource(
         _activeVideo,
         part: _currentPart,
-        quality: _currentQuality,
+        quality: quality,
         initialPosition: _openingResumePlan!.position,
       );
-      if (_playbackSpeed != 1) {
-        await service.setPlaybackSpeed(_playbackSpeed);
-      }
+      await service.setPlaybackSpeed(speed);
       if (!shouldResume) {
         await service.pause();
       }
@@ -365,12 +420,16 @@ mixin _PlayerVideoCoordinator
     if (_openingCollectionBvid != null || entry.bvid == _activeVideo.bvid) {
       return;
     }
+    final generation = _beginVideoNavigation();
     setState(() => _openingCollectionBvid = entry.bvid);
     try {
       final VideoPreview video = await _bilibiliService.lookupVideo(entry.bvid);
+      if (!_isCurrentVideoNavigation(generation)) return;
       final VideoPreview previousVideo = _activeVideo;
       await _switchActiveVideo(video);
-      _collectionVideoBackStack.add(previousVideo);
+      if (mounted && _activeVideo.bvid == video.bvid) {
+        _collectionVideoBackStack.add(previousVideo);
+      }
     } catch (error) {
       if (mounted) {
         _showPlayerNotice('无法打开合集视频：$error');
@@ -388,14 +447,20 @@ mixin _PlayerVideoCoordinator
     VideoPreview video, {
     LearningListEntry? learningEntry,
   }) async {
+    final generation = _beginVideoNavigation();
     await _deactivateFocusPlaybackForCurrentPart();
+    if (!_isCurrentVideoNavigation(generation)) return;
     _notesPanelAnimationTimer?.cancel();
     _flushVideoNoteAutoSave();
+    await _noteSaveCompletion?.future;
+    if (!_isCurrentVideoNavigation(generation)) return;
     _flushCurrentWatchHistoryProgress();
     _flushCurrentLearningListProgress();
     await _playbackService.pause();
+    if (!_isCurrentVideoNavigation(generation)) return;
     final SavedPlaybackState? savedState = await _playbackService
         .loadSavedPlaybackState(video.bvid);
+    if (!_isCurrentVideoNavigation(generation)) return;
     final LearningListEntry? requestedLearningEntry =
         learningEntry != null && learningEntry.bvid == video.bvid
         ? learningEntry
@@ -415,6 +480,7 @@ mixin _PlayerVideoCoordinator
     final WatchHistoryEntry? historyEntry = requestedLearningEntry == null
         ? await _loadWatchHistoryResumeEntry(video.bvid)
         : null;
+    if (!_isCurrentVideoNavigation(generation)) return;
     final PlaybackResumePlan resolvedPlan = PlaybackResumePlan.resolve(
       video: video,
       requestedPartCid: requestedPartCid,
@@ -459,6 +525,7 @@ mixin _PlayerVideoCoordinator
       _noteAutoSavePending = false;
       _currentVideoNotes = const <VideoNote>[];
       _editingVideoNote = null;
+      _noteDraftRevision++;
       _noteTitleController.clear();
       _noteBodyController.clear();
       _notePartCid = targetPart.cid;
@@ -472,19 +539,22 @@ mixin _PlayerVideoCoordinator
       _interactiveChoiceOpening = false;
       _resetVideoInteractionState();
     });
+    _refreshPlayerNoteIdentity();
     _shownRestoredCid = null;
     _openingResumePlan = resumePlan;
+    _refreshOfflinePartState();
     _resumeNoticeTimer?.cancel();
     _resetFocusPlaybackIdentity();
     unawaited(_loadCurrentLearningListEntry());
     _startVideoInteractionStateLoad();
     unawaited(_loadPlayerEnhancements());
-    await _playbackService.openVideo(
+    await _openPlaybackSource(
       video,
       part: targetPart,
       quality: _currentQuality,
       initialPosition: resumePlan.position,
     );
+    if (!_isCurrentVideoNavigation(generation, bvid: video.bvid)) return;
     if (resumePlan.shouldShowPartNotice && video.parts.length > 1) {
       _showPartRestoreSnackBar(targetPart.pageNumber);
     }

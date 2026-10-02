@@ -35,14 +35,14 @@ class _ProblemDiagnosticsPageState extends State<ProblemDiagnosticsPage> {
     unawaited(_loadSnapshot());
   }
 
-  /// 重新读取诊断快照；失败时保留已显示内容并给出明确提示。
+  /// 进入或刷新页面时自动读取完整诊断，包括 Android WebView 信息。
   Future<void> _loadSnapshot() async {
     if (mounted) {
       setState(() => _loading = true);
     }
     try {
       final ProblemDiagnosticsSnapshot snapshot = await _diagnosticsService
-          .loadSnapshot();
+          .loadSnapshot(refreshWebViewInfo: true);
       if (mounted) {
         setState(() {
           _snapshot = snapshot;
@@ -55,6 +55,36 @@ class _ProblemDiagnosticsPageState extends State<ProblemDiagnosticsPage> {
         _showMessage('暂时无法读取诊断信息，请稍后重试。');
       }
     }
+  }
+
+  /// 展示自动读取的内核状态、包名、版本和默认渲染方式。
+  Widget _buildWebViewCard(ProblemDiagnosticsSnapshot snapshot) {
+    final info = snapshot.webViewInfo;
+    return Card(
+      key: const Key('webview-diagnostics-card'),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text('WebView 信息', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            if (info == null)
+              const Text('当前设备未提供 WebView 信息。')
+            else ...<Widget>[
+              _buildInfoRow('内核状态', info.statusLabel),
+              _buildInfoRow(
+                '内核包名',
+                info.packageName.isEmpty ? '未知' : info.packageName,
+              ),
+              _buildInfoRow('内核版本', info.version.isEmpty ? '未知' : info.version),
+              _buildInfoRow('默认渲染', info.compositionLabel),
+              if (info.message.isNotEmpty) Text(info.message),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 
   /// 生成脱敏诊断文本并复制到系统剪贴板，成功后不自动发送给任何第三方。
@@ -356,27 +386,25 @@ class _ProblemDiagnosticsPageState extends State<ProblemDiagnosticsPage> {
     );
   }
 
-  /// 创建复制、清空和隐私说明区域，让用户知道数据只在明确点击复制后才会离开应用。
+  /// 创建页面顶部复制入口，只复制本机诊断内容，保留加载/保存互斥状态。
+  Widget _buildCopyButton() => FilledButton.icon(
+    key: const Key('copy-problem-diagnostics'),
+    onPressed: _loading || _copying || _clearing ? null : _copyDiagnostics,
+    icon: _copying
+        ? const SizedBox.square(
+            dimension: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          )
+        : const Icon(Icons.content_copy_rounded),
+    label: Text(_copying ? '正在复制…' : '复制诊断信息'),
+  );
+
+  /// 创建底部清空和隐私说明区域，保留已有记录管理入口。
   Widget _buildActions() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         const SizedBox(height: 14),
-        FilledButton.icon(
-          key: const Key('copy-problem-diagnostics'),
-          // 复制按钮函数只写入系统剪贴板，不会联网发送诊断内容。
-          onPressed: _loading || _copying || _clearing
-              ? null
-              : _copyDiagnostics,
-          icon: _copying
-              ? const SizedBox.square(
-                  dimension: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.content_copy_rounded),
-          label: Text(_copying ? '正在复制…' : '复制诊断信息'),
-        ),
-        const SizedBox(height: 10),
         OutlinedButton.icon(
           key: const Key('clear-problem-diagnostics'),
           // 清空按钮函数只删除本机诊断记录，不会影响账号、笔记、观看记录或学习清单。
@@ -403,7 +431,7 @@ class _ProblemDiagnosticsPageState extends State<ProblemDiagnosticsPage> {
     );
   }
 
-  /// 构建诊断页面；加载期间显示进度，完成后提供下拉刷新以重新读取当前环境。
+  /// 构建诊断页面，复制入口放在正文最上方，环境和错误记录在其后。
   @override
   Widget build(BuildContext context) {
     final ProblemDiagnosticsSnapshot? snapshot = _snapshot;
@@ -433,8 +461,13 @@ class _ProblemDiagnosticsPageState extends State<ProblemDiagnosticsPage> {
                   physics: const AlwaysScrollableScrollPhysics(),
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
                   children: <Widget>[
+                    _buildCopyButton(),
+                    const SizedBox(height: 12),
                     if (snapshot != null) ...<Widget>[
                       _buildEnvironmentCard(snapshot),
+                      if (snapshot.deviceInfo.platformName.toLowerCase() ==
+                          'android')
+                        _buildWebViewCard(snapshot),
                       const SizedBox(height: 8),
                       _buildReminderDiagnosticsCard(
                         snapshot.reminderDiagnostics,

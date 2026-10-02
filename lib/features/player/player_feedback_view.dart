@@ -41,8 +41,9 @@ extension _PlayerFeedbackView on _PlayerPageState {
     );
   }
 
-  /// 创建横向拖动中央预览卡；无截图时仍显示准确目标时间。
+  /// 创建由统一提示区排列的拖动卡；无截图时仍显示准确目标时间。
   Widget _buildSeekFeedback() {
+    if (_seekFeedback == null) return const SizedBox.shrink();
     final Duration target = Duration(
       milliseconds:
           (_displayDuration.inMilliseconds * _horizontalScrubTargetProgress)
@@ -91,7 +92,7 @@ extension _PlayerFeedbackView on _PlayerPageState {
     );
   }
 
-  /// 创建仅属于学习清单任务的完播选择层，并随底部播放栏上浮以避免内容重叠。
+  /// 创建学习清单完播卡，位置由统一提示区测量和排列。
   Widget _buildPlaybackCompletionPrompt() {
     if (!_completionPromptVisible || _playbackSnapshot.isInPictureInPicture) {
       return const SizedBox.shrink();
@@ -100,27 +101,15 @@ extension _PlayerFeedbackView on _PlayerPageState {
     final bool markingCompleted = _addingLearningBvid == _activeVideo.bvid;
     final bool markedCompleted =
         currentEntry?.status == LearningListStatus.completed;
-    final bool controlsVisible = _showControls && !_controlsLocked;
-    final double fullscreenSafeBottom = _fullscreen
-        ? MediaQuery.paddingOf(context).bottom
-        : 0;
-    return AnimatedPositioned(
-      duration: const Duration(milliseconds: 180),
-      curve: Curves.easeOutCubic,
-      left: 16,
-      right: 16,
-      bottom: (controlsVisible ? 78 : 14) + fullscreenSafeBottom,
-      child: Center(
-        child: PlaybackCompletionOverlay(
-          markedCompleted: markedCompleted,
-          learningFinished: _completionLearningFinished,
-          processing: markingCompleted,
-          // 完成回调只更新当前学习任务，不改变播放器分P。
-          onMarkCompleted: () => unawaited(_markCurrentLearningCompleted()),
-          // 继续学习回调只在用户明确点击后按学习清单顺序打开下一条任务。
-          onContinueLearning: () =>
-              unawaited(_continueLearningAfterCompletion()),
-        ),
+    return Center(
+      child: PlaybackCompletionOverlay(
+        markedCompleted: markedCompleted,
+        learningFinished: _completionLearningFinished,
+        processing: markingCompleted,
+        // 完成回调只更新当前学习任务，不改变播放器分P。
+        onMarkCompleted: () => unawaited(_markCurrentLearningCompleted()),
+        // 继续学习回调只在用户明确点击后按学习清单顺序打开下一条任务。
+        onContinueLearning: () => unawaited(_continueLearningAfterCompletion()),
       ),
     );
   }
@@ -130,17 +119,14 @@ extension _PlayerFeedbackView on _PlayerPageState {
     if (!_interactivePromptVisible || _playbackSnapshot.isInPictureInPicture) {
       return const SizedBox.shrink();
     }
-    final bool controlsVisible = _showControls && !_controlsLocked;
-    final double fullscreenSafeBottom = _fullscreen
-        ? MediaQuery.paddingOf(context).bottom
-        : 0;
     return InteractiveVideoChoiceOverlay(
       node: _playerEnhancementController.interactiveNode,
       loading:
           _playerEnhancementController.interactiveNodeLoading ||
           _interactiveChoiceOpening,
       errorMessage: _playerEnhancementController.interactiveNodeError,
-      bottomInset: (controlsVisible ? 82 : 14) + fullscreenSafeBottom,
+      bottomInset: 0,
+      embedded: true,
       // 剧情按钮函数只播放用户明确点击的目标分支。
       onChoiceSelected: (InteractiveVideoChoice choice) {
         unawaited(_playInteractiveChoice(choice));
@@ -148,6 +134,109 @@ extension _PlayerFeedbackView on _PlayerPageState {
       // 重试函数重新请求当前节点，不触发播放和跳转。
       onRetry: () {
         unawaited(_playerEnhancementController.retryInteractiveNode());
+      },
+    );
+  }
+
+  /// 让上下栏分别淡出并透传隐藏后的触摸，不影响提示可见性。
+  Widget _buildFadingControls(Widget child) {
+    final visible =
+        _showControls &&
+        !_controlsLocked &&
+        !_playbackSnapshot.isInPictureInPicture;
+    return IgnorePointer(
+      ignoring: !visible,
+      child: AnimatedOpacity(
+        opacity: visible ? 1 : 0,
+        duration: const Duration(milliseconds: 180),
+        child: child,
+      ),
+    );
+  }
+
+  /// 将短消息、续播、字幕和操作卡片排成一列，并协调同一操作的动画。
+  Widget _buildPlayerFeedback() {
+    if (_playbackSnapshot.isInPictureInPicture) return const SizedBox.shrink();
+    return ListenableBuilder(
+      listenable: _playerNotices,
+      builder: (context, _) {
+        final subtitle = _activeSubtitleCue();
+        final subtitleVisible =
+            subtitle != null || (_subtitleCuesLoading && _subtitleCues.isEmpty);
+        final phase = _playbackSnapshot.phase;
+        final playbackHintVisible =
+            phase == PlaybackPhase.error || phase == PlaybackPhase.loading;
+        final actionVisible =
+            _completionPromptVisible ||
+            _interactivePromptVisible ||
+            phase == PlaybackPhase.error ||
+            _playerNotices.entries.any((entry) => entry.onAction != null);
+        final gestureVisible =
+            _seekFeedback != null ||
+            _doubleTapSeekSeconds != 0 ||
+            _playbackActionPlaying != null;
+        return PlayerFeedbackStack(
+          interactive: actionVisible,
+          alignment:
+              _completionPromptVisible ||
+                  _interactivePromptVisible ||
+                  subtitleVisible
+              ? Alignment.bottomCenter
+              : gestureVisible ||
+                    playbackHintVisible ||
+                    _playbackSnapshot.audioOnly
+              ? Alignment.center
+              : Alignment.topCenter,
+          children: [
+            if (_temporarySpeedActive)
+              const PlayerNoticeCard(
+                key: Key('temporary-triple-speed'),
+                message: '三倍速中>>',
+              ),
+            for (final entry in _playerNotices.entries)
+              PlayerNoticeCard(
+                key: entry.message == _playerNotices.messages.first
+                    ? const Key('player-floating-notice')
+                    : ValueKey('player-notice-${entry.message}'),
+                message: entry.message,
+                actionLabel: entry.actionLabel,
+                onAction: entry.onAction,
+              ),
+            if (_resumeNotice != null)
+              PlayerNoticeCard(
+                key: const Key('player-resume-notice'),
+                message: _resumeNotice!,
+              ),
+            // 直接拖动优先于尚未消失的旧动画，避免同一手势重复反馈。
+            if (_seekFeedback != null)
+              _buildSeekFeedback()
+            else if (_doubleTapSeekSeconds != 0)
+              PlayerSeekFeedback(
+                key: ValueKey('seek-$_doubleTapFeedbackSequence'),
+                seconds: _doubleTapSeekSeconds,
+                compact: true,
+              )
+            else if (_playbackActionPlaying != null)
+              SizedBox(
+                height: 84,
+                child: FittedBox(
+                  child: SizedBox.square(
+                    dimension: 120,
+                    child: PlayerActionFeedback(
+                      key: ValueKey('playback-action-$_playbackActionSequence'),
+                      playing: _playbackActionPlaying!,
+                    ),
+                  ),
+                ),
+              ),
+            if (playbackHintVisible) _buildPlaybackHint(),
+            if (_playbackSnapshot.audioOnly && !playbackHintVisible)
+              _buildListeningSurface(),
+            if (_completionPromptVisible) _buildPlaybackCompletionPrompt(),
+            if (_interactivePromptVisible) _buildInteractiveVideoPrompt(),
+            if (subtitleVisible) _buildSubtitleOverlay(),
+          ],
+        );
       },
     );
   }

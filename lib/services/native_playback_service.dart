@@ -1,8 +1,12 @@
 import 'dart:async';
 
+import 'app_behavior_preferences_service.dart';
+
 import 'package:flutter/services.dart';
 
 import '../models/video_preview.dart';
+import 'local_file_playback_service.dart';
+import 'listening_playback_service.dart';
 
 /// 表示 Android 原生播放器当前所处的阶段，供页面决定显示加载、播放或错误提示。
 enum PlaybackPhase { idle, loading, ready, ended, error }
@@ -33,11 +37,13 @@ class SavedPlaybackState {
     required this.cid,
     required this.pageNumber,
     required this.position,
+    this.savedAt,
   });
 
   final int cid;
   final int pageNumber;
   final Duration position;
+  final DateTime? savedAt;
 
   /// 从 Android 本地存储结果读取分P和进度，非法编号会返回空值。
   factory SavedPlaybackState.fromPlatformMap(Map<Object?, Object?> values) {
@@ -47,6 +53,11 @@ class SavedPlaybackState {
       position: Duration(
         milliseconds: (values['positionMs'] as num?)?.toInt() ?? 0,
       ),
+      savedAt: (values['savedAtMs'] as num? ?? 0) > 0
+          ? DateTime.fromMillisecondsSinceEpoch(
+              (values['savedAtMs'] as num).toInt(),
+            )
+          : null,
     );
   }
 }
@@ -78,6 +89,8 @@ class PlaybackSnapshot {
   const PlaybackSnapshot({
     this.phase = PlaybackPhase.idle,
     this.isPlaying = false,
+    this.audioOnly = false,
+    this.sleepTimerRemaining = Duration.zero,
     this.position = Duration.zero,
     this.duration = Duration.zero,
     this.speed = 1,
@@ -92,6 +105,8 @@ class PlaybackSnapshot {
 
   final PlaybackPhase phase;
   final bool isPlaying;
+  final bool audioOnly;
+  final Duration sleepTimerRemaining;
   final Duration position;
   final Duration duration;
   final double speed;
@@ -126,6 +141,10 @@ class PlaybackSnapshot {
         orElse: () => PlaybackPhase.idle,
       ),
       isPlaying: values['isPlaying'] as bool? ?? false,
+      audioOnly: values['audioOnly'] == true,
+      sleepTimerRemaining: Duration(
+        milliseconds: (values['sleepTimerRemainingMs'] as num?)?.toInt() ?? 0,
+      ),
       position: Duration(
         milliseconds: (values['positionMs'] as num?)?.toInt() ?? 0,
       ),
@@ -149,6 +168,8 @@ class PlaybackSnapshot {
   PlaybackSnapshot copyWith({
     PlaybackPhase? phase,
     bool? isPlaying,
+    bool? audioOnly,
+    Duration? sleepTimerRemaining,
     Duration? position,
     Duration? duration,
     double? speed,
@@ -164,6 +185,8 @@ class PlaybackSnapshot {
     return PlaybackSnapshot(
       phase: phase ?? this.phase,
       isPlaying: isPlaying ?? this.isPlaying,
+      audioOnly: audioOnly ?? this.audioOnly,
+      sleepTimerRemaining: sleepTimerRemaining ?? this.sleepTimerRemaining,
       position: position ?? this.position,
       duration: duration ?? this.duration,
       speed: speed ?? this.speed,
@@ -235,9 +258,15 @@ abstract interface class PlaybackService {
 }
 
 /// 通过 Flutter MethodChannel 调用 Android Media3 原生播放器。
-class NativePlaybackService implements PlaybackService {
+class NativePlaybackService
+    implements
+        PlaybackService,
+        LocalTrackPlaybackService,
+        ListeningPlaybackService {
   /// 注册 Android 到 Flutter 的状态回调，让此页面能接收原生播放状态。
-  NativePlaybackService() {
+  NativePlaybackService({AppBehaviorPreferencesService? behaviorPreferences})
+    : _behaviorPreferences =
+          behaviorPreferences ?? AppBehaviorPreferencesService() {
     _claimPlatformChannel();
   }
 
@@ -253,6 +282,19 @@ class NativePlaybackService implements PlaybackService {
   final StreamController<PlaybackSnapshot> _stateController =
       StreamController<PlaybackSnapshot>.broadcast();
   bool _disposed = false;
+  final AppBehaviorPreferencesService _behaviorPreferences;
+
+  /// 让 Android 原生层替换媒体源，纯音频模式不提交视频轨道给播放器。
+  @override
+  Future<void> setAudioOnly(bool enabled) =>
+      _channel.invokeMethod<void>('setAudioOnly', {'enabled': enabled});
+
+  /// 将倒计时交给原生线程执行，锁屏后依然按时暂停。
+  @override
+  Future<void> setSleepTimer(Duration? duration) => _channel.invokeMethod<void>(
+    'setSleepTimer',
+    {'durationMs': duration?.inMilliseconds ?? 0},
+  );
 
   /// 判断当前实例是否仍拥有唯一原生播放器的回调通道，供被下层播放器覆盖的页面决定是否重建。
   bool get ownsPlatformChannel => identical(_activeService, this);
@@ -316,6 +358,84 @@ class NativePlaybackService implements PlaybackService {
       'partTitle': targetPart.title,
       'ownerName': video.ownerName,
       'initialPositionMs': initialPosition?.inMilliseconds,
+      'wbiEnabled': await _behaviorPreferences.loadWbiSigningEnabled(),
+    });
+  }
+
+  /// 将完整本地音视频文件交给 Android 在同一时间轴播放。
+  @override
+  Future<void> openLocalTracks({
+    required String videoFilePath,
+    required String audioFilePath,
+    String title = '',
+    Duration? initialPosition,
+    VideoPreview? video,
+    VideoPart? part,
+  }) => _openLocalMedia(
+    filePath: videoFilePath,
+    audioFilePath: audioFilePath,
+    title: title,
+    initialPosition: initialPosition,
+    video: video,
+    part: part,
+  );
+
+  /// 保持原有单文件接口，旧缓存及既有调用方无需新增参数。
+  @override
+  Future<void> openLocalFile({
+    required String filePath,
+    String title = '',
+    Duration? initialPosition,
+    VideoPreview? video,
+    VideoPart? part,
+  }) => _openLocalMedia(
+    filePath: filePath,
+    title: title,
+    initialPosition: initialPosition,
+    video: video,
+    part: part,
+  );
+
+  /// 直接播放本机文件，可附带独立音频，不请求任何网络播放数据。
+  Future<void> _openLocalMedia({
+    required String filePath,
+    String? audioFilePath,
+    String title = '',
+    Duration? initialPosition,
+    VideoPreview? video,
+    VideoPart? part,
+  }) async {
+    final String normalizedPath = filePath.trim();
+    if (normalizedPath.isEmpty) {
+      throw ArgumentError.value(filePath, 'filePath', '需要有效的本地文件路径。');
+    }
+    if (audioFilePath != null && audioFilePath.trim().isEmpty) {
+      throw ArgumentError('需要有效的本地音频文件路径。');
+    }
+    if (initialPosition?.isNegative ?? false) {
+      throw ArgumentError.value(
+        initialPosition,
+        'initialPosition',
+        '初始位置不能为负数。',
+      );
+    }
+    final target = part ?? video?.initialPart;
+    if (video != null &&
+        (!_bvidPattern.hasMatch(video.bvid.trim()) ||
+            target == null ||
+            target.cid <= 0)) {
+      throw ArgumentError('无效的本地视频身份。');
+    }
+    await _invokeVoid('openLocal', <String, Object?>{
+      'filePath': normalizedPath,
+      if (audioFilePath != null) 'audioFilePath': audioFilePath.trim(),
+      'title': title,
+      'initialPositionMs': initialPosition?.inMilliseconds,
+      'bvid': video?.bvid.trim(),
+      'cid': target?.cid,
+      'pageNumber': target?.pageNumber,
+      'partTitle': target?.title,
+      'ownerName': video?.ownerName,
     });
   }
 
@@ -343,22 +463,25 @@ class NativePlaybackService implements PlaybackService {
     });
   }
 
-  /// 检查 0.5 到 3 倍的速度范围后，把新的播放速度发送给 Android Media3。
+  /// 检查 0.5 到 5 倍的速度范围后，把新的播放速度发送给 Android Media3。
   @override
   Future<void> setPlaybackSpeed(double speed) {
-    if (!speed.isFinite || speed < 0.5 || speed > 3) {
-      throw ArgumentError.value(speed, 'speed', '倍速必须在 0.5 到 3.0 之间。');
+    if (!speed.isFinite || speed < 0.5 || speed > 5) {
+      throw ArgumentError.value(speed, 'speed', '倍速必须在 0.5 到 5.0 之间。');
     }
     return _invokeVoid('setSpeed', <String, Object?>{'speed': speed});
   }
 
   /// 检查清晰度编号后，请求 Android 在当前进度切换播放源。
   @override
-  Future<void> selectQuality(int quality) {
+  Future<void> selectQuality(int quality) async {
     if (quality <= 0) {
       throw ArgumentError.value(quality, 'quality', '需要有效的清晰度编号。');
     }
-    return _invokeVoid('selectQuality', <String, Object?>{'quality': quality});
+    await _invokeVoid('selectQuality', <String, Object?>{
+      'quality': quality,
+      'wbiEnabled': await _behaviorPreferences.loadWbiSigningEnabled(),
+    });
   }
 
   /// 从 Android 本地偏好设置读取最后分P，以及原生层已校验的可恢复位置。
@@ -458,7 +581,7 @@ class NativePlaybackService implements PlaybackService {
     _stateController.add(PlaybackSnapshot.fromPlatformMap(values));
   }
 
-  /// 通知 Android 释放当前视频资源，并关闭本页使用的状态流。
+  /// 只在当前服务仍拥有原生通道时释放播放器，迟到的旧页面销毁不影响新所有者。
   @override
   Future<void> dispose() async {
     if (_disposed) {
@@ -466,7 +589,9 @@ class NativePlaybackService implements PlaybackService {
     }
     _disposed = true;
     try {
-      await _channel.invokeMethod<void>('dispose');
+      if (ownsPlatformChannel) {
+        await _channel.invokeMethod<void>('dispose');
+      }
     } on MissingPluginException {
       // 测试或非 Android 平台没有原生实现时，不影响页面正常销毁。
     } finally {

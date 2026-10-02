@@ -23,6 +23,130 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
   int _preferredOpeningQuality = PreferredPlaybackQuality.p720.id;
   bool _defaultQualityPending = true;
   PlaybackResumePlan? _openingResumePlan;
+  bool _playingOffline = false;
+  static const _localCacheQuality = -1;
+  String? _sourceChoicePart;
+  bool? _sourceChoiceLocal;
+  bool _changingPlaybackSource = false;
+  int? _offlineQuality;
+  int _sourceGeneration = 0;
+  bool _externalNavigationSuspended = false;
+
+  /// 由手势协调器为真实播放暂停切换提供短暂动画。
+  void _showPlaybackActionFeedback(bool playing);
+
+  /// Provided by the video coordinator to reclaim Android's shared native channel.
+  Future<void> _restorePlaybackAfterNestedPlayer({required bool shouldResume});
+
+  /// Invalidates pending source selection and awaits a pause before external routing.
+  Future<void> _pauseForExternalNavigation() async {
+    _externalNavigationSuspended = true;
+    _sourceGeneration++;
+    final service = _playbackService;
+    if (service is! NativePlaybackService || service.ownsPlatformChannel) {
+      await service.pause();
+    }
+  }
+
+  /// Reclaims a replaced native surface while leaving the old video paused.
+  Future<void> _restoreFromExternalNavigation() async {
+    if (!mounted) return;
+    _externalNavigationSuspended = false;
+    await _restorePlaybackAfterNestedPlayer(shouldResume: false);
+  }
+
+  /// Supplies verified local records for every playback entry point.
+  OfflineVideoService get _offlineVideoService;
+
+  /// Refreshes membership after resume planning changes the initially selected part.
+  void _refreshOfflinePartState();
+
+  /// Uses explicit per-part source choices without leaking them into another video.
+  bool _wantsLocalSource(
+    VideoPreview video,
+    VideoPart part, {
+    bool? useLocal,
+  }) =>
+      useLocal ??
+      ('${video.bvid}:${part.cid}' == _sourceChoicePart
+          ? _sourceChoiceLocal
+          : null) ??
+      (video.fromOfflineCache ||
+          (widget.forceOffline && video.bvid == widget.video.bvid));
+
+  /// Validates offline-only transitions before page identity or progress ownership changes.
+  Future<void> _checkPlaybackPart(VideoPreview video, VideoPart part) async {
+    if (_wantsLocalSource(video, part)) {
+      await PlaybackSourceResolver(
+        _offlineVideoService,
+      ).resolve(video.bvid, part.cid, preferLocal: true, requireLocal: true);
+    }
+  }
+
+  /// Opens the chosen source through the existing backend and retains player controls.
+  Future<void> _openPlaybackSource(
+    VideoPreview video, {
+    required VideoPart part,
+    required int quality,
+    Duration? initialPosition,
+    bool? useLocal,
+  }) async {
+    final generation = ++_sourceGeneration;
+    final identity = '${video.bvid}:${part.cid}';
+    final wantsLocal = _wantsLocalSource(video, part, useLocal: useLocal);
+    final local = await PlaybackSourceResolver(_offlineVideoService).resolve(
+      video.bvid,
+      part.cid,
+      preferLocal: wantsLocal,
+      requireLocal: wantsLocal,
+    );
+    if (!mounted ||
+        generation != _sourceGeneration ||
+        _externalNavigationSuspended) {
+      return;
+    }
+    final service = _playbackService;
+    if (_sourceChoicePart != identity) _sourceChoiceLocal = null;
+    _sourceChoicePart = identity;
+    if (useLocal != null) _sourceChoiceLocal = useLocal;
+    _playingOffline = local != null;
+    _offlineQuality = local?.qualityId;
+    if (local != null) {
+      if (service is! LocalFilePlaybackService) {
+        throw const OfflineVideoException('当前平台不支持本地播放。');
+      }
+      _defaultQualityPending = false;
+      // Keep online menu options and the complete VideoPreview when only media changes.
+      if (local.audioFilePath != null) {
+        if (service is! LocalTrackPlaybackService) {
+          throw const OfflineVideoException('当前平台不支持分离音视频缓存。');
+        }
+        await (service as LocalTrackPlaybackService).openLocalTracks(
+          videoFilePath: local.filePath,
+          audioFilePath: local.audioFilePath!,
+          title: local.title,
+          initialPosition: initialPosition,
+          video: video,
+          part: part,
+        );
+      } else {
+        await (service as LocalFilePlaybackService).openLocalFile(
+          filePath: local.filePath,
+          title: local.title,
+          initialPosition: initialPosition,
+          video: video,
+          part: part,
+        );
+      }
+    } else {
+      await service.openVideo(
+        video,
+        part: part,
+        quality: quality,
+        initialPosition: initialPosition,
+      );
+    }
+  }
 
   /// 由页面状态提供循环播放开关。
   bool get _playbackLoopEnabled;
@@ -191,13 +315,21 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     unawaited(_playbackSubscription?.cancel() ?? Future<void>.value());
   }
 
-  /// 读取设备里保存的手势和默认清晰度；异常时返回当前安全默认配置。
+  double? _subtitleFontSizeOverride;
+  double? _savedSubtitleFontSize;
+
+  /// 读取本机偏好，迟到的初始加载不能覆盖用户刚调整的字幕字号。
   Future<PlaybackPreferences> _loadPlaybackPreferences() async {
     try {
       final PlaybackPreferences preferences = await _playbackPreferencesService
           .load();
       if (mounted) {
-        setState(() => _playbackPreferences = preferences);
+        _savedSubtitleFontSize ??= preferences.subtitleFontSize;
+        setState(
+          () => _playbackPreferences = preferences.copyWith(
+            subtitleFontSize: _subtitleFontSizeOverride,
+          ),
+        );
       }
       return preferences;
     } catch (_) {
@@ -234,6 +366,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
 
   /// 初始化当前平台播放表面，并按恢复分 P、网络偏好和初始位置打开视频。
   Future<void> _initializePlaybackSession(Duration? requestedPosition) async {
+    final generation = _sourceGeneration;
     try {
       final PlaybackPreferences preferences = await _loadPlaybackPreferences();
       final DeviceNetworkType networkType = await _loadNetworkTypeSafely();
@@ -243,16 +376,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
       );
       final SavedPlaybackState? savedState = await _playbackService
           .loadSavedPlaybackState(_activeVideo.bvid);
-      final VideoPart? savedPart = _findPartByCid(savedState?.cid);
-      final bool hasBackendResumePosition =
-          savedPart != null &&
-          savedState != null &&
-          PlaybackResumePlan.normalizeBackendPosition(savedState.position) >
-              Duration.zero;
-      final WatchHistoryEntry? historyEntry =
-          widget.initialPartCid == null &&
-              requestedPosition == null &&
-              !hasBackendResumePosition
+      final WatchHistoryEntry? historyEntry = requestedPosition == null
           ? await _loadWatchHistoryResumeEntry(_activeVideo.bvid)
           : null;
       final SystemPlaybackLevels levels = await _playbackService
@@ -264,7 +388,9 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
         savedState: savedState,
         historyEntry: historyEntry,
       );
-      if (!mounted) {
+      if (!mounted ||
+          _externalNavigationSuspended ||
+          generation != _sourceGeneration) {
         return;
       }
       _openingResumePlan = resumePlan;
@@ -274,6 +400,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
         networkType: networkType,
         preferredQuality: preferredQuality,
       );
+      _refreshOfflinePartState();
       unawaited(_loadCurrentLearningListEntry());
       unawaited(_loadPlayerEnhancements());
       if (resumePlan.shouldShowPartNotice && _activeVideo.parts.length > 1) {
@@ -282,15 +409,21 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
         });
       }
       final int? textureId = await _playbackService.initialize();
-      if (!mounted) {
+      if (!mounted ||
+          _externalNavigationSuspended ||
+          generation != _sourceGeneration) {
         return;
       }
       setState(() => _textureId = textureId);
-      await _playbackService.openVideo(
+      await _openPlaybackSource(
         _activeVideo,
         part: _currentPart,
         quality: preferredQuality,
-        initialPosition: resumePlan.position,
+        initialPosition:
+            widget.initialPartCid != null &&
+                resumePlan.positionSource == PlaybackResumePositionSource.none
+            ? null
+            : resumePlan.position,
       );
     } on PlatformException catch (error) {
       _showPlaybackError('无法启动播放器：${error.message ?? error.code}');
@@ -299,19 +432,6 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     } catch (error) {
       _showPlaybackError('无法初始化播放器：$error');
     }
-  }
-
-  /// 在当前视频的完整分P中查找指定 cid，缺失或失效时返回空值。
-  VideoPart? _findPartByCid(int? cid) {
-    if (cid == null || cid <= 0) {
-      return null;
-    }
-    for (final VideoPart part in _activeVideo.parts) {
-      if (part.cid == cid) {
-        return part;
-      }
-    }
-    return null;
   }
 
   /// 读取当前视频的观看记录；读取失败或没有匹配 BV 时返回空值，不阻止播放器启动。
@@ -332,19 +452,9 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     return null;
   }
 
-  /// 使用系统风格提示告知用户已经定位到上次观看的分 P。
+  /// 将上次分 P 提示加入播放器内队列，避免系统消息遮住底栏。
   void _showPartRestoreSnackBar(int pageNumber) {
-    if (!mounted) {
-      return;
-    }
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text('已跳转到上次分P：P$pageNumber'),
-          duration: _sessionTransientHintDuration,
-        ),
-      );
+    _showTransientSnackBar('已跳转到上次分P：P$pageNumber');
   }
 
   /// 把播放后端推送的快照写入页面，并协调恢复、记录、弹幕、专注和完播状态。
@@ -352,7 +462,23 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     if (!mounted) {
       return;
     }
+    if (_externalNavigationSuspended && snapshot.isPlaying) {
+      final service = _playbackService;
+      if (service is! NativePlaybackService || service.ownsPlatformChannel) {
+        unawaited(service.pause());
+      }
+      snapshot = snapshot.copyWith(isPlaying: false);
+    }
+    if (_playingOffline && _offlineQuality != null) {
+      snapshot = snapshot.copyWith(currentQuality: _offlineQuality);
+    }
     final PlaybackSnapshot previousSnapshot = _playbackSnapshot;
+    if (previousSnapshot.phase == PlaybackPhase.ready &&
+        snapshot.phase == PlaybackPhase.ready &&
+        previousSnapshot.isPlaying != snapshot.isPlaying &&
+        !snapshot.isRestoringPosition) {
+      _showPlaybackActionFeedback(snapshot.isPlaying);
+    }
     final bool shouldRestartDanmakuPresentation =
         _shouldRestartDanmakuPresentation(previousSnapshot, snapshot);
     final bool justEnded =
@@ -442,7 +568,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
       }
       _playbackSpeed = snapshot.speed;
       _currentQuality = snapshot.currentQuality;
-      if (snapshot.availableQualities.isNotEmpty) {
+      if (!_playingOffline && snapshot.availableQualities.isNotEmpty) {
         _availableQualities = snapshot.availableQualities;
       }
       if (qualitySelectionFinished) {
@@ -508,7 +634,9 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
       }
     }
     _scheduleInteractiveChoicePrompt(snapshot);
-    if (_danmakuEnabled && snapshot.phase == PlaybackPhase.ready) {
+    if (_danmakuEnabled &&
+        !snapshot.audioOnly &&
+        snapshot.phase == PlaybackPhase.ready) {
       _ensureDanmakuSegmentsForPosition(snapshot.position);
     }
     if (!snapshot.isPlaying || snapshot.isInPictureInPicture) {
@@ -641,7 +769,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
             )
           : _openingResumePlan ?? PlaybackResumePlan.direct(part: _currentPart);
       _openingResumePlan = retryPlan;
-      await _playbackService.openVideo(
+      await _openPlaybackSource(
         _activeVideo,
         part: _currentPart,
         quality: _currentQuality,

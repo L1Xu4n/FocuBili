@@ -273,19 +273,21 @@ extension _PlayerCollectionView on _PlayerPageState {
         const SizedBox(height: 10),
         SizedBox(
           height: 100,
-          child: ListView.separated(
-            scrollCacheExtent: const ScrollCacheExtent.pixels(680),
-            key: const Key('collection-preview-list'),
-            controller: _collectionPreviewScrollController,
-            scrollDirection: Axis.horizontal,
-            itemCount: collection.entries.length,
-            // 分隔函数为相邻合集预览保留固定的横向间距。
-            separatorBuilder: (BuildContext context, int index) =>
-                const SizedBox(width: 10),
-            // 构建函数复用带封面与统计的预览行，并限制成可横向滑动的紧凑卡片。
-            itemBuilder: (BuildContext context, int index) => SizedBox(
-              width: 330,
-              child: _buildCollectionPreviewRow(collection.entries[index]),
+          child: HorizontalMouseScroll(
+            child: ListView.separated(
+              scrollCacheExtent: const ScrollCacheExtent.pixels(680),
+              key: const Key('collection-preview-list'),
+              controller: _collectionPreviewScrollController,
+              scrollDirection: Axis.horizontal,
+              itemCount: collection.entries.length,
+              // 分隔函数为相邻合集预览保留固定的横向间距。
+              separatorBuilder: (BuildContext context, int index) =>
+                  const SizedBox(width: 10),
+              // 构建函数复用带封面与统计的预览行，并限制成可横向滑动的紧凑卡片。
+              itemBuilder: (BuildContext context, int index) => SizedBox(
+                width: 330,
+                child: _buildCollectionPreviewRow(collection.entries[index]),
+              ),
             ),
           ),
         ),
@@ -387,30 +389,47 @@ extension _PlayerCollectionView on _PlayerPageState {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          const SizedBox(height: 12),
-          Row(
+          const SizedBox(height: 4),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              Expanded(
-                child: Text(
-                  '简介',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ),
-              _buildCurrentVideoLearningListButton(),
-              TextButton.icon(
-                key: const Key('portrait-note-button'),
-                // 竖屏记笔记按钮函数在播放器下方打开编辑区，并固定播放器高度。
-                onPressed: () => unawaited(_openVideoNotes()),
-                icon: const Icon(Icons.edit_note_rounded, size: 20),
-                label: const Text('记笔记'),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final scale = MediaQuery.textScalerOf(context).scale(12) / 12;
+                  final columns = constraints.maxWidth >= 4 * 64 * scale
+                      ? 4
+                      : 2;
+                  final width =
+                      (constraints.maxWidth - (columns - 1) * 8) / columns;
+                  final actions = <Widget>[
+                    _buildCurrentVideoLearningListButton(),
+                    _buildOfflineDownloadButton(),
+                    _buildAppFavoriteButton(),
+                    PlayerLibraryAction(
+                      key: const Key('portrait-note-button'),
+                      // 竖屏记笔记按钮函数在播放器下方打开编辑区，并固定播放器高度。
+                      onPressed: () => unawaited(_openVideoNotes()),
+                      icon: Icons.edit_note_rounded,
+                      tooltip: '记笔记',
+                      label: '记笔记',
+                    ),
+                  ];
+                  return Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    children: [
+                      for (final action in actions)
+                        SizedBox(width: width, child: action),
+                    ],
+                  );
+                },
               ),
             ],
           ),
-          const SizedBox(height: 10),
-          Divider(color: Theme.of(context).colorScheme.outlineVariant),
-          const SizedBox(height: 12),
+          Divider(
+            height: 16,
+            color: Theme.of(context).colorScheme.outlineVariant,
+          ),
           _buildVideoDescription(),
           if (_activeVideo.parts.length > 1) ...<Widget>[
             const SizedBox(height: 18),

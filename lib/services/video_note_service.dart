@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'dart:io';
 
 import 'package:shared_preferences/shared_preferences.dart';
@@ -15,6 +16,11 @@ class VideoNoteService {
 
   static const String storageKey = 'video_timepoint_notes_v1';
   static const int maximumEntries = 500;
+  static final StreamController<String> _changes =
+      StreamController<String>.broadcast();
+
+  /// 通知所有服务实例同一 BV 的笔记已成功写入，播放器无需另建数据源。
+  static Stream<String> get changes => _changes.stream;
 
   final VideoNotePreferencesLoader _preferencesLoader;
 
@@ -86,12 +92,14 @@ class VideoNoteService {
         .where((VideoNote item) => !retainedIds.contains(item.id))
         .map((VideoNote item) => item.framePath)
         .toList(growable: false);
-    await preferences.setString(
+    final saved = await preferences.setString(
       storageKey,
       jsonEncode(
         limited.map((VideoNote item) => item.toJson()).toList(growable: false),
       ),
     );
+    if (!saved) throw StateError('笔记保存失败');
+    _changes.add(normalized.bvid);
     await _deleteFrameIfPresent(obsoleteFramePath);
     for (final String? framePath in removedFrames) {
       await _deleteFrameIfPresent(framePath);
@@ -113,12 +121,14 @@ class VideoNoteService {
       orElse: () => null,
     );
     notes.removeWhere((VideoNote item) => item.id == normalizedId);
-    await preferences.setString(
+    final saved = await preferences.setString(
       storageKey,
       jsonEncode(
         notes.map((VideoNote item) => item.toJson()).toList(growable: false),
       ),
     );
+    if (!saved) throw StateError('笔记删除失败');
+    if (removed != null) _changes.add(removed.bvid);
     await _deleteFrameIfPresent(removed?.framePath);
   }
 

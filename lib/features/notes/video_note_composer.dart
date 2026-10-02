@@ -79,97 +79,151 @@ class VideoNoteComposer extends StatelessWidget {
   /// 控制标题和正文是否可编辑；为空时沿用 saving 状态，播放器自动保存时传入 true。
   final bool? inputEnabled;
 
-  /// 创建全屏使用的单行紧凑头部，把标题、时间和操作压缩到同一行。
+  /// 按系统文字比例测量头部文本，供布局判断宽度及日期的自然高度。
+  Size _measureHeaderText(BuildContext context, String text, TextStyle style) {
+    final TextPainter painter = TextPainter(
+      text: TextSpan(text: text, style: style),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+    )..layout();
+    final Size size = painter.size;
+    painter.dispose();
+    return size;
+  }
+
+  /// 创建全屏头部；实际文字放不下一行时，让位置和日期自然分行。
   Widget _buildCompactHeader(BuildContext context) {
     final TextTheme textTheme = Theme.of(context).textTheme;
     final String recordedText = createdAt == null
         ? '保存时记录'
         : formatVideoNoteDateTime(createdAt!);
-    return Row(
-      key: const Key('compact-note-header'),
-      children: <Widget>[
-        Text(
-          '时间点笔记',
-          style: textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+    final TextStyle titleStyle =
+        textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800) ??
+        const TextStyle(fontSize: 14, fontWeight: FontWeight.w800);
+    final TextStyle dateStyle =
+        textTheme.labelSmall ?? const TextStyle(fontSize: 11);
+    final TextStyle partStyle =
+        textTheme.titleSmall?.copyWith(
+          fontSize: 16,
+          fontWeight: FontWeight.w900,
+          height: 1,
+          color: Theme.of(context).colorScheme.onPrimaryContainer,
+        ) ??
+        const TextStyle(fontSize: 16, fontWeight: FontWeight.w900);
+    final TextStyle positionStyle =
+        textTheme.labelSmall ?? const TextStyle(fontSize: 11);
+    final String positionText = '视频位置：${formatVideoNotePosition(position)}';
+    final Size dateSize = _measureHeaderText(context, recordedText, dateStyle);
+    final Widget title = Text('时间点笔记', style: titleStyle);
+    final Widget date = Text(
+      recordedText,
+      key: const Key('note-recorded-time-marquee'),
+      style: dateStyle,
+    );
+    final List<Widget> metadata = <Widget>[
+      if (partPageNumber != null && partPageNumber! > 0)
+        DecoratedBox(
+          key: const Key('note-part-label'),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.primaryContainer,
+            borderRadius: BorderRadius.circular(7),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+            child: Text('P$partPageNumber', style: partStyle),
+          ),
         ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Row(
+      Text(
+        positionText,
+        key: const Key('note-position-label'),
+        style: positionStyle,
+      ),
+    ];
+    final List<Widget> actions = <Widget>[
+      IconButton(
+        key: const Key('new-video-note'),
+        // 紧凑新建按钮函数清空当前编辑内容并记录此刻的视频位置。
+        onPressed: saving ? null : onNew,
+        visualDensity: VisualDensity.compact,
+        constraints: const BoxConstraints.tightFor(width: 34, height: 34),
+        padding: EdgeInsets.zero,
+        iconSize: 20,
+        icon: const Icon(Icons.note_add_outlined),
+        tooltip: '新建笔记',
+      ),
+      const SizedBox(width: 2),
+      IconButton(
+        key: const Key('close-video-notes'),
+        // 紧凑关闭按钮函数退出笔记工作区。
+        onPressed: saving ? null : onClose,
+        visualDensity: VisualDensity.compact,
+        constraints: const BoxConstraints.tightFor(width: 34, height: 34),
+        padding: EdgeInsets.zero,
+        iconSize: 20,
+        icon: const Icon(Icons.close_rounded),
+        tooltip: '关闭笔记',
+      ),
+    ];
+    final double inlineWidth =
+        _measureHeaderText(context, '时间点笔记', titleStyle).width +
+        10 +
+        dateSize.width +
+        6 +
+        (partPageNumber != null && partPageNumber! > 0
+            ? _measureHeaderText(context, 'P$partPageNumber', partStyle).width +
+                  14 +
+                  6
+            : 0) +
+        _measureHeaderText(context, positionText, positionStyle).width +
+        76;
+    return LayoutBuilder(
+      key: const Key('compact-note-header'),
+      // 头部布局函数根据真实文字测量结果选择一行或自然分行。
+      builder: (BuildContext context, BoxConstraints constraints) {
+        if (constraints.maxWidth >= inlineWidth) {
+          return Row(
             children: <Widget>[
+              title,
+              const SizedBox(width: 10),
               Expanded(
                 child: SizedBox(
-                  height: 18,
+                  height: dateSize.height,
                   child: _VideoNoteOverflowMarquee(
                     key: const Key('note-recorded-time-marquee'),
                     text: recordedText,
-                    style:
-                        textTheme.labelSmall ?? const TextStyle(fontSize: 11),
+                    style: dateStyle,
                   ),
                 ),
               ),
               const SizedBox(width: 6),
-              if (partPageNumber != null && partPageNumber! > 0) ...<Widget>[
-                DecoratedBox(
-                  key: const Key('note-part-label'),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.primaryContainer,
-                    borderRadius: BorderRadius.circular(7),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 7,
-                      vertical: 2,
-                    ),
-                    child: Text(
-                      'P$partPageNumber',
-                      style: textTheme.titleSmall?.copyWith(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w900,
-                        height: 1,
-                        color: Theme.of(context).colorScheme.onPrimaryContainer,
-                      ),
-                    ),
-                  ),
-                ),
+              for (final Widget item in metadata) ...<Widget>[
+                item,
                 const SizedBox(width: 6),
               ],
-              Text(
-                '视频位置：${formatVideoNotePosition(position)}',
-                key: const Key('note-position-label'),
-                maxLines: 1,
-                style: textTheme.labelSmall,
-              ),
+              ...actions,
             ],
-          ),
-        ),
-        IconButton(
-          key: const Key('new-video-note'),
-          // 紧凑新建按钮函数清空当前编辑内容并记录此刻的视频位置。
-          onPressed: saving ? null : onNew,
-          visualDensity: VisualDensity.compact,
-          constraints: const BoxConstraints.tightFor(width: 34, height: 34),
-          padding: EdgeInsets.zero,
-          iconSize: 20,
-          icon: const Icon(Icons.note_add_outlined),
-          tooltip: '新建笔记',
-        ),
-        const SizedBox(width: 2),
-        IconButton(
-          key: const Key('close-video-notes'),
-          // 紧凑关闭按钮函数退出笔记工作区。
-          onPressed: saving ? null : onClose,
-          visualDensity: VisualDensity.compact,
-          constraints: const BoxConstraints.tightFor(width: 34, height: 34),
-          padding: EdgeInsets.zero,
-          iconSize: 20,
-          icon: const Icon(Icons.close_rounded),
-          tooltip: '关闭笔记',
-        ),
-      ],
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Expanded(child: title),
+                ...actions,
+              ],
+            ),
+            const SizedBox(height: 2),
+            Wrap(spacing: 6, runSpacing: 4, children: metadata),
+            const SizedBox(height: 2),
+            date,
+          ],
+        );
+      },
     );
   }
 
-  /// 创建竖屏使用的完整头部，分两行显示操作与自动记录信息。
+  /// 创建竖屏完整头部，日期与位置随可用宽度自然换行并保留文字高度。
   Widget _buildRegularHeader(BuildContext context) {
     final TextTheme textTheme = Theme.of(context).textTheme;
     final String recordedText = createdAt == null
@@ -214,24 +268,28 @@ class VideoNoteComposer extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 2),
-        Row(
+        Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: <Widget>[
-            Icon(
-              Icons.schedule_rounded,
-              size: 15,
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-            const SizedBox(width: 5),
-            Expanded(
-              child: SizedBox(
-                height: 18,
-                child: _VideoNoteOverflowMarquee(
-                  text: recordedText,
-                  style: textTheme.bodySmall ?? const TextStyle(fontSize: 12),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Icon(
+                  Icons.schedule_rounded,
+                  size: 15,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
-              ),
+                const SizedBox(width: 5),
+                Flexible(
+                  child: Text(
+                    recordedText,
+                    style: textTheme.bodySmall ?? const TextStyle(fontSize: 12),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(width: 8),
             if (partPageNumber != null && partPageNumber! > 0) ...<Widget>[
               DecoratedBox(
                 key: const Key('regular-note-part-label'),
@@ -253,7 +311,6 @@ class VideoNoteComposer extends StatelessWidget {
                   ),
                 ),
               ),
-              const SizedBox(width: 6),
             ],
             DecoratedBox(
               decoration: BoxDecoration(
@@ -341,7 +398,7 @@ class VideoNoteComposer extends StatelessWidget {
     );
   }
 
-  /// 创建“插入画面”和可选跳转按钮，窄屏允许自然换行而不挤压右侧保存操作。
+  /// 用单个稳定图标表示画面选项，自动保存不切换其启用态；窄屏自然换行。
   Widget _buildNoteOptionActions() {
     return Wrap(
       crossAxisAlignment: WrapCrossAlignment.center,
@@ -351,12 +408,18 @@ class VideoNoteComposer extends StatelessWidget {
         FilterChip(
           key: const Key('include-current-frame'),
           selected: includeFrame,
-          avatar: const Icon(Icons.add_photo_alternate_outlined, size: 18),
+          showCheckmark: false,
+          avatar: Icon(
+            includeFrame
+                ? Icons.check_circle_rounded
+                : Icons.add_photo_alternate_outlined,
+            size: 18,
+          ),
           label: const Text('插入时间点画面'),
           visualDensity: VisualDensity.compact,
           materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
           // 画面选择函数只记录用户选择，真正截图会在保存时执行。
-          onSelected: saving ? null : onIncludeFrameChanged,
+          onSelected: (inputEnabled ?? !saving) ? onIncludeFrameChanged : null,
         ),
         if (onJumpToPosition != null)
           OutlinedButton.icon(

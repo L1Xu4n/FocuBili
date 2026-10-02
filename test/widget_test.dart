@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart' show TapGestureRecognizer;
@@ -9,6 +10,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/app.dart';
 import 'package:focubili/features/focus/focus_timer_controller.dart';
 import 'package:focubili/features/player/player_page.dart';
+import 'package:focubili/features/player/widgets/player_timeline.dart';
+import 'package:focubili/features/player/widgets/player_action_feedback.dart';
 import 'package:focubili/features/profile/login_page.dart';
 import 'package:focubili/features/profile/user_profile_page.dart';
 import 'package:focubili/features/search/search_page.dart';
@@ -26,6 +29,7 @@ import 'package:focubili/services/app_theme_mode_service.dart';
 import 'package:focubili/services/device_status_service.dart';
 import 'package:focubili/services/danmaku_preferences_service.dart';
 import 'package:focubili/services/native_playback_service.dart';
+import 'package:focubili/services/listening_playback_service.dart';
 import 'package:focubili/services/player_overlay_service.dart';
 import 'package:focubili/services/playback_preferences_service.dart';
 import 'package:focubili/services/playback_video_surface.dart';
@@ -263,17 +267,46 @@ class _SuggestionJsonRequest {
   }
 }
 
+/// 提供听视频开关与后端定时记录，验证真实播放器入口的连接方式。
+class _FakeListeningPlaybackService extends _FakePlaybackService
+    implements ListeningPlaybackService {
+  Duration? timerDuration;
+
+  /// 将后端剩余时间附在状态事件中，验证页面不另建第二个暂停计时器。
+  @override
+  Stream<PlaybackSnapshot> get states => super.states.map(
+    (snapshot) =>
+        snapshot.copyWith(sleepTimerRemaining: timerDuration ?? Duration.zero),
+  );
+
+  /// 更新模式并推送快照，模拟平台已经切换为音轨。
+  @override
+  Future<void> setAudioOnly(bool enabled) async {
+    audioOnly = enabled;
+    _emit();
+  }
+
+  /// 保存后端计时参数，不创建第二份真实计时器。
+  @override
+  Future<void> setSleepTimer(Duration? duration) async {
+    timerDuration = duration;
+    _emit();
+  }
+}
+
 /// 提供无 Android 平台依赖的播放器替身，让组件测试只检查 Flutter 控制层交互。
 class _FakePlaybackService implements PlaybackService {
   /// 创建用于播放器组件测试的无网络服务替身。
   _FakePlaybackService({
     this.savedState,
+    this.savedStateLoader,
     this.rejectQuality = false,
     this.emitReadyOnOpen = true,
     this.emitLoadingDuringSeek = false,
     this.duration = _defaultDuration,
     this.textureId,
     this.frameCapturePath = 'C:\\fake-video-note-frame.jpg',
+    this.pauseGate,
   });
 
   final StreamController<PlaybackSnapshot> _states =
@@ -282,7 +315,9 @@ class _FakePlaybackService implements PlaybackService {
   final Duration duration;
   final int? textureId;
   final String? frameCapturePath;
+  final Future<void> Function()? pauseGate;
   bool _isPlaying = false;
+  bool audioOnly = false;
   bool _ended = false;
   Duration _position = Duration.zero;
   double _speed = 1;
@@ -297,6 +332,7 @@ class _FakePlaybackService implements PlaybackService {
   final List<int> selectedQualities = <int>[];
   Completer<void>? retryOpenCompleter;
   final SavedPlaybackState? savedState;
+  final Future<SavedPlaybackState?> Function()? savedStateLoader;
   final bool rejectQuality;
   final bool emitReadyOnOpen;
   final bool emitLoadingDuringSeek;
@@ -366,12 +402,13 @@ class _FakePlaybackService implements PlaybackService {
     _emit();
   }
 
-  /// 模拟原生播放器暂停并推送新状态。
+  /// 模拟暂停并允许阻塞回包，复现切视频与旧分 P 请求交错完成。
   @override
   Future<void> pause() async {
     pauseRequests += 1;
     _isPlaying = false;
     _emit();
+    await pauseGate?.call();
   }
 
   /// 模拟按相对时长快进或快退，并把位置限制在视频有效范围内。
@@ -449,7 +486,7 @@ class _FakePlaybackService implements PlaybackService {
   /// 返回测试预先设置的最后观看分P和进度。
   @override
   Future<SavedPlaybackState?> loadSavedPlaybackState(String bvid) async {
-    return savedState;
+    return savedStateLoader == null ? savedState : await savedStateLoader!();
   }
 
   /// 返回固定亮度和音量，避免组件测试依赖 Android 系统服务。
@@ -482,6 +519,7 @@ class _FakePlaybackService implements PlaybackService {
       PlaybackSnapshot(
         phase: phase,
         isPlaying: _isPlaying,
+        audioOnly: audioOnly,
         position: _position,
         duration: duration,
         speed: _speed,
@@ -740,10 +778,16 @@ class _FakePlayerOverlayService implements PlayerOverlayService {
     required this.cuesResult,
     this.danmakuResult = const DanmakuSegmentLoadResult.empty(),
     this.danmakuLoader,
+    this.tracksLoader,
+    this.cuesLoader,
   });
 
   final SubtitleTrackLoadResult tracksResult;
   final SubtitleCueLoadResult cuesResult;
+  final Future<SubtitleTrackLoadResult> Function(int cid)? tracksLoader;
+  final Future<SubtitleCueLoadResult> Function(int cid)? cuesLoader;
+  final List<int> subtitleTrackRequests = <int>[];
+  final List<int> subtitleCueRequests = <int>[];
   final DanmakuSegmentLoadResult danmakuResult;
   final Future<DanmakuSegmentLoadResult> Function(int segmentIndex)?
   danmakuLoader;
@@ -754,7 +798,10 @@ class _FakePlayerOverlayService implements PlayerOverlayService {
   Future<SubtitleTrackLoadResult> loadSubtitleTracks({
     required String bvid,
     required int cid,
-  }) async => tracksResult;
+  }) async {
+    subtitleTrackRequests.add(cid);
+    return tracksLoader == null ? tracksResult : await tracksLoader!(cid);
+  }
 
   /// 返回测试配置的字幕条目，不接触临时字幕地址或 Cookie。
   @override
@@ -762,7 +809,10 @@ class _FakePlayerOverlayService implements PlayerOverlayService {
     required String bvid,
     required int cid,
     required String trackId,
-  }) async => cuesResult;
+  }) async {
+    subtitleCueRequests.add(cid);
+    return cuesLoader == null ? cuesResult : await cuesLoader!(cid);
+  }
 
   /// 记录段号并返回即时或延迟结果，用于覆盖正常加载与网络晚到两种弹幕场景。
   @override
@@ -940,7 +990,179 @@ VideoPreview _createSecondCollectionVideo() {
 }
 
 /// 验证应用能够显示首页、搜索入口和底部一级导航。
+/// 创建旗标回归用的笔记，并允许指定分 P 或 BV 身份。
+VideoNote _flagNote(
+  String id,
+  int seconds, {
+  int cid = 137649199,
+  String bvid = 'BV1GJ411x7h7',
+}) => VideoNote(
+  id: id,
+  bvid: bvid,
+  videoTitle: '测试视频',
+  ownerName: 'UP',
+  partCid: cid,
+  partPageNumber: 1,
+  partTitle: '分 P',
+  title: id,
+  body: '$id 正文',
+  createdAt: DateTime(2026),
+  updatedAt: DateTime(2026),
+  position: Duration(seconds: seconds),
+);
+
+/// 控制首次读取的返回顺序，模拟旧分 P 的结果迟到。
+class _DelayedFlagNotes extends VideoNoteService {
+  final first = Completer<List<VideoNote>>();
+  int calls = 0;
+
+  /// 第一轮等待手动释放，后续请求立即返回当前本机列表。
+  @override
+  Future<List<VideoNote>> loadNotesForVideo(String bvid) {
+    if (++calls == 1) return first.future;
+    return super.loadNotesForVideo(bvid);
+  }
+}
+
+/// 注册播放器已有功能及笔记旗标的必要回归。
 void main() {
+  /// 进入时读取已有标记，点击单笔记只打开正文，跨实例增删后及时更新。
+  testWidgets('笔记旗标进入即显示点击不seek并随增删刷新', (tester) async {
+    final service = _FakePlaybackService();
+    final notes = VideoNoteService();
+    await notes.saveNote(_flagNote('已有笔记', 42));
+    await notes.saveNote(_flagNote('异分P', 10, cid: 137649200));
+    await notes.saveNote(_flagNote('异BV', 20, bvid: 'BVother'));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          interactionService: _FakePlayerInteractionService(),
+          video: _createCollectionVideo(),
+          playbackService: service,
+          videoNoteService: notes,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('player-note-flag-42')), findsOneWidget);
+    expect(find.byIcon(Icons.flag_rounded), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('player-note-flag-hit-0')));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('note-title-field')))
+          .controller!
+          .text,
+      '已有笔记',
+    );
+    expect(service.seekToRequests, 0);
+    await VideoNoteService().saveNote(_flagNote('新增笔记', 100));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('player-note-flag-100')), findsOneWidget);
+    await VideoNoteService().deleteNote('新增笔记');
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('player-note-flag-100')), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  /// 取消同时间点列表保留当前输入，选中后先保存草稿再载入已有笔记。
+  testWidgets('笔记旗标选择取消及打开均保护未保存草稿', (tester) async {
+    final service = _FakePlaybackService();
+    final notes = VideoNoteService();
+    await notes.saveNote(_flagNote('同秒A', 42));
+    await notes.saveNote(_flagNote('同秒B', 42));
+    await tester.binding.setSurfaceSize(const Size(920, 2000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          interactionService: _FakePlayerInteractionService(),
+          video: _createCollectionVideo(),
+          playbackService: service,
+          videoNoteService: notes,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('player-note-flag-hit-0')));
+    await tester.pumpAndSettle();
+    expect(find.text('选择笔记'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('choose-note-同秒A')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('note-body-field')),
+      '当前尚未保存的草稿',
+    );
+    await tester.tap(find.byKey(const ValueKey('player-note-flag-hit-0')));
+    await tester.pump();
+    await tester.tap(find.text('关闭'));
+    await tester.pump();
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('note-body-field')))
+          .controller!
+          .text,
+      '当前尚未保存的草稿',
+    );
+    await tester.tap(find.byKey(const ValueKey('player-note-flag-hit-0')));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('choose-note-同秒B')));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('note-title-field')))
+          .controller!
+          .text,
+      '同秒B',
+    );
+    expect(
+      (await notes.loadNotes()).firstWhere((note) => note.id == '同秒A').body,
+      '当前尚未保存的草稿',
+    );
+    expect(service.seekToRequests, 0);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  /// 切 P 后先清空旧标记，旧请求迟到也不能覆盖新分 P。
+  testWidgets('笔记旗标切分P隔离旧异步请求并持久关闭', (tester) async {
+    final service = _FakePlaybackService();
+    final notes = _DelayedFlagNotes();
+    await notes.saveNote(_flagNote('第二P笔记', 80, cid: 137649200));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          interactionService: _FakePlayerInteractionService(),
+          video: _createCollectionVideo(),
+          playbackService: service,
+          videoNoteService: notes,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('next-part-button')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('player-note-flag-80')), findsOneWidget);
+    notes.first.complete([_flagNote('旧分P', 42)]);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('player-note-flag-80')), findsOneWidget);
+    expect(find.byKey(const ValueKey('player-note-flag-42')), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await const PlaybackPreferencesService().saveShowNoteTimeMarkers(false);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          interactionService: _FakePlayerInteractionService(),
+          video: _createCollectionVideo(),
+          playbackService: _FakePlaybackService(),
+          videoNoteService: notes,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byType(PlayerNoteFlags), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   /// 每项组件测试从空白本机偏好开始，避免网络清晰度选择跨用例泄漏。
   setUp(() {
     SharedPreferences.setMockInitialValues(<String, Object>{});
@@ -1315,7 +1537,7 @@ void main() {
     expect(find.byKey(const Key('picture-in-picture')), findsNothing);
   });
 
-  /// 验证 Windows 全屏时控制层收起会隐藏鼠标，单击画面唤出控制层后恢复鼠标。
+  /// 验证全屏观看收起控制栏会隐藏鼠标，而打开笔记编辑后仍保留鼠标。
   testWidgets('Windows 全屏控制层收起时隐藏鼠标', (WidgetTester tester) async {
     const MethodChannel windowChannel = MethodChannel('window_manager');
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -1375,11 +1597,37 @@ void main() {
       find.byKey(const Key('player-mouse-region')),
     );
     expect(mouseRegion.cursor, MouseCursor.defer);
+
+    await tester.tap(find.byKey(const Key('fullscreen-note-button')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('fullscreen-video-notes-panel')),
+      findsOneWidget,
+    );
+    tester
+        .widget<GestureDetector>(find.byKey(const Key('player-surface')))
+        .onTap!();
+    await tester.pump(const Duration(seconds: 6));
+    expect(
+      tester
+          .widget<MouseRegion>(find.byKey(const Key('player-mouse-region')))
+          .cursor,
+      MouseCursor.defer,
+    );
   });
 
   /// 验证 Windows 最大化窗口先还原再进入播放器全屏，并在退出后恢复最大化布局。
   testWidgets('Windows 最大化窗口可完全进入播放器全屏并恢复', (WidgetTester tester) async {
     const MethodChannel windowChannel = MethodChannel('window_manager');
+    const experienceChannel = MethodChannel(
+      'com.focubili.app/windows_experience',
+    );
+    final protection = <bool>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(experienceChannel, (call) async {
+          protection.add((call.arguments as Map)['enabled'] as bool);
+          return true;
+        });
     final List<MethodCall> windowCalls = <MethodCall>[];
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(windowChannel, (MethodCall call) async {
@@ -1390,6 +1638,8 @@ void main() {
           return null;
         });
     addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(experienceChannel, null);
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(windowChannel, null);
     });
@@ -1416,6 +1666,7 @@ void main() {
       'setFullScreen',
       'maximize',
     ]);
+    expect(protection, [true, false]);
     expect(
       windowCalls
           .where((MethodCall call) => call.method == 'setFullScreen')
@@ -2267,6 +2518,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: PlayerPage(
+          interactionService: _FakePlayerInteractionService(),
           video: _createMultiPartVideo(),
           playbackService: service,
         ),
@@ -2280,6 +2532,8 @@ void main() {
       ),
     );
     fullscreenButton.onPressed!();
+    // 组件测试不会随系统方向请求旋转视口，手动切换到真实横屏尺寸。
+    await tester.binding.setSurfaceSize(const Size(960, 540));
     await tester.pumpAndSettle();
     expect(
       find.descendant(
@@ -2316,6 +2570,189 @@ void main() {
       findsOneWidget,
     );
   });
+
+  /// 最大播放栏比例下按钮和滑块放大，顶部与底部均在窄屏内可达。
+  testWidgets('200%播放栏在320宽播放器可点击且不重叠', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    const preferences = PlaybackPreferencesService();
+    await preferences.saveControlScale(2);
+    await tester.binding.setSurfaceSize(const Size(320, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final service = _FakePlaybackService(rejectQuality: true);
+    final focus = FocusTimerController(tickInterval: const Duration(days: 1));
+    await focus.initialize();
+    addTearDown(focus.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _createMultiPartVideo(),
+          playbackService: service,
+          playbackPreferencesService: preferences,
+          focusTimerController: focus,
+          interactionService: _FakePlayerInteractionService(),
+          playerOverlayService: _FakePlayerOverlayService(
+            tracksResult: const SubtitleTrackLoadResult.empty(),
+            cuesResult: const SubtitleCueLoadResult.empty(),
+          ),
+          playerEnhancementService: _FakePlayerEnhancementService(
+            metadata: const PlayerEnhancementMetadata(
+              chapters: [
+                VideoChapter(
+                  title: '章节',
+                  start: Duration.zero,
+                  end: Duration(minutes: 3),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    final play = tester.getRect(find.byKey(const Key('play-pause-button')));
+    final top = tester.getRect(find.byKey(const Key('top-player-bar')));
+    final slider = tester.getRect(
+      find.byKey(const Key('player-progress-slider')),
+    );
+    final surface = tester.getRect(find.byKey(const Key('player-surface')));
+    expect(play.width, closeTo(68, 0.1));
+    expect(slider.height, closeTo(48, 0.1));
+    expect(top.bottom, lessThanOrEqualTo(slider.top));
+    expect(play.bottom, lessThanOrEqualTo(surface.bottom));
+    await tester.tapAt(Offset(play.right - 2, play.center.dy));
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(service._isPlaying, isTrue);
+    tester
+        .widget<IconButton>(
+          find.byWidgetPredicate(
+            (widget) => widget is IconButton && widget.tooltip == '进入全屏',
+          ),
+        )
+        .onPressed!();
+    await tester.pumpAndSettle();
+    await tester.binding.setSurfaceSize(const Size(640, 360));
+    await tester.pumpAndSettle();
+    tester
+        .widget<PopupMenuButton<int>>(find.byKey(const Key('quality-menu')))
+        .onSelected!(32);
+    await tester.pump(const Duration(milliseconds: 100));
+    final dynamic menu = tester.state(
+      find.byKey(const Key('more-settings-menu')),
+    );
+    menu.showButtonMenu();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('playback-loop-menu-item')));
+    await tester.pump(const Duration(milliseconds: 300));
+    final viewport = tester.getRect(
+      find.byKey(const Key('player-feedback-viewport')),
+    );
+    expect(
+      viewport.top,
+      greaterThan(
+        tester.getRect(find.byKey(const Key('top-player-bar'))).bottom,
+      ),
+    );
+    expect(
+      viewport.bottom,
+      lessThan(tester.getRect(find.byKey(const Key('bottom-player-bar'))).top),
+    );
+    final failure = tester.getRect(
+      find.byKey(const Key('player-floating-notice')),
+    );
+    final loop = tester.getRect(
+      find.byKey(const ValueKey('player-notice-已开启当前分P循环播放')),
+    );
+    expect(failure.bottom, lessThan(loop.top));
+    expect(find.byType(SnackBar), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  /// 窄屏大字和长时长多 P 时，所有操作保持可达，章节与旗标跟随实际控制栏高度。
+  testWidgets(
+    '320宽大字多P长时长控制栏换行且时间轴不重叠',
+    (tester) async {
+      // 使用采集画面相同的雅黑字体，复现真实字宽；默认 Ahem 方块字体会改变外围详情布局。
+      final font = FontLoader('PlayerNarrowLayout');
+      font.addFont(
+        Future.value(
+          ByteData.sublistView(
+            File('C:/Windows/Fonts/msyh.ttc').readAsBytesSync(),
+          ),
+        ),
+      );
+      await font.load();
+      await tester.binding.setSurfaceSize(const Size(320, 760));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final playback = _FakePlaybackService(
+        duration: const Duration(hours: 120),
+      );
+      final notes = VideoNoteService();
+      await notes.saveNote(_flagNote('起点笔记', 0));
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ThemeData(fontFamily: 'PlayerNarrowLayout'),
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: TextScaler.linear(1.6)),
+            child: child!,
+          ),
+          home: PlayerPage(
+            interactionService: _FakePlayerInteractionService(),
+            video: _createMultiPartVideo(),
+            playbackService: playback,
+            videoNoteService: notes,
+            playerEnhancementService: _FakePlayerEnhancementService(
+              metadata: const PlayerEnhancementMetadata(
+                chapters: [
+                  VideoChapter(
+                    title: '测试章节',
+                    start: Duration.zero,
+                    end: Duration(hours: 120),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      // 只等待异步初始化与控制栏动画，章节标题可能保持循环滚动。
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(tester.takeException(), isNull);
+      final player = tester.getRect(find.byKey(const Key('player-surface')));
+      final slider = tester.getRect(
+        find.byKey(const Key('player-progress-slider')),
+      );
+      final annotations = tester.getRect(
+        find.byKey(const Key('player-timeline-annotations')),
+      );
+      final chapter = tester.getRect(
+        find.byKey(const Key('video-chapter-strip')),
+      );
+      final playbackGroup = tester.getRect(
+        find.byKey(const Key('player-playback-control-group')),
+      );
+      final displayGroup = tester.getRect(
+        find.byKey(const Key('player-display-control-group')),
+      );
+      expect(displayGroup.top, greaterThanOrEqualTo(playbackGroup.bottom));
+      expect(displayGroup.bottom, lessThanOrEqualTo(player.bottom));
+      expect(annotations.top, greaterThanOrEqualTo(player.top));
+      expect(annotations.bottom, lessThanOrEqualTo(slider.top));
+      expect(chapter.left, closeTo(slider.left + 8, 0.1));
+      expect(chapter.right, closeTo(slider.right - 8, 0.1));
+      expect(find.byKey(const Key('previous-part-button')), findsOneWidget);
+      expect(find.byKey(const Key('next-part-button')), findsOneWidget);
+      expect(find.byKey(const Key('quality-menu')), findsOneWidget);
+      expect(find.byKey(const Key('speed-menu')), findsOneWidget);
+      expect(find.text('0:00 / 120:00:00'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+    skip: !File('C:/Windows/Fonts/msyh.ttc').existsSync(),
+  );
 
   /// 验证播放器日期包含时间、长简介收起时省略，并能长按复制 BV 号。
   testWidgets('视频信息显示时间省略长简介并复制BV', (WidgetTester tester) async {
@@ -2812,6 +3249,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: PlayerPage(
+          interactionService: _FakePlayerInteractionService(),
           video: _createCollectionVideo(),
           playbackService: playbackService,
           videoNoteService: noteService,
@@ -2863,6 +3301,11 @@ void main() {
     await tester.pump(const Duration(milliseconds: 900));
     expect(tester.testTextInput.isVisible, isTrue);
     expect(tester.widget<TextField>(portraitBodyField).enabled, isTrue);
+    final frameOption = tester.widget<FilterChip>(
+      find.byKey(const Key('include-current-frame')),
+    );
+    expect(frameOption.showCheckmark, isFalse);
+    expect(frameOption.onSelected, isNotNull);
     // 停止输入后，草稿会在去抖时间内自动写入本机，不依赖手动保存按钮。
     await tester.pumpAndSettle();
     expect(await noteService.loadNotes(), hasLength(1));
@@ -2900,6 +3343,45 @@ void main() {
     expect(await noteService.loadNotes(), hasLength(1));
   });
 
+  /// 截图不可用时仍保存标题和正文，并明确提示截图重试。
+  testWidgets('时间点笔记截图失败仍保存文字', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final service = _FakePlaybackService(frameCapturePath: null);
+    final notes = VideoNoteService();
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          interactionService: _FakePlayerInteractionService(),
+          video: _createCollectionVideo(),
+          playbackService: service,
+          videoNoteService: notes,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('portrait-note-button')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('note-title-field')),
+      'Screenshot failure',
+    );
+    await tester.enterText(
+      find.byKey(const Key('note-body-field')),
+      'Keep this text',
+    );
+    await tester.tap(find.byKey(const Key('include-current-frame')));
+    await tester.tap(find.byKey(const Key('save-video-note')));
+    await tester.pumpAndSettle();
+    final saved = (await notes.loadNotes()).single;
+    expect(saved.body, 'Keep this text');
+    expect(saved.framePath, isNull);
+    expect(service.frameCaptureRequests, 1);
+    expect(find.textContaining('笔记文字已保存，截图未成功'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   /// 验证全屏笔记列表只选中内容，且必须点击独立按钮才会跳转时间点。
   testWidgets('全屏时间点笔记显示半透明列表并显式跳转进度', (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
@@ -2930,6 +3412,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: PlayerPage(
+          interactionService: _FakePlayerInteractionService(),
           video: _createCollectionVideo(),
           playbackService: playbackService,
           videoNoteService: noteService,
@@ -3090,6 +3573,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: PlayerPage(
+          interactionService: _FakePlayerInteractionService(),
           video: _createCollectionVideo(),
           playbackService: playbackService,
           initialPartCid: 137649200,
@@ -3142,6 +3626,7 @@ void main() {
       MaterialApp(
         home: PlayerPage(
           video: _createCollectionVideo(),
+          interactionService: _FakePlayerInteractionService(),
           playbackService: playbackService,
           bilibiliService: videoService,
         ),
@@ -3586,7 +4071,11 @@ void main() {
       find.byKey(const Key('playback-completion-prompt')),
     );
     expect(promptBounds.height, lessThanOrEqualTo(125));
-    expect(playerBounds.bottom - promptBounds.bottom, greaterThanOrEqualTo(70));
+    final barBounds = tester.getRect(
+      find.byKey(const Key('bottom-player-bar')),
+    );
+    expect(promptBounds.bottom, lessThanOrEqualTo(barBounds.top - 8));
+    expect(promptBounds.top, greaterThanOrEqualTo(playerBounds.top));
   });
 
   /// 验证普通视频完播时不显示学习清单专属的完成或继续学习提示。
@@ -3686,6 +4175,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: PlayerPage(
+          interactionService: _FakePlayerInteractionService(),
           video: VideoPreview.placeholder(),
           playbackService: playbackService,
           playerEnhancementService: enhancementService,
@@ -3726,6 +4216,8 @@ void main() {
       ),
     );
     fullscreenButton.onPressed!();
+    // 全屏轨道在横屏视口中复核，避免只验证竖屏状态标记。
+    await tester.binding.setSurfaceSize(const Size(960, 540));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('video-chapter-strip')), findsOneWidget);
     final Rect fullscreenVisibleChapterBounds = tester.getRect(
@@ -3747,19 +4239,19 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 400));
     expect(find.byKey(const Key('video-chapter-strip')), findsOneWidget);
-    final Rect fullscreenPlayerBounds = tester.getRect(
-      find.byKey(const Key('player-surface')),
-    );
     final Rect hiddenControlsChapterBounds = tester.getRect(
       find.byKey(const Key('video-chapter-strip')),
     );
+    final Rect miniProgressBounds = tester.getRect(
+      find.byKey(const Key('mini-progress')),
+    );
     expect(
       hiddenControlsChapterBounds.left,
-      closeTo(fullscreenPlayerBounds.left, 0.1),
+      closeTo(miniProgressBounds.left, 0.1),
     );
     expect(
       hiddenControlsChapterBounds.right,
-      closeTo(fullscreenPlayerBounds.right, 0.1),
+      closeTo(miniProgressBounds.right, 0.1),
     );
     await tester.tapAt(
       tester.getRect(find.byKey(const Key('player-surface'))).center,
@@ -3873,11 +4365,11 @@ void main() {
           .opacity,
       1,
     );
-    final GestureDetector visibleSurface = tester.widget<GestureDetector>(
+    final surfaceBounds = tester.getRect(
       find.byKey(const Key('player-surface')),
     );
-    visibleSurface.onTap!();
-    await tester.pump();
+    await tester.tapAt(Offset(surfaceBounds.left + 8, surfaceBounds.center.dy));
+    await tester.pump(const Duration(milliseconds: 340));
     await tester.pump(const Duration(milliseconds: 220));
     expect(
       tester
@@ -3893,11 +4385,8 @@ void main() {
       greaterThan(controlsVisibleChoiceBounds.top + 50),
     );
 
-    final GestureDetector hiddenSurface = tester.widget<GestureDetector>(
-      find.byKey(const Key('player-surface')),
-    );
-    hiddenSurface.onTap!();
-    await tester.pump();
+    await tester.tapAt(Offset(surfaceBounds.left + 8, surfaceBounds.center.dy));
+    await tester.pump(const Duration(milliseconds: 340));
     await tester.pump(const Duration(milliseconds: 220));
     final Rect liftedChoiceBounds = tester.getRect(
       find.byKey(const Key('interactive-video-choice-overlay')),
@@ -4504,8 +4993,350 @@ void main() {
     expect(find.text('专注已结束，视频已暂停'), findsOneWidget);
   });
 
-  /// 验证全屏更多菜单可选择真实字幕轨道，并在播放画面中显示当前时间段的文字。
+  /// 在真实播放器全屏更多菜单中打开字幕入口，供字幕异步回归使用。
+  Future<void> openSubtitleMenu(WidgetTester tester) async {
+    if (find.byKey(const Key('more-settings-menu')).evaluate().isEmpty) {
+      tester.widget<IconButton>(find.byTooltip('进入全屏')).onPressed!();
+      await tester.pumpAndSettle();
+    }
+    final dynamic menu = tester.state(
+      find.byKey(const Key('more-settings-menu')),
+    );
+    menu.showButtonMenu();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('字幕'));
+    await tester.pumpAndSettle();
+  }
+
+  const subtitleTrack = SubtitleTrack(
+    id: '101',
+    language: 'zh-CN',
+    label: '测试中文字幕',
+    isLocked: false,
+  );
+  const subtitleTracks = SubtitleTrackLoadResult(
+    status: SubtitleLoadStatus.available,
+    message: '',
+    tracks: [subtitleTrack],
+  );
+  const subtitleCues = SubtitleCueLoadResult(
+    status: SubtitleLoadStatus.available,
+    message: '',
+    cues: [
+      SubtitleCue(
+        from: Duration.zero,
+        to: Duration(minutes: 1),
+        content: '第一 P 的字幕',
+      ),
+    ],
+  );
+
+  /// 旧分 P 暂停回包晚于换视频时，字幕参数也必须保持新视频的正确配对。
+  testWidgets('跨视频切换会撤销旧分P避免字幕BV与CID串台', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    var blockNextPause = false;
+    final paused = Completer<void>();
+    final releasePause = Completer<void>();
+    final playback = _FakePlaybackService(
+      // 只挂起旧分 P 的第一次暂停，新视频的暂停仍正常完成。
+      pauseGate: () async {
+        if (blockNextPause) {
+          blockNextPause = false;
+          paused.complete();
+          await releasePause.future;
+        }
+      },
+    );
+    final overlays = _FakePlayerOverlayService(
+      tracksResult: subtitleTracks,
+      cuesResult: subtitleCues,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _createCollectionVideo(),
+          playbackService: playback,
+          bilibiliService: _CollectionSwitchVideoService(),
+          playerOverlayService: overlays,
+          interactionService: _FakePlayerInteractionService(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    blockNextPause = true;
+    tester
+        .widget<IconButton>(find.byKey(const Key('next-part-button')))
+        .onPressed!();
+    await tester.pumpAndSettle();
+    expect(paused.isCompleted, isTrue);
+    await tester.tap(find.byKey(const Key('collection-preview-BV1Q541167Qg')));
+    await tester.pumpAndSettle();
+    expect(playback.openedBvid, 'BV1Q541167Qg');
+    expect(playback.openedCid, 137649300);
+    releasePause.complete();
+    await tester.pumpAndSettle();
+    await openSubtitleMenu(tester);
+    expect(overlays.subtitleTrackRequests.last, 137649300);
+    expect(playback.openedCid, 137649300);
+  });
+
+  /// 听视频入口切换真实状态视图，并把定时与取消交给后端。
+  testWidgets('听视频入口与后台定时保持一致', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.binding.setSurfaceSize(const Size(800, 600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final service = _FakeListeningPlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: service,
+          playerOverlayService: _FakePlayerOverlayService(
+            tracksResult: const SubtitleTrackLoadResult.empty(),
+            cuesResult: const SubtitleCueLoadResult.empty(),
+          ),
+          interactionService: _FakePlayerInteractionService(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('danmaku-toggle')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('danmaku-canvas')), findsOneWidget);
+    final dynamic menu = tester.state(
+      find.byKey(const Key('more-settings-menu')),
+    );
+    menu.showButtonMenu();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('listening-menu-item')));
+    await tester.pumpAndSettle();
+    expect(service.audioOnly, isTrue);
+    expect(find.byKey(const Key('danmaku-canvas')), findsNothing);
+    expect(find.byKey(const Key('audio-only-surface')), findsOneWidget);
+    expect(find.byKey(const Key('listening-sleep-timer')), findsNothing);
+    expect(find.byKey(const Key('listening-return-video')), findsNothing);
+    expect(find.byKey(const Key('listening-time-progress')), findsOneWidget);
+    expect(find.text('00:00/03:32'), findsOneWidget);
+    menu.showButtonMenu();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('sleep-timer-menu-item')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('sleep-timer-15-minutes')));
+    await tester.pumpAndSettle();
+    expect(service.timerDuration, const Duration(minutes: 15));
+    menu.showButtonMenu();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('sleep-timer-menu-item')));
+    await tester.pumpAndSettle();
+    expect(find.text('剩余时间：15:00 后暂停'), findsOneWidget);
+    service.timerDuration = const Duration(minutes: 14, seconds: 59);
+    service._emit();
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.text('剩余时间：14:59 后暂停'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('sleep-timer-off')));
+    await tester.pumpAndSettle();
+    expect(service.timerDuration, isNull);
+    menu.showButtonMenu();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('listening-menu-item')));
+    await tester.pumpAndSettle();
+    expect(service.audioOnly, isFalse);
+    expect(find.byKey(const Key('danmaku-canvas')), findsOneWidget);
+    expect(find.byKey(const Key('audio-only-surface')), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  /// 自定义命中范围生效，同向跳转累计、反向重置，动画会消失且可关闭。
+  testWidgets('自定义双击区域与累计动画生效', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    const preferences = PlaybackPreferencesService();
+    await preferences.saveDoubleTapRegions(
+      const DoubleTapRegions(leftWidth: 0.2, rightWidth: 0.2, height: 0.6),
+    );
+    final service = _FakePlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: service,
+          playbackPreferencesService: preferences,
+          playerOverlayService: _FakePlayerOverlayService(
+            tracksResult: const SubtitleTrackLoadResult.empty(),
+            cuesResult: const SubtitleCueLoadResult.empty(),
+          ),
+          interactionService: _FakePlayerInteractionService(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final surface = tester.getRect(find.byKey(const Key('player-surface')));
+
+    /// 发出一个完整双击序列，保留短时间连续操作的间隔。
+    Future<void> doubleTap(double x, double y) async {
+      final point = Offset(
+        surface.left + surface.width * x,
+        surface.top + surface.height * y,
+      );
+      await tester.tapAt(point);
+      await tester.pump(const Duration(milliseconds: 60));
+      await tester.tapAt(point);
+      await tester.pump(const Duration(milliseconds: 120));
+    }
+
+    await doubleTap(0.9, 0.5);
+    await doubleTap(0.9, 0.5);
+    expect(find.text('快进 10 秒'), findsOneWidget);
+    expect(service._position, const Duration(seconds: 10));
+    await doubleTap(0.1, 0.5);
+    expect(find.text('快退 5 秒'), findsOneWidget);
+    expect(service._position, const Duration(seconds: 5));
+    await tester.pump(const Duration(milliseconds: 1300));
+    expect(find.byType(PlayerSeekFeedback), findsNothing);
+    // 自定义右区从 80% 开始，75% 仍是播放暂停；默认会把此处当作快进。
+    await doubleTap(0.75, 0.5);
+    expect(service._isPlaying, isTrue);
+    expect(find.byType(PlayerActionFeedback), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 750));
+    expect(find.byType(PlayerActionFeedback), findsNothing);
+    // 右侧上方位于自定义高度之外，应暂停而非快进。
+    await doubleTap(0.9, 0.15);
+    expect(service._isPlaying, isFalse);
+    expect(service.seekByRequests, 3);
+    expect(find.byType(PlayerActionFeedback), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await preferences.savePlaybackActionAnimation(false);
+    final quietService = _FakePlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: quietService,
+          playbackPreferencesService: preferences,
+          playerOverlayService: _FakePlayerOverlayService(
+            tracksResult: const SubtitleTrackLoadResult.empty(),
+            cuesResult: const SubtitleCueLoadResult.empty(),
+          ),
+          interactionService: _FakePlayerInteractionService(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await quietService.play();
+    await tester.pump();
+    expect(find.byType(PlayerActionFeedback), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  /// 一次网络失败可以在当前面板直接重试，不必反复退出更多菜单。
+  testWidgets('字幕失败后可以在面板内重试', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    int reads = 0;
+    final overlays = _FakePlayerOverlayService(
+      tracksResult: subtitleTracks,
+      tracksLoader: (cid) async => ++reads == 1
+          ? const SubtitleTrackLoadResult.unavailable()
+          : subtitleTracks,
+      cuesResult: const SubtitleCueLoadResult(
+        status: SubtitleLoadStatus.available,
+        message: '',
+        cues: [
+          SubtitleCue(
+            from: Duration(seconds: 2),
+            to: Duration(seconds: 3),
+            content: '稍后的字幕',
+          ),
+          SubtitleCue(
+            from: Duration.zero,
+            to: Duration(seconds: 1),
+            content: '当前字幕',
+          ),
+        ],
+      ),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _createMultiPartVideo(),
+          playbackService: _FakePlaybackService(),
+          playerOverlayService: overlays,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await openSubtitleMenu(tester);
+    expect(find.text('测试中文字幕'), findsNothing);
+    await tester.tap(find.byKey(const Key('refresh-subtitle-tracks')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('测试中文字幕'));
+    await tester.pumpAndSettle();
+    expect(reads, 2);
+    expect(find.text('当前字幕'), findsOneWidget);
+    expect(find.text('稍后的字幕'), findsNothing);
+  });
+
+  /// 初始续播晚到改变分 P 时，已打开的旧菜单或进行中的旧正文均必须失效。
+  for (final bool selectBeforeRestore in [false, true]) {
+    testWidgets(selectBeforeRestore ? '初始恢复分P后丢弃晚到的字幕正文' : '初始恢复分P后旧字幕菜单失效', (
+      tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({});
+      await tester.binding.setSurfaceSize(const Size(1080, 2400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final saved = Completer<SavedPlaybackState?>();
+      final pendingCues = Completer<SubtitleCueLoadResult>();
+      final playback = _FakePlaybackService(
+        savedStateLoader: () => saved.future,
+      );
+      final overlays = _FakePlayerOverlayService(
+        tracksResult: subtitleTracks,
+        cuesResult: subtitleCues,
+        cuesLoader: (cid) => pendingCues.future,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PlayerPage(
+            video: _createMultiPartVideo(),
+            playbackService: playback,
+            playerOverlayService: overlays,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await openSubtitleMenu(tester);
+      if (selectBeforeRestore) {
+        await tester.tap(find.text('测试中文字幕'));
+        await tester.pumpAndSettle();
+        expect(overlays.subtitleCueRequests, [137649199]);
+      }
+      saved.complete(
+        const SavedPlaybackState(
+          cid: 137649200,
+          pageNumber: 2,
+          position: Duration.zero,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(playback.openedCid, 137649200);
+      if (!selectBeforeRestore) {
+        await tester.tap(find.text('测试中文字幕'));
+        await tester.pumpAndSettle();
+        expect(overlays.subtitleCueRequests, isEmpty);
+      }
+      pendingCues.complete(subtitleCues);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('active-subtitle')), findsNothing);
+      expect(find.text('第一 P 的字幕'), findsNothing);
+    });
+  }
+
+  /// 验证字幕可选择、同分 P 列表稳定复用，字号实时更新且保存到本机。
   testWidgets('播放器可以选择并显示字幕', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await const PlaybackPreferencesService().saveControlScale(2);
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     const SubtitleTrack track = SubtitleTrack(
@@ -4561,6 +5392,46 @@ void main() {
 
     expect(find.byKey(const Key('active-subtitle')), findsOneWidget);
     expect(find.text('真实字幕内容'), findsOneWidget);
+    await openSubtitleMenu(tester);
+    expect(overlayService.subtitleTrackRequests, hasLength(1));
+    final slider = tester.widget<Slider>(
+      find.byKey(const Key('subtitle-font-size-slider')),
+    );
+    slider.onChanged!(28);
+    await tester.pump();
+    expect(
+      tester
+          .widget<Text>(find.byKey(const Key('active-subtitle')))
+          .style
+          ?.fontSize,
+      28,
+    );
+    slider.onChangeEnd!(28);
+    await tester.pumpAndSettle();
+    expect(
+      (await const PlaybackPreferencesService().load()).subtitleFontSize,
+      28,
+    );
+    await tester.tap(find.byTooltip('关闭字幕设置'));
+    await tester.pumpAndSettle();
+    await tester.binding.setSurfaceSize(const Size(640, 360));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const Key('active-subtitle')));
+    await tester.pumpAndSettle();
+    final subtitleBounds = tester.getRect(
+      find.byKey(const Key('active-subtitle')),
+    );
+    final feedbackBounds = tester.getRect(
+      find.byKey(const Key('player-feedback-viewport')),
+    );
+    expect(subtitleBounds.top, greaterThanOrEqualTo(feedbackBounds.top));
+    expect(subtitleBounds.bottom, lessThanOrEqualTo(feedbackBounds.bottom));
+    expect(
+      feedbackBounds.bottom,
+      lessThan(tester.getRect(find.byKey(const Key('bottom-player-bar'))).top),
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 
   /// 验证弹幕开关会按当前时间轴请求真实六分钟片段，并创建不拦截手势的绘制画布。
@@ -4926,6 +5797,14 @@ void main() {
     await tester.pumpAndSettle();
     expect(service.seekToRequests, 1);
     expect(service.playRequests, 1);
+
+    moreMenuState.showButtonMenu();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('sleep-timer-menu-item')));
+    await tester.pumpAndSettle();
+    expect(find.text('剩余次数：1 次后暂停（含当前这一轮）'), findsOneWidget);
+    tester.state<NavigatorState>(find.byType(Navigator)).pop();
+    await tester.pumpAndSettle();
 
     service.emitEnded();
     await tester.pumpAndSettle();

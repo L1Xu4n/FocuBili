@@ -4,6 +4,7 @@ import 'dart:io';
 import '../models/video_preview.dart';
 import '../models/user_search.dart';
 import 'bilibili_request_policy.dart';
+import 'offline_video_service.dart';
 
 /// 定义可替换的 JSON 请求函数，方便测试时不用真的访问网络。
 typedef JsonRequest = Future<String> Function(Uri uri);
@@ -50,8 +51,11 @@ abstract interface class BilibiliUserSearchService {
 class BilibiliVideoInfoService
     implements BilibiliService, BilibiliUserSearchService {
   /// 创建服务；测试可传入自定义请求函数，正式 App 默认使用 HTTPS 请求。
-  BilibiliVideoInfoService({JsonRequest? requestJson})
-    : _requestJson = requestJson ?? _requestPublicJson;
+  BilibiliVideoInfoService({
+    JsonRequest? requestJson,
+    OfflineVideoService? offlineVideoService,
+  }) : _requestJson = requestJson ?? _requestPublicJson,
+       _offlineVideoService = offlineVideoService;
 
   static const String _apiHost = 'api.bilibili.com';
   static const String _suggestHost = 's.search.bilibili.com';
@@ -69,6 +73,21 @@ class BilibiliVideoInfoService
   );
 
   final JsonRequest _requestJson;
+  final OfflineVideoService? _offlineVideoService;
+
+  /// Provides cached metadata to every lookup-based entry, including offline cold starts.
+  Future<VideoPreview?> _cachedVideo(String bvid) async {
+    try {
+      final files = await (_offlineVideoService ?? OfflineVideoService())
+          .loadDownloads();
+      final matches = files.where(
+        (file) => file.bvid.toLowerCase() == bvid.toLowerCase(),
+      );
+      return matches.isEmpty ? null : matches.first.toPreview();
+    } catch (_) {
+      return null;
+    }
+  }
 
   /// 从 BV 号或包含 BV 号的视频链接中提取编号，查询后返回可直接进入播放页的数据。
   @override
@@ -82,8 +101,15 @@ class BilibiliVideoInfoService
     final Uri endpoint = Uri.https(_apiHost, _videoInfoPath, <String, String>{
       'bvid': bvid,
     });
-    final String responseText = await _requestJson(endpoint);
-    final VideoPreview video = _parseVideoInfo(responseText, bvid);
+    late VideoPreview video;
+    try {
+      final String responseText = await _requestJson(endpoint);
+      video = _parseVideoInfo(responseText, bvid);
+    } catch (_) {
+      final cached = await _cachedVideo(bvid);
+      if (cached != null) return cached;
+      rethrow;
+    }
     try {
       final String tagResponse = await _requestJson(
         Uri.https(_apiHost, _videoTagsPath, <String, String>{
@@ -713,6 +739,12 @@ class BilibiliVideoInfoService
           thumbnailUrl: _normalizeThumbnailUrl(_readText(item['pic'], '')),
           publishedAt: _parseUnixTime(item['pubdate']),
           playCount: _readInteger(item['play']),
+          categoryId: int.tryParse('${item['typeid'] ?? ''}'),
+          tags: _readText(item['tag'], '')
+              .split(',')
+              .map((tag) => tag.trim())
+              .where((tag) => tag.isNotEmpty)
+              .toList(),
           danmakuCount: _readInteger(item['danmaku'] ?? item['video_review']),
           episodeCountText: _stripHtml(
             _readText(item['episode_count_text'], ''),

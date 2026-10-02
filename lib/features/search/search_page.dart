@@ -5,15 +5,22 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/layout/adaptive_layout.dart';
+import '../../core/layout/adaptive_two_column_list.dart';
+import '../../core/layout/app_scroll_behavior.dart';
 import '../../core/router/app_router.dart';
 import '../../models/user_search.dart';
 import '../../models/learning_list_entry.dart';
 import '../../models/video_preview.dart';
+import '../../models/search_content_filter.dart';
+import '../../services/search_content_filter_service.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/learning_list_service.dart';
 import '../../services/problem_diagnostics_service.dart';
 import '../../services/search_history_service.dart';
 import '../profile/user_profile_page.dart';
+import 'search_content_filter_controls.dart';
+import 'search_filter_sheet.dart';
+import 'search_video_row.dart';
 
 /// 标识搜索页当前查找公开视频还是公开用户。
 enum _SearchMode { videos, users }
@@ -97,6 +104,10 @@ class _SearchPageState extends State<SearchPage> {
   late final BilibiliUserSearchService _userSearchService;
   late final LearningListService _learningListService;
   late final ProblemDiagnosticsService _problemDiagnosticsService;
+  final SearchContentFilterService _contentFilterService =
+      const SearchContentFilterService();
+  SearchContentFilter _contentFilter = const SearchContentFilter();
+  late final Future<void> _contentFilterReady;
   Timer? _suggestionDebounce;
   VideoPreview? _directResult;
   List<VideoSearchResult> _searchResults = const <VideoSearchResult>[];
@@ -108,6 +119,8 @@ class _SearchPageState extends State<SearchPage> {
   bool _loading = false;
   bool _loadingMore = false;
   bool _hasSubmitted = false;
+  int _requestGeneration = 0;
+  bool _autoLoadFailed = false;
   int _currentPage = 0;
   int _totalPages = 0;
   int _activeEpisodeCountLookups = 0;
@@ -134,12 +147,14 @@ class _SearchPageState extends State<SearchPage> {
     _resultScrollController.addListener(_handleResultScroll);
     _searchFocusNode.addListener(_handleSearchFocusChange);
     _loadSearchHistory();
+    _contentFilterReady = _loadContentFilter();
     unawaited(_loadLearningListMembership());
   }
 
   /// 释放输入、焦点、滚动和候选词计时器，避免页面销毁后继续请求。
   @override
   void dispose() {
+    _requestGeneration++;
     _suggestionDebounce?.cancel();
     _resultScrollController
       ..removeListener(_handleResultScroll)
@@ -154,10 +169,36 @@ class _SearchPageState extends State<SearchPage> {
   /// 搜索结果接近底部时自动请求下一页，并防止同一页重复加载。
   void _handleResultScroll() {
     if (!_resultScrollController.hasClients ||
-        _resultScrollController.position.extentAfter > 420) {
+        _resultScrollController.position.extentAfter > 160 ||
+        _autoLoadFailed) {
       return;
     }
     unawaited(_loadMoreResults());
+  }
+
+  /// Continues while the viewport is at the bottom, stopping on errors or exhausted pages.
+  void _scheduleFilteredPage() {
+    if (_searchMode != _SearchMode.videos ||
+        _loading ||
+        _loadingMore ||
+        _autoLoadFailed ||
+        _currentPage <= 0 ||
+        _currentPage >= _totalPages) {
+      return;
+    }
+    final generation = _requestGeneration;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          generation != _requestGeneration ||
+          _loading ||
+          _loadingMore ||
+          _autoLoadFailed ||
+          !_resultScrollController.hasClients ||
+          _resultScrollController.position.extentAfter > 160) {
+        return;
+      }
+      unawaited(_loadMoreResults());
+    });
   }
 
   /// 焦点变化时刷新候选词区域，失去焦点后隐藏候选列表。
@@ -166,6 +207,27 @@ class _SearchPageState extends State<SearchPage> {
       setState(() {});
     }
   }
+
+  /// Restores independent search rules before accepting the first search request.
+  Future<void> _loadContentFilter() async {
+    final filter = await _contentFilterService.load();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _contentFilter = filter;
+    });
+    _scheduleFilteredPage();
+  }
+
+  /// Preserves raw results so changing local rules never loses fetched content.
+  List<VideoSearchResult> get _visibleSearchResults =>
+      _searchResults.where(_contentFilter.includes).toList(growable: false);
+
+  /// Counts only learning-rule exclusions, not results rejected solely for popularity.
+  int get _filteredLearningCount => _contentFilter.learningOnly
+      ? _searchResults.where(_contentFilter.isProbablyUnrelated).length
+      : 0;
 
   /// 输入变化后延迟请求候选词，避免每输入一个字符都立即访问网络。
   void _handleSearchInputChanged(String value) {
@@ -200,11 +262,17 @@ class _SearchPageState extends State<SearchPage> {
 
   /// BV 号直接查询详情，普通文字按当前筛选条件请求第一页真实结果。
   Future<void> _submitSearch() async {
+    await _contentFilterReady;
+    if (!mounted) return;
+    final generation = ++_requestGeneration;
+    _autoLoadFailed = false;
+    final mode = _searchMode;
     final String input = _controller.text.trim();
     _searchFocusNode.unfocus();
     _suggestionDebounce?.cancel();
     setState(() {
       _loading = true;
+      _loadingMore = false;
       _hasSubmitted = true;
       _errorMessage = null;
       _directResult = null;
@@ -224,6 +292,9 @@ class _SearchPageState extends State<SearchPage> {
         );
       }
       final List<String> history = await _historyService.addHistory(input);
+      if (!mounted || generation != _requestGeneration || mode != _searchMode) {
+        return;
+      }
       final bool opensDirectly =
           _searchMode == _SearchMode.videos && _bvidPattern.hasMatch(input);
       final VideoPreview? directResult = opensDirectly
@@ -240,7 +311,7 @@ class _SearchPageState extends State<SearchPage> {
               filter: _userFilter,
             )
           : null;
-      if (!mounted) {
+      if (!mounted || generation != _requestGeneration || mode != _searchMode) {
         return;
       }
       setState(() {
@@ -255,7 +326,11 @@ class _SearchPageState extends State<SearchPage> {
       if (_resultScrollController.hasClients) {
         _resultScrollController.jumpTo(0);
       }
+      _scheduleFilteredPage();
     } on BilibiliLookupException catch (error) {
+      if (!mounted || generation != _requestGeneration || mode != _searchMode) {
+        return;
+      }
       if (input.isNotEmpty) {
         unawaited(
           _problemDiagnosticsService.recordNetworkFailure(
@@ -268,6 +343,9 @@ class _SearchPageState extends State<SearchPage> {
       }
       _showLookupError(error.message);
     } catch (_) {
+      if (!mounted || generation != _requestGeneration || mode != _searchMode) {
+        return;
+      }
       if (input.isNotEmpty) {
         unawaited(
           _problemDiagnosticsService.recordNetworkFailure(
@@ -293,7 +371,12 @@ class _SearchPageState extends State<SearchPage> {
         _currentPage >= _totalPages) {
       return;
     }
-    setState(() => _loadingMore = true);
+    final generation = _requestGeneration;
+    final mode = _searchMode;
+    setState(() {
+      _loadingMore = true;
+      _autoLoadFailed = false;
+    });
     try {
       if (_searchMode == _SearchMode.users) {
         final UserSearchPage nextPage = await _userSearchService.searchUsers(
@@ -301,7 +384,9 @@ class _SearchPageState extends State<SearchPage> {
           page: _currentPage + 1,
           filter: _userFilter,
         );
-        if (!mounted) {
+        if (!mounted ||
+            generation != _requestGeneration ||
+            mode != _searchMode) {
           return;
         }
         final Set<int> existingMids = _userResults
@@ -325,8 +410,11 @@ class _SearchPageState extends State<SearchPage> {
         page: _currentPage + 1,
         filter: _filter,
       );
-      if (!mounted) {
+      if (!mounted || generation != _requestGeneration || mode != _searchMode) {
         return;
+      }
+      if (nextPage.page <= _currentPage) {
+        throw const FormatException('Search page did not advance');
       }
       final Set<String> existingBvids = _searchResults
           .map((VideoSearchResult result) => result.bvid)
@@ -342,9 +430,13 @@ class _SearchPageState extends State<SearchPage> {
         _totalPages = nextPage.totalPages;
         _loadingMore = false;
       });
+      _scheduleFilteredPage();
     } catch (_) {
-      if (mounted) {
-        setState(() => _loadingMore = false);
+      if (mounted && generation == _requestGeneration && mode == _searchMode) {
+        setState(() {
+          _loadingMore = false;
+          _autoLoadFailed = true;
+        });
         _showTransientMessage('下一页加载失败，请稍后重试。');
       }
     }
@@ -863,88 +955,97 @@ class _SearchPageState extends State<SearchPage> {
     };
   }
 
-  /// 打开参考图样式的筛选面板，并在用户确认后重新搜索。
+  /// 打开高度受限且可随时关闭的筛选面板，只在应用时保存草稿并重新搜索。
   Future<void> _openFilterSheet() async {
+    await _contentFilterReady;
+    if (!mounted) return;
     VideoSearchFilter editingFilter = _filter;
-    final VideoSearchFilter?
-    selectedFilter = await showModalBottomSheet<VideoSearchFilter>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (BuildContext context) {
-        return StatefulBuilder(
-          // 筛选面板构建函数只修改临时条件，点击应用后才请求网络。
-          builder: (BuildContext context, StateSetter setModalState) {
-            return SafeArea(
-              child: SingleChildScrollView(
-                padding: EdgeInsets.fromLTRB(
-                  20,
-                  0,
-                  20,
-                  20 + MediaQuery.viewInsetsOf(context).bottom,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text('筛选', style: Theme.of(context).textTheme.titleLarge),
-                    const SizedBox(height: 20),
-                    _buildFilterSection<VideoPublishedRange>(
-                      title: '发布日期',
-                      values: VideoPublishedRange.values,
-                      selectedValue: editingFilter.publishedRange,
-                      labelBuilder: _publishedRangeLabel,
-                      onSelected: (VideoPublishedRange value) {
-                        setModalState(() {
-                          editingFilter = editingFilter.copyWith(
-                            publishedRange: value,
-                          );
-                        });
-                      },
+    SearchContentFilter editingContent = _contentFilter;
+    final formKey = GlobalKey<FormState>();
+    final VideoSearchFilter? selectedFilter =
+        await showModalBottomSheet<VideoSearchFilter>(
+          context: context,
+          isScrollControlled: true,
+          showDragHandle: true,
+          useSafeArea: true,
+          constraints: const BoxConstraints(maxWidth: 720),
+          builder: (BuildContext context) {
+            return StatefulBuilder(
+              // 筛选面板构建函数只修改临时条件，点击应用后才请求网络。
+              builder: (BuildContext context, StateSetter setModalState) {
+                return Form(
+                  key: formKey,
+                  child: SearchFilterSheet(
+                    // 关闭仅退出弹窗，未应用的临时筛选不写入存储。
+                    onClose: () => Navigator.of(context).pop(),
+                    content: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        SearchContentFilterControls(
+                          value: editingContent,
+                          onChanged: (value) =>
+                              setModalState(() => editingContent = value),
+                        ),
+                        const SizedBox(height: 24),
+                        _buildFilterSection<VideoPublishedRange>(
+                          title: '发布日期',
+                          values: VideoPublishedRange.values,
+                          selectedValue: editingFilter.publishedRange,
+                          labelBuilder: _publishedRangeLabel,
+                          onSelected: (VideoPublishedRange value) {
+                            setModalState(() {
+                              editingFilter = editingFilter.copyWith(
+                                publishedRange: value,
+                              );
+                            });
+                          },
+                        ),
+                        const SizedBox(height: 20),
+                        _buildFilterSection<VideoDurationRange>(
+                          title: '内容时长',
+                          values: VideoDurationRange.values,
+                          selectedValue: editingFilter.durationRange,
+                          labelBuilder: _durationRangeLabel,
+                          onSelected: (VideoDurationRange value) {
+                            setModalState(() {
+                              editingFilter = editingFilter.copyWith(
+                                durationRange: value,
+                              );
+                            });
+                          },
+                        ),
+                        const SizedBox(height: 20),
+                        Text(
+                          '内容分区',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 4,
+                          children: _categories
+                              .map((_SearchCategory category) {
+                                return ChoiceChip(
+                                  label: Text(category.label),
+                                  selected:
+                                      editingFilter.categoryId == category.id,
+                                  // 分区选择函数更新筛选面板中的临时内容分区。
+                                  onSelected: (_) {
+                                    setModalState(() {
+                                      editingFilter = editingFilter.copyWith(
+                                        categoryId: category.id,
+                                        categoryLabel: category.label,
+                                        clearCategory: category.id == null,
+                                      );
+                                    });
+                                  },
+                                );
+                              })
+                              .toList(growable: false),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 20),
-                    _buildFilterSection<VideoDurationRange>(
-                      title: '内容时长',
-                      values: VideoDurationRange.values,
-                      selectedValue: editingFilter.durationRange,
-                      labelBuilder: _durationRangeLabel,
-                      onSelected: (VideoDurationRange value) {
-                        setModalState(() {
-                          editingFilter = editingFilter.copyWith(
-                            durationRange: value,
-                          );
-                        });
-                      },
-                    ),
-                    const SizedBox(height: 20),
-                    Text(
-                      '内容分区',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 10),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 4,
-                      children: _categories
-                          .map((_SearchCategory category) {
-                            return ChoiceChip(
-                              label: Text(category.label),
-                              selected: editingFilter.categoryId == category.id,
-                              // 分区选择函数更新筛选面板中的临时内容分区。
-                              onSelected: (_) {
-                                setModalState(() {
-                                  editingFilter = editingFilter.copyWith(
-                                    categoryId: category.id,
-                                    categoryLabel: category.label,
-                                    clearCategory: category.id == null,
-                                  );
-                                });
-                              },
-                            );
-                          })
-                          .toList(growable: false),
-                    ),
-                    const SizedBox(height: 24),
-                    Row(
+                    actions: Row(
                       children: <Widget>[
                         Expanded(
                           child: OutlinedButton(
@@ -954,6 +1055,8 @@ class _SearchPageState extends State<SearchPage> {
                                 editingFilter = VideoSearchFilter(
                                   order: editingFilter.order,
                                 );
+                                editingContent = const SearchContentFilter();
+                                formKey.currentState?.reset();
                               });
                             },
                             child: const Text('重置'),
@@ -963,25 +1066,36 @@ class _SearchPageState extends State<SearchPage> {
                         Expanded(
                           child: FilledButton(
                             // 筛选应用函数把临时条件返回搜索页面。
-                            onPressed: () =>
-                                Navigator.of(context).pop(editingFilter),
+                            onPressed: () {
+                              if (formKey.currentState!.validate()) {
+                                Navigator.of(context).pop(editingFilter);
+                              }
+                            },
                             child: const Text('应用筛选'),
                           ),
                         ),
                       ],
                     ),
-                  ],
-                ),
-              ),
+                  ),
+                );
+              },
             );
           },
         );
-      },
-    );
     if (!mounted || selectedFilter == null) {
       return;
     }
-    setState(() => _filter = selectedFilter);
+    try {
+      await _contentFilterService.save(editingContent);
+    } catch (_) {
+      if (mounted) _showTransientMessage('筛选设置保存失败，请重试。');
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _filter = selectedFilter;
+      _contentFilter = editingContent;
+    });
     if (_controller.text.trim().isNotEmpty) {
       unawaited(_submitSearch());
     }
@@ -1066,7 +1180,9 @@ class _SearchPageState extends State<SearchPage> {
 
   /// 返回当前启用的日期、时长和分区筛选数量，供筛选按钮显示徽标。
   int _activeFilterCount() {
-    int count = 0;
+    int count =
+        (_contentFilter.learningOnly ? 1 : 0) +
+        (_contentFilter.minimumPlayCount > 0 ? 1 : 0);
     if (_filter.publishedRange != VideoPublishedRange.any) {
       count += 1;
     }
@@ -1454,20 +1570,22 @@ class _SearchPageState extends State<SearchPage> {
       child: Row(
         children: <Widget>[
           Expanded(
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: VideoSearchOrder.values.length,
-              separatorBuilder: (BuildContext context, int index) =>
-                  const SizedBox(width: 6),
-              itemBuilder: (BuildContext context, int index) {
-                final VideoSearchOrder order = VideoSearchOrder.values[index];
-                return ChoiceChip(
-                  label: Text(_orderLabel(order)),
-                  selected: _filter.order == order,
-                  // 排序标签函数立即用新顺序重新搜索第一页。
-                  onSelected: (_) => _changeSearchOrder(order),
-                );
-              },
+            child: HorizontalMouseScroll(
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: VideoSearchOrder.values.length,
+                separatorBuilder: (BuildContext context, int index) =>
+                    const SizedBox(width: 6),
+                itemBuilder: (BuildContext context, int index) {
+                  final VideoSearchOrder order = VideoSearchOrder.values[index];
+                  return ChoiceChip(
+                    label: Text(_orderLabel(order)),
+                    selected: _filter.order == order,
+                    // 排序标签函数立即用新顺序重新搜索第一页。
+                    onSelected: (_) => _changeSearchOrder(order),
+                  );
+                },
+              ),
             ),
           ),
           const VerticalDivider(indent: 8, endIndent: 8),
@@ -1493,20 +1611,22 @@ class _SearchPageState extends State<SearchPage> {
       child: Row(
         children: <Widget>[
           Expanded(
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: UserSearchOrder.values.length,
-              separatorBuilder: (BuildContext context, int index) =>
-                  const SizedBox(width: 6),
-              itemBuilder: (BuildContext context, int index) {
-                final UserSearchOrder order = UserSearchOrder.values[index];
-                return ChoiceChip(
-                  label: Text(_userOrderLabel(order)),
-                  selected: _userFilter.order == order,
-                  // 用户排序标签函数按所选粉丝数或等级顺序重新搜索。
-                  onSelected: (_) => _changeUserSearchOrder(order),
-                );
-              },
+            child: HorizontalMouseScroll(
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: UserSearchOrder.values.length,
+                separatorBuilder: (BuildContext context, int index) =>
+                    const SizedBox(width: 6),
+                itemBuilder: (BuildContext context, int index) {
+                  final UserSearchOrder order = UserSearchOrder.values[index];
+                  return ChoiceChip(
+                    label: Text(_userOrderLabel(order)),
+                    selected: _userFilter.order == order,
+                    // 用户排序标签函数按所选粉丝数或等级顺序重新搜索。
+                    onSelected: (_) => _changeUserSearchOrder(order),
+                  );
+                },
+              ),
             ),
           ),
           const VerticalDivider(indent: 8, endIndent: 8),
@@ -1630,17 +1750,38 @@ class _SearchPageState extends State<SearchPage> {
         },
       );
     }
-    if (_searchResults.isNotEmpty) {
-      return ListView.separated(
+    if (_searchResults.isNotEmpty ||
+        (_searchMode == _SearchMode.videos && _currentPage > 0)) {
+      final List<VideoSearchResult> visibleResults = _visibleSearchResults;
+      if (visibleResults.isEmpty) {
+        return ListView(
+          controller: _resultScrollController,
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: <Widget>[
+            const Padding(
+              padding: EdgeInsets.all(24),
+              child: Column(
+                children: [
+                  Icon(Icons.filter_alt_off_rounded, size: 48),
+                  SizedBox(height: 12),
+                  Text('已加载结果中暂无符合筛选条件的视频。', textAlign: TextAlign.center),
+                ],
+              ),
+            ),
+            _buildLoadMoreFooter(),
+          ],
+        );
+      }
+      return AdaptiveTwoColumnList(
+        key: const Key('search-results-list'),
         controller: _resultScrollController,
-        itemCount: _searchResults.length + 1,
-        separatorBuilder: (BuildContext context, int index) =>
-            const SizedBox(height: 6),
+        breakpoint: 840,
+        crossAxisSpacing: 24,
+        mainAxisSpacing: 4,
+        itemCount: visibleResults.length,
+        footer: _buildLoadMoreFooter(),
         itemBuilder: (BuildContext context, int index) {
-          if (index == _searchResults.length) {
-            return _buildLoadMoreFooter();
-          }
-          return _buildSearchResultCard(_searchResults[index]);
+          return _buildSearchResultCard(visibleResults[index]);
         },
       );
     }
@@ -1739,7 +1880,7 @@ class _SearchPageState extends State<SearchPage> {
     );
   }
 
-  /// 创建扁平的 B 站式视频行；BV 直达资料可避免再次查询详情。
+  /// 将搜索结果交给响应式视频行，保留直达、学习清单和更多菜单行为。
   Widget _buildSearchResultCard(
     VideoSearchResult result, {
     VideoPreview? directVideo,
@@ -1760,161 +1901,87 @@ class _SearchPageState extends State<SearchPage> {
     if (!isDirectResult) {
       _scheduleEpisodeCountFallback(result);
     }
-    final Color secondaryTextColor = Theme.of(
-      context,
-    ).colorScheme.onSurfaceVariant;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        key: ValueKey<String>(
-          '${isDirectResult ? 'direct' : 'search'}-${result.bvid}',
+    return SearchVideoRow(
+      rowKey: ValueKey<String>(
+        '${isDirectResult ? 'direct' : 'search'}-${result.bvid}',
+      ),
+      title: result.title,
+      owner: result.ownerName,
+      publishedAt: _formatPublishedAt(result.publishedAt),
+      playCount: _formatCount(result.playCount),
+      danmakuCount: _formatCount(result.danmakuCount),
+      opening: opening,
+      thumbnailBuilder: (width) => _buildSearchThumbnail(
+        result,
+        episodeCountText: episodeCountText,
+        width: width,
+      ),
+      // 直达结果直接打开；轻量结果先补全 cid 与分P 再进入播放器。
+      onTap: opening || changingLearningState
+          ? null
+          : () => isDirectResult
+                ? _openVideo(directVideo)
+                : _openSearchResult(result),
+      menu: PopupMenuButton<_SearchResultMenuAction>(
+        key: Key(
+          '${isDirectResult ? 'more-direct' : 'more-search'}-'
+          '${result.bvid}',
         ),
-        borderRadius: BorderRadius.circular(12),
-        // 直达结果直接打开；轻量结果先补全 cid 与分P 再进入播放器。
-        onTap: opening || changingLearningState
-            ? null
-            : () => isDirectResult
-                  ? _openVideo(directVideo)
-                  : _openSearchResult(result),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: <Widget>[
-              _buildSearchThumbnail(result, episodeCountText: episodeCountText),
-              const SizedBox(width: 12),
-              Expanded(
-                child: SizedBox(
-                  height: 96,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      Text(
-                        result.title,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w600,
-                          height: 1.25,
-                        ),
-                      ),
-                      const Spacer(),
-                      Text(
-                        '${_formatPublishedAt(result.publishedAt)}  ${result.ownerName}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: secondaryTextColor,
-                        ),
-                      ),
-                      const SizedBox(height: 3),
-                      Row(
-                        children: <Widget>[
-                          Icon(
-                            Icons.play_circle_outline_rounded,
-                            size: 16,
-                            color: secondaryTextColor,
-                          ),
-                          const SizedBox(width: 3),
-                          Text(
-                            _formatCount(result.playCount),
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(color: secondaryTextColor),
-                          ),
-                          const SizedBox(width: 12),
-                          Icon(
-                            Icons.subtitles_outlined,
-                            size: 16,
-                            color: secondaryTextColor,
-                          ),
-                          const SizedBox(width: 3),
-                          Text(
-                            _formatCount(result.danmakuCount),
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(color: secondaryTextColor),
-                          ),
-                          if (opening) ...<Widget>[
-                            const Spacer(),
-                            const SizedBox.square(
-                              dimension: 15,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
+        enabled: menuEnabled,
+        tooltip: '更多选项',
+        padding: EdgeInsets.zero,
+        // 使用标准图标按钮，圆形悬停与水波纹围绕居中的图标绘制。
+        style: IconButton.styleFrom(shape: const CircleBorder()),
+        icon: changingLearningState
+            ? const SizedBox.square(
+                dimension: 17,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : Icon(
+                Icons.more_vert_rounded,
+                size: 18,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
-              SizedBox(
-                width: 38,
-                height: 96,
-                child: Align(
-                  alignment: Alignment.bottomCenter,
-                  child: PopupMenuButton<_SearchResultMenuAction>(
-                    key: Key(
-                      '${isDirectResult ? 'more-direct' : 'more-search'}-'
-                      '${result.bvid}',
-                    ),
-                    enabled: menuEnabled,
-                    tooltip: '更多选项',
-                    padding: EdgeInsets.zero,
-                    icon: changingLearningState
-                        ? const SizedBox.square(
-                            dimension: 17,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : Icon(
-                            Icons.more_vert_rounded,
-                            color: secondaryTextColor,
-                          ),
-                    itemBuilder: (BuildContext context) =>
-                        <PopupMenuEntry<_SearchResultMenuAction>>[
-                          PopupMenuItem<_SearchResultMenuAction>(
-                            key: Key(
-                              '${isDirectResult ? 'add-learning-direct' : 'add-learning-search'}-'
-                              '${result.bvid}',
-                            ),
-                            value: _SearchResultMenuAction.toggleLearningList,
-                            child: ListTile(
-                              contentPadding: EdgeInsets.zero,
-                              leading: Icon(
-                                isInLearningList
-                                    ? Icons.playlist_remove_rounded
-                                    : Icons.playlist_add_rounded,
-                              ),
-                              title: Text(
-                                isInLearningList ? '取消加入学习清单' : '加入学习清单',
-                              ),
-                            ),
-                          ),
-                        ],
-                    // 更多菜单函数执行加入或取消加入，并阻止卡片同时跳转。
-                    onSelected: (_SearchResultMenuAction action) {
-                      if (isDirectResult) {
-                        _handleDirectResultMenuAction(action, directVideo);
-                        return;
-                      }
-                      _handleSearchResultMenuAction(action, result);
-                    },
+        itemBuilder: (BuildContext context) =>
+            <PopupMenuEntry<_SearchResultMenuAction>>[
+              PopupMenuItem<_SearchResultMenuAction>(
+                key: Key(
+                  '${isDirectResult ? 'add-learning-direct' : 'add-learning-search'}-'
+                  '${result.bvid}',
+                ),
+                value: _SearchResultMenuAction.toggleLearningList,
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    isInLearningList
+                        ? Icons.playlist_remove_rounded
+                        : Icons.playlist_add_rounded,
                   ),
+                  title: Text(isInLearningList ? '取消加入学习清单' : '加入学习清单'),
                 ),
               ),
             ],
-          ),
-        ),
+        // 更多菜单函数执行加入或取消加入，并阻止卡片同时跳转。
+        onSelected: (_SearchResultMenuAction action) {
+          if (isDirectResult) {
+            _handleDirectResultMenuAction(action, directVideo);
+            return;
+          }
+          _handleSearchResultMenuAction(action, result);
+        },
       ),
     );
   }
 
-  /// 创建缓存封面，并叠加时长和服务端或详情补查得到的分集角标。
+  /// 按视频行分配的宽度显示 16:9 封面，保留时长及分集角标。
   Widget _buildSearchThumbnail(
     VideoSearchResult result, {
     required String episodeCountText,
+    required double width,
   }) {
     return SizedBox(
-      width: 148,
-      height: 96,
+      width: width,
+      height: width * 9 / 16,
       child: ClipRRect(
         borderRadius: BorderRadius.circular(12),
         child: Stack(
@@ -1989,6 +2056,27 @@ class _SearchPageState extends State<SearchPage> {
 
   /// 创建分页列表底部的加载状态或“已经到底”说明。
   Widget _buildLoadMoreFooter() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (_searchMode == _SearchMode.videos)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+            child: Text(
+              '已过滤 $_filteredLearningCount 条可能与学习无关的内容'
+              '${_contentFilter.minimumPlayCount > 0 ? ' · 播放量另过滤 ${_searchResults.length - _filteredLearningCount - _visibleSearchResults.length} 条' : ''}',
+              key: const Key('search-filtered-count'),
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+        _buildPaginationControl(),
+      ],
+    );
+  }
+
+  /// Keeps an explicit retry button available when automatic pagination fails.
+  Widget _buildPaginationControl() {
     if (_loadingMore) {
       return const Padding(
         padding: EdgeInsets.all(18),
@@ -2006,7 +2094,17 @@ class _SearchPageState extends State<SearchPage> {
         child: Center(child: Text('已经到底了')),
       );
     }
-    return const SizedBox(height: 24);
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: Center(
+        child: TextButton.icon(
+          key: const Key('search-load-more'),
+          onPressed: () => unawaited(_loadMoreResults()),
+          icon: const Icon(Icons.expand_more),
+          label: Text(_autoLoadFailed ? '重试加载' : '继续加载'),
+        ),
+      ),
+    );
   }
 }
 

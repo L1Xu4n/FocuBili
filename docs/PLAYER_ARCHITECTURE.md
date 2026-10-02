@@ -1,6 +1,6 @@
 # 播放器代码结构与维护规则
 
-更新日期：2026-08-11
+更新日期：2026-10-02
 
 这份文档用于避免播放器重新退化成单个超大文件。修改播放功能前，应先确认代码属于下面哪一层。
 
@@ -25,6 +25,12 @@
 - `lib/features/player/player_collection_view.dart`：合集预览、UP 主资料和非全屏详情组合。
 - `lib/features/player/player_page_view.dart`：播放器画面、控制层、响应式工作台和最终页面骨架的同库视图扩展。
 - `lib/features/player/widgets/player_control_widgets.dart`：选集、清晰度、倍速和图标按钮共用的尺寸与文字基线。
+- `lib/features/player/widgets/player_subtitle_sheet.dart`：字幕设置的固定入口、轨道列表和字号预览；视频身份与网络请求仍由叠加协调器校验。
+- `lib/features/player/player_listening_coordinator.dart`：听视频切换与状态画面，纯音频加载和定时属于后端的 `ListeningPlaybackService` 能力。
+- `lib/features/player/player_sleep_timer_coordinator.dart`：定时选择、输入校验和实时剩余状态；弹窗的每秒计时仅重绘文字，不能重复控制后台暂停。
+- `lib/features/player/widgets/player_action_feedback.dart`：播放暂停缩小淡出、左右跳转三角形；反馈使用 IgnorePointer，播放页拥有短暂状态的清理。
+- `lib/features/profile/double_tap_regions_page.dart`：全屏预览/编辑并恢复原生视口；`DoubleTapRegions.actionAt` 为预览与播放器共用的命中规则。
+- `lib/features/player/widgets/fullscreen_video_transform.dart`：移动端全屏双指画面缩放、拖动和双指双击复位；只变换视频层，并接管双指序列以避免单指控制误触。
 - `lib/features/focus/player_focus_sheet.dart`：播放器专注表单和视频关联确认面板。
 
 十七个拆出文件使用 Dart `part`，目的是让现有私有类型保持同一 library；九个协调器 mixin 都受 `State<PlayerPage>` 约束，并显式声明依赖。控制协调器在播放、专注、手势、笔记、视口和叠加层之后应用；视频协调器最后应用，并实现前面协调器要求的分 P 与视频切换能力。五个视图 extension 只组合 Widget，不直接拥有计时器或平台资源。控制栏组件使用普通 import，已经形成可复用边界。
@@ -35,18 +41,33 @@
 
 - `NativePlaybackController.kt`：Media3 生命周期、播放数据请求、音视频合并、进度、缓存、字幕和弹幕原始数据。
 - `PlaybackTrackPolicy.kt`：编码兼容优先级与缓存键清洗，不应再散落回主控制器。
+- `ListeningMediaService.kt`：听视频期间托管唯一媒体会话和通知；`PlaybackSleepTimer.kt`：原生单调时钟定时。显式退出播放页或关闭任务停止播放，当前不提供跨页面悬浮播放。
 - Media3 各模块必须保持相同版本，当前统一为 `1.10.1`。
 
 部分 B 站视频会同时返回 AVC/H.264 和 HEVC。当前策略优先 AVC；这是为了避免异常 HEVC 初始化数据在提取器中触发 `HevcConfig.parseImpl` 越界。AVC、HEVC 和音频使用包含编码名称的不同缓存键，防止旧编码数据污染新轨道。
 
 ## 3. 控制栏对齐规则
 
-- 所有底栏文字入口必须使用 `PlayerControlLabel`，固定高度 34、字号 11、`height: 1`。
-- 图标入口必须使用 `PlayerCompactIconButton`，固定为 34×34。
+- 所有底栏文字入口必须使用 `PlayerControlLabel`，默认高度 34、字号 11、`height: 1`，统一按 `PlayerControlSize` 与本机比例缩放。
+- 图标入口必须使用 `PlayerCompactIconButton`，默认 34×34，图标和实际命中范围一起按 80%～200% 比例调整。
+- 大小预览使用真实控制组件；顶部 `PlayerTopControlBar` 和底部 `PlayerControlGroups` 按空间换行，进度条使用 `PlayerProgressSlider`，不能用 Transform 只放大外观。
 - “选集”必须使用 `PlayerPartSelectorButton`，不能重新使用带默认视觉边距的 `TextButton`。
 - 修改后必须运行“全屏选集从右侧展开并切换分P”测试；测试会比较选集与清晰度菜单的垂直中心。
+- 可交互横向列表必须使用 `HorizontalMouseScroll` 包裹（`lib/core/layout/app_scroll_behavior.dart`），并测试鼠标拖动。不要全局替换 `MaterialApp.scrollBehavior`，以免竖向正文和笔记输入区域的文字选择受到影响。纯展示跑马灯保留不可手动滚动。
+- 本地缓存是清晰度菜单中的媒体来源选项，不是另一套详情页面。在线入口先加载完整 VideoPreview；原地切换媒体时保留资料、进度、倍速和暂停状态。旧全局本地优先偏好不得跳过在线详情查询。
+- 倍速菜单读取 PlaybackPreferences，保留 1x，允许 0.5–5x。Flutter 校验和 Android/Windows 原生上限必须同步。
+- 字幕导航先验证请求代次与 BV/CID，异步返回后再次验证。轨道刷新和正文读取各自管理请求代次；刷新失败保留当前视频的成功列表，跨视频必须清空。桌面与 Android 会话按 BV/CID 隔离，不能把接口回显的 CID 当作输入配对正确的证明。
+- 缓存同时兼容旧单文件与 DASH 视频/音频双文件。`OfflineMediaPlan` 选择可用轨道，`OfflineVideoService` 在两个文件完整后一次写入记录；`LocalTrackPlaybackService` 为两端传递独立音轨。续传 sidecar 只存校验器与轨道摘要，不能保存 Cookie 或带授权参数的 URL。
+- r13 职责复核：叠加协调器约 960 行，增长来自字幕请求归属与字号保存；设置视图已抽到独立组件，主页面只添加 import。后续若继续增加字幕能力，应独立拆分字幕/弹幕协调器，本轮不再扩展叠加功能。Android 网络解析仍沿用下述既定拆分方向。
+- r14 职责复核：听视频界面与 Android 服务/定时各自独立文件；现有控制协调器只保留菜单分发和原定时界面的接入，后台计时不能重复留在页面。Windows 听视频复用既有媒体打开/恢复链，音频模式必须只打开音轨 URL，禁止靠隐藏 Video 控件冒充省流。没有在本轮顺带重构字幕、下载或其他播放能力。
+- r15 职责复核：定时选择/状态移到专用协调器，控制协调器降至约 750 行；区域编辑器和动画画法各用独立组件。主页面仅装配依赖，双击分区用归一化配置，播放状态动画只由真实 ready 状态变化触发。
+- r16 职责复核：播放栏大小编辑放在独立设置组件；顶部组合移入控制视图，页面视图减少约 120 行。按钮/文字/滑块尺寸共用，预览与真实播放器不分别维护缩放公式；原生媒体链保持原职责。
+- r17 职责复核：播放栏大小预览改为 `player_control_size_page.dart` 全屏页面；两类设置共用 `fullscreen_settings_preview.dart` 管理原生全屏与恢复。双击区域使用整屏坐标，悬浮调整卡片不得通过 Column 或 SafeArea 缩小触发区；分割线与真实边界对齐，颜色读取当前 ColorScheme。
+- r18 职责复核：设置搜索在 `settings_search_section.dart` 自动读取当前项目标题/说明，别名只补充搜索词；无匹配提示依据实际可见结果。播放栏上限 200%，窄屏高度容纳新增换行。轻微位移点击在 `player_tap_gesture.dart` 用 Flutter 点击识别器与局部 24 像素容差，继续遵守手势竞争、取消和销毁规则；不要通过放宽全局阈值或屏蔽真实拖动处理双击误判。
 
 ## 4. 后续拆分顺序
+
+r19 职责复核：`widgets/player_feedback_layout.dart` 在同一帧先测量真实上下栏，再限制提示区域；提示、字幕和操作卡片使用自然高度纵向排列，空间不足时可滚动。`widgets/player_notice_controller.dart` 为不同消息分别计时，相同文字续期合并。不得重新把字幕/续播等反馈分别用固定 `Positioned` 偏移覆盖到控制栏上；播放业务和字幕身份校验仍由原协调器负责。
 
 1. [已完成] 把时间点笔记编辑、列表和截图流程迁移到 `player_notes_workspace.dart`。
 2. [已完成] 把横滑、竖滑、双击和长按倍速迁移到 `player_gesture_coordinator.dart`。

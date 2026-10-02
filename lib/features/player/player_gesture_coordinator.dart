@@ -4,7 +4,7 @@ part of 'player_page.dart';
 enum _VerticalAdjustmentMode { none, brightness, volume }
 
 /// 封装播放器画面的双击、长按、横滑、竖滑规则以及短暂反馈状态。
-mixin _PlayerGestureCoordinator on State<PlayerPage> {
+mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
   static const Duration _gestureFeedbackDuration = Duration(seconds: 3);
   static const double _fullscreenBottomGestureExclusionHeight = 72;
   static const double _fullscreenTopGestureExclusionHeight = 56;
@@ -16,7 +16,14 @@ mixin _PlayerGestureCoordinator on State<PlayerPage> {
   Offset? _lastDoubleTapPosition;
   String? _seekFeedback;
   Timer? _seekFeedbackTimer;
+  Timer? _doubleTapFeedbackTimer;
+  Timer? _playbackActionTimer;
+  int _doubleTapSeekSeconds = 0;
+  int _doubleTapFeedbackSequence = 0;
+  int _playbackActionSequence = 0;
+  bool? _playbackActionPlaying;
   bool _temporarySpeedActive = false;
+  @override
   bool _horizontalScrubbing = false;
   double _speedBeforeLongPress = 1;
   double _horizontalScrubStartProgress = 0;
@@ -35,21 +42,26 @@ mixin _PlayerGestureCoordinator on State<PlayerPage> {
       _VerticalAdjustmentMode.none;
 
   /// 由播放器状态类提供当前平台的播放服务。
+  @override
   PlaybackService get _playbackService;
 
   /// 由播放器状态类提供用于读取横滑预览图的服务。
   VideoShotService get _videoShotService;
 
   /// 由播放器状态类提供当前正在展示的视频资料。
+  @override
   VideoPreview get _activeVideo;
 
   /// 由播放器状态类提供当前正在播放的分 P。
+  @override
   VideoPart get _currentPart;
 
   /// 由播放器状态类提供最近一次真实播放状态。
+  @override
   PlaybackSnapshot get _playbackSnapshot;
 
   /// 由播放器状态类提供已保存的画面手势偏好。
+  @override
   PlaybackPreferences get _playbackPreferences;
 
   /// 由播放器状态类提供当前视频用于进度换算的总时长。
@@ -65,24 +77,29 @@ mixin _PlayerGestureCoordinator on State<PlayerPage> {
   double get _progress;
 
   /// 更新播放器当前显示的进度比例。
+  @override
   set _progress(double value);
 
   /// 读取播放器当前倍速。
   double get _playbackSpeed;
 
   /// 更新播放器当前倍速。
+  @override
   set _playbackSpeed(double value);
 
   /// 更新播放器控制层可见状态。
+  @override
   set _showControls(bool value);
 
   /// 切换播放器的播放或暂停状态。
   void _togglePlayback();
 
   /// 停止控制层自动隐藏计时器。
+  @override
   void _stopControlsAutoHideTimer();
 
   /// 重新启动控制层自动隐藏计时器。
+  @override
   void _restartControlsAutoHideTimer();
 
   /// 显示播放器控制层。
@@ -95,17 +112,22 @@ mixin _PlayerGestureCoordinator on State<PlayerPage> {
   Future<void> _seekToProgress(double progress);
 
   /// 把播放器异常转换为画面上的可读错误。
+  @override
   void _showPlaybackError(String message);
 
   /// 按新快照重新同步弹幕动画时钟。
+  @override
   void _syncDanmakuAnimation(PlaybackSnapshot snapshot);
 
   /// 把总秒数格式化为播放器使用的时间文字。
+  @override
   String _formatSeconds(int totalSeconds);
 
   /// 取消手势反馈计时器并使晚到的预览图请求失效。
   void _disposePlayerGestureCoordinator() {
     _seekFeedbackTimer?.cancel();
+    _doubleTapFeedbackTimer?.cancel();
+    _playbackActionTimer?.cancel();
     _videoShotRequestToken += 1;
   }
 
@@ -115,19 +137,55 @@ mixin _PlayerGestureCoordinator on State<PlayerPage> {
   }
 
   /// 根据个性化设置执行分区快进快退，或把任意区域双击改成播放暂停。
-  void _handleDoubleTap(double playerWidth) {
+  void _handleDoubleTap(Size playerSize) {
     if (!_playbackPreferences.enableDoubleTapSeek) {
       _togglePlayback();
       return;
     }
-    final double tapX = _lastDoubleTapPosition?.dx ?? playerWidth / 2;
-    if (tapX < playerWidth * 0.35) {
-      _seekBy(-5, showFeedback: true);
-    } else if (tapX > playerWidth * 0.65) {
-      _seekBy(5, showFeedback: true);
-    } else {
-      _togglePlayback();
+    final tap = _lastDoubleTapPosition ?? playerSize.center(Offset.zero);
+    switch (_playbackPreferences.doubleTapRegions.actionAt(
+      tap.dx / playerSize.width,
+      tap.dy / playerSize.height,
+    )) {
+      case DoubleTapAction.rewind:
+        _seekBy(-5, showFeedback: true);
+      case DoubleTapAction.forward:
+        _seekBy(5, showFeedback: true);
+      case DoubleTapAction.togglePlayback:
+        _togglePlayback();
     }
+  }
+
+  /// 显示一次真实播放状态变化，650 毫秒后撤掉动画节点。
+  @override
+  void _showPlaybackActionFeedback(bool playing) {
+    if (!mounted || !_playbackPreferences.showPlaybackActionAnimation) return;
+    _playbackActionTimer?.cancel();
+    setState(() {
+      _playbackActionPlaying = playing;
+      _playbackActionSequence++;
+    });
+    _playbackActionTimer = Timer(const Duration(milliseconds: 700), () {
+      if (mounted) setState(() => _playbackActionPlaying = null);
+    });
+  }
+
+  /// 累计 1.2 秒内同方向的快进快退；反向操作或超时开始新一轮。
+  void _showDoubleTapSeekFeedback(int seconds) {
+    final accumulate =
+        _doubleTapFeedbackTimer?.isActive == true &&
+        _doubleTapSeekSeconds.sign == seconds.sign;
+    _doubleTapFeedbackTimer?.cancel();
+    setState(() {
+      _doubleTapSeekSeconds = accumulate
+          ? _doubleTapSeekSeconds + seconds
+          : seconds;
+      _doubleTapFeedbackSequence++;
+      _seekFeedback = null;
+    });
+    _doubleTapFeedbackTimer = Timer(const Duration(milliseconds: 1200), () {
+      if (mounted) setState(() => _doubleTapSeekSeconds = 0);
+    });
   }
 
   /// 按指定秒数更新界面进度并把相同的快进或快退命令交给播放器。
@@ -139,18 +197,12 @@ mixin _PlayerGestureCoordinator on State<PlayerPage> {
     _seekFeedbackTimer?.cancel();
     setState(() {
       _progress = durationSeconds == 0 ? 0 : target / durationSeconds;
-      _showControls = true;
-      _seekFeedback = showFeedback
-          ? (seconds > 0 ? '快进 ${seconds.abs()} 秒' : '快退 ${seconds.abs()} 秒')
-          : null;
+      if (!showFeedback) _showControls = true;
+      _seekFeedback = null;
     });
     unawaited(_seekNativeBy(Duration(seconds: seconds)));
     if (showFeedback) {
-      _seekFeedbackTimer = Timer(_gestureFeedbackDuration, () {
-        if (mounted) {
-          setState(() => _seekFeedback = null);
-        }
-      });
+      _showDoubleTapSeekFeedback(seconds);
     }
     _restartControlsAutoHideTimer();
   }

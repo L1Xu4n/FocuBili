@@ -2,6 +2,89 @@ part of 'player_page.dart';
 
 /// 组合播放器的选集、更多菜单、视频画面和播放状态提示。
 extension _PlayerControlsView on _PlayerPageState {
+  /// 组合按偏好放大的顶栏按钮，空间不足时由共用布局自动换行。
+  Widget _buildTopControlBar() {
+    final size = PlayerControlSize(_playbackPreferences.controlScale);
+    final actions = <Widget>[
+      if (_boundFocusController != null)
+        PlayerCompactIconButton(
+          key: const Key('player-focus-button'),
+          scale: size.scale,
+          onPressed: () => unawaited(_openPlayerFocusSheet()),
+          icon: _observedFocusStatus == FocusSessionStatus.paused
+              ? Icons.pause_circle_outline
+              : _observedFocusSessionId == null
+              ? Icons.timer_outlined
+              : Icons.timer_rounded,
+          tooltip: _observedFocusSessionId == null ? '开始专注' : '管理专注',
+        ),
+      if (_playerEnhancementController.chapters.isNotEmpty)
+        PlayerCompactIconButton(
+          key: const Key('video-chapter-button'),
+          scale: size.scale,
+          onPressed: () => unawaited(_showVideoChapterPanel()),
+          icon: Icons.view_timeline_outlined,
+          tooltip: '分段信息',
+        ),
+      if (_playbackService is! PlaybackVideoSurface)
+        PlayerCompactIconButton(
+          key: const Key('picture-in-picture'),
+          scale: size.scale,
+          onPressed: () => unawaited(_enterPictureInPicture()),
+          icon: Icons.picture_in_picture_alt_rounded,
+          tooltip: '画中画',
+        ),
+      PlayerCompactIconButton(
+        key: const Key('danmaku-toggle'),
+        scale: size.scale,
+        onPressed: _toggleDanmaku,
+        icon: _danmakuEnabled
+            ? Icons.subtitles_rounded
+            : Icons.subtitles_off_rounded,
+        tooltip: _danmakuEnabled ? '关闭弹幕' : '开启弹幕',
+      ),
+      SizedBox(
+        width: size.moreButton,
+        height: size.moreButton,
+        child: PopupMenuButton<_PlayerMoreMenuAction>(
+          key: const Key('more-settings-menu'),
+          tooltip: '更多选项',
+          padding: EdgeInsets.zero,
+          iconSize: 22 * size.scale,
+          popUpAnimationStyle:
+              _PlayerControlsCoordinator._playerPopupMenuAnimationStyle,
+          icon: const Icon(Icons.more_vert_rounded, color: Colors.white),
+          onSelected: _handleMoreSettingsSelection,
+          itemBuilder: (context) => _buildMoreSettingsMenu(),
+        ),
+      ),
+    ];
+    return PlayerTopControlBar(
+      scale: size.scale,
+      leading: PlayerCompactIconButton(
+        scale: size.scale,
+        onPressed: _handleBackPressed,
+        icon: Icons.arrow_back_rounded,
+        tooltip: '返回',
+      ),
+      title: _fullscreen
+          ? _AutoScrollingText(
+              key: const Key('player-bar-title'),
+              text: _activeVideo.parts.length > 1
+                  ? _currentPart.title
+                  : _activeVideo.title,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 14 * size.scale,
+                fontWeight: FontWeight.w600,
+              ),
+            )
+          : null,
+      actions: actions,
+      actionsWidth: (actions.length - 1) * size.button + size.moreButton,
+    );
+  }
+
   /// 在非全屏详情页恢复横向分P列表，用户不必先进入全屏才能选择分P。
   Widget _buildPartSelector() {
     final List<VideoPart> parts = _orderedParts();
@@ -31,17 +114,19 @@ extension _PlayerControlsView on _PlayerPageState {
         const SizedBox(height: 6),
         SizedBox(
           height: 58,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            itemCount: parts.length,
-            separatorBuilder: (BuildContext context, int index) =>
-                const SizedBox(width: 8),
-            itemBuilder: (BuildContext context, int index) {
-              return SizedBox(
-                width: 190,
-                child: _buildPartCard(parts[index], compact: true),
-              );
-            },
+          child: HorizontalMouseScroll(
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: parts.length,
+              separatorBuilder: (BuildContext context, int index) =>
+                  const SizedBox(width: 8),
+              itemBuilder: (BuildContext context, int index) {
+                return SizedBox(
+                  width: 190,
+                  child: _buildPartCard(parts[index], compact: true),
+                );
+              },
+            ),
           ),
         ),
       ],
@@ -167,6 +252,25 @@ extension _PlayerControlsView on _PlayerPageState {
   /// 构建“更多”菜单，只保留字幕、弹幕和画面比例等次级播放器设置。
   List<PopupMenuEntry<_PlayerMoreMenuAction>> _buildMoreSettingsMenu() {
     return <PopupMenuEntry<_PlayerMoreMenuAction>>[
+      if (_playbackService is ListeningPlaybackService)
+        PopupMenuItem<_PlayerMoreMenuAction>(
+          key: const Key('listening-menu-item'),
+          value: _PlayerMoreMenuAction.listening,
+          enabled:
+              !_switchingListening &&
+              _playbackSnapshot.phase != PlaybackPhase.loading,
+          child: Row(
+            children: [
+              Icon(
+                _playbackSnapshot.audioOnly
+                    ? Icons.ondemand_video_rounded
+                    : Icons.headphones_rounded,
+              ),
+              const SizedBox(width: 8),
+              Text(_playbackSnapshot.audioOnly ? '返回看视频' : '听视频（省流）'),
+            ],
+          ),
+        ),
       const PopupMenuItem<_PlayerMoreMenuAction>(
         value: _PlayerMoreMenuAction.subtitles,
         child: Row(
@@ -242,6 +346,9 @@ extension _PlayerControlsView on _PlayerPageState {
 
   /// 创建当前平台的视频画面，并在横竖屏中统一应用用户选择的比例模式。
   Widget _buildVideoOutput() {
+    if (_playbackSnapshot.audioOnly) {
+      return const ColoredBox(color: Color(0xff17131b));
+    }
     final PlaybackService service = _playbackService;
     if (service is PlaybackVideoSurface) {
       final PlaybackVideoSurface surface = service as PlaybackVideoSurface;
@@ -317,14 +424,14 @@ extension _PlayerControlsView on _PlayerPageState {
     );
   }
 
-  /// 创建加载或错误提示；错误时允许重试，加载提示自身保持不可点击。
+  /// 创建由统一反馈区避让控制栏的加载或错误卡，保留重试操作。
   Widget _buildPlaybackHint() {
     final PlaybackPhase phase = _playbackSnapshot.phase;
     final String? message = _playbackSnapshot.message;
     if (phase == PlaybackPhase.error) {
       return Center(
         child: Padding(
-          padding: const EdgeInsets.all(28),
+          padding: const EdgeInsets.all(8),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[

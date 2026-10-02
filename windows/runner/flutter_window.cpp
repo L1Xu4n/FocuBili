@@ -135,6 +135,8 @@ bool FlutterWindow::OnCreate() {
   }
   RegisterPlugins(flutter_controller_->engine());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
+  windows_experience_ = std::make_unique<WindowsExperience>(
+      GetHandle(), flutter_controller_->engine()->messenger());
 
   // 升级后先恢复旧版本可能遗留的全局通知值；之后不再用注册表模拟系统专注。
   RestoreLegacyNotificationSetting();
@@ -232,6 +234,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  windows_experience_.reset();
   // 退出时再次尝试清理旧版残留；当前版本本身不会再修改系统专注状态。
   RestoreLegacyNotificationSetting();
   do_not_disturb_channel_.reset();
@@ -250,6 +253,7 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
   try {
+    if (windows_experience_) windows_experience_->OnWindowMessage(message, wparam);
     // Give Flutter, including plugins, an opportunity to handle window messages.
     if (flutter_controller_) {
       std::optional<LRESULT> result =

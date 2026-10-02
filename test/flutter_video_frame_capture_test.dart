@@ -22,9 +22,11 @@ void main() {
     );
     await tester.pump();
 
-    final Uint8List? bytes = await tester.runAsync<Uint8List?>(
+    final pending = tester.runAsync<Uint8List?>(
       () => capture.capturePngBytes(),
     );
+    await tester.pump();
+    final Uint8List? bytes = await pending;
 
     expect(bytes, isNotNull);
     expect(bytes, isNotEmpty);
@@ -69,9 +71,11 @@ void main() {
       );
       await tester.pump();
       expect(tester.takeException(), isNull);
-      final Uint8List? bytes = await tester.runAsync<Uint8List?>(
+      final pending = tester.runAsync<Uint8List?>(
         () => capture.capturePngBytes(),
       );
+      await tester.pump();
+      final Uint8List? bytes = await pending;
       expect(bytes, isNotNull, reason: '第 $index 次布局切换后应保留当前取帧边界');
     }
 

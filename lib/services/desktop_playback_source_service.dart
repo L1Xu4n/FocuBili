@@ -3,7 +3,10 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'bilibili_auth_service.dart';
+import 'app_behavior_preferences_service.dart';
+import 'bilibili_wbi_signing_service.dart';
 import 'native_playback_service.dart';
+import 'media_url_policy.dart';
 
 /// 定义桌面播放数据请求函数，测试可直接返回固定 JSON 而不访问网络。
 typedef DesktopPlaybackJsonRequest =
@@ -42,7 +45,6 @@ class DesktopPlaybackSources {
       'Origin': 'https://www.bilibili.com',
       'Referer': referer,
       'User-Agent': BilibiliDesktopPlaybackSourceService.desktopUserAgent,
-      if (cookieHeader.isNotEmpty) 'Cookie': cookieHeader,
     };
   }
 }
@@ -65,8 +67,11 @@ class BilibiliDesktopPlaybackSourceService {
   BilibiliDesktopPlaybackSourceService({
     BilibiliAuthService? authService,
     DesktopPlaybackJsonRequest? requestJson,
+    AppBehaviorPreferencesService? behaviorPreferences,
   }) : _authService = authService ?? BilibiliAuthService(),
-       _requestJson = requestJson ?? _requestPlaybackJson;
+       _requestJson = requestJson ?? _requestPlaybackJson,
+       _behaviorPreferences =
+           behaviorPreferences ?? AppBehaviorPreferencesService();
 
   static const String desktopUserAgent =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -79,6 +84,8 @@ class BilibiliDesktopPlaybackSourceService {
 
   final BilibiliAuthService _authService;
   final DesktopPlaybackJsonRequest _requestJson;
+  final AppBehaviorPreferencesService _behaviorPreferences;
+  late final _wbiSigner = BilibiliWbiSigningService(requestJson: _requestJson);
 
   /// 校验视频参数，请求固定播放接口，并挑选不超过目标清晰度的兼容音视频轨。
   Future<DesktopPlaybackSources> load({
@@ -98,28 +105,38 @@ class BilibiliDesktopPlaybackSourceService {
     }
     final String referer = 'https://www.bilibili.com/video/$normalizedBvid';
     final String cookieHeader = await _authService.readCookieHeader();
-    final Uri endpoint = Uri.https(
-      'api.bilibili.com',
-      '/x/player/playurl',
-      <String, String>{
-        'bvid': normalizedBvid,
-        'cid': '$cid',
-        'qn': '$quality',
-        'fnval': '16',
-        'fourk': '1',
-      },
-    );
-    final String responseText = await _requestJson(endpoint, <String, String>{
+    final bool wbiEnabled = await _behaviorPreferences.loadWbiSigningEnabled();
+    final headers = <String, String>{
       'Accept': 'application/json',
       'Referer': referer,
       'User-Agent': desktopUserAgent,
       if (cookieHeader.isNotEmpty) 'Cookie': cookieHeader,
-    });
+    };
+    var parameters = <String, String>{
+      'bvid': normalizedBvid,
+      'cid': '$cid',
+      'qn': '$quality',
+      'fnval': '16',
+      'fourk': '1',
+    };
+    if (wbiEnabled) {
+      parameters = await _wbiSigner.signParameters({
+        ...parameters,
+        'fnver': '0',
+        'web_location': '1315873',
+      }, headers: headers);
+    }
+    final Uri endpoint = Uri.https(
+      'api.bilibili.com',
+      wbiEnabled ? '/x/player/wbi/playurl' : '/x/player/playurl',
+    ).replace(query: BilibiliWbiSigningService.encodeQuery(parameters));
+    final String responseText = await _requestJson(endpoint, headers);
     return _parseResponse(
       responseText,
       requestedQuality: quality,
       referer: referer,
       cookieHeader: cookieHeader,
+      wbiEnabled: wbiEnabled,
     );
   }
 
@@ -129,6 +146,7 @@ class BilibiliDesktopPlaybackSourceService {
     required int requestedQuality,
     required String referer,
     required String cookieHeader,
+    required bool wbiEnabled,
   }) {
     final Object? decoded;
     try {
@@ -143,6 +161,13 @@ class BilibiliDesktopPlaybackSourceService {
     final int code = (root['code'] as num?)?.toInt() ?? -1;
     if (code != 0) {
       final String serverMessage = _readText(root['message']);
+      if (code == -351) {
+        throw DesktopPlaybackSourceException(
+          wbiEnabled
+              ? '播放数据服务拒绝了本次请求（错误码：-351）。WBI 签名已启用，请稍后重试或检查账号与网络状态。'
+              : '播放数据服务拒绝了本次请求（错误码：-351）。请到“我的 → 个性化设置 → 播放与专注”开启“启用 WBI 签名”后重试；不保证恢复。',
+        );
+      }
       throw DesktopPlaybackSourceException(
         serverMessage.isEmpty || serverMessage == '0'
             ? '播放数据服务拒绝了本次请求（错误码：$code）。'
@@ -366,22 +391,8 @@ class BilibiliDesktopPlaybackSourceService {
     return List<String>.unmodifiable(urls);
   }
 
-  /// 判断地址是否属于允许送入本机播放器的 B 站 HTTPS 媒体域名。
-  bool _isSafeMediaUrl(String value) {
-    final Uri? uri = Uri.tryParse(value);
-    if (uri == null ||
-        uri.scheme.toLowerCase() != 'https' ||
-        uri.userInfo.isNotEmpty ||
-        (uri.hasPort && uri.port != 443) ||
-        uri.fragment.isNotEmpty) {
-      return false;
-    }
-    final String host = uri.host.toLowerCase();
-    return host == 'bilivideo.com' ||
-        host.endsWith('.bilivideo.com') ||
-        host == 'bilivideo.cn' ||
-        host.endsWith('.bilivideo.cn');
-  }
+  /// Applies the shared trusted-CDN policy before handing media to mpv.
+  bool _isSafeMediaUrl(String value) => MediaUrlPolicy.isSafe(value);
 
   /// 为常见 B 站清晰度编号生成稳定中文名称。
   String _qualityFallbackLabel(int quality) {
@@ -410,6 +421,7 @@ class BilibiliDesktopPlaybackSourceService {
       ..connectionTimeout = const Duration(seconds: 15);
     try {
       final HttpClientRequest request = await client.getUrl(endpoint);
+      request.followRedirects = false;
       headers.forEach(request.headers.set);
       final HttpClientResponse response = await request.close().timeout(
         const Duration(seconds: 20),

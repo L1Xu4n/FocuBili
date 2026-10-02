@@ -15,16 +15,19 @@ class BilibiliCookieController(
     messenger: BinaryMessenger,
 ) : MethodChannel.MethodCallHandler {
     private val channel = MethodChannel(messenger, CHANNEL_NAME)
-    private val cookieManager = CookieManager.getInstance()
+    // 首次会话操作时才加载内核，避免应用启动就阻塞旧设备的主线程。
+    private val cookieManager by lazy {
+        CookieManager.getInstance().also { it.setAcceptCookie(true) }
+    }
 
-    /** 创建控制器时启用 WebView Cookie，并注册 Flutter 方法通道。 */
+    /** 注册会话通道；WebView 内核延迟到实际会话操作时加载。 */
     init {
-        cookieManager.setAcceptCookie(true)
         channel.setMethodCallHandler(this)
     }
 
     /** 接收读取、写入和清除 B 站会话的 Flutter 请求。 */
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
+        try {
         when (call.method) {
             "readCookies" -> result.success(readBilibiliCookies())
             "setCookies" -> {
@@ -47,6 +50,11 @@ class BilibiliCookieController(
             }
             "clearCookies", "clearBilibiliCookies" -> clearBilibiliCookies(result)
             else -> result.notImplemented()
+        }
+        } catch (_: Exception) {
+            result.error("webview_unavailable", "系统 WebView 会话容器暂时不可用。", null)
+        } catch (_: LinkageError) {
+            result.error("webview_unavailable", "系统 WebView 组件无法加载。", null)
         }
     }
 

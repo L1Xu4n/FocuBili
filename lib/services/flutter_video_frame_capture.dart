@@ -18,19 +18,17 @@ class FlutterVideoFrameCapture {
     if (!pixelRatio.isFinite || pixelRatio <= 0) {
       return null;
     }
-    RenderRepaintBoundary? boundary = _findBoundary();
-    if (boundary == null) {
-      return null;
-    }
-    if (boundary.debugNeedsPaint) {
-      await WidgetsBinding.instance.endOfFrame;
-      boundary = _findBoundary();
-      if (boundary == null || boundary.debugNeedsPaint) {
-        return null;
-      }
-    }
     ui.Image? image;
     try {
+      if (_findBoundary() == null) return null;
+      // Debug-only render getters are not initialized in Windows release builds.
+      await WidgetsBinding.instance.endOfFrame.timeout(
+        const Duration(seconds: 2),
+      );
+      final boundary = _findBoundary();
+      if (boundary == null || !boundary.hasSize || boundary.size.isEmpty) {
+        return null;
+      }
       image = await boundary.toImage(pixelRatio: pixelRatio);
       final ByteData? data = await image.toByteData(
         format: ui.ImageByteFormat.png,

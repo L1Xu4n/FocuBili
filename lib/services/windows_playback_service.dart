@@ -12,6 +12,8 @@ import 'desktop_playback_source_service.dart';
 import 'flutter_video_frame_capture.dart';
 import 'media_cache_service.dart';
 import 'native_playback_service.dart';
+import 'local_file_playback_service.dart';
+import 'listening_playback_service.dart';
 import 'playback_video_surface.dart';
 import 'video_shot_service.dart';
 import 'windows_dash_media_plan.dart';
@@ -19,7 +21,12 @@ import 'windows_playback_recovery_policy.dart';
 import 'windows_playback_progress_store.dart';
 
 /// 使用 media_kit 与 Windows 系统能力实现 FocuBili 的桌面播放接口。
-class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
+class WindowsPlaybackService
+    implements
+        PlaybackService,
+        PlaybackVideoSurface,
+        ListeningPlaybackService,
+        LocalTrackPlaybackService {
   /// 创建 Windows 播放服务并立即订阅底层播放器状态；测试可注入播放源服务。
   WindowsPlaybackService({
     BilibiliDesktopPlaybackSourceService? sourceService,
@@ -65,6 +72,75 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
 
   VideoPreview? _currentVideo;
   VideoPart? _currentPart;
+  bool _localSource = false;
+  bool _audioOnly = false;
+  String? _localVideoPath;
+  String? _localAudioPath;
+  Timer? _sleepTimer;
+  DateTime? _sleepDeadline;
+
+  /// 原地切换音频媒体，停止旧画面传输，保留当前位置和播放意图。
+  @override
+  Future<void> setAudioOnly(bool enabled) async {
+    _ensureAvailable();
+    if (_audioOnly == enabled) return;
+    final video = _currentVideo;
+    final part = _currentPart;
+    if (video == null || part == null || _opening) {
+      throw StateError('请等待当前视频加载完成。');
+    }
+    if (enabled &&
+        !_localSource &&
+        _mediaAttempts.every((item) => item.audioUrl.isEmpty)) {
+      throw StateError('当前视频没有可用的独立音轨。');
+    }
+    final position = _player.state.position;
+    final playing = _player.state.playing;
+    final previous = _audioOnly;
+    _audioOnly = enabled;
+    try {
+      await _player.stop();
+      if (_localSource) {
+        await _openLocalMedia(
+          filePath: _localVideoPath!,
+          audioFilePath: _localAudioPath,
+          video: video,
+          part: part,
+          title: video.title,
+          initialPosition: position,
+          shouldPlay: playing,
+        );
+      } else {
+        await _openCurrentSource(
+          generation: _beginSourceRequest(),
+          video: video,
+          part: part,
+          quality: _currentQuality,
+          resumePosition: position,
+          shouldPlay: playing,
+        );
+      }
+    } catch (_) {
+      _audioOnly = previous;
+      _emitPlayerState();
+      rethrow;
+    }
+  }
+
+  /// 后端定时暂停在最小化或系统锁屏时继续运行，关闭定时会撤销旧回调。
+  @override
+  Future<void> setSleepTimer(Duration? duration) async {
+    _sleepTimer?.cancel();
+    _sleepDeadline = duration == null ? null : DateTime.now().add(duration);
+    if (duration != null) {
+      _sleepTimer = Timer(duration, () {
+        _sleepDeadline = null;
+        if (!_disposed) unawaited(pause());
+      });
+    }
+    _emitPlayerState();
+  }
+
   PlaybackSnapshot _snapshot = const PlaybackSnapshot();
   List<PlaybackQuality> _availableQualities = const <PlaybackQuality>[
     PlaybackQuality(id: 64, label: '高清 720P'),
@@ -158,6 +234,7 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
       return;
     }
     _currentVideo = video;
+    _localSource = false;
     _currentPart = targetPart;
     _currentQuality = quality;
     _restoredPosition =
@@ -175,7 +252,184 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
     );
   }
 
-  /// 继续播放当前 Windows 媒体。
+  /// 复用本地加载流程挂载独立音轨，保持缓存视频的续播和重播行为。
+  @override
+  Future<void> openLocalTracks({
+    required String videoFilePath,
+    required String audioFilePath,
+    String title = '',
+    Duration? initialPosition,
+    VideoPreview? video,
+    VideoPart? part,
+  }) => _openLocalMedia(
+    filePath: videoFilePath,
+    audioFilePath: audioFilePath,
+    title: title,
+    initialPosition: initialPosition,
+    video: video,
+    part: part,
+  );
+
+  /// 保持原有单文件接口，旧缓存及既有调用方无需新增参数。
+  @override
+  Future<void> openLocalFile({
+    required String filePath,
+    String title = '',
+    Duration? initialPosition,
+    VideoPreview? video,
+    VideoPart? part,
+  }) => _openLocalMedia(
+    filePath: filePath,
+    title: title,
+    initialPosition: initialPosition,
+    video: video,
+    part: part,
+  );
+
+  /// 本地音视频一起加载并校验解码和位置，之后才报告就绪。
+  Future<void> _openLocalMedia({
+    required String filePath,
+    String? audioFilePath,
+    String title = '',
+    Duration? initialPosition,
+    VideoPreview? video,
+    VideoPart? part,
+    bool shouldPlay = true,
+  }) async {
+    _ensureAvailable();
+    if (filePath.trim().isEmpty || (initialPosition?.isNegative ?? false)) {
+      throw ArgumentError('Invalid local playback request');
+    }
+    if (audioFilePath != null && audioFilePath.trim().isEmpty) {
+      throw ArgumentError('本地音频路径无效');
+    }
+    final generation = _beginSourceRequest();
+    final file = File(filePath);
+    if (!await file.exists()) throw StateError('离线文件不存在');
+    final audioFile = audioFilePath == null ? null : File(audioFilePath);
+    if (audioFile != null && !await audioFile.exists()) {
+      throw StateError('离线音频文件不存在');
+    }
+    if (!_isCurrentSourceRequest(generation)) return;
+    await _saveCurrentProgress(force: true);
+    if (!_isCurrentSourceRequest(generation)) return;
+    _opening = true;
+    final targetPart = part ?? video?.initialPart;
+    final saved = initialPosition == null && video != null && targetPart != null
+        ? await _progressStore.loadPart(video.bvid, targetPart.cid)
+        : null;
+    if (!_isCurrentSourceRequest(generation)) return;
+    _currentVideo = video;
+    _currentPart = targetPart;
+    _localSource = true;
+    _localVideoPath = filePath;
+    _localAudioPath = audioFilePath;
+    _restoredPosition = initialPosition ?? saved?.position ?? Duration.zero;
+    final resumePosition = _restoredPosition;
+    _restoringPosition = resumePosition > Duration.zero;
+    _shouldPlayAfterFallback = shouldPlay;
+    final localAttempt = audioFile == null || _audioOnly
+        ? null
+        : WindowsDashMediaAttempt(
+            videoUrl: file.absolute.path,
+            audioUrl: audioFile.absolute.path,
+            audioCodec: 'local',
+          );
+    _activeMediaHeaders = const {};
+    _mediaAttempts = localAttempt == null ? const [] : [localAttempt];
+    _activeAudioMedia = localAttempt?.createAudioMedia(_activeMediaHeaders);
+    _availableQualities = const [];
+    _currentQuality = 0;
+    _currentMediaAttemptIndex = 0;
+    _activeAudioTrackToken = localAttempt == null
+        ? ''
+        : _audioTrackTokenFor(generation);
+    _snapshot = const PlaybackSnapshot();
+    _emitPlayerState(
+      phaseOverride: PlaybackPhase.loading,
+      message: '正在打开离线视频…',
+    );
+    try {
+      await _player.stop();
+      if (!_isCurrentSourceRequest(generation)) return;
+      await _player.open(
+        Media(
+          (_audioOnly ? audioFile ?? file : file).absolute.path,
+          start: resumePosition,
+        ),
+        play: false,
+      );
+      if (!_isCurrentSourceRequest(generation)) return;
+      await _player.setVideoTrack(
+        _audioOnly ? VideoTrack.no() : VideoTrack.auto(),
+      );
+      if (localAttempt != null) {
+        await _player.setAudioTrack(
+          localAttempt.createAudioTrack(
+            _activeAudioMedia!,
+            title: _activeAudioTrackToken,
+          ),
+        );
+        if (!_isCurrentSourceRequest(generation)) return;
+        _pendingResumePositionAfterDecode = resumePosition;
+      }
+      if (!await _waitForLocalMediaReady(generation)) {
+        if (!_isCurrentSourceRequest(generation)) return;
+        throw StateError('本地媒体未能完成加载');
+      }
+      await _restoreResumePositionAfterDecode(
+        generation,
+        resumePosition,
+        restorePlayback: false,
+      );
+      if (!_isCurrentSourceRequest(generation)) return;
+      if (_isResumePositionBehindTarget(
+        _clampResumePositionToMediaDuration(resumePosition),
+      )) {
+        throw StateError('本地媒体未能恢复当前位置');
+      }
+      if (_shouldPlayAfterFallback) await _player.play();
+      if (!_isCurrentSourceRequest(generation)) return;
+      if (localAttempt != null && _shouldPlayAfterFallback) {
+        if (!await _waitForDecodedAudio(generation)) {
+          if (!_isCurrentSourceRequest(generation)) return;
+          throw StateError('本地音频未能完成加载');
+        }
+        await _restoreResumePositionAfterDecode(generation, resumePosition);
+        if (!_isCurrentSourceRequest(generation)) return;
+        _pendingResumePositionAfterDecode = Duration.zero;
+      }
+      _opening = false;
+      _restoringPosition = false;
+      _emitPlayerState(phaseOverride: PlaybackPhase.ready, clearMessage: true);
+      _restoredPosition = Duration.zero;
+    } catch (_) {
+      if (_isCurrentSourceRequest(generation)) {
+        _opening = false;
+        _restoringPosition = false;
+        _emitPlayerState(
+          phaseOverride: PlaybackPhase.error,
+          message: '无法打开离线视频。',
+        );
+      }
+      rethrow;
+    }
+  }
+
+  /// 等待本地文件产生真实时长与视频解码输出，避免把收到加载命令误当成就绪。
+  Future<bool> _waitForLocalMediaReady(int generation) async {
+    final deadline = DateTime.now().add(_audioDecoderReadyTimeout);
+    while (_isCurrentSourceRequest(generation)) {
+      if (_player.state.duration > Duration.zero && _hasDecodedVideo()) {
+        return true;
+      }
+      if (!DateTime.now().isBefore(deadline)) return false;
+      await Future<void>.delayed(_resumePositionPollInterval);
+    }
+    return false;
+  }
+
+  /// Resumes the current Windows media session.
   @override
   Future<void> play() async {
     _ensureAvailable();
@@ -262,8 +516,12 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
     _emitPlayerState(phaseOverride: PlaybackPhase.ready);
   }
 
-  /// media_kit 会在完播时卸载外部音轨；重播前重新挂载当前 CDN 音轨，避免第二轮只剩画面。
+  /// 完播后重新挂载当前本地或 CDN 音轨，避免第二轮只剩画面。
   Future<void> _reloadExternalAudioAfterCompletion(int generation) async {
+    if (_audioOnly) {
+      _externalAudioNeedsReload = false;
+      return;
+    }
     if (!_isCurrentSourceRequest(generation) ||
         !_externalAudioNeedsReload ||
         _currentMediaAttemptIndex >= _mediaAttempts.length) {
@@ -295,12 +553,26 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
     _emitPlayerState(phaseOverride: PlaybackPhase.ready);
   }
 
-  /// 校验 0.5 到 3 倍范围并更新 Windows 播放速度。
+  /// 在高倍速时放宽 mpv 音频变速滤镜的静音阈值，再更新播放速度。
   @override
   Future<void> setPlaybackSpeed(double speed) async {
     _ensureAvailable();
-    if (!speed.isFinite || speed < 0.5 || speed > 3) {
-      throw ArgumentError.value(speed, 'speed', '倍速必须在 0.5 到 3.0 之间。');
+    if (!speed.isFinite || speed < 0.5 || speed > 5) {
+      throw ArgumentError.value(speed, 'speed', '倍速必须在 0.5 到 5.0 之间。');
+    }
+    final PlatformPlayer? platformPlayer = _player.platform;
+    if (speed > 2 && platformPlayer is NativePlayer) {
+      try {
+        // Explicit scaletempo2 replaces mpv's default filter; zero disables its
+        // high-speed mute threshold while preserving the original speech pitch.
+        await platformPlayer.setProperty('af', 'scaletempo2=max-speed=0');
+      } catch (_) {
+        // Older mpv builds can still play audibly without pitch correction.
+        await platformPlayer.setProperty('audio-pitch-correction', 'no');
+      }
+    } else if (platformPlayer is NativePlayer) {
+      // Restore normal pitch correction if an older mpv needed the fallback.
+      await platformPlayer.setProperty('audio-pitch-correction', 'yes');
     }
     await _player.setRate(speed);
   }
@@ -381,7 +653,10 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
     List<int>? bytes = await _frameCapture.capturePngBytes(pixelRatio: 1.5);
     final VideoPreview? video = _currentVideo;
     final VideoPart? part = _currentPart;
-    if ((bytes == null || bytes.isEmpty) && video != null && part != null) {
+    if ((bytes == null || bytes.isEmpty) &&
+        !_localSource &&
+        video != null &&
+        part != null) {
       bytes = await _videoShotService.captureFramePngBytes(
         bvid: video.bvid,
         cid: part.cid,
@@ -407,6 +682,7 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
   /// 保存最后进度、释放 media_kit 与全部订阅，不触碰 Windows 显示器亮度。
   @override
   Future<void> dispose() async {
+    _sleepTimer?.cancel();
     if (_disposed) {
       return;
     }
@@ -514,6 +790,8 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
       return;
     }
     _opening = true;
+    // 必须在网络等待前保存播放意图；等待期间的定时暂停不能被旧 shouldPlay 覆盖。
+    _shouldPlayAfterFallback = shouldPlay;
     _restoringPosition = resumePosition > Duration.zero;
     _emitPlayerState(
       phaseOverride: PlaybackPhase.loading,
@@ -532,8 +810,17 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
       _currentQuality = sources.actualQuality;
       _currentMediaAttemptIndex = 0;
       _mediaAttempts = WindowsDashMediaPlan.build(sources);
+      if (_audioOnly) {
+        _mediaAttempts = [
+          for (final url in sources.audioUrls)
+            WindowsDashMediaAttempt(
+              videoUrl: '',
+              audioUrl: url,
+              audioCodec: sources.audioCodecByUrl[url] ?? sources.audioCodec,
+            ),
+        ];
+      }
       _activeMediaHeaders = sources.mediaHeaders;
-      _shouldPlayAfterFallback = shouldPlay;
       if (_mediaAttempts.isEmpty) {
         throw const DesktopPlaybackSourceException('播放数据没有返回安全的媒体地址。');
       }
@@ -604,6 +891,22 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
     required Duration resumePosition,
     required bool shouldPlay,
   }) async {
+    if (_audioOnly) {
+      final media = attempt.createAudioMedia(_activeMediaHeaders);
+      _activeAudioMedia = media;
+      await _player.stop();
+      if (!_isCurrentSourceRequest(generation)) return;
+      await _player.open(media, play: false);
+      if (!_isCurrentSourceRequest(generation)) return;
+      await _player.seek(resumePosition);
+      if (!_isCurrentSourceRequest(generation)) return;
+      if (_shouldPlayAfterFallback) await _player.play();
+      if (_shouldPlayAfterFallback && !await _waitForDecodedAudio(generation)) {
+        throw const DesktopPlaybackSourceException('独立音轨未能完成加载。');
+      }
+      _externalAudioNeedsReload = false;
+      return;
+    }
     // 保留音频 Media 的强引用，避免 media_kit 的请求头缓存被垃圾回收清掉。
     _activeAudioMedia = attempt.createAudioMedia(_activeMediaHeaders);
     _activeAudioTrackToken = _audioTrackTokenFor(generation);
@@ -617,6 +920,7 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
       attempt.createVideoMedia(_activeMediaHeaders),
       play: false,
     );
+    await _player.setVideoTrack(VideoTrack.auto());
     if (!_isCurrentSourceRequest(generation)) {
       return;
     }
@@ -679,8 +983,9 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
   /// 音频真正建立解码后再次检查时间轴；若被外部音轨拉回目标之前，则暂停、重试定位并恢复播放。
   Future<void> _restoreResumePositionAfterDecode(
     int generation,
-    Duration resumePosition,
-  ) async {
+    Duration resumePosition, {
+    bool restorePlayback = true,
+  }) async {
     if (!_isCurrentSourceRequest(generation) ||
         !_isResumePositionBehindTarget(resumePosition)) {
       return;
@@ -706,6 +1011,7 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
     if (!_isCurrentSourceRequest(generation)) {
       return;
     }
+    if (!restorePlayback) return;
     if (_shouldPlayAfterFallback) {
       await _player.play();
     } else {
@@ -756,6 +1062,7 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
 
   /// 判断当前视频轨是否已经建立真实解码输出，避免只凭容器时长把纯音频或损坏视频当作成功。
   bool _hasDecodedVideo() {
+    if (_audioOnly) return true;
     final VideoParams params = _player.state.videoParams;
     final bool hasPixelFormat = params.pixelformat?.trim().isNotEmpty ?? false;
     final bool hasDimensions =
@@ -767,6 +1074,9 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
   /// 核对 libmpv 当前选中的外部音轨标记，并用公开音频参数确认当前线路已经产生解码输出。
   Future<bool> _hasDecodedAudio() async {
     final AudioParams params = _player.state.audioParams;
+    if (_audioOnly || (_localSource && _activeAudioMedia == null)) {
+      return _hasAudioOutput(params);
+    }
     final PlatformPlayer? platformPlayer = _player.platform;
     if (platformPlayer is NativePlayer) {
       try {
@@ -961,6 +1271,15 @@ class WindowsPlaybackService implements PlaybackService, PlaybackVideoSurface {
     _snapshot = PlaybackSnapshot(
       phase: phase,
       isPlaying: _player.state.playing,
+      audioOnly: _audioOnly,
+      sleepTimerRemaining: _sleepDeadline == null
+          ? Duration.zero
+          : Duration(
+              milliseconds: _sleepDeadline!
+                  .difference(DateTime.now())
+                  .inMilliseconds
+                  .clamp(0, 604800000),
+            ),
       position: _player.state.position,
       duration: _player.state.duration,
       speed: _player.state.rate,

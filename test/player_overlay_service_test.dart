@@ -29,6 +29,49 @@ class _FakePlayerOverlayPlatformChannel
 
 /// 运行字幕、弹幕通道、状态转换与数据上限的纯 Dart 回归测试。
 void main() {
+  for (final failure in [
+    'subtitle_track_not_loaded',
+    'subtitle_document_expired',
+  ]) {
+    /// 会话缺失和临时地址过期都重新确认指定 BV/CID，并且最多重试一次。
+    test('原生字幕恢复当前轨道：$failure', () async {
+      int cueReads = 0;
+      final channel = _FakePlayerOverlayPlatformChannel((
+        method,
+        arguments,
+      ) async {
+        expect(arguments?['bvid'], 'BV1GJ411x7h7');
+        expect(arguments?['cid'], 137649199);
+        if (method == 'loadSubtitleTracks') {
+          return {
+            'status': 'available',
+            'tracks': [
+              {'id': '101', 'label': '中文', 'isLocked': false},
+            ],
+          };
+        }
+        if (++cueReads == 1) {
+          throw PlatformException(code: failure);
+        }
+        return {
+          'status': 'available',
+          'cues': [
+            {'fromMs': 0, 'toMs': 1000, 'content': '当前视频'},
+          ],
+        };
+      });
+      final result = await NativePlayerOverlayService(
+        platformChannel: channel,
+      ).loadSubtitleCues(bvid: 'BV1GJ411x7h7', cid: 137649199, trackId: '101');
+      expect(result.cues.single.content, '当前视频');
+      expect(channel.methods, [
+        'loadSubtitleCues',
+        'loadSubtitleTracks',
+        'loadSubtitleCues',
+      ]);
+    });
+  }
+
   test('字幕轨道只接收安全元数据并保留可选择状态', () async {
     final _FakePlayerOverlayPlatformChannel channel =
         _FakePlayerOverlayPlatformChannel((

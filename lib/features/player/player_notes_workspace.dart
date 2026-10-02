@@ -2,6 +2,8 @@ part of 'player_page.dart';
 
 /// 封装播放器内时间点笔记的状态、持久化、截图流程和响应式界面。
 mixin _PlayerNotesWorkspace on State<PlayerPage> {
+  /// 读取播放栏比例，让全屏笔记入口与其他操作保持同样大小。
+  PlaybackPreferences get _playbackPreferences;
   static const Duration _notesPanelAnimationDuration = Duration(
     milliseconds: 280,
   );
@@ -25,6 +27,10 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
   String? _noteFramePath;
   bool _fullscreenNoteListCollapsed = false;
   int _noteDraftRevision = 0;
+  int _notesRequestGeneration = 0;
+  StreamSubscription<String>? _noteChangesSubscription;
+  Completer<void>? _noteSaveCompletion;
+  bool _noteLastSaveSucceeded = false;
 
   /// 由播放器状态类提供当前笔记的本机持久化服务。
   VideoNoteService get _videoNoteService;
@@ -70,6 +76,8 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
 
   /// 取消笔记计时器并释放输入控制器，供播放器 dispose 统一调用。
   void _disposePlayerNotesWorkspace() {
+    _notesRequestGeneration++;
+    unawaited(_noteChangesSubscription?.cancel());
     _notesPanelAnimationTimer?.cancel();
     _flushVideoNoteAutoSave();
     _noteAutoSaveTimer?.cancel();
@@ -79,11 +87,17 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
 
   /// 读取当前 BV 的全部笔记，并按视频时间点更新播放器内列表。
   Future<void> _loadCurrentVideoNotes() async {
+    final generation = ++_notesRequestGeneration;
+    final bvid = _activeVideo.bvid;
+    final cid = _currentPart.cid;
     try {
       final List<VideoNote> notes = await _videoNoteService.loadNotesForVideo(
-        _activeVideo.bvid,
+        bvid,
       );
-      if (!mounted) {
+      if (!mounted ||
+          generation != _notesRequestGeneration ||
+          bvid != _activeVideo.bvid ||
+          cid != _currentPart.cid) {
         return;
       }
       setState(() {
@@ -91,7 +105,10 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
         _notesLoading = false;
       });
     } catch (_) {
-      if (!mounted) {
+      if (!mounted ||
+          generation != _notesRequestGeneration ||
+          bvid != _activeVideo.bvid ||
+          cid != _currentPart.cid) {
         return;
       }
       setState(() => _notesLoading = false);
@@ -100,7 +117,7 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
   }
 
   /// 打开笔记工作区，并为新笔记锁定按钮按下时的视频位置。
-  Future<void> _openVideoNotes() async {
+  Future<void> _openVideoNotes({VideoNote? selectedNote}) async {
     _stopControlsAutoHideTimer();
     _notesPanelAnimationTimer?.cancel();
     if (_fullscreen) {
@@ -126,7 +143,11 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
         _fullscreenNoteListCollapsed = false;
       });
     }
-    _startNewVideoNote();
+    if (selectedNote == null) {
+      _startNewVideoNote();
+    } else {
+      _selectVideoNote(selectedNote);
+    }
     await _loadCurrentVideoNotes();
     _restartControlsAutoHideTimer();
   }
@@ -337,32 +358,37 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
       _noteSaving = true;
     }
     final String title = enteredTitle.isEmpty ? '未命名笔记' : enteredTitle;
+    final completion = Completer<void>();
+    _noteSaveCompletion = completion;
+    _noteLastSaveSucceeded = false;
+    final noteVideo = _activeVideo;
     final VideoNote? existing = _editingVideoNote;
     final int draftRevision = _noteDraftRevision;
     final bool includeFrame = _includeCurrentFrame;
     final int notePartCid = _notePartCid;
+    final VideoPart notePart = _findVideoNotePart(notePartCid);
     final Duration notePosition = _notePosition;
     // 自动保存只锁定保存按钮，不禁用输入框，避免输入过程中键盘失去焦点。
     setState(() {});
     String? framePath = includeFrame ? _noteFramePath : null;
+    bool frameFailed = false;
     try {
       if (includeFrame && framePath == null && !automatic) {
-        framePath = await _captureFrameAtNotePosition();
-        if (framePath == null) {
-          throw PlatformException(
-            code: 'frame_capture_failed',
-            message: '没有取得当前视频画面。',
-          );
+        try {
+          framePath = await _captureFrameAtNotePosition();
+          frameFailed = framePath == null;
+        } catch (_) {
+          // Optional screenshot failure must never discard a valid text note.
+          frameFailed = true;
         }
       }
       final DateTime now = DateTime.now();
-      final VideoPart notePart = _findVideoNotePart(notePartCid);
       final VideoNote note = existing == null
           ? VideoNote(
-              id: '${_activeVideo.bvid}-${now.microsecondsSinceEpoch}',
-              bvid: _activeVideo.bvid,
-              videoTitle: _activeVideo.title,
-              ownerName: _activeVideo.ownerName,
+              id: '${noteVideo.bvid}-${now.microsecondsSinceEpoch}',
+              bvid: noteVideo.bvid,
+              videoTitle: noteVideo.title,
+              ownerName: noteVideo.ownerName,
               partCid: notePart.cid,
               partPageNumber: notePart.pageNumber,
               partTitle: notePart.title,
@@ -371,7 +397,7 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
               createdAt: now,
               updatedAt: now,
               position: notePosition,
-              videoCoverUrl: _activeVideo.thumbnailUrl,
+              videoCoverUrl: noteVideo.thumbnailUrl,
               framePath: framePath,
             )
           : existing.copyWith(
@@ -383,7 +409,8 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
               clearFrame: !includeFrame,
             );
       await _videoNoteService.saveNote(note);
-      if (!mounted) {
+      _noteLastSaveSucceeded = true;
+      if (!mounted || noteVideo.bvid != _activeVideo.bvid) {
         return;
       }
       final bool retryAutomaticSave = _noteAutoSavePending;
@@ -402,7 +429,9 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
         _scheduleVideoNoteAutoSave();
       }
       if (mounted && !automatic) {
-        _showTransientSnackBar('笔记已保存到本机。');
+        _showTransientSnackBar(
+          frameFailed ? '笔记文字已保存，截图未成功；可再次保存以重试截图。' : '笔记已保存到本机。',
+        );
       }
     } on PlatformException catch (error) {
       if (!mounted) {
@@ -432,6 +461,11 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
         _scheduleVideoNoteAutoSave();
       }
       _showTransientSnackBar('保存笔记失败，请稍后再试。');
+    } finally {
+      completion.complete();
+      if (identical(_noteSaveCompletion, completion)) {
+        _noteSaveCompletion = null;
+      }
     }
   }
 
@@ -529,78 +563,59 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
       );
     }
     if (_currentVideoNotes.isEmpty) {
-      return const SizedBox(
-        height: 52,
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 12),
         child: Align(
           alignment: Alignment.centerLeft,
           child: Text('这个视频还没有笔记，先写下第一条吧。'),
         ),
       );
     }
+    final List<Size> tileSizes = _currentVideoNotes
+        // 尺寸映射函数测量每条笔记的实际字体，避免大字号仍挤在固定高度内。
+        .map(
+          (VideoNote note) => measurePlayerNoteStripTile(
+            context,
+            title: note.title,
+            positionLabel: formatVideoNotePosition(note.position),
+            partLabel: 'P${note.partPageNumber}',
+          ),
+        )
+        .toList();
+    final double stripHeight = tileSizes.fold<double>(
+      44,
+      // 最大值函数让列表保留足够高度以容纳当前最高的卡片。
+      (double height, Size size) => height > size.height ? height : size.height,
+    );
     return SizedBox(
-      height: 56,
-      child: ListView.separated(
-        key: const Key('portrait-video-note-list'),
-        scrollDirection: Axis.horizontal,
-        itemCount: _currentVideoNotes.length,
-        // 分隔函数给横向笔记卡片保留稳定间距。
-        separatorBuilder: (BuildContext context, int index) =>
-            const SizedBox(width: 8),
-        // 构建函数显示笔记标题与视频时间点，并标出当前编辑项。
-        itemBuilder: (BuildContext context, int index) {
-          final VideoNote note = _currentVideoNotes[index];
-          final bool selected = note.id == _editingVideoNote?.id;
-          return SizedBox(
-            width: 146,
-            child: Card(
-              margin: EdgeInsets.zero,
-              color: selected
-                  ? Theme.of(context).colorScheme.primaryContainer
-                  : null,
-              child: InkWell(
-                key: Key('portrait-video-note-${note.id}'),
-                borderRadius: BorderRadius.circular(12),
-                // 竖屏笔记卡点击函数只载入笔记，跳转需要用户使用编辑器按钮确认。
+      height: stripHeight,
+      child: HorizontalMouseScroll(
+        child: ListView.separated(
+          key: const Key('portrait-video-note-list'),
+          scrollDirection: Axis.horizontal,
+          itemCount: _currentVideoNotes.length,
+          // 分隔函数给横向笔记卡片保留稳定间距。
+          separatorBuilder: (BuildContext context, int index) =>
+              const SizedBox(width: 8),
+          // 构建函数按测量宽度展示标题和时间点，点击仅选中编辑笔记。
+          itemBuilder: (BuildContext context, int index) {
+            final VideoNote note = _currentVideoNotes[index];
+            return SizedBox(
+              width: tileSizes[index].width,
+              child: PlayerNoteTile(
+                horizontal: true,
+                title: note.title,
+                positionLabel: formatVideoNotePosition(note.position),
+                partLabel: 'P${note.partPageNumber}',
+                selected: note.id == _editingVideoNote?.id,
+                tapKey: Key('portrait-video-note-${note.id}'),
+                partKey: Key('portrait-video-note-part-${note.id}'),
+                // 选择函数仅载入笔记，视频跳转仍由编辑器独立按钮执行。
                 onTap: () => _selectVideoNote(note),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 9,
-                    vertical: 6,
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      Text(
-                        note.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                      const SizedBox(height: 3),
-                      Row(
-                        children: <Widget>[
-                          Expanded(
-                            child: Text(
-                              formatVideoNotePosition(note.position),
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            'P${note.partPageNumber}',
-                            key: Key('portrait-video-note-part-${note.id}'),
-                            style: Theme.of(context).textTheme.labelMedium
-                                ?.copyWith(fontWeight: FontWeight.w800),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }
@@ -649,73 +664,23 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
       // 构建函数显示可自动滚动的标题和视频时间点，点击只切换编辑内容。
       itemBuilder: (BuildContext context, int index) {
         final VideoNote note = _currentVideoNotes[index];
-        final bool selected = note.id == _editingVideoNote?.id;
-        final ColorScheme colors = Theme.of(context).colorScheme;
-        return Material(
-          color: selected
-              ? colors.primary.withValues(alpha: 0.18)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(9),
-          child: InkWell(
-            key: Key('fullscreen-video-note-${note.id}'),
-            borderRadius: BorderRadius.circular(9),
-            // 全屏笔记点击函数只载入标题、正文和画面，跳转由单独按钮执行。
-            onTap: () => _selectVideoNote(note),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
-              child: Row(
-                children: <Widget>[
-                  Container(
-                    width: 3,
-                    height: 32,
-                    decoration: BoxDecoration(
-                      color: selected ? colors.primary : colors.outlineVariant,
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        SizedBox(
-                          height: 18,
-                          child: _AutoScrollingText(
-                            text: note.title,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 3),
-                        DecoratedBox(
-                          decoration: BoxDecoration(
-                            color: selected
-                                ? colors.primary.withValues(alpha: 0.22)
-                                : colors.surfaceContainerHighest,
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 6,
-                              vertical: 2,
-                            ),
-                            child: Text(
-                              'P${note.partPageNumber} ${formatVideoNotePosition(note.position)}',
-                              style: Theme.of(context).textTheme.labelMedium
-                                  ?.copyWith(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
+        return PlayerNoteTile(
+          title: note.title,
+          positionLabel: formatVideoNotePosition(note.position),
+          partLabel: 'P${note.partPageNumber}',
+          selected: note.id == _editingVideoNote?.id,
+          tapKey: Key('fullscreen-video-note-${note.id}'),
+          // 选择函数只载入笔记内容，跳转仍需用户点击独立按钮。
+          onTap: () => _selectVideoNote(note),
+          scrollingTitle: SizedBox(
+            height: measurePlayerNoteText(
+              context,
+              note.title,
+              PlayerNoteTile.listTitleStyle,
+            ).height.ceilToDouble(),
+            child: _AutoScrollingText(
+              text: note.title,
+              style: PlayerNoteTile.listTitleStyle,
             ),
           ),
         );
@@ -837,14 +802,16 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
     );
   }
 
-  /// 创建全屏右侧中部的半透明记笔记按钮，打开后由半屏笔记本替代。
+  /// 创建全屏侧边记笔记入口，放大控制栏时上移避开底部进度，打开后显示笔记本。
   Widget _buildFullscreenVideoNoteButton() {
+    final size = PlayerControlSize(_playbackPreferences.controlScale);
     return Positioned(
       key: const Key('fullscreen-note-button'),
       right: 12,
       top: 0,
       bottom: 0,
-      child: Center(
+      child: Align(
+        alignment: Alignment(0, size.sideControlAlignmentY),
         child: Material(
           color: Colors.black.withValues(alpha: 0.58),
           borderRadius: BorderRadius.circular(22),
@@ -852,14 +819,27 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
             borderRadius: BorderRadius.circular(22),
             // 全屏记笔记按钮函数打开工作区并锁定当前播放时间点。
             onTap: () => unawaited(_openVideoNotes()),
-            child: const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            child: Padding(
+              padding: EdgeInsets.symmetric(
+                horizontal: 12 * size.scale,
+                vertical: 9 * size.scale,
+              ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: <Widget>[
-                  Icon(Icons.edit_note_rounded, color: Colors.white, size: 20),
-                  SizedBox(width: 5),
-                  Text('记笔记', style: TextStyle(color: Colors.white)),
+                  Icon(
+                    Icons.edit_note_rounded,
+                    color: Colors.white,
+                    size: 20 * size.scale,
+                  ),
+                  SizedBox(width: 5 * size.scale),
+                  Text(
+                    '记笔记',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 14 * size.scale,
+                    ),
+                  ),
                 ],
               ),
             ),

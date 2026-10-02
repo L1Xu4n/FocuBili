@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/layout/adaptive_page_frame.dart';
 import '../../core/router/app_router.dart';
+import '../../core/theme/app_theme.dart';
 import '../../models/playback_preferences.dart';
 import '../../services/app_behavior_preferences_service.dart';
 import '../../services/playback_preferences_service.dart';
@@ -13,6 +14,22 @@ import '../../services/focus_preferences_service.dart';
 import '../../services/windows_clipboard_link_service.dart';
 import '../../platform/app_platform.dart';
 import 'app_theme_mode_controller.dart';
+import 'playback_speeds_dialog.dart';
+import 'double_tap_regions_page.dart';
+import 'player_control_size_page.dart';
+import 'settings_search_section.dart';
+
+/// 可选择的主题强调色预设，供设置页以色块形式展示。
+const List<(String, int)> _themeColorOptions = <(String, int)>[
+  ('焦点蓝', 0xFF1677FF),
+  ('国庆红', AppTheme.nationalDayRedValue),
+  ('B站粉', 0xFFFB7299),
+  ('玫红', 0xFFC2188B),
+  ('珊瑚橙', 0xFFFF7043),
+  ('翠绿', 0xFF00A870),
+  ('湖蓝', 0xFF00B8D4),
+  ('薰衣草紫', 0xFF7C4DFF),
+];
 
 /// 标识个性化设置当前显示首页还是某个二级分类页面。
 enum _SettingsLevel {
@@ -65,6 +82,8 @@ class _PersonalizationSettingsPageState
   bool _accountReadOnly = true;
   bool _searchHistoryEnabled = true;
   bool _watchHistoryEnabled = true;
+  bool _wbiSigningEnabled = false;
+  final TextEditingController _settingsSearch = TextEditingController();
   bool _savingBehaviorPreference = false;
   _SettingsLevel _settingsLevel = _SettingsLevel.overview;
   late final AppUpdateController _fallbackUpdateController;
@@ -135,6 +154,8 @@ class _PersonalizationSettingsPageState
           .loadSearchHistoryEnabled();
       final bool watchHistoryEnabled = await _behaviorPreferencesService
           .loadWatchHistoryEnabled();
+      final bool wbiSigningEnabled = await _behaviorPreferencesService
+          .loadWbiSigningEnabled();
       final bool hasDoNotDisturbAccess =
           widget.focusNotificationService.supportsDoNotDisturb
           ? await widget.focusNotificationService.hasDoNotDisturbAccess()
@@ -149,6 +170,7 @@ class _PersonalizationSettingsPageState
         _accountReadOnly = accountReadOnly;
         _searchHistoryEnabled = searchHistoryEnabled;
         _watchHistoryEnabled = watchHistoryEnabled;
+        _wbiSigningEnabled = wbiSigningEnabled;
         _hasDoNotDisturbAccess = hasDoNotDisturbAccess;
         _loading = false;
       });
@@ -224,6 +246,15 @@ class _PersonalizationSettingsPageState
       }
     }
   }
+
+  /// 保存 WBI 选择；后续打开、重试和清晰度请求使用已保存的模式。
+  Future<void> _setWbiSigningEnabled(bool enabled) => _saveBehaviorPreference(
+    enabled: enabled,
+    previous: _wbiSigningEnabled,
+    applyValue: (bool value) => _wbiSigningEnabled = value,
+    saveValue: _behaviorPreferencesService.saveWbiSigningEnabled,
+    failureMessage: 'WBI 签名设置保存失败，请稍后重试。',
+  );
 
   /// 保存前台剪贴板检测开关；失败时恢复原值并显示说明。
   Future<void> _setWindowsClipboardDetectionEnabled(bool enabled) async {
@@ -399,6 +430,125 @@ class _PersonalizationSettingsPageState
       if (mounted) {
         setState(() => _saving = false);
       }
+    }
+  }
+
+  /// 打开真实大小的沉浸式控制栏预览，保存后更新设置摘要。
+  Future<void> _editPlayerControlSize() async {
+    final scale = await showPlayerControlSizeEditor(
+      context: context,
+      scale: _preferences.controlScale,
+      service: widget.preferencesService,
+      platform: widget.appPlatform ?? AppPlatformDetector.current,
+    );
+    if (mounted && scale != null) {
+      setState(() => _preferences = _preferences.copyWith(controlScale: scale));
+    }
+  }
+
+  /// 全屏编辑双击区域，保存成功后更新设置摘要。
+  Future<void> _editDoubleTapRegions() async {
+    final regions = await showDoubleTapRegionsEditor(
+      context: context,
+      regions: _preferences.doubleTapRegions,
+      service: widget.preferencesService,
+      platform: widget.appPlatform ?? AppPlatformDetector.current,
+    );
+    if (mounted && regions != null) {
+      setState(
+        () => _preferences = _preferences.copyWith(doubleTapRegions: regions),
+      );
+    }
+  }
+
+  /// 保存播放暂停反馈开关，失败时恢复最近成功的配置。
+  Future<void> _setPlaybackActionAnimation(bool enabled) async {
+    if (_saving) return;
+    final previous = _preferences;
+    setState(() {
+      _preferences = _preferences.copyWith(
+        showPlaybackActionAnimation: enabled,
+      );
+      _saving = true;
+    });
+    try {
+      await widget.preferencesService.savePlaybackActionAnimation(enabled);
+    } catch (_) {
+      if (mounted) {
+        setState(() => _preferences = previous);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('动画设置保存失败，请重试。')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// 立即保存笔记旗标显示设置，存储失败时恢复之前的开关状态。
+  Future<void> _setShowNoteTimeMarkers(bool enabled) async {
+    if (_saving) return;
+    final previous = _preferences;
+    setState(() {
+      _preferences = _preferences.copyWith(showNoteTimeMarkers: enabled);
+      _saving = true;
+    });
+    try {
+      await widget.preferencesService.saveShowNoteTimeMarkers(enabled);
+    } catch (_) {
+      if (mounted) {
+        setState(() => _preferences = previous);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('设置保存失败，请重试。')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// Saves each add/delete immediately; closing the editor needs no confirmation.
+  Future<void> _editPlaybackSpeeds() async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => PlaybackSpeedsDialog(
+        speeds: _preferences.playbackSpeeds,
+        onChanged: (speeds) async {
+          await widget.preferencesService.savePlaybackSpeeds(speeds);
+          if (mounted) {
+            setState(
+              () =>
+                  _preferences = _preferences.copyWith(playbackSpeeds: speeds),
+            );
+          }
+        },
+      ),
+    );
+  }
+
+  /// Saves two-finger picture gestures immediately and restores the old switch on failure.
+  Future<void> _setTwoFingerVideoTransformEnabled(bool enabled) async {
+    if (_saving) return;
+    final previous = _preferences;
+    setState(() {
+      _preferences = _preferences.copyWith(
+        enableTwoFingerVideoTransform: enabled,
+      );
+      _saving = true;
+    });
+    try {
+      await widget.preferencesService.saveTwoFingerVideoTransformEnabled(
+        enabled,
+      );
+    } catch (_) {
+      if (mounted) {
+        setState(() => _preferences = previous);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('设置保存失败，请重试。')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
   }
 
@@ -583,8 +733,114 @@ class _PersonalizationSettingsPageState
     );
   }
 
+  /// 创建主题强调色选择区，点按色块后整套应用立即换色并持久化。
+  Widget _buildThemeColorTile(AppThemeModeController controller) {
+    return Padding(
+      key: const Key('theme-color-setting'),
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          const Row(
+            children: <Widget>[
+              Icon(Icons.palette_outlined),
+              SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text('主题颜色'),
+                    SizedBox(height: 2),
+                    Text(
+                      '选择整套界面的强调色，切换后立即应用并在重启后保留',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 12,
+            runSpacing: 10,
+            children: <Widget>[
+              for (final (String label, int value) in _themeColorOptions)
+                Tooltip(
+                  message: label,
+                  child: InkWell(
+                    key: Key('theme-color-option-${value.toRadixString(16)}'),
+                    customBorder: const CircleBorder(),
+                    onTap: controller.saving
+                        ? null
+                        : () => unawaited(
+                            _setThemeColor(controller, Color(value)),
+                          ),
+                    child: Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: Color(value),
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: controller.seedColor.toARGB32() == value
+                              ? Theme.of(context).colorScheme.onSurface
+                              : Colors.transparent,
+                          width: 2,
+                        ),
+                      ),
+                      child: controller.seedColor.toARGB32() == value
+                          ? const Icon(
+                              Icons.check_rounded,
+                              color: Colors.white,
+                              size: 20,
+                            )
+                          : null,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              key: const Key('reset-theme-color'),
+              onPressed: controller.saving
+                  ? null
+                  : () => unawaited(_resetThemeColor(controller)),
+              child: const Text('恢复默认'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 保存新的主题强调色；失败时控制器会恢复旧值并向用户说明。
+  Future<void> _setThemeColor(
+    AppThemeModeController controller,
+    Color color,
+  ) async {
+    final bool saved = await controller.setSeedColor(color);
+    if (!saved && mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('主题颜色保存失败，请稍后重试。')));
+    }
+  }
+
+  /// 恢复默认主题颜色，失败时提示用户稍后重试。
+  Future<void> _resetThemeColor(AppThemeModeController controller) async {
+    final bool saved = await controller.resetSeedColor();
+    if (!saved && mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('主题颜色恢复失败，请稍后重试。')));
+    }
+  }
+
   /// 创建“账号与隐私”设置卡，集中管理账号写入和本机行为记录。
-  Widget _buildAccountAndPrivacySection() {
+  SettingsSearchSection _buildAccountAndPrivacySection() {
     return _buildSettingsSection(
       key: const Key('settings-account-privacy-section'),
       icon: Icons.admin_panel_settings_outlined,
@@ -636,7 +892,8 @@ class _PersonalizationSettingsPageState
   }
 
   /// 创建“播放与专注”设置卡，集中播放器行为、清晰度和专注系统能力。
-  Widget _buildPlaybackAndFocusSection() {
+  SettingsSearchSection _buildPlaybackAndFocusSection() {
+    final platform = widget.appPlatform ?? AppPlatformDetector.current;
     final bool supportsDoNotDisturb =
         widget.focusNotificationService.supportsDoNotDisturb;
     return _buildSettingsSection(
@@ -647,6 +904,48 @@ class _PersonalizationSettingsPageState
         _buildDefaultQualityTile(forWifi: true),
         _buildDefaultQualityTile(forWifi: false),
         SwitchListTile.adaptive(
+          key: const Key('enable-wbi-signing'),
+          value: _wbiSigningEnabled,
+          onChanged: _savingBehaviorPreference ? null : _setWbiSigningEnabled,
+          secondary: const Icon(Icons.verified_user_outlined),
+          title: const Text('启用 WBI 签名'),
+          subtitle: const Text(
+            '默认关闭。在线播放遇到 -351 时可尝试开启；下次加载生效。'
+            '首次需额外获取签名材料，可能稍慢；不增加账号权限，也不保证解决风控。',
+          ),
+        ),
+        ListTile(
+          key: const Key('player-control-size-preference'),
+          leading: const Icon(Icons.format_size_rounded),
+          title: const Text('播放栏大小'),
+          subtitle: Text(
+            '${(_preferences.controlScale * 100).round()}% · 调整按钮、文字和点击区域，实时预览',
+          ),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: _saving ? null : _editPlayerControlSize,
+        ),
+        SwitchListTile.adaptive(
+          key: const Key('show-note-time-markers'),
+          value: _preferences.showNoteTimeMarkers,
+          // 开关回调立即持久化，失败时恢复原值。
+          onChanged: _saving ? null : _setShowNoteTimeMarkers,
+          secondary: const Icon(Icons.flag_outlined),
+          title: const Text('显示笔记时间标记'),
+          subtitle: const Text('在进度条上方显示当前分 P 的笔记，点击可打开。'),
+        ),
+        ListTile(
+          key: const Key('playback-speeds-preference'),
+          leading: const Icon(Icons.speed),
+          title: const Text('自定义播放倍速'),
+          subtitle: Text(
+            _preferences.playbackSpeeds
+                .map(PlaybackPreferences.speedLabel)
+                .join(' / '),
+          ),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: _saving ? null : _editPlaybackSpeeds,
+        ),
+        SwitchListTile.adaptive(
           key: const Key('enable-double-tap-seek'),
           value: _preferences.enableDoubleTapSeek,
           // 双击开关函数立即更新界面并把选择保存到当前设备。
@@ -655,6 +954,33 @@ class _PersonalizationSettingsPageState
           title: const Text('启用双击快进快退'),
           subtitle: const Text('关闭后，双击视频画面的任何位置都会切换播放或暂停。'),
         ),
+        ListTile(
+          key: const Key('double-tap-regions-preference'),
+          leading: const Icon(Icons.crop_free_rounded),
+          title: const Text('自定义双击触发区'),
+          subtitle: Text(
+            '全屏预览 · 左 ${(100 * _preferences.doubleTapRegions.leftWidth).round()}% / 右 ${(100 * _preferences.doubleTapRegions.rightWidth).round()}% / 高 ${(100 * _preferences.doubleTapRegions.height).round()}%',
+          ),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: _saving ? null : _editDoubleTapRegions,
+        ),
+        SwitchListTile.adaptive(
+          key: const Key('show-playback-action-animation'),
+          value: _preferences.showPlaybackActionAnimation,
+          onChanged: _saving ? null : _setPlaybackActionAnimation,
+          secondary: const Icon(Icons.animation_rounded),
+          title: const Text('播放 / 暂停动画'),
+          subtitle: const Text('在画面中央短暂显示缩小淡出的播放或暂停标志。'),
+        ),
+        if (platform == AppPlatform.android || platform == AppPlatform.ios)
+          SwitchListTile.adaptive(
+            key: const Key('enable-two-finger-video-transform'),
+            value: _preferences.enableTwoFingerVideoTransform,
+            onChanged: _saving ? null : _setTwoFingerVideoTransformEnabled,
+            secondary: const Icon(Icons.pinch_outlined),
+            title: const Text('启用双指缩放画面'),
+            subtitle: const Text('全屏时双指拖动、缩放画面；双指双击恢复画面。'),
+          ),
         if (supportsDoNotDisturb || _isWindows)
           SwitchListTile.adaptive(
             key: const Key('enable-focus-do-not-disturb'),
@@ -682,7 +1008,7 @@ class _PersonalizationSettingsPageState
   }
 
   /// 创建“外观与应用”设置卡，把主题、权限、更新、缓存和版本入口集中展示。
-  Widget _buildApplicationSection(
+  SettingsSearchSection _buildApplicationSection(
     AppUpdateController updateController,
     AppThemeModeController themeModeController,
   ) {
@@ -696,6 +1022,7 @@ class _PersonalizationSettingsPageState
       title: '外观与应用',
       children: <Widget>[
         _buildThemeModeTile(themeModeController),
+        _buildThemeColorTile(themeModeController),
         ListTile(
           key: const Key('open-android-permissions'),
           leading: const Icon(Icons.admin_panel_settings_outlined),
@@ -729,6 +1056,7 @@ class _PersonalizationSettingsPageState
           subtitle: const Text('每次启动从 GitHub Release 检查新的正式版本。'),
         ),
         ListTile(
+          key: const Key('open-cache-management'),
           leading: const Icon(Icons.storage_outlined),
           title: const Text('视频缓存管理'),
           subtitle: const Text('查看和清理边播边缓存的数据'),
@@ -774,40 +1102,21 @@ class _PersonalizationSettingsPageState
     );
   }
 
-  /// 给一组设置项添加标题、图标和分隔线，手机与平板复用相同信息结构。
-  Widget _buildSettingsSection({
+  /// 按标题、说明与别名搜索本组实际设置，二级页无查询时显示全部。
+  SettingsSearchSection _buildSettingsSection({
     required Key key,
     required IconData icon,
     required String title,
     required List<Widget> children,
   }) {
-    final List<Widget> separatedChildren = <Widget>[];
-    for (int index = 0; index < children.length; index += 1) {
-      separatedChildren.add(children[index]);
-      if (index < children.length - 1) {
-        separatedChildren.add(const Divider(height: 1));
-      }
-    }
-    return Card(
+    return SettingsSearchSection(
       key: key,
-      margin: EdgeInsets.zero,
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          ListTile(
-            leading: Icon(icon),
-            title: Text(
-              title,
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-            ),
-          ),
-          const Divider(height: 1),
-          ...separatedChildren,
-        ],
-      ),
+      icon: icon,
+      title: title,
+      query: _settingsLevel == _SettingsLevel.overview
+          ? _settingsSearch.text
+          : '',
+      children: children,
     );
   }
 
@@ -830,16 +1139,49 @@ class _PersonalizationSettingsPageState
     );
   }
 
-  /// 创建由三个分类入口组成的设置首页。
-  Widget _buildSettingsOverview() {
+  /// 创建分类首页或实际可操作搜索结果，无匹配提示与结果共用同一筛选。
+  Widget _buildSettingsOverview(
+    AppUpdateController updateController,
+    AppThemeModeController themeController,
+  ) {
+    final query = _settingsSearch.text.trim().toLowerCase();
+    final sections = query.isEmpty
+        ? <SettingsSearchSection>[]
+        : [
+            _buildAccountAndPrivacySection(),
+            _buildPlaybackAndFocusSection(),
+            _buildApplicationSection(updateController, themeController),
+          ];
     return SingleChildScrollView(
       key: const Key('settings-overview-list'),
       padding: const EdgeInsets.all(16),
-      child: Card(
-        margin: EdgeInsets.zero,
-        clipBehavior: Clip.antiAlias,
-        child: Column(
-          children: <Widget>[
+      child: Column(
+        children: <Widget>[
+          TextField(
+            key: const Key('settings-search'),
+            controller: _settingsSearch,
+            decoration: InputDecoration(
+              prefixIcon: const Icon(Icons.search),
+              hintText: '搜索设置项目',
+              suffixIcon: query.isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip: '清空搜索',
+                      icon: const Icon(Icons.close),
+                      onPressed: () => setState(_settingsSearch.clear),
+                    ),
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: 16),
+          if (query.isNotEmpty) ...[
+            if (sections.every((section) => section.isEmpty))
+              const Padding(
+                padding: EdgeInsets.all(24),
+                child: Text('没有匹配的设置项目'),
+              ),
+            ...sections,
+          ] else ...[
             _buildSettingsCategoryTile(
               key: const Key('open-account-privacy-settings'),
               icon: Icons.admin_panel_settings_outlined,
@@ -864,7 +1206,7 @@ class _PersonalizationSettingsPageState
               level: _SettingsLevel.appearanceAndApplication,
             ),
           ],
-        ),
+        ],
       ),
     );
   }
@@ -875,7 +1217,7 @@ class _PersonalizationSettingsPageState
     AppThemeModeController themeModeController,
   ) {
     if (_settingsLevel == _SettingsLevel.overview) {
-      return _buildSettingsOverview();
+      return _buildSettingsOverview(updateController, themeModeController);
     }
     final Widget section = switch (_settingsLevel) {
       _SettingsLevel.accountAndPrivacy => _buildAccountAndPrivacySection(),
@@ -954,6 +1296,7 @@ class _PersonalizationSettingsPageState
   /// 释放独立页面的后备更新控制器和监听器。
   @override
   void dispose() {
+    _settingsSearch.dispose();
     WidgetsBinding.instance.removeObserver(this);
     _fallbackUpdateController
       ..removeListener(_handleFallbackUpdateChanged)

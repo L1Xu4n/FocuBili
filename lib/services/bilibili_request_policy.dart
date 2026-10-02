@@ -36,6 +36,16 @@ abstract final class BilibiliRequestPolicy {
     return '$normalized Mobile';
   }
 
+  /// 识别极验官方资源的网络错误；只检查域名，不保存含验证参数的完整 URL。
+  static bool isCaptchaResourceUrl(String? url) {
+    final uri = Uri.tryParse(url ?? '');
+    if (uri == null || (uri.scheme != 'https' && uri.scheme != 'http')) {
+      return false;
+    }
+    final host = uri.host.toLowerCase();
+    return host == 'geetest.com' || host.endsWith('.geetest.com');
+  }
+
   /// 根据公开接口地址生成对应网页来源，详情和标签请求使用精确视频页防止 HTTP 412。
   static String publicJsonReferer(Uri endpoint) {
     if (endpoint.path == '/x/web-interface/wbi/search/type') {

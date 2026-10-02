@@ -1,5 +1,17 @@
 part of 'player_page.dart';
 
+/// 保存软件收藏夹多选面板的最终勾选结果，以及用户是否希望继续创建新目录。
+class _AppFavoriteFolderSelection {
+  /// 创建一份不会再被弹窗内部修改的软件收藏夹选择结果。
+  _AppFavoriteFolderSelection({
+    required Set<String> selectedIds,
+    this.createNewFolder = false,
+  }) : selectedIds = Set<String>.unmodifiable(selectedIds);
+
+  final Set<String> selectedIds;
+  final bool createNewFolder;
+}
+
 /// 保存收藏夹多选面板的最终勾选结果，以及用户是否希望继续创建新目录。
 class _FavoriteFolderSelection {
   /// 创建一份不会再被弹窗内部修改的收藏夹选择结果。
@@ -739,39 +751,25 @@ extension _PlayerDetailsView on _PlayerPageState {
     final LearningListEntry? currentEntry = _currentLearningListEntry;
     final bool busy =
         _learningListLoading || _addingLearningBvid == _activeVideo.bvid;
-    return Tooltip(
-      message: currentEntry == null ? '加入学习清单' : '取消加入学习清单',
-      child: TextButton.icon(
-        key: const Key('current-video-learning-list-button'),
-        style: TextButton.styleFrom(
-          visualDensity: VisualDensity.compact,
-          padding: const EdgeInsets.symmetric(horizontal: 6),
-        ),
-        // 顶部学习清单按钮函数会在加入与取消加入之间切换，并在取消前要求确认。
-        onPressed: busy
-            ? null
-            : () => unawaited(_handleCurrentVideoLearningListTap()),
-        icon: busy
-            ? const SizedBox.square(
-                dimension: 17,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            : Icon(
-                currentEntry == null
-                    ? Icons.playlist_add_rounded
-                    : Icons.playlist_add_check_rounded,
-                size: 20,
-              ),
-        label: Text(
-          _learningListLoading
-              ? '读取中…'
-              : currentEntry == null
-              ? '加入 P${_currentPart.pageNumber}'
-              : currentEntry.status == LearningListStatus.completed
-              ? 'P${_currentPart.pageNumber} 已完成'
-              : 'P${_currentPart.pageNumber} 已加入',
-        ),
-      ),
+    return PlayerLibraryAction(
+      tooltip: currentEntry == null ? '加入学习清单' : '取消加入学习清单',
+      key: const Key('current-video-learning-list-button'),
+      busy: busy,
+      selected: currentEntry != null,
+      // 顶部学习清单按钮函数会在加入与取消加入之间切换，并在取消前要求确认。
+      onPressed: busy
+          ? null
+          : () => unawaited(_handleCurrentVideoLearningListTap()),
+      icon: currentEntry == null
+          ? Icons.playlist_add_rounded
+          : Icons.playlist_add_check_rounded,
+      label: _learningListLoading
+          ? '读取中…'
+          : currentEntry == null
+          ? '加入 P${_currentPart.pageNumber}'
+          : currentEntry.status == LearningListStatus.completed
+          ? 'P${_currentPart.pageNumber} 已完成'
+          : 'P${_currentPart.pageNumber} 已加入',
     );
   }
 
@@ -983,9 +981,7 @@ extension _PlayerDetailsView on _PlayerPageState {
       opened = false;
     }
     if (!opened && mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('无法打开默认浏览器，请稍后重试。')));
+      _showTransientSnackBar('无法打开默认浏览器，请稍后重试。');
     }
   }
 }

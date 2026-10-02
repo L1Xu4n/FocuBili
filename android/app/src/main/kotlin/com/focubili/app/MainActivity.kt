@@ -15,6 +15,7 @@ class MainActivity : FlutterActivity() {
     private var bilibiliCookieController: BilibiliCookieController? = null
     private var deviceStatusController: DeviceStatusController? = null
     private var focusNotificationController: FocusNotificationController? = null
+    private var downloadProgressController: DownloadProgressController? = null
     private var deepLinkController: DeepLinkController? = null
     private var deferredDeepLink: String? = null
 
@@ -60,6 +61,7 @@ class MainActivity : FlutterActivity() {
             initialLink = deferredDeepLink,
         )
         deferredDeepLink = null
+        downloadProgressController = DownloadProgressController(this, flutterEngine.dartExecutor.binaryMessenger)
     }
 
     /** `singleTask` Activity 收到新链接或分享文本时复用现有 Flutter 页面处理。 */
@@ -134,6 +136,8 @@ class MainActivity : FlutterActivity() {
         deviceStatusController = null
         focusNotificationController?.dispose()
         focusNotificationController = null
+        downloadProgressController?.dispose()
+        downloadProgressController = null
         deepLinkController?.dispose()
         deepLinkController = null
         deferredDeepLink = null

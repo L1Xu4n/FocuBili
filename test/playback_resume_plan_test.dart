@@ -45,6 +45,24 @@ void main() {
     expect(plan.positionSource, PlaybackResumePositionSource.platform);
   });
 
+  /// 离线播放写入的较新观看记录应覆盖旧在线分P和旧位置。
+  test('较新的离线观看记录优先于旧平台进度', () {
+    final PlaybackResumePlan plan = PlaybackResumePlan.resolve(
+      video: _video(),
+      savedState: SavedPlaybackState(
+        cid: 101,
+        pageNumber: 1,
+        position: const Duration(seconds: 20),
+        savedAt: DateTime(2026, 8, 13),
+      ),
+      historyEntry: _history(position: const Duration(seconds: 40)),
+    );
+
+    expect(plan.part.cid, 202);
+    expect(plan.position, const Duration(seconds: 40));
+    expect(plan.positionSource, PlaybackResumePositionSource.watchHistory);
+  });
+
   /// 平台后端已用真实媒体时长校验过位置，详情接口缺失时长不能把它再次清零。
   test('平台合法进度不依赖详情接口时长', () {
     final PlaybackResumePlan plan = PlaybackResumePlan.resolve(
