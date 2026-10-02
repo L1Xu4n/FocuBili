@@ -19,6 +19,7 @@ void main() {
     expect(Platform.isIOS || Platform.isMacOS, isTrue);
     MediaKit.ensureInitialized();
     final dir = await getTemporaryDirectory();
+    await dir.create(recursive: true);
     final file = File('${dir.path}/focubili-apple-smoke.mp4');
     await file.writeAsBytes(base64Decode(appleSmokeVideoBase64));
     final player = Player();

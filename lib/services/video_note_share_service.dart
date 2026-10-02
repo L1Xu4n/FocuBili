@@ -125,9 +125,12 @@ class VideoNoteShareService {
     return math.min(3, math.min(byHeight, byWidth)).clamp(0.25, 3).toDouble();
   }
 
-  /// 读取应用临时目录，目录缺失时由系统提供方负责创建。
-  Future<Directory> _temporaryDirectory() {
-    return temporaryDirectoryLoader?.call() ?? getTemporaryDirectory();
+  /// 创建应用临时目录；Apple 系统返回的路径不保证已经存在。
+  Future<Directory> _temporaryDirectory() async {
+    final directory =
+        await (temporaryDirectoryLoader?.call() ?? getTemporaryDirectory());
+    await directory.create(recursive: true);
+    return directory;
   }
 
   /// 调用可注入的分享函数，默认使用 share_plus 系统面板。
