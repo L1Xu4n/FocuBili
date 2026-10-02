@@ -58,3 +58,17 @@ Windows 包版本：`1.7.0.20`
 后续将进行 iOS、macOS 系统适配；下个大版本将对学习清单进行体验升级。
 
 本次仍发布 Android 与 Windows 版本。
+
+## 正式包与校验
+
+正式包来自 [Release Build 37047320494](https://github.com/L1Xu4n/FocuBili/actions/runs/37047320494)，构建提交为 `7189729015a2c4789c71419b7ee116a2c64d614d`。
+
+- dev 和 master CI 均通过；Flutter 全量检查 668 项通过、1 项跳过。
+- Android 正式包名为 `com.focubili.app`，版本 `1.7.0`、构建号 `20`，已核对历史签名证书。
+- Windows 正式产品名为“焦点哔哩”，版本 `1.7.0.20`；便携包包含完整运行库，45 个文件已逐一校验。
+
+| 文件 | 大小（字节） | SHA-256 |
+| --- | ---: | --- |
+| `FocuBili-v1.7.0-android.apk` | 33,393,099 | `ADC453F286E61D8C89650DDABA73C904DED53EB3E6F71C125304CC33E6ABCCBF` |
+| `FocuBili-v1.7.0-windows-x64-setup.exe` | 28,064,794 | `BBB198DE57EFFC6A5D10F031E448ABFB8F4FF07395CC9B9AD52A6EC63653437B` |
+| `FocuBili-v1.7.0-windows-x64-portable.zip` | 38,239,068 | `C6B48738945DBC67D63E513875A6F23DA974CC4681124037270D078FB646DE61` |
