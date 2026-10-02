@@ -66,7 +66,7 @@ void main() {
   /// 每项验证从独立本机偏好开始，防止上一项布局影响本项。
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
-  /// 首页底部可进入编辑，移动、隐藏、加回后重进保持相同布局。
+  /// 首页底部可进入编辑，加回卡片追加末尾，重进后保留用户保存的最终布局。
   testWidgets('首页底部编辑排序隐藏加回并重进恢复', (tester) async {
     _setWindow(tester, const Size(430, 900));
     final controller = FocusTimerController(
@@ -113,7 +113,13 @@ void main() {
       find.byKey(const ValueKey('dashboard-add-home.continue_learning')),
     );
     await tester.pumpAndSettle();
-    expect((await service.load('home', [])).hidden, isEmpty);
+    final restored = await service.load('home', []);
+    expect(restored.hidden, isEmpty);
+    expect(restored.order.last, 'home.continue_learning');
+    expect(
+      restored.order.where((id) => id != 'home.continue_learning'),
+      hidden.order.where((id) => id != 'home.continue_learning'),
+    );
     await tester.tap(find.text('关闭'));
     await tester.pumpAndSettle();
     await _tapVisible(tester, find.text('完成'));
@@ -121,7 +127,7 @@ void main() {
     await tester.pumpWidget(_homeHost(controller, DashboardLayoutService()));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('test-continue-learning')), findsOneWidget);
-    expect((await service.load('home', [])).order, hidden.order);
+    expect((await service.load('home', [])).order, restored.order);
     expect(tester.takeException(), isNull);
   });
 

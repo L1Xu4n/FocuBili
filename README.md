@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/L1Xu4n/FocuBili/releases"><img src="https://img.shields.io/github/v/release/L1Xu4n/FocuBili?display_name=tag&sort=semver" alt="GitHub Release"></a>
-  <img src="https://img.shields.io/badge/version-v1.5.0-2EA44F" alt="Current version v1.5.0">
+  <img src="https://img.shields.io/badge/version-v1.7.0-2EA44F" alt="Current version v1.7.0">
   <img src="https://img.shields.io/badge/Flutter-3.44.6-02569B?logo=flutter" alt="Flutter 3.44.6">
   <img src="https://img.shields.io/badge/Android-7.0+-3DDC84?logo=android" alt="Android 7.0+">
   <img src="https://img.shields.io/badge/Windows-10%201809+-0078D4?logo=windows" alt="Windows 10 1809+">
@@ -29,6 +29,12 @@ FocuBili 希望保留“主动找到一支视频并认真看完”这件事本�
 - 搜索、BV 号和视频链接是主要入口；
 - 播放页优先保留视频、选集、简介和必要控制；
 - 账号数据功能默认只读；关闭保护后才允许点赞、投币、收藏和关注等账号写操作。
+
+## v1.7.0 国庆更新
+
+国庆快乐！本次新增国庆红主题，并带来听视频、卡片布局自定义、离线缓存、笔记时间旗标、软件收藏夹、双指缩放、主题个性化、字幕改进及老设备登录兼容等更新。
+
+Android APK、Windows 安装器和便携版见 [GitHub Releases](https://github.com/L1Xu4n/FocuBili/releases)。完整简报、使用说明和后续计划见 [v1.7.0 发布说明](docs/RELEASE_NOTES_v1.7.0.md)。
 
 ## v1.5.0 更新内容
 

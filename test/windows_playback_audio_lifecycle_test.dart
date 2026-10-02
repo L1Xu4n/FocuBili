@@ -70,7 +70,13 @@ void main() {
       'bool _needsResumePositionCorrection(',
       methodStart,
     );
-    final String methodBody = service.substring(methodStart, methodEnd);
+    // 听视频新增了独立纯音频分支；这项契约只检查后续视频与外部音轨分支。
+    final int videoBranchStart = service.indexOf(
+      'final AudioTrack audioTrack =',
+      methodStart,
+    );
+    expect(videoBranchStart, greaterThan(methodStart));
+    final String methodBody = service.substring(videoBranchStart, methodEnd);
     final int pauseIndex = methodBody.indexOf('await _player.pause();');
     final int openIndex = methodBody.indexOf('await _player.open(');
     final int seekIndex = methodBody.indexOf(

@@ -89,7 +89,9 @@ class OfflineDownloadQueue extends ChangeNotifier {
         final ready = completed.where(
           (file) => file.bvid == task.video.bvid && file.cid == task.part.cid,
         );
-        if (task.status == DownloadTaskStatus.completed && ready.isEmpty) continue;
+        if (task.status == DownloadTaskStatus.completed && ready.isEmpty) {
+          continue;
+        }
         _tasks.add(
           ready.isNotEmpty
               ? task.copyWith(
@@ -258,12 +260,18 @@ class OfflineDownloadQueue extends ChangeNotifier {
     final files = await library.loadDownloads();
     final ready = files.map((file) => '${file.bvid}:${file.cid}').toSet();
     final before = List<OfflineDownloadTask>.of(_tasks);
-    _tasks.removeWhere((task) => task.status == DownloadTaskStatus.completed && !ready.contains(task.id));
+    _tasks.removeWhere(
+      (task) =>
+          task.status == DownloadTaskStatus.completed &&
+          !ready.contains(task.id),
+    );
     if (_tasks.length == before.length) return;
     try {
       await _save();
     } catch (_) {
-      _tasks..clear()..addAll(before);
+      _tasks
+        ..clear()
+        ..addAll(before);
       rethrow;
     }
     _emit();

@@ -86,13 +86,14 @@ void main() {
     expect(find.text('基础环境信息'), findsOneWidget);
     expect(find.text('1.1.1+10'), findsOneWidget);
     expect(find.text('Android 15 / API 35'), findsOneWidget);
+    // 复制按钮已置顶，先验证它，再滚动到错误区与底部清空入口。
+    expect(find.byKey(const Key('copy-problem-diagnostics')), findsOneWidget);
     await tester.scrollUntilVisible(find.text('网络错误'), 200);
     expect(find.text('网络错误'), findsOneWidget);
     await tester.scrollUntilVisible(
-      find.byKey(const Key('copy-problem-diagnostics')),
+      find.byKey(const Key('clear-problem-diagnostics')),
       300,
     );
-    expect(find.byKey(const Key('copy-problem-diagnostics')), findsOneWidget);
     expect(find.byKey(const Key('clear-problem-diagnostics')), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('clear-problem-diagnostics')));

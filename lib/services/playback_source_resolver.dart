@@ -22,7 +22,9 @@ class PlaybackSourceResolver {
       return null;
     }
     for (final file in files) {
-      if (file.bvid == bvid && file.cid == cid && (preferLocal || requireLocal)) {
+      if (file.bvid == bvid &&
+          file.cid == cid &&
+          (preferLocal || requireLocal)) {
         return file;
       }
     }

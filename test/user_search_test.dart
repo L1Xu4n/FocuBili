@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:focubili/features/profile/user_profile_page.dart';
@@ -104,6 +105,9 @@ class _FakeUserSearchService implements BilibiliUserSearchService {
 
 /// 验证用户搜索解析和页面交互。
 void main() {
+  /// 导航到用户主页时用空内存账号容器，避免原生插件等待影响测试结束。
+  setUp(() => FlutterSecureStorage.setMockInitialValues(<String, String>{}));
+
   /// 验证服务会发送用户排序与类型参数，并解析公开认证资料。
   test('用户搜索解析认证粉丝等级和筛选参数', () async {
     final _UserSearchJsonRequest request = _UserSearchJsonRequest();

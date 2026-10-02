@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:focubili/core/theme/app_theme.dart';
@@ -78,6 +79,8 @@ void main() {
   /// 每项测试开始前清空 SharedPreferences，防止学习任务影响其他测试。
   setUp(() {
     SharedPreferences.setMockInitialValues(<String, Object>{});
+    // 账号读取使用空内存容器，避免访问 Windows 凭据插件并留下超时计时器。
+    FlutterSecureStorage.setMockInitialValues(<String, String>{});
   });
 
   testWidgets('学习清单页面可以切换未开始、学习中和已完成状态', (WidgetTester tester) async {
@@ -273,8 +276,11 @@ void main() {
 
   /// 验证大幅上滑已经进入深层卡片时，不会被首次吸附拉回第一张卡片。
   testWidgets('首页大幅上滑保留深层卡片位置', (WidgetTester tester) async {
-    await tester.binding.setSurfaceSize(const Size(420, 900));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+    // 短屏保留足够的深层滚动距离，同时让真实视口和 MediaQuery 尺寸一致。
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(420, 640);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
     final LearningListService service = await _learningListService();
     final FocusTimerController focusController = FocusTimerController(
       tickInterval: const Duration(days: 1),
@@ -296,7 +302,8 @@ void main() {
     await tester.pumpAndSettle();
 
     final Finder scrollView = find.byType(CustomScrollView);
-    await tester.drag(scrollView, const Offset(0, -900));
+    // 越过欢迎区及 220 像素吸附窗口，模拟明确进入深层卡片的大幅手势。
+    await tester.drag(scrollView, const Offset(0, -1300));
     await tester.pumpAndSettle();
 
     final Rect firstCardRect = tester.getRect(

@@ -65,10 +65,12 @@ class PlaybackResumePlan {
         historyEntry != null &&
         historyEntry.bvid.trim().toUpperCase() ==
             video.bvid.trim().toUpperCase() &&
-        (requestedPart == null || requestedPart.pageNumber == historyEntry.lastPartPageNumber) &&
-        (savedPart == null || savedPosition == Duration.zero ||
-          (savedState?.savedAt != null &&
-              historyEntry.watchedAt.isAfter(savedState!.savedAt!)));
+        (requestedPart == null ||
+            requestedPart.pageNumber == historyEntry.lastPartPageNumber) &&
+        (savedPart == null ||
+            savedPosition == Duration.zero ||
+            (savedState?.savedAt != null &&
+                historyEntry.watchedAt.isAfter(savedState!.savedAt!)));
     final VideoPart? historyPart = canUseHistory
         ? _findPartByPageNumber(video.parts, historyEntry.lastPartPageNumber)
         : null;
@@ -101,7 +103,9 @@ class PlaybackResumePlan {
         positionSource: PlaybackResumePositionSource.requested,
       );
     }
-    if (!usesHistory && savedPart?.cid == targetPart.cid && savedPosition > Duration.zero) {
+    if (!usesHistory &&
+        savedPart?.cid == targetPart.cid &&
+        savedPosition > Duration.zero) {
       return PlaybackResumePlan(
         part: targetPart,
         position: savedPosition,

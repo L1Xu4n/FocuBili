@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart' show TapGestureRecognizer;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:focubili/app.dart';
@@ -1166,6 +1167,8 @@ void main() {
   /// 每项组件测试从空白本机偏好开始，避免网络清晰度选择跨用例泄漏。
   setUp(() {
     SharedPreferences.setMockInitialValues(<String, Object>{});
+    // 默认账号调用使用内存安全容器，业务替身仍可单独提供登录会话。
+    FlutterSecureStorage.setMockInitialValues(<String, String>{});
   });
 
   /// 验证公开详情服务能解析 BV 号、大编号、UP 主、时长和多P列表。
@@ -1307,7 +1310,7 @@ void main() {
     expect(app.locale, const Locale('zh', 'CN'));
     expect(app.themeMode, ThemeMode.system);
     expect(find.text('焦点哔哩'), findsWidgets);
-    expect(find.text('打开视频'), findsOneWidget);
+    expect(find.byKey(const Key('home-start-search')), findsOneWidget);
     expect(find.text('首页'), findsOneWidget);
     expect(find.text('我的'), findsOneWidget);
   });
@@ -1574,10 +1577,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byTooltip('退出全屏'), findsOneWidget);
 
-    tester
-        .widget<GestureDetector>(find.byKey(const Key('player-surface')))
-        .onTap!();
-    await tester.pump();
+    await tester.tapAt(
+      tester.getRect(find.byKey(const Key('player-surface'))).center,
+    );
+    await tester.pump(const Duration(milliseconds: 350));
     expect(
       tester
           .widget<AnimatedOpacity>(find.byKey(const Key('player-controls')))
@@ -1589,10 +1592,10 @@ void main() {
     );
     expect(mouseRegion.cursor, SystemMouseCursors.none);
 
-    tester
-        .widget<GestureDetector>(find.byKey(const Key('player-surface')))
-        .onTap!();
-    await tester.pump();
+    await tester.tapAt(
+      tester.getRect(find.byKey(const Key('player-surface'))).center,
+    );
+    await tester.pump(const Duration(milliseconds: 350));
     mouseRegion = tester.widget<MouseRegion>(
       find.byKey(const Key('player-mouse-region')),
     );
@@ -1604,9 +1607,11 @@ void main() {
       find.byKey(const Key('fullscreen-video-notes-panel')),
       findsOneWidget,
     );
-    tester
-        .widget<GestureDetector>(find.byKey(const Key('player-surface')))
-        .onTap!();
+    // 点击笔记面板左侧的画面，避免把输入框上的点击误当视频手势。
+    final Rect surface = tester.getRect(
+      find.byKey(const Key('player-surface')),
+    );
+    await tester.tapAt(Offset(surface.left + 40, surface.center.dy));
     await tester.pump(const Duration(seconds: 6));
     expect(
       tester
@@ -3162,7 +3167,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('简介'), findsOneWidget);
+    expect(find.byKey(const Key('video-description')), findsOneWidget);
     expect(find.byKey(const Key('part-selector-button')), findsNothing);
     expect(
       find.byKey(const Key('detail-part-selector-expand')),
@@ -3266,10 +3271,20 @@ void main() {
       find.byKey(const Key('note-title-field')),
     );
     expect(portraitTitleField.decoration?.border, InputBorder.none);
-    final GestureDetector activePlayerSurface = tester.widget<GestureDetector>(
+    // 用真实点击核验新的点击识别器，笔记打开时视频仍能切换控制层。
+    final Rect noteSurface = tester.getRect(
       find.byKey(const Key('player-surface')),
     );
-    expect(activePlayerSurface.onTap, isNotNull);
+    await tester.tapAt(noteSurface.center);
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(
+      tester
+          .widget<AnimatedOpacity>(find.byKey(const Key('player-controls')))
+          .opacity,
+      0,
+    );
+    await tester.tapAt(noteSurface.center);
+    await tester.pump(const Duration(milliseconds: 350));
     final IconButton activePlayButton = tester.widget<IconButton>(
       find.byKey(const Key('play-pause-button')),
     );
@@ -3430,16 +3445,14 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
 
     expect(find.byKey(const Key('fullscreen-note-button')), findsOneWidget);
-    final GestureDetector fullscreenSurface = tester.widget<GestureDetector>(
+    final Rect fullscreenSurface = tester.getRect(
       find.byKey(const Key('player-surface')),
     );
-    fullscreenSurface.onTap!();
-    await tester.pump();
+    await tester.tapAt(fullscreenSurface.center);
+    await tester.pump(const Duration(milliseconds: 350));
     expect(find.byKey(const Key('fullscreen-note-button')), findsNothing);
-    tester
-        .widget<GestureDetector>(find.byKey(const Key('player-surface')))
-        .onTap!();
-    await tester.pump();
+    await tester.tapAt(fullscreenSurface.center);
+    await tester.pump(const Duration(milliseconds: 350));
     expect(find.byKey(const Key('fullscreen-note-button')), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('fullscreen-note-button')));
@@ -5650,6 +5663,10 @@ void main() {
           video: VideoPreview.placeholder(),
           playbackService: _FakePlaybackService(),
           danmakuPreferencesService: preferencesService,
+          playerOverlayService: _FakePlayerOverlayService(
+            tracksResult: const SubtitleTrackLoadResult.empty(),
+            cuesResult: const SubtitleCueLoadResult.empty(),
+          ),
         ),
       ),
     );
@@ -6066,7 +6083,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     expect(playbackService.volume, greaterThan(0.5));
     expect(find.byKey(const Key('collapsing-player-scroll')), findsNothing);
-    expect(find.text('简介'), findsOneWidget);
+    expect(find.byKey(const Key('video-description')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

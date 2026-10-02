@@ -37,7 +37,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('进入全屏'));
+      await tester.tap(find.byTooltip('进入全屏'));
       await tester.pumpAndSettle();
       final picture = find.byKey(
         const Key('fullscreen-video-picture-transform'),
@@ -61,7 +61,7 @@ void main() {
       await second.up();
       await tester.pumpAndSettle();
       expect(backend.seeks, 0);
-    await tester.tap(find.byTooltip('退出全屏'));
+      await tester.tap(find.byTooltip('退出全屏'));
       await tester.pumpAndSettle();
       expect(tester.widget<Transform>(picture).transform, Matrix4.identity());
       await tester.pumpWidget(const SizedBox.shrink());

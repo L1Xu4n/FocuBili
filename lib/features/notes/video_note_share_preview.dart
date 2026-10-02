@@ -65,8 +65,12 @@ class _VideoNoteSharePreviewDialogState
         sharePositionOrigin: origin,
       );
       if (mounted && widget.shareService.copiesToClipboard) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('图片已复制到剪贴板'), duration: Duration(seconds: 3)));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('图片已复制到剪贴板'),
+            duration: Duration(seconds: 3),
+          ),
+        );
       }
     } catch (_) {
       if (mounted) {
@@ -131,8 +135,18 @@ class _VideoNoteSharePreviewDialogState
                           dimension: 18,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
-                      : Icon(widget.shareService.copiesToClipboard ? Icons.copy : Icons.ios_share_rounded),
-                  label: Text(_sharing ? '正在生成长图…' : widget.shareService.copiesToClipboard ? '复制图片' : '分享图片'),
+                      : Icon(
+                          widget.shareService.copiesToClipboard
+                              ? Icons.copy
+                              : Icons.ios_share_rounded,
+                        ),
+                  label: Text(
+                    _sharing
+                        ? '正在生成长图…'
+                        : widget.shareService.copiesToClipboard
+                        ? '复制图片'
+                        : '分享图片',
+                  ),
                 ),
               ),
             ],

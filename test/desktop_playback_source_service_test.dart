@@ -281,37 +281,35 @@ void main() {
   });
 
   test('可信 CDN 的新增子域名仍然可用', () async {
-    final BilibiliDesktopPlaybackSourceService service =
-        BilibiliDesktopPlaybackSourceService(
-          authService: BilibiliAuthService(cookieStore: _MemoryCookieStore()),
-          // New nodes remain allowed only within the trusted CDN suffixes.
-          requestJson: (Uri _, Map<String, String> _) async {
-            return jsonEncode(<String, Object?>{
-              'code': 0,
-              'data': <String, Object?>{
-                'quality': 64,
-                'dash': <String, Object?>{
-                  'video': <Map<String, Object?>>[
-                    <String, Object?>{
-                      'id': 64,
-                      'codecs': 'avc1.64001F',
-                      'base_url':
-                          'https://cdn-01.new-node.bilivideo.cn/video.m4s',
-                    },
-                  ],
-                  'audio': <Map<String, Object?>>[
-                    <String, Object?>{
-                      'id': 30280,
-                      'codecs': 'mp4a.40.2',
-                      'base_url':
-                          'https://cdn-02.new-node.bilivideo.cn/audio.m4s',
-                    },
-                  ],
+    final BilibiliDesktopPlaybackSourceService
+    service = BilibiliDesktopPlaybackSourceService(
+      authService: BilibiliAuthService(cookieStore: _MemoryCookieStore()),
+      // New nodes remain allowed only within the trusted CDN suffixes.
+      requestJson: (Uri _, Map<String, String> _) async {
+        return jsonEncode(<String, Object?>{
+          'code': 0,
+          'data': <String, Object?>{
+            'quality': 64,
+            'dash': <String, Object?>{
+              'video': <Map<String, Object?>>[
+                <String, Object?>{
+                  'id': 64,
+                  'codecs': 'avc1.64001F',
+                  'base_url': 'https://cdn-01.new-node.bilivideo.cn/video.m4s',
                 },
-              },
-            });
+              ],
+              'audio': <Map<String, Object?>>[
+                <String, Object?>{
+                  'id': 30280,
+                  'codecs': 'mp4a.40.2',
+                  'base_url': 'https://cdn-02.new-node.bilivideo.cn/audio.m4s',
+                },
+              ],
+            },
           },
-        );
+        });
+      },
+    );
 
     final DesktopPlaybackSources sources = await service.load(
       bvid: 'BV1GJ411x7h7',
@@ -368,7 +366,6 @@ void main() {
     // Only the trusted HTTPS source may reach the media backend.
     expect(sources.videoUrls, <String>[
       'https://upos-sz.bilivideo.com/video.m4s',
-
     ]);
   });
 }

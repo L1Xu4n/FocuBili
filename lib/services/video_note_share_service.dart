@@ -28,7 +28,8 @@ class VideoNoteShareService {
   final WindowsExperienceService windowsExperience;
 
   /// Windows image actions copy actual pixels; other platforms retain system sharing.
-  bool get copiesToClipboard => (platform ?? AppPlatformDetector.current) == AppPlatform.windows;
+  bool get copiesToClipboard =>
+      (platform ?? AppPlatformDetector.current) == AppPlatform.windows;
 
   /// 把批量导出包写成临时文件并分享，文件名和 MIME 类型与实际格式保持一致。
   Future<void> shareExportPackage(

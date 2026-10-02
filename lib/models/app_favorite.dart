@@ -88,9 +88,15 @@ class AppFavoriteItem {
 
   /// Updates only P-count metadata, keeping membership and collection time unchanged.
   AppFavoriteItem withPartCount(int count) => AppFavoriteItem(
-    folderId: folderId, bvid: bvid, title: title, coverUrl: coverUrl,
-    ownerName: ownerName, durationText: durationText, addedAt: addedAt,
-    partCount: count > 0 ? count : null);
+    folderId: folderId,
+    bvid: bvid,
+    title: title,
+    coverUrl: coverUrl,
+    ownerName: ownerName,
+    durationText: durationText,
+    addedAt: addedAt,
+    partCount: count > 0 ? count : null,
+  );
 
   /// Matches video metadata, not folder names, ignoring case and outer whitespace.
   bool matchesQuery(String query) => '$title $ownerName $bvid'
