@@ -11,6 +11,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/services/apple_playback_session.dart';
 import 'media_fixture.dart';
 
+Future<void> eventually(bool Function() condition) async {
+  final deadline = DateTime.now().add(const Duration(seconds: 10));
+  while (!condition() && DateTime.now().isBefore(deadline)) {
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+  }
+  expect(condition(), isTrue);
+}
+
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   testWidgets('Apple native playback and app-owned storage smoke', (
@@ -50,9 +58,15 @@ void main() {
             .timeout(const Duration(seconds: 15));
       }
       expect(player.state.width, 160);
+      await eventually(() => player.state.playing);
       await player.pause();
+      await eventually(() => !player.state.playing);
       await player.seek(const Duration(seconds: 2));
+      await eventually(
+        () => (player.state.position.inMilliseconds - 2000).abs() < 600,
+      );
       await player.setRate(1.5);
+      await eventually(() => (player.state.rate - 1.5).abs() < 0.01);
       session.update(
         title: 'FocuBili test',
         position: const Duration(seconds: 2),
