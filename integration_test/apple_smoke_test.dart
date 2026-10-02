@@ -30,15 +30,19 @@ void main() {
     await dir.create(recursive: true);
     final file = File('${dir.path}/focubili-apple-smoke.mp4');
     await file.writeAsBytes(base64Decode(appleSmokeVideoBase64));
+    debugPrint("APPLE_SMOKE: creating player");
     final player = Player();
+    debugPrint("APPLE_SMOKE: creating video controller");
     final controller = VideoController(player);
     final session = ApplePlaybackSession();
     try {
+      debugPrint("APPLE_SMOKE: activating native media session");
       await session.initialize(
         play: player.play,
         pause: player.pause,
         seek: player.seek,
       );
+      debugPrint("APPLE_SMOKE: mounting video surface");
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
@@ -49,6 +53,7 @@ void main() {
       final ready = player.stream.duration
           .firstWhere((d) => d > Duration.zero)
           .timeout(const Duration(seconds: 30));
+      debugPrint("APPLE_SMOKE: opening fixture");
       await player.open(Media(file.path));
       expect((await ready).inSeconds, greaterThanOrEqualTo(3));
       await tester.pump(const Duration(seconds: 1));
@@ -57,6 +62,7 @@ void main() {
             .firstWhere((w) => w != null && w > 0)
             .timeout(const Duration(seconds: 15));
       }
+      debugPrint("APPLE_SMOKE: decoded video");
       expect(player.state.width, 160);
       await eventually(() => player.state.playing);
       await player.pause();
@@ -74,6 +80,7 @@ void main() {
         playing: false,
         speed: 1.5,
       );
+      debugPrint("APPLE_SMOKE: playback controls verified");
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('apple_smoke', 'persisted');
       await prefs.reload();
@@ -91,7 +98,9 @@ void main() {
         'com.focubili.app/focus_notifications',
       ).invokeMethod<bool>('hasPermission');
       expect(permission, isA<bool>());
+      debugPrint("APPLE_SMOKE: all assertions passed");
     } finally {
+      debugPrint("APPLE_SMOKE: mounting video surface");
       await tester.pumpWidget(const SizedBox.shrink());
       await session.dispose();
       await player.dispose();

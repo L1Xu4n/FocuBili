@@ -27,7 +27,6 @@ jobs:
       - run: flutter analyze --no-pub
       - run: flutter test --no-pub
   apple:
-    needs: quality
     runs-on: macos-15
     timeout-minutes: 60
     strategy:
@@ -95,6 +94,24 @@ jobs:
           screencapture -x build/apple/macos-launch.png
           pkill -f '/FocuBili.app/Contents/MacOS/FocuBili' || true
           flutter test integration_test/apple_smoke_test.dart -d macos
+      - name: Preserve native failure diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          mkdir -p build/apple-diagnostics
+          find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -type f -iname '*FocuBili*' -exec cp {} build/apple-diagnostics/ \; 2>/dev/null || true
+          cp build/apple/*-launch.png build/apple-diagnostics/ 2>/dev/null || true
+          for f in build/apple-diagnostics/*.ips; do
+            test -f "$f" || continue
+            head -c 22000 "$f"
+          done
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: apple-diagnostics-${{ matrix.platform }}-${{ github.sha }}
+          path: build/apple-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         with:
           name: focubili-apple-${{ matrix.platform }}-${{ github.sha }}
