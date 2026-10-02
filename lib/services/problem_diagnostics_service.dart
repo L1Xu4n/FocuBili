@@ -680,13 +680,13 @@ class ProblemDiagnosticsService {
     return text.toString().trimRight();
   }
 
-  /// 安全读取安装版本；插件在测试或极少数异常设备不可用时回退到当前发布版本。
+  /// 安全读取安装版本；插件不可用时回退到当前源码的 v1.7.0 版本标识。
   Future<String> _loadVersionSafely() async {
     try {
       final String version = (await _appVersionLoader()).trim();
-      return version.isEmpty ? '1.5.0+17' : version;
+      return version.isEmpty ? '1.7.0+20' : version;
     } catch (_) {
-      return '1.5.0+17';
+      return '1.7.0+20';
     }
   }
 
