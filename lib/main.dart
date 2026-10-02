@@ -10,6 +10,7 @@ import 'package:window_manager/window_manager.dart';
 import 'app.dart';
 import 'core/theme/app_theme.dart';
 import 'platform/platform_services.dart';
+import 'platform/platform_capabilities.dart';
 import 'services/problem_diagnostics_service.dart';
 
 /// 注册框架和 Dart 未捕获错误的最小诊断记录；只保存固定操作名与异常类型，绝不保存异常原文或堆栈。
@@ -46,10 +47,12 @@ Future<void> _prepareWindowsDesktop({
 }) async {
   final PlatformServices services =
       platformServices ?? PlatformServices.current;
+  if (services.capabilities.playbackBackend == PlaybackBackendKind.mediaKit) {
+    MediaKit.ensureInitialized();
+  }
   if (!services.capabilities.supportsDesktopWindow) {
     return;
   }
-  MediaKit.ensureInitialized();
   await windowManager.ensureInitialized();
   await windowManager.waitUntilReadyToShow(
     const WindowOptions(

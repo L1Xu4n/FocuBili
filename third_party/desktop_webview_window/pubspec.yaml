@@ -24,9 +24,5 @@ dev_dependencies:
 flutter:
   plugin:
     platforms:
-      macos:
-        pluginClass: DesktopWebviewWindowPlugin
       windows:
-        pluginClass: DesktopWebviewWindowPlugin
-      linux:
         pluginClass: DesktopWebviewWindowPlugin

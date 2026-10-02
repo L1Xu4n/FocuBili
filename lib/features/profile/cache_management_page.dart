@@ -82,7 +82,7 @@ class _CacheManagementPageState extends State<CacheManagementPage> {
         ),
         content: Text(
           status?.storageKind == MediaCacheStorageKind.windowsPlaybackBuffer
-              ? '这不会删除账号信息、观看记录或笔记，只会删除 Windows 播放器的临时磁盘缓冲。'
+              ? '这不会删除账号信息、观看记录或笔记，只会删除 播放器的临时磁盘缓冲。'
               : '这不会删除账号信息或观看记录，只会删除边播边缓存的数据。',
         ),
         actions: <Widget>[
@@ -232,7 +232,7 @@ class _CacheManagementPageState extends State<CacheManagementPage> {
             const SizedBox(height: 8),
             Text(
               windowsBuffer
-                  ? 'Windows 使用 media_kit 的临时磁盘播放缓冲来支持拖动和网络波动。'
+                  ? '当前平台使用 media_kit 的临时磁盘播放缓冲来支持拖动和网络波动。'
                         '容量调整会在下一次打开播放器时生效；这些数据不是离线下载，退出播放或系统清理后可能消失。'
                   : '这里保存的是边播边缓存，用于减少短期内重复播放的网络请求，不是离线下载。'
                         'Android 在存储空间紧张时可能自动清理这些数据。',

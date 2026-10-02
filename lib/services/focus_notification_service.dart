@@ -94,7 +94,8 @@ class FocusNotificationService {
       _usesDefaultChannel &&
       _windowsBackend == null &&
       _resolvedPlatform != AppPlatform.android &&
-      _resolvedPlatform != AppPlatform.windows;
+      _resolvedPlatform != AppPlatform.windows &&
+      !_resolvedPlatform.isApple;
 
   /// 返回注入的测试后端或进程内共享的生产 Windows 通知后端。
   WindowsFocusNotificationBackend get _resolvedWindowsBackend =>
@@ -108,7 +109,9 @@ class FocusNotificationService {
 
   /// 判断当前平台是否已经兑现自动勿扰切换；Windows 在取得微软受限功能授权前只提供手动入口。
   bool get supportsDoNotDisturb =>
-      !_usesWindowsBackend && !_usesUnavailableBackend;
+      !_usesWindowsBackend &&
+      !_usesUnavailableBackend &&
+      !_resolvedPlatform.isApple;
 
   /// 返回 Windows 是否已通过 MSIX 安装并获得完整通知查询与取消能力。
   bool get hasWindowsPackageIdentity =>
@@ -440,7 +443,16 @@ class FocusNotificationService {
     required String goal,
     required int focusedMinutes,
   }) async {
-    if (_skipDefaultChannelInFlutterTest || !_usesWindowsBackend) {
+    if (_skipDefaultChannelInFlutterTest) return;
+    if (_resolvedPlatform.isApple) {
+      await _channel.invokeMethod<void>('showFocusCompleted', {
+        'sessionId': sessionId,
+        'goal': goal,
+        'focusedMinutes': focusedMinutes,
+      });
+      return;
+    }
+    if (!_usesWindowsBackend) {
       return;
     }
     await _resolvedWindowsBackend.showFocusCompleted(

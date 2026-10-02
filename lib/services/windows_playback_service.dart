@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'apple_playback_session.dart';
 
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
@@ -64,6 +65,7 @@ class WindowsPlaybackService
   final WindowsPlaybackProgressStore _progressStore;
   final Player _player;
   late final VideoController _videoController;
+  final ApplePlaybackSession _appleSession = ApplePlaybackSession();
   final FlutterVideoFrameCapture _frameCapture = FlutterVideoFrameCapture();
   final StreamController<PlaybackSnapshot> _stateController =
       StreamController<PlaybackSnapshot>.broadcast();
@@ -190,6 +192,7 @@ class WindowsPlaybackService
     if (_disposed) {
       return null;
     }
+    await _appleSession.initialize(play: play, pause: pause, seek: seekTo);
     await _configureWindowsMediaCache();
     return _videoController.id.value;
   }
@@ -697,6 +700,7 @@ class WindowsPlaybackService
         await subscription.cancel();
       }
       _subscriptions.clear();
+      await _appleSession.dispose();
       await _player.dispose();
     } finally {
       _activeAudioMedia = null;
@@ -1289,6 +1293,13 @@ class WindowsPlaybackService
       restoredPosition: _restoredPosition,
       isRestoringPosition: _restoringPosition,
       message: clearMessage ? null : (message ?? _snapshot.message),
+    );
+    _appleSession.update(
+      title: _currentVideo?.title ?? '焦点哔哩',
+      position: _snapshot.position,
+      duration: _snapshot.duration,
+      playing: _snapshot.isPlaying,
+      speed: _snapshot.speed,
     );
     _stateController.add(_snapshot);
   }

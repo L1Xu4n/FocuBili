@@ -30,6 +30,8 @@ environment:
 # the latest version available on pub.dev. To see which dependencies have newer
 # versions available, run `flutter pub outdated`.
 dependencies:
+  focubili_apple:
+    path: packages/focubili_apple
   # 以下版本已在 Flutter 3.44.6 下完成解析、测试和 Android 构建验证。
   archive: ^4.0.9
   cached_network_image: ^3.4.1
@@ -59,6 +61,8 @@ dependencies:
   # Windows 播放器使用 libmpv 后端，现有 Android Media3 播放链保持不变。
   media_kit: ^1.2.6
   media_kit_libs_windows_video: ^1.0.11
+  media_kit_libs_ios_video: ^1.1.4
+  media_kit_libs_macos_video: ^1.1.4
   media_kit_video: ^2.0.1
   shared_preferences: ^2.5.5
   timezone: ^0.11.1

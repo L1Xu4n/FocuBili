@@ -308,6 +308,13 @@ packages:
     description: flutter
     source: sdk
     version: "0.0.0"
+  focubili_apple:
+    dependency: "direct main"
+    description:
+      path: "packages/focubili_apple"
+      relative: true
+    source: path
+    version: "0.1.0"
   get_it:
     dependency: transitive
     description:
@@ -452,6 +459,22 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.2.6"
+  media_kit_libs_ios_video:
+    dependency: "direct main"
+    description:
+      name: media_kit_libs_ios_video
+      sha256: b5382994eb37a4564c368386c154ad70ba0cc78dacdd3fb0cd9f30db6d837991
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.1.4"
+  media_kit_libs_macos_video:
+    dependency: "direct main"
+    description:
+      name: media_kit_libs_macos_video
+      sha256: f26aa1452b665df288e360393758f84b911f70ffb3878032e1aabba23aa1032d
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.1.4"
   media_kit_libs_windows_video:
     dependency: "direct main"
     description:
