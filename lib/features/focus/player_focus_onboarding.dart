@@ -23,15 +23,24 @@ Future<void> showPlayerFocusDoNotDisturbGuideIfNeeded(
   if (!context.mounted) {
     return;
   }
+  final bool isApple = (appPlatform ?? AppPlatformDetector.current).isApple;
   final bool isWindows =
       (appPlatform ?? AppPlatformDetector.current) == AppPlatform.windows;
   final bool? shouldOpenSettings = await showDialog<bool>(
     context: context,
     builder: (BuildContext dialogContext) => AlertDialog(
       icon: const Icon(Icons.do_not_disturb_on_outlined),
-      title: Text(isWindows ? 'Windows 系统专注需要手动启动' : '专注时可以自动开启勿扰'),
+      title: Text(
+        isApple
+            ? 'Apple 系统专注需要手动启动'
+            : isWindows
+            ? 'Windows 系统专注需要手动启动'
+            : '专注时可以自动开启勿扰',
+      ),
       content: Text(
-        isWindows
+        isApple
+            ? '请在控制中心手动开启专注或勿扰。Apple 不允许普通第三方应用自动切换系统专注；应用内专注计时和提醒不受影响。'
+            : isWindows
             ? 'Windows 自动启动系统专注需要微软单独授权。你可以在“我的 → 设置 → 个性化设置”中开启开始提醒，之后从 Windows“时钟”手动启动。'
             : '你可以在“我的 → 设置 → 个性化设置”中开启专注勿扰。开启后，专注视频播放时进入勿扰，暂停或结束时恢复；快进、快退不会反复切换。',
       ),

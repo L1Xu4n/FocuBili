@@ -1,7 +1,7 @@
 name: Apple builds
 on:
   push:
-    branches: [dev, 'iOS＆MacOS']
+    branches: [dev]
   pull_request:
     branches: [dev]
     paths: ['ios/**', 'macos/**', 'packages/focubili_apple/**', 'lib/**', 'pubspec.*', '.github/workflows/apple-build.yml']
@@ -58,6 +58,20 @@ jobs:
         run: |
           flutter build ios --simulator --debug
           ditto -c -k --sequesterRsrc --keepParent build/ios/iphonesimulator/Runner.app build/apple/FocuBili-ios-simulator.zip
+      - name: Smoke-test iOS launch on simulator
+        if: matrix.platform == 'ios'
+        timeout-minutes: 10
+        run: |
+          device="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for rows in d["devices"].values() for x in rows if x.get("isAvailable") and x["name"].startswith("iPhone")))')"
+          xcrun simctl boot "$device"
+          xcrun simctl bootstatus "$device" -b
+          xcrun simctl install "$device" build/ios/iphonesimulator/Runner.app
+          xcrun simctl launch "$device" com.focubili.app
+          sleep 15
+          xcrun simctl io "$device" screenshot build/apple/ios-launch.png
+          xcrun simctl spawn "$device" launchctl list | grep com.focubili.app
+          flutter test integration_test/apple_smoke_test.dart -d "$device"
+          xcrun simctl shutdown "$device"
       - name: Build and package macOS
         if: matrix.platform == 'macos'
         run: |
@@ -70,6 +84,17 @@ jobs:
           hdiutil create -volname FocuBili -srcfolder build/apple/dmg -ov -format UDZO build/apple/FocuBili-macos-preview.dmg
           rm -rf build/apple/dmg
           shasum -a 256 build/apple/FocuBili-macos-preview.dmg > build/apple/SHA256SUMS.txt
+      - name: Smoke-test macOS launch
+        if: matrix.platform == 'macos'
+        timeout-minutes: 15
+        run: |
+          app="$PWD/build/macos/Build/Products/Release/FocuBili.app"
+          open -n "$app"
+          sleep 15
+          pgrep -f '/FocuBili.app/Contents/MacOS/FocuBili'
+          screencapture -x build/apple/macos-launch.png
+          pkill -f '/FocuBili.app/Contents/MacOS/FocuBili' || true
+          flutter test integration_test/apple_smoke_test.dart -d macos
       - uses: actions/upload-artifact@v4
         with:
           name: focubili-apple-${{ matrix.platform }}-${{ github.sha }}

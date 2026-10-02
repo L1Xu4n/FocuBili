@@ -700,8 +700,11 @@ class WindowsPlaybackService
         await subscription.cancel();
       }
       _subscriptions.clear();
-      await _appleSession.dispose();
-      await _player.dispose();
+      try {
+        await _appleSession.dispose();
+      } finally {
+        await _player.dispose();
+      }
     } finally {
       _activeAudioMedia = null;
       WindowsMediaCacheRuntime.unregisterPlaybackSession();

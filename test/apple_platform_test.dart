@@ -12,6 +12,9 @@ void main() {
     test('${platform.name} selects implemented Apple services', () {
       final services = PlatformServices.forPlatform(platform);
       final capabilities = services.capabilities;
+      expect(platform.isApple, isTrue);
+      expect(platform.isMobile, platform == AppPlatform.ios);
+      expect(platform.isDesktop, platform == AppPlatform.macos);
       expect(capabilities.playbackBackend, PlaybackBackendKind.mediaKit);
       expect(
         capabilities.playerOverlayBackend,
