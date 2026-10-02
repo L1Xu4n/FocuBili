@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/layout/adaptive_page_frame.dart';
@@ -9,6 +8,7 @@ import '../../models/account_collection.dart';
 import '../../services/bilibili_account_data_service.dart';
 import '../../services/bilibili_service.dart';
 import 'favorite_videos_page.dart';
+import 'favorite_folder_card.dart';
 
 /// 展示当前登录账号创建的收藏夹，并只允许用户进入查看其内容。
 class FavoriteFoldersPage extends StatefulWidget {
@@ -153,47 +153,6 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
       );
   }
 
-  /// 创建收藏夹封面、加载失败占位图和内容数量角标。
-  Widget _buildFolderCover(FavoriteFolder folder) {
-    final String coverUrl = folder.coverUrl.isNotEmpty
-        ? folder.coverUrl
-        : (_fallbackCoverUrls[folder.mediaId] ?? '');
-    return SizedBox(
-      width: 112,
-      height: 70,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(10),
-        child: Stack(
-          fit: StackFit.expand,
-          children: <Widget>[
-            if (coverUrl.isEmpty)
-              _buildCoverPlaceholder()
-            else
-              CachedNetworkImage(
-                imageUrl: coverUrl,
-                httpHeaders: const <String, String>{
-                  'Referer': 'https://www.bilibili.com/',
-                },
-                fit: BoxFit.cover,
-                memCacheWidth: 256,
-                maxWidthDiskCache: 512,
-                fadeInDuration: const Duration(milliseconds: 120),
-                placeholder: (BuildContext context, String url) =>
-                    _buildCoverPlaceholder(),
-                errorWidget: (BuildContext context, String url, Object error) =>
-                    _buildCoverPlaceholder(),
-              ),
-            Positioned(
-              right: 5,
-              bottom: 5,
-              child: _buildCountBadge('${folder.mediaCount} 个视频'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   /// 按收藏夹名称筛选当前已加载列表，搜索不触发额外账号请求。
   List<FavoriteFolder> _filteredFolders(List<FavoriteFolder> folders) {
     final String query = _searchQuery.trim().toLowerCase();
@@ -220,33 +179,6 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
           prefixIcon: const Icon(Icons.search_rounded),
           isDense: true,
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
-        ),
-      ),
-    );
-  }
-
-  /// 创建收藏夹没有封面或封面加载失败时的本地占位图。
-  Widget _buildCoverPlaceholder() {
-    return ColoredBox(
-      color: Theme.of(context).colorScheme.surfaceContainerHighest,
-      child: const Center(
-        child: Icon(Icons.star_outline_rounded, color: Colors.black45),
-      ),
-    );
-  }
-
-  /// 创建覆盖在收藏夹封面右下角的半透明内容数量角标。
-  Widget _buildCountBadge(String text) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.72),
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-        child: Text(
-          text,
-          style: const TextStyle(color: Colors.white, fontSize: 11),
         ),
       ),
     );
@@ -327,47 +259,15 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
         mainAxisSpacing: 8,
         itemBuilder: (BuildContext context, int index) {
           final FavoriteFolder folder = folders[index];
-          return Card(
+          return FavoriteFolderCard(
             key: Key('favorite-folder-${folder.mediaId}'),
-            clipBehavior: Clip.antiAlias,
-            child: InkWell(
-              // 收藏夹点击函数只打开内容页，不会改变任何收藏夹数据。
-              onTap: folder.isAvailable ? () => _openFolder(folder) : null,
-              child: Padding(
-                padding: const EdgeInsets.all(10),
-                child: Row(
-                  children: <Widget>[
-                    _buildFolderCover(folder),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: <Widget>[
-                          Text(
-                            folder.title,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            folder.isAvailable
-                                ? '${folder.mediaCount} 个视频'
-                                : '收藏夹已失效',
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                        ],
-                      ),
-                    ),
-                    Icon(
-                      folder.isAvailable
-                          ? Icons.chevron_right_rounded
-                          : Icons.block_rounded,
-                    ),
-                  ],
-                ),
-              ),
-            ),
+            title: folder.title,
+            count: folder.mediaCount,
+            available: folder.isAvailable,
+            coverUrl: folder.coverUrl.isNotEmpty
+                ? folder.coverUrl
+                : (_fallbackCoverUrls[folder.mediaId] ?? ''),
+            onTap: () => _openFolder(folder),
           );
         },
       ),

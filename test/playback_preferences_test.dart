@@ -17,8 +17,51 @@ void main() {
         await const PlaybackPreferencesService().load();
 
     expect(preferences.enableDoubleTapSeek, isTrue);
+    expect(preferences.enableTwoFingerVideoTransform, isTrue);
+    expect(preferences.showNoteTimeMarkers, isTrue);
+    expect(preferences.subtitleFontSize, 16);
     expect(preferences.wifiDefaultQuality, PreferredPlaybackQuality.p720);
     expect(preferences.mobileDefaultQuality, PreferredPlaybackQuality.p720);
+  });
+
+  /// 字号持久化、范围限制及损坏值回退不影响其他已有配置。
+  test('字幕字号保存和读取使用合法范围', () async {
+    const service = PlaybackPreferencesService();
+    await service.saveSubtitleFontSize(28);
+    expect((await service.load()).subtitleFontSize, 28);
+    expect(
+      (await service.load())
+          .copyWith(enableDoubleTapSeek: false)
+          .subtitleFontSize,
+      28,
+    );
+    await service.saveSubtitleFontSize(100);
+    expect((await service.load()).subtitleFontSize, 36);
+    SharedPreferences.setMockInitialValues({
+      'playback_preferences.subtitle_font_size': '损坏字段',
+      'playback_preferences.show_note_time_markers': false,
+    });
+    expect((await service.load()).subtitleFontSize, 16);
+    expect((await service.load()).showNoteTimeMarkers, isFalse);
+  });
+
+  /// 关闭笔记旗标后重新读取仍保持关闭，复制其他偏好不会覆盖这个开关。
+  test('笔记旗标设置保存在本机且复制配置保留原值', () async {
+    const service = PlaybackPreferencesService();
+    await service.saveShowNoteTimeMarkers(false);
+    final preferences = await service.load();
+    expect(preferences.showNoteTimeMarkers, isFalse);
+    expect(
+      preferences.copyWith(enableDoubleTapSeek: false).showNoteTimeMarkers,
+      isFalse,
+    );
+  });
+
+  /// Keeps the default-on two-finger switch disabled after reloading local preferences.
+  test('双指画面手势设置保存在本机', () async {
+    const service = PlaybackPreferencesService();
+    await service.saveTwoFingerVideoTransformEnabled(false);
+    expect((await service.load()).enableTwoFingerVideoTransform, isFalse);
   });
 
   /// 验证关闭开关后重新读取仍保持关闭。

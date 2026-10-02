@@ -7,8 +7,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
+import 'widgets/player_tap_gesture.dart';
 
 import '../../core/layout/adaptive_layout.dart';
+import '../../core/layout/app_scroll_behavior.dart';
 import '../../core/layout/device_orientation_policy.dart';
 import '../../features/common/watch_history_badge.dart';
 import '../../features/focus/focus_timer_controller.dart';
@@ -21,6 +23,7 @@ import '../../features/profile/user_profile_page.dart';
 import '../../models/video_note.dart';
 import '../../platform/app_platform.dart';
 import '../../models/video_preview.dart';
+import '../../models/app_favorite.dart';
 import '../../models/player_enhancement.dart';
 import '../../models/video_shot_preview.dart';
 import '../../models/watch_history_entry.dart';
@@ -38,6 +41,16 @@ import '../../services/bilibili_interaction_service.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/watch_history_service.dart';
 import '../../services/learning_list_service.dart';
+import '../../services/offline_video_service.dart';
+import '../../services/offline_download_queue.dart';
+import '../../services/download_notification_service.dart';
+import '../../services/playback_source_resolver.dart';
+import '../../services/local_file_playback_service.dart';
+import '../../services/listening_playback_service.dart';
+import '../../services/windows_experience_service.dart';
+import '../../services/player_route_session.dart';
+import '../profile/offline_videos_page.dart';
+import '../../services/app_favorites_service.dart';
 import '../../services/video_shot_service.dart';
 import '../../services/video_note_service.dart';
 import '../../models/player_overlay_data.dart';
@@ -56,6 +69,15 @@ import 'enhancements/player_enhancement_controller.dart';
 import 'enhancements/video_chapter_widgets.dart';
 import 'playback_resume_plan.dart';
 import 'widgets/player_control_widgets.dart';
+import 'widgets/player_control_layout.dart';
+import 'widgets/player_library_action.dart';
+import 'widgets/player_note_tile.dart';
+import 'widgets/fullscreen_video_transform.dart';
+import 'widgets/player_timeline.dart';
+import 'widgets/player_subtitle_sheet.dart';
+import 'widgets/player_action_feedback.dart';
+import 'widgets/player_feedback_layout.dart';
+import 'widgets/player_notice_controller.dart';
 
 part 'player_collection_sheet.dart';
 part 'player_layout_widgets.dart';
@@ -65,13 +87,18 @@ part 'player_learning_coordinator.dart';
 part 'player_focus_coordinator.dart';
 part 'player_gesture_coordinator.dart';
 part 'player_notes_workspace.dart';
+part 'player_note_flags_coordinator.dart';
+part 'player_timeline_view.dart';
 part 'player_viewport_coordinator.dart';
 part 'player_overlay_coordinator.dart';
 part 'player_controls_coordinator.dart';
+part 'player_listening_coordinator.dart';
+part 'player_sleep_timer_coordinator.dart';
 part 'player_video_coordinator.dart';
 part 'player_controls_view.dart';
 part 'player_feedback_view.dart';
 part 'player_details_view.dart';
+part 'player_local_library.dart';
 part 'player_collection_view.dart';
 part 'player_page_view.dart';
 
@@ -80,6 +107,7 @@ enum _VideoFitMode { contain, cover, stretch }
 
 /// 标识播放器右上角“更多”菜单中可执行的本地播放器设置。
 enum _PlayerMoreMenuAction {
+  listening,
   subtitles,
   danmakuSettings,
   playbackLoop,
@@ -114,6 +142,10 @@ class PlayerPage extends StatefulWidget {
     this.danmakuPreferencesService,
     this.playbackPreferencesService,
     this.playerEnhancementService,
+    this.offlineVideoService,
+    this.downloadQueue,
+    this.forceOffline = false,
+    this.appFavoritesService,
     this.focusTimerController,
     this.externalLinkLauncher,
     this.appPlatform,
@@ -136,6 +168,10 @@ class PlayerPage extends StatefulWidget {
   final DanmakuPreferencesService? danmakuPreferencesService;
   final PlaybackPreferencesService? playbackPreferencesService;
   final BilibiliPlayerEnhancementService? playerEnhancementService;
+  final OfflineVideoService? offlineVideoService;
+  final OfflineDownloadQueue? downloadQueue;
+  final bool forceOffline;
+  final AppFavoritesService? appFavoritesService;
   final FocusTimerController? focusTimerController;
   final ExternalLinkLauncher? externalLinkLauncher;
   final AppPlatform? appPlatform;
@@ -158,8 +194,11 @@ class _PlayerPageState extends State<PlayerPage>
         _PlayerFocusCoordinator,
         _PlayerGestureCoordinator,
         _PlayerNotesWorkspace,
+        _PlayerNoteFlagsCoordinator,
         _PlayerViewportCoordinator,
         _PlayerOverlayCoordinator,
+        _PlayerListeningCoordinator,
+        _PlayerSleepTimerCoordinator,
         _PlayerControlsCoordinator,
         _PlayerVideoCoordinator {
   @override
@@ -219,15 +258,27 @@ class _PlayerPageState extends State<PlayerPage>
     _likeCountDelta = 0;
     _coinCountDelta = 0;
     _favoriteCountDelta = 0;
+    _currentVideoDownloaded = false;
+    _appFavoriteFolderIds = const <String>{};
   }
 
   /// 在视频切换完成后异步读取当前视频的互动状态，避开 setState 回调中的异步副作用。
   @override
   void _startVideoInteractionStateLoad() {
     unawaited(_loadVideoInteractionState());
+    unawaited(_loadOfflineState());
+    unawaited(_loadAppFavoriteState());
   }
 
   /// 为播放器各个视图扩展提供统一的状态更新入口，避免扩展直接访问 State 的保护成员。
+  /// Refreshes local per-part membership without requesting online interaction data.
+  @override
+  void _refreshOfflinePartState() {
+    _updatePlayerState(() => _currentVideoDownloaded = false);
+    unawaited(_loadOfflineState());
+  }
+
+  /// Applies view-owned state changes only while mounted.
   void _updatePlayerState(VoidCallback update) {
     if (mounted) {
       setState(update);
@@ -243,15 +294,13 @@ class _PlayerPageState extends State<PlayerPage>
   @override
   Timer? _interactivePromptTimer;
   @override
-  Timer? _playerNoticeTimer;
+  final PlayerNoticeController _playerNotices = PlayerNoticeController();
   @override
   Timer? _playerStatusTimer;
   @override
   Timer? _sleepTimer;
   @override
   double _playbackSpeed = 1;
-  @override
-  String? _playerNotice;
   @override
   bool _playbackLoopEnabled = false;
   @override
@@ -291,6 +340,18 @@ class _PlayerPageState extends State<PlayerPage>
   @override
   late final PlayerEnhancementController _playerEnhancementController;
   @override
+  late final OfflineVideoService _offlineVideoService;
+  late final OfflineDownloadQueue _downloadQueue;
+  StreamSubscription<dynamic>? _downloadCompletionSubscription;
+  late final PlayerRouteSession _routeSession;
+  bool _offlineDownloading = false;
+  bool _currentVideoDownloaded = false;
+  int _offlineStateGeneration = 0;
+  late final AppFavoritesService _appFavoritesService;
+  Set<String> _appFavoriteFolderIds = const <String>{};
+  bool _appFavoriteLoading = false;
+  bool _appFavoriteBusy = false;
+  @override
   PlaybackPreferences _playbackPreferences = const PlaybackPreferences();
 
   /// 判断原生播放器是否真的在播放，避免 Flutter 页面自己伪造播放状态。
@@ -312,7 +373,7 @@ class _PlayerPageState extends State<PlayerPage>
     });
   }
 
-  /// 一次性写入播放会话恢复结果，使初始化状态在同一帧内对界面生效。
+  /// 应用初始续播配置；恢复到其他分 P 时同时撤销旧字幕和弹幕请求。
   @override
   void _applyInitialPlaybackConfiguration({
     required VideoPart part,
@@ -320,6 +381,11 @@ class _PlayerPageState extends State<PlayerPage>
     required DeviceNetworkType networkType,
     required int preferredQuality,
   }) {
+    final partChanged = _currentPart.cid != part.cid;
+    if (partChanged) {
+      _clearSubtitlesForPart();
+      _clearDanmakuForPart();
+    }
     setState(() {
       _currentPart = part;
       _brightness = levels.brightness;
@@ -329,6 +395,7 @@ class _PlayerPageState extends State<PlayerPage>
       _preferredOpeningQuality = preferredQuality;
       _defaultQualityPending = true;
     });
+    if (partChanged) _refreshPlayerNoteIdentity();
   }
 
   /// 创建播放服务、订阅原生状态，并启动视频纹理和播放数据请求。
@@ -356,10 +423,22 @@ class _PlayerPageState extends State<PlayerPage>
             ? BilibiliVideoShotService()
             : const EmptyVideoShotService());
     _videoNoteService = widget.videoNoteService ?? VideoNoteService();
+    _initializePlayerNoteFlags();
     _appPlatform = widget.appPlatform ?? AppPlatformDetector.current;
     _problemDiagnosticsService = ProblemDiagnosticsService();
     _playbackPreferencesService =
         widget.playbackPreferencesService ?? const PlaybackPreferencesService();
+    _offlineVideoService = widget.offlineVideoService ?? OfflineVideoService();
+    _downloadQueue = widget.downloadQueue ?? OfflineDownloadQueue.instance;
+    OfflineVideoService.revision.addListener(_refreshOfflinePartState);
+    _downloadCompletionSubscription = _downloadQueue.completions.listen((_) {
+      if (mounted) unawaited(_loadOfflineState());
+    });
+    _routeSession = PlayerRouteSession(
+      pause: _pauseForExternalNavigation,
+      restore: _restoreFromExternalNavigation,
+    )..attach();
+    _appFavoritesService = widget.appFavoritesService ?? AppFavoritesService();
     _playerEnhancementController = PlayerEnhancementController(
       service:
           widget.playerEnhancementService ??
@@ -393,6 +472,14 @@ class _PlayerPageState extends State<PlayerPage>
     _scheduleOrientationSync();
   }
 
+  /// 返回应用时刷新本机笔记，兼容从外部笔记页面返回后的标记更新。
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_loadCurrentVideoNotes());
+    }
+  }
+
   /// 读取当前电量；替换了原生播放器却未提供设备服务时直接返回未知，避免调用不存在的平台通道。
   @override
   Future<int?> _loadBatteryPercentSafely() async {
@@ -420,6 +507,9 @@ class _PlayerPageState extends State<PlayerPage>
   /// 离开页面前取消重试状态、订阅和计时器，释放原生资源并恢复竖屏与系统栏。
   @override
   void dispose() {
+    OfflineVideoService.revision.removeListener(_refreshOfflinePartState);
+    unawaited(_downloadCompletionSubscription?.cancel());
+    _routeSession.detach();
     WidgetsBinding.instance.removeObserver(this);
     _flushCurrentWatchHistoryProgress();
     _flushCurrentLearningListProgress();

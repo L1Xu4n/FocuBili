@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
-import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../core/layout/adaptive_page_frame.dart';
 import '../../platform/app_platform.dart';
@@ -10,7 +9,7 @@ import '../../platform/platform_capabilities.dart';
 import '../../platform/platform_services.dart';
 import '../../services/bilibili_auth_service.dart';
 import '../../services/bilibili_qr_login_service.dart';
-import '../../services/bilibili_request_policy.dart';
+import 'official_web_login_page.dart';
 
 /// 标识登录首页提供的手机号、密码和 Cookie 三种入口。
 enum _LoginMode { phone, password, cookie }
@@ -97,7 +96,10 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   /// 打开当前选择对应的 B 站官方登录页，成功后把账号信息返回“我的”页面。
-  Future<void> _openOfficialLogin({_LoginMode? requestedMode}) async {
+  Future<void> _openOfficialLogin({
+    _LoginMode? requestedMode,
+    bool useQrLogin = false,
+  }) async {
     if (_loginUnavailable) {
       return;
     }
@@ -108,9 +110,9 @@ class _LoginPageState extends State<LoginPage> {
     final BilibiliAccount? account = await Navigator.of(context).push(
       MaterialPageRoute<BilibiliAccount>(
         // Windows 使用官方扫码接口，Android 继续创建隔离的 WebView 登录页面。
-        builder: (BuildContext context) => _usesQrLogin
+        builder: (BuildContext context) => _usesQrLogin || useQrLogin
             ? const _OfficialQrLoginPage()
-            : const _OfficialWebLoginPage(),
+            : const OfficialWebLoginPage(),
       ),
     );
     if (!mounted || account == null) {
@@ -261,6 +263,15 @@ class _LoginPageState extends State<LoginPage> {
           ),
           label: Text(phoneMode ? '进入官方手机号登录' : '进入官方密码登录'),
         ),
+        if (_platformServices.platform == AppPlatform.android) ...<Widget>[
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            // 官方扫码入口无需渲染登录网页，适合用另一台手机扫码确认。
+            onPressed: () => _openOfficialLogin(useQrLogin: true),
+            icon: const Icon(Icons.qr_code_rounded),
+            label: const Text('网页登录卡顿？使用扫码登录'),
+          ),
+        ],
       ],
     );
   }
@@ -602,177 +613,6 @@ class _OfficialQrLoginPageState extends State<_OfficialQrLoginPage> {
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-/// 承载 B 站官方登录网页，并定时检测 WebView Cookie 是否已形成有效会话。
-class _OfficialWebLoginPage extends StatefulWidget {
-  /// 创建只访问 B 站官方登录地址的 WebView 页面。
-  const _OfficialWebLoginPage();
-
-  /// 创建网页控制器、检测计时器和登录提示状态。
-  @override
-  State<_OfficialWebLoginPage> createState() => _OfficialWebLoginPageState();
-}
-
-/// 管理官方网页加载、非网页协议拦截和登录成功后的自动返回。
-class _OfficialWebLoginPageState extends State<_OfficialWebLoginPage> {
-  final BilibiliAuthService _authService = BilibiliAuthService();
-  late final WebViewController _webController;
-  Timer? _loginCheckTimer;
-  bool _checking = false;
-  bool _loginCompleted = false;
-  String? _statusMessage;
-
-  /// 创建 WebView、启用官方验证码所需的 JavaScript，并启动会话自动检测。
-  @override
-  void initState() {
-    super.initState();
-    _webController = WebViewController();
-    unawaited(_configureWebController());
-  }
-
-  /// 按顺序设置移动端 UA、网页权限和导航规则，再加载 B 站官方登录地址。
-  Future<void> _configureWebController() async {
-    await _webController.setJavaScriptMode(JavaScriptMode.unrestricted);
-    await _webController.setBackgroundColor(Colors.white);
-    String? defaultUserAgent;
-    try {
-      defaultUserAgent = await _webController.platform.getUserAgent();
-    } catch (_) {
-      // 平台未提供 UA 读取能力时使用固定移动端回退值，登录页仍可继续加载。
-    }
-    await _webController.setUserAgent(
-      BilibiliRequestPolicy.ensureMobileWebUserAgent(defaultUserAgent),
-    );
-    await _webController.setNavigationDelegate(
-      NavigationDelegate(
-        onNavigationRequest: _handleNavigationRequest,
-        onPageFinished: _handlePageFinished,
-        onWebResourceError: _handleWebResourceError,
-      ),
-    );
-    if (!mounted) {
-      return;
-    }
-    await _webController.loadRequest(
-      BilibiliRequestPolicy.officialMobileLoginUri,
-    );
-    if (!mounted) {
-      return;
-    }
-    _startLoginCheckTimer();
-  }
-
-  /// 每两秒检查一次官方网页产生的会话，以便登录后无需额外点击确认。
-  void _startLoginCheckTimer() {
-    _loginCheckTimer?.cancel();
-    _loginCheckTimer = Timer.periodic(const Duration(seconds: 2), (_) {
-      // 定时检测函数读取会话但不会输出 Cookie 内容。
-      unawaited(_checkLoginState());
-    });
-  }
-
-  /// 仅允许 WebView 导航到 HTTP(S) 页面，阻止网页唤起外部 App 协议。
-  NavigationDecision _handleNavigationRequest(NavigationRequest request) {
-    final Uri? uri = Uri.tryParse(request.url);
-    if (uri == null || (uri.scheme != 'https' && uri.scheme != 'http')) {
-      return NavigationDecision.prevent;
-    }
-    return NavigationDecision.navigate;
-  }
-
-  /// 网页完成加载后立即补做一次登录检测，缩短成功后的等待时间。
-  void _handlePageFinished(String url) {
-    unawaited(_checkLoginState());
-  }
-
-  /// 网页资源失败时展示轻量说明，验证码子资源失败仍允许用户刷新重试。
-  void _handleWebResourceError(WebResourceError error) {
-    if (mounted && error.isForMainFrame == true) {
-      setState(() => _statusMessage = '登录页面加载失败，请检查网络后重试。');
-    }
-  }
-
-  /// 读取并验证 WebView 会话，成功后自动把账号信息返回上一页。
-  Future<void> _checkLoginState() async {
-    if (_checking || _loginCompleted || !mounted) {
-      return;
-    }
-    _checking = true;
-    try {
-      final BilibiliSessionState session = await _authService
-          .loadCurrentSession();
-      if (mounted && session.isActive) {
-        await _completeOfficialLogin(session.account!);
-      } else if (mounted &&
-          session.status == BilibiliSessionStatus.networkError) {
-        setState(() {
-          _statusMessage = session.message ?? '暂时无法读取登录状态，请稍后重试。';
-        });
-      }
-    } finally {
-      _checking = false;
-    }
-  }
-
-  /// 先撤下原生 WebView 并显示成功画面，再延迟返回，避免连续关闭两层页面造成黑屏。
-  Future<void> _completeOfficialLogin(BilibiliAccount account) async {
-    if (_loginCompleted || !mounted) {
-      return;
-    }
-    _loginCompleted = true;
-    _loginCheckTimer?.cancel();
-    setState(() => _statusMessage = '登录成功，正在返回…');
-    await _webController.loadHtmlString(
-      '<!doctype html><html><body style="margin:0;background:#fff"></body></html>',
-    );
-    await WidgetsBinding.instance.endOfFrame;
-    await Future<void>.delayed(const Duration(milliseconds: 220));
-    if (mounted) {
-      Navigator.of(context).pop(account);
-    }
-  }
-
-  /// 取消轮询计时器，避免离开网页后继续读取登录状态。
-  @override
-  void dispose() {
-    _loginCheckTimer?.cancel();
-    super.dispose();
-  }
-
-  /// 创建官方登录 WebView、状态提示和手动检测按钮。
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('B 站官方登录'),
-        actions: <Widget>[
-          IconButton(
-            // 登录检测按钮函数允许网络较慢时由用户立即重新检查会话。
-            onPressed: _checkLoginState,
-            icon: const Icon(Icons.verified_user_outlined),
-            tooltip: '检测登录状态',
-          ),
-        ],
-      ),
-      body: Column(
-        children: <Widget>[
-          if (_statusMessage != null)
-            MaterialBanner(
-              content: Text(_statusMessage!),
-              actions: <Widget>[
-                TextButton(
-                  // 状态关闭按钮函数只清除当前提示，不影响网页登录进度。
-                  onPressed: () => setState(() => _statusMessage = null),
-                  child: const Text('关闭'),
-                ),
-              ],
-            ),
-          Expanded(child: WebViewWidget(controller: _webController)),
-        ],
       ),
     );
   }

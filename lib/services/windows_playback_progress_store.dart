@@ -77,6 +77,11 @@ class WindowsPlaybackProgressStore {
         cid: cid,
         pageNumber: pageNumber,
         position: position,
+        savedAt: (decoded['savedAtMs'] as num? ?? 0) > 0
+            ? DateTime.fromMillisecondsSinceEpoch(
+                (decoded['savedAtMs'] as num).toInt(),
+              )
+            : null,
       );
     } on Object {
       // JSON 语法错误或字段类型损坏都只放弃这条本机记录，不能阻止播放器打开。
@@ -111,6 +116,7 @@ class WindowsPlaybackProgressStore {
       }
     }
     final String encoded = jsonEncode(<String, int>{
+      'savedAtMs': DateTime.now().millisecondsSinceEpoch,
       'cid': snapshot.cid,
       'pageNumber': snapshot.pageNumber,
       'positionMs': position.inMilliseconds.clamp(0, 1 << 31),

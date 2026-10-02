@@ -105,11 +105,18 @@ Future<void> _pumpSearchPage(
   required BilibiliService service,
   LearningListService? learningListService,
   Size surfaceSize = const Size(420, 900),
+  double textScale = 1,
 }) async {
   await tester.binding.setSurfaceSize(surfaceSize);
   addTearDown(() => tester.binding.setSurfaceSize(null));
   await tester.pumpWidget(
     MaterialApp(
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(
+          context,
+        ).copyWith(textScaler: TextScaler.linear(textScale)),
+        child: child!,
+      ),
       home: SearchPage(
         service: service,
         learningListService: learningListService,
@@ -121,6 +128,66 @@ Future<void> _pumpSearchPage(
 
 /// 注册搜索候选、历史换行、模式切换和更多菜单的布局回归测试。
 void main() {
+  // 检查手机放大文字与桌面双列都保留统计和菜单的可用空间。
+  for (final size in [const Size(320, 640), const Size(1280, 720)]) {
+    testWidgets('搜索结果适应 ${size.width} 宽度并保留统计和学习菜单', (tester) async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      const first = 'BV1GJ411x7h8';
+      const second = 'BV1GJ411x7h9';
+      final service = _SearchPageTestService(
+        suggestions: const [],
+        results: [_createSearchResult(first), _createSearchResult(second)],
+        video: _createVideo(first),
+      );
+      await _pumpSearchPage(
+        tester,
+        service: service,
+        surfaceSize: size,
+        textScale: size.width == 320 ? 1.8 : 1,
+      );
+      await tester.enterText(
+        find.byKey(const Key('search-input-field')),
+        '景德镇',
+      );
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pumpAndSettle();
+      final firstRow = find.byKey(const Key('search-$first'));
+      final secondRow = find.byKey(const Key('search-$second'));
+      expect(firstRow, findsOneWidget);
+      if (size.width > 840) {
+        expect(tester.getTopLeft(firstRow).dy, tester.getTopLeft(secondRow).dy);
+        expect(
+          tester.getTopLeft(secondRow).dx,
+          greaterThan(tester.getTopLeft(firstRow).dx),
+        );
+      }
+      expect(find.text('56.3万'), findsWidgets);
+      expect(find.text('1692'), findsWidgets);
+      // 统计与标题同处封面右侧，不再独占封面下方整行。
+      final rowTitle = find.descendant(
+        of: firstRow,
+        matching: find.text(_createSearchResult(first).title),
+      );
+      final playCount = find.descendant(
+        of: firstRow,
+        matching: find.byIcon(Icons.play_circle_outline_rounded),
+      );
+      expect(tester.getTopLeft(playCount).dx, tester.getTopLeft(rowTitle).dx);
+      final menuBounds = tester.getRect(
+        find.byKey(const Key('more-search-$first')),
+      );
+      // 桌面滚动条位于列表右边缘，菜单点击区必须完整避开它。
+      expect(
+        menuBounds.right,
+        lessThanOrEqualTo(tester.getRect(firstRow).right - 12),
+      );
+      await tester.tap(find.byKey(const Key('more-search-$first')));
+      await tester.pumpAndSettle();
+      expect(find.text('加入学习清单'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   /// 验证候选保持扁平、位于换行历史上方，并突出用户已输入的前缀。
   testWidgets('搜索候选高亮前缀并显示在自动换行的历史上方', (WidgetTester tester) async {
     const String firstHistory = '第一个非常非常长的搜索历史记录关键词';
@@ -334,4 +401,68 @@ void main() {
     expect(find.text('取消加入'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  /// 验证开启播放量过滤后，低于阈值的搜索结果被隐藏，高于阈值的保留。
+  testWidgets('开启播放量过滤时隐藏低播放量结果', (WidgetTester tester) async {
+    const String popularBvid = 'BV1GJ411x7h9';
+    const String unpopularBvid = 'BV1GJ411x7hA';
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'search.content_filter_v2':
+          '{"learningOnly":true,"minimumPlayCount":500000}',
+    });
+    final _SearchPageTestService service = _SearchPageTestService(
+      suggestions: const <String>[],
+      results: <VideoSearchResult>[
+        _createSearchResultWithPlayCount(popularBvid, 563000),
+        _createSearchResultWithPlayCount(unpopularBvid, 120000),
+      ],
+      video: _createVideo(popularBvid),
+    );
+    await _pumpSearchPage(tester, service: service);
+
+    await tester.enterText(find.byKey(const Key('search-input-field')), '景德镇');
+    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('search-$popularBvid')), findsOneWidget);
+    expect(find.byKey(const Key('search-$unpopularBvid')), findsNothing);
+  });
+
+  /// 验证播放量过滤关闭时，低播放量结果也正常展示。
+  testWidgets('关闭播放量过滤时展示全部结果', (WidgetTester tester) async {
+    const String popularBvid = 'BV1GJ411x7hB';
+    const String unpopularBvid = 'BV1GJ411x7hC';
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final _SearchPageTestService service = _SearchPageTestService(
+      suggestions: const <String>[],
+      results: <VideoSearchResult>[
+        _createSearchResultWithPlayCount(popularBvid, 563000),
+        _createSearchResultWithPlayCount(unpopularBvid, 120000),
+      ],
+      video: _createVideo(popularBvid),
+    );
+    await _pumpSearchPage(tester, service: service);
+
+    await tester.enterText(find.byKey(const Key('search-input-field')), '景德镇');
+    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('search-$popularBvid')), findsOneWidget);
+    expect(find.byKey(const Key('search-$unpopularBvid')), findsOneWidget);
+  });
+}
+
+/// 创建指定播放量的搜索结果，供播放量过滤测试构造高低的对比。
+VideoSearchResult _createSearchResultWithPlayCount(String bvid, int playCount) {
+  return VideoSearchResult(
+    bvid: bvid,
+    title: '测试视频',
+    ownerName: '星球研究所',
+    duration: const Duration(minutes: 15, seconds: 22),
+    thumbnailUrl: '',
+    publishedAt: DateTime(2026, 7, 25),
+    playCount: playCount,
+    danmakuCount: 1692,
+    episodeCountText: '全1集',
+  );
 }

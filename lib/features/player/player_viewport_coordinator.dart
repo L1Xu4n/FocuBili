@@ -10,7 +10,11 @@ mixin _PlayerViewportCoordinator
   AppPlatform get _appPlatform;
 
   /// 由播放器状态提供控制层可见性，供桌面鼠标光标和窗口布局同步使用。
+  @override
   bool get _showControls;
+
+  /// 字幕面板打开时保留 Windows 鼠标，方便持续调整字号和刷新列表。
+  bool get _subtitleSelectorOpen;
 
   /// 更新播放器控制层可见性，供退出窗口全屏时恢复控制层。
   @override
@@ -50,10 +54,12 @@ mixin _PlayerViewportCoordinator
     }
   }
 
-  /// 返回播放器当前应使用的鼠标光标，控制层收起时让 Windows 光标不可见。
+  /// 仅在 Windows 全屏观看时隐藏鼠标，笔记工作区打开期间始终保留光标。
   MouseCursor get _playerMouseCursor {
     return _appPlatform == AppPlatform.windows &&
             _fullscreen &&
+            !_notesOpen &&
+            !_subtitleSelectorOpen &&
             (!_showControls || _controlsLocked)
         ? SystemMouseCursors.none
         : MouseCursor.defer;
@@ -69,7 +75,13 @@ mixin _PlayerViewportCoordinator
       if (fullscreen && _windowWasMaximizedBeforePlayerFullscreen == true) {
         await windowManager.unmaximize();
       }
+      if (!fullscreen) {
+        await _setFullscreenProtection(false);
+      }
       await windowManager.setFullScreen(fullscreen);
+      if (fullscreen) {
+        await _setFullscreenProtection(true);
+      }
       if (!fullscreen && _windowWasMaximizedBeforePlayerFullscreen == true) {
         await windowManager.maximize();
       }
@@ -81,6 +93,17 @@ mixin _PlayerViewportCoordinator
       if (!fullscreen) {
         _windowWasMaximizedBeforePlayerFullscreen = null;
       }
+    }
+  }
+
+  /// Keeps native edge protection optional in widget tests and releases it on exit.
+  Future<void> _setFullscreenProtection(bool enabled) async {
+    try {
+      await const WindowsExperienceService().setFullscreenProtection(enabled);
+    } on MissingPluginException {
+      // Test hosts do not have a native runner; retain the normal fullscreen path.
+    } on PlatformException {
+      // A destroyed or unavailable native window cannot hold a cursor restriction.
     }
   }
 

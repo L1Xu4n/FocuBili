@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'services/player_route_session.dart';
+import 'services/offline_download_queue.dart';
+import 'models/offline_download_task.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -70,12 +73,15 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
   bool _deepLinkOpening = false;
   bool _clipboardLinkDialogOpen = false;
   BilibiliVideoDeepLinkTarget? _pendingDeepLink;
+  StreamSubscription<OfflineDownloadTask>? _downloadCompletionSubscription;
 
   /// 初始化专注控制器并异步恢复本机未结束的计时。
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _downloadCompletionSubscription = OfflineDownloadQueue.instance.completions
+        .listen(_showDownloadCompleted);
     _ownsFocusTimerController = widget.focusTimerController == null;
     _focusTimerController =
         widget.focusTimerController ?? FocusTimerController();
@@ -98,6 +104,25 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
     if (widget.checkForUpdatesOnStart) {
       unawaited(_initializeUpdateCheck());
     }
+  }
+
+  /// Shows a short global toast for new downloads without replaying completed history.
+  void _showDownloadCompleted(OfflineDownloadTask task) {
+    if (!mounted) return;
+    final title = task.video.parts.length > 1
+        ? '${task.video.title} · P${task.part.pageNumber} ${task.part.title}'
+        : task.video.title;
+    _scaffoldMessengerKey.currentState?.showSnackBar(
+      SnackBar(
+        content: Text(
+          '已完成缓存：$title',
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
+        ),
+        duration: const Duration(seconds: 4),
+        persist: false,
+      ),
+    );
   }
 
   /// 仅在应用前台允许剪贴板监听器读取内容，后台和锁屏期间完全停止读取。
@@ -219,18 +244,24 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
       }
       final int? initialPartCid =
           target.partCid ?? _partCidForPage(video, target.partPageNumber);
-      unawaited(
-        navigator.push<void>(
-          MaterialPageRoute<void>(
-            // 深链播放器构建函数复用正常播放器，并传入分P与网页时间点。
-            builder: (BuildContext context) => PlayerPage(
-              video: video,
-              initialPartCid: initialPartCid,
-              initialPosition: target.initialPosition,
-              initialPositionSource: PlayerInitialPositionSource.externalLink,
-            ),
-          ),
+      final previousPlayer = await PlayerRouteSession.suspendCurrent();
+      if (!mounted || !navigator.mounted) return;
+      final externalRoute = MaterialPageRoute<void>(
+        // 剪贴板和深链复用正常播放器，保留分 P 和外部链接指定的时间点。
+        builder: (BuildContext context) => PlayerPage(
+          video: video,
+          initialPartCid: initialPartCid,
+          initialPosition: target.initialPosition,
+          initialPositionSource: PlayerInitialPositionSource.externalLink,
         ),
+      );
+      unawaited(
+        navigator
+            .push<void>(externalRoute)
+            .then((_) => previousPlayer?.restoreAfterRoute(externalRoute))
+            .catchError((Object _) {
+              if (mounted) _showDeepLinkMessage('返回原视频时恢复失败，请重新打开该视频。');
+            }),
       );
     } on BilibiliLookupException catch (error) {
       if (mounted) {
@@ -342,8 +373,8 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
       locale: const Locale('zh', 'CN'),
       supportedLocales: const <Locale>[Locale('zh', 'CN')],
       localizationsDelegates: GlobalMaterialLocalizations.delegates,
-      theme: AppTheme.light(),
-      darkTheme: AppTheme.dark(),
+      theme: AppTheme.light(seedColor: _appThemeModeController.seedColor),
+      darkTheme: AppTheme.dark(seedColor: _appThemeModeController.seedColor),
       themeMode: _appThemeModeController.mode,
       home: FirstLaunchGate(
         onReady: _handleFirstLaunchReady,
@@ -374,6 +405,7 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
   /// 仅释放由应用自己创建的控制器，测试注入实例仍由测试负责回收。
   @override
   void dispose() {
+    unawaited(_downloadCompletionSubscription?.cancel());
     WidgetsBinding.instance.removeObserver(this);
     _clipboardLinkMonitor.dispose();
     _focusTimerController.removeListener(_handleFocusTimerChanged);

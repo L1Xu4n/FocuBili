@@ -8,6 +8,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.BatteryManager
 import android.os.Build
+import androidx.webkit.WebViewCompat
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -34,6 +35,7 @@ class DeviceStatusController(
             METHOD_GET_BATTERY_PERCENT -> result.success(readBatteryPercent())
             METHOD_GET_NETWORK_TYPE -> result.success(readNetworkType())
             METHOD_GET_DIAGNOSTIC_DEVICE_INFO -> result.success(readDiagnosticDeviceInfo())
+            "getWebViewInfo" -> result.success(readWebViewInfo())
             else -> result.notImplemented()
         }
     }
@@ -99,6 +101,27 @@ class DeviceStatusController(
             "apiLevel" to Build.VERSION.SDK_INT,
             "model" to displayModel,
         )
+    }
+
+    /** 查询系统选定的内核包和版本，不实例化 WebView，不读取 UA 或 Cookie。 */
+    private fun readWebViewInfo(): Map<String, Any> {
+        val values = mutableMapOf<String, Any>(
+            "manufacturer" to Build.MANUFACTURER.orEmpty(),
+            "model" to Build.MODEL.orEmpty(),
+            "apiLevel" to Build.VERSION.SDK_INT,
+        )
+        try {
+            val provider = WebViewCompat.getCurrentWebViewPackage(applicationContext)
+            values["providerAvailable"] = provider != null
+            values["packageName"] = provider?.packageName.orEmpty()
+            values["version"] = provider?.versionName.orEmpty()
+            if (provider == null) values["message"] = "系统没有提供可用的 WebView 内核。"
+        } catch (_: Exception) {
+            values["message"] = "系统 WebView 信息读取失败。"
+        } catch (_: LinkageError) {
+            values["message"] = "系统 WebView 组件无法加载。"
+        }
+        return values
     }
 
     /** 解除方法通道回调，避免 Activity 销毁后继续引用 Flutter 引擎。 */

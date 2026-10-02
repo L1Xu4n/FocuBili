@@ -1,105 +1,5 @@
 part of 'player_page.dart';
 
-/// 区分关闭定时、按分钟倒计时和按完整播放次数暂停三种选择。
-enum _SleepTimerChoiceKind { off, durationMinutes, playCount }
-
-/// 保存定时关闭对话框的选择；value 为空表示用户还需要输入自定义数值。
-class _SleepTimerChoice {
-  /// 创建带明确类型和可选数值的定时关闭选择，避免再用正负数暗示业务含义。
-  const _SleepTimerChoice(this.kind, [this.value]);
-
-  final _SleepTimerChoiceKind kind;
-  final int? value;
-}
-
-/// 在独立状态对象中管理自定义定时输入，确保控制器跟随弹窗动画完整释放。
-class _CustomSleepTimerValueDialog extends StatefulWidget {
-  /// 创建分钟数或播放次数输入弹窗。
-  const _CustomSleepTimerValueDialog({required this.kind});
-
-  final _SleepTimerChoiceKind kind;
-
-  /// 创建持有输入控制器和校验错误的弹窗状态。
-  @override
-  State<_CustomSleepTimerValueDialog> createState() =>
-      _CustomSleepTimerValueDialogState();
-}
-
-/// 管理自定义定时输入、范围校验和输入控制器生命周期。
-class _CustomSleepTimerValueDialogState
-    extends State<_CustomSleepTimerValueDialog> {
-  final TextEditingController _controller = TextEditingController();
-  String? _errorText;
-
-  /// 判断当前输入的是分钟数而不是播放次数。
-  bool get _durationMode =>
-      widget.kind == _SleepTimerChoiceKind.durationMinutes;
-
-  /// 返回当前模式允许的最大正整数。
-  int get _maximum => _durationMode ? 10080 : 9999;
-
-  /// 释放输入控制器；此时弹窗退场动画已经不再使用它。
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  /// 校验输入并返回结果；非法输入只更新范围提示，不关闭弹窗。
-  void _submit() {
-    final int? value = int.tryParse(_controller.text.trim());
-    if (value == null || value < 1 || value > _maximum) {
-      setState(() => _errorText = '请输入 1～$_maximum 之间的整数');
-      return;
-    }
-    Navigator.of(context).pop(value);
-  }
-
-  /// 创建数字输入框与取消、确定按钮。
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(_durationMode ? '自定义定时时长' : '自定义播放次数'),
-      content: TextField(
-        key: Key(
-          _durationMode
-              ? 'sleep-timer-custom-duration-input'
-              : 'sleep-timer-custom-play-count-input',
-        ),
-        controller: _controller,
-        autofocus: true,
-        keyboardType: TextInputType.number,
-        inputFormatters: <TextInputFormatter>[
-          FilteringTextInputFormatter.digitsOnly,
-        ],
-        decoration: InputDecoration(
-          labelText: _durationMode ? '分钟数' : '播放次数',
-          hintText: _durationMode ? '例如：25' : '例如：3',
-          helperText: _durationMode
-              ? '可输入 1～10080 分钟（最长 7 天）'
-              : '当前这一轮也计入次数，可输入 1～9999 次',
-          errorText: _errorText,
-        ),
-        // 键盘提交函数复用确认按钮的校验，输入无效时不会关闭对话框。
-        onSubmitted: (_) => _submit(),
-      ),
-      actions: <Widget>[
-        TextButton(
-          // 取消按钮函数关闭输入框并保留原来的定时设置。
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('取消'),
-        ),
-        FilledButton(
-          key: const Key('sleep-timer-custom-confirm'),
-          // 确认按钮函数只在输入为允许范围内的正整数时返回结果。
-          onPressed: _submit,
-          child: const Text('确定'),
-        ),
-      ],
-    );
-  }
-}
-
 /// 封装播放器控制层、播放命令、选集状态、桌面快捷键和设备状态栏刷新。
 mixin _PlayerControlsCoordinator
     on
@@ -109,6 +9,8 @@ mixin _PlayerControlsCoordinator
         _PlayerGestureCoordinator,
         _PlayerNotesWorkspace,
         _PlayerViewportCoordinator,
+        _PlayerListeningCoordinator,
+        _PlayerSleepTimerCoordinator,
         _PlayerOverlayCoordinator {
   static const Duration _controlsAutoHideDelay = Duration(seconds: 5);
   static const Duration _transientHintDuration = Duration(seconds: 3);
@@ -119,14 +21,6 @@ mixin _PlayerControlsCoordinator
     reverseCurve: Curves.easeIn,
   );
   static const double _expandedPartItemHeight = 76;
-  static const List<double> _playbackSpeeds = <double>[
-    0.75,
-    1,
-    1.25,
-    1.5,
-    2,
-    3,
-  ];
 
   /// 说明控制层已经安排自动隐藏，供播放快照协调器避免重复创建计时器。
   @override
@@ -286,6 +180,14 @@ mixin _PlayerControlsCoordinator
   /// 请求原生播放器保留当前进度并切换到所选清晰度。
   @override
   Future<void> _changeQuality(int quality) async {
+    if (_changingPlaybackSource) return;
+    if (quality == _PlayerPlaybackSession._localCacheQuality ||
+        _playingOffline) {
+      final useLocal = quality == _PlayerPlaybackSession._localCacheQuality;
+      if (useLocal && _playingOffline) return;
+      await _switchPlaybackSource(quality, useLocal: useLocal);
+      return;
+    }
     if (quality == _currentQuality || _pendingQualitySelection == quality) {
       return;
     }
@@ -293,9 +195,7 @@ mixin _PlayerControlsCoordinator
     setState(() {
       _pendingQualitySelection = quality;
       _qualitySelectionSawLoading = false;
-      _playerNotice = null;
     });
-    _playerNoticeTimer?.cancel();
     try {
       await _playbackService.selectQuality(quality);
     } on PlatformException catch (error) {
@@ -311,6 +211,44 @@ mixin _PlayerControlsCoordinator
     }
   }
 
+  /// Switches media in place, preserving online metadata, position, speed and pause state.
+  Future<void> _switchPlaybackSource(
+    int quality, {
+    required bool useLocal,
+  }) async {
+    final position = _playbackSnapshot.position;
+    final speed = _playbackSpeed;
+    final wasPlaying = _playing;
+    _changingPlaybackSource = true;
+    _openingResumePlan = PlaybackResumePlan.direct(
+      part: _currentPart,
+      position: position,
+      positionSource: PlaybackResumePositionSource.internalRecovery,
+    );
+    _showPlayerControls();
+    try {
+      await _openPlaybackSource(
+        _activeVideo,
+        part: _currentPart,
+        quality: useLocal ? _currentQuality : quality,
+        initialPosition: position,
+        useLocal: useLocal,
+      );
+      if (!mounted || _externalNavigationSuspended) return;
+      await _playbackService.setPlaybackSpeed(speed);
+      if (!wasPlaying) await _playbackService.pause();
+      if (mounted) setState(() {});
+    } catch (error) {
+      if (mounted) {
+        _showPlayerNotice(
+          '播放来源切换失败：${error is OfflineVideoException ? error.message : '请检查网络或缓存文件。'}',
+        );
+      }
+    } finally {
+      _changingPlaybackSource = false;
+    }
+  }
+
   /// 用播放器内三秒悬浮提示说明高画质切换失败通常与大会员权限有关。
   @override
   void _showMembershipQualityNotice([String? details]) {
@@ -323,16 +261,10 @@ mixin _PlayerControlsCoordinator
     _showPlayerNotice('画质切换失败：可能未开通大会员或当前账号无此画质权限$suffix');
   }
 
-  /// 在播放器画面内部显示三秒悬浮提示，避免系统 SnackBar 遮住底部播放栏。
+  /// 显示独立到期的三秒提示，多条结果按出现顺序排列。
   @override
   void _showPlayerNotice(String message) {
-    _playerNoticeTimer?.cancel();
-    setState(() => _playerNotice = message);
-    _playerNoticeTimer = Timer(_transientHintDuration, () {
-      if (mounted) {
-        setState(() => _playerNotice = null);
-      }
-    });
+    if (mounted) _playerNotices.show(message, duration: _transientHintDuration);
   }
 
   /// 标记进度条正被手指拖动，并暂停自动隐藏以方便精确调整。
@@ -377,13 +309,12 @@ mixin _PlayerControlsCoordinator
 
   /// 把倍速数字格式化为播放器按钮使用的简短文字。
   String _formatSpeed(double speed) {
-    return speed == speed.roundToDouble()
-        ? '${speed.toInt()}x'
-        : '${speed.toStringAsFixed(2).replaceFirst(RegExp(r'0+$'), '')}x';
+    return PlaybackPreferences.speedLabel(speed);
   }
 
   /// 返回当前清晰度的用户可读名称，未知编号时显示原始质量编号。
   String _currentQualityLabel() {
+    if (_playingOffline) return '本地';
     for (final PlaybackQuality quality in _availableQualities) {
       if (quality.id == _currentQuality) {
         return quality.label;
@@ -621,6 +552,9 @@ mixin _PlayerControlsCoordinator
   /// 根据菜单操作打开字幕或弹幕设置，或切换播放器画面比例。
   void _handleMoreSettingsSelection(_PlayerMoreMenuAction action) {
     switch (action) {
+      case _PlayerMoreMenuAction.listening:
+        unawaited(_toggleAudioOnly());
+        return;
       case _PlayerMoreMenuAction.subtitles:
         unawaited(_showSubtitleSelector());
         return;
@@ -655,142 +589,6 @@ mixin _PlayerControlsCoordinator
     });
     _showTransientSnackBar(_playbackLoopEnabled ? '已开启当前分P循环播放' : '已关闭循环播放');
     _showPlayerControls();
-  }
-
-  /// 返回当前定时关闭设置的简短菜单文字。
-  String get _sleepTimerSummary {
-    if (_pauseAfterPlayCount != null) {
-      return '定时关闭：播放 $_pauseAfterPlayCount 次后';
-    }
-    final DateTime? deadline = _sleepTimerDeadline;
-    if (deadline != null && deadline.isAfter(DateTime.now())) {
-      final int minutes = deadline.difference(DateTime.now()).inMinutes + 1;
-      return '定时关闭：约 $minutes 分钟后';
-    }
-    return '定时关闭';
-  }
-
-  /// 显示快捷选项与自定义入口；“关闭”统一表示到点后暂停播放器。
-  Future<void> _showSleepTimerDialog() async {
-    _SleepTimerChoice? selected = await showDialog<_SleepTimerChoice>(
-      context: context,
-      builder: (BuildContext dialogContext) => SimpleDialog(
-        title: const Text('定时关闭（到时暂停）'),
-        children: <Widget>[
-          SimpleDialogOption(
-            key: const Key('sleep-timer-off'),
-            onPressed: () => Navigator.of(
-              dialogContext,
-            ).pop(const _SleepTimerChoice(_SleepTimerChoiceKind.off, 0)),
-            child: const Text('关闭定时'),
-          ),
-          for (final int minutes in <int>[15, 30, 60, 90])
-            SimpleDialogOption(
-              key: Key('sleep-timer-$minutes-minutes'),
-              onPressed: () => Navigator.of(dialogContext).pop(
-                _SleepTimerChoice(
-                  _SleepTimerChoiceKind.durationMinutes,
-                  minutes,
-                ),
-              ),
-              child: Text('$minutes 分钟后暂停'),
-            ),
-          SimpleDialogOption(
-            key: const Key('sleep-timer-custom-duration'),
-            onPressed: () => Navigator.of(dialogContext).pop(
-              const _SleepTimerChoice(_SleepTimerChoiceKind.durationMinutes),
-            ),
-            child: const Text('自定义时长…'),
-          ),
-          for (final int count in <int>[1, 2, 3, 5])
-            SimpleDialogOption(
-              key: Key('sleep-timer-$count-plays'),
-              onPressed: () => Navigator.of(
-                dialogContext,
-              ).pop(_SleepTimerChoice(_SleepTimerChoiceKind.playCount, count)),
-              child: Text('播放 $count 次后暂停'),
-            ),
-          SimpleDialogOption(
-            key: const Key('sleep-timer-custom-play-count'),
-            onPressed: () => Navigator.of(
-              dialogContext,
-            ).pop(const _SleepTimerChoice(_SleepTimerChoiceKind.playCount)),
-            child: const Text('自定义播放次数…'),
-          ),
-        ],
-      ),
-    );
-    if (!mounted || selected == null) {
-      return;
-    }
-    if (selected.value == null) {
-      final int? customValue = await _showCustomSleepTimerValueDialog(
-        selected.kind,
-      );
-      if (!mounted || customValue == null) {
-        return;
-      }
-      selected = _SleepTimerChoice(selected.kind, customValue);
-    }
-    _applySleepTimerChoice(selected);
-  }
-
-  /// 请求一个正整数的自定义分钟数或播放次数，并在输入非法或过大时留在对话框提示。
-  Future<int?> _showCustomSleepTimerValueDialog(
-    _SleepTimerChoiceKind kind,
-  ) async {
-    return showDialog<int>(
-      context: context,
-      builder: (BuildContext dialogContext) =>
-          _CustomSleepTimerValueDialog(kind: kind),
-    );
-  }
-
-  /// 将已经校验的选择写入播放器状态，并保证时长与次数两种模式互斥。
-  void _applySleepTimerChoice(_SleepTimerChoice selected) {
-    final int value = selected.value ?? 0;
-    _sleepTimer?.cancel();
-    _sleepTimer = null;
-    if (selected.kind == _SleepTimerChoiceKind.off) {
-      setState(() {
-        _sleepTimerDeadline = null;
-        _pauseAfterPlayCount = null;
-        _completedPlayCount = 0;
-      });
-      _showTransientSnackBar('已关闭定时暂停');
-      return;
-    }
-    if (selected.kind == _SleepTimerChoiceKind.playCount) {
-      setState(() {
-        _sleepTimerDeadline = null;
-        _pauseAfterPlayCount = value;
-        _completedPlayCount = 0;
-        _playbackLoopEnabled = value > 1;
-      });
-      _showTransientSnackBar('将在播放 $value 次后暂停');
-      return;
-    }
-    final Duration duration = Duration(minutes: value);
-    setState(() {
-      _sleepTimerDeadline = DateTime.now().add(duration);
-      _pauseAfterPlayCount = null;
-      _completedPlayCount = 0;
-    });
-    _sleepTimer = Timer(duration, _pauseForSleepTimer);
-    _showTransientSnackBar('将在 $value 分钟后暂停');
-  }
-
-  /// 倒计时到期后暂停播放器并清除本次定时状态。
-  void _pauseForSleepTimer() {
-    if (!mounted) {
-      return;
-    }
-    setState(() {
-      _sleepTimerDeadline = null;
-      _pauseAfterPlayCount = null;
-    });
-    unawaited(_setPlaybackActive(false));
-    _showTransientSnackBar('定时关闭时间已到，视频已暂停');
   }
 
   /// 保存用户选择的画面比例，并用三秒提示确认该设置只作用于渲染层。
@@ -839,10 +637,13 @@ mixin _PlayerControlsCoordinator
     }
   }
 
-  /// 显示统一持续三秒的系统临时提示。
+  /// 全屏和工作台使用内部提示区，竖屏详情操作沿用页面底部提示。
   @override
   void _showTransientSnackBar(String message) {
-    if (!mounted) {
+    if (!mounted) return;
+    if (_fullscreen ||
+        AdaptiveLayout.usesWorkspace(MediaQuery.sizeOf(context))) {
+      _showPlayerNotice(message);
       return;
     }
     ScaffoldMessenger.of(context)
@@ -856,21 +657,12 @@ mixin _PlayerControlsCoordinator
   Timer? get _controlsTimer;
   set _controlsTimer(Timer? value);
 
-  /// 由页面状态类提供播放器内短消息计时器。
-  Timer? get _playerNoticeTimer;
-  set _playerNoticeTimer(Timer? value);
+  /// 由页面状态类提供独立管理各条消息的控制器。
+  PlayerNoticeController get _playerNotices;
 
   /// 由页面状态类提供播放器顶部状态刷新计时器。
   Timer? get _playerStatusTimer;
   set _playerStatusTimer(Timer? value);
-
-  /// 由页面状态类提供倒计时暂停计时器。
-  Timer? get _sleepTimer;
-  set _sleepTimer(Timer? value);
-
-  /// 由页面状态类提供倒计时暂停的绝对截止时间。
-  DateTime? get _sleepTimerDeadline;
-  set _sleepTimerDeadline(DateTime? value);
 
   /// 由播放会话提供循环播放开关。
   @override
@@ -889,9 +681,6 @@ mixin _PlayerControlsCoordinator
   int get _completedPlayCount;
   @override
   set _completedPlayCount(int value);
-
-  /// 由页面状态类提供播放器内短消息文字。
-  set _playerNotice(String? value);
 
   /// 由页面状态类提供展开选集面板状态。
   bool get _partSelectorExpanded;
@@ -944,7 +733,7 @@ mixin _PlayerControlsCoordinator
   /// 取消控制层计时器并释放选集滚动控制器。
   void _disposePlayerControlsCoordinator() {
     _controlsTimer?.cancel();
-    _playerNoticeTimer?.cancel();
+    _playerNotices.dispose();
     _playerStatusTimer?.cancel();
     _sleepTimer?.cancel();
     _partScrollController.dispose();

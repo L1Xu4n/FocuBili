@@ -52,6 +52,12 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
 # Application build; see runner/CMakeLists.txt.
 add_subdirectory("runner")
 
+# Local preview bundles use a separate path_provider preferences directory.
+option(FOCUBILI_LOCAL_PREVIEW "Isolate local preview application data" OFF)
+if(FOCUBILI_LOCAL_PREVIEW)
+  target_compile_definitions(${BINARY_NAME} PRIVATE FOCUBILI_LOCAL_PREVIEW)
+endif()
+
 
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.

@@ -120,6 +120,8 @@ class VideoSearchResult {
     required this.playCount,
     required this.danmakuCount,
     required this.episodeCountText,
+    this.categoryId,
+    this.tags = const [],
   });
 
   final String bvid;
@@ -131,6 +133,8 @@ class VideoSearchResult {
   final int playCount;
   final int danmakuCount;
   final String episodeCountText;
+  final int? categoryId;
+  final List<String> tags;
 }
 
 /// 定义关键词视频搜索的排序方式。
@@ -250,6 +254,7 @@ class VideoPreview {
     this.stats = const VideoStats(),
     this.collection,
     this.tags = const <String>[],
+    this.fromOfflineCache = false,
   });
 
   final int aid;
@@ -269,6 +274,7 @@ class VideoPreview {
   final VideoCollection? collection;
   final List<String> tags;
   final Duration duration;
+  final bool fromOfflineCache;
 
   /// 视频封面地址，仅用于低流量缩略图展示；为空时页面显示本地占位图。
   final String thumbnailUrl;
@@ -291,6 +297,7 @@ class VideoPreview {
       stats: stats,
       collection: collection,
       tags: List<String>.unmodifiable(values),
+      fromOfflineCache: fromOfflineCache,
       duration: duration,
       thumbnailUrl: thumbnailUrl,
       parts: parts,

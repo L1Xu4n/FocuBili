@@ -6,11 +6,22 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import '../platform/app_platform.dart';
+import 'windows_experience_service.dart';
 
 /// 把 Flutter 分享卡渲染成 PNG，并交给系统分享面板，不经过开发者服务器。
 class FocusShareService {
   /// 创建专注分享服务；服务本身不保存用户状态。
-  const FocusShareService();
+  const FocusShareService({
+    this.windowsExperience = const WindowsExperienceService(),
+    this.platform,
+  });
+  final WindowsExperienceService windowsExperience;
+  final AppPlatform? platform;
+
+  /// Determines whether the primary action copies an image rather than opening Share UI.
+  bool get copiesToClipboard =>
+      (platform ?? AppPlatformDetector.current) == AppPlatform.windows;
 
   /// 捕获指定 RepaintBoundary、写入临时 PNG，然后打开系统分享面板。
   Future<void> shareBoundary({
@@ -37,6 +48,10 @@ class FocusShareService {
         data.offsetInBytes,
         data.lengthInBytes,
       );
+      if (copiesToClipboard) {
+        await windowsExperience.copyRenderedImage(image, png: bytes);
+        return;
+      }
       final Directory temporaryDirectory = await getTemporaryDirectory();
       final String safeFileName = _safePngName(fileName);
       final File output = File('${temporaryDirectory.path}/$safeFileName');

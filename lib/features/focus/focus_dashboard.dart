@@ -6,11 +6,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection, SliverConstraints;
 
 import '../../core/layout/adaptive_layout.dart';
+import '../../core/widgets/editable_card_board.dart';
+import '../../services/dashboard_layout_service.dart';
 import '../../models/focus_session.dart';
 import 'custom_focus_duration_dialog.dart';
 import 'focus_do_not_disturb.dart';
 import 'focus_interruption_dialog.dart';
 import 'focus_timer_controller.dart';
+
+part 'focus_dashboard_home_layout.dart';
+part 'focus_dashboard_home_cards.dart';
 
 /// 首页专注台，提供目标、计时控制、今日汇总和最近本机记录。
 class FocusDashboard extends StatefulWidget {
@@ -25,6 +30,7 @@ class FocusDashboard extends StatefulWidget {
     this.onOpenLinkedVideo,
     this.continueLearningCard,
     this.onOpenLearningList,
+    this.layoutService,
   });
 
   final FocusTimerController controller;
@@ -42,6 +48,9 @@ class FocusDashboard extends StatefulWidget {
   /// 打开完整学习清单的回调，由外层首页决定页面和本机服务实例。
   final VoidCallback? onOpenLearningList;
 
+  /// 可注入的首页布局存储，业务服务和专注计时不受布局编辑影响。
+  final DashboardLayoutService? layoutService;
+
   /// 创建保存目标输入和预设时长选择的页面状态。
   @override
   State<FocusDashboard> createState() => _FocusDashboardState();
@@ -56,6 +65,8 @@ class _FocusDashboardState extends State<FocusDashboard> {
 
   final TextEditingController _goalController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  final GlobalKey _homeBoardKey = GlobalKey(debugLabel: 'home-card-board');
+  bool _editingHomeCards = false;
   int _selectedMinutes = 25;
   double _scrollOffset = 0;
   bool _homeCardsSnapped = false;
@@ -86,21 +97,11 @@ class _FocusDashboardState extends State<FocusDashboard> {
     setState(() => _scrollOffset = _scrollController.offset);
   }
 
-  /// 返回首页首屏的稳定高度，确保不同设备上第一次上滑都能吸附到卡片区。
-  double _homeHeroHeight(BuildContext context) {
-    final Size windowSize = MediaQuery.sizeOf(context);
-    final bool needsCompactHeight =
-        windowSize.width >= AdaptiveLayout.tabletBreakpoint ||
-        windowSize.height < 648;
-    if (needsCompactHeight) {
-      return (windowSize.height - 64).clamp(280.0, 720.0).toDouble();
-    }
-    return (windowSize.height - 88).clamp(560.0, 760.0).toDouble();
-  }
-
   /// 在一次拖动结束后把首屏或卡片区吸附到完整的阅读位置。
   void _handleHomeScrollEnd(BuildContext context) {
     if (widget.onOpenProfile == null ||
+        _editingHomeCards ||
+        !_canAnimateHomeHero(context) ||
         _isSnappingHomeScroll ||
         !_scrollController.hasClients) {
       return;
@@ -145,7 +146,7 @@ class _FocusDashboardState extends State<FocusDashboard> {
     _isSnappingHomeScroll = true;
     // 等当前 ScrollEndNotification 完成后再启动驱动动画，避免手势活动取消吸附。
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_scrollController.hasClients) {
+      if (!mounted || _editingHomeCards || !_scrollController.hasClients) {
         _isSnappingHomeScroll = false;
         return;
       }
@@ -158,7 +159,7 @@ class _FocusDashboardState extends State<FocusDashboard> {
     BuildContext context,
     ScrollNotification notification,
   ) {
-    if (notification.depth != 0) {
+    if (_editingHomeCards || notification.depth != 0) {
       return false;
     }
     if (notification is UserScrollNotification) {
@@ -168,7 +169,10 @@ class _FocusDashboardState extends State<FocusDashboard> {
         _scrollController.hasClients) {
       _homeScrollStartOffset = _scrollController.offset;
     } else if (notification is ScrollEndNotification) {
-      _handleHomeScrollEnd(context);
+      // 只吸附真实手势，跳转到输入框、底部编辑入口和拖动边缘滚动均保留目标位置。
+      if (_homeScrollStartOffset != null) {
+        _handleHomeScrollEnd(context);
+      }
       _homeScrollDirection = ScrollDirection.idle;
       _homeScrollStartOffset = null;
     }
@@ -194,6 +198,20 @@ class _FocusDashboardState extends State<FocusDashboard> {
         _homeCardsSnapped = targetOffset > 0;
       }
     }
+  }
+
+  /// 编辑时停止首页吸附，并清理旧手势，防止长按拖动被自动滚动抢走。
+  void _handleHomeEditingChanged(bool editing) {
+    if (!mounted || editing == _editingHomeCards) return;
+    if (editing && _scrollController.hasClients) {
+      _scrollController.jumpTo(_scrollController.offset);
+    }
+    setState(() {
+      _editingHomeCards = editing;
+      _homeScrollDirection = ScrollDirection.idle;
+      _homeScrollStartOffset = null;
+      _isSnappingHomeScroll = false;
+    });
   }
 
   /// 使用当前目标和所选分钟数开始专注，并在失败时给出可读提示。
@@ -704,375 +722,6 @@ class _FocusDashboardState extends State<FocusDashboard> {
           ],
         ),
       ),
-    );
-  }
-
-  /// 创建截图中的首屏欢迎区，保留搜索和“我的”两个最短路径入口。
-  Widget _buildHomeHero(BuildContext context) {
-    final double heroHeight = _homeHeroHeight(context);
-    final double progress = (_scrollOffset / 280).clamp(0.0, 1.0).toDouble();
-    // Sliver 随滚动上移；额外向下位移后，首屏元素会相对原位下坠再淡出。
-    final double fallOffset = _scrollOffset * 1.32;
-    final ThemeData theme = Theme.of(context);
-    final Color textColor = theme.colorScheme.onSurface;
-    // 两个首页动作按钮都复用应用主题，避免草图颜色泄漏到成品界面。
-    final Color actionColor = theme.colorScheme.primary;
-    final Color actionTextColor = theme.colorScheme.onPrimary;
-    return SliverToBoxAdapter(
-      child: SizedBox(
-        key: const Key('focus-home-hero'),
-        height: heroHeight,
-        child: ClipRect(
-          child: ImageFiltered(
-            imageFilter: ui.ImageFilter.blur(
-              sigmaX: progress * 7,
-              sigmaY: progress * 7,
-            ),
-            child: Opacity(
-              opacity: 1 - (progress * 0.88),
-              child: Transform.translate(
-                // 首屏本身随滚动离开，但内容相对原位向下坠落并逐渐淡出。
-                offset: Offset(0, fallOffset),
-                child: LayoutBuilder(
-                  builder: (BuildContext context, BoxConstraints constraints) {
-                    final double horizontalPadding =
-                        AdaptiveLayout.centeredHorizontalPadding(
-                          width: constraints.maxWidth,
-                          maxContentWidth: AdaptiveLayout.homeContentMaxWidth,
-                          compact: 24,
-                        );
-                    return Padding(
-                      padding: EdgeInsets.fromLTRB(
-                        horizontalPadding,
-                        18,
-                        horizontalPadding,
-                        12,
-                      ),
-                      child: Column(
-                        children: <Widget>[
-                          Row(
-                            children: <Widget>[
-                              // 保留首页文字节点，便于旧版无障碍和启动回归测试识别当前页面。
-                              const SizedBox.shrink(child: Text('首页')),
-                              Text(
-                                '焦点哔哩',
-                                style: theme.textTheme.headlineSmall?.copyWith(
-                                  fontWeight: FontWeight.w800,
-                                  color: textColor,
-                                ),
-                              ),
-                              const Spacer(),
-                              IconButton(
-                                key: const Key('home-profile-button'),
-                                // 我的按钮函数切换到个人中心页面。
-                                onPressed: widget.onOpenProfile,
-                                tooltip: '我的',
-                                style: IconButton.styleFrom(
-                                  backgroundColor: actionColor,
-                                  foregroundColor: actionTextColor,
-                                  fixedSize: const Size.square(46),
-                                  padding: EdgeInsets.zero,
-                                  shape: const CircleBorder(),
-                                ),
-                                icon: _buildProfileIcon(actionTextColor),
-                              ),
-                              // 保留旧启动测试需要的文字节点，实际按钮仍只绘制图标。
-                              const SizedBox.shrink(child: Text('我的')),
-                            ],
-                          ),
-                          const Spacer(),
-                          Text(
-                            '今天要学点什么？',
-                            textAlign: TextAlign.center,
-                            style: theme.textTheme.headlineMedium?.copyWith(
-                              fontWeight: FontWeight.w500,
-                              color: textColor,
-                            ),
-                          ),
-                          const SizedBox(height: 24),
-                          FilledButton(
-                            key: const Key('home-start-search'),
-                            // 开始搜索按钮函数进入搜索页面，保持首页动作单一明确。
-                            onPressed: widget.onOpenVideo,
-                            style: FilledButton.styleFrom(
-                              backgroundColor: actionColor,
-                              foregroundColor: actionTextColor,
-                              minimumSize: const Size(160, 58),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 28,
-                              ),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(30),
-                              ),
-                            ),
-                            child: const Text('开始搜索'),
-                          ),
-                          // 保留旧入口文字节点，但不在新首屏重复绘制第二个按钮。
-                          const SizedBox.shrink(child: Text('打开视频')),
-                          const Spacer(),
-                          Icon(
-                            Icons.keyboard_double_arrow_up_rounded,
-                            key: const Key('home-scroll-hint'),
-                            size: 34,
-                            color: textColor,
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// 创建首页账号入口的头像或主题色默认人物图标。
-  Widget _buildProfileIcon(Color fallbackColor) {
-    final String avatarUrl = widget.profileAvatarUrl?.trim() ?? '';
-    if (avatarUrl.isEmpty) {
-      return Icon(Icons.person_outline_rounded, color: fallbackColor);
-    }
-    return ClipOval(
-      child: Image.network(
-        avatarUrl,
-        width: 46,
-        height: 46,
-        fit: BoxFit.cover,
-        // 头像加载失败函数回退为人物图标，避免网络图片破坏按钮布局。
-        errorBuilder: _buildProfileAvatarError,
-      ),
-    );
-  }
-
-  /// 创建头像请求失败时使用的主题色人物图标占位。
-  Widget _buildProfileAvatarError(
-    BuildContext context,
-    Object error,
-    StackTrace? stackTrace,
-  ) {
-    return ColoredBox(
-      color: Theme.of(context).colorScheme.primary,
-      child: Icon(
-        Icons.person_outline_rounded,
-        color: Theme.of(context).colorScheme.onPrimary,
-      ),
-    );
-  }
-
-  /// 创建首页底部的辅助入口卡片，避免首屏右上角堆叠多个按钮。
-  Widget _buildHomeActionsCard(BuildContext context) {
-    return Card(
-      key: const Key('home-utility-actions'),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        child: Row(
-          children: <Widget>[
-            if (widget.onOpenLearningList != null)
-              Expanded(
-                child: TextButton.icon(
-                  key: const Key('open-learning-list'),
-                  // 学习清单按钮函数打开完整任务管理页面。
-                  onPressed: widget.onOpenLearningList,
-                  icon: const Icon(Icons.menu_book_rounded),
-                  label: const Text('学习清单'),
-                ),
-              ),
-            Expanded(
-              child: TextButton.icon(
-                key: const Key('open-focus-statistics'),
-                // 专注数据按钮函数打开本机统计看板。
-                onPressed: widget.onOpenStatistics,
-                icon: const Icon(Icons.insights_rounded),
-                label: const Text('专注数据'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// 创建横屏工作台左栏的品牌说明和主要搜索动作。
-  Widget _buildWorkspaceIntro(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    return Card(
-      key: const Key('focus-workspace-intro'),
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Row(
-              children: <Widget>[
-                Icon(
-                  Icons.filter_center_focus_rounded,
-                  color: theme.colorScheme.primary,
-                ),
-                const SizedBox(width: 10),
-                Text(
-                  '焦点哔哩',
-                  style: theme.textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                // 保留首页文字节点，兼容已有的页面识别和无障碍测试。
-                const SizedBox.shrink(child: Text('首页')),
-              ],
-            ),
-            const SizedBox(height: 42),
-            Text(
-              '今天要学点什么？',
-              style: theme.textTheme.headlineMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              '从一个明确的视频开始，把注意力留给真正想完成的事。',
-              style: theme.textTheme.bodyLarge?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 28),
-            FilledButton.icon(
-              key: const Key('home-start-search'),
-              // 工作台搜索按钮函数切换到左侧导航中的搜索页面。
-              onPressed: widget.onOpenVideo,
-              icon: const Icon(Icons.search_rounded),
-              label: const Text('开始搜索'),
-              style: FilledButton.styleFrom(minimumSize: const Size(176, 52)),
-            ),
-            // 保留旧入口文字节点，但工作台只绘制一个清晰的主要动作。
-            const SizedBox.shrink(child: Text('打开视频')),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// 创建横屏平板首页的左右双栏，让学习入口与专注状态同时可见。
-  Widget _buildWorkspaceDashboard(
-    BuildContext context,
-    FocusSession? activeSession,
-    FocusSession? finishedSession,
-  ) {
-    return Padding(
-      key: const Key('focus-workspace-layout'),
-      padding: const EdgeInsets.all(20),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          Expanded(
-            flex: 5,
-            child: ListView(
-              key: const Key('focus-workspace-primary'),
-              children: <Widget>[
-                _buildWorkspaceIntro(context),
-                if (widget.continueLearningCard != null) ...<Widget>[
-                  const SizedBox(height: 14),
-                  widget.continueLearningCard!,
-                ],
-              ],
-            ),
-          ),
-          const SizedBox(width: 20),
-          Expanded(
-            flex: 7,
-            child: ListView(
-              key: const Key('focus-workspace-secondary'),
-              children: <Widget>[
-                if (!widget.controller.isReady)
-                  const Card(
-                    child: Padding(
-                      padding: EdgeInsets.all(32),
-                      child: Center(child: CircularProgressIndicator()),
-                    ),
-                  )
-                else ...<Widget>[
-                  if (finishedSession != null) ...<Widget>[
-                    _buildFinishedCard(context, finishedSession),
-                    const SizedBox(height: 14),
-                  ],
-                  if (activeSession != null)
-                    _buildActiveCard(context, activeSession)
-                  else
-                    _buildReadyCard(context),
-                  const SizedBox(height: 14),
-                  _buildTodaySummary(context),
-                  const SizedBox(height: 14),
-                  _buildRecentHistory(context),
-                  if (widget.onOpenProfile != null) ...<Widget>[
-                    const SizedBox(height: 14),
-                    _buildHomeActionsCard(context),
-                  ],
-                ],
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// 创建首页滚动卡片区，让继续学习、专注、统计和记录按截图顺序展开。
-  Widget _buildCardsSliver(
-    BuildContext context,
-    FocusSession? activeSession,
-    FocusSession? finishedSession,
-  ) {
-    return SliverLayoutBuilder(
-      builder: (BuildContext context, SliverConstraints constraints) {
-        final double horizontalPadding =
-            AdaptiveLayout.centeredHorizontalPadding(
-              width: constraints.crossAxisExtent,
-              maxContentWidth: AdaptiveLayout.homeContentMaxWidth,
-            );
-        return SliverPadding(
-          key: const Key('focus-adaptive-cards'),
-          padding: EdgeInsets.fromLTRB(
-            horizontalPadding,
-            12,
-            horizontalPadding,
-            32,
-          ),
-          sliver: SliverList.list(
-            children: <Widget>[
-              if (!widget.controller.isReady)
-                const Card(
-                  child: Padding(
-                    padding: EdgeInsets.all(32),
-                    child: Center(child: CircularProgressIndicator()),
-                  ),
-                )
-              else ...<Widget>[
-                if (widget.continueLearningCard != null) ...<Widget>[
-                  widget.continueLearningCard!,
-                  const SizedBox(height: 14),
-                ],
-                if (finishedSession != null) ...<Widget>[
-                  _buildFinishedCard(context, finishedSession),
-                  const SizedBox(height: 14),
-                ],
-                if (activeSession != null)
-                  _buildActiveCard(context, activeSession)
-                else
-                  _buildReadyCard(context),
-                const SizedBox(height: 14),
-                _buildTodaySummary(context),
-                const SizedBox(height: 14),
-                _buildRecentHistory(context),
-                if (widget.onOpenProfile != null) ...<Widget>[
-                  const SizedBox(height: 14),
-                  _buildHomeActionsCard(context),
-                ],
-              ],
-            ],
-          ),
-        );
-      },
     );
   }
 

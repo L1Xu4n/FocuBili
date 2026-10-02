@@ -2,6 +2,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:focubili/services/app_behavior_preferences_service.dart';
+import 'package:focubili/services/search_content_filter_service.dart';
+import 'package:focubili/models/search_content_filter.dart';
 
 /// 注册全局应用行为偏好的默认值和持久化测试。
 void main() {
@@ -35,5 +37,33 @@ void main() {
     expect(await service.loadAccountReadOnly(), isFalse);
     expect(await service.loadSearchHistoryEnabled(), isFalse);
     expect(await service.loadWatchHistoryEnabled(), isFalse);
+  });
+
+  /// New search rules default to learning content without a popularity threshold.
+  test('搜索过滤默认开启学习内容而不限制播放量', () async {
+    final filter = await const SearchContentFilterService().load();
+    expect(filter.learningOnly, isTrue);
+    expect(filter.minimumPlayCount, 0);
+  });
+
+  /// Arbitrary custom integer limits are now supported and saved with learning mode.
+  test('自定义播放量与学习过滤一起持久化', () async {
+    const service = SearchContentFilterService();
+    await service.save(
+      const SearchContentFilter(learningOnly: false, minimumPlayCount: 12345),
+    );
+    expect((await service.load()).learningOnly, isFalse);
+    expect((await service.load()).minimumPlayCount, 12345);
+  });
+
+  /// Invalid thresholds are rejected before touching the last valid preferences.
+  test('播放量过滤拒绝负数并保留原设置', () async {
+    const service = SearchContentFilterService();
+    await service.save(const SearchContentFilter(minimumPlayCount: 12345));
+    await expectLater(
+      service.save(const SearchContentFilter(minimumPlayCount: -1)),
+      throwsArgumentError,
+    );
+    expect((await service.load()).minimumPlayCount, 12345);
   });
 }

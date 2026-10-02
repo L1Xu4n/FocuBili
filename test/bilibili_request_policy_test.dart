@@ -43,6 +43,37 @@ void main() {
     );
   });
 
+  /// 验证脚本和接口即使含查询参数，也应被识别为验证码资源。
+  test('识别验证脚本及接口失败，包括带验证参数的地址', () {
+    expect(
+      BilibiliRequestPolicy.isCaptchaResourceUrl(
+        'https://static.geetest.com/static/js/gt.js',
+      ),
+      isTrue,
+    );
+    expect(
+      BilibiliRequestPolicy.isCaptchaResourceUrl(
+        'https://api.geetest.com/ajax.php?challenge=test-only',
+      ),
+      isTrue,
+    );
+  });
+
+  /// 无关资源、伪装域名和无法识别的地址不能误报为验证码失败。
+  test('普通资源失败不会误报为验证服务失败', () {
+    for (final url in <String?>[
+      null,
+      '',
+      'https://i0.hdslb.com/geetest.com/image.png',
+      'https://geetest.com.example.org/script.js',
+      'https://fakegeetest.com/script.js',
+      'https://geetest.com@example.org/script.js',
+      'data:text/plain,geetest.com',
+    ]) {
+      expect(BilibiliRequestPolicy.isCaptchaResourceUrl(url), isFalse);
+    }
+  });
+
   /// 视频详情与标签来源必须指向同一 BV 的网页，避免根域来源触发平台 412。
   test('视频详情和标签使用精确视频页来源', () {
     const String bvid = 'BV1GJ411x7h7';

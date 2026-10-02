@@ -101,6 +101,11 @@ class _FocusSharePreviewDialogState extends State<_FocusSharePreviewDialog> {
         text: widget.shareText,
         sharePositionOrigin: origin,
       );
+      if (mounted && _shareService.copiesToClipboard) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('图片已复制到剪贴板')));
+      }
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -167,8 +172,18 @@ class _FocusSharePreviewDialogState extends State<_FocusSharePreviewDialog> {
                           dimension: 18,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
-                      : const Icon(Icons.ios_share_rounded),
-                  label: Text(_sharing ? '正在生成…' : '分享到其他 App'),
+                      : Icon(
+                          _shareService.copiesToClipboard
+                              ? Icons.copy_rounded
+                              : Icons.ios_share_rounded,
+                        ),
+                  label: Text(
+                    _sharing
+                        ? '正在生成…'
+                        : _shareService.copiesToClipboard
+                        ? '复制图片'
+                        : '分享到其他 App',
+                  ),
                 ),
               ),
             ],

@@ -78,6 +78,39 @@ BilibiliNavResponse _expiredResponse() {
 }
 
 void main() {
+  /// 登录页复用未变化的过期会话，Cookie 改变或手动检测时重新验证。
+  test('网页登录轮询只验证变化的会话，手动检测强制刷新', () async {
+    final store = _RecordingCookieStore(cookies: 'SESSDATA=expired');
+    final api = _CallbackAuthApi((_) async => _expiredResponse());
+    final service = BilibiliAuthService(cookieStore: store, api: api);
+    await service.loadCurrentSessionForWebLogin();
+    await service.loadCurrentSessionForWebLogin();
+    expect(api.requestedCookies, hasLength(1));
+    store.cookies = 'SESSDATA=new-session';
+    await service.loadCurrentSessionForWebLogin();
+    await service.loadCurrentSession();
+    expect(api.requestedCookies, hasLength(3));
+    expect(store.clearCalls, 0);
+  });
+
+  /// 暂时断网不能被缓存成已确认的未登录状态，下一次轮询可恢复成功。
+  test('网页登录轮询网络失败后会重新验证', () async {
+    final store = _RecordingCookieStore(cookies: 'SESSDATA=valid');
+    int calls = 0;
+    final api = _CallbackAuthApi((_) async {
+      if (++calls == 1) throw const SocketException('offline');
+      return _activeResponse();
+    });
+    final service = BilibiliAuthService(cookieStore: store, api: api);
+    expect(
+      (await service.loadCurrentSessionForWebLogin()).status,
+      BilibiliSessionStatus.networkError,
+    );
+    expect((await service.loadCurrentSessionForWebLogin()).isActive, isTrue);
+    expect(calls, 2);
+    expect(store.clearCalls, 0);
+  });
+
   /// 验证本机没有会话 Cookie 时会显示“未登录”，且不会发起网络请求。
   test('没有 Cookie 时返回未登录且不请求账号接口', () async {
     final _RecordingCookieStore store = _RecordingCookieStore();

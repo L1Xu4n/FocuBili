@@ -9,6 +9,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import 'video_note_export_service.dart';
+import '../platform/app_platform.dart';
+import 'windows_experience_service.dart';
 
 /// 把笔记导出包或笔记分享卡交给系统分享面板，所有临时文件只写入本机缓存。
 class VideoNoteShareService {
@@ -16,10 +18,18 @@ class VideoNoteShareService {
   const VideoNoteShareService({
     this.temporaryDirectoryLoader,
     this.shareLauncher,
+    this.platform,
+    this.windowsExperience = const WindowsExperienceService(),
   });
 
   final Future<Directory> Function()? temporaryDirectoryLoader;
   final Future<ShareResult> Function(ShareParams params)? shareLauncher;
+  final AppPlatform? platform;
+  final WindowsExperienceService windowsExperience;
+
+  /// Windows image actions copy actual pixels; other platforms retain system sharing.
+  bool get copiesToClipboard =>
+      (platform ?? AppPlatformDetector.current) == AppPlatform.windows;
 
   /// 把批量导出包写成临时文件并分享，文件名和 MIME 类型与实际格式保持一致。
   Future<void> shareExportPackage(
@@ -81,6 +91,10 @@ class VideoNoteShareService {
         data.offsetInBytes,
         data.lengthInBytes,
       );
+      if (copiesToClipboard) {
+        await windowsExperience.copyRenderedImage(image, png: bytes);
+        return;
+      }
       final Directory directory = await _temporaryDirectory();
       if (!await directory.exists()) {
         await directory.create(recursive: true);

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:focubili/core/router/app_router.dart';
@@ -56,6 +57,8 @@ void main() {
   /// 每项测试清空本机偏好，避免学习清单或搜索历史影响页面状态。
   setUp(() {
     SharedPreferences.setMockInitialValues(<String, Object>{});
+    // 主框架账号读取使用空内存容器，不依赖系统凭据插件。
+    FlutterSecureStorage.setMockInitialValues(<String, String>{});
   });
 
   /// 验证搜索页和“我的”页先返回首页，只有首页把返回继续交给系统。
@@ -98,6 +101,8 @@ void main() {
     expect(tester.testTextInput.isVisible, isFalse);
 
     await tester.tap(find.byKey(const Key('home-profile-button')));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('设置'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('设置'));
     await tester.pumpAndSettle();

@@ -44,7 +44,7 @@ class PlaybackResumePlan {
       positionSource != PlaybackResumePositionSource.none &&
       positionSource != PlaybackResumePositionSource.internalRecovery;
 
-  /// 按用户明确入口、平台记录、观看历史、默认分 P 的顺序生成唯一续播计划。
+  /// Honors explicit positions, otherwise uses the newest matching saved progress.
   static PlaybackResumePlan resolve({
     required VideoPreview video,
     int? requestedPartCid,
@@ -61,12 +61,16 @@ class PlaybackResumePlan {
         ? Duration.zero
         : normalizeBackendPosition(savedState.position);
     final bool canUseHistory =
-        requestedPartCid == null &&
         requestedPosition == null &&
-        savedPosition == Duration.zero &&
         historyEntry != null &&
         historyEntry.bvid.trim().toUpperCase() ==
-            video.bvid.trim().toUpperCase();
+            video.bvid.trim().toUpperCase() &&
+        (requestedPart == null ||
+            requestedPart.pageNumber == historyEntry.lastPartPageNumber) &&
+        (savedPart == null ||
+            savedPosition == Duration.zero ||
+            (savedState?.savedAt != null &&
+                historyEntry.watchedAt.isAfter(savedState!.savedAt!)));
     final VideoPart? historyPart = canUseHistory
         ? _findPartByPageNumber(video.parts, historyEntry.lastPartPageNumber)
         : null;
@@ -99,7 +103,9 @@ class PlaybackResumePlan {
         positionSource: PlaybackResumePositionSource.requested,
       );
     }
-    if (savedPart?.cid == targetPart.cid && savedPosition > Duration.zero) {
+    if (!usesHistory &&
+        savedPart?.cid == targetPart.cid &&
+        savedPosition > Duration.zero) {
       return PlaybackResumePlan(
         part: targetPart,
         position: savedPosition,

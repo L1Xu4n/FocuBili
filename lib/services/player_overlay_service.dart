@@ -100,7 +100,7 @@ class NativePlayerOverlayService implements PlayerOverlayService {
     }
   }
 
-  /// 校验视频和轨道编号后请求原生字幕条目，避免把临时地址带到 Flutter。
+  /// 会话缺失或临时正文地址过期时，重新确认当前视频的轨道并且只重试一次。
   @override
   Future<SubtitleCueLoadResult> loadSubtitleCues({
     required String bvid,
@@ -112,23 +112,51 @@ class NativePlayerOverlayService implements PlayerOverlayService {
     if (arguments == null || normalizedTrackId.isEmpty) {
       return const SubtitleCueLoadResult.unavailable(message: '字幕请求参数无效。');
     }
-    try {
-      final Object? result = await _platformChannel.invokeMethod(
-        'loadSubtitleCues',
-        <String, Object?>{...arguments, 'trackId': normalizedTrackId},
-      );
-      if (result is! Map) {
+    bool restoredSession = false;
+    while (true) {
+      try {
+        final Object? result = await _platformChannel.invokeMethod(
+          'loadSubtitleCues',
+          <String, Object?>{...arguments, 'trackId': normalizedTrackId},
+        );
+        if (result is! Map) {
+          return const SubtitleCueLoadResult.unavailable();
+        }
+        return SubtitleCueLoadResult.fromPlatformMap(
+          Map<Object?, Object?>.from(result),
+        );
+      } on PlatformException catch (error) {
+        if ((error.code == 'subtitle_track_not_loaded' ||
+                error.code == 'subtitle_document_expired') &&
+            !restoredSession) {
+          restoredSession = true;
+          final SubtitleTrackLoadResult tracks = await loadSubtitleTracks(
+            bvid: bvid,
+            cid: cid,
+          );
+          if (tracks.status != SubtitleLoadStatus.available) {
+            return SubtitleCueLoadResult(
+              status: tracks.status,
+              message: tracks.message,
+              cues: const <SubtitleCue>[],
+            );
+          }
+          if (!tracks.tracks.any(
+            (SubtitleTrack track) =>
+                track.id == normalizedTrackId && !track.isLocked,
+          )) {
+            return const SubtitleCueLoadResult.locked();
+          }
+          continue;
+        }
+        return _cueResultFromPlatformError(error);
+      } on MissingPluginException {
+        return const SubtitleCueLoadResult.unavailable(
+          message: '当前设备暂不支持读取字幕。',
+        );
+      } catch (_) {
         return const SubtitleCueLoadResult.unavailable();
       }
-      return SubtitleCueLoadResult.fromPlatformMap(
-        Map<Object?, Object?>.from(result),
-      );
-    } on PlatformException catch (error) {
-      return _cueResultFromPlatformError(error);
-    } on MissingPluginException {
-      return const SubtitleCueLoadResult.unavailable(message: '当前设备暂不支持读取字幕。');
-    } catch (_) {
-      return const SubtitleCueLoadResult.unavailable();
     }
   }
 
@@ -177,6 +205,21 @@ class NativePlayerOverlayService implements PlayerOverlayService {
     return <String, Object?>{'bvid': normalizedBvid, 'cid': cid};
   }
 
+  /// 只把已知错误类别和纯数字 HTTP 状态映射成提示，不展示原始地址或平台详情。
+  String _subtitleFailureMessage(PlatformException error) {
+    if (error.code == 'subtitle_identity_mismatch') return '字幕信息与当前视频不匹配，已忽略。';
+    if (error.code == 'subtitle_request_cancelled') return '视频已切换，请重新打开字幕设置。';
+    if (error.code == 'subtitle_invalid_data') return '字幕数据不完整，可点击刷新重试。';
+    if (error.code == 'subtitle_network' ||
+        error.code == 'subtitle_document_expired') {
+      final status = RegExp(
+        r'HTTP (\d{3})',
+      ).firstMatch(error.message ?? '')?.group(1);
+      return status == null ? '字幕网络请求失败，请稍后重试。' : '字幕请求失败（HTTP $status），请稍后重试。';
+    }
+    return '字幕暂时无法读取，可点击刷新重试。';
+  }
+
   /// 把原生轨道错误转为页面可显示的状态，且不使用错误详情中的敏感内容。
   SubtitleTrackLoadResult _trackResultFromPlatformError(
     PlatformException error,
@@ -187,7 +230,9 @@ class NativePlayerOverlayService implements PlayerOverlayService {
       case 'subtitle_locked':
         return const SubtitleTrackLoadResult.locked();
       default:
-        return const SubtitleTrackLoadResult.unavailable();
+        return SubtitleTrackLoadResult.unavailable(
+          message: _subtitleFailureMessage(error),
+        );
     }
   }
 
@@ -200,7 +245,9 @@ class NativePlayerOverlayService implements PlayerOverlayService {
       case 'subtitle_track_not_loaded':
         return const SubtitleCueLoadResult.locked();
       default:
-        return const SubtitleCueLoadResult.unavailable();
+        return SubtitleCueLoadResult.unavailable(
+          message: _subtitleFailureMessage(error),
+        );
     }
   }
 

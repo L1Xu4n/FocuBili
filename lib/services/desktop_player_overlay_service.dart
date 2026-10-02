@@ -27,6 +27,14 @@ typedef DesktopOverlayRequest =
       int maximumBytes,
     );
 
+/// 隔离一支视频的字幕地址；每次元数据请求都拥有独立会话。
+class _DesktopSubtitleSession {
+  /// 创建尚未解析轨道的字幕会话，旧请求不能写入新会话。
+  _DesktopSubtitleSession();
+
+  Map<String, Uri> readableUrls = const <String, Uri>{};
+}
+
 /// 在 Windows 上直接读取官方字幕与弹幕接口，同时维持与 Android 相同的安全边界。
 class DesktopPlayerOverlayService implements PlayerOverlayService {
   /// 创建桌面叠加数据服务；测试可注入内存请求函数和内存 Cookie 容器。
@@ -40,6 +48,7 @@ class DesktopPlayerOverlayService implements PlayerOverlayService {
   static const int _maximumSubtitleDocumentBytes = 4 * 1024 * 1024;
   static const int _maximumDanmakuSegmentBytes = 6 * 1024 * 1024;
   static const int _maximumSubtitleTracks = 20;
+  static const int _maximumSubtitleSessions = 8;
   static const int _maximumSubtitleCues = 10000;
   static const int _maximumSubtitleTrackIdLength = 32;
   static const int _maximumSubtitleDurationMilliseconds = 48 * 60 * 60 * 1000;
@@ -53,9 +62,9 @@ class DesktopPlayerOverlayService implements PlayerOverlayService {
 
   final BilibiliAuthService _authService;
   final DesktopOverlayRequest _request;
-  String? _subtitleSessionBvid;
-  int? _subtitleSessionCid;
-  Map<String, Uri> _readableSubtitleUrls = const <String, Uri>{};
+  final Map<(String, int), _DesktopSubtitleSession> _subtitleSessions =
+      <(String, int), _DesktopSubtitleSession>{};
+  final Map<(String, int), Object> _subtitleRequests = {};
 
   /// 校验视频编号后读取官方播放器元数据，并仅向页面返回无敏感信息的轨道描述。
   @override
@@ -67,6 +76,10 @@ class DesktopPlayerOverlayService implements PlayerOverlayService {
     if (!_isValidVideo(normalizedBvid, cid)) {
       return const SubtitleTrackLoadResult.unavailable(message: '字幕请求参数无效。');
     }
+    final (String, int) key = (normalizedBvid, cid);
+    final _DesktopSubtitleSession session = _DesktopSubtitleSession();
+    final requestToken = Object();
+    _subtitleRequests[key] = requestToken;
     try {
       final Uri endpoint = Uri.https(
         'api.bilibili.com',
@@ -82,31 +95,54 @@ class DesktopPlayerOverlayService implements PlayerOverlayService {
         ),
         _maximumSubtitleMetadataBytes,
       );
-      if (response.statusCode < 200 || response.statusCode > 299) {
+      if (!identical(_subtitleRequests[key], requestToken)) {
         return const SubtitleTrackLoadResult.unavailable();
+      }
+      if (response.statusCode < 200 || response.statusCode > 299) {
+        return SubtitleTrackLoadResult.unavailable(
+          message: '字幕列表获取失败（HTTP ${response.statusCode}），可点击刷新重试。',
+        );
       }
       final Map<String, Object?> root = _decodeJsonObject(response.bodyBytes);
       final int code = _readInt(root['code'], fallback: -1);
       if (code == -101) {
-        _clearSubtitleSession();
+        _subtitleSessions.remove(key);
         return const SubtitleTrackLoadResult.loginRequired();
       }
       if (code != 0 || root['data'] is! Map) {
-        _clearSubtitleSession();
-        return const SubtitleTrackLoadResult.unavailable();
+        return SubtitleTrackLoadResult.unavailable(
+          message: code == 0 ? '字幕列表数据不完整，可点击刷新重试。' : '字幕服务返回错误 $code，可稍后刷新重试。',
+        );
       }
-      return _parseSubtitleTracks(
+      final parsed = _parseSubtitleTracks(
         bvid: normalizedBvid,
         cid: cid,
+        session: session,
         rawData: Map<Object?, Object?>.from(root['data']! as Map),
       );
+      // 只有有效响应才替换已成功的地址表，刷新失败不能破坏正在使用的字幕。
+      if (parsed.status != SubtitleLoadStatus.unavailable) {
+        _subtitleSessions.remove(key);
+        _subtitleSessions[key] = session;
+        while (_subtitleSessions.length > _maximumSubtitleSessions) {
+          _subtitleSessions.remove(_subtitleSessions.keys.first);
+        }
+      }
+      return parsed;
+    } on TimeoutException {
+      return const SubtitleTrackLoadResult.unavailable(
+        message: '字幕列表读取超时，可点击刷新重试。',
+      );
     } catch (_) {
-      _clearSubtitleSession();
       return const SubtitleTrackLoadResult.unavailable();
+    } finally {
+      if (identical(_subtitleRequests[key], requestToken)) {
+        _subtitleRequests.remove(key);
+      }
     }
   }
 
-  /// 读取当前会话中已确认安全的字幕地址，并把 JSON 内容转换为有限字幕条目。
+  /// 按 BV/CID 读取正文；临时地址失效时重新确认当前轨道，只自动重试一次。
   @override
   Future<SubtitleCueLoadResult> loadSubtitleCues({
     required String bvid,
@@ -119,30 +155,55 @@ class DesktopPlayerOverlayService implements PlayerOverlayService {
         !_isValidSubtitleTrackId(normalizedTrackId)) {
       return const SubtitleCueLoadResult.unavailable(message: '字幕请求参数无效。');
     }
-    if (_subtitleSessionBvid != normalizedBvid || _subtitleSessionCid != cid) {
-      return const SubtitleCueLoadResult.locked(message: '请先读取当前视频的字幕轨道。');
-    }
-    final Uri? endpoint = _readableSubtitleUrls[normalizedTrackId];
-    if (endpoint == null) {
-      return const SubtitleCueLoadResult.locked();
-    }
-    try {
-      final DesktopOverlayHttpResponse response = await _request(
-        endpoint,
-        await _buildHeaders(
-          bvid: normalizedBvid,
-          accept: 'application/json',
-          includeCookie: false,
-        ),
-        _maximumSubtitleDocumentBytes,
-      );
-      if (response.statusCode < 200 || response.statusCode > 299) {
+    for (var attempt = 0; attempt < 2; attempt++) {
+      final session = _subtitleSessions[(normalizedBvid, cid)];
+      if (session == null) {
+        return const SubtitleCueLoadResult.locked(message: '请先读取当前视频的字幕轨道。');
+      }
+      final endpoint = session.readableUrls[normalizedTrackId];
+      if (endpoint == null) {
+        return const SubtitleCueLoadResult.locked(
+          message: '此字幕已不可用，请刷新列表后重新选择。',
+        );
+      }
+      try {
+        final response = await _request(
+          endpoint,
+          await _buildHeaders(
+            bvid: normalizedBvid,
+            accept: 'application/json',
+            includeCookie: false,
+          ),
+          _maximumSubtitleDocumentBytes,
+        );
+        if (response.statusCode >= 200 && response.statusCode <= 299) {
+          return _parseSubtitleCues(_decodeJsonObject(response.bodyBytes));
+        }
+        if (attempt == 0 &&
+            const [401, 403, 410].contains(response.statusCode)) {
+          final refreshed = await loadSubtitleTracks(
+            bvid: normalizedBvid,
+            cid: cid,
+          );
+          if (refreshed.status == SubtitleLoadStatus.available) continue;
+          return SubtitleCueLoadResult(
+            status: refreshed.status,
+            message: refreshed.message,
+            cues: const [],
+          );
+        }
+        return SubtitleCueLoadResult.unavailable(
+          message: '字幕内容读取失败（HTTP ${response.statusCode}），请稍后重试。',
+        );
+      } on TimeoutException {
+        return const SubtitleCueLoadResult.unavailable(
+          message: '字幕内容读取超时，请稍后重试。',
+        );
+      } catch (_) {
         return const SubtitleCueLoadResult.unavailable();
       }
-      return _parseSubtitleCues(_decodeJsonObject(response.bodyBytes));
-    } catch (_) {
-      return const SubtitleCueLoadResult.unavailable();
     }
+    return const SubtitleCueLoadResult.unavailable();
   }
 
   /// 从固定官方接口读取一个六分钟弹幕段，并用最小 Protobuf 解析器生成安全条目。
@@ -192,7 +253,7 @@ class DesktopPlayerOverlayService implements PlayerOverlayService {
     }
   }
 
-  /// 使用 Dart HttpClient 执行受限 GET，请求过大、超时或重定向都会安全失败。
+  /// 限制响应大小、单次读取和总时长，慢速连续响应也会在 30 秒后停止。
   static Future<DesktopOverlayHttpResponse> _performLimitedGet(
     Uri endpoint,
     Map<String, String> headers,
@@ -200,6 +261,9 @@ class DesktopPlayerOverlayService implements PlayerOverlayService {
   ) async {
     final HttpClient client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 15);
+    final Timer deadline = Timer(const Duration(seconds: 30), () {
+      client.close(force: true);
+    });
     try {
       final HttpClientRequest request = await client
           .getUrl(endpoint)
@@ -229,11 +293,12 @@ class DesktopPlayerOverlayService implements PlayerOverlayService {
         bodyBytes: output.takeBytes(),
       );
     } finally {
+      deadline.cancel();
       client.close(force: true);
     }
   }
 
-  /// 创建固定来源和桌面浏览器标识的请求头，Cookie 读取失败时仍允许匿名请求。
+  /// 使用同一登录状态创建请求头，读取失败时不悄悄改成匿名请求并缩减字幕列表。
   Future<Map<String, String>> _buildHeaders({
     required String bvid,
     required String accept,
@@ -246,24 +311,29 @@ class DesktopPlayerOverlayService implements PlayerOverlayService {
       HttpHeaders.userAgentHeader: BilibiliHttpAuthApi.desktopUserAgent,
     };
     if (includeCookie) {
-      try {
-        final String cookie = (await _authService.readCookieHeader()).trim();
-        if (cookie.isNotEmpty) {
-          headers[HttpHeaders.cookieHeader] = cookie;
-        }
-      } catch (_) {
-        // 安全存储暂时不可用时按匿名请求继续，禁止把 Cookie 读取异常写入结果或日志。
+      final String cookie = (await _authService.readCookieHeader().timeout(
+        const Duration(seconds: 10),
+      )).trim();
+      if (cookie.isNotEmpty) {
+        headers[HttpHeaders.cookieHeader] = cookie;
       }
     }
     return headers;
   }
 
-  /// 解析字幕轨道、锁定状态和安全 CDN 地址，并建立仅限当前视频的临时会话。
+  /// 校验响应视频归属后解析轨道，将安全地址保存在这次请求独有的会话内。
   SubtitleTrackLoadResult _parseSubtitleTracks({
     required String bvid,
     required int cid,
+    required _DesktopSubtitleSession session,
     required Map<Object?, Object?> rawData,
   }) {
+    final String responseBvid = rawData['bvid']?.toString().trim() ?? '';
+    if (responseBvid != bvid || _readInt(rawData['cid'], fallback: -1) != cid) {
+      return const SubtitleTrackLoadResult.unavailable(
+        message: '字幕信息与当前视频不匹配，请重试。',
+      );
+    }
     final Object? rawSubtitle = rawData['subtitle'];
     final Object? rawTracks = rawSubtitle is Map
         ? rawSubtitle['subtitles']
@@ -287,7 +357,9 @@ class DesktopPlayerOverlayService implements PlayerOverlayService {
         }
         final String language = values['lan']?.toString().trim() ?? '';
         final String rawLabel = values['lan_doc']?.toString().trim() ?? '';
-        final bool serviceLocked = values['is_lock'] == true;
+        final bool serviceLocked =
+            values['is_lock'] == true ||
+            _readInt(values['is_lock'], fallback: 0) == 1;
         final Uri? safeUrl = serviceLocked
             ? null
             : _normalizeSafeSubtitleUrl(
@@ -306,9 +378,7 @@ class DesktopPlayerOverlayService implements PlayerOverlayService {
         }
       }
     }
-    _subtitleSessionBvid = bvid;
-    _subtitleSessionCid = cid;
-    _readableSubtitleUrls = Map<String, Uri>.unmodifiable(readableUrls);
+    session.readableUrls = Map<String, Uri>.unmodifiable(readableUrls);
     final bool needsLogin = rawData['need_login_subtitle'] == true;
     final String status = readableUrls.isNotEmpty
         ? 'available'
@@ -501,13 +571,6 @@ class DesktopPlayerOverlayService implements PlayerOverlayService {
     return value is num
         ? value.toInt()
         : int.tryParse(value?.toString() ?? '') ?? fallback;
-  }
-
-  /// 清空临时字幕链接，避免视频切换或接口失败后继续使用上一分P地址。
-  void _clearSubtitleSession() {
-    _subtitleSessionBvid = null;
-    _subtitleSessionCid = null;
-    _readableSubtitleUrls = const <String, Uri>{};
   }
 }
 

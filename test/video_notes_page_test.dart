@@ -519,8 +519,8 @@ void main() {
     expect(partLabel.style?.fontSize, 16);
   });
 
-  /// 验证狭窄全屏面板会为完整记录时间启用横向循环滚动，而不是省略文字。
-  testWidgets('全屏笔记记录时间过长时自动滚动', (WidgetTester tester) async {
+  /// 验证新版窄面板将日期单独分行，完整保留时间且没有文字溢出。
+  testWidgets('全屏笔记窄面板分行保留完整记录时间', (WidgetTester tester) async {
     final TextEditingController titleController = TextEditingController();
     final TextEditingController bodyController = TextEditingController();
     addTearDown(titleController.dispose);
@@ -556,9 +556,11 @@ void main() {
 
     final Finder marquee = find.byKey(const Key('note-recorded-time-marquee'));
     expect(marquee, findsOneWidget);
-    expect(
-      find.descendant(of: marquee, matching: find.byType(AnimatedBuilder)),
-      findsOneWidget,
-    );
+    final Text recorded = tester.widget<Text>(marquee);
+    expect(recorded.data, contains('2026'));
+    expect(recorded.data, contains('23:59'));
+    expect(recorded.overflow, isNot(TextOverflow.ellipsis));
+    expect(tester.getRect(marquee).right, lessThanOrEqualTo(340));
+    expect(tester.takeException(), isNull);
   });
 }

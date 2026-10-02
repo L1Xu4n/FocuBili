@@ -3,10 +3,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../core/router/app_router.dart';
+import '../../core/widgets/home_theme_background.dart';
 import '../../models/focus_session.dart';
 import '../../models/learning_list_entry.dart';
 import '../../services/bilibili_auth_service.dart';
 import '../../services/bilibili_service.dart';
+import '../../services/dashboard_layout_service.dart';
 import '../../services/learning_list_service.dart';
 import '../focus/focus_dashboard.dart';
 import '../focus/focus_timer_scope.dart';
@@ -24,6 +26,7 @@ class HomePage extends StatefulWidget {
     this.learningListService,
     this.videoService,
     this.authService,
+    this.layoutService,
     this.refreshGeneration = 0,
   });
 
@@ -33,6 +36,9 @@ class HomePage extends StatefulWidget {
   final BilibiliService? videoService;
   final BilibiliAuthService? authService;
   final int refreshGeneration;
+
+  /// 首页卡片布局存储，与学习清单和计时业务分开维护。
+  final DashboardLayoutService? layoutService;
 
   /// 创建首页状态，用于读取并刷新唯一突出显示的继续学习任务。
   @override
@@ -188,7 +194,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 child: CircularProgressIndicator(strokeWidth: 2),
               ),
               SizedBox(width: 12),
-              Text('正在读取继续学习任务…'),
+              Expanded(child: Text('正在读取继续学习任务…')),
             ],
           ),
         ),
@@ -234,13 +240,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   color: Theme.of(context).colorScheme.primary,
                 ),
                 const SizedBox(width: 8),
-                Text(
-                  '继续学习',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w800,
+                Expanded(
+                  child: Text(
+                    '继续学习',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                 ),
-                const Spacer(),
                 TextButton(
                   key: const Key('home-open-learning-list'),
                   // 完整清单函数不在首页堆叠多条任务，只在需要时打开管理页。
@@ -296,21 +303,24 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
-  /// 创建使用应用级计时控制器的专注台，切换标签不会丢失当前状态。
+  /// 为首页添加随主题变化的背景，并复用应用级计时控制器保持专注状态。
   @override
   Widget build(BuildContext context) {
-    return FocusDashboard(
-      controller: FocusTimerScope.of(context),
-      onOpenVideo: widget.onSearchRequested,
-      onOpenProfile: widget.onProfileRequested,
-      profileAvatarUrl: _homeSession.isActive
-          ? _homeSession.account?.avatarUrl
-          : null,
-      onOpenStatistics: () => _openFocusStatistics(context),
-      onOpenLinkedVideo: (FocusSession session) =>
-          _openLinkedVideo(context, session),
-      continueLearningCard: _buildContinueLearningCard(context),
-      onOpenLearningList: () => unawaited(_openLearningList()),
+    return HomeThemeBackground(
+      child: FocusDashboard(
+        controller: FocusTimerScope.of(context),
+        layoutService: widget.layoutService,
+        onOpenVideo: widget.onSearchRequested,
+        onOpenProfile: widget.onProfileRequested,
+        profileAvatarUrl: _homeSession.isActive
+            ? _homeSession.account?.avatarUrl
+            : null,
+        onOpenStatistics: () => _openFocusStatistics(context),
+        onOpenLinkedVideo: (FocusSession session) =>
+            _openLinkedVideo(context, session),
+        continueLearningCard: _buildContinueLearningCard(context),
+        onOpenLearningList: () => unawaited(_openLearningList()),
+      ),
     );
   }
 }

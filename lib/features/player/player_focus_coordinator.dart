@@ -267,14 +267,7 @@ mixin _PlayerFocusCoordinator on State<PlayerPage> {
       return;
     }
     _dismissedAssociationCandidate = candidate;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        const SnackBar(
-          content: Text('我们将在新的视频提示你关联'),
-          duration: Duration(seconds: 3),
-        ),
-      );
+    _showPlayerNotice('我们将在新的视频提示你关联');
   }
 
   /// 尝试保存播放器当前画面，失败时仍允许关联和退出。

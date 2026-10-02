@@ -95,7 +95,11 @@ BEGIN
             VALUE "InternalName", "FocuBili" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 L1Xu4n" "\0"
             VALUE "OriginalFilename", "FocuBili.exe" "\0"
+#ifdef FOCUBILI_LOCAL_PREVIEW
+            VALUE "ProductName", "焦点哔哩测试版" "\0"
+#else
             VALUE "ProductName", "焦点哔哩" "\0"
+#endif
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

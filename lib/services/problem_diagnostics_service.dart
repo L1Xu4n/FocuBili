@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../platform/app_platform.dart';
 import 'focus_notification_service.dart';
+import 'webview_environment_service.dart';
 
 /// 定义读取问题诊断本机存储的可替换入口，便于单元测试使用内存偏好设置。
 typedef ProblemDiagnosticsPreferencesLoader =
@@ -352,6 +353,7 @@ class ProblemDiagnosticsSnapshot {
     required this.generatedAt,
     required this.recentErrors,
     required this.reminderDiagnostics,
+    this.webViewInfo,
   });
 
   /// 当前已安装应用的语义版本与构建号。
@@ -366,6 +368,7 @@ class ProblemDiagnosticsSnapshot {
   /// 最多保留固定数量的近期脱敏错误。
   final List<ProblemDiagnosticEntry> recentErrors;
   final ReminderDiagnosticsSnapshot reminderDiagnostics;
+  final WebViewEnvironment? webViewInfo;
 }
 
 /// 提供问题诊断 MVP 的本机记录、环境读取、复制文本和清空能力。
@@ -377,6 +380,7 @@ class ProblemDiagnosticsService {
     ProblemDiagnosticsDeviceInfoLoader? deviceInfoLoader,
     ReminderDiagnosticsLoader? reminderDiagnosticsLoader,
     ReminderDiagnosticsClearer? reminderDiagnosticsClearer,
+    Future<WebViewEnvironment> Function()? webViewInfoLoader,
     DateTime Function()? clock,
   }) : _preferencesLoader = preferencesLoader ?? SharedPreferences.getInstance,
        _appVersionLoader = appVersionLoader ?? _loadInstalledAppVersion,
@@ -385,6 +389,8 @@ class ProblemDiagnosticsService {
            reminderDiagnosticsLoader ?? _loadNativeReminderDiagnostics,
        _reminderDiagnosticsClearer =
            reminderDiagnosticsClearer ?? _clearNativeReminderDiagnostics,
+       _webViewInfoLoader =
+           webViewInfoLoader ?? const WebViewEnvironmentService().load,
        _clock = clock ?? DateTime.now;
 
   static const String _storageKey = 'focubili_problem_diagnostics_v1';
@@ -402,6 +408,22 @@ class ProblemDiagnosticsService {
   final ReminderDiagnosticsLoader _reminderDiagnosticsLoader;
   final ReminderDiagnosticsClearer _reminderDiagnosticsClearer;
   final DateTime Function() _clock;
+  final Future<WebViewEnvironment> Function() _webViewInfoLoader;
+  WebViewEnvironment? _webViewInfo;
+
+  /// 读取公开内核信息，并供诊断页面和后续复制报告复用。
+  Future<WebViewEnvironment> loadWebViewInfo() async {
+    try {
+      _webViewInfo = await _webViewInfoLoader().timeout(
+        const Duration(seconds: 6),
+      );
+    } catch (_) {
+      _webViewInfo = const WebViewEnvironment(
+        message: '无法读取系统 WebView 信息，请稍后重试。',
+      );
+    }
+    return _webViewInfo!;
+  }
 
   /// 读取当前设备已保存的最近错误，损坏记录会被自动忽略。
   Future<List<ProblemDiagnosticEntry>> loadRecentErrors() async {
@@ -545,20 +567,28 @@ class ProblemDiagnosticsService {
     }
   }
 
-  /// 读取应用版本、当前系统环境和最近错误，生成供页面展示的一次性诊断快照。
-  Future<ProblemDiagnosticsSnapshot> loadSnapshot() async {
+  /// 读取诊断快照；页面进入和刷新时可同时更新 Android WebView 信息。
+  Future<ProblemDiagnosticsSnapshot> loadSnapshot({
+    bool refreshWebViewInfo = false,
+  }) async {
     final List<Object> values = await Future.wait<Object>(<Future<Object>>[
       _loadVersionSafely(),
       _loadDeviceInfoSafely(),
       loadRecentErrors(),
       _loadReminderDiagnosticsSafely(),
     ]);
+    final DiagnosticDeviceInfo deviceInfo = values[1] as DiagnosticDeviceInfo;
+    if (refreshWebViewInfo &&
+        deviceInfo.platformName.toLowerCase() == 'android') {
+      await loadWebViewInfo();
+    }
     return ProblemDiagnosticsSnapshot(
       appVersion: values[0] as String,
-      deviceInfo: values[1] as DiagnosticDeviceInfo,
+      deviceInfo: deviceInfo,
       generatedAt: _clock(),
       recentErrors: values[2] as List<ProblemDiagnosticEntry>,
       reminderDiagnostics: values[3] as ReminderDiagnosticsSnapshot,
+      webViewInfo: _webViewInfo,
     );
   }
 
@@ -612,6 +642,12 @@ class ProblemDiagnosticsService {
         );
       }
     }
+    if (snapshot.webViewInfo != null) {
+      text
+        ..writeln()
+        ..writeln(snapshot.webViewInfo!.toDiagnosticText())
+        ..writeln();
+    }
     text
       ..writeln()
       ..writeln('最近错误：');
@@ -644,13 +680,13 @@ class ProblemDiagnosticsService {
     return text.toString().trimRight();
   }
 
-  /// 安全读取安装版本；插件在测试或极少数异常设备不可用时回退到当前发布版本。
+  /// 安全读取安装版本；插件不可用时回退到当前源码的 v1.7.0 版本标识。
   Future<String> _loadVersionSafely() async {
     try {
       final String version = (await _appVersionLoader()).trim();
-      return version.isEmpty ? '1.5.0+17' : version;
+      return version.isEmpty ? '1.7.0+20' : version;
     } catch (_) {
-      return '1.5.0+17';
+      return '1.7.0+20';
     }
   }
 

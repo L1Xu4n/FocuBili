@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// 定义应用行为偏好使用的可替换存储读取器，便于单元测试使用内存配置。
@@ -5,6 +6,9 @@ typedef AppBehaviorPreferencesLoader = Future<SharedPreferences> Function();
 
 /// 统一管理账号写入、搜索记录和观看记录等全局行为开关。
 class AppBehaviorPreferencesService {
+  /// Notifies open pages after preferences have been successfully persisted.
+  static final ValueNotifier<int> changes = ValueNotifier<int>(0);
+
   /// 创建行为偏好服务；未传入读取器时使用设备上的 SharedPreferences。
   AppBehaviorPreferencesService({
     AppBehaviorPreferencesLoader? preferencesLoader,
@@ -15,7 +19,8 @@ class AppBehaviorPreferencesService {
       'app_behavior.search_history_enabled';
   static const String _watchHistoryEnabledKey =
       'app_behavior.watch_history_enabled';
-
+  static const String _wbiSigningEnabledKey =
+      'app_behavior.wbi_signing_enabled';
   final AppBehaviorPreferencesLoader _preferencesLoader;
 
   /// 读取账号只读开关；没有旧配置或读取失败时默认开启以保护账号。
@@ -48,6 +53,14 @@ class AppBehaviorPreferencesService {
     return _saveBool(_watchHistoryEnabledKey, enabled);
   }
 
+  /// 读取播放请求签名开关；新安装、旧配置及读取失败时都默认关闭。
+  Future<bool> loadWbiSigningEnabled() =>
+      _loadBool(_wbiSigningEnabledKey, defaultValue: false);
+
+  /// 保存播放请求签名开关，写入失败时让设置页恢复原值。
+  Future<bool> saveWbiSigningEnabled(bool enabled) =>
+      _saveBool(_wbiSigningEnabledKey, enabled);
+
   /// 从本机读取布尔偏好；存储不可用时使用调用方指定的安全默认值。
   Future<bool> _loadBool(String key, {required bool defaultValue}) async {
     try {
@@ -62,7 +75,9 @@ class AppBehaviorPreferencesService {
   Future<bool> _saveBool(String key, bool value) async {
     try {
       final SharedPreferences preferences = await _preferencesLoader();
-      return preferences.setBool(key, value);
+      final saved = await preferences.setBool(key, value);
+      if (saved) changes.value++;
+      return saved;
     } catch (_) {
       return false;
     }

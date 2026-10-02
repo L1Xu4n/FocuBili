@@ -66,10 +66,7 @@ void main() {
     expect(audioTrack.id, attempt.audioUrl);
     expect(audioTrack.title, 'FocuBili audio 1:0');
     expect(Media(audioTrack.id).httpHeaders, sources.mediaHeaders);
-    expect(
-      Media(audioTrack.id).httpHeaders!['Cookie'],
-      'SESSDATA=test-session',
-    );
+    expect(Media(audioTrack.id).httpHeaders!['Cookie'], isNull);
     expect(Media(audioTrack.id).httpHeaders!['Referer'], sources.referer);
   });
 

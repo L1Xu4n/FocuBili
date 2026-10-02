@@ -100,10 +100,21 @@ android {
     }
 
     buildTypes {
+        // 调试测试包需压缩 JNI 库，确保 arm64 APK 可作为单一 GitHub 文件下载。
+        debug {
+            applicationIdSuffix ".preview"
+        }
         release {
             if (hasReleaseSigning) {
                 signingConfig signingConfigs.release
             }
+        }
+    }
+
+    // Android 安装时会解压 JNI 库；此设置缩小 APK 网络传输体积。
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging true
         }
     }
 }
@@ -113,6 +124,8 @@ flutter {
 }
 
 dependencies {
+    // 仅查询当前 WebView 提供程序，兼容 API 24/25；版本与 Flutter WebView 插件一致。
+    implementation 'androidx.webkit:webkit:1.15.0'
     // flutter_local_notifications 22.x 官方要求使用 2.1.4，在旧 Android 上回填所需的 Java 核心库 API。
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'
     // Media3 统一使用 1.10.1，修复旧版提取器、回退和播放状态中的多项崩溃问题。

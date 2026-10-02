@@ -105,12 +105,25 @@ class NativePlaybackController(
     private var textureEntry: TextureRegistry.SurfaceTextureEntry? = null
     private var videoSurface: Surface? = null
     private var currentBvid = ""
+    private var localSource = false
+    private var audioOnly = false
+    private var localVideoPath: String? = null
+    private var localAudioPath: String? = null
+    private val sleepTimer = PlaybackSleepTimer {
+        resumeAfterPrepare = false
+        resumeWhenForeground = false
+        player?.pause()
+        saveCurrentPlaybackProgress(force = true)
+        emitPlaybackState()
+    }
     private var currentCid = 0L
     private var currentPageNumber = 1
     private var currentTitle = ""
     private var currentPartTitle = ""
     private var currentOwnerName = ""
     private var requestedQuality = DEFAULT_QUALITY
+    private var wbiSigningEnabled = false
+    private val wbiSigner = PlaybackWbiSigner()
     private var currentQuality = DEFAULT_QUALITY
     private var availableQualities = listOf(
         PlaybackQualityOption(DEFAULT_QUALITY, "高清 720P"),
@@ -132,7 +145,8 @@ class NativePlaybackController(
     private var playbackMessage: String? = null
     private var isInPictureInPicture = false
     @Volatile
-    private var subtitleTrackSession: SubtitleTrackSession? = null
+    private var subtitleSessionEpoch = 0L
+    private val subtitleTrackSessions = linkedMapOf<Pair<String, Long>, SubtitleTrackSession>()
 
     /** 保存一档可供 Flutter 选择的清晰度编号与名称。 */
     private data class PlaybackQualityOption(
@@ -213,6 +227,7 @@ class NativePlaybackController(
         /** 在播放器仍存在时保存进度、发送状态并安排下一次刷新。 */
         override fun run() {
             if (player != null) {
+                sleepTimer.check()
                 saveCurrentPlaybackProgress(force = false)
                 emitPlaybackState()
                 mainHandler.postDelayed(this, STATE_TICK_INTERVAL_MS)
@@ -249,6 +264,7 @@ class NativePlaybackController(
                 } else if (initialPositionMs != null && initialPositionMs < 0L) {
                     result.error("invalid_position", "初始播放位置不能为负数。", null)
                 } else {
+                    wbiSigningEnabled = call.argument<Boolean>("wbiEnabled") == true
                     openVideo(
                         bvid = bvid,
                         cid = cid,
@@ -259,6 +275,45 @@ class NativePlaybackController(
                         ownerName = call.argument<String>("ownerName").orEmpty(),
                         initialPositionMs = initialPositionMs,
                     )
+                    result.success(null)
+                }
+            }
+            "openLocal" -> {
+                val filePath = call.argument<String>("filePath")?.trim().orEmpty()
+                val title = call.argument<String>("title").orEmpty()
+                val initialPositionMs = call.argument<Number>("initialPositionMs")?.toLong()
+                if (filePath.isEmpty()) {
+                    result.error("invalid_path", "请选择有效的本地视频文件。", null)
+                } else if (initialPositionMs != null && initialPositionMs < 0L) {
+                    result.error("invalid_position", "初始播放位置不能为负数。", null)
+                } else {
+                    openLocalVideo(
+                        filePath = filePath,
+                        audioFilePath = call.argument<String>("audioFilePath")?.trim()?.takeIf { it.isNotEmpty() },
+                        title = title,
+                        initialPositionMs = initialPositionMs,
+                        bvid = call.argument<String>("bvid").orEmpty(),
+                        cid = call.argument<Number>("cid")?.toLong() ?: 0L,
+                        pageNumber = call.argument<Number>("pageNumber")?.toInt() ?: 1,
+                    )
+                    result.success(null)
+                }
+            }
+            "setAudioOnly" -> {
+                try {
+                    setAudioOnly(call.argument<Boolean>("enabled") == true)
+                    result.success(null)
+                } catch (error: IllegalStateException) {
+                    result.error("audio_unavailable", error.message, null)
+                }
+            }
+            "setSleepTimer" -> {
+                val durationMs = call.argument<Number>("durationMs")?.toLong() ?: 0L
+                if (durationMs !in 0L..604_800_000L) {
+                    result.error("invalid_timer", "定时时长应在 7 天以内。", null)
+                } else {
+                    sleepTimer.configure(durationMs)
+                    emitPlaybackState()
                     result.success(null)
                 }
             }
@@ -287,7 +342,7 @@ class NativePlaybackController(
                 if (speed == null || !speed.isFinite() ||
                     speed < MIN_PLAYBACK_SPEED || speed > MAX_PLAYBACK_SPEED
                 ) {
-                    result.error("invalid_speed", "倍速必须在 0.5 到 3.0 之间。", null)
+                    result.error("invalid_speed", "倍速必须在 0.5 到 5.0 之间。", null)
                 } else {
                     setPlaybackSpeed(speed)
                     result.success(null)
@@ -298,6 +353,7 @@ class NativePlaybackController(
                 if (quality == null || quality <= 0) {
                     result.error("invalid_quality", "请选择有效的清晰度。", null)
                 } else {
+                    wbiSigningEnabled = call.argument<Boolean>("wbiEnabled") == true
                     switchQuality(quality)
                     result.success(null)
                 }
@@ -388,6 +444,7 @@ class NativePlaybackController(
 
     /** App 返回前台时按离开前的状态恢复唯一的 Media3 播放器。 */
     fun onHostResume() {
+        sleepTimer.check()
         if (resumeWhenForeground) {
             resumeAfterPrepare = true
             player?.play()
@@ -396,6 +453,11 @@ class NativePlaybackController(
 
     /** App 进入后台时暂停播放，同时保留返回前台时是否需要恢复的信息。 */
     fun onHostPause() {
+        if (audioOnly) {
+            resumeWhenForeground = false
+            saveCurrentPlaybackProgress(force = true)
+            return
+        }
         val nativePlayer = player
         resumeWhenForeground = nativePlayer?.playWhenReady == true || resumeAfterPrepare
         resumeAfterPrepare = false
@@ -574,6 +636,7 @@ class NativePlaybackController(
             true,
         )
         nativePlayer.setHandleAudioBecomingNoisy(true)
+        nativePlayer.setWakeMode(C.WAKE_MODE_LOCAL)
         nativePlayer.playbackParameters = PlaybackParameters(playbackSpeed)
         nativePlayer.addListener(object : Player.Listener {
             /** 播放或暂停变化时把最新状态同步给 Flutter。 */
@@ -642,7 +705,11 @@ class NativePlaybackController(
             }
         })
         player = nativePlayer
-        mediaSession = MediaSession.Builder(activity, nativePlayer).build()
+        mediaSession = MediaSession.Builder(activity.applicationContext, nativePlayer)
+            .setSessionActivity(PendingIntent.getActivity(activity, 41,
+                Intent(activity, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
+            .build()
         nativePlayer.setVideoSurface(videoSurface)
         mainHandler.removeCallbacks(stateTicker)
         mainHandler.post(stateTicker)
@@ -664,7 +731,7 @@ class NativePlaybackController(
         error: PlaybackException,
     ) {
         val failureDetails = inspectPlaybackFailure(error)
-        if (currentBvid.isEmpty() || currentCid <= 0L) {
+        if (localSource || currentBvid.isEmpty() || currentCid <= 0L) {
             reportError(
                 buildFinalPlaybackErrorMessage(
                     prefix = "原生播放器无法播放该视频",
@@ -832,6 +899,7 @@ class NativePlaybackController(
 
     /** 返回本次需要尝试的全部音视频交叉组合数量。 */
     private fun playbackCandidateCount(sources: PlaybackSources): Int {
+        if (audioOnly) return sources.audioUrls.size
         return PlaybackRecoveryPolicy.candidateCount(
             videoCount = sources.videoUrls.size,
             audioCount = sources.audioUrls.size,
@@ -930,10 +998,10 @@ class NativePlaybackController(
         ensureTexture()
         saveCurrentPlaybackProgress(force = true)
         invalidatePlaybackRequests()
-        clearSubtitleTrackSession()
         player?.stop()
         player?.clearMediaItems()
         currentBvid = bvid
+        localSource = false
         currentCid = cid
         currentPageNumber = pageNumber
         currentTitle = title
@@ -961,6 +1029,132 @@ class NativePlaybackController(
         }
         emitPlaybackState()
         requestPlaybackSources(bvid, cid, quality)
+    }
+
+    /** 从本机合并文件或分离音视频轨播放，不请求网络媒体地址。 */
+    private fun openLocalVideo(
+        filePath: String,
+        audioFilePath: String?,
+        title: String,
+        initialPositionMs: Long?,
+        bvid: String,
+        cid: Long,
+        pageNumber: Int,
+        shouldPlay: Boolean = true,
+    ) {
+        ensurePlayer()
+        ensureTexture()
+        saveCurrentPlaybackProgress(force = true)
+        invalidatePlaybackRequests()
+        player?.stop()
+        player?.clearMediaItems()
+        currentBvid = bvid
+        currentCid = cid
+        currentPageNumber = pageNumber
+        localSource = true
+        localVideoPath = filePath
+        localAudioPath = audioFilePath
+        currentTitle = title.ifBlank { "离线视频" }
+        currentPartTitle = ""
+        currentOwnerName = ""
+        requestedQuality = 0
+        currentQuality = 0
+        pendingStartPositionMs = initialPositionMs ?: loadSavedPlaybackPosition(bvid, cid)
+        saveCurrentPartSelection()
+        restoredPositionMs = pendingStartPositionMs
+        resumeAfterPrepare = shouldPlay
+        playbackPrepared = false
+        resumeWhenForeground = false
+        playbackDataRefreshCount = 0
+        playbackCandidateAttempt = 0
+        bypassMediaCacheForPlayback = true
+        latestPlaybackSources = null
+        playbackPhase = PHASE_LOADING
+        playbackMessage = "正在打开离线视频…"
+        emitPlaybackState()
+        val localFile = File(filePath)
+        if (!localFile.exists() || !localFile.isFile) {
+            reportError("离线视频文件不存在或已被移动。")
+            return
+        }
+        val audioFile = audioFilePath?.let(::File)
+        if (audioFile != null && (!audioFile.exists() || !audioFile.isFile)) {
+            reportError("离线音频文件不存在或已被移动。")
+            return
+        }
+        val nativePlayer = player ?: return
+        val uri = Uri.fromFile(if (audioOnly) audioFile ?: localFile else localFile)
+        val mediaItem = MediaItem.Builder()
+            .setMediaId("offline:${localFile.absolutePath}")
+            .setUri(uri)
+            .setMediaMetadata(
+                MediaMetadata.Builder()
+                    .setTitle(currentTitle.ifBlank { "离线视频" })
+                    .setArtist(currentOwnerName.ifBlank { "焦点哔哩离线缓存" })
+                    .build(),
+            )
+            .build()
+        val sourceFactory = ProgressiveMediaSource.Factory(
+            DataSource.Factory { androidx.media3.datasource.FileDataSource() },
+        ).setLoadErrorHandlingPolicy(
+            DefaultLoadErrorHandlingPolicy(MEDIA_MINIMUM_RETRY_COUNT),
+        )
+        val videoSource = sourceFactory.createMediaSource(mediaItem)
+        val mediaSource = if (audioOnly || audioFile == null) videoSource else MergingMediaSource(
+            videoSource,
+            sourceFactory.createMediaSource(MediaItem.fromUri(Uri.fromFile(audioFile))),
+        )
+        // 音视频采用同一时间轴和初始位置，避免分离音轨丢失或续播后不同步。
+        nativePlayer.setMediaSource(
+            mediaSource,
+            pendingStartPositionMs,
+        )
+        pendingStartPositionMs = 0L
+        nativePlayer.playbackParameters = PlaybackParameters(playbackSpeed)
+        nativePlayer.prepare()
+        nativePlayer.playWhenReady = shouldPlay
+        emitPlaybackState()
+    }
+
+    /** 停止旧媒体传输后只打开独立音轨；切回视频恢复当前位置及暂停状态。 */
+    private fun setAudioOnly(enabled: Boolean) {
+        if (audioOnly == enabled) return
+        val nativePlayer = player ?: throw IllegalStateException("请先打开视频。")
+        val sources = latestPlaybackSources
+        if (!localSource && enabled && (sources == null || sources.audioUrls.isEmpty())) {
+            throw IllegalStateException("当前视频没有可用的独立音轨，暂不能省流收听。")
+        }
+        val position = nativePlayer.currentPosition.coerceAtLeast(0L)
+        val shouldPlay = nativePlayer.playWhenReady
+        if (enabled) {
+            val session = mediaSession ?: throw IllegalStateException("媒体会话尚未准备好。")
+            ListeningMediaService.start(activity.applicationContext, session)
+        } else {
+            ListeningMediaService.stop(activity.applicationContext)
+        }
+        invalidatePlaybackRequests()
+        nativePlayer.stop()
+        nativePlayer.clearMediaItems()
+        audioOnly = enabled
+        nativePlayer.trackSelectionParameters = nativePlayer.trackSelectionParameters.buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, enabled).build()
+        pendingStartPositionMs = position
+        resumeAfterPrepare = shouldPlay
+        resumeWhenForeground = false
+        playbackPrepared = false
+        playbackCandidateAttempt = 0
+        updateKeepScreenOn(shouldPlay)
+        if (localSource) {
+            openLocalVideo(localVideoPath!!, localAudioPath, currentTitle, position,
+                currentBvid, currentCid, currentPageNumber, shouldPlay)
+        } else if (sources != null) {
+            prepareMediaSources(sources)
+        } else {
+            // 听视频请求失败或正在刷新地址时，仍允许用户回到视频并重新查询。
+            playbackPhase = PHASE_LOADING
+            requestPlaybackSources(currentBvid, currentCid, requestedQuality)
+        }
+        emitPlaybackState()
     }
 
     /** 保留当前位置与播放状态，再重新请求指定清晰度。 */
@@ -1000,9 +1194,10 @@ class NativePlaybackController(
     /** 在单线程后台请求播放数据，并只让最新请求更新当前视频。 */
     private fun requestPlaybackSources(bvid: String, cid: Long, quality: Int) {
         val requestToken = createPlaybackRequestToken()
+        val useWbi = wbiSigningEnabled
         playbackRequestExecutor.execute {
             val sourceResult = runCatching {
-                loadPlaybackSources(bvid, cid, quality)
+                loadPlaybackSources(bvid, cid, quality, useWbi)
             }
             mainHandler.post {
                 if (!isCurrentPlaybackRequest(requestToken, bvid, cid, quality)) {
@@ -1020,11 +1215,21 @@ class NativePlaybackController(
         bvid: String,
         cid: Long,
         quality: Int,
+        useWbi: Boolean,
     ): PlaybackSources {
-        val responseText = requestPlaybackInfoJson(bvid, cid, quality)
+        val responseText = requestPlaybackInfoJson(bvid, cid, quality, useWbi)
         val root = JSONObject(responseText)
         val code = root.optInt("code", -1)
         if (code != 0) {
+            if (code == -351) {
+                throw PlaybackSourceException(
+                    if (useWbi) {
+                        "播放数据服务拒绝了本次请求（错误码：-351）。WBI 签名已启用，请稍后重试或检查账号与网络状态。"
+                    } else {
+                        "播放数据服务拒绝了本次请求（错误码：-351）。请到“我的 → 个性化设置 → 播放与专注”开启“启用 WBI 签名”后重试；不保证恢复。"
+                    },
+                )
+            }
             val serverMessage = root.optString("message")
             val readableMessage = if (serverMessage.isBlank() || serverMessage == "0") {
                 "播放数据服务拒绝了本次请求（错误码：$code）。"
@@ -1056,33 +1261,47 @@ class NativePlaybackController(
         )
     }
 
-    /** 使用 HTTPS 请求指定分P和清晰度的播放数据。 */
+    /** 按本次请求固定的开关选择旧接口或 WBI 接口，nav 与播放共用同一会话。 */
     private fun requestPlaybackInfoJson(
         bvid: String,
         cid: Long,
         quality: Int,
+        useWbi: Boolean,
     ): String {
-        val endpoint = Uri.Builder()
-            .scheme("https")
-            .authority(PLAYBACK_API_HOST)
-            .appendPath("x")
-            .appendPath("player")
-            .appendPath("playurl")
-            .appendQueryParameter("bvid", bvid)
-            .appendQueryParameter("cid", cid.toString())
-            .appendQueryParameter("qn", quality.toString())
-            .appendQueryParameter("fnval", DASH_FEATURE_FLAG.toString())
-            .appendQueryParameter("fourk", "1")
-            .build()
+        val cookie = readBilibiliCookieHeader()
+        val referer = buildVideoPageUrl(bvid).orEmpty()
+        val parameters = mapOf(
+            "bvid" to bvid, "cid" to cid.toString(), "qn" to quality.toString(),
+            "fnval" to DASH_FEATURE_FLAG.toString(), "fourk" to "1",
+        )
+        val query = if (useWbi) {
+            try {
+                wbiSigner.sign(parameters + mapOf("fnver" to "0", "web_location" to "1315873")) {
+                    requestPlaybackApiJson(
+                        Uri.parse("https://$PLAYBACK_API_HOST/x/web-interface/nav"), referer, cookie,
+                    )
+                }
+            } catch (_: Exception) {
+                throw PlaybackSourceException(WbiSigningPolicy.UNAVAILABLE_MESSAGE)
+            }
+        } else parameters
+        val path = if (useWbi) "/x/player/wbi/playurl" else "/x/player/playurl"
+        val endpoint = Uri.parse("https://$PLAYBACK_API_HOST$path?${WbiSigningPolicy.encodeQuery(query)}")
+        return requestPlaybackApiJson(endpoint, referer, cookie)
+    }
+
+    /** 读取固定官方 HTTPS API，禁止重定向携带会话，错误不回显响应正文。 */
+    private fun requestPlaybackApiJson(endpoint: Uri, referer: String, cookie: String): String {
         val connection = URL(endpoint.toString()).openConnection() as HttpsURLConnection
         try {
             connection.requestMethod = "GET"
+            connection.instanceFollowRedirects = false
             connection.connectTimeout = NETWORK_TIMEOUT_MS
             connection.readTimeout = NETWORK_TIMEOUT_MS
             connection.setRequestProperty("Accept", "application/json")
-            connection.setRequestProperty("Referer", buildVideoPageUrl(bvid).orEmpty())
+            connection.setRequestProperty("Referer", referer)
             connection.setRequestProperty("User-Agent", DESKTOP_USER_AGENT)
-            readBilibiliCookieHeader().takeIf { cookie -> cookie.isNotBlank() }?.let { cookie ->
+            cookie.takeIf { it.isNotBlank() }?.let { cookie ->
                 connection.setRequestProperty("Cookie", cookie)
             }
             val statusCode = connection.responseCode
@@ -1113,9 +1332,10 @@ class NativePlaybackController(
         cid: Long,
         result: MethodChannel.Result,
     ) {
+        val requestEpoch = subtitleSessionEpoch
         runCatching {
             overlayDataRequestExecutor.execute {
-                val trackResult = runCatching { loadSubtitleTracks(bvid, cid) }
+                val trackResult = runCatching { loadSubtitleTracks(bvid, cid, requestEpoch) }
                 mainHandler.post {
                     trackResult.onSuccess(result::success).onFailure { error ->
                         reportSubtitleOperationFailure(result, error)
@@ -1134,9 +1354,10 @@ class NativePlaybackController(
         trackId: String,
         result: MethodChannel.Result,
     ) {
+        val requestEpoch = subtitleSessionEpoch
         runCatching {
             overlayDataRequestExecutor.execute {
-                val cueResult = runCatching { loadSubtitleCues(bvid, cid, trackId) }
+                val cueResult = runCatching { loadSubtitleCues(bvid, cid, trackId, requestEpoch) }
                 mainHandler.post {
                     cueResult.onSuccess(result::success).onFailure { error ->
                         reportSubtitleOperationFailure(result, error)
@@ -1153,11 +1374,13 @@ class NativePlaybackController(
      *
      * `is_lock=true` 的轨道只作为锁定状态回传，绝不会尝试读取内容或绕过权限。
      */
-    private fun loadSubtitleTracks(bvid: String, cid: Long): Map<String, Any> {
+    private fun loadSubtitleTracks(bvid: String, cid: Long, requestEpoch: Long): Map<String, Any> {
+        checkSubtitleRequestEpoch(requestEpoch)
         val root = parseSubtitleJson(requestSubtitleMetadataJson(bvid, cid))
+        checkSubtitleRequestEpoch(requestEpoch)
         val code = root.optInt("code", -1)
         if (code == SUBTITLE_LOGIN_REQUIRED_CODE) {
-            clearSubtitleTrackSession()
+            synchronized(subtitleTrackSessions) { subtitleTrackSessions.remove(bvid to cid) }
             return subtitleTrackResult(
                 status = SUBTITLE_STATUS_LOGIN_REQUIRED,
                 message = "登录后可尝试读取字幕。",
@@ -1171,6 +1394,11 @@ class NativePlaybackController(
         }
         val data = root.optJSONObject("data")
             ?: throw SubtitleOperationException("subtitle_invalid_data", "字幕数据格式不正确。")
+        // 核对接口返回的视频和分 P，拒绝把其他视频的地址绑定到当前请求。
+        val responseBvid = data.optString("bvid").trim()
+        if (responseBvid != bvid || data.optLong("cid", -1L) != cid) {
+            throw SubtitleOperationException("subtitle_identity_mismatch", "字幕信息与当前视频不匹配。")
+        }
         val subtitle = data.optJSONObject("subtitle")
         val rawTracks = subtitle?.optJSONArray("subtitles")
         val tracks = mutableListOf<SubtitleTrackOption>()
@@ -1192,7 +1420,7 @@ class NativePlaybackController(
                     },
                     MAX_SUBTITLE_LABEL_CODE_POINTS,
                 )
-                val serviceLocked = rawTrack.optBoolean("is_lock", false)
+                val serviceLocked = rawTrack.optBoolean("is_lock", false) || rawTrack.optInt("is_lock", 0) == 1
                 val subtitleUrl = if (serviceLocked) {
                     null
                 } else {
@@ -1212,11 +1440,20 @@ class NativePlaybackController(
                 }
             }
         }
-        subtitleTrackSession = SubtitleTrackSession(
-            bvid = bvid,
-            cid = cid,
-            readableTrackUrls = readableTrackUrls.toMap(),
-        )
+        // 按 BV/CID 分开保留地址，切换媒体或清晰度不会冲掉另一个有效字幕会话。
+        synchronized(subtitleTrackSessions) {
+            checkSubtitleRequestEpoch(requestEpoch)
+            val key = bvid to cid
+            subtitleTrackSessions.remove(key)
+            subtitleTrackSessions[key] = SubtitleTrackSession(
+                bvid = bvid,
+                cid = cid,
+                readableTrackUrls = readableTrackUrls.toMap(),
+            )
+            while (subtitleTrackSessions.size > MAX_SUBTITLE_SESSIONS) {
+                subtitleTrackSessions.remove(subtitleTrackSessions.keys.first())
+            }
+        }
         if (readableTrackUrls.isNotEmpty()) {
             return subtitleTrackResult(
                 status = SUBTITLE_STATUS_AVAILABLE,
@@ -1251,8 +1488,10 @@ class NativePlaybackController(
         bvid: String,
         cid: Long,
         trackId: String,
+        requestEpoch: Long,
     ): Map<String, Any> {
-        val session = subtitleTrackSession
+        checkSubtitleRequestEpoch(requestEpoch)
+        val session = synchronized(subtitleTrackSessions) { subtitleTrackSessions[bvid to cid] }
         if (session == null || session.bvid != bvid || session.cid != cid) {
             throw SubtitleOperationException(
                 "subtitle_track_not_loaded",
@@ -1262,6 +1501,7 @@ class NativePlaybackController(
         val subtitleUrl = session.readableTrackUrls[trackId]
             ?: throw SubtitleOperationException("subtitle_locked", "此字幕当前不可用。")
         val root = parseSubtitleJson(requestSubtitleDocumentJson(subtitleUrl, bvid))
+        checkSubtitleRequestEpoch(requestEpoch)
         val rawCues = root.optJSONArray("body")
         val cues = mutableListOf<Map<String, Any>>()
         if (rawCues != null) {
@@ -1340,6 +1580,14 @@ class NativePlaybackController(
     ): String {
         val connection = URL(endpoint).openConnection() as? HttpsURLConnection
             ?: throw SubtitleOperationException("subtitle_invalid_url", "字幕地址无效。")
+        val deadlineMs = SystemClock.elapsedRealtime() + 30_000L
+        val deadlineTimer = java.util.Timer("subtitle-deadline", true)
+        deadlineTimer.schedule(object : java.util.TimerTask() {
+            /** 中断超过总时限的连接，避免慢速响应一直占用字幕工作线程。 */
+            override fun run() {
+                connection.disconnect()
+            }
+        }, 30_000L)
         try {
             connection.requestMethod = "GET"
             connection.connectTimeout = NETWORK_TIMEOUT_MS
@@ -1355,27 +1603,41 @@ class NativePlaybackController(
             val statusCode = connection.responseCode
             if (statusCode !in 200..299) {
                 throw SubtitleOperationException(
-                    "subtitle_network",
+                    if (!includeSessionCookie && statusCode in listOf(401, 403, 410)) {
+                        "subtitle_document_expired"
+                    } else {
+                        "subtitle_network"
+                    },
                     "字幕服务暂时不可用（HTTP $statusCode）。",
                 )
             }
             val responseBody = connection.inputStream.use { stream ->
-                readLimitedUtf8Text(stream.readBytesWithLimit(maximumBytes))
+                readLimitedUtf8Text(stream.readBytesWithLimit(maximumBytes, connection, deadlineMs))
             }
             if (responseBody.isBlank()) {
                 throw SubtitleOperationException("subtitle_invalid_data", "字幕数据为空。")
             }
             return responseBody
         } finally {
+            deadlineTimer.cancel()
             connection.disconnect()
         }
     }
 
-    /** 将字节流复制到受限缓冲区；超过上限时立刻停止，避免异常字幕包耗尽内存。 */
-    private fun java.io.InputStream.readBytesWithLimit(maximumBytes: Int): ByteArray {
+    /** 按剩余总时限读取受限缓冲区，阻止持续小块响应拖住后续视频的字幕请求。 */
+    private fun java.io.InputStream.readBytesWithLimit(
+        maximumBytes: Int,
+        connection: HttpsURLConnection,
+        deadlineMs: Long,
+    ): ByteArray {
         val buffer = ByteArray(SUBTITLE_RESPONSE_BUFFER_BYTES)
         val output = ByteArrayOutputStream()
         while (true) {
+            val remainingMs = deadlineMs - SystemClock.elapsedRealtime()
+            if (remainingMs <= 0) {
+                throw java.net.SocketTimeoutException("Subtitle request timed out")
+            }
+            connection.readTimeout = minOf(NETWORK_TIMEOUT_MS, remainingMs.toInt())
             val read = read(buffer)
             if (read < 0) {
                 break
@@ -1937,11 +2199,9 @@ class NativePlaybackController(
             "Referer" to referer,
             "User-Agent" to DESKTOP_USER_AGENT,
         )
-        readBilibiliCookieHeader().takeIf { cookie -> cookie.isNotBlank() }?.let { cookie ->
-            requestProperties["Cookie"] = cookie
-        }
+        // Media requests must never forward the logged-in API session.
         val networkFactory = DefaultHttpDataSource.Factory()
-            .setAllowCrossProtocolRedirects(true)
+            .setAllowCrossProtocolRedirects(false)
             .setConnectTimeoutMs(MEDIA_CONNECT_TIMEOUT_MS)
             .setReadTimeoutMs(MEDIA_READ_TIMEOUT_MS)
             .setDefaultRequestProperties(requestProperties)
@@ -2098,7 +2358,12 @@ class NativePlaybackController(
             audioCount = sources.audioUrls.size,
         )
         val videoUrl = mediaUrlAt(sources.videoUrls, selection.videoIndex)
-        val audioUrl = mediaUrlAt(sources.audioUrls, selection.audioIndex)
+        val audioUrl = mediaUrlAt(sources.audioUrls,
+            if (audioOnly) playbackCandidateAttempt else selection.audioIndex)
+        if (audioOnly && !isSafeMediaUrl(audioUrl)) {
+            reportError("当前视频没有可用的独立音轨，暂不能省流收听。")
+            return
+        }
         val displayTitle = buildMediaDisplayTitle()
         val mediaMetadata = MediaMetadata.Builder()
             .setTitle(displayTitle)
@@ -2112,23 +2377,25 @@ class NativePlaybackController(
         ).setLoadErrorHandlingPolicy(
             DefaultLoadErrorHandlingPolicy(MEDIA_MINIMUM_RETRY_COUNT),
         )
-        val videoItem = MediaItem.Builder()
-            .setMediaId("$currentBvid:$currentCid:$currentQuality")
-            .setUri(videoUrl)
-            .setCustomCacheKey(playbackCacheKey(sources, video = true))
-            .setMediaMetadata(mediaMetadata)
-            .build()
-        val videoSource = sourceFactory.createMediaSource(videoItem)
-        val finalSource: MediaSource = if (isSafeMediaUrl(audioUrl)) {
-            val audioSource = sourceFactory.createMediaSource(
-                MediaItem.Builder()
-                    .setUri(audioUrl)
-                    .setCustomCacheKey(playbackCacheKey(sources, video = false))
-                    .build(),
+        val finalSource: MediaSource = if (audioOnly) {
+            sourceFactory.createMediaSource(
+                MediaItem.Builder().setMediaId("$currentBvid:$currentCid:audio")
+                    .setUri(audioUrl).setMediaMetadata(mediaMetadata)
+                    .setCustomCacheKey(playbackCacheKey(sources, video = false)).build(),
             )
-            MergingMediaSource(videoSource, audioSource)
         } else {
-            videoSource
+            val videoSource = sourceFactory.createMediaSource(
+                MediaItem.Builder().setMediaId("$currentBvid:$currentCid:$currentQuality")
+                    .setUri(videoUrl).setMediaMetadata(mediaMetadata)
+                    .setCustomCacheKey(playbackCacheKey(sources, video = true)).build(),
+            )
+            if (isSafeMediaUrl(audioUrl)) {
+                val audioSource = sourceFactory.createMediaSource(
+                    MediaItem.Builder().setUri(audioUrl)
+                        .setCustomCacheKey(playbackCacheKey(sources, video = false)).build(),
+                )
+                MergingMediaSource(videoSource, audioSource)
+            } else videoSource
         }
         playbackPhase = PHASE_LOADING
         playbackMessage = "正在准备原生播放器…"
@@ -2220,6 +2487,8 @@ class NativePlaybackController(
             mapOf(
                 "phase" to playbackPhase,
                 "isPlaying" to (nativePlayer?.isPlaying == true),
+                "audioOnly" to audioOnly,
+                "sleepTimerRemainingMs" to sleepTimer.remainingMs(),
                 "positionMs" to position,
                 "durationMs" to duration,
                 "speed" to playbackSpeed.toDouble(),
@@ -2278,6 +2547,7 @@ class NativePlaybackController(
         progressPreferences.edit()
             .putLong(progressPositionKey(currentBvid, currentCid), position)
             .putLong(progressDurationKey(currentBvid, currentCid), duration)
+            .putLong(progressUpdatedAtKey(currentBvid, currentCid), System.currentTimeMillis())
             .apply()
     }
 
@@ -2287,7 +2557,7 @@ class NativePlaybackController(
         val duration = progressPreferences.getLong(progressDurationKey(bvid, cid), 0L)
         val normalizedPosition = PlaybackResumePolicy.normalizeStoredPosition(position, duration)
         if (normalizedPosition == 0L) {
-            clearSavedPlaybackProgress(bvid, cid)
+            clearSavedPlaybackProgress(bvid, cid, recordTimestamp = false)
             return 0L
         }
         return normalizedPosition
@@ -2318,19 +2588,24 @@ class NativePlaybackController(
             "cid" to cid,
             "pageNumber" to pageNumber,
             "positionMs" to loadSavedPlaybackPosition(bvid, cid),
+            "savedAtMs" to progressPreferences.getLong(progressUpdatedAtKey(bvid, cid), 0L),
         )
     }
 
     /** 删除一条已看完或无效的分P播放记忆。 */
-    private fun clearSavedPlaybackProgress(bvid: String, cid: Long) {
+    private fun clearSavedPlaybackProgress(bvid: String, cid: Long, recordTimestamp: Boolean = true) {
         if (bvid.isEmpty() || cid <= 0L) {
             return
         }
         progressPreferences.edit()
             .remove(progressPositionKey(bvid, cid))
             .remove(progressDurationKey(bvid, cid))
+            .also { if (recordTimestamp) it.putLong(progressUpdatedAtKey(bvid, cid), System.currentTimeMillis()) }
             .apply()
     }
+
+    /** 记录进度修改时间，用于区分较新的离线进度和过期在线记录。 */
+    private fun progressUpdatedAtKey(bvid: String, cid: Long): String = "progress:$bvid:$cid:updated_at"
 
     /** 生成某个分P的进度位置存储键。 */
     private fun progressPositionKey(bvid: String, cid: Long): String {
@@ -2391,6 +2666,11 @@ class NativePlaybackController(
 
     /** 清理播放器、系统媒体会话、纹理和未完成播放数据请求。 */
     private fun releasePlaybackResources() {
+        sleepTimer.configure(0L)
+        ListeningMediaService.stop(activity.applicationContext)
+        audioOnly = false
+        localVideoPath = null
+        localAudioPath = null
         saveCurrentPlaybackProgress(force = true)
         invalidatePlaybackRequests()
         mainHandler.removeCallbacks(stateTicker)
@@ -2439,14 +2719,24 @@ class NativePlaybackController(
         mediaCache = null
     }
 
-    /** 清空旧视频的内存字幕地址，防止切P或离开播放页后继续请求过期资源。 */
+    /** 播放资源释放时撤销排队请求并清空字幕地址，其他切换靠 BV/CID 隔离会话。 */
     private fun clearSubtitleTrackSession() {
-        subtitleTrackSession = null
+        synchronized(subtitleTrackSessions) {
+            subtitleSessionEpoch++
+            subtitleTrackSessions.clear()
+        }
+    }
+
+    /** 拒绝已经释放的播放资源对应的迟到或排队字幕请求。 */
+    private fun checkSubtitleRequestEpoch(requestEpoch: Long) {
+        if (requestEpoch != subtitleSessionEpoch) {
+            throw SubtitleOperationException("subtitle_request_cancelled", "视频已切换，请重新打开字幕设置。")
+        }
     }
 
     /** 播放时保持屏幕常亮，暂停、结束或出错后恢复系统默认行为。 */
     private fun updateKeepScreenOn(keepOn: Boolean) {
-        if (keepOn) {
+        if (keepOn && !audioOnly) {
             activity.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         } else {
             activity.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -2471,12 +2761,15 @@ class NativePlaybackController(
         return "https://www.bilibili.com/video/$normalized"
     }
 
-    /** 仅接受 B 站 CDN 的 HTTPS 媒体地址，避免任意链接进入播放器。 */
+    /** Accept only HTTPS media on the same trusted CDN suffixes as Dart. */
     private fun isSafeMediaUrl(url: String): Boolean {
-        val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return false
+        val uri = runCatching { java.net.URI(url) }.getOrNull() ?: return false
         val host = uri.host?.lowercase(Locale.ROOT) ?: return false
-        return uri.scheme.equals("https", ignoreCase = true) &&
-            (host.endsWith(".bilivideo.com") || host.endsWith(".bilivideo.cn"))
+        if (!uri.scheme.equals("https", ignoreCase = true) || uri.rawUserInfo != null ||
+            uri.rawFragment != null || uri.port == 0 || uri.port > 65535) return false
+        return listOf("bilivideo.com", "bilivideo.cn").any { domain ->
+            host == domain || host.endsWith(".$domain")
+        }
     }
 
     companion object {
@@ -2527,8 +2820,8 @@ class NativePlaybackController(
         private const val DEFAULT_VIDEO_ASPECT_RATIO = 16f / 9f
         private const val MIN_SCREEN_BRIGHTNESS = 0.01f
         private const val MIN_PLAYBACK_SPEED = 0.5f
-        // Flutter 播放器支持长按和菜单选择 3 倍速，原生校验必须使用同一上限。
-        private const val MAX_PLAYBACK_SPEED = 3.0f
+        // 自定义倍速最高为 5x，与 Flutter 服务和设置页保持一致。
+        private const val MAX_PLAYBACK_SPEED = 5.0f
         private const val MIN_PICTURE_IN_PICTURE_ASPECT = 0.42
         private const val MAX_PICTURE_IN_PICTURE_ASPECT = 2.39
         private const val PICTURE_IN_PICTURE_RATIO_BASE = 1000
@@ -2544,6 +2837,7 @@ class NativePlaybackController(
         private const val SUBTITLE_STATUS_LOGIN_REQUIRED = "login_required"
         private const val SUBTITLE_STATUS_LOCKED = "locked"
         private const val MAX_SUBTITLE_TRACKS = 20
+        private const val MAX_SUBTITLE_SESSIONS = 8
         private const val MAX_SUBTITLE_CUES = 10_000
         private const val MAX_SUBTITLE_LABEL_CODE_POINTS = 80
         private const val MAX_SUBTITLE_CUE_CODE_POINTS = 400

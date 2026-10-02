@@ -26,26 +26,40 @@ void main() {
         .setMockMethodCallHandler(channel, null);
   });
 
-  /// 验证三倍速会穿过 Flutter 校验并被完整发送给 Android 原生播放器。
-  test('原生播放服务允许并发送三倍速', () async {
+  /// 模拟原页面先恢复、剪贴板页面迟到销毁，确认不会释放已恢复的共享播放器。
+  test('失去通道所有权的旧服务销毁时不释放当前播放器', () async {
+    final original = NativePlaybackService();
+    final clipboard = NativePlaybackService();
+    await original.initialize();
+    calls.clear();
+    await clipboard.dispose();
+    expect(calls.where((call) => call.method == 'dispose'), isEmpty);
+    expect(original.ownsPlatformChannel, isTrue);
+    await original.play();
+    expect(calls.last.method, 'play');
+    await original.dispose();
+  });
+
+  /// 验证最高五倍速会穿过 Flutter 校验并被完整发送给 Android 原生播放器。
+  test('原生播放服务允许并发送五倍速', () async {
     final NativePlaybackService service = NativePlaybackService();
 
-    await service.setPlaybackSpeed(3);
+    await service.setPlaybackSpeed(5);
 
     expect(calls, hasLength(1));
     expect(calls.single.method, 'setSpeed');
     expect(
       Map<Object?, Object?>.from(calls.single.arguments as Map)['speed'],
-      3,
+      5,
     );
     await service.dispose();
   });
 
-  /// 验证超过三倍速仍会在 Flutter 层安全拦截，避免把非法速度交给 Android。
-  test('原生播放服务拒绝超过三倍速', () async {
+  /// 验证超过五倍速会在 Flutter 层安全拦截，避免把非法速度交给 Android。
+  test('原生播放服务拒绝超过五倍速', () async {
     final NativePlaybackService service = NativePlaybackService();
 
-    expect(() => service.setPlaybackSpeed(3.01), throwsArgumentError);
+    expect(() => service.setPlaybackSpeed(5.01), throwsArgumentError);
     expect(calls, isEmpty);
     await service.dispose();
   });
@@ -84,6 +98,27 @@ void main() {
       isTrue,
     );
     expect(legacy.isRestoringPosition, isFalse);
+  });
+
+  /// 分离缓存向 Android 同时传入两个本地文件，视频身份和位置保持一致。
+  test('原生播放服务发送完整的本地音视频路径', () async {
+    final service = NativePlaybackService();
+    final video = VideoPreview.placeholder();
+    await service.openLocalTracks(
+      videoFilePath: '/private/video.mp4',
+      audioFilePath: '/private/audio.m4a',
+      video: video,
+      part: video.initialPart,
+      initialPosition: const Duration(seconds: 24),
+    );
+    final args = Map<Object?, Object?>.from(calls.single.arguments as Map);
+    expect(calls.single.method, 'openLocal');
+    expect(args['filePath'], '/private/video.mp4');
+    expect(args['audioFilePath'], '/private/audio.m4a');
+    expect(args['initialPositionMs'], 24000);
+    expect(args['bvid'], video.bvid);
+    expect(args['cid'], video.cid);
+    await service.dispose();
   });
 
   /// 验证 Flutter 的观看记录兜底位置会随打开命令交给 Android，在 prepare 前直接定位。

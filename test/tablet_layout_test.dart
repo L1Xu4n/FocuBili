@@ -9,6 +9,15 @@ import 'package:focubili/features/focus/focus_timer_controller.dart';
 import 'package:focubili/features/profile/profile_page.dart';
 import 'package:focubili/features/profile/personalization_settings_page.dart';
 import 'package:focubili/features/search/search_page.dart';
+import 'package:focubili/services/bilibili_auth_service.dart';
+
+/// 平板布局验证使用确定的未登录状态，避免账号读取启动真实网络等待。
+class _SignedOutAccountFixture extends BilibiliAuthService {
+  /// 直接返回未登录状态，保留个人中心真实的账号摘要布局。
+  @override
+  Future<BilibiliSessionState> loadCurrentSession() async =>
+      const BilibiliSessionState.signedOut();
+}
 
 /// 把测试窗口设置为指定逻辑尺寸，确保 MediaQuery 和布局约束使用同一宽高。
 void _configureTestWindow(WidgetTester tester, Size size) {
@@ -77,27 +86,34 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  /// “我的”页面在平板横屏中把账号摘要和功能网格并排展示。
-  testWidgets('平板我的页面使用账号和功能双栏', (WidgetTester tester) async {
+  /// 个人中心账号摘要全宽显示，功能卡按实际可用宽度排列为三列。
+  testWidgets('平板我的页面使用统一可编辑卡片区域', (WidgetTester tester) async {
     _configureTestWindow(tester, const Size(1280, 800));
-    await tester.pumpWidget(const MaterialApp(home: ProfilePage()));
+    await tester.pumpWidget(
+      MaterialApp(home: ProfilePage(authService: _SignedOutAccountFixture())),
+    );
     await tester.pumpAndSettle();
 
-    final Rect accountPaneRect = tester.getRect(
-      find.byKey(const Key('profile-workspace-account')),
-    );
-    expect(accountPaneRect.width, 300);
-    expect(accountPaneRect.left, 20);
     final Rect accountCardRect = tester.getRect(
       find.byKey(const Key('profile-account-card')),
     );
-    final Rect avatarRect = tester.getRect(
-      find.byKey(const Key('profile-workspace-avatar')),
+    final Rect historyRect = tester.getRect(
+      find.byKey(const ValueKey('dashboard-card-watch-history')),
     );
+    final Rect offlineRect = tester.getRect(
+      find.byKey(const ValueKey('dashboard-card-offline-videos')),
+    );
+    final Rect favoritesRect = tester.getRect(
+      find.byKey(const ValueKey('dashboard-card-app-favorites')),
+    );
+    expect(accountCardRect.width, greaterThan(1200));
     expect(accountCardRect.height, lessThan(360));
-    expect(avatarRect.center.dx, closeTo(accountCardRect.center.dx, 1));
-    expect(find.byKey(const Key('profile-workspace-grid')), findsOneWidget);
+    expect(historyRect.top, offlineRect.top);
+    expect(offlineRect.top, favoritesRect.top);
+    expect(historyRect.width, closeTo((1240 - 32) / 3, 1));
+    expect(find.byKey(const Key('profile-card-board')), findsOneWidget);
     expect(find.text('设置').hitTestable(), findsOneWidget);
+    expect(find.text('自定义').hitTestable(), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -152,7 +168,7 @@ void main() {
         ),
       ),
     );
-    await tester.pump();
+    await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('focus-workspace-layout')), findsOneWidget);
     expect(find.byKey(const Key('focus-workspace-primary')), findsOneWidget);
@@ -187,7 +203,7 @@ void main() {
         ),
       ),
     );
-    await tester.pump();
+    await tester.pumpAndSettle();
 
     expect(
       tester.getSize(find.byKey(const Key('focus-home-hero'))).height,
