@@ -70,8 +70,9 @@ Future<void> main() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('apple_runtime_probe', 'saved');
     await prefs.reload();
-    if (prefs.getString('apple_runtime_probe') != 'saved')
+    if (prefs.getString('apple_runtime_probe') != 'saved') {
       throw StateError('storage');
+    }
     await prefs.remove('apple_runtime_probe');
     final cookies = await const MethodChannel(
       'com.focubili.app/auth',
@@ -80,8 +81,9 @@ Future<void> main() async {
     final webview = await const MethodChannel(
       'com.focubili.app/device_status',
     ).invokeMapMethod<String, dynamic>('getWebViewInfo');
-    if (webview?['providerAvailable'] != true)
+    if (webview?['providerAvailable'] != true) {
       throw StateError('webview bridge');
+    }
     final allowed = await const MethodChannel(
       'com.focubili.app/focus_notifications',
     ).invokeMethod<bool>('hasPermission');
