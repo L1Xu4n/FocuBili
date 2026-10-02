@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'apple_playback_session.dart';
+import 'apple_video_capabilities.dart';
 
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
@@ -45,7 +46,10 @@ class WindowsPlaybackService
                bufferSize: 64 * 1024 * 1024,
              ),
            ) {
-    _videoController = VideoController(_player);
+    _videoController = VideoController(
+      _player,
+      configuration: AppleVideoCapabilities.configuration,
+    );
     WindowsMediaCacheRuntime.registerPlaybackSession();
     _subscribeToPlayer();
   }

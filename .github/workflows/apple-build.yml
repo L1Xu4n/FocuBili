@@ -99,6 +99,10 @@ jobs:
           run = subprocess.run(['build/macos/Build/Products/Release/FocuBili.app/Contents/MacOS/FocuBili'], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=150)
           pathlib.Path('build/apple/macos-runtime.log').write_text(run.stdout)
           print(run.stdout)
+          if run.returncode != 0:
+              trace = subprocess.run(['xcrun', 'lldb', '--batch', '-o', 'run', '-o', 'thread backtrace all', '--', 'build/macos/Build/Products/Release/FocuBili.app/Contents/MacOS/FocuBili'], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=150)
+              pathlib.Path('build/apple/macos-native-backtrace.log').write_text(trace.stdout)
+              print(trace.stdout[-24000:])
           assert run.returncode == 0, f'Native probe exited {run.returncode}'
           assert 'APPLE_RUNTIME_ALL_CHECKS_PASSED' in run.stdout, 'Probe did not complete'
           PYRUN
@@ -109,6 +113,7 @@ jobs:
           sleep 10
           mkdir -p build/apple-diagnostics
           find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -type f -iname '*FocuBili*' -exec cp {} build/apple-diagnostics/ \; 2>/dev/null || true
+          cp build/apple/*.log build/apple-diagnostics/ 2>/dev/null || true
           cp build/apple/*-launch.png build/apple-diagnostics/ 2>/dev/null || true
           for f in build/apple-diagnostics/*.ips; do
             test -f "$f" || continue

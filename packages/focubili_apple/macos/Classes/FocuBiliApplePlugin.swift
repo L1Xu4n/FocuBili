@@ -4,6 +4,8 @@ import UIKit
 #else
 import FlutterMacOS
 import AppKit
+import OpenGL.GL
+import OpenGL.GL3
 #endif
 import WebKit
 import UserNotifications
@@ -193,6 +195,27 @@ public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCen
 
     private func media(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
         switch call.method {
+        case "supportsHardwareVideo":
+            #if os(macOS)
+            let attributes: [CGLPixelFormatAttribute] = [
+                kCGLPFAOpenGLProfile,
+                CGLPixelFormatAttribute(kCGLOGLPVersion_3_2_Core.rawValue),
+                kCGLPFAAccelerated, kCGLPFADoubleBuffer,
+                kCGLPFAColorSize, CGLPixelFormatAttribute(rawValue: 64),
+                kCGLPFAColorFloat, kCGLPFABackingStore,
+                kCGLPFAAllowOfflineRenderers, kCGLPFASupportsAutomaticGraphicsSwitching,
+                CGLPixelFormatAttribute(rawValue: 0)
+            ]
+            var pixel: CGLPixelFormatObj?
+            var count: GLint = 0
+            let error = CGLChoosePixelFormat(attributes, &pixel, &count)
+            let available = error == kCGLNoError && pixel != nil && count > 0
+            if let pixel = pixel { CGLDestroyPixelFormat(pixel) }
+            NSLog("FocuBili hardware video available: %d", available)
+            result(available)
+            #else
+            result(true)
+            #endif
         case "activate":
             #if os(iOS)
             do {

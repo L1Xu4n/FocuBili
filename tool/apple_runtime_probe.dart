@@ -9,6 +9,7 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/services/apple_playback_session.dart';
+import 'package:focubili/services/apple_video_capabilities.dart';
 import '../integration_test/media_fixture.dart';
 
 Future<void> waitFor(bool Function() condition, String phase) async {
@@ -28,13 +29,17 @@ Future<void> main() async {
   var success = false;
   try {
     MediaKit.ensureInitialized();
+    await AppleVideoCapabilities.initialize();
     final dir = await getTemporaryDirectory();
     await dir.create(recursive: true);
     file = File('${dir.path}/focubili-runtime-probe.mp4');
     await file.writeAsBytes(base64Decode(appleSmokeVideoBase64));
     stdout.writeln('APPLE_RUNTIME: creating player');
     final p = player = Player();
-    final video = VideoController(p);
+    final video = VideoController(
+      p,
+      configuration: AppleVideoCapabilities.configuration,
+    );
     await session.initialize(play: p.play, pause: p.pause, seek: p.seek);
     runApp(
       MaterialApp(

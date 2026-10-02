@@ -9,6 +9,7 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/services/apple_playback_session.dart';
+import 'package:focubili/services/apple_video_capabilities.dart';
 import 'media_fixture.dart';
 
 Future<void> eventually(bool Function() condition) async {
@@ -26,6 +27,7 @@ void main() {
   ) async {
     expect(Platform.isIOS || Platform.isMacOS, isTrue);
     MediaKit.ensureInitialized();
+    await AppleVideoCapabilities.initialize();
     final dir = await getTemporaryDirectory();
     await dir.create(recursive: true);
     final file = File('${dir.path}/focubili-apple-smoke.mp4');
@@ -33,7 +35,10 @@ void main() {
     debugPrint("APPLE_SMOKE: creating player");
     final player = Player();
     debugPrint("APPLE_SMOKE: creating video controller");
-    final controller = VideoController(player);
+    final controller = VideoController(
+      player,
+      configuration: AppleVideoCapabilities.configuration,
+    );
     final session = ApplePlaybackSession();
     try {
       debugPrint("APPLE_SMOKE: activating native media session");

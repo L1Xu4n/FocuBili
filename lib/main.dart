@@ -10,8 +10,10 @@ import 'package:window_manager/window_manager.dart';
 import 'app.dart';
 import 'core/theme/app_theme.dart';
 import 'platform/platform_services.dart';
+import 'platform/app_platform.dart';
 import 'platform/platform_capabilities.dart';
 import 'services/problem_diagnostics_service.dart';
+import 'services/apple_video_capabilities.dart';
 
 /// 注册框架和 Dart 未捕获错误的最小诊断记录；只保存固定操作名与异常类型，绝不保存异常原文或堆栈。
 void _installProblemDiagnostics() {
@@ -49,15 +51,35 @@ Future<void> _prepareWindowsDesktop({
       platformServices ?? PlatformServices.current;
   if (services.capabilities.playbackBackend == PlaybackBackendKind.mediaKit) {
     MediaKit.ensureInitialized();
+    await AppleVideoCapabilities.initialize();
   }
   if (!services.capabilities.supportsDesktopWindow) {
     return;
   }
   await windowManager.ensureInitialized();
+  var initialSize = const Size(1280, 800);
+  var minimumSize = const Size(900, 640);
+  if (services.platform == AppPlatform.macos) {
+    final views = WidgetsBinding.instance.platformDispatcher.views;
+    if (views.isNotEmpty) {
+      final display = views.first.display;
+      final screen = display.size / display.devicePixelRatio;
+      if (screen.width > 0 && screen.height > 0) {
+        initialSize = Size(
+          (screen.width - 40).clamp(640.0, 1280.0),
+          (screen.height - 100).clamp(480.0, 800.0),
+        );
+        minimumSize = Size(
+          initialSize.width.clamp(640.0, 900.0),
+          initialSize.height.clamp(480.0, 640.0),
+        );
+      }
+    }
+  }
   await windowManager.waitUntilReadyToShow(
-    const WindowOptions(
-      size: Size(1280, 800),
-      minimumSize: Size(900, 640),
+    WindowOptions(
+      size: initialSize,
+      minimumSize: minimumSize,
       center: true,
       backgroundColor: Color(0xFFF7F8FC),
       title: '焦点哔哩',
