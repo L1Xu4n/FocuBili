@@ -4,19 +4,25 @@ import '../platform/app_platform.dart';
 
 /// Bridges media_kit to Apple's audio session and lock-screen transport controls.
 class ApplePlaybackSession {
+  ApplePlaybackSession({AppPlatform? platform})
+    : enabled = (platform ?? AppPlatformDetector.current).isApple;
+
   static const _channel = MethodChannel('com.focubili.app/apple_media');
   static ApplePlaybackSession? _owner;
-  final bool enabled = AppPlatformDetector.current.isApple;
+  final bool enabled;
   bool _disposed = false;
   int _lastSecond = -1;
   bool? _lastPlaying;
+  String? _lastTitle;
+  Duration? _lastDuration;
+  double? _lastSpeed;
 
   Future<void> initialize({
     required Future<void> Function() play,
     required Future<void> Function() pause,
     required Future<void> Function(Duration) seek,
   }) async {
-    if (!enabled) return;
+    if (!enabled || _disposed) return;
     _owner = this;
     _channel.setMethodCallHandler((call) async {
       if (_disposed || _owner != this) return;
@@ -43,9 +49,18 @@ class ApplePlaybackSession {
     required double speed,
   }) {
     if (!enabled || _disposed || _owner != this) return;
-    if (_lastSecond == position.inSeconds && _lastPlaying == playing) return;
+    if (_lastSecond == position.inSeconds &&
+        _lastPlaying == playing &&
+        _lastTitle == title &&
+        _lastDuration == duration &&
+        _lastSpeed == speed) {
+      return;
+    }
     _lastSecond = position.inSeconds;
     _lastPlaying = playing;
+    _lastTitle = title;
+    _lastDuration = duration;
+    _lastSpeed = speed;
     unawaited(
       _channel
           .invokeMethod<void>('update', {
