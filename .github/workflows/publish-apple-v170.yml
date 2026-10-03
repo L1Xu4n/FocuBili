@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   publish:
-    if: startsWith(github.event.head_commit.message, 'release: append Apple v1.7.0 assets')
+    if: "startsWith(github.event.head_commit.message, 'release: append Apple v1.7.0 assets')"
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
