@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/services/apple_playback_session.dart';
 import 'package:focubili/services/apple_video_capabilities.dart';
+import 'package:focubili/services/flutter_video_frame_capture.dart';
 import '../integration_test/media_fixture.dart';
 
 Future<void> waitFor(bool Function() condition, String phase) async {
@@ -46,10 +47,18 @@ Future<void> main() async {
       pause: p.pause,
       seek: p.seek,
     );
+    final capture = FlutterVideoFrameCapture();
     runApp(
       MaterialApp(
         home: Scaffold(
-          body: Video(controller: video, controls: NoVideoControls),
+          body: Center(
+            child: AspectRatio(
+              aspectRatio: 16 / 9,
+              child: capture.wrap(
+                Video(controller: video, controls: NoVideoControls),
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -82,9 +91,9 @@ Future<void> main() async {
       'pipStatus',
     );
     if (pipBefore?['supported'] == true) {
-      var started = await session.startPictureInPicture(
-        const Rect.fromLTWH(0, 0, 320, 180),
-      );
+      final rect = capture.globalRect;
+      if (rect == null) throw StateError('Video source view is not laid out');
+      var started = await session.startPictureInPicture(rect);
       if (!started) {
         stdout.writeln(
           'APPLE_PIP_PAUSED_UNAVAILABLE: ${await mediaChannel.invokeMethod<Object?>('pipStatus')}',
@@ -101,9 +110,7 @@ Future<void> main() async {
         );
         await p.play();
         await waitFor(() => p.state.playing, 'PiP retry playback');
-        started = await session.startPictureInPicture(
-          const Rect.fromLTWH(0, 0, 320, 180),
-        );
+        started = await session.startPictureInPicture(rect);
         await updates.cancel();
       }
       final status = await mediaChannel.invokeMapMethod<String, dynamic>(
@@ -130,7 +137,7 @@ Future<void> main() async {
       }
       for (var attempt = 0; attempt < 2; attempt++) {
         final fallback = await session.startPictureInPicture(
-          const Rect.fromLTWH(0, 0, 320, 180),
+          rect,
           preferFloating: true,
         );
         final fallbackStatus = await mediaChannel
