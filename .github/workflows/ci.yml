@@ -5,10 +5,12 @@ on:
     branches:
       - dev
       - master
+      - "iOS＆MacOS"
   push:
     branches:
       - dev
       - master
+      - feat/platform-dark-icons
   workflow_dispatch:
 
 permissions:
