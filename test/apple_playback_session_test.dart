@@ -12,7 +12,7 @@ void main() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
           calls.add(call);
-          return null;
+          return call.method == 'startPiP' ? true : null;
         });
   });
   tearDown(() {
@@ -84,4 +84,24 @@ void main() {
     await windows.dispose();
     expect(calls, isEmpty);
   });
+  test(
+    'PiP requires an active owner and forwards the visible video rect',
+    () async {
+      final session = ApplePlaybackSession(platform: AppPlatform.ios);
+      const rect = Rect.fromLTWH(20, 40, 320, 180);
+      expect(await session.startPictureInPicture(rect), isFalse);
+      await activate(session);
+      expect(await session.startPictureInPicture(Rect.zero), isFalse);
+      expect(await session.startPictureInPicture(rect), isTrue);
+      final call = calls.singleWhere((c) => c.method == 'startPiP');
+      expect(call.arguments, {
+        'x': 20.0,
+        'y': 40.0,
+        'width': 320.0,
+        'height': 180.0,
+      });
+      await session.dispose();
+      expect(await session.startPictureInPicture(rect), isFalse);
+    },
+  );
 }

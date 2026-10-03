@@ -43,6 +43,7 @@ void main() {
     try {
       debugPrint("APPLE_SMOKE: activating native media session");
       await session.initialize(
+        handle: await player.handle,
         play: player.play,
         pause: player.pause,
         seek: player.seek,
@@ -86,6 +87,46 @@ void main() {
         speed: 1.5,
       );
       debugPrint("APPLE_SMOKE: playback controls verified");
+      const mediaChannel = MethodChannel('com.focubili.app/apple_media');
+      final pipBefore = await mediaChannel.invokeMapMethod<String, dynamic>(
+        'pipStatus',
+      );
+      if (pipBefore?['supported'] == true) {
+        final rect = tester.getRect(find.byType(Video));
+        var started = await session.startPictureInPicture(rect);
+        if (!started) {
+          debugPrint(
+            'APPLE_PIP_PAUSED_UNAVAILABLE: ${await mediaChannel.invokeMethod<Object?>('pipStatus')}',
+          );
+          await player.setPlaylistMode(PlaylistMode.loop);
+          final updates = player.stream.position.listen(
+            (_) => session.update(
+              title: 'FocuBili test',
+              position: player.state.position,
+              duration: player.state.duration,
+              playing: player.state.playing,
+              speed: player.state.rate,
+            ),
+          );
+          await player.play();
+          await eventually(() => player.state.playing);
+          started = await session.startPictureInPicture(rect);
+          await updates.cancel();
+        }
+        final pipAfter = await mediaChannel.invokeMapMethod<String, dynamic>(
+          'pipStatus',
+        );
+        debugPrint('APPLE_PIP_RESULT: started=$started status=$pipAfter');
+        expect(
+          pipAfter?['frames'],
+          greaterThan(0),
+          reason: 'Native PiP must receive independently copied frames',
+        );
+        if (started) expect(pipAfter?['active'], isTrue);
+        await mediaChannel.invokeMethod<void>('stopPiP');
+      } else {
+        debugPrint('APPLE_PIP_UNSUPPORTED_ON_RUNTIME');
+      }
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('apple_smoke', 'persisted');
       await prefs.reload();

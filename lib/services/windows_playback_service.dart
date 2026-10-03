@@ -196,7 +196,13 @@ class WindowsPlaybackService
     if (_disposed) {
       return null;
     }
-    await _appleSession.initialize(play: play, pause: pause, seek: seekTo);
+    await _appleSession.initialize(
+      handle: _appleSession.enabled ? await _player.handle : null,
+      play: play,
+      pause: pause,
+      seek: seekTo,
+      onPictureInPictureChanged: (_) => _emitPlayerState(),
+    );
     await _configureWindowsMediaCache();
     return _videoController.id.value;
   }
@@ -650,7 +656,8 @@ class WindowsPlaybackService
   @override
   Future<bool> enterPictureInPicture(double aspectRatio) async {
     _ensureAvailable();
-    return false;
+    final rect = _frameCapture.globalRect;
+    return rect != null && await _appleSession.startPictureInPicture(rect);
   }
 
   /// 优先读取 Flutter 已绘制画面，失败时裁切 B 站时间点雪碧图，始终绕开会终止进程的原生截图。
@@ -1283,6 +1290,7 @@ class WindowsPlaybackService
       phase: phase,
       isPlaying: _player.state.playing,
       audioOnly: _audioOnly,
+      isInPictureInPicture: _appleSession.isInPictureInPicture,
       sleepTimerRemaining: _sleepDeadline == null
           ? Duration.zero
           : Duration(

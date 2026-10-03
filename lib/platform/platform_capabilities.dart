@@ -115,7 +115,7 @@ class PlatformCapabilities {
         updateTargetPlatform: platform == AppPlatform.macos
             ? AppUpdateTargetPlatform.macos
             : AppUpdateTargetPlatform.other,
-        supportsPictureInPicture: false,
+        supportsPictureInPicture: true,
         supportsDoNotDisturb: false,
         supportsDesktopWindow: platform == AppPlatform.macos,
       ),

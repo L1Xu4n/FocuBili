@@ -6,6 +6,29 @@ import 'package:focubili/services/flutter_video_frame_capture.dart';
 
 /// 验证 Windows 使用的 Flutter 画面取帧器不依赖播放器原生截图接口。
 void main() {
+  testWidgets('native PiP rect tracks scaling and detachment', (tester) async {
+    final capture = FlutterVideoFrameCapture();
+    expect(capture.globalRect, isNull);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Center(
+          child: Transform.scale(
+            scale: 2,
+            child: SizedBox(
+              width: 80,
+              height: 45,
+              child: capture.wrap(const ColoredBox(color: Colors.blue)),
+            ),
+          ),
+        ),
+      ),
+    );
+    expect(capture.globalRect!.width, closeTo(160, .01));
+    expect(capture.globalRect!.height, closeTo(90, .01));
+    await tester.pumpWidget(const SizedBox.shrink());
+    expect(capture.globalRect, isNull);
+  });
+
   /// 挂载一个已绘制画面后应得到带标准文件头的非空 PNG 数据。
   testWidgets('Flutter 视频画面取帧生成 PNG', (WidgetTester tester) async {
     final FlutterVideoFrameCapture capture = FlutterVideoFrameCapture();

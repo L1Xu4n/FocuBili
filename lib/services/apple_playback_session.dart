@@ -11,6 +11,7 @@ class ApplePlaybackSession {
   static ApplePlaybackSession? _owner;
   final bool enabled;
   bool _disposed = false;
+  bool isInPictureInPicture = false;
   int _lastSecond = -1;
   bool? _lastPlaying;
   String? _lastTitle;
@@ -18,6 +19,8 @@ class ApplePlaybackSession {
   double? _lastSpeed;
 
   Future<void> initialize({
+    int? handle,
+    void Function(bool)? onPictureInPictureChanged,
     required Future<void> Function() play,
     required Future<void> Function() pause,
     required Future<void> Function(Duration) seek,
@@ -27,6 +30,9 @@ class ApplePlaybackSession {
     _channel.setMethodCallHandler((call) async {
       if (_disposed || _owner != this) return;
       switch (call.method) {
+        case 'pipStateChanged':
+          isInPictureInPicture = call.arguments == true;
+          onPictureInPictureChanged?.call(isInPictureInPicture);
         case 'play':
           await play();
         case 'pause':
@@ -38,7 +44,7 @@ class ApplePlaybackSession {
           }
       }
     });
-    await _channel.invokeMethod<void>('activate');
+    await _channel.invokeMethod<void>('activate', {'handle': ?handle});
   }
 
   void update({
@@ -71,6 +77,23 @@ class ApplePlaybackSession {
           })
           .catchError((Object _) {}),
     );
+  }
+
+  Future<bool> startPictureInPicture(Rect rect) async {
+    if (!enabled ||
+        _disposed ||
+        _owner != this ||
+        rect.isEmpty ||
+        !rect.isFinite) {
+      return false;
+    }
+    return await _channel.invokeMethod<bool>('startPiP', {
+          'x': rect.left,
+          'y': rect.top,
+          'width': rect.width,
+          'height': rect.height,
+        }) ??
+        false;
   }
 
   Future<void> dispose() async {

@@ -1,7 +1,7 @@
 name: Apple builds
 on:
   push:
-    branches: [dev, "feat/platform-dark-icons"]
+    branches: [dev]
   pull_request:
     branches: [dev, "iOS＆MacOS"]
     paths: ['ios/**', 'macos/**', 'packages/focubili_apple/**', 'lib/**', 'integration_test/**', 'assets/icon/**', 'tool/**', 'pubspec.*', '.github/workflows/apple-build.yml']
@@ -40,7 +40,7 @@ jobs:
             os: macos-26
     steps:
       - uses: actions/checkout@v6
-      - name: Select Xcode 26 for macOS appearance icons
+      - name: Select Xcode 26 for Apple runtime checks
         run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
       - uses: subosito/flutter-action@v2
         with:
@@ -69,7 +69,7 @@ jobs:
         if: matrix.platform == 'ios'
         timeout-minutes: 25
         run: |
-          device="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for rows in d["devices"].values() for x in rows if x.get("isAvailable") and x["name"].startswith("iPhone")))')"
+          device="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); a=[x for k in sorted(d["devices"], reverse=True) for x in d["devices"][k] if x.get("isAvailable")]; v=next((x for x in a if x["name"].startswith("iPad")), next(x for x in a if x["name"].startswith("iPhone"))); print("Smoke device: "+v["name"], file=sys.stderr); print(v["udid"])')"
           xcrun simctl boot "$device"
           xcrun simctl bootstatus "$device" -b
           xcrun simctl install "$device" build/ios/iphonesimulator/Runner.app

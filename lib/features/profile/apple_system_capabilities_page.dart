@@ -66,7 +66,9 @@ class _AppleCapabilitiesState extends State<AppleSystemCapabilitiesPage> {
         ),
         const ListTile(
           title: Text('画中画'),
-          subtitle: Text('当前 libmpv 播放路径暂不提供系统画中画。应用内全屏与后台音频可用。'),
+          subtitle: Text(
+            'iOS 15 / macOS 12 及以上可请求系统画中画，需设备和系统允许。画中画只显示视频，不包含 Flutter 弹幕与字幕叠加。',
+          ),
         ),
       ],
     ),
