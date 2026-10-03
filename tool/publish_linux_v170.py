@@ -34,7 +34,9 @@ START = '<!-- focubili-linux-v170:start -->'
 END = '<!-- focubili-linux-v170:end -->'
 META = ('id', 'tag_name', 'name', 'target_commitish', 'draft', 'prerelease', 'immutable')
 HELPERS = {'.github/workflows/publish-linux-v170.yml', 'tool/publish_linux_v170.py',
-           'tool/linux_v170_baseline.json', 'tool/test_publish_linux_v170.py'}
+           'tool/linux_v170_baseline.json', 'tool/test_publish_linux_v170.py',
+           '.github/workflows/cleanup-linux-v170.yml', 'tool/cleanup_linux_v170.py',
+           'tool/linux_v170_cleanup_snapshot.json', 'tool/test_cleanup_linux_v170.py'}
 
 
 def require(ok, message):
@@ -65,7 +67,7 @@ def check_release(release, body=None):
     require(all(release.get(k) == BASELINE.get(k) for k in META), 'Release metadata mismatch')
     assets = asset_map(release)
     old = asset_map(BASELINE)
-    require(set(assets) <= set(old) | {DEB, TAR, SUMS}, 'Unexpected release assets')
+    require(set(assets) <= set(old) | {DEB}, 'Unexpected release assets')
     for name, original in old.items():
         require(name in assets, f'Missing original asset: {name}')
         require(all(assets[name].get(k) == original.get(k)
@@ -204,16 +206,17 @@ def prepare_payloads():
         for name, data in payloads.items():
             require(sha(data) == sums[name] == PACKAGE_SHA256[name], f'Package checksum mismatch: {name}')
     validate_packages(payloads)
-    payloads[SUMS] = ''.join(f'{sha(payloads[n])}  {n}\n' for n in (DEB, TAR)).encode()
-    return payloads
+    # TAR and its manifest remain CI validation inputs, never Release downloads.
+    return {DEB: payloads[DEB]}
 
 
 def build_body(payloads):
+    require(set(payloads) == {DEB}, 'Only the DEB installer may be published')
     section = f'''{START}
 ## Linux 1.7.0 补充
 
-- 提供 Ubuntu 24.04 amd64 / x86-64 的 DEB 和 tar.gz；不承诺旧版 Ubuntu、其他发行版或 ARM 兼容。
-- 推荐使用 `sudo apt install ./FocuBili-v1.7.0-linux-amd64.deb` 安装，以便解析系统依赖。tar.gz 不是静态免依赖包；需要 GTK 3、mpv、libsecret、JsonCpp、ALSA、WebKitGTK 4.1 和桌面 portal；建议安装 GNOME Keyring 与 GTK portal 后端。
+- 提供 Ubuntu 24.04 amd64 / x86-64 的 DEB 安装包；不承诺旧版 Ubuntu、其他发行版或 ARM 兼容。
+- 推荐使用 `sudo apt install ./FocuBili-v1.7.0-linux-amd64.deb` 安装，以便解析系统依赖。建议安装 GNOME Keyring 与 GTK portal 后端。
 - 构建 CI 已执行正常应用启动/单实例检查，以及独立运行探针的桌面服务和媒体检查；探针不是发布安装包。
 - CI 使用 Ubuntu 24.04 虚拟桌面。真实账号登录、真实桌面/显卡与 Wayland 环境、长时间播放及跨版本数据迁移仍需实机验证；本次不宣称上述场景已全面验收。更新前请备份重要本地数据。
 
@@ -239,6 +242,7 @@ def check_existing(release, payloads):
 
 
 def publish(payloads, head):
+    require(set(payloads) == {DEB}, 'Only the DEB installer may be published')
     body = build_body(payloads)
     current = api(f'releases/{RELEASE_ID}')
     check_release(current)

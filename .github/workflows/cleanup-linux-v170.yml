@@ -1,0 +1,30 @@
+name: Keep Linux v1.7.0 installer only
+on:
+  push:
+    branches: [dev]
+    paths: ['.github/workflows/cleanup-linux-v170.yml']
+permissions:
+  contents: read
+concurrency:
+  group: publish-linux-v170
+  cancel-in-progress: false
+jobs:
+  cleanup:
+    if: "github.repository == 'L1Xu4n/FocuBili' && github.event.head_commit.message == 'release: keep Linux v1.7.0 installer only'"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Test release publisher and exact asset cleanup
+        run: |
+          python3 -m unittest discover -s tool -p test_publish_linux_v170.py -v
+          python3 -m unittest discover -s tool -p test_cleanup_linux_v170.py -v
+      - name: Verify and remove only pinned Linux non-installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tool/cleanup_linux_v170.py

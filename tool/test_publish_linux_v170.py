@@ -46,27 +46,39 @@ class PublisherTests(unittest.TestCase):
 
     def publish(self):
         with patch.object(p, 'api', self.api), patch.object(p, 'gh', self.gh):
-            p.publish(self.payloads, 'head')
+            p.publish({p.DEB: self.payloads[p.DEB]}, 'head')
 
     def test_additive_and_rerun_idempotence(self):
         original = copy.deepcopy(self.release['assets'])
         self.publish()
         self.assertEqual(self.release['assets'][:5], original)
-        self.assertEqual(len(self.writes), 4)
+        self.assertEqual(len(self.writes), 2)
         self.assertTrue(self.release['body'].startswith(p.BASELINE['body']))
         self.writes.clear()
         self.publish()
         self.assertEqual(self.writes, [])
 
+    def test_non_installer_payload_is_rejected(self):
+        with self.assertRaisesRegex(RuntimeError, 'Only the DEB'):
+            p.publish(self.payloads, 'head')
+        self.assertEqual(self.writes, [])
+
+    def test_notes_only_list_installer(self):
+        body = p.build_body({p.DEB: b'deb'})
+        section = body.split(p.START)[1]
+        self.assertNotIn('tar.gz', section)
+        self.assertNotIn(p.SUMS, section)
+        self.assertIn(p.sha(b'deb'), section)
+
     def test_partial_rerun(self):
         self.publish()
-        self.release['assets'] = [a for a in self.release['assets'] if a['name'] != p.SUMS]
+        self.release['assets'] = [a for a in self.release['assets'] if a['name'] != p.DEB]
         self.writes.clear()
         self.publish()
-        self.assertEqual(self.writes, [('upload', p.SUMS)])
+        self.assertEqual(self.writes, [('upload', p.DEB)])
 
     def test_different_existing_linux_asset_is_never_uploaded(self):
-        self.release['assets'].append({'name': p.TAR, 'size': 3, 'digest': 'sha256:bad', 'state': 'uploaded'})
+        self.release['assets'].append({'name': p.DEB, 'size': 3, 'digest': 'sha256:bad', 'state': 'uploaded'})
         with self.assertRaisesRegex(RuntimeError, 'Different existing Linux'):
             self.publish()
         self.assertEqual(self.writes, [])
@@ -120,7 +132,7 @@ class PublisherTests(unittest.TestCase):
 
     def test_artifact_preparation(self):
         result = self.prepare()
-        self.assertIn(p.SUMS, result)
+        self.assertEqual(set(result), {p.DEB})
         self.assertNotIn('SHA256SUMS.txt', result)
 
     def test_package_checksum_mismatch(self):
