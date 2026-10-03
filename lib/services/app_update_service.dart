@@ -180,6 +180,7 @@ class AppUpdateService {
         '.exe',
       ],
       AppUpdateTargetPlatform.android => const <String>['.apk'],
+      AppUpdateTargetPlatform.macos => const <String>['.dmg', '.pkg'],
       AppUpdateTargetPlatform.other => const <String>[],
     };
     for (final String extension in extensions) {
@@ -225,6 +226,7 @@ class AppUpdateService {
     return switch (_targetPlatform) {
       AppUpdateTargetPlatform.windows => '下载 Windows 安装包',
       AppUpdateTargetPlatform.android => '下载 Android 安装包',
+      AppUpdateTargetPlatform.macos => '下载 macOS 安装包',
       AppUpdateTargetPlatform.other => '查看 Release',
     };
   }

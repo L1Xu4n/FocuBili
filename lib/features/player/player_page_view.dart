@@ -178,7 +178,9 @@ extension _PlayerPageView on _PlayerPageState {
                     child: _buildVideoOutput(),
                   ),
                   _buildDanmakuOverlay(),
-                  if (_appPlatform == AppPlatform.windows && _brightness < 1)
+                  if ((_appPlatform.isDesktop ||
+                          _appPlatform == AppPlatform.ios) &&
+                      _brightness < 1)
                     IgnorePointer(
                       key: const Key('software-brightness-overlay'),
                       child: ColoredBox(

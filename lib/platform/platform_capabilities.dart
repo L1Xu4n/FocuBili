@@ -17,7 +17,12 @@ enum CookieStoreBackendKind {
 }
 
 /// 指定专注提醒应使用 Android 原生通道还是 Windows Toast。
-enum FocusNotificationBackendKind { androidChannel, windowsToast, unavailable }
+enum FocusNotificationBackendKind {
+  androidChannel,
+  windowsToast,
+  appleNotifications,
+  unavailable,
+}
 
 /// 指定登录页应提供官方 WebView、二维码还是不可用说明。
 enum LoginExperience { officialWebView, officialQrCode, unavailable }
@@ -26,11 +31,12 @@ enum LoginExperience { officialWebView, officialQrCode, unavailable }
 enum SystemCapabilitiesExperience {
   androidPermissions,
   windowsDesktop,
+  apple,
   unavailable,
 }
 
 /// 指定更新检查应挑选的安装包平台，其他平台只打开 Release 页面。
-enum AppUpdateTargetPlatform { android, windows, other }
+enum AppUpdateTargetPlatform { android, windows, macos, other }
 
 /// 汇总页面和服务装配需要的平台能力，避免按系统名称散落条件判断。
 class PlatformCapabilities {
@@ -96,10 +102,24 @@ class PlatformCapabilities {
         supportsDoNotDisturb: false,
         supportsDesktopWindow: true,
       ),
-      AppPlatform.ios ||
-      AppPlatform.macos ||
-      AppPlatform.linux ||
-      AppPlatform.unsupported => PlatformCapabilities(
+      AppPlatform.ios || AppPlatform.macos => PlatformCapabilities(
+        platform: platform,
+        playbackBackend: PlaybackBackendKind.mediaKit,
+        playerOverlayBackend: PlayerOverlayBackendKind.dartHttp,
+        mediaCacheBackend: MediaCacheBackendKind.windowsMediaKit,
+        cookieStoreBackend: CookieStoreBackendKind.androidWebView,
+        focusNotificationBackend:
+            FocusNotificationBackendKind.appleNotifications,
+        loginExperience: LoginExperience.officialWebView,
+        systemCapabilitiesExperience: SystemCapabilitiesExperience.apple,
+        updateTargetPlatform: platform == AppPlatform.macos
+            ? AppUpdateTargetPlatform.macos
+            : AppUpdateTargetPlatform.other,
+        supportsPictureInPicture: true,
+        supportsDoNotDisturb: false,
+        supportsDesktopWindow: platform == AppPlatform.macos,
+      ),
+      AppPlatform.linux || AppPlatform.unsupported => PlatformCapabilities(
         platform: platform,
         playbackBackend: PlaybackBackendKind.unavailable,
         playerOverlayBackend: PlayerOverlayBackendKind.unavailable,

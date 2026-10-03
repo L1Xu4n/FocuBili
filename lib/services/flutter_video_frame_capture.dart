@@ -41,6 +41,18 @@ class FlutterVideoFrameCapture {
     }
   }
 
+  /// Native PiP source hosts use the actual on-screen video region.
+  ui.Rect? get globalRect {
+    final boundary = _findBoundary();
+    if (boundary == null || !boundary.hasSize || boundary.size.isEmpty) {
+      return null;
+    }
+    return MatrixUtils.transformRect(
+      boundary.getTransformTo(null),
+      Offset.zero & boundary.size,
+    );
+  }
+
   /// 查找当前仍挂载的重绘边界，页面切换或销毁期间安全返回空值。
   RenderRepaintBoundary? _findBoundary() {
     final RenderRepaintBoundary? boundary = _activeBoundary;

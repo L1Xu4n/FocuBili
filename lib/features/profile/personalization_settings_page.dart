@@ -102,7 +102,7 @@ class _PersonalizationSettingsPageState
   bool get _supportsClipboardDetection {
     final AppPlatform platform =
         widget.appPlatform ?? AppPlatformDetector.current;
-    return platform == AppPlatform.windows || platform == AppPlatform.android;
+    return platform.isDesktop || platform.isMobile;
   }
 
   /// 页面创建后读取设备里已经保存的播放器偏好。
@@ -1034,6 +1034,8 @@ class _PersonalizationSettingsPageState
           subtitle: Text(
             usesWindowsCapabilities
                 ? '检查 Windows 通知、未来提醒和安装包身份'
+                : (widget.appPlatform ?? AppPlatformDetector.current).isApple
+                ? '检查 Apple 通知、后台音频及系统权限'
                 : usesUnavailableCapabilities
                 ? '当前平台的系统能力尚未接入'
                 : '统一申请、检查、取消权限，并设置后台提醒保护',

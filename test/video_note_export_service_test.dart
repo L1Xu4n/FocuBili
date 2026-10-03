@@ -30,6 +30,22 @@ VideoNote _note({String? framePath}) {
 
 /// 验证 Markdown、JSON 与截图打包规则。
 void main() {
+  test('Apple 首次使用不存在的临时目录也能导出', () async {
+    final root = await Directory.systemTemp.createTemp(
+      'focubili_apple_export_',
+    );
+    addTearDown(() => root.delete(recursive: true));
+    final missing = Directory('${root.path}/new/cache');
+    final service = VideoNoteShareService(
+      temporaryDirectoryLoader: () async => missing,
+    );
+    final package = await const VideoNoteExportService().buildPackage([
+      _note(),
+    ], VideoNoteExportFormat.markdown);
+    final file = await service.writeExportPackage(package);
+    expect(await file.readAsBytes(), package.bytes);
+  });
+
   /// 验证无截图时直接生成可读取的 Markdown 文件。
   test('无图片笔记直接导出Markdown', () async {
     final VideoNoteExportPackage package = await const VideoNoteExportService()

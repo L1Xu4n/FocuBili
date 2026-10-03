@@ -390,3 +390,7 @@ android/app/src/main/kotlin/com/focubili/app/
 
 友情链接：
 [Linux.do](https://linux.do/)——新的理想型社区
+
+## Apple 平台开发预览
+
+iOS/macOS 适配分支的功能范围、构建、免费自签与升级说明见 [Apple 平台文档](docs/APPLE_PLATFORMS.md)。Apple 真机验证尚未完成，预览产物不等于正式签名发行版。

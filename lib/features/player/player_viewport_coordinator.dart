@@ -33,11 +33,11 @@ mixin _PlayerViewportCoordinator
   _PlayerSystemUiLayout? _appliedSystemUiLayout;
 
   /// 判断当前是否需要 Android 的旋转与系统栏联动，桌面窗口只响应用户主动全屏。
-  bool get _usesMobileViewportPolicy => _appPlatform == AppPlatform.android;
+  bool get _usesMobileViewportPolicy => _appPlatform.isMobile;
 
   /// 在 Windows 进入播放器全屏前记录窗口化状态，退出时恢复用户原来的窗口布局。
   Future<void> _rememberDesktopWindowState() async {
-    if (_appPlatform != AppPlatform.windows ||
+    if (!_appPlatform.isDesktop ||
         _playbackService is! PlaybackVideoSurface ||
         _windowWasMaximizedBeforePlayerFullscreen != null) {
       return;
@@ -56,7 +56,7 @@ mixin _PlayerViewportCoordinator
 
   /// 仅在 Windows 全屏观看时隐藏鼠标，笔记工作区打开期间始终保留光标。
   MouseCursor get _playerMouseCursor {
-    return _appPlatform == AppPlatform.windows &&
+    return _appPlatform.isDesktop &&
             _fullscreen &&
             !_notesOpen &&
             !_subtitleSelectorOpen &&
@@ -67,8 +67,7 @@ mixin _PlayerViewportCoordinator
 
   /// 切换 Windows 原生窗口全屏；最大化窗口先还原，避免插件保留工作区边界而无法覆盖任务栏。
   Future<void> _setDesktopWindowFullscreen(bool fullscreen) async {
-    if (_appPlatform != AppPlatform.windows ||
-        _playbackService is! PlaybackVideoSurface) {
+    if (!_appPlatform.isDesktop || _playbackService is! PlaybackVideoSurface) {
       return;
     }
     try {
@@ -98,6 +97,7 @@ mixin _PlayerViewportCoordinator
 
   /// Keeps native edge protection optional in widget tests and releases it on exit.
   Future<void> _setFullscreenProtection(bool enabled) async {
+    if (_appPlatform != AppPlatform.windows) return;
     try {
       await const WindowsExperienceService().setFullscreenProtection(enabled);
     } on MissingPluginException {
