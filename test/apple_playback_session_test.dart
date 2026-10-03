@@ -104,4 +104,21 @@ void main() {
       expect(await session.startPictureInPicture(rect), isFalse);
     },
   );
+  test(
+    'Mac compatibility-window preference is explicit in the channel request',
+    () async {
+      final session = ApplePlaybackSession(platform: AppPlatform.macos);
+      await activate(session);
+      expect(
+        await session.startPictureInPicture(
+          const Rect.fromLTWH(0, 0, 320, 180),
+          preferFloating: true,
+        ),
+        isTrue,
+      );
+      final call = calls.singleWhere((c) => c.method == 'startPiP');
+      expect(call.arguments, containsPair('preferFloating', true));
+      await session.dispose();
+    },
+  );
 }

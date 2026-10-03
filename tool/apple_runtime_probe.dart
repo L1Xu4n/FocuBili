@@ -116,7 +116,46 @@ Future<void> main() async {
       if (started && status?['active'] != true) {
         throw StateError('PiP start not confirmed');
       }
+      if (started) {
+        stdout.writeln('APPLE_PIP_READY_FOR_SCREENSHOT');
+        await stdout.flush();
+        await Future<void>.delayed(const Duration(seconds: 3));
+      }
       await mediaChannel.invokeMethod<void>('stopPiP');
+      final stopped = await mediaChannel.invokeMapMethod<String, dynamic>(
+        'pipStatus',
+      );
+      if (stopped?['active'] == true) {
+        throw StateError('Video window did not close');
+      }
+      for (var attempt = 0; attempt < 2; attempt++) {
+        final fallback = await session.startPictureInPicture(
+          const Rect.fromLTWH(0, 0, 320, 180),
+          preferFloating: true,
+        );
+        final fallbackStatus = await mediaChannel
+            .invokeMapMethod<String, dynamic>('pipStatus');
+        stdout.writeln(
+          'APPLE_FLOATING_RESULT: attempt=$attempt started=$fallback status=$fallbackStatus',
+        );
+        if (!fallback ||
+            fallbackStatus?['mode'] != 'floating' ||
+            fallbackStatus?['active'] != true) {
+          throw StateError('Native floating-window fallback did not open');
+        }
+        if (attempt == 0) {
+          stdout.writeln('APPLE_FLOATING_READY_FOR_SCREENSHOT');
+          await stdout.flush();
+          await Future<void>.delayed(const Duration(seconds: 3));
+        }
+        await mediaChannel.invokeMethod<void>('stopPiP');
+        final closed = await mediaChannel.invokeMapMethod<String, dynamic>(
+          'pipStatus',
+        );
+        if (closed?['active'] == true) {
+          throw StateError('Floating window did not close');
+        }
+      }
     } else {
       stdout.writeln('APPLE_PIP_UNSUPPORTED_ON_RUNTIME');
     }

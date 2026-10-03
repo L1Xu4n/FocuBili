@@ -102,16 +102,29 @@ jobs:
           pkill -f '/FocuBili.app/Contents/MacOS/FocuBili' || true
           flutter build macos --release --target=tool/apple_runtime_probe.dart
           python3 - <<'PYRUN'
-          import subprocess, pathlib
-          run = subprocess.run(['build/macos/Build/Products/Release/FocuBili.app/Contents/MacOS/FocuBili'], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=150)
-          pathlib.Path('build/apple/macos-runtime.log').write_text(run.stdout)
-          print(run.stdout)
+          import subprocess, pathlib, time
+          log = pathlib.Path('build/apple/macos-runtime.log')
+          captured = set()
+          with log.open('w') as stream:
+              run = subprocess.Popen(['build/macos/Build/Products/Release/FocuBili.app/Contents/MacOS/FocuBili'], text=True, stdout=stream, stderr=subprocess.STDOUT)
+              deadline = time.monotonic() + 150
+              while run.poll() is None:
+                  output = log.read_text(errors='replace')
+                  for marker, filename in [('APPLE_PIP_READY_FOR_SCREENSHOT', 'macos-video-window.png'), ('APPLE_FLOATING_READY_FOR_SCREENSHOT', 'macos-floating-video-window.png')]:
+                      if marker not in captured and marker in output:
+                          subprocess.run(['screencapture', '-x', 'build/apple/' + filename], timeout=10, check=True)
+                          captured.add(marker)
+                  if time.monotonic() > deadline:
+                      run.kill(); run.wait(); raise TimeoutError('Native runtime probe')
+                  time.sleep(.1)
+          output = log.read_text(errors='replace')
+          print(output)
           if run.returncode != 0:
               trace = subprocess.run(['xcrun', 'lldb', '--batch', '-o', 'run', '-o', 'thread backtrace all', '--', 'build/macos/Build/Products/Release/FocuBili.app/Contents/MacOS/FocuBili'], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=150)
               pathlib.Path('build/apple/macos-native-backtrace.log').write_text(trace.stdout)
               print(trace.stdout[-24000:])
           assert run.returncode == 0, f'Native probe exited {run.returncode}'
-          assert 'APPLE_RUNTIME_ALL_CHECKS_PASSED' in run.stdout, 'Probe did not complete'
+          assert 'APPLE_RUNTIME_ALL_CHECKS_PASSED' in output, 'Probe did not complete'
           PYRUN
       - name: Verify macOS replacement preserves data
         if: matrix.platform == 'macos'

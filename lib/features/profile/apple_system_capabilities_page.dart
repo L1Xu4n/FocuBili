@@ -67,7 +67,7 @@ class _AppleCapabilitiesState extends State<AppleSystemCapabilitiesPage> {
         const ListTile(
           title: Text('画中画'),
           subtitle: Text(
-            'iOS 15 / macOS 12 及以上可请求系统画中画，需设备和系统允许。画中画只显示视频，不包含 Flutter 弹幕与字幕叠加。',
+            'iOS 15 及以上可请求系统画中画；新版 Mac 优先请求系统画中画，旧系统或请求失败时使用可置顶的视频小窗，提供播放、暂停和跳转。小窗不包含 Flutter 弹幕与字幕叠加。',
           ),
         ),
       ],
