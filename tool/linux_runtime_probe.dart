@@ -27,6 +27,20 @@ Future<void> waitFor(bool Function() condition, String name) async {
   stdout.writeln('LINUX_PROBE: $name passed');
 }
 
+Future<void> waitForBounds(Rect expected, String phase) async {
+  final deadline = DateTime.now().add(const Duration(seconds: 5));
+  Rect actual;
+  do {
+    actual = await windowManager.getBounds();
+    if ((actual.width - expected.width).abs() <= 2 &&
+        (actual.height - expected.height).abs() <= 2) {
+      return;
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+  } while (DateTime.now().isBefore(deadline));
+  throw StateError('$phase bounds: expected=$expected actual=$actual');
+}
+
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   if (runWebViewTitleBarWidget(args)) return;
@@ -190,11 +204,7 @@ Future<void> main(List<String> args) async {
       await Future<void>.delayed(const Duration(seconds: 2));
       await mini.restore();
       if (mini.active) throw StateError('Mini-player did not restore');
-      final restored = await windowManager.getBounds();
-      if ((restored.width - bounds.width).abs() > 2 ||
-          (restored.height - bounds.height).abs() > 2) {
-        throw StateError('Window bounds not restored');
-      }
+      await waitForBounds(bounds, 'mini-player restore');
     }
     final interruptedMini = LinuxMiniPlayer();
     final entering = interruptedMini.toggle(16 / 9);
@@ -203,11 +213,7 @@ Future<void> main(List<String> args) async {
     if (interruptedMini.active) {
       throw StateError('Disposed mini-player reactivated');
     }
-    final recovered = await windowManager.getBounds();
-    if ((recovered.width - bounds.width).abs() > 2 ||
-        (recovered.height - bounds.height).abs() > 2) {
-      throw StateError('Interrupted mini-player did not restore');
-    }
+    await waitForBounds(bounds, 'interrupted mini-player restore');
     stdout.writeln('LINUX_PROBE: mini-player disposal interruption passed');
     for (var i = 0; i < 2; i++) {
       stdout.writeln('LINUX_WEBKIT: create $i');
