@@ -29,6 +29,7 @@ final class FocuBiliApplePictureInPicture: NSObject, AVPictureInPictureControlle
     private var frames = 0
     private var generation = 0
     private var timebase: CMTimebase?
+    private var lastAttempt: [String: Any] = [:]
 
     init(channel: FlutterMethodChannel) {
         self.channel = channel
@@ -66,11 +67,12 @@ final class FocuBiliApplePictureInPicture: NSObject, AVPictureInPictureControlle
     func status() -> [String: Any] {
         ["supported": AVPictureInPictureController.isPictureInPictureSupported(),
          "possible": controller?.isPictureInPicturePossible ?? false,
-         "active": controller?.isPictureInPictureActive ?? false, "frames": frames]
+         "active": controller?.isPictureInPictureActive ?? false, "frames": frames, "lastAttempt": lastAttempt]
     }
     func start(rect: CGRect, result: @escaping FlutterResult) {
         guard completion == nil else { result(false); return }
         if controller?.isPictureInPictureActive == true { result(true); return }
+        guard host == nil else { result(false); return }
         guard handle != 0, rect.width > 0, rect.height > 0,
               [rect.minX, rect.minY, rect.width, rect.height].allSatisfy({ $0.isFinite }),
               AVPictureInPictureController.isPictureInPictureSupported() else { result(false); return }
@@ -129,6 +131,12 @@ final class FocuBiliApplePictureInPicture: NSObject, AVPictureInPictureControlle
     }
     private func finish(_ succeeded: Bool) { let callback = completion; completion = nil; callback?(succeeded) }
     private func cleanUp() {
+        lastAttempt = ["possible": controller?.isPictureInPicturePossible ?? false,
+            "layerStatus": layer.status.rawValue, "layerError": layer.error?.localizedDescription ?? "",
+            "hostAttached": host?.window != nil, "position": position, "duration": duration, "rate": rate]
+        #if os(macOS)
+        lastAttempt["applicationActive"] = NSApp.isActive
+        #endif
         generation += 1; capture(false); possibleObservation = nil
         controller?.delegate = nil; controller = nil; starting = false
         layer.flushAndRemoveImage(); layer.removeFromSuperlayer(); host?.removeFromSuperview(); host = nil
@@ -139,12 +147,15 @@ final class FocuBiliApplePictureInPicture: NSObject, AVPictureInPictureControlle
         channel.invokeMethod("pipStateChanged", arguments: false)
     }
     func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+        guard controller === pictureInPictureController else { return }
         finish(true); channel.invokeMethod("pipStateChanged", arguments: true)
     }
     func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
+        guard controller === pictureInPictureController else { return }
         finish(false); cleanUp(); channel.invokeMethod("pipStateChanged", arguments: false)
     }
     func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+        guard controller === pictureInPictureController else { return }
         finish(false); cleanUp(); channel.invokeMethod("pipStateChanged", arguments: false)
     }
     func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping @Sendable (Bool) -> Void) {

@@ -82,9 +82,30 @@ Future<void> main() async {
       'pipStatus',
     );
     if (pipBefore?['supported'] == true) {
-      final started = await session.startPictureInPicture(
+      var started = await session.startPictureInPicture(
         const Rect.fromLTWH(0, 0, 320, 180),
       );
+      if (!started) {
+        stdout.writeln(
+          'APPLE_PIP_PAUSED_UNAVAILABLE: ${await mediaChannel.invokeMethod<Object?>('pipStatus')}',
+        );
+        await p.setPlaylistMode(PlaylistMode.loop);
+        final updates = p.stream.position.listen(
+          (_) => session.update(
+            title: 'FocuBili test',
+            position: p.state.position,
+            duration: p.state.duration,
+            playing: p.state.playing,
+            speed: p.state.rate,
+          ),
+        );
+        await p.play();
+        await waitFor(() => p.state.playing, 'PiP retry playback');
+        started = await session.startPictureInPicture(
+          const Rect.fromLTWH(0, 0, 320, 180),
+        );
+        await updates.cancel();
+      }
       final status = await mediaChannel.invokeMapMethod<String, dynamic>(
         'pipStatus',
       );

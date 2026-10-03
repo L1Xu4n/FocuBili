@@ -93,7 +93,26 @@ void main() {
       );
       if (pipBefore?['supported'] == true) {
         final rect = tester.getRect(find.byType(Video));
-        final started = await session.startPictureInPicture(rect);
+        var started = await session.startPictureInPicture(rect);
+        if (!started) {
+          debugPrint(
+            'APPLE_PIP_PAUSED_UNAVAILABLE: ${await mediaChannel.invokeMethod<Object?>('pipStatus')}',
+          );
+          await player.setPlaylistMode(PlaylistMode.loop);
+          final updates = player.stream.position.listen(
+            (_) => session.update(
+              title: 'FocuBili test',
+              position: player.state.position,
+              duration: player.state.duration,
+              playing: player.state.playing,
+              speed: player.state.rate,
+            ),
+          );
+          await player.play();
+          await eventually(() => player.state.playing);
+          started = await session.startPictureInPicture(rect);
+          await updates.cancel();
+        }
         final pipAfter = await mediaChannel.invokeMapMethod<String, dynamic>(
           'pipStatus',
         );
