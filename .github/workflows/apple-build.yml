@@ -3,8 +3,8 @@ on:
   push:
     branches: [dev]
   pull_request:
-    branches: [dev]
-    paths: ['ios/**', 'macos/**', 'packages/focubili_apple/**', 'lib/**', 'integration_test/**', 'tool/**', 'pubspec.*', '.github/workflows/apple-build.yml']
+    branches: [dev, "iOS＆MacOS"]
+    paths: ['ios/**', 'macos/**', 'packages/focubili_apple/**', 'lib/**', 'integration_test/**', 'assets/icon/**', 'tool/**', 'pubspec.*', '.github/workflows/apple-build.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -22,6 +22,7 @@ jobs:
           flutter-version: '3.44.6'
           cache: true
       - run: python3 tool/check_apple_sources.py
+      - run: python3 tool/check_platform_icons.py
       - run: flutter pub get
       - run: dart format --output=none --set-exit-if-changed lib test
       - run: flutter analyze --no-pub
@@ -46,6 +47,7 @@ jobs:
           flutter-version: '3.44.6'
           cache: true
       - run: python3 tool/check_apple_sources.py
+      - run: python3 tool/check_platform_icons.py
       - run: flutter pub get
       - name: Build iOS device archive (unsigned)
         if: matrix.platform == 'ios'
