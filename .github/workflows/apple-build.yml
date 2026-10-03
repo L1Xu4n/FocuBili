@@ -28,12 +28,16 @@ jobs:
       - run: flutter analyze --no-pub
       - run: flutter test --no-pub
   apple:
-    runs-on: macos-15
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        platform: [ios, macos]
+        include:
+          - platform: ios
+            os: macos-15
+          - platform: macos
+            os: macos-26
     steps:
       - uses: actions/checkout@v6
       - name: Select Xcode 26 for macOS appearance icons
