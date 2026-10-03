@@ -169,7 +169,13 @@ class FocusNotificationService {
   }
 
   /// 检查 Android 12 及以上是否允许应用安排可在待机和进程退出后准点触发的精确闹钟。
+  Future<bool> canScheduleReminders() async {
+    if (_usesLinuxBackend) return _resolvedWindowsBackend.isAvailable();
+    return hasExactAlarmPermission();
+  }
+
   Future<bool> hasExactAlarmPermission() async {
+    if (_usesLinuxBackend) return false;
     if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return false;
     }

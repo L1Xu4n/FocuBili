@@ -4,6 +4,10 @@ import 'package:window_manager/window_manager.dart';
 
 /// Reuses the existing video surface in a small desktop window, without a second player.
 class LinuxMiniPlayer {
+  static Size normalMinimumSize = Size.zero;
+  Size _previousMinimum = Size.zero;
+  bool _disposed = false;
+  Future<bool>? _pendingToggle;
   bool active = false;
   bool _changing = false;
   Rect? _bounds;
@@ -11,7 +15,17 @@ class LinuxMiniPlayer {
   bool _wasMaximized = false;
   bool _wasFullscreen = false;
 
-  Future<bool> toggle(double aspectRatio) async {
+  Future<bool> toggle(double aspectRatio) {
+    if (_disposed || _pendingToggle != null) return Future<bool>.value(false);
+    final operation = _toggle(aspectRatio);
+    _pendingToggle = operation;
+    operation.whenComplete(() {
+      if (identical(_pendingToggle, operation)) _pendingToggle = null;
+    });
+    return operation;
+  }
+
+  Future<bool> _toggle(double aspectRatio) async {
     if (!Platform.isLinux ||
         _changing ||
         !aspectRatio.isFinite ||
@@ -21,9 +35,10 @@ class LinuxMiniPlayer {
     _changing = true;
     try {
       if (active) {
-        await restore();
+        await _restore();
         return true;
       }
+      _previousMinimum = normalMinimumSize;
       _bounds = await windowManager.getBounds();
       _wasAlwaysOnTop = await windowManager.isAlwaysOnTop();
       _wasMaximized = await windowManager.isMaximized();
@@ -39,7 +54,7 @@ class LinuxMiniPlayer {
       active = true;
       return true;
     } catch (_) {
-      await restore();
+      await _restore();
       return false;
     } finally {
       _changing = false;
@@ -47,6 +62,16 @@ class LinuxMiniPlayer {
   }
 
   Future<void> restore() async {
+    await _pendingToggle;
+    await _restore();
+  }
+
+  Future<void> dispose() async {
+    _disposed = true;
+    await restore();
+  }
+
+  Future<void> _restore() async {
     if (_bounds == null) {
       active = false;
       return;
@@ -56,9 +81,7 @@ class LinuxMiniPlayer {
     active = false;
     try {
       await windowManager.setAlwaysOnTop(_wasAlwaysOnTop);
-      await windowManager.setMinimumSize(
-        Size(bounds.width.clamp(260, 900), bounds.height.clamp(180, 640)),
-      );
+      await windowManager.setMinimumSize(_previousMinimum);
       await windowManager.setBounds(bounds);
       if (_wasMaximized) await windowManager.maximize();
       if (_wasFullscreen) await windowManager.setFullScreen(true);

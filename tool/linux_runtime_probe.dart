@@ -119,6 +119,33 @@ Future<void> main(List<String> args) async {
     await waitFor(() => p.state.playing, 'MPRIS play');
     await remote.callMethod(LinuxMediaSession.playerInterface, 'Pause', []);
     await waitFor(() => !p.state.playing, 'MPRIS pause');
+    // A nested video must return media-key ownership to the still-live parent.
+    final nested = LinuxMediaSession();
+    await nested.initialize(
+      play: () async {},
+      pause: () async {},
+      seek: (_) async {},
+      setRate: (_) async {},
+    );
+    nested.update(
+      title: 'Nested player',
+      trackId: 'nested',
+      position: Duration.zero,
+      duration: const Duration(seconds: 4),
+      playing: false,
+      speed: 1,
+    );
+    await nested.dispose();
+    await session.initialize(
+      play: p.play,
+      pause: p.pause,
+      seek: p.seek,
+      setRate: p.setRate,
+    );
+    await remote.callMethod(LinuxMediaSession.playerInterface, 'Play', []);
+    await waitFor(() => p.state.playing, 'MPRIS nested return');
+    await remote.callMethod(LinuxMediaSession.playerInterface, 'Pause', []);
+    await waitFor(() => !p.state.playing, 'MPRIS idempotent initialization');
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('linux_probe', '中文🧪');
     await prefs.reload();
@@ -169,6 +196,19 @@ Future<void> main(List<String> args) async {
         throw StateError('Window bounds not restored');
       }
     }
+    final interruptedMini = LinuxMiniPlayer();
+    final entering = interruptedMini.toggle(16 / 9);
+    await interruptedMini.dispose();
+    await entering;
+    if (interruptedMini.active) {
+      throw StateError('Disposed mini-player reactivated');
+    }
+    final recovered = await windowManager.getBounds();
+    if ((recovered.width - bounds.width).abs() > 2 ||
+        (recovered.height - bounds.height).abs() > 2) {
+      throw StateError('Interrupted mini-player did not restore');
+    }
+    stdout.writeln('LINUX_PROBE: mini-player disposal interruption passed');
     for (var i = 0; i < 2; i++) {
       final webview = await WebviewWindow.create(
         configuration: const CreateConfiguration(

@@ -284,7 +284,9 @@ class WindowsOfficialLoginService implements WindowsOfficialLoginLauncher {
     final String profileDirectory =
         '${supportDirectory.path}${Platform.pathSeparator}official_login_webview';
     try {
-      await WebviewWindow.clearAll(userDataFolderWindows: profileDirectory);
+      if (Platform.isWindows) {
+        await WebviewWindow.clearAll(userDataFolderWindows: profileDirectory);
+      }
     } catch (_) {
       // 启动前清理旧临时会话失败时仍允许创建窗口，后续账号接口会再次验证 Cookie 有效性。
     }
@@ -304,6 +306,12 @@ class WindowsOfficialLoginService implements WindowsOfficialLoginLauncher {
     bool loginSubmitSucceeded = false;
     DateTime? loginSubmitSucceededAt;
     int cookieReadFailures = 0;
+    bool loginWindowClosed = false;
+    webview.onClose.whenComplete(() {
+      loginWindowClosed = true;
+      checkTimer?.cancel();
+      if (!result.isCompleted) result.complete(null);
+    });
 
     /// 记录一次 Cookie 桥接失败；连续失败三次后给主页面明确错误，避免窗口无限无响应。
     void recordCookieReadFailure(StackTrace stackTrace) {
@@ -327,7 +335,7 @@ class WindowsOfficialLoginService implements WindowsOfficialLoginLauncher {
 
     /// 登录 Cookie 出现后让当前 WebView2 自己导航到官方账号接口，由浏览器原样携带会话。
     Future<void> checkSession() async {
-      if (checking || result.isCompleted) {
+      if (checking || result.isCompleted || loginWindowClosed) {
         return;
       }
       checking = true;
@@ -341,6 +349,7 @@ class WindowsOfficialLoginService implements WindowsOfficialLoginLauncher {
                   .map(WindowsOfficialLoginCookie.fromWebviewCookie)
                   .toList(growable: false);
             });
+        if (result.isCompleted || loginWindowClosed) return;
         final String cookieHeader = cookieSnapshot.cookieHeader;
         cookieReadFailures = 0;
         if (!_containsBilibiliSessionCookie(cookieHeader)) {
@@ -370,7 +379,10 @@ class WindowsOfficialLoginService implements WindowsOfficialLoginLauncher {
         final Completer<BilibiliSessionState> verification =
             Completer<BilibiliSessionState>();
         webview.setOnNavigationCompletedCallback((String url, bool isSuccess) {
-          if (verification.isCompleted || !_isBilibiliAccountEndpoint(url)) {
+          if (verification.isCompleted ||
+              result.isCompleted ||
+              loginWindowClosed ||
+              !_isBilibiliAccountEndpoint(url)) {
             return;
           }
           if (!isSuccess) {
@@ -387,6 +399,7 @@ class WindowsOfficialLoginService implements WindowsOfficialLoginLauncher {
               final String? scriptResult = await webview.evaluateJavaScript(
                 'document.body ? document.body.innerText : ""',
               );
+              if (result.isCompleted || loginWindowClosed) return;
               final BilibiliSessionState session = await _authService
                   .saveBrowserVerifiedSession(
                     responseText: _decodeWebviewScriptString(scriptResult),
@@ -507,7 +520,11 @@ class WindowsOfficialLoginService implements WindowsOfficialLoginLauncher {
       }
       if (windowClosed) {
         try {
-          await WebviewWindow.clearAll(userDataFolderWindows: profileDirectory);
+          if (Platform.isWindows) {
+            await WebviewWindow.clearAll(
+              userDataFolderWindows: profileDirectory,
+            );
+          }
         } catch (_) {
           // 临时登录容器清理失败不改变已验证账号结果，也不输出 Cookie 或本机路径。
         }

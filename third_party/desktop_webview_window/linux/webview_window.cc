@@ -77,23 +77,27 @@ WebviewWindow::WebviewWindow(FlMethodChannel *method_channel, int64_t window_id,
   box_ = GTK_BOX(gtk_box_new(GTK_ORIENTATION_VERTICAL, 0));
   gtk_container_add(GTK_CONTAINER(window_), GTK_WIDGET(box_));
 
-  // initial flutter_view
-  g_autoptr(FlDartProject) project = fl_dart_project_new();
-  const char *args[] = {"web_view_title_bar", g_strdup_printf("%ld", window_id),
-                        nullptr};
-  fl_dart_project_set_dart_entrypoint_arguments(project,
-                                                const_cast<char **>(args));
-  auto *title_bar = fl_view_new(project);
-
-  g_autoptr(FlPluginRegistrar) desktop_webview_window_registrar =
-      fl_plugin_registry_get_registrar_for_plugin(FL_PLUGIN_REGISTRY(title_bar),
-                                                  "DesktopWebviewWindowPlugin");
-  client_message_channel_plugin_register_with_registrar(
-      desktop_webview_window_registrar);
-
-  gtk_widget_set_size_request(GTK_WIDGET(title_bar), -1, title_bar_height);
-  gtk_widget_set_vexpand(GTK_WIDGET(title_bar), FALSE);
-  gtk_box_pack_start(box_, GTK_WIDGET(title_bar), FALSE, FALSE, 0);
+  // Use GTK chrome instead of a second Flutter engine. WebKit and the main
+  // media texture must not compete with a title-bar engine for a GL context.
+  GtkWidget* header = gtk_header_bar_new();
+  gtk_header_bar_set_title(GTK_HEADER_BAR(header), title.c_str());
+  gtk_header_bar_set_show_close_button(GTK_HEADER_BAR(header), TRUE);
+  gtk_window_set_titlebar(GTK_WINDOW(window_), header);
+  auto add_button = [this, header](const char* icon, const char* tooltip, GCallback callback) {
+    GtkWidget* button = gtk_button_new_from_icon_name(icon, GTK_ICON_SIZE_BUTTON);
+    gtk_widget_set_tooltip_text(button, tooltip);
+    g_signal_connect(button, "clicked", callback, this);
+    gtk_header_bar_pack_start(GTK_HEADER_BAR(header), button);
+  };
+  add_button("go-previous-symbolic", "返回", G_CALLBACK(+[](GtkButton*, gpointer data) {
+    static_cast<WebviewWindow*>(data)->GoBack();
+  }));
+  add_button("go-next-symbolic", "前进", G_CALLBACK(+[](GtkButton*, gpointer data) {
+    static_cast<WebviewWindow*>(data)->GoForward();
+  }));
+  add_button("view-refresh-symbolic", "重新加载", G_CALLBACK(+[](GtkButton*, gpointer data) {
+    static_cast<WebviewWindow*>(data)->Reload();
+  }));
 
   // initial web_view
   g_autoptr(WebKitWebContext) context = webkit_web_context_new_ephemeral();
@@ -120,15 +124,7 @@ WebviewWindow::WebviewWindow(FlMethodChannel *method_channel, int64_t window_id,
   gtk_widget_show_all(GTK_WIDGET(window_));
   gtk_widget_grab_focus(GTK_WIDGET(webview_));
 
-  // FROM: https://github.com/leanflutter/window_manager/pull/343
-  // Disconnect all delete-event handlers first in flutter 3.10.1, which causes
-  // delete_event not working. Issues from flutter/engine:
-  // https://github.com/flutter/engine/pull/40033
-  guint handler_id = g_signal_handler_find(window_, G_SIGNAL_MATCH_DATA, 0, 0,
-                                           NULL, NULL, title_bar);
-  if (handler_id > 0) {
-    g_signal_handler_disconnect(window_, handler_id);
-  }
+
 }
 
 WebviewWindow::~WebviewWindow() {
@@ -153,11 +149,11 @@ void WebviewWindow::Navigate(const char *url) {
 void WebviewWindow::RunJavaScriptWhenContentReady(const char *java_script) {
   auto *manager =
       webkit_web_view_get_user_content_manager(WEBKIT_WEB_VIEW(webview_));
-  webkit_user_content_manager_add_script(
-      manager,
-      webkit_user_script_new(java_script, WEBKIT_USER_CONTENT_INJECT_TOP_FRAME,
-                             WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START,
-                             nullptr, nullptr));
+  WebKitUserScript* script = webkit_user_script_new(java_script,
+      WEBKIT_USER_CONTENT_INJECT_TOP_FRAME, WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START,
+      nullptr, nullptr);
+  webkit_user_content_manager_add_script(manager, script);
+  webkit_user_script_unref(script);
 }
 
 void WebviewWindow::SetApplicationNameForUserAgent(
@@ -345,6 +341,12 @@ void WebviewWindow::EvaluateJavaScript(const char *java_script,
           fl_method_call_respond_success(
               call, js_value ? fl_value_new_string(js_value) : nullptr,
               nullptr);
+          g_free(js_value);
+#ifdef WEBKIT_OLD_USED
+          webkit_javascript_result_unref(js_result);
+#else
+          g_object_unref(js_result);
+#endif
         }
         g_object_unref(call);
       },

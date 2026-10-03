@@ -14,6 +14,8 @@ import 'platform/app_platform.dart';
 import 'platform/platform_capabilities.dart';
 import 'services/problem_diagnostics_service.dart';
 import 'services/apple_video_capabilities.dart';
+import 'services/linux_focus_notification_service.dart';
+import 'services/linux_mini_player.dart';
 
 /// 注册框架和 Dart 未捕获错误的最小诊断记录；只保存固定操作名与异常类型，绝不保存异常原文或堆栈。
 void _installProblemDiagnostics() {
@@ -77,6 +79,9 @@ Future<void> _prepareWindowsDesktop({
       }
     }
   }
+  if (services.platform == AppPlatform.linux) {
+    LinuxMiniPlayer.normalMinimumSize = minimumSize;
+  }
   await windowManager.waitUntilReadyToShow(
     WindowOptions(
       size: initialSize,
@@ -88,6 +93,9 @@ Future<void> _prepareWindowsDesktop({
   );
   await windowManager.show();
   await windowManager.focus();
+  if (services.platform == AppPlatform.linux) {
+    await LinuxFocusNotificationBackend.instance.isAvailable();
+  }
 }
 
 /// 初始化 Flutter 绑定、系统栏样式，并启动焦点哔哩应用。

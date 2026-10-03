@@ -12,10 +12,25 @@ class LinuxNotificationClient implements WindowsNotificationClient {
   LinuxNotificationClient({
     FlutterLocalNotificationsPlugin? plugin,
     this.persistReminders = true,
+    this.saveDeadlines,
+    this.cancelNotification,
   }) : _plugin = plugin ?? FlutterLocalNotificationsPlugin();
 
   final FlutterLocalNotificationsPlugin _plugin;
   final bool persistReminders;
+  final Future<bool> Function(String)? saveDeadlines;
+  final Future<void> Function(int)? cancelNotification;
+  final Map<int, int> _generations = {};
+  int _serial = 0;
+  int _lastRestoredAt = 0;
+  int _lastTriggeredAt = 0;
+  String _lastTriggerResult = 'none';
+  Map<Object?, Object?> get diagnostics => {
+    'pendingCount': _pending.length,
+    'lastRestoredAtMs': _lastRestoredAt,
+    'lastTriggeredAtMs': _lastTriggeredAt,
+    'lastTriggerResult': _lastTriggerResult,
+  };
   final Map<int, Timer> _timers = {};
   final Map<int, Map<String, Object>> _pending = {};
   Future<void> _writes = Future<void>.value();
@@ -42,7 +57,8 @@ class LinuxNotificationClient implements WindowsNotificationClient {
               item['id'] is! int ||
               item['at'] is! int ||
               item['title'] is! String ||
-              item['body'] is! String) {
+              item['body'] is! String ||
+              (item['at'] as int).abs() > 8640000000000000) {
             continue;
           }
           final at = DateTime.fromMillisecondsSinceEpoch(item['at'] as int);
@@ -60,6 +76,9 @@ class LinuxNotificationClient implements WindowsNotificationClient {
       }
     } on FormatException {
       // A damaged reminder list never blocks app startup or focus history.
+    }
+    if (_pending.isNotEmpty) {
+      _lastRestoredAt = DateTime.now().millisecondsSinceEpoch;
     }
     await _persist();
     return true;
@@ -86,11 +105,22 @@ class LinuxNotificationClient implements WindowsNotificationClient {
     required String body,
     required DateTime scheduledAt,
   }) async {
-    _arm(id, title, body, scheduledAt);
-    await _persist();
+    final generation = _arm(id, title, body, scheduledAt);
+    try {
+      await _persist();
+    } catch (_) {
+      if (_generations[id] == generation) {
+        _generations.remove(id);
+        _timers.remove(id)?.cancel();
+        _pending.remove(id);
+      }
+      rethrow;
+    }
   }
 
-  void _arm(int id, String title, String body, DateTime at) {
+  int _arm(int id, String title, String body, DateTime at) {
+    final generation = ++_serial;
+    _generations[id] = generation;
     _timers.remove(id)?.cancel();
     _pending[id] = {
       'id': id,
@@ -100,33 +130,51 @@ class LinuxNotificationClient implements WindowsNotificationClient {
     };
     final delay = at.difference(DateTime.now());
     _timers[id] = Timer(delay.isNegative ? Duration.zero : delay, () async {
+      if (_generations[id] != generation) return;
       _timers.remove(id);
       _pending.remove(id);
-      await _persist();
+      try {
+        await _persist();
+      } catch (_) {
+        /* Delivery still works without storage. */
+      }
+      if (_generations[id] != generation) return;
       try {
         await show(id: id, title: title, body: body);
+        _lastTriggeredAt = DateTime.now().millisecondsSinceEpoch;
+        _lastTriggerResult = 'delivered';
       } catch (_) {
+        _lastTriggerResult = 'notification_unavailable';
         // A stopped notification server must not crash playback or focus.
+      } finally {
+        if (_generations[id] == generation) _generations.remove(id);
       }
     });
+    return generation;
   }
 
   Future<void> _persist() {
     if (!persistReminders) return Future<void>.value();
     final snapshot = jsonEncode(_pending.values.toList());
     _writes = _writes.catchError((Object _) {}).then((_) async {
-      final preferences = await SharedPreferences.getInstance();
-      await preferences.setString(_key, snapshot);
+      final saved = saveDeadlines != null
+          ? await saveDeadlines!(snapshot)
+          : await (await SharedPreferences.getInstance()).setString(
+              _key,
+              snapshot,
+            );
+      if (!saved) throw StateError('Reminder persistence failed');
     });
     return _writes;
   }
 
   @override
   Future<void> cancel(int id) async {
+    _generations.remove(id);
     _timers.remove(id)?.cancel();
     _pending.remove(id);
     await _persist();
-    await _plugin.cancel(id: id);
+    await (cancelNotification?.call(id) ?? _plugin.cancel(id: id));
   }
 
   // GNOME/KDE/other desktops have no universal settings URI.
@@ -136,19 +184,34 @@ class LinuxNotificationClient implements WindowsNotificationClient {
 
 /// Reuses platform-neutral text/ID handling with a Linux-only notification client.
 class LinuxFocusNotificationBackend extends WindowsFocusNotificationBackend {
-  LinuxFocusNotificationBackend({WindowsNotificationClient? client})
-    : super(client: client ?? LinuxNotificationClient());
+  factory LinuxFocusNotificationBackend({WindowsNotificationClient? client}) =>
+      LinuxFocusNotificationBackend._(client ?? LinuxNotificationClient());
+  LinuxFocusNotificationBackend._(this._linuxClient)
+    : super(client: _linuxClient);
+  final WindowsNotificationClient _linuxClient;
   static final instance = LinuxFocusNotificationBackend();
 
   @override
-  Future<Map<Object?, Object?>> getDiagnostics() async => {
-    ...await super.getDiagnostics(),
-    'platform': 'linux',
-    'manufacturer': 'Linux',
-    'lastTriggerResult': 'application_timer',
-    'lastScheduleMode': 'in_process_persisted_deadline',
-    'exactAlarmAllowed': false,
-    'reminderMode': 'in_process_persisted_deadline',
-    'requiresRunningApplication': true,
-  };
+  Future<Map<Object?, Object?>> getDiagnostics() async {
+    final base = await super.getDiagnostics();
+    return {
+      ...base,
+      if (_linuxClient is LinuxNotificationClient) ..._linuxClient.diagnostics,
+      'events': [
+        for (final event in (base['events'] as List? ?? []))
+          if (event is Map)
+            {
+              ...event,
+              if (event['mode'] == 'windows_toast')
+                'mode': 'in_process_persisted_deadline',
+            },
+      ],
+      'platform': 'linux',
+      'manufacturer': 'Linux',
+      'lastScheduleMode': 'in_process_persisted_deadline',
+      'exactAlarmAllowed': false,
+      'reminderMode': 'in_process_persisted_deadline',
+      'requiresRunningApplication': true,
+    };
+  }
 }

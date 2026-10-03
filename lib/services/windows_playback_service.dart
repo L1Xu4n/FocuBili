@@ -212,6 +212,7 @@ class WindowsPlaybackService
       pause: pause,
       seek: seekTo,
       setRate: setPlaybackSpeed,
+      setVolume: setMediaVolume,
     );
     await _configureWindowsMediaCache();
     return _videoController.id.value;
@@ -740,7 +741,7 @@ class WindowsPlaybackService
       try {
         await _appleSession.dispose();
         await _linuxSession.dispose();
-        await _linuxMiniPlayer.restore();
+        await _linuxMiniPlayer.dispose();
       } finally {
         await _player.dispose();
       }
@@ -795,6 +796,7 @@ class WindowsPlaybackService
       )
       ..add(_player.stream.duration.listen((Duration _) => _emitPlayerState()))
       ..add(_player.stream.rate.listen((double _) => _emitPlayerState()))
+      ..add(_player.stream.volume.listen((double _) => _emitPlayerState()))
       ..add(_player.stream.buffering.listen((bool _) => _emitPlayerState()))
       ..add(_player.stream.width.listen((int? _) => _emitPlayerState()))
       ..add(_player.stream.height.listen((int? _) => _emitPlayerState()))
@@ -1347,6 +1349,7 @@ class WindowsPlaybackService
     );
     _linuxSession.update(
       title: _currentVideo?.title ?? '焦点哔哩',
+      volume: (_player.state.volume / 100).clamp(0, 1).toDouble(),
       trackId: '${_currentVideo?.bvid ?? 'none'}_${_currentPart?.cid ?? 0}',
       position: _snapshot.position,
       duration: _snapshot.duration,

@@ -10,12 +10,18 @@ class LinuxMediaSession extends DBusObject {
   static const rootInterface = 'org.mpris.MediaPlayer2';
   static const playerInterface = 'org.mpris.MediaPlayer2.Player';
   static LinuxMediaSession? _owner;
+  static final List<LinuxMediaSession> _sessions = [];
+  static Future<void> _ownershipQueue = Future<void>.value();
+  Future<void>? _activation;
+  bool _initialized = false;
   DBusClient? _client;
   bool _disposed = false;
   Future<void> Function()? _play;
   Future<void> Function()? _pause;
   Future<void> Function(Duration)? _seek;
   Future<void> Function(double)? _setRate;
+  Future<void> Function(double)? _setVolume;
+  double _volume = 1;
   String _title = '焦点哔哩';
   String _track = 'none';
   Duration _position = Duration.zero;
@@ -28,24 +34,70 @@ class LinuxMediaSession extends DBusObject {
     required Future<void> Function() pause,
     required Future<void> Function(Duration) seek,
     required Future<void> Function(double) setRate,
+    Future<void> Function(double)? setVolume,
   }) async {
     if (!Platform.isLinux || _disposed) return;
-    await _owner?.dispose();
-    _owner = this;
     _play = play;
     _pause = pause;
     _seek = seek;
     _setRate = setRate;
-    final client = DBusClient.session();
-    _client = client;
-    try {
-      await client.registerObject(this);
-      await client.requestName('org.mpris.MediaPlayer2.focubili.instance$pid');
-    } catch (_) {
-      await client.close();
-      if (_client == client) _client = null;
-      // Missing session D-Bus must not prevent local playback.
+    _setVolume = setVolume;
+    if (!_initialized) {
+      _initialized = true;
+      _sessions.add(this);
     }
+    await _activate();
+  }
+
+  Future<void> _activate() {
+    if (_disposed || (_owner == this && _client != null)) {
+      return Future<void>.value();
+    }
+    if (_activation != null) return _activation!;
+    final operation = _ownershipQueue.catchError((Object _) {}).then((_) async {
+      if (_disposed) return;
+      if (_owner != this) await _owner?._detach();
+      if (_disposed) return;
+      _owner = this;
+      final connection = DBusClient.session();
+      _client = connection;
+      try {
+        await connection.registerObject(this);
+        if (_disposed) {
+          await _detach();
+          return;
+        }
+        await connection.requestName(
+          'org.mpris.MediaPlayer2.focubili.instance$pid',
+        );
+        if (_disposed) await _detach();
+      } catch (_) {
+        await _detach();
+        // Missing session D-Bus must not prevent local playback.
+      }
+    });
+    _ownershipQueue = operation;
+    _activation = operation;
+    unawaited(
+      operation.whenComplete(() {
+        if (identical(_activation, operation)) _activation = null;
+      }),
+    );
+    return operation;
+  }
+
+  Future<void> _detach() async {
+    final connection = _client;
+    _client = null;
+    if (_owner == this) _owner = null;
+    if (connection == null) return;
+    try {
+      await connection.unregisterObject(this);
+    } catch (_) {}
+    client = null; // dbus 0.7 leaves this field set after unregisterObject.
+    try {
+      await connection.close();
+    } catch (_) {}
   }
 
   void update({
@@ -55,20 +107,24 @@ class LinuxMediaSession extends DBusObject {
     required Duration duration,
     required bool playing,
     required double speed,
+    double volume = 1,
   }) {
     if (_disposed) return;
+    if (playing && _initialized && _owner != this) unawaited(_activate());
     final changed =
         title != _title ||
         trackId != _track ||
         duration != _duration ||
         playing != _playing ||
-        speed != _rate;
+        speed != _rate ||
+        volume != _volume;
     _title = title;
     _track = trackId;
     _position = position;
     _duration = duration;
     _playing = playing;
     _rate = speed;
+    _volume = volume;
     if (changed && _client != null && _owner == this) {
       unawaited(
         emitPropertiesChanged(
@@ -77,6 +133,7 @@ class LinuxMediaSession extends DBusObject {
             'PlaybackStatus': DBusString(playing ? 'Playing' : 'Paused'),
             'Metadata': _metadata,
             'Rate': DBusDouble(speed),
+            'Volume': DBusDouble(volume),
           },
         ).catchError((Object _) {}),
       );
@@ -107,6 +164,9 @@ class LinuxMediaSession extends DBusObject {
       'Metadata': _metadata,
       'Position': DBusInt64(_position.inMicroseconds),
       'Rate': DBusDouble(_rate),
+      'Volume': DBusDouble(_volume),
+      'LoopStatus': const DBusString('None'),
+      'Shuffle': const DBusBoolean(false),
       'MinimumRate': const DBusDouble(0.5),
       'MaximumRate': const DBusDouble(5),
       'CanGoNext': const DBusBoolean(false),
@@ -155,12 +215,26 @@ class LinuxMediaSession extends DBusObject {
                   ],
                 ),
               ],
+        signals: interface == playerInterface
+            ? [
+                DBusIntrospectSignal(
+                  'Seeked',
+                  args: [
+                    DBusIntrospectArgument(
+                      DBusSignature('x'),
+                      DBusArgumentDirection.out,
+                      name: 'Position',
+                    ),
+                  ],
+                ),
+              ]
+            : [],
         properties: [
           for (final entry in _properties(interface).entries)
             DBusIntrospectProperty(
               entry.key,
               entry.value.signature,
-              access: entry.key == 'Rate'
+              access: entry.key == 'Rate' || entry.key == 'Volume'
                   ? DBusPropertyAccess.readwrite
                   : DBusPropertyAccess.read,
             ),
@@ -187,6 +261,18 @@ class LinuxMediaSession extends DBusObject {
   ) async {
     if (_disposed || _owner != this) {
       return DBusMethodErrorResponse.failed('Inactive player');
+    }
+    if (interface == playerInterface &&
+        name == 'Volume' &&
+        value is DBusDouble &&
+        value.value.isFinite &&
+        _setVolume != null) {
+      try {
+        await _setVolume!(value.value.clamp(0, 1));
+        return DBusMethodSuccessResponse();
+      } catch (_) {
+        return DBusMethodErrorResponse.failed('Playback operation failed');
+      }
     }
     if (interface == playerInterface &&
         name == 'Rate' &&
@@ -220,8 +306,11 @@ class LinuxMediaSession extends DBusObject {
         switch (call.name) {
           case 'Play' when call.values.isEmpty:
             await _play?.call();
-          case 'Pause' || 'Stop' when call.values.isEmpty:
+          case 'Pause' when call.values.isEmpty:
             await _pause?.call();
+          case 'Stop' when call.values.isEmpty:
+            await _pause?.call();
+            await _seekBounded(0);
           case 'PlayPause' when call.values.isEmpty:
             if (_playing) {
               await _pause?.call();
@@ -257,13 +346,21 @@ class LinuxMediaSession extends DBusObject {
     await _seek?.call(
       Duration(microseconds: microseconds.clamp(0, _duration.inMicroseconds)),
     );
+    if (_client != null && _owner == this && !_disposed) {
+      await emitSignal(playerInterface, 'Seeked', [
+        DBusInt64(microseconds.clamp(0, _duration.inMicroseconds)),
+      ]);
+    }
   }
 
   Future<void> dispose() async {
+    if (_disposed) return;
     _disposed = true;
-    if (_owner == this) _owner = null;
-    final client = _client;
-    _client = null;
-    await client?.close();
+    _sessions.remove(this);
+    await _activation;
+    await _detach();
+    if (_owner == null && _sessions.isNotEmpty) {
+      await _sessions.last._activate();
+    }
   }
 }

@@ -89,4 +89,5 @@ void client_message_channel_plugin_register_with_registrar(FlPluginRegistrar *re
                                             [](gpointer pointer) {
                                               delete static_cast<ClientMessageChannelPlugin *>(pointer);
                                             });
+  g_object_unref(channel);
 }

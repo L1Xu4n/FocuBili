@@ -103,7 +103,7 @@ class _LoginPageState extends State<LoginPage> {
     _LoginMode? requestedMode,
     bool useQrLogin = false,
   }) async {
-    if (_loginUnavailable) {
+    if (_loginUnavailable || _submitting) {
       return;
     }
     final _LoginMode mode = requestedMode ?? _mode;
@@ -285,7 +285,9 @@ class _LoginPageState extends State<LoginPage> {
         const SizedBox(height: 14),
         FilledButton.icon(
           // 官方登录按钮函数打开支持手机号、密码和验证码的 B 站页面。
-          onPressed: () => _openOfficialLogin(requestedMode: _mode),
+          onPressed: _submitting
+              ? null
+              : () => _openOfficialLogin(requestedMode: _mode),
           icon: Icon(
             phoneMode ? Icons.phone_android_rounded : Icons.password_rounded,
           ),
