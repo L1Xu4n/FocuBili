@@ -12,7 +12,7 @@ python3 - <<'PY'
 import os,subprocess,time
 from pathlib import Path
 out=Path('build/linux-packages')
-p=subprocess.Popen(['build/linux/x64/release/bundle/focubili'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1)
+p=subprocess.Popen(['gdb','--batch','-ex','handle SIGPIPE nostop noprint pass','-ex','run','-ex','thread apply all bt','--args','build/linux/x64/release/bundle/focubili'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1)
 with (out/'linux-runtime.log').open('w') as log:
  for line in p.stdout:
   print(line,end='',flush=True);log.write(line);log.flush()

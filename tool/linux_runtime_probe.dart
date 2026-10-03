@@ -210,6 +210,8 @@ Future<void> main(List<String> args) async {
     }
     stdout.writeln('LINUX_PROBE: mini-player disposal interruption passed');
     for (var i = 0; i < 2; i++) {
+      stdout.writeln('LINUX_WEBKIT: create $i');
+      await stdout.flush();
       final webview = await WebviewWindow.create(
         configuration: const CreateConfiguration(
           title: 'Linux login window QA',
@@ -217,15 +219,23 @@ Future<void> main(List<String> args) async {
           windowHeight: 480,
         ),
       );
+      stdout.writeln('LINUX_WEBKIT: created $i');
+      await stdout.flush();
       await webview.setUserAgent('FocuBili synthetic QA');
       await webview.setAllowedNavigationHosts(['graph.qq.com']);
+      stdout.writeln('LINUX_WEBKIT: configured $i');
+      await stdout.flush();
       final cookies = await webview.getCookiesForUrl(
         'https://api.bilibili.com/x/web-interface/nav',
       );
+      stdout.writeln('LINUX_WEBKIT: cookies read $i');
+      await stdout.flush();
       if (cookies.isNotEmpty) {
         throw StateError('New ephemeral window has cookies');
       }
       final pending = webview.getCookiesForUrl('https://www.bilibili.com/');
+      stdout.writeln('LINUX_WEBKIT: closing $i');
+      await stdout.flush();
       webview.close();
       try {
         await pending;
@@ -233,6 +243,8 @@ Future<void> main(List<String> args) async {
         /* Closing may reject the read. */
       }
       await webview.onClose.timeout(const Duration(seconds: 10));
+      stdout.writeln('LINUX_WEBKIT: closed $i');
+      await stdout.flush();
     }
     stdout.writeln('LINUX_PROBE: ephemeral WebKit windows repeat-close passed');
     await media.delete();
