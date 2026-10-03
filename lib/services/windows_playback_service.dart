@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:io';
+import 'apple_playback_session.dart';
+import 'apple_video_capabilities.dart';
 
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
@@ -44,7 +46,10 @@ class WindowsPlaybackService
                bufferSize: 64 * 1024 * 1024,
              ),
            ) {
-    _videoController = VideoController(_player);
+    _videoController = VideoController(
+      _player,
+      configuration: AppleVideoCapabilities.configuration,
+    );
     WindowsMediaCacheRuntime.registerPlaybackSession();
     _subscribeToPlayer();
   }
@@ -64,6 +69,7 @@ class WindowsPlaybackService
   final WindowsPlaybackProgressStore _progressStore;
   final Player _player;
   late final VideoController _videoController;
+  final ApplePlaybackSession _appleSession = ApplePlaybackSession();
   final FlutterVideoFrameCapture _frameCapture = FlutterVideoFrameCapture();
   final StreamController<PlaybackSnapshot> _stateController =
       StreamController<PlaybackSnapshot>.broadcast();
@@ -190,6 +196,13 @@ class WindowsPlaybackService
     if (_disposed) {
       return null;
     }
+    await _appleSession.initialize(
+      handle: _appleSession.enabled ? await _player.handle : null,
+      play: play,
+      pause: pause,
+      seek: seekTo,
+      onPictureInPictureChanged: (_) => _emitPlayerState(),
+    );
     await _configureWindowsMediaCache();
     return _videoController.id.value;
   }
@@ -643,7 +656,8 @@ class WindowsPlaybackService
   @override
   Future<bool> enterPictureInPicture(double aspectRatio) async {
     _ensureAvailable();
-    return false;
+    final rect = _frameCapture.globalRect;
+    return rect != null && await _appleSession.startPictureInPicture(rect);
   }
 
   /// 优先读取 Flutter 已绘制画面，失败时裁切 B 站时间点雪碧图，始终绕开会终止进程的原生截图。
@@ -697,7 +711,11 @@ class WindowsPlaybackService
         await subscription.cancel();
       }
       _subscriptions.clear();
-      await _player.dispose();
+      try {
+        await _appleSession.dispose();
+      } finally {
+        await _player.dispose();
+      }
     } finally {
       _activeAudioMedia = null;
       WindowsMediaCacheRuntime.unregisterPlaybackSession();
@@ -1272,6 +1290,7 @@ class WindowsPlaybackService
       phase: phase,
       isPlaying: _player.state.playing,
       audioOnly: _audioOnly,
+      isInPictureInPicture: _appleSession.isInPictureInPicture,
       sleepTimerRemaining: _sleepDeadline == null
           ? Duration.zero
           : Duration(
@@ -1289,6 +1308,13 @@ class WindowsPlaybackService
       restoredPosition: _restoredPosition,
       isRestoringPosition: _restoringPosition,
       message: clearMessage ? null : (message ?? _snapshot.message),
+    );
+    _appleSession.update(
+      title: _currentVideo?.title ?? '焦点哔哩',
+      position: _snapshot.position,
+      duration: _snapshot.duration,
+      playing: _snapshot.isPlaying,
+      speed: _snapshot.speed,
     );
     _stateController.add(_snapshot);
   }

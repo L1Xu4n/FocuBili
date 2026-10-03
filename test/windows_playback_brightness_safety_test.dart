@@ -23,7 +23,7 @@ void main() {
     ).readAsStringSync();
 
     expect(page, contains("Key('software-brightness-overlay')"));
-    expect(page, contains('_appPlatform == AppPlatform.windows'));
+    expect(page, contains('_appPlatform.isDesktop'));
     expect(page, contains('Colors.black.withValues(alpha: 1 - _brightness)'));
   });
 }

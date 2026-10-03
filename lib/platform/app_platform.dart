@@ -50,6 +50,11 @@ abstract final class AppPlatformDetector {
 
 /// 提供不含版本和设备标识的平台显示名称，供不可用页面与诊断回退使用。
 extension AppPlatformDisplayName on AppPlatform {
+  bool get isApple => this == AppPlatform.ios || this == AppPlatform.macos;
+  bool get isDesktop =>
+      this == AppPlatform.windows || this == AppPlatform.macos;
+  bool get isMobile => this == AppPlatform.android || this == AppPlatform.ios;
+
   /// 把平台枚举转换为稳定的用户可读名称。
   String get displayName => switch (this) {
     AppPlatform.android => 'Android',

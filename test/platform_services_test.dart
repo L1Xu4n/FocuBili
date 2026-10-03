@@ -120,8 +120,6 @@ void main() {
   /// 验证尚未开发的三个目标平台和未知环境都保持明确不可用。
   test('未来平台在实现前不会回退到 Android 后端', () {
     for (final AppPlatform platform in <AppPlatform>[
-      AppPlatform.ios,
-      AppPlatform.macos,
       AppPlatform.linux,
       AppPlatform.unsupported,
     ]) {
@@ -223,19 +221,19 @@ void main() {
   /// 验证未支持平台的页面展示说明，而不是构建 Android 权限或登录控件。
   testWidgets('未支持平台显示安全说明页', (WidgetTester tester) async {
     final PlatformServices services = PlatformServices.forPlatform(
-      AppPlatform.ios,
+      AppPlatform.linux,
     );
 
     await tester.pumpWidget(
       MaterialApp(home: SystemCapabilitiesPage(platformServices: services)),
     );
-    expect(find.text('iOS 的系统能力尚未接入'), findsOneWidget);
+    expect(find.text('Linux 的系统能力尚未接入'), findsOneWidget);
     expect(find.textContaining('精确闹钟'), findsNothing);
 
     await tester.pumpWidget(
       MaterialApp(home: LoginPage(platformServices: services)),
     );
-    expect(find.text('iOS 暂不支持账号登录'), findsOneWidget);
+    expect(find.text('Linux 暂不支持账号登录'), findsOneWidget);
     expect(find.text('使用 Cookie 登录'), findsNothing);
     expect(find.byType(SegmentedButton), findsNothing);
   });

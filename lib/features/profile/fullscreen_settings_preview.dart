@@ -21,7 +21,7 @@ Future<T?> showFullscreenSettingsPreview<T>({
         DeviceOrientation.landscapeRight,
       ]);
       await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    } else if (platform == AppPlatform.windows) {
+    } else if (platform.isDesktop) {
       try {
         wasFullscreen = await windowManager.isFullScreen();
         wasMaximized = await windowManager.isMaximized();
@@ -45,7 +45,7 @@ Future<T?> showFullscreenSettingsPreview<T>({
         ),
       );
       await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-    } else if (platform == AppPlatform.windows && wasFullscreen != null) {
+    } else if (platform.isDesktop && wasFullscreen != null) {
       try {
         await windowManager.setFullScreen(wasFullscreen);
         if (wasMaximized == true && !wasFullscreen) {

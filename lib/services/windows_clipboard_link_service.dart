@@ -79,14 +79,13 @@ class WindowsClipboardLinkMonitor implements ClipboardLinkMonitor {
   @override
   void start(ValueChanged<String> onTextChanged) {
     _handler = onTextChanged;
-    if ((_platform != AppPlatform.windows &&
-            _platform != AppPlatform.android) ||
+    if ((!_platform.isDesktop && !_platform.isMobile) ||
         (AppPlatformDetector.isFlutterTest && !_allowInFlutterTest) ||
         _timer != null) {
       return;
     }
     unawaited(_checkClipboard());
-    if (_platform == AppPlatform.windows) {
+    if (_platform.isDesktop) {
       _timer = Timer.periodic(_interval, (_) => unawaited(_checkClipboard()));
     }
   }

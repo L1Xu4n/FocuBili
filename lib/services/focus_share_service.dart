@@ -53,6 +53,7 @@ class FocusShareService {
         return;
       }
       final Directory temporaryDirectory = await getTemporaryDirectory();
+      await temporaryDirectory.create(recursive: true);
       final String safeFileName = _safePngName(fileName);
       final File output = File('${temporaryDirectory.path}/$safeFileName');
       await output.writeAsBytes(bytes, flush: true);
