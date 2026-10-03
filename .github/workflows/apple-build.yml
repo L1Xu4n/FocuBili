@@ -34,7 +34,7 @@ jobs:
       matrix:
         include:
           - platform: ios
-            os: macos-15
+            os: macos-26
           - platform: macos
             os: macos-26
     steps:
@@ -112,6 +112,7 @@ jobs:
                   output = log.read_text(errors='replace')
                   for marker, filename in [('APPLE_PIP_READY_FOR_SCREENSHOT', 'macos-video-window.png'), ('APPLE_FLOATING_READY_FOR_SCREENSHOT', 'macos-floating-video-window.png')]:
                       if marker not in captured and marker in output:
+                          time.sleep(.75)  # Allow the window transition to reach a rendered frame.
                           subprocess.run(['screencapture', '-x', 'build/apple/' + filename], timeout=10, check=True)
                           captured.add(marker)
                   if time.monotonic() > deadline:
@@ -139,6 +140,7 @@ jobs:
           find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -type f -iname '*FocuBili*' -exec cp {} build/apple-diagnostics/ \; 2>/dev/null || true
           cp build/apple/*.log build/apple-diagnostics/ 2>/dev/null || true
           cp build/apple/*-launch.png build/apple-diagnostics/ 2>/dev/null || true
+          cp build/apple/*-window.png build/apple-diagnostics/ 2>/dev/null || true
           for f in build/apple-diagnostics/*.ips; do
             test -f "$f" || continue
             head -c 22000 "$f"

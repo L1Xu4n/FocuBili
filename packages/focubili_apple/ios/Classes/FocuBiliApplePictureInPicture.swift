@@ -74,14 +74,14 @@ final class FocuBiliAppleFloatingVideoWindow: NSObject, NSWindowDelegate, FocuBi
         let ratio = min(max(rect.width / rect.height, 0.5), 3)
         let screen = NSApp.keyWindow?.screen ?? NSScreen.main
         let availableHeight = screen?.visibleFrame.height ?? 720
-        let width: CGFloat = min(400, max(200, availableHeight * 0.65 * ratio)), height = width / ratio
+        let width: CGFloat = min(400, max(240, availableHeight * 0.65 * ratio)), height = width / ratio
         let window = NSPanel(contentRect: CGRect(x: 0, y: 0, width: width, height: height),
             styleMask: [.titled, .closable, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
         window.title = "焦点哔哩 · 视频小窗"
         window.isFloatingPanel = true; window.level = .floating
         window.hidesOnDeactivate = false; window.isReleasedWhenClosed = false
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        window.contentMinSize = NSSize(width: 200, height: 200 / ratio)
+        window.contentMinSize = NSSize(width: 240, height: 240 / ratio)
         window.contentAspectRatio = NSSize(width: width, height: height)
         let view = NSView(frame: CGRect(x: 0, y: 0, width: width, height: height))
         view.wantsLayer = true; view.layer?.backgroundColor = NSColor.black.cgColor
@@ -93,10 +93,18 @@ final class FocuBiliAppleFloatingVideoWindow: NSObject, NSWindowDelegate, FocuBi
             let button = NSButton(title: title, target: self, action: action)
             button.bezelStyle = .rounded; controls.addArrangedSubview(button)
         }
+        let bar = NSVisualEffectView(frame: .zero)
+        bar.material = .popover; bar.blendingMode = .withinWindow; bar.state = .active
+        bar.wantsLayer = true; bar.layer?.cornerRadius = 8; bar.layer?.masksToBounds = true
+        bar.translatesAutoresizingMaskIntoConstraints = false
         controls.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(controls)
-        NSLayoutConstraint.activate([controls.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            controls.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -8)])
+        view.addSubview(bar); bar.addSubview(controls)
+        NSLayoutConstraint.activate([bar.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            bar.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -8),
+            controls.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 8),
+            controls.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
+            controls.topAnchor.constraint(equalTo: bar.topAnchor, constant: 6),
+            controls.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -6)])
         if let screen = screen {
             let visible = screen.visibleFrame
             window.setFrameOrigin(NSPoint(x: max(visible.minX, visible.maxX - width - 20), y: max(visible.minY, visible.maxY - height - 70)))
@@ -217,9 +225,18 @@ final class FocuBiliApplePictureInPicture: NSObject, AVPictureInPictureControlle
             userInfo: ["handle": handle, "enabled": enabled])
     }
     func status() -> [String: Any] {
-        ["mode": "system", "systemPictureInPicture": true, "supported": AVPictureInPictureController.isPictureInPictureSupported(),
+        var value: [String: Any] = ["mode": "system", "systemPictureInPicture": true, "supported": AVPictureInPictureController.isPictureInPictureSupported(),
          "possible": controller?.isPictureInPicturePossible ?? false,
-         "active": controller?.isPictureInPictureActive ?? false, "frames": frames, "lastAttempt": lastAttempt]
+         "active": controller?.isPictureInPictureActive ?? false, "frames": frames, "lastAttempt": lastAttempt,
+         "layerStatus": layer.status.rawValue, "layerError": layer.error?.localizedDescription ?? ""]
+        #if os(macOS)
+        value["applicationActive"] = NSApp.isActive
+        value["sourceWindowVisible"] = host?.window?.isVisible ?? false
+        value["applicationWindows"] = NSApp.windows.filter { $0.isVisible }.map {
+            ["title": $0.title, "frame": NSStringFromRect($0.frame), "level": $0.level.rawValue] as [String: Any]
+        }
+        #endif
+        return value
     }
     func start(rect: CGRect, result: @escaping FlutterResult) {
         guard completion == nil else { result(false); return }
@@ -237,6 +254,8 @@ final class FocuBiliApplePictureInPicture: NSObject, AVPictureInPictureControlle
         root.addSubview(view); view.layer.addSublayer(layer); host = view
         #else
         guard let root = NSApp.keyWindow?.contentView ?? NSApp.windows.first(where: { $0.isVisible })?.contentView else { result(false); return }
+        NSApp.activate(ignoringOtherApps: true)
+        root.window?.makeKeyAndOrderFront(nil)
         let nativeRect = root.isFlipped ? rect : CGRect(x: rect.minX, y: root.bounds.height - rect.maxY, width: rect.width, height: rect.height)
         let view = NSView(frame: nativeRect)
         view.wantsLayer = true
@@ -312,7 +331,7 @@ final class FocuBiliApplePictureInPicture: NSObject, AVPictureInPictureControlle
     }
     func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping @Sendable (Bool) -> Void) {
         #if os(macOS)
-        NSApp.activate(ignoringOtherApps: true); NSApp.windows.first?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true); host?.window?.makeKeyAndOrderFront(nil)
         #endif
         completionHandler(host?.window != nil)
     }
