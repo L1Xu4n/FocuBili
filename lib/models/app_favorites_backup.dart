@@ -40,12 +40,20 @@ class AppFavoritesBackup {
         const JsonEncoder.withIndent('  ').convert({
           'format': format,
           'version': version,
-          'exportedAt': exportedAt.toIso8601String(),
+          'exportedAt': exportedAt.toUtc().toIso8601String(),
           'folders': [
             for (final folder in folders)
               {
                 ...folder.toJson(),
-                'items': [for (final item in items[folder.id]!) item.toJson()],
+                'createdAt': folder.createdAt.toUtc().toIso8601String(),
+                'updatedAt': folder.updatedAt.toUtc().toIso8601String(),
+                'items': [
+                  for (final item in items[folder.id]!)
+                    {
+                      ...item.toJson(),
+                      'addedAt': item.addedAt.toUtc().toIso8601String(),
+                    },
+                ],
               },
           ],
         }),

@@ -111,6 +111,69 @@ class RecordingFilePicker extends FilePickerPlatform {
 }
 
 void main() {
+  test('备份将本地时间统一导出为 UTC 并保留原始时刻', () {
+    final local = DateTime(2026, 9, 1, 12, 30, 15, 123, 456);
+    final updated = local.add(const Duration(hours: 2));
+    final added = local.add(const Duration(minutes: 30));
+    final exported = local.add(const Duration(days: 1));
+    final backup = AppFavoritesBackup(
+      folders: [
+        AppFavoriteFolder(
+          id: 'local',
+          name: '本地时间',
+          createdAt: local,
+          updatedAt: updated,
+        ),
+      ],
+      items: {
+        'local': [
+          AppFavoriteItem(
+            folderId: 'local',
+            bvid: 'BV1GJ411x7h7',
+            title: '测试',
+            coverUrl: '',
+            ownerName: '',
+            durationText: '',
+            addedAt: added,
+          ),
+        ],
+      },
+      exportedAt: exported,
+    );
+    final bytes = backup.toBytes();
+    final json = jsonDecode(utf8.decode(bytes)) as Map;
+    final folder = (json['folders'] as List).single as Map;
+    final item = (folder['items'] as List).single as Map;
+    for (final pair in [
+      [json['exportedAt'], exported],
+      [folder['createdAt'], local],
+      [folder['updatedAt'], updated],
+      [item['addedAt'], added],
+    ]) {
+      expect(pair.first, endsWith('Z'));
+      final date = DateTime.parse(pair.first as String);
+      expect(date.isUtc, isTrue);
+      expect(date.isAtSameMomentAs(pair.last as DateTime), isTrue);
+    }
+    final restored = AppFavoritesBackup.fromBytes(bytes);
+    expect(restored.folders.single.createdAt.isAtSameMomentAs(local), isTrue);
+    expect(restored.folders.single.updatedAt.isAtSameMomentAs(updated), isTrue);
+    expect(
+      restored.items['local']!.single.addedAt.isAtSameMomentAs(added),
+      isTrue,
+    );
+    expect(restored.exportedAt.isAtSameMomentAs(exported), isTrue);
+  });
+
+  test('备份继续兼容旧版未带时区的时间字段', () {
+    final data = jsonDecode(utf8.decode(sample().toBytes())) as Map;
+    data['exportedAt'] = '2026-10-03T12:30:00.000';
+    final restored = AppFavoritesBackup.fromBytes(
+      utf8.encode(jsonEncode(data)),
+    );
+    expect(restored.exportedAt, DateTime(2026, 10, 3, 12, 30));
+  });
+
   TestWidgetsFlutterBinding.ensureInitialized();
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
