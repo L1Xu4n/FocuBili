@@ -96,7 +96,7 @@ Future<void> main() async {
       var started = await session.startPictureInPicture(rect);
       if (!started) {
         stdout.writeln(
-          'APPLE_PIP_PAUSED_UNAVAILABLE: ${await mediaChannel.invokeMethod<Object?>('pipStatus')}',
+          'APPLE_VIDEO_WINDOW_PAUSED_UNAVAILABLE: ${await mediaChannel.invokeMethod<Object?>('pipStatus')}',
         );
         await p.setPlaylistMode(PlaylistMode.loop);
         final updates = p.stream.position.listen(
@@ -116,15 +116,18 @@ Future<void> main() async {
       final status = await mediaChannel.invokeMapMethod<String, dynamic>(
         'pipStatus',
       );
-      stdout.writeln('APPLE_PIP_RESULT: started=$started status=$status');
+      stdout.writeln(
+        'APPLE_MAC_VIDEO_WINDOW_RESULT: started=$started status=$status',
+      );
       if ((status?['frames'] as int? ?? 0) == 0) {
         throw StateError('PiP frame bridge produced no frames');
       }
-      if (started && status?['active'] != true) {
+      if (started &&
+          (status?['active'] != true || status?['mode'] != 'floating')) {
         throw StateError('PiP start not confirmed');
       }
       if (started) {
-        stdout.writeln('APPLE_PIP_READY_FOR_SCREENSHOT');
+        stdout.writeln('APPLE_VIDEO_WINDOW_READY_FOR_SCREENSHOT');
         await stdout.flush();
         await Future<void>.delayed(const Duration(seconds: 3));
       }

@@ -80,4 +80,6 @@ iOS 预览采用软件画面输出并请求 `hwdec=auto-copy`，避免应用进�
 CI 会记录 `APPLE_PIP_RESULT` 的真实 started 状态和收到的独立帧数。帧桥检查通过而 started=false 仅证明帧传输可用，不算系统浮窗启动成功；不支持的运行环境单独标记。正式验收还需 Home/锁屏/恢复、旋转、连续进入退出、拖动与倍速、音频中断等场景。
 
 
-macOS 26+ 优先请求系统画中画，旧系统或系统请求失败时使用原生 NSPanel 视频小窗，支持置顶、跨桌面、调整大小、播放/暂停和 ±15 秒跳转，复用同一个播放器与独立帧桥。它是应用提供的视频小窗，不是 AVKit 系统画中画。Apple DTS 在 2026-06 的答复称 AVSampleBufferDisplayLayer 系统画中画仅支持 iOS、macOS API 标注不准确，但本项目在更新的 macOS 26 CI 已收到真实 didStart/active=true。以实际运行结果为准，不据通用 supported 标志承诺所有 Mac 均支持；较早官方答复：https://developer.apple.com/forums/thread/830764 。诊断返回 `mode=floating` 并明确 `systemPictureInPicture=false`。
+macOS 默认使用原生 NSPanel 视频小窗，支持置顶、跨桌面、调整大小、播放/暂停和 ±15 秒跳转，复用同一个播放器与独立帧桥。它是应用提供的视频小窗，不是 AVKit 系统画中画。诊断明确返回 `mode=floating` 和 `systemPictureInPicture=false`。
+
+Mac 系统 sample-buffer 接口曾在 macOS 26 CI 返回 didStart/active=true，但彩色测试图截图暴露裁切；因此不把回调成功当作视觉验收，也不将该路径作为默认实现。原生小窗已实测显示完整测试帧并连续开关。Apple DTS 较早关于平台可用性标注的讨论：https://developer.apple.com/forums/thread/830764 。

@@ -168,6 +168,7 @@ final class FocuBiliAppleFloatingVideoWindow: NSObject, NSWindowDelegate, FocuBi
 }
 #endif
 
+#if os(iOS)
 @available(iOS 15.0, macOS 12.0, *)
 final class FocuBiliApplePictureInPicture: NSObject, AVPictureInPictureControllerDelegate, AVPictureInPictureSampleBufferPlaybackDelegate, FocuBiliAppleVideoWindow {
     private let channel: FlutterMethodChannel
@@ -361,65 +362,4 @@ final class FocuBiliApplePictureInPicture: NSObject, AVPictureInPictureControlle
 }
 
 
-#if os(macOS)
-@available(macOS 26.0, *)
-final class FocuBiliAppleVideoWindowRouter: FocuBiliAppleVideoWindow {
-    private let system: FocuBiliApplePictureInPicture
-    private let floating: FocuBiliAppleFloatingVideoWindow
-    private var current: FocuBiliAppleVideoWindow
-    private var generation = 0
-    private var starting = false
-    init(channel: FlutterMethodChannel) {
-        let system = FocuBiliApplePictureInPicture(channel: channel)
-        let floating = FocuBiliAppleFloatingVideoWindow(channel: channel)
-        self.system = system; self.floating = floating; current = system
-    }
-    func activate(handle: Int64) {
-        generation += 1; starting = false
-        system.activate(handle: handle); floating.activate(handle: handle)
-    }
-    func update(position: Double, duration: Double, rate: Double) {
-        system.update(position: position, duration: duration, rate: rate)
-        floating.update(position: position, duration: duration, rate: rate)
-    }
-    func status() -> [String: Any] {
-        var value = current.status()
-        value["supported"] = true // The native floating-window fallback is available.
-        value["systemSupported"] = system.status()["supported"]
-        return value
-    }
-    func start(rect: CGRect, result: @escaping FlutterResult) {
-        guard !starting else { result(false); return }
-        if current.status()["active"] as? Bool == true { current.start(rect: rect, result: result); return }
-        starting = true; current = system
-        let expected = generation
-        system.start(rect: rect) { [weak self] value in
-            guard let self = self, self.generation == expected else { result(false); return }
-            if value as? Bool == true { self.starting = false; result(true); return }
-            // Let the system source finish cleanup before enabling the same handle
-            // for the fallback. Otherwise its capture(false) can cancel our frames.
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self, self.generation == expected else { result(false); return }
-                self.current = self.floating
-                self.floating.start(rect: rect) { [weak self] value in
-                    guard let self = self, self.generation == expected else { result(false); return }
-                    self.starting = false; result(value)
-                }
-            }
-        }
-    }
-    func startFloating(rect: CGRect, result: @escaping FlutterResult) {
-        guard !starting, current.status()["active"] as? Bool != true else { result(false); return }
-        current = floating; starting = true
-        let expected = generation
-        floating.start(rect: rect) { [weak self] value in
-            guard let self = self, self.generation == expected else { result(false); return }
-            self.starting = false; result(value)
-        }
-    }
-    func stop() {
-        generation += 1; starting = false
-        system.stop(); floating.stop()
-    }
-}
 #endif

@@ -197,11 +197,9 @@ public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCen
     private func media(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
         if pictureInPicture == nil, let channel = mediaChannel {
             #if os(macOS)
-            if #available(macOS 26.0, *) {
-                pictureInPicture = FocuBiliAppleVideoWindowRouter(channel: channel)
-            } else {
-                pictureInPicture = FocuBiliAppleFloatingVideoWindow(channel: channel)
-            }
+            // The system sample-buffer path reported success but cropped frames
+            // in visual QA. Use the fully verified native window on Mac.
+            pictureInPicture = FocuBiliAppleFloatingVideoWindow(channel: channel)
             #else
             if #available(iOS 15.0, *) {
                 pictureInPicture = FocuBiliApplePictureInPicture(channel: channel)
@@ -217,13 +215,6 @@ public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCen
             guard let args = call.arguments as? [String: Any],
                   let x = args["x"] as? Double, let y = args["y"] as? Double,
                   let width = args["width"] as? Double, let height = args["height"] as? Double else { result(false); return }
-            #if os(macOS)
-            if #available(macOS 26.0, *), args["preferFloating"] as? Bool == true,
-               let router = pictureInPicture as? FocuBiliAppleVideoWindowRouter {
-                router.startFloating(rect: CGRect(x: x, y: y, width: width, height: height), result: result)
-                return
-            }
-            #endif
             if let pip = pictureInPicture {
                 pip.start(rect: CGRect(x: x, y: y, width: width, height: height), result: result)
             } else { result(false) }
