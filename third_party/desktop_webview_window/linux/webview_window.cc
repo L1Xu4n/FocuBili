@@ -13,6 +13,23 @@
 #define WEBKIT_OLD_USED
 #endif
 
+struct WebKitRequest {
+  FlMethodCall* call;
+  WebviewWindow* window;
+  WebKitWebContext* context;
+};
+
+static void release_request_later(WebKitRequest* request) {
+  g_idle_add_full(G_PRIORITY_DEFAULT_IDLE, [](gpointer data) -> gboolean {
+    auto* request = static_cast<WebKitRequest*>(data);
+    request->window->AsyncOperationCompleted();
+    g_object_unref(request->call);
+    g_object_unref(request->context);
+    delete request;
+    return G_SOURCE_REMOVE;
+  }, request, nullptr);
+}
+
 namespace {
 
 gboolean on_load_failed_with_tls_errors(WebKitWebView *web_view,
@@ -56,7 +73,13 @@ WebviewWindow::WebviewWindow(FlMethodChannel *method_channel, int64_t window_id,
       default_user_agent_() {
   g_object_ref(method_channel_);
 
+  cookie_cancellable_ = g_cancellable_new();
   window_ = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+  g_signal_connect(window_, "delete-event",
+      G_CALLBACK(+[](GtkWidget*, GdkEvent*, gpointer data) -> gboolean {
+        static_cast<WebviewWindow*>(data)->Close();
+        return TRUE;
+      }), this);
   g_signal_connect(G_OBJECT(window_), "destroy",
                    G_CALLBACK(+[](GtkWidget *, gpointer arg) {
                      auto *window = static_cast<WebviewWindow *>(arg);
@@ -139,14 +162,17 @@ WebviewWindow::~WebviewWindow() {
     g_signal_handlers_disconnect_by_data(webview_, this);
     g_object_unref(webview_);
   }
+  g_clear_object(&cookie_cancellable_);
   g_object_unref(method_channel_);
 }
 
 void WebviewWindow::Navigate(const char *url) {
+  if (closing_) return;
   if (IsAllowedUrl(url)) webkit_web_view_load_uri(WEBKIT_WEB_VIEW(webview_), url);
 }
 
 void WebviewWindow::RunJavaScriptWhenContentReady(const char *java_script) {
+  if (closing_) return;
   auto *manager =
       webkit_web_view_get_user_content_manager(WEBKIT_WEB_VIEW(webview_));
   WebKitUserScript* script = webkit_user_script_new(java_script,
@@ -158,14 +184,34 @@ void WebviewWindow::RunJavaScriptWhenContentReady(const char *java_script) {
 
 void WebviewWindow::SetApplicationNameForUserAgent(
     const std::string &app_name) {
+  if (closing_) return;
   auto *setting = webkit_web_view_get_settings(WEBKIT_WEB_VIEW(webview_));
   webkit_settings_set_user_agent(setting,
                                  (default_user_agent_ + app_name).c_str());
 }
 
-void WebviewWindow::Close() { gtk_widget_destroy(window_); }
+void WebviewWindow::Close() {
+  if (destroying_) return;
+  closing_ = true;
+  webkit_web_view_stop_loading(WEBKIT_WEB_VIEW(webview_));
+  gtk_widget_hide(window_);
+  if (pending_operations_ > 0) {
+    // WebKit's cookie GTask can outlive its owning ephemeral context. Keep the
+    // widget/context alive until every completion callback has fully unwound.
+    g_cancellable_cancel(cookie_cancellable_);
+    return;
+  }
+  destroying_ = true;
+  gtk_widget_destroy(window_);
+}
+
+void WebviewWindow::AsyncOperationCompleted() {
+  --pending_operations_;
+  if (closing_ && pending_operations_ == 0) Close();
+}
 
 void WebviewWindow::OnLoadChanged(WebKitLoadEvent load_event) {
+  if (closing_) return;
   // notify history changed event.
   {
     auto can_go_back = webkit_web_view_can_go_back(WEBKIT_WEB_VIEW(webview_));
@@ -212,14 +258,17 @@ void WebviewWindow::OnLoadChanged(WebKitLoadEvent load_event) {
 }
 
 void WebviewWindow::GoForward() {
+  if (closing_) return;
   webkit_web_view_go_forward(WEBKIT_WEB_VIEW(webview_));
 }
 
 void WebviewWindow::GoBack() {
+  if (closing_) return;
   webkit_web_view_go_back(WEBKIT_WEB_VIEW(webview_));
 }
 
 void WebviewWindow::Reload() {
+  if (closing_) return;
   webkit_web_view_reload(WEBKIT_WEB_VIEW(webview_));
 }
 
@@ -242,11 +291,16 @@ bool WebviewWindow::IsAllowedUrl(const char* url) {
 }
 
 void WebviewWindow::SetUserAgent(const char* user_agent) {
+  if (closing_) return;
   webkit_settings_set_user_agent(
       webkit_web_view_get_settings(WEBKIT_WEB_VIEW(webview_)), user_agent);
 }
 
 void WebviewWindow::GetCookies(const char* url, FlMethodCall* call) {
+  if (closing_) {
+    fl_method_call_respond_error(call, "closed", "WebView is closing", nullptr, nullptr);
+    return;
+  }
   const char* target = url ? url : webkit_web_view_get_uri(WEBKIT_WEB_VIEW(webview_));
   if (!IsAllowedUrl(target)) {
     fl_method_call_respond_error(call, "invalid_url", "Cookie URL is not allowed", nullptr, nullptr);
@@ -254,12 +308,14 @@ void WebviewWindow::GetCookies(const char* url, FlMethodCall* call) {
   }
   auto* manager = webkit_web_context_get_cookie_manager(
       webkit_web_view_get_context(WEBKIT_WEB_VIEW(webview_)));
-  // The asynchronous operation references only GObjects, never the C++ window.
-  // Closing/reopening a window during a cookie read cannot access freed memory.
-  g_object_ref(call);
-  webkit_cookie_manager_get_cookies(manager, target, nullptr,
+  ++pending_operations_;
+  auto* request = new WebKitRequest{
+      FL_METHOD_CALL(g_object_ref(call)), this,
+      WEBKIT_WEB_CONTEXT(g_object_ref(webkit_web_view_get_context(WEBKIT_WEB_VIEW(webview_))))};
+  webkit_cookie_manager_get_cookies(manager, target, cookie_cancellable_,
       [](GObject* object, GAsyncResult* result, gpointer data) {
-        auto* call = FL_METHOD_CALL(data);
+        auto* request = static_cast<WebKitRequest*>(data);
+        auto* call = request->call;
         g_autoptr(GError) error = nullptr;
         GList* cookies = webkit_cookie_manager_get_cookies_finish(
             WEBKIT_COOKIE_MANAGER(object), result, &error);
@@ -285,12 +341,18 @@ void WebviewWindow::GetCookies(const char* url, FlMethodCall* call) {
           fl_method_call_respond_success(call, values, nullptr);
         }
         g_list_free_full(cookies, reinterpret_cast<GDestroyNotify>(soup_cookie_free));
-        g_object_unref(call);
-      }, call);
+        // The next main-loop turn is after WebKit has released its GTask and
+        // cookie-manager references. Only then may Close destroy the context.
+        release_request_later(request);
+      }, request);
 }
 
 gboolean WebviewWindow::DecidePolicy(WebKitPolicyDecision* decision,
                                     WebKitPolicyDecisionType type) {
+  if (closing_) {
+    webkit_policy_decision_ignore(decision);
+    return TRUE;
+  }
   if (type == WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION ||
       type == WEBKIT_POLICY_DECISION_TYPE_NEW_WINDOW_ACTION) {
     auto* action = webkit_navigation_policy_decision_get_navigation_action(
@@ -307,6 +369,14 @@ gboolean WebviewWindow::DecidePolicy(WebKitPolicyDecision* decision,
 
 void WebviewWindow::EvaluateJavaScript(const char *java_script,
                                        FlMethodCall *call) {
+  if (closing_) {
+    fl_method_call_respond_error(call, "closed", "WebView is closing", nullptr, nullptr);
+    return;
+  }
+  ++pending_operations_;
+  auto* request = new WebKitRequest{
+      FL_METHOD_CALL(g_object_ref(call)), this,
+      WEBKIT_WEB_CONTEXT(g_object_ref(webkit_web_view_get_context(WEBKIT_WEB_VIEW(webview_))))};
 #ifdef WEBKIT_OLD_USED
   webkit_web_view_run_javascript(
 #else
@@ -316,9 +386,10 @@ void WebviewWindow::EvaluateJavaScript(const char *java_script,
 #ifndef WEBKIT_OLD_USED
       -1, nullptr, nullptr,
 #endif
-      nullptr,
+      cookie_cancellable_,
       [](GObject *object, GAsyncResult *result, gpointer user_data) {
-        auto *call = static_cast<FlMethodCall *>(user_data);
+        auto* request = static_cast<WebKitRequest*>(user_data);
+        auto* call = request->call;
         GError *error = nullptr;
         auto *js_result =
 #ifdef WEBKIT_OLD_USED
@@ -329,8 +400,8 @@ void WebviewWindow::EvaluateJavaScript(const char *java_script,
                 WEBKIT_WEB_VIEW(object), result, &error);
         if (!js_result) {
           fl_method_call_respond_error(call, "failed to evaluate javascript.",
-                                       error->message, nullptr, nullptr);
-          g_error_free(error);
+                                       "JavaScript evaluation failed", nullptr, nullptr);
+          if (error) g_error_free(error);
         } else {
           auto *js_value = jsc_value_to_json(
 #ifdef WEBKIT_OLD_USED
@@ -348,9 +419,9 @@ void WebviewWindow::EvaluateJavaScript(const char *java_script,
           g_object_unref(js_result);
 #endif
         }
-        g_object_unref(call);
+        release_request_later(request);
       },
-      g_object_ref(call));
+      request);
 }
 
 void WebviewWindow::RegisterJavaScriptChannel(const std::string &name) {

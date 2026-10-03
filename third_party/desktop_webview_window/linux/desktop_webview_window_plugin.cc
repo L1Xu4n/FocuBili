@@ -1,3 +1,4 @@
+#include <vector>
 #include "include/desktop_webview_window/desktop_webview_window_plugin.h"
 
 #include <flutter_linux/flutter_linux.h>
@@ -100,8 +101,11 @@ static void webview_window_plugin_handle_method_call(
     self->windows->at(window_id)->RunJavaScriptWhenContentReady(java_script);
     fl_method_call_respond_success(method_call, nullptr, nullptr);
   } else if (strcmp(method, "clearAll") == 0) {
-    while (!self->windows->empty()) {
-      self->windows->begin()->second->Close();
+    std::vector<int64_t> ids;
+    for (const auto& entry : *self->windows) ids.push_back(entry.first);
+    for (const auto id : ids) {
+      auto found = self->windows->find(id);
+      if (found != self->windows->end()) found->second->Close();
     }
     // Every window owns an ephemeral context; nothing is persisted or globally cleared.
     fl_method_call_respond_success(method_call, nullptr, nullptr);

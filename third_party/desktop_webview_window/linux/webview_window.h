@@ -42,6 +42,7 @@ class WebviewWindow {
   void StopLoading();
 
   void GetCookies(const char* url, FlMethodCall* call);
+  void AsyncOperationCompleted();
   void SetUserAgent(const char* user_agent);
   void OnLoadFailed() { load_failed_ = true; }
   static bool IsAllowedUrl(const char* url);
@@ -63,6 +64,10 @@ class WebviewWindow {
   std::string default_user_agent_;
 
   bool load_failed_ = false;
+  bool closing_ = false;
+  bool destroying_ = false;
+  int pending_operations_ = 0;
+  GCancellable* cookie_cancellable_ = nullptr;
   GtkWidget *window_ = nullptr;
   GtkWidget *webview_ = nullptr;
   GtkBox *box_ = nullptr;

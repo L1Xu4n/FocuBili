@@ -239,7 +239,17 @@ Future<void> main(List<String> args) async {
       if (cookies.isNotEmpty) {
         throw StateError('New ephemeral window has cookies');
       }
+      final evaluated = await webview.evaluateJavaScript('1 + 1');
+      if (evaluated?.trim() != '2') {
+        throw StateError('WebKit JS result mismatch');
+      }
       final pending = webview.getCookiesForUrl('https://www.bilibili.com/');
+      final pendingJs = webview.evaluateJavaScript('document.title').catchError(
+        (Object error) {
+          if (error is PlatformException) return null;
+          throw error;
+        },
+      );
       stdout.writeln('LINUX_WEBKIT: closing $i');
       await stdout.flush();
       webview.close();
@@ -248,6 +258,7 @@ Future<void> main(List<String> args) async {
       } on PlatformException {
         /* Closing may reject the read. */
       }
+      await pendingJs;
       await webview.onClose.timeout(const Duration(seconds: 10));
       stdout.writeln('LINUX_WEBKIT: closed $i');
       await stdout.flush();
