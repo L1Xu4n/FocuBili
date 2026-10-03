@@ -1036,6 +1036,9 @@ class _PersonalizationSettingsPageState
                 ? '检查 Windows 通知、未来提醒和安装包身份'
                 : (widget.appPlatform ?? AppPlatformDetector.current).isApple
                 ? '检查 Apple 通知、后台音频及系统权限'
+                : (widget.appPlatform ?? AppPlatformDetector.current) ==
+                      AppPlatform.linux
+                ? '检查 Linux 通知、密钥环和桌面文件服务'
                 : usesUnavailableCapabilities
                 ? '当前平台的系统能力尚未接入'
                 : '统一申请、检查、取消权限，并设置后台提醒保护',

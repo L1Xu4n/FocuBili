@@ -179,7 +179,7 @@ class WebviewImpl extends Webview {
   /// 用完整字符串替换浏览器 UA，供桌面端按移动网页兼容模式发起首次导航。
   @override
   Future<void> setUserAgent(String userAgent) async {
-    if (!Platform.isWindows) {
+    if (!Platform.isWindows && !Platform.isLinux) {
       return;
     }
     final String normalizedUserAgent = userAgent.trim();
@@ -339,7 +339,7 @@ class WebviewImpl extends Webview {
   /// 读取 WebView2 实际会发送给指定 HTTPS 地址的 Cookie，保留浏览器域名和路径匹配规则。
   @override
   Future<List<WebviewCookie>> getCookiesForUrl(String url) async {
-    if (!Platform.isWindows) {
+    if (!Platform.isWindows && !Platform.isLinux) {
       return getAllCookies();
     }
     final Uri? uri = Uri.tryParse(url);

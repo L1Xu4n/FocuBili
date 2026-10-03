@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:file_picker/file_picker.dart';
 
 import 'video_note_export_service.dart';
 import '../platform/app_platform.dart';
@@ -28,14 +29,25 @@ class VideoNoteShareService {
   final WindowsExperienceService windowsExperience;
 
   /// Windows image actions copy actual pixels; other platforms retain system sharing.
-  bool get copiesToClipboard =>
-      (platform ?? AppPlatformDetector.current) == AppPlatform.windows;
+  bool get copiesToClipboard => const {
+    AppPlatform.windows,
+    AppPlatform.linux,
+  }.contains(platform ?? AppPlatformDetector.current);
 
   /// 把批量导出包写成临时文件并分享，文件名和 MIME 类型与实际格式保持一致。
   Future<void> shareExportPackage(
     VideoNoteExportPackage package, {
     Rect? sharePositionOrigin,
   }) async {
+    if (shareLauncher == null &&
+        (platform ?? AppPlatformDetector.current) == AppPlatform.linux) {
+      await FilePicker.saveFile(
+        dialogTitle: '保存笔记导出包',
+        fileName: _safeFileName(package.fileName),
+        bytes: Uint8List.fromList(package.bytes),
+      );
+      return;
+    }
     final File output = await writeExportPackage(package);
     await _share(
       ShareParams(

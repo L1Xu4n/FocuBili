@@ -20,8 +20,10 @@ class FocusShareService {
   final AppPlatform? platform;
 
   /// Determines whether the primary action copies an image rather than opening Share UI.
-  bool get copiesToClipboard =>
-      (platform ?? AppPlatformDetector.current) == AppPlatform.windows;
+  bool get copiesToClipboard => const {
+    AppPlatform.windows,
+    AppPlatform.linux,
+  }.contains(platform ?? AppPlatformDetector.current);
 
   /// 捕获指定 RepaintBoundary、写入临时 PNG，然后打开系统分享面板。
   Future<void> shareBoundary({

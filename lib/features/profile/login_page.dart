@@ -1,3 +1,4 @@
+import '../../services/windows_official_login_service.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -55,6 +56,8 @@ class _LoginPageState extends State<LoginPage> {
   bool get _usesQrLogin => _loginExperience == LoginExperience.officialQrCode;
 
   /// 判断当前页是否运行在 Windows，并需要额外提供官方账号密码入口。
+  bool get _isLinux => _platformServices.platform == AppPlatform.linux;
+
   bool get _isWindows => _platformServices.platform == AppPlatform.windows;
 
   /// 判断当前平台是否还没有安全可用的登录实现。
@@ -100,11 +103,36 @@ class _LoginPageState extends State<LoginPage> {
     _LoginMode? requestedMode,
     bool useQrLogin = false,
   }) async {
-    if (_loginUnavailable) {
+    if (_loginUnavailable || _submitting) {
       return;
     }
     final _LoginMode mode = requestedMode ?? _mode;
     if (_isWindows && mode == _LoginMode.password) {
+      return;
+    }
+    if (_isLinux && mode == _LoginMode.password && !useQrLogin) {
+      setState(() {
+        _submitting = true;
+        _errorMessage = null;
+      });
+      try {
+        final account = await WindowsOfficialLoginService(
+          authService: _authService,
+        ).open();
+        if (mounted && account != null) Navigator.of(context).pop(account);
+      } catch (_) {
+        if (mounted) {
+          setState(() {
+            _errorMessage = '无法完成官方网页登录，请检查网络与密钥环，或使用扫码登录。';
+          });
+        }
+      } finally {
+        if (mounted) {
+          setState(() {
+            _submitting = false;
+          });
+        }
+      }
       return;
     }
     final BilibiliAccount? account = await Navigator.of(context).push(
@@ -174,7 +202,7 @@ class _LoginPageState extends State<LoginPage> {
         children: <Widget>[
           Text(
             _usesQrLogin
-                ? '仅粘贴你自己账号的 Cookie。内容只写入 Windows 加密凭据存储。'
+                ? '仅粘贴你自己账号的 Cookie。内容只写入系统加密凭据存储。'
                 : '仅粘贴你自己账号的 Cookie。内容只写入本应用的 WebView 会话容器。',
           ),
           const SizedBox(height: 14),
@@ -257,7 +285,9 @@ class _LoginPageState extends State<LoginPage> {
         const SizedBox(height: 14),
         FilledButton.icon(
           // 官方登录按钮函数打开支持手机号、密码和验证码的 B 站页面。
-          onPressed: () => _openOfficialLogin(requestedMode: _mode),
+          onPressed: _submitting
+              ? null
+              : () => _openOfficialLogin(requestedMode: _mode),
           icon: Icon(
             phoneMode ? Icons.phone_android_rounded : Icons.password_rounded,
           ),
@@ -391,7 +421,9 @@ class _LoginPageState extends State<LoginPage> {
             ],
             const SizedBox(height: 10),
             Text(
-              _usesQrLogin
+              _isLinux
+                  ? '说明：官方网页登录在隔离浏览器中完成，会话保存在系统密钥环；未配置或锁定的密钥环可能导致保存失败。'
+                  : _usesQrLogin
                   ? '说明：Windows 密码登录仍在开发；扫码登录可用，成功会话通过 Windows 加密存储保护。'
                   : '说明：当前原生手机号/密码接口尚未直接接入；这样可以避免 App 接触密码，并确保验证码由官方页面完成。',
               style: TextStyle(fontSize: 12),

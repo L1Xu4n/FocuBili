@@ -64,9 +64,9 @@ DMG 包含 FocuBili.app 和 Applications 快捷方式。测试包无 Apple 公�
 - 应用容器、钥匙串与文件权限均可能受签名/沙箱变化影响；正式包必须实测迁移，不把可编译当作无损升级证据。
 - 开发者目前没有苹果实机；本清单尚未完成。模拟器启动截图仅证明对应构建可以进入界面，不等于登录/媒体/后台场景通过。
 
-## 自动化覆盖升级检查
+## 手动覆盖升级检查
 
-CI 在正常安装包已打包后，另外构建两个测试专用入口版本（build number 900001 → 900002），保持 `com.focubili.app` 不变。
+按维护者要求，Apple CI 不再自动执行覆盖升级验证。需要专项检查时，可手动运行 `tool/check_apple_upgrade.sh`，构建两个测试专用入口版本（build number 900001 → 900002），保持 `com.focubili.app` 不变。
 iOS 模拟器使用替换安装而非卸载；macOS 替换同路径应用后启动新进程，核对 SharedPreferences、Documents 笔记样例和 Application Support 离线文件字节是否保留。测试记录包含阶段和结果，不写入真实账号。
 
 此检查仅证明同标识、同测试签名条件下的容器数据保留，不覆盖跨个人/正式签名团队、钥匙串迁移、真实历史版本数据库升级或第三方自签工具改写标识。测试入口不会装进已打包的用户 IPA/DMG。
@@ -83,3 +83,7 @@ CI 会记录 `APPLE_PIP_RESULT` 的真实 started 状态和收到的独立帧数
 macOS 默认使用原生 NSPanel 视频小窗，支持置顶、跨桌面、调整大小、播放/暂停和 ±15 秒跳转，复用同一个播放器与独立帧桥。它是应用提供的视频小窗，不是 AVKit 系统画中画。诊断明确返回 `mode=floating` 和 `systemPictureInPicture=false`。
 
 Mac 系统 sample-buffer 接口曾在 macOS 26 CI 返回 didStart/active=true，但彩色测试图截图暴露裁切；因此不把回调成功当作视觉验收，也不将该路径作为默认实现。原生小窗已实测显示完整测试帧并连续开关。Apple DTS 较早关于平台可用性标注的讨论：https://developer.apple.com/forums/thread/830764 。
+
+## iOS CI 原生运行检查
+
+正常 IPA 和模拟器包封装后，CI 单独构建 `tool/ios_runtime_probe.dart` 并由 simctl 直接启动，通过 Documents 中的原子 JSON 结果文件确认播放、跳转、倍速、画中画帧/状态、偏好存储及原生接口。这避免依赖 Flutter 测试运行器的 VM 服务发现；测试项目保留，覆盖升级检查仍不在 CI 中运行。测试入口不进入正常安装包。

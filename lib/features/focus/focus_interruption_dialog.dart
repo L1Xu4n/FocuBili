@@ -192,7 +192,7 @@ Future<bool> _ensureExactAlarmPermission(
   BuildContext context,
   FocusNotificationService service,
 ) async {
-  if (await service.hasExactAlarmPermission()) {
+  if (await service.canScheduleReminders()) {
     return true;
   }
   if (!context.mounted) {
@@ -224,7 +224,7 @@ Future<bool> _ensureExactAlarmPermission(
   }
   final _NextAppResumeWaiter waiter = _NextAppResumeWaiter();
   await waiter.openSettingsAndWait(service.openExactAlarmSettings);
-  final bool permitted = await service.hasExactAlarmPermission();
+  final bool permitted = await service.canScheduleReminders();
   if (!permitted && context.mounted) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()

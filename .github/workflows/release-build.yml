@@ -71,7 +71,9 @@ jobs:
         run: flutter pub get
 
       - name: Build release APK
-        run: flutter build apk --release --no-pub
+        # Flutter 3.44 skips release plugin regeneration with --no-pub.
+        # Regenerate here so dev-only integration_test stays out of the APK.
+        run: flutter build apk --release
 
       - name: Verify release APK metadata
         shell: bash
