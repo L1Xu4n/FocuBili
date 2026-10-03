@@ -1,7 +1,7 @@
 name: Linux builds
 on:
   push:
-    branches: [feat/linux-platform, dev, master]
+    branches: [dev, master]
     paths: ['linux/**', 'lib/**', 'test/**', 'integration_test/**', 'third_party/**', 'pubspec.*', 'tool/**', '.github/workflows/linux-build.yml']
   pull_request:
     branches: [dev, master]
@@ -37,6 +37,9 @@ jobs:
           desktop-file-validate linux/packaging/com.focubili.app.desktop
           ldd build/linux/x64/release/bundle/focubili | tee build/linux-packages/ldd.txt
           ! grep -q 'not found' build/linux-packages/ldd.txt
+      - name: Test normal application startup and single instance
+        timeout-minutes: 3
+        run: dbus-run-session -- xvfb-run -a -s '-screen 0 1280x900x24' bash tool/check_linux_launch.sh
       - name: Build standalone native runtime probe
         run: flutter build linux --release --target tool/linux_runtime_probe.dart
       - name: Test real Linux desktop services and media
