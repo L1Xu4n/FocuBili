@@ -110,7 +110,7 @@ jobs:
               deadline = time.monotonic() + 150
               while run.poll() is None:
                   output = log.read_text(errors='replace')
-                  for marker, filename in [('APPLE_PIP_READY_FOR_SCREENSHOT', 'macos-video-window.png'), ('APPLE_FLOATING_READY_FOR_SCREENSHOT', 'macos-floating-video-window.png')]:
+                  for marker, filename in [('APPLE_VIDEO_WINDOW_READY_FOR_SCREENSHOT', 'macos-video-window.png'), ('APPLE_FLOATING_READY_FOR_SCREENSHOT', 'macos-floating-video-window.png')]:
                       if marker not in captured and marker in output:
                           time.sleep(.75)  # Allow the window transition to reach a rendered frame.
                           subprocess.run(['screencapture', '-x', 'build/apple/' + filename], timeout=10, check=True)
