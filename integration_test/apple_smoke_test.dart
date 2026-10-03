@@ -43,6 +43,7 @@ void main() {
     try {
       debugPrint("APPLE_SMOKE: activating native media session");
       await session.initialize(
+        handle: await player.handle,
         play: player.play,
         pause: player.pause,
         seek: player.seek,
@@ -86,6 +87,27 @@ void main() {
         speed: 1.5,
       );
       debugPrint("APPLE_SMOKE: playback controls verified");
+      const mediaChannel = MethodChannel('com.focubili.app/apple_media');
+      final pipBefore = await mediaChannel.invokeMapMethod<String, dynamic>(
+        'pipStatus',
+      );
+      if (pipBefore?['supported'] == true) {
+        final rect = tester.getRect(find.byType(Video));
+        final started = await session.startPictureInPicture(rect);
+        final pipAfter = await mediaChannel.invokeMapMethod<String, dynamic>(
+          'pipStatus',
+        );
+        debugPrint('APPLE_PIP_RESULT: started=$started status=$pipAfter');
+        expect(
+          pipAfter?['frames'],
+          greaterThan(0),
+          reason: 'Native PiP must receive independently copied frames',
+        );
+        if (started) expect(pipAfter?['active'], isTrue);
+        await mediaChannel.invokeMethod<void>('stopPiP');
+      } else {
+        debugPrint('APPLE_PIP_UNSUPPORTED_ON_RUNTIME');
+      }
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('apple_smoke', 'persisted');
       await prefs.reload();

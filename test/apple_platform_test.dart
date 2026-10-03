@@ -35,7 +35,7 @@ void main() {
       );
       expect(capabilities.supportsDesktopWindow, platform == AppPlatform.macos);
       expect(capabilities.supportsDoNotDisturb, isFalse);
-      expect(capabilities.supportsPictureInPicture, isFalse);
+      expect(capabilities.supportsPictureInPicture, isTrue);
       expect(
         services.createFocusNotificationService().usesUnavailableBackend,
         isFalse,

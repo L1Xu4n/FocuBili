@@ -40,7 +40,12 @@ Future<void> main() async {
       p,
       configuration: AppleVideoCapabilities.configuration,
     );
-    await session.initialize(play: p.play, pause: p.pause, seek: p.seek);
+    await session.initialize(
+      handle: await p.handle,
+      play: p.play,
+      pause: p.pause,
+      seek: p.seek,
+    );
     runApp(
       MaterialApp(
         home: Scaffold(
@@ -72,6 +77,28 @@ Future<void> main() async {
       playing: false,
       speed: 1.5,
     );
+    const mediaChannel = MethodChannel('com.focubili.app/apple_media');
+    final pipBefore = await mediaChannel.invokeMapMethod<String, dynamic>(
+      'pipStatus',
+    );
+    if (pipBefore?['supported'] == true) {
+      final started = await session.startPictureInPicture(
+        const Rect.fromLTWH(0, 0, 320, 180),
+      );
+      final status = await mediaChannel.invokeMapMethod<String, dynamic>(
+        'pipStatus',
+      );
+      stdout.writeln('APPLE_PIP_RESULT: started=$started status=$status');
+      if ((status?['frames'] as int? ?? 0) == 0) {
+        throw StateError('PiP frame bridge produced no frames');
+      }
+      if (started && status?['active'] != true) {
+        throw StateError('PiP start not confirmed');
+      }
+      await mediaChannel.invokeMethod<void>('stopPiP');
+    } else {
+      stdout.writeln('APPLE_PIP_UNSUPPORTED_ON_RUNTIME');
+    }
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('apple_runtime_probe', 'saved');
     await prefs.reload();
