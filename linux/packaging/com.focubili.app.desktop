@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=焦点哔哩
+Name[en]=FocuBili
+Comment=专注观看、学习与时间点笔记
+Exec=focubili %u
+Icon=com.focubili.app
+Terminal=false
+Categories=AudioVideo;Video;Education;
+MimeType=x-scheme-handler/bilibili;
+StartupWMClass=com.focubili.app

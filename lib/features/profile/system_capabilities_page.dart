@@ -6,6 +6,7 @@ import '../../platform/platform_services.dart';
 import 'android_permission_management_page.dart';
 import 'windows_system_capabilities_page.dart';
 import 'apple_system_capabilities_page.dart';
+import 'linux_system_capabilities_page.dart';
 
 /// 根据统一能力表显示 Android 权限、Windows 桌面能力或暂不支持说明。
 class SystemCapabilitiesPage extends StatelessWidget {
@@ -25,6 +26,8 @@ class SystemCapabilitiesPage extends StatelessWidget {
       SystemCapabilitiesExperience.windowsDesktop =>
         const WindowsSystemCapabilitiesPage(),
       SystemCapabilitiesExperience.apple => const AppleSystemCapabilitiesPage(),
+      SystemCapabilitiesExperience.linuxDesktop =>
+        const LinuxSystemCapabilitiesPage(),
       SystemCapabilitiesExperience.unavailable =>
         _UnavailableSystemCapabilitiesPage(platform: services.platform),
     };

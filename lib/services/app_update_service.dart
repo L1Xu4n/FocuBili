@@ -181,6 +181,11 @@ class AppUpdateService {
       ],
       AppUpdateTargetPlatform.android => const <String>['.apk'],
       AppUpdateTargetPlatform.macos => const <String>['.dmg', '.pkg'],
+      AppUpdateTargetPlatform.linux => const <String>[
+        '.deb',
+        '.appimage',
+        '.tar.gz',
+      ],
       AppUpdateTargetPlatform.other => const <String>[],
     };
     for (final String extension in extensions) {
@@ -195,7 +200,9 @@ class AppUpdateService {
         final Uri? uri = Uri.tryParse(
           (asset['browser_download_url']?.toString() ?? '').trim(),
         );
-        if (name.toLowerCase().endsWith(extension) &&
+        if ((_targetPlatform != AppUpdateTargetPlatform.linux ||
+                name.toLowerCase().contains('linux')) &&
+            name.toLowerCase().endsWith(extension) &&
             uri != null &&
             uri.path.toLowerCase().endsWith(extension) &&
             _isTrustedReleaseAsset(uri)) {
@@ -227,6 +234,7 @@ class AppUpdateService {
       AppUpdateTargetPlatform.windows => '下载 Windows 安装包',
       AppUpdateTargetPlatform.android => '下载 Android 安装包',
       AppUpdateTargetPlatform.macos => '下载 macOS 安装包',
+      AppUpdateTargetPlatform.linux => '下载 Linux 安装包',
       AppUpdateTargetPlatform.other => '查看 Release',
     };
   }

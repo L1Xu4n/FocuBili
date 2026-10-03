@@ -21,6 +21,7 @@ enum FocusNotificationBackendKind {
   androidChannel,
   windowsToast,
   appleNotifications,
+  linuxNotifications,
   unavailable,
 }
 
@@ -32,11 +33,12 @@ enum SystemCapabilitiesExperience {
   androidPermissions,
   windowsDesktop,
   apple,
+  linuxDesktop,
   unavailable,
 }
 
 /// 指定更新检查应挑选的安装包平台，其他平台只打开 Release 页面。
-enum AppUpdateTargetPlatform { android, windows, macos, other }
+enum AppUpdateTargetPlatform { android, windows, macos, linux, other }
 
 /// 汇总页面和服务装配需要的平台能力，避免按系统名称散落条件判断。
 class PlatformCapabilities {
@@ -119,7 +121,22 @@ class PlatformCapabilities {
         supportsDoNotDisturb: false,
         supportsDesktopWindow: platform == AppPlatform.macos,
       ),
-      AppPlatform.linux || AppPlatform.unsupported => PlatformCapabilities(
+      AppPlatform.linux => const PlatformCapabilities(
+        platform: AppPlatform.linux,
+        playbackBackend: PlaybackBackendKind.mediaKit,
+        playerOverlayBackend: PlayerOverlayBackendKind.dartHttp,
+        mediaCacheBackend: MediaCacheBackendKind.windowsMediaKit,
+        cookieStoreBackend: CookieStoreBackendKind.windowsSecureStorage,
+        focusNotificationBackend:
+            FocusNotificationBackendKind.linuxNotifications,
+        loginExperience: LoginExperience.officialQrCode,
+        systemCapabilitiesExperience: SystemCapabilitiesExperience.linuxDesktop,
+        updateTargetPlatform: AppUpdateTargetPlatform.linux,
+        supportsPictureInPicture: true,
+        supportsDoNotDisturb: false,
+        supportsDesktopWindow: true,
+      ),
+      AppPlatform.unsupported => PlatformCapabilities(
         platform: platform,
         playbackBackend: PlaybackBackendKind.unavailable,
         playerOverlayBackend: PlayerOverlayBackendKind.unavailable,

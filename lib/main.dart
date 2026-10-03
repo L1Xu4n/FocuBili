@@ -59,7 +59,8 @@ Future<void> _prepareWindowsDesktop({
   await windowManager.ensureInitialized();
   var initialSize = const Size(1280, 800);
   var minimumSize = const Size(900, 640);
-  if (services.platform == AppPlatform.macos) {
+  if (services.platform == AppPlatform.macos ||
+      services.platform == AppPlatform.linux) {
     final views = WidgetsBinding.instance.platformDispatcher.views;
     if (views.isNotEmpty) {
       final display = views.first.display;

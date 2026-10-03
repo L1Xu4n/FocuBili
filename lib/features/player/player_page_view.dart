@@ -303,8 +303,7 @@ extension _PlayerPageView on _PlayerPageState {
                               clock: _playerClock,
                               batteryPercent: _batteryPercent,
                               networkTypeLabel: _networkType.label,
-                              showNetworkType:
-                                  _appPlatform != AppPlatform.windows,
+                              showNetworkType: !_appPlatform.isDesktop,
                             ),
                           _buildTopControlBar(),
                         ],
@@ -550,6 +549,36 @@ extension _PlayerPageView on _PlayerPageState {
                   _buildFullscreenVideoNoteButton(),
                 if (_fullscreen && _notesOverlayMounted)
                   _buildFullscreenVideoNotesPanel(constraints.maxWidth),
+                if (inPictureInPicture && _appPlatform == AppPlatform.linux)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: ColoredBox(
+                      color: Colors.black54,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          IconButton(
+                            tooltip: _playbackSnapshot.isPlaying ? '暂停' : '播放',
+                            color: Colors.white,
+                            onPressed: _togglePlayback,
+                            icon: Icon(
+                              _playbackSnapshot.isPlaying
+                                  ? Icons.pause
+                                  : Icons.play_arrow,
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: '返回完整窗口',
+                            color: Colors.white,
+                            onPressed: _enterPictureInPicture,
+                            icon: const Icon(Icons.open_in_full),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),

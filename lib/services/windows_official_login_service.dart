@@ -272,12 +272,12 @@ class WindowsOfficialLoginService implements WindowsOfficialLoginLauncher {
   /// 检查 WebView2、创建隔离登录窗口并轮询官方 Cookie，整个过程不读取网页表单内容。
   @override
   Future<BilibiliAccount?> open() async {
-    if (!Platform.isWindows) {
-      throw const WindowsOfficialLoginException('账号密码网页登录仅支持 Windows 客户端。');
+    if (!Platform.isWindows && !Platform.isLinux) {
+      throw const WindowsOfficialLoginException('账号密码网页登录仅支持已接入的桌面客户端。');
     }
     if (!await WebviewWindow.isWebviewAvailable()) {
       throw const WindowsOfficialLoginException(
-        '系统缺少 Microsoft Edge WebView2 Runtime，请安装后重试；扫码登录仍可正常使用。',
+        '系统缺少可用的网页运行环境，请检查 WebView2 / WebKitGTK；扫码登录仍可使用。',
       );
     }
     final Directory supportDirectory = await getApplicationSupportDirectory();
@@ -359,7 +359,7 @@ class WindowsOfficialLoginService implements WindowsOfficialLoginLauncher {
               );
               result.completeError(
                 const WindowsOfficialLoginException(
-                  'B站已接受本次登录并完成落地跳转，但 WebView2 仍没有生成可接管的会话；请关闭窗口后重试。',
+                  'B站已接受本次登录并完成落地跳转，但 浏览器仍没有生成可接管的会话；请关闭窗口后重试。',
                 ),
               );
               webview.close();

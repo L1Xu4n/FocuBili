@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 import 'apple_playback_session.dart';
+import 'linux_media_session.dart';
+import 'linux_mini_player.dart';
 import 'apple_video_capabilities.dart';
 
 import 'package:flutter/material.dart';
@@ -70,6 +72,8 @@ class WindowsPlaybackService
   final Player _player;
   late final VideoController _videoController;
   final ApplePlaybackSession _appleSession = ApplePlaybackSession();
+  final LinuxMediaSession _linuxSession = LinuxMediaSession();
+  final LinuxMiniPlayer _linuxMiniPlayer = LinuxMiniPlayer();
   final FlutterVideoFrameCapture _frameCapture = FlutterVideoFrameCapture();
   final StreamController<PlaybackSnapshot> _stateController =
       StreamController<PlaybackSnapshot>.broadcast();
@@ -202,6 +206,12 @@ class WindowsPlaybackService
       pause: pause,
       seek: seekTo,
       onPictureInPictureChanged: (_) => _emitPlayerState(),
+    );
+    await _linuxSession.initialize(
+      play: play,
+      pause: pause,
+      seek: seekTo,
+      setRate: setPlaybackSpeed,
     );
     await _configureWindowsMediaCache();
     return _videoController.id.value;
@@ -624,6 +634,14 @@ class WindowsPlaybackService
   /// 返回软件亮度覆盖层的默认值，并读取 Windows 系统媒体音量。
   @override
   Future<SystemPlaybackLevels> getSystemPlaybackLevels() async {
+    // Linux ALSA may have no default Master mixer (PipeWire/headless systems).
+    // Use this player's gain instead of a native mixer that can dereference null.
+    if (Platform.isLinux) {
+      return SystemPlaybackLevels(
+        brightness: 1,
+        volume: (_player.state.volume / 100).clamp(0, 1).toDouble(),
+      );
+    }
     double volume = 0.5;
     try {
       volume = await VolumeController.instance.getVolume();
@@ -648,6 +666,9 @@ class WindowsPlaybackService
   @override
   Future<void> setMediaVolume(double volume) {
     _ensureAvailable();
+    if (Platform.isLinux) {
+      return _player.setVolume(volume.clamp(0, 1).toDouble() * 100);
+    }
     VolumeController.instance.showSystemUI = false;
     return VolumeController.instance.setVolume(volume.clamp(0, 1).toDouble());
   }
@@ -656,6 +677,11 @@ class WindowsPlaybackService
   @override
   Future<bool> enterPictureInPicture(double aspectRatio) async {
     _ensureAvailable();
+    if (Platform.isLinux) {
+      final changed = await _linuxMiniPlayer.toggle(aspectRatio);
+      _emitPlayerState();
+      return changed;
+    }
     final rect = _frameCapture.globalRect;
     return rect != null && await _appleSession.startPictureInPicture(rect);
   }
@@ -713,6 +739,8 @@ class WindowsPlaybackService
       _subscriptions.clear();
       try {
         await _appleSession.dispose();
+        await _linuxSession.dispose();
+        await _linuxMiniPlayer.restore();
       } finally {
         await _player.dispose();
       }
@@ -1290,7 +1318,8 @@ class WindowsPlaybackService
       phase: phase,
       isPlaying: _player.state.playing,
       audioOnly: _audioOnly,
-      isInPictureInPicture: _appleSession.isInPictureInPicture,
+      isInPictureInPicture:
+          _appleSession.isInPictureInPicture || _linuxMiniPlayer.active,
       sleepTimerRemaining: _sleepDeadline == null
           ? Duration.zero
           : Duration(
@@ -1311,6 +1340,14 @@ class WindowsPlaybackService
     );
     _appleSession.update(
       title: _currentVideo?.title ?? '焦点哔哩',
+      position: _snapshot.position,
+      duration: _snapshot.duration,
+      playing: _snapshot.isPlaying,
+      speed: _snapshot.speed,
+    );
+    _linuxSession.update(
+      title: _currentVideo?.title ?? '焦点哔哩',
+      trackId: '${_currentVideo?.bvid ?? 'none'}_${_currentPart?.cid ?? 0}',
       position: _snapshot.position,
       duration: _snapshot.duration,
       playing: _snapshot.isPlaying,
