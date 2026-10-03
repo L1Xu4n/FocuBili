@@ -79,7 +79,10 @@ class ApplePlaybackSession {
     );
   }
 
-  Future<bool> startPictureInPicture(Rect rect) async {
+  Future<bool> startPictureInPicture(
+    Rect rect, {
+    bool preferFloating = false,
+  }) async {
     if (!enabled ||
         _disposed ||
         _owner != this ||
@@ -92,6 +95,7 @@ class ApplePlaybackSession {
           'y': rect.top,
           'width': rect.width,
           'height': rect.height,
+          if (preferFloating) 'preferFloating': true,
         }) ??
         false;
   }

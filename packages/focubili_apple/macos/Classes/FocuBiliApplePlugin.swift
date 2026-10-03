@@ -17,7 +17,7 @@ import Network
 public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCenterDelegate {
     private var channels: [FlutterMethodChannel] = []
     private var mediaChannel: FlutterMethodChannel?
-    private var pictureInPicture: AnyObject?
+    private var pictureInPicture: FocuBiliAppleVideoWindow?
     private var initialLink: String?
     private var networkType = "other"
     private let monitor = NWPathMonitor()
@@ -195,23 +195,40 @@ public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCen
     }
 
     private func media(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
-        if #available(iOS 15.0, macOS 12.0, *), pictureInPicture == nil, let channel = mediaChannel {
-            pictureInPicture = FocuBiliApplePictureInPicture(channel: channel)
+        if pictureInPicture == nil, let channel = mediaChannel {
+            #if os(macOS)
+            if #available(macOS 26.0, *) {
+                pictureInPicture = FocuBiliAppleVideoWindowRouter(channel: channel)
+            } else {
+                pictureInPicture = FocuBiliAppleFloatingVideoWindow(channel: channel)
+            }
+            #else
+            if #available(iOS 15.0, *) {
+                pictureInPicture = FocuBiliApplePictureInPicture(channel: channel)
+            }
+            #endif
         }
         switch call.method {
         case "pipStatus":
-            if #available(iOS 15.0, macOS 12.0, *), let pip = pictureInPicture as? FocuBiliApplePictureInPicture {
+            if let pip = pictureInPicture {
                 result(pip.status())
             } else { result(["supported": false, "active": false, "frames": 0]) }
         case "startPiP":
             guard let args = call.arguments as? [String: Any],
                   let x = args["x"] as? Double, let y = args["y"] as? Double,
                   let width = args["width"] as? Double, let height = args["height"] as? Double else { result(false); return }
-            if #available(iOS 15.0, macOS 12.0, *), let pip = pictureInPicture as? FocuBiliApplePictureInPicture {
+            #if os(macOS)
+            if #available(macOS 26.0, *), args["preferFloating"] as? Bool == true,
+               let router = pictureInPicture as? FocuBiliAppleVideoWindowRouter {
+                router.startFloating(rect: CGRect(x: x, y: y, width: width, height: height), result: result)
+                return
+            }
+            #endif
+            if let pip = pictureInPicture {
                 pip.start(rect: CGRect(x: x, y: y, width: width, height: height), result: result)
             } else { result(false) }
         case "stopPiP":
-            if #available(iOS 15.0, macOS 12.0, *), let pip = pictureInPicture as? FocuBiliApplePictureInPicture { pip.stop() }
+            if let pip = pictureInPicture { pip.stop() }
             result(nil)
         case "supportsHardwareVideo":
             #if os(macOS)
@@ -235,7 +252,7 @@ public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCen
             result(true)
             #endif
         case "activate":
-            if #available(iOS 15.0, macOS 12.0, *), let pip = pictureInPicture as? FocuBiliApplePictureInPicture,
+            if let pip = pictureInPicture,
                let args = call.arguments as? [String: Any], let handle = args["handle"] as? NSNumber {
                 pip.activate(handle: handle.int64Value)
             }
@@ -248,7 +265,7 @@ public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCen
             result(nil)
         case "update":
             let args = call.arguments as? [String: Any] ?? [:]
-            if #available(iOS 15.0, macOS 12.0, *), let pip = pictureInPicture as? FocuBiliApplePictureInPicture {
+            if let pip = pictureInPicture {
                 pip.update(position: args["position"] as? Double ?? 0, duration: args["duration"] as? Double ?? 0, rate: args["rate"] as? Double ?? 0)
             }
             MPNowPlayingInfoCenter.default().nowPlayingInfo = [
@@ -262,7 +279,7 @@ public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCen
             #endif
             result(nil)
         case "deactivate":
-            if #available(iOS 15.0, macOS 12.0, *), let pip = pictureInPicture as? FocuBiliApplePictureInPicture { pip.stop() }
+            if let pip = pictureInPicture { pip.stop() }
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
             #if os(iOS)
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)

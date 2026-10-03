@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/services/apple_playback_session.dart';
 import 'package:focubili/services/apple_video_capabilities.dart';
+import 'package:focubili/services/flutter_video_frame_capture.dart';
 import '../integration_test/media_fixture.dart';
 
 Future<void> waitFor(bool Function() condition, String phase) async {
@@ -46,10 +47,18 @@ Future<void> main() async {
       pause: p.pause,
       seek: p.seek,
     );
+    final capture = FlutterVideoFrameCapture();
     runApp(
       MaterialApp(
         home: Scaffold(
-          body: Video(controller: video, controls: NoVideoControls),
+          body: Center(
+            child: AspectRatio(
+              aspectRatio: 16 / 9,
+              child: capture.wrap(
+                Video(controller: video, controls: NoVideoControls),
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -82,9 +91,9 @@ Future<void> main() async {
       'pipStatus',
     );
     if (pipBefore?['supported'] == true) {
-      var started = await session.startPictureInPicture(
-        const Rect.fromLTWH(0, 0, 320, 180),
-      );
+      final rect = capture.globalRect;
+      if (rect == null) throw StateError('Video source view is not laid out');
+      var started = await session.startPictureInPicture(rect);
       if (!started) {
         stdout.writeln(
           'APPLE_PIP_PAUSED_UNAVAILABLE: ${await mediaChannel.invokeMethod<Object?>('pipStatus')}',
@@ -101,9 +110,7 @@ Future<void> main() async {
         );
         await p.play();
         await waitFor(() => p.state.playing, 'PiP retry playback');
-        started = await session.startPictureInPicture(
-          const Rect.fromLTWH(0, 0, 320, 180),
-        );
+        started = await session.startPictureInPicture(rect);
         await updates.cancel();
       }
       final status = await mediaChannel.invokeMapMethod<String, dynamic>(
@@ -116,7 +123,46 @@ Future<void> main() async {
       if (started && status?['active'] != true) {
         throw StateError('PiP start not confirmed');
       }
+      if (started) {
+        stdout.writeln('APPLE_PIP_READY_FOR_SCREENSHOT');
+        await stdout.flush();
+        await Future<void>.delayed(const Duration(seconds: 3));
+      }
       await mediaChannel.invokeMethod<void>('stopPiP');
+      final stopped = await mediaChannel.invokeMapMethod<String, dynamic>(
+        'pipStatus',
+      );
+      if (stopped?['active'] == true) {
+        throw StateError('Video window did not close');
+      }
+      for (var attempt = 0; attempt < 2; attempt++) {
+        final fallback = await session.startPictureInPicture(
+          rect,
+          preferFloating: true,
+        );
+        final fallbackStatus = await mediaChannel
+            .invokeMapMethod<String, dynamic>('pipStatus');
+        stdout.writeln(
+          'APPLE_FLOATING_RESULT: attempt=$attempt started=$fallback status=$fallbackStatus',
+        );
+        if (!fallback ||
+            fallbackStatus?['mode'] != 'floating' ||
+            fallbackStatus?['active'] != true) {
+          throw StateError('Native floating-window fallback did not open');
+        }
+        if (attempt == 0) {
+          stdout.writeln('APPLE_FLOATING_READY_FOR_SCREENSHOT');
+          await stdout.flush();
+          await Future<void>.delayed(const Duration(seconds: 3));
+        }
+        await mediaChannel.invokeMethod<void>('stopPiP');
+        final closed = await mediaChannel.invokeMapMethod<String, dynamic>(
+          'pipStatus',
+        );
+        if (closed?['active'] == true) {
+          throw StateError('Floating window did not close');
+        }
+      }
     } else {
       stdout.writeln('APPLE_PIP_UNSUPPORTED_ON_RUNTIME');
     }

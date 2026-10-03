@@ -17,7 +17,7 @@
 
 平台边界：
 - Apple 系统勿扰不能由普通第三方 App 自动切换，页面明确说明需手动操作。
-- iOS 15 / macOS 12 及以上接入系统画中画：从 libmpv 输出复制独立帧交给 AVSampleBufferDisplayLayer，保留原播放源与音轨；只有系统 didStart 回调确认后才报告进入成功。设备不支持或当前状态不可用时返回失败。画中画不包含 Flutter 弹幕/字幕覆盖层。
+- iOS 15 及以上接入系统画中画：从 libmpv 输出复制独立帧交给 AVSampleBufferDisplayLayer，保留原播放源与音轨；只有系统 didStart 回调确认后才报告进入成功。设备不支持或当前状态不可用时返回失败。画中画不包含 Flutter 弹幕/字幕覆盖层。
 - iOS 可挂起后台下载；不承诺 Android 前台服务式无限后台下载。回到 App 后可继续队列。
 - 没有 Apple 实机验证，不能把 CI 编译成功描述为所有功能真机通过。
 - 自签/未公证构建仅供测试，不是 App Store、TestFlight 或 Developer ID 正式发布包。
@@ -78,3 +78,6 @@ iOS 模拟器使用替换安装而非卸载；macOS 替换同路径应用后启�
 iOS 预览采用软件画面输出并请求 `hwdec=auto-copy`，避免应用进入后台继续调用 OpenGL ES。硬件解码是否实际启用需真机观测；软件输出仍有 CPU 色彩转换/缩放成本，不能宣称高分辨率/高帧率性能与旧硬件路径相同。真机温度、耗电和长时间后台播放仍需验收。
 
 CI 会记录 `APPLE_PIP_RESULT` 的真实 started 状态和收到的独立帧数。帧桥检查通过而 started=false 仅证明帧传输可用，不算系统浮窗启动成功；不支持的运行环境单独标记。正式验收还需 Home/锁屏/恢复、旋转、连续进入退出、拖动与倍速、音频中断等场景。
+
+
+macOS 26+ 优先请求系统画中画，旧系统或系统请求失败时使用原生 NSPanel 视频小窗，支持置顶、跨桌面、调整大小、播放/暂停和 ±15 秒跳转，复用同一个播放器与独立帧桥。它是应用提供的视频小窗，不是 AVKit 系统画中画。Apple DTS 在 2026-06 的答复称 AVSampleBufferDisplayLayer 系统画中画仅支持 iOS、macOS API 标注不准确，但本项目在更新的 macOS 26 CI 已收到真实 didStart/active=true。以实际运行结果为准，不据通用 supported 标志承诺所有 Mac 均支持；较早官方答复：https://developer.apple.com/forums/thread/830764 。诊断返回 `mode=floating` 并明确 `systemPictureInPicture=false`。
