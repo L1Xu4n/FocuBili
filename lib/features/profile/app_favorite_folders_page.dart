@@ -6,6 +6,8 @@ import '../../core/layout/adaptive_page_frame.dart';
 import '../../core/layout/adaptive_two_column_list.dart';
 import '../../core/router/app_router.dart';
 import '../../models/app_favorite.dart';
+import '../../models/app_favorites_backup.dart';
+import '../../services/app_favorites_file_service.dart';
 import '../../services/app_favorites_service.dart';
 import '../../services/bilibili_account_data_service.dart';
 import '../../services/bilibili_service.dart';
@@ -15,7 +17,10 @@ import 'favorite_folder_card.dart';
 import 'app_favorite_video_tile.dart';
 
 /// 保存收藏夹管理菜单的两个明确动作。
-enum _FolderMenuAction { rename, delete }
+enum _FolderMenuAction { export, rename, delete }
+
+/// 区分本地备份的两个文件操作，避免与 B 站在线导入混淆。
+enum _BackupMenuAction { importFile, exportAll }
 
 /// 展示本机软件收藏夹列表，支持新建、重命名、删除和进入详情。
 class AppFavoriteFoldersPage extends StatefulWidget {
@@ -25,9 +30,11 @@ class AppFavoriteFoldersPage extends StatefulWidget {
     this.favoritesService,
     this.bilibiliService,
     this.accountService,
+    this.fileService = const AppFavoritesFileService(),
   });
   final BilibiliService? bilibiliService;
   final BilibiliAccountDataService? accountService;
+  final AppFavoritesFileService fileService;
 
   /// 可选的软件收藏夹服务，未传入时使用设备默认实现。
   final AppFavoritesService? favoritesService;
@@ -42,6 +49,7 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
   late final AppFavoritesService _favoritesService;
   List<AppFavoriteFolder> _folders = const <AppFavoriteFolder>[];
   bool _isLoading = true;
+  bool _transferring = false;
   final TextEditingController _searchController = TextEditingController();
   Map<String, List<AppFavoriteItem>> _items = {};
 
@@ -112,6 +120,82 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
       ),
     );
     if (mounted) await _loadFolders();
+  }
+
+  /// 选择并预览本地备份，确认后合并；取消选择或关闭预览不会写入收藏。
+  Future<void> _importFile() async {
+    if (_transferring) return;
+    setState(() => _transferring = true);
+    try {
+      final backup = await widget.fileService.pickBackup();
+      if (backup == null || !mounted) return;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('导入软件收藏夹'),
+          content: SingleChildScrollView(
+            child: Text(
+              '文件包含 ${backup.folders.length} 个收藏夹、${backup.itemCount} 条收藏。\n\n'
+              '相同标识或同名收藏夹将合并，同一收藏夹内重复视频会跳过，保留已有收藏。',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              key: const Key('confirm-app-favorites-file-import'),
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('合并导入'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+      final result = await _favoritesService.importBackup(backup);
+      if (!mounted) return;
+      await _loadFolders();
+      if (mounted) {
+        _showMessage(
+          '导入完成：新建 ${result.createdFolders} 个收藏夹，新增 ${result.importedItems} 条收藏，跳过 ${result.duplicates} 条重复。',
+        );
+      }
+    } on FormatException catch (error) {
+      if (mounted) _showMessage(error.message);
+    } on StateError catch (error) {
+      if (mounted) {
+        await _loadFolders();
+        if (mounted) _showMessage(error.message.toString());
+      }
+    } catch (_) {
+      if (mounted) _showMessage('收藏夹导入失败，请检查文件和存储后重试。');
+    } finally {
+      if (mounted) setState(() => _transferring = false);
+    }
+  }
+
+  /// 导出全部或一个完整收藏夹，忽略搜索筛选；取消保存不会显示成功提示。
+  Future<void> _exportFile({String? folderId}) async {
+    if (_transferring) return;
+    setState(() => _transferring = true);
+    try {
+      final AppFavoritesBackup backup = await _favoritesService.exportBackup(
+        folderId: folderId,
+      );
+      final saved = await widget.fileService.saveBackup(backup);
+      if (saved && mounted) {
+        _showMessage(
+          '已导出 ${backup.folders.length} 个收藏夹、${backup.itemCount} 条收藏。',
+        );
+      }
+    } on FormatException catch (error) {
+      if (mounted) _showMessage(error.message);
+    } catch (_) {
+      if (mounted) _showMessage('收藏夹导出失败，请检查本机数据和存储位置后重试。');
+    } finally {
+      if (mounted) setState(() => _transferring = false);
+    }
   }
 
   /// Opens a matched video directly with complete online metadata when available.
@@ -322,10 +406,11 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
         title: const Text('软件收藏夹'),
         actions: <Widget>[
           if (!compact) _buildImportAction(),
+          if (!compact) _buildBackupAction(),
           IconButton(
             key: const Key('create-app-favorite-folder'),
             tooltip: '新建软件收藏夹',
-            onPressed: _createFolder,
+            onPressed: _transferring ? null : _createFolder,
             icon: const Icon(Icons.add_rounded),
           ),
         ],
@@ -370,10 +455,15 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                     _buildImportAction(),
+                    _buildBackupAction(),
                   ],
                 ),
               ),
             Expanded(child: _buildBody()),
+            if (_transferring)
+              const LinearProgressIndicator(
+                key: Key('app-favorites-transfer-progress'),
+              ),
           ],
         ),
       ),
@@ -383,9 +473,40 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
   /// 在顶栏或手机工具区提供相同的文字导入入口，避免挤压页面标题。
   Widget _buildImportAction() => TextButton.icon(
     key: const Key('import-bilibili-favorites'),
-    onPressed: _openImport,
+    onPressed: _transferring ? null : _openImport,
     icon: const Icon(Icons.download_outlined),
     label: const Text('从 B 站导入'),
+  );
+
+  /// 在手机工具区和桌面顶栏提供一致的本地文件入口。
+  Widget _buildBackupAction() => PopupMenuButton<_BackupMenuAction>(
+    key: const Key('app-favorites-backup-menu'),
+    tooltip: '导入 / 导出',
+    enabled: !_transferring && !_isLoading,
+    onSelected: (action) {
+      switch (action) {
+        case _BackupMenuAction.importFile:
+          unawaited(_importFile());
+        case _BackupMenuAction.exportAll:
+          unawaited(_exportFile());
+      }
+    },
+    itemBuilder: (context) => const [
+      PopupMenuItem(
+        key: Key('import-app-favorites-file'),
+        value: _BackupMenuAction.importFile,
+        child: Text('从文件导入'),
+      ),
+      PopupMenuItem(
+        key: Key('export-all-app-favorites'),
+        value: _BackupMenuAction.exportAll,
+        child: Text('导出全部收藏夹'),
+      ),
+    ],
+    child: const Padding(
+      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      child: Text('导入 / 导出'),
+    ),
   );
 
   /// 将偶尔使用的管理动作放入具有完整触摸面积的菜单，给收藏夹名称留出空间。
@@ -393,9 +514,12 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
       PopupMenuButton<_FolderMenuAction>(
         key: Key('app-favorite-actions-${folder.id}'),
         tooltip: '管理收藏夹',
+        enabled: !_transferring,
         icon: const Icon(Icons.more_vert_rounded),
         onSelected: (action) {
           switch (action) {
+            case _FolderMenuAction.export:
+              unawaited(_exportFile(folderId: folder.id));
             case _FolderMenuAction.rename:
               unawaited(_renameFolder(folder));
             case _FolderMenuAction.delete:
@@ -403,6 +527,11 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
           }
         },
         itemBuilder: (context) => [
+          PopupMenuItem(
+            key: Key('export-app-favorite-${folder.id}'),
+            value: _FolderMenuAction.export,
+            child: const Text('导出此收藏夹'),
+          ),
           PopupMenuItem(
             key: Key('rename-app-favorite-${folder.id}'),
             value: _FolderMenuAction.rename,
@@ -431,7 +560,7 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
             const Text('还没有软件收藏夹'),
             const SizedBox(height: 12),
             FilledButton.icon(
-              onPressed: _createFolder,
+              onPressed: _transferring ? null : _createFolder,
               icon: const Icon(Icons.add_rounded),
               label: const Text('新建收藏夹'),
             ),

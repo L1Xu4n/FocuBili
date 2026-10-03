@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/app_favorite.dart';
+import '../models/app_favorites_backup.dart';
 import '../models/video_preview.dart';
 
 /// Allows isolated in-memory storage in tests.
@@ -200,6 +201,135 @@ class AppFavoritesService {
     }
     return total;
   }
+
+  /// 在共享写入队列中获取完整快照，避免导出期间混入新增或删除的数据。
+  Future<AppFavoritesBackup> exportBackup({String? folderId}) =>
+      _mutate(() async {
+        final all = await loadFolders();
+        final folders = folderId == null
+            ? all
+            : all.where((folder) => folder.id == folderId).toList();
+        if (folderId != null && folders.isEmpty) throw StateError('收藏夹已不存在。');
+        final items = <String, List<AppFavoriteItem>>{};
+        for (final folder in folders) {
+          items[folder.id] = await loadItems(folder.id);
+        }
+        return AppFavoritesBackup(
+          folders: folders,
+          items: items,
+          exportedAt: DateTime.now(),
+        );
+      });
+
+  /// 同标识或同名目录合并，按目录内 BV 去重；本机名称、元数据和已有视频优先。
+  Future<AppFavoritesBackupImportResult> importBackup(
+    AppFavoritesBackup backup,
+  ) => _mutate(() async {
+    // 再次校验公开模型，保证通过代码构造的备份也不能绕过完整文件校验。
+    backup.toBytes();
+    final prefs = await _loadPreferences();
+    final folders = (await loadFolders()).toList();
+    final existingFolders = folders.toList();
+    final sourceIds = backup.folders.map((folder) => folder.id).toSet();
+    final claimedTargets = <String>{};
+    final pending = <String, List<AppFavoriteItem>>{};
+    var created = 0, imported = 0, duplicates = 0;
+    for (final source in backup.folders) {
+      final byId = folders.where((folder) => folder.id == source.id);
+      // 不把备份中两个独立同名目录合在一起；相同标识的本机目录也预留给其来源。
+      final byName = existingFolders.where(
+        (folder) =>
+            folder.name.trim() == source.name.trim() &&
+            !claimedTargets.contains(folder.id) &&
+            !sourceIds.contains(folder.id),
+      );
+      final AppFavoriteFolder target;
+      if (byId.isNotEmpty) {
+        target = byId.first;
+      } else if (byName.isNotEmpty) {
+        target = byName.first;
+      } else {
+        target = source;
+        folders.add(target);
+        created++;
+      }
+      claimedTargets.add(target.id);
+      final entries =
+          pending[target.id] ?? (await loadItems(target.id)).toList();
+      final seen = entries.map((item) => item.bvid).toSet();
+      for (final item in backup.items[source.id]!) {
+        if (!seen.add(item.bvid)) {
+          duplicates++;
+          continue;
+        }
+        entries.add(
+          AppFavoriteItem(
+            folderId: target.id,
+            bvid: item.bvid,
+            title: item.title,
+            coverUrl: item.coverUrl,
+            ownerName: item.ownerName,
+            durationText: item.durationText,
+            addedAt: item.addedAt,
+            partCount: item.partCount,
+          ),
+        );
+        imported++;
+      }
+      pending[target.id] = entries;
+    }
+    if (created == 0 && imported == 0) {
+      return AppFavoritesBackupImportResult(
+        createdFolders: 0,
+        importedItems: 0,
+        duplicates: duplicates,
+      );
+    }
+    // 写入前保存涉及键的原始文本；任一写入失败时恢复，包括偏好层的内存缓存。
+    final updates = <String, String>{
+      for (final entry in pending.entries)
+        '$_itemsPrefix${entry.key}': jsonEncode(
+          entry.value.map((item) => item.toJson()).toList(),
+        ),
+      if (created > 0)
+        _foldersKey: jsonEncode(
+          folders.map((folder) => folder.toJson()).toList(),
+        ),
+    };
+    final originals = {
+      for (final key in updates.keys) key: prefs.getString(key),
+    };
+    final attempted = <String>[];
+    try {
+      for (final entry in updates.entries) {
+        attempted.add(entry.key);
+        if (!await prefs.setString(entry.key, entry.value)) {
+          throw StateError('write failed');
+        }
+      }
+    } catch (_) {
+      var restored = true;
+      for (final key in attempted.reversed) {
+        try {
+          final raw = originals[key];
+          final saved = raw == null
+              ? await prefs.remove(key)
+              : await prefs.setString(key, raw);
+          if (!saved) restored = false;
+        } catch (_) {
+          restored = false;
+        }
+      }
+      throw StateError(
+        restored ? '导入保存失败，已恢复原有收藏，请重试。' : '导入保存失败，部分内容可能已写入，请检查存储后重试。',
+      );
+    }
+    return AppFavoritesBackupImportResult(
+      createdFolders: created,
+      importedItems: imported,
+      duplicates: duplicates,
+    );
+  });
 
   /// Saves metadata and reports a rejected or failed write to the caller.
   Future<bool> _saveFolders(List<AppFavoriteFolder> folders) async {
