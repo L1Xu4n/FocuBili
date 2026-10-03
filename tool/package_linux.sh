@@ -4,8 +4,13 @@ version="$(sed -nE 's/^version: ([0-9]+\.[0-9]+\.[0-9]+)\+.*/\1/p' pubspec.yaml)
 test -n "$version"
 bundle=build/linux/x64/release/bundle
 out=build/linux-packages
-root="$out/deb"
 test -x "$bundle/focubili"
+mkdir -p "$out"
+# Use a new staging directory on every invocation, so removed libraries never
+# leak into a rebuilt DEB and an existing executable symlink cannot abort it.
+root="$(mktemp -d "$out/.deb-staging.XXXXXX")"
+trap 'rm -rf -- "$root"' EXIT
+chmod 0755 "$root"
 mkdir -p "$root/opt/focubili" "$root/usr/bin" "$root/usr/share/applications" "$root/usr/share/icons/hicolor/512x512/apps" "$root/DEBIAN"
 cp -a "$bundle/." "$root/opt/focubili/"
 ln -s /opt/focubili/focubili "$root/usr/bin/focubili"

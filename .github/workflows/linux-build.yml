@@ -29,6 +29,8 @@ jobs:
       - run: dart format --output=none --set-exit-if-changed lib test tool/linux_runtime_probe.dart
       - run: flutter analyze --no-pub
       - run: flutter test --no-pub
+      - name: Verify repeatable Linux packaging
+        run: python3 tool/test_linux_packaging.py
       - name: Build normal release application
         run: flutter build linux --release
       - name: Package installable application
