@@ -70,6 +70,7 @@ jobs:
         timeout-minutes: 25
         run: |
           device="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); a=[x for k in sorted(d["devices"], reverse=True) for x in d["devices"][k] if x.get("isAvailable")]; v=next((x for x in a if x["name"].startswith("iPad")), next(x for x in a if x["name"].startswith("iPhone"))); print("Smoke device: "+v["name"], file=sys.stderr); print(v["udid"])')"
+          trap 'xcrun simctl shutdown "$device" >/dev/null 2>&1 || true' EXIT
           xcrun simctl boot "$device"
           xcrun simctl bootstatus "$device" -b
           xcrun simctl install "$device" build/ios/iphonesimulator/Runner.app
@@ -77,8 +78,7 @@ jobs:
           sleep 15
           xcrun simctl io "$device" screenshot build/apple/ios-launch.png
           xcrun simctl spawn "$device" launchctl list | grep com.focubili.app
-          flutter test integration_test/apple_smoke_test.dart -d "$device"
-          xcrun simctl shutdown "$device"
+          bash tool/check_ios_runtime.sh "$device"
       - name: Build and package macOS
         if: matrix.platform == 'macos'
         run: |
@@ -136,6 +136,7 @@ jobs:
           mkdir -p build/apple-diagnostics
           find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -type f -iname '*FocuBili*' -exec cp {} build/apple-diagnostics/ \; 2>/dev/null || true
           cp build/apple/*.log build/apple-diagnostics/ 2>/dev/null || true
+          cp build/apple/*-result.json build/apple-diagnostics/ 2>/dev/null || true
           cp build/apple/*-launch.png build/apple-diagnostics/ 2>/dev/null || true
           cp build/apple/*-window.png build/apple-diagnostics/ 2>/dev/null || true
           for f in build/apple-diagnostics/*.ips; do

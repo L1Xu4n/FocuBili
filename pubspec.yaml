@@ -74,6 +74,8 @@ dependencies:
   webview_flutter_android: ^4.13.0
   # Windows 桌面窗口需要最小尺寸和居中显示；单实例保护由原生启动器实现。
   window_manager: ^0.5.2
+  media_kit_libs_linux: ^1.2.1
+  dbus: ^0.7.14
 
 
 dev_dependencies:

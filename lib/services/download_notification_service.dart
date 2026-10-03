@@ -5,6 +5,7 @@ import '../models/offline_download_task.dart';
 import '../platform/app_platform.dart';
 import 'focus_notification_service.dart';
 import 'windows_focus_notification_service.dart';
+import 'linux_focus_notification_service.dart';
 
 /// Publishes one quiet, continuously updated OS notification for the queue.
 class DownloadNotificationService {
@@ -32,6 +33,11 @@ class DownloadNotificationService {
   final FlutterLocalNotificationsWindows? _windowsPlugin;
   final Future<bool> Function()? _windowsAvailable;
   String? _windowsTask;
+  final LinuxNotificationClient _linuxNotifications = LinuxNotificationClient(
+    persistReminders: false,
+  );
+  Future<bool>? _linuxReady;
+  String? _linuxLastStatus;
   String? _dismissedWindowsTask;
   Future<void> Function()? onPauseRequested;
 
@@ -76,6 +82,28 @@ class DownloadNotificationService {
             ? -1
             : (running!.progress! * 100).round(),
       });
+    } else if (platform == AppPlatform.linux) {
+      final label = '${running?.video.title ?? '离线缓存'} · $status';
+      if (_linuxLastStatus == label) return;
+      _linuxReady ??= _linuxNotifications.initialize().catchError(
+        (Object _) => false,
+      );
+      if (!await _linuxReady!) return;
+      _linuxLastStatus = label;
+      try {
+        if (running == null && task == null) {
+          await _linuxNotifications.cancel(_notificationId);
+        } else {
+          await _linuxNotifications.show(
+            id: _notificationId,
+            title: running?.video.title ?? '离线缓存',
+            body: status,
+          );
+        }
+        _windowsTask = running?.id;
+      } catch (_) {
+        // Notifications are optional; the download queue keeps running.
+      }
     } else if (platform == AppPlatform.windows) {
       if (running == null) _dismissedWindowsTask = null;
       if (running?.id == _dismissedWindowsTask && running != null) return;

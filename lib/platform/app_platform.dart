@@ -52,7 +52,9 @@ abstract final class AppPlatformDetector {
 extension AppPlatformDisplayName on AppPlatform {
   bool get isApple => this == AppPlatform.ios || this == AppPlatform.macos;
   bool get isDesktop =>
-      this == AppPlatform.windows || this == AppPlatform.macos;
+      this == AppPlatform.windows ||
+      this == AppPlatform.macos ||
+      this == AppPlatform.linux;
   bool get isMobile => this == AppPlatform.android || this == AppPlatform.ios;
 
   /// 把平台枚举转换为稳定的用户可读名称。

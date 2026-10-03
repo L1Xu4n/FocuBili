@@ -1,0 +1,26 @@
+name: Publish Apple v1.7.0 assets
+on:
+  push:
+    branches: [master]
+    paths: ['.github/workflows/publish-apple-v170.yml']
+permissions:
+  contents: read
+concurrency:
+  group: publish-apple-v170
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: "startsWith(github.event.head_commit.message, 'release: append Apple v1.7.0 assets')"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Verify and append Apple release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tool/publish_apple_v170.py

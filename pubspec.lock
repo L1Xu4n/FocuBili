@@ -122,7 +122,7 @@ packages:
     source: hosted
     version: "3.0.7"
   dbus:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: dbus
       sha256: "0ce9b0a839e6dee59a37a623d2fc26a35bbbe6404213e419b0d6411023d62645"
@@ -482,6 +482,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.1.4"
+  media_kit_libs_linux:
+    dependency: "direct main"
+    description:
+      name: media_kit_libs_linux
+      sha256: "2b473399a49ec94452c4d4ae51cfc0f6585074398d74216092bf3d54aac37ecf"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.2.1"
   media_kit_libs_macos_video:
     dependency: "direct main"
     description:

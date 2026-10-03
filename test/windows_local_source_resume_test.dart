@@ -9,6 +9,9 @@ import 'package:focubili/services/windows_playback_service.dart';
 
 /// Supplies quiet streams while the test controls loading through player state.
 class QuietLocalStreams extends Fake implements PlayerStream {
+  @override
+  Stream<double> get volume => const Stream<double>.empty();
+
   /// Leaves playing events under service control in this bounded loading test.
   @override
   Stream<bool> get playing => const Stream.empty();

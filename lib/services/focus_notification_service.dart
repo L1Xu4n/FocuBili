@@ -2,6 +2,7 @@ import 'package:flutter/services.dart';
 
 import '../platform/app_platform.dart';
 import 'windows_focus_notification_service.dart';
+import 'linux_focus_notification_service.dart';
 import 'windows_do_not_disturb_service.dart';
 
 /// 汇总统一权限管理页需要的 Android 权限与后台运行状态。
@@ -89,17 +90,27 @@ class FocusNotificationService {
       _windowsBackend != null ||
       (_usesDefaultChannel && _resolvedPlatform == AppPlatform.windows);
 
+  bool get _usesLinuxBackend =>
+      _usesDefaultChannel &&
+      _windowsBackend == null &&
+      _resolvedPlatform == AppPlatform.linux;
+  bool get _usesDesktopBackend => _usesWindowsBackend || _usesLinuxBackend;
+
   /// 判断默认服务是否运行在尚未实现通知后端的平台。
   bool get _usesUnavailableBackend =>
       _usesDefaultChannel &&
       _windowsBackend == null &&
       _resolvedPlatform != AppPlatform.android &&
       _resolvedPlatform != AppPlatform.windows &&
+      _resolvedPlatform != AppPlatform.linux &&
       !_resolvedPlatform.isApple;
 
   /// 返回注入的测试后端或进程内共享的生产 Windows 通知后端。
   WindowsFocusNotificationBackend get _resolvedWindowsBackend =>
-      _windowsBackend ?? WindowsFocusNotificationBackend.instance;
+      _windowsBackend ??
+      (_usesLinuxBackend
+          ? LinuxFocusNotificationBackend.instance
+          : WindowsFocusNotificationBackend.instance);
 
   /// 供界面判断是否应展示 Windows 系统能力，而不是 Android 权限文案。
   bool get usesWindowsBackend => _usesWindowsBackend;
@@ -109,7 +120,7 @@ class FocusNotificationService {
 
   /// 判断当前平台是否已经兑现自动勿扰切换；Windows 在取得微软受限功能授权前只提供手动入口。
   bool get supportsDoNotDisturb =>
-      !_usesWindowsBackend &&
+      !_usesDesktopBackend &&
       !_usesUnavailableBackend &&
       !_resolvedPlatform.isApple;
 
@@ -128,7 +139,7 @@ class FocusNotificationService {
     if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return false;
     }
-    if (_usesWindowsBackend) {
+    if (_usesDesktopBackend) {
       return _resolvedWindowsBackend.isAvailable();
     }
     try {
@@ -145,7 +156,7 @@ class FocusNotificationService {
     if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return false;
     }
-    if (_usesWindowsBackend) {
+    if (_usesDesktopBackend) {
       return _resolvedWindowsBackend.isAvailable();
     }
     try {
@@ -158,11 +169,17 @@ class FocusNotificationService {
   }
 
   /// 检查 Android 12 及以上是否允许应用安排可在待机和进程退出后准点触发的精确闹钟。
+  Future<bool> canScheduleReminders() async {
+    if (_usesLinuxBackend) return _resolvedWindowsBackend.isAvailable();
+    return hasExactAlarmPermission();
+  }
+
   Future<bool> hasExactAlarmPermission() async {
+    if (_usesLinuxBackend) return false;
     if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return false;
     }
-    if (_usesWindowsBackend) {
+    if (_usesDesktopBackend) {
       return _resolvedWindowsBackend.isAvailable();
     }
     try {
@@ -180,7 +197,7 @@ class FocusNotificationService {
     if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return;
     }
-    if (_usesWindowsBackend) {
+    if (_usesDesktopBackend) {
       await _resolvedWindowsBackend.openSettings();
       return;
     }
@@ -195,10 +212,11 @@ class FocusNotificationService {
 
   /// 检查 Android 是否允许应用在专注期间切换系统勿扰模式。
   Future<bool> hasDoNotDisturbAccess() async {
+    if (_usesLinuxBackend) return false;
     if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return false;
     }
-    if (_usesWindowsBackend) {
+    if (_usesDesktopBackend) {
       return _windowsDoNotDisturbService.isSupported();
     }
     try {
@@ -213,10 +231,11 @@ class FocusNotificationService {
 
   /// 打开 Android 勿扰模式特殊访问设置；用户必须亲自在系统页面授权。
   Future<void> openDoNotDisturbSettings() async {
+    if (_usesLinuxBackend) return;
     if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return;
     }
-    if (_usesWindowsBackend) {
+    if (_usesDesktopBackend) {
       await _windowsDoNotDisturbService.openSettings();
       return;
     }
@@ -231,10 +250,11 @@ class FocusNotificationService {
 
   /// 开启专注勿扰或恢复进入专注前的系统模式，并返回原生层是否成功执行。
   Future<bool> setFocusDoNotDisturb(bool enabled) async {
+    if (_usesLinuxBackend) return false;
     if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return false;
     }
-    if (_usesWindowsBackend) {
+    if (_usesDesktopBackend) {
       return _windowsDoNotDisturbService.setEnabled(enabled);
     }
     try {
@@ -255,7 +275,7 @@ class FocusNotificationService {
     if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return AndroidPermissionOverview.unavailable();
     }
-    if (_usesWindowsBackend) {
+    if (_usesDesktopBackend) {
       return AndroidPermissionOverview.unavailable();
     }
     try {
@@ -278,7 +298,7 @@ class FocusNotificationService {
   /// 打开小米后台自启动管理；其他系统会回退到当前应用详情页面。
   Future<void> openBackgroundAutostartSettings() async {
     if (_skipDefaultChannelInFlutterTest ||
-        _usesWindowsBackend ||
+        _usesDesktopBackend ||
         _usesUnavailableBackend) {
       return;
     }
@@ -294,7 +314,7 @@ class FocusNotificationService {
   /// 打开当前应用详情和电量管理入口，让用户自行选择无限制后台运行或取消。
   Future<void> openBatterySettings() async {
     if (_skipDefaultChannelInFlutterTest ||
-        _usesWindowsBackend ||
+        _usesDesktopBackend ||
         _usesUnavailableBackend) {
       return;
     }
@@ -312,7 +332,7 @@ class FocusNotificationService {
     if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return const <Object?, Object?>{};
     }
-    if (_usesWindowsBackend) {
+    if (_usesDesktopBackend) {
       return _resolvedWindowsBackend.getDiagnostics();
     }
     try {
@@ -334,7 +354,7 @@ class FocusNotificationService {
     if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return;
     }
-    if (_usesWindowsBackend) {
+    if (_usesDesktopBackend) {
       await _resolvedWindowsBackend.clearDiagnostics();
       return;
     }
@@ -352,7 +372,7 @@ class FocusNotificationService {
     if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return;
     }
-    if (_usesWindowsBackend) {
+    if (_usesDesktopBackend) {
       await _resolvedWindowsBackend.openSettings();
       return;
     }
@@ -370,7 +390,7 @@ class FocusNotificationService {
     if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return;
     }
-    if (_usesWindowsBackend) {
+    if (_usesDesktopBackend) {
       // Windows 专注完成 Toast 已播放系统提示音，避免庆祝弹窗再次发出重复声音。
       return;
     }
@@ -393,7 +413,7 @@ class FocusNotificationService {
     if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return false;
     }
-    if (_usesWindowsBackend) {
+    if (_usesDesktopBackend) {
       return _resolvedWindowsBackend.scheduleReminder(
         sessionId: sessionId,
         goal: goal,
@@ -422,7 +442,7 @@ class FocusNotificationService {
     if (_skipDefaultChannelInFlutterTest || _usesUnavailableBackend) {
       return;
     }
-    if (_usesWindowsBackend) {
+    if (_usesDesktopBackend) {
       await _resolvedWindowsBackend.cancelReminder(sessionId);
       return;
     }
@@ -452,7 +472,7 @@ class FocusNotificationService {
       });
       return;
     }
-    if (!_usesWindowsBackend) {
+    if (!_usesDesktopBackend) {
       return;
     }
     await _resolvedWindowsBackend.showFocusCompleted(

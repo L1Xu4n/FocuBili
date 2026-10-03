@@ -83,3 +83,7 @@ CI 会记录 `APPLE_PIP_RESULT` 的真实 started 状态和收到的独立帧数
 macOS 默认使用原生 NSPanel 视频小窗，支持置顶、跨桌面、调整大小、播放/暂停和 ±15 秒跳转，复用同一个播放器与独立帧桥。它是应用提供的视频小窗，不是 AVKit 系统画中画。诊断明确返回 `mode=floating` 和 `systemPictureInPicture=false`。
 
 Mac 系统 sample-buffer 接口曾在 macOS 26 CI 返回 didStart/active=true，但彩色测试图截图暴露裁切；因此不把回调成功当作视觉验收，也不将该路径作为默认实现。原生小窗已实测显示完整测试帧并连续开关。Apple DTS 较早关于平台可用性标注的讨论：https://developer.apple.com/forums/thread/830764 。
+
+## iOS CI 原生运行检查
+
+正常 IPA 和模拟器包封装后，CI 单独构建 `tool/ios_runtime_probe.dart` 并由 simctl 直接启动，通过 Documents 中的原子 JSON 结果文件确认播放、跳转、倍速、画中画帧/状态、偏好存储及原生接口。这避免依赖 Flutter 测试运行器的 VM 服务发现；测试项目保留，覆盖升级检查仍不在 CI 中运行。测试入口不进入正常安装包。
