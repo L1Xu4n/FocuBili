@@ -4,7 +4,7 @@ on:
     branches: [dev]
   pull_request:
     branches: [dev]
-    paths: ['ios/**', 'macos/**', 'packages/focubili_apple/**', 'lib/**', 'pubspec.*', '.github/workflows/apple-build.yml']
+    paths: ['ios/**', 'macos/**', 'packages/focubili_apple/**', 'lib/**', 'integration_test/**', 'tool/**', 'pubspec.*', '.github/workflows/apple-build.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -59,7 +59,7 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent build/ios/iphonesimulator/Runner.app build/apple/FocuBili-ios-simulator.zip
       - name: Smoke-test iOS launch on simulator
         if: matrix.platform == 'ios'
-        timeout-minutes: 10
+        timeout-minutes: 25
         run: |
           device="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for rows in d["devices"].values() for x in rows if x.get("isAvailable") and x["name"].startswith("iPhone")))')"
           xcrun simctl boot "$device"
@@ -70,6 +70,7 @@ jobs:
           xcrun simctl io "$device" screenshot build/apple/ios-launch.png
           xcrun simctl spawn "$device" launchctl list | grep com.focubili.app
           flutter test integration_test/apple_smoke_test.dart -d "$device"
+          bash tool/check_apple_upgrade.sh ios "$device"
           xcrun simctl shutdown "$device"
       - name: Build and package macOS
         if: matrix.platform == 'macos'
@@ -106,6 +107,10 @@ jobs:
           assert run.returncode == 0, f'Native probe exited {run.returncode}'
           assert 'APPLE_RUNTIME_ALL_CHECKS_PASSED' in run.stdout, 'Probe did not complete'
           PYRUN
+      - name: Verify macOS replacement preserves data
+        if: matrix.platform == 'macos'
+        timeout-minutes: 15
+        run: bash tool/check_apple_upgrade.sh macos
       - name: Preserve native failure diagnostics
         if: failure()
         shell: bash
