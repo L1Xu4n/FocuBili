@@ -205,14 +205,14 @@ jobs:
                   if name not in assets:
                       continue
                   asset = assets[name]
-                  if asset['id'] == OLD_ID or (recovery and name == DMG and asset['digest'] == CONFIG['assets'][DMG]['digest']):
+                  if asset['id'] == OLD_ID or (name == DMG and asset['digest'] == CONFIG['assets'][DMG]['digest']):
                       fields = FIELDS if asset['id'] == OLD_ID else tuple(k for k in FIELDS if k != 'id')
                       require(name == DMG and all(asset.get(k) == CONFIG['assets'][DMG].get(k) for k in fields), 'Original Mac metadata changed')
                   else:
                       require((asset['size'], asset['digest'], asset['state'], asset['content_type']) == (CONFIG['size'], 'sha256:' + CONFIG['sha256'], 'uploaded', CONFIG['assets'][DMG]['content_type']), 'Conflicting replacement')
                       require(asset.get('label') in (None, ''), 'Unexpected Mac label')
               require(recovery or DMG in assets or CONFIG['staged_name'] in assets, 'Both installers absent')
-              require(recovery or not (DMG in assets and assets[DMG]['id'] != OLD_ID and CONFIG['staged_name'] in assets), 'Duplicate replacements')
+              require(recovery or not (DMG in assets and assets[DMG]['digest'] != CONFIG['assets'][DMG]['digest'] and CONFIG['staged_name'] in assets), 'Duplicate replacements')
               desired_body(release['body'])
               return assets
 
@@ -315,6 +315,25 @@ jobs:
               gh('release', 'upload', 'v1.7.0', str(target), '--repo', REPO)
 
 
+          def promote_staged(data, old, staged):
+              stage = CONFIG['staged_name']
+              require(download(staged) == data, 'Staged bytes differ')
+              try:
+                  _, assets = read_checked()
+                  if DMG in assets:
+                      current = assets[DMG]
+                      require(current['digest'] == CONFIG['assets'][DMG]['digest'] and download(current) == old, 'Refusing non-original deletion')
+                      _, assets = read_checked()
+                      require(assets[stage]['id'] == staged['id'] and assets[DMG]['id'] == current['id'], 'Installer IDs changed')
+                      gh('api', '--method', 'DELETE', f'repos/{REPO}/releases/assets/{current["id"]}')
+                  _, assets = read_checked()
+                  require(DMG not in assets and assets[stage]['id'] == staged['id'], 'Rename conflict')
+                  patch(f'releases/assets/{staged["id"]}', {'name': DMG})
+              except Exception:
+                  recover_canonical(data, old, staged['id'])
+                  raise
+
+
           def recover_canonical(data, old, staged_id, read=recovery_read, fetch=download, rename=patch, upload=upload_original):
               def observed():
                   # Only reads are retried; an uncertain write is always observed first.
@@ -391,6 +410,25 @@ jobs:
                   with mock_patch('time.sleep'):
                       recover_canonical(b'new', b'old', new_asset['id'], read, fetch, rename, upload)
                   require(DMG in read() and calls['renames'] == 1 and calls['uploads'] <= 1, 'Recovery regression: ' + mode)
+                  # Re-enter the normal promotion path after an actual rollback.
+                  assets = validate_release(release)
+                  if calls['uploads']:
+                      restored_id = assets[DMG]['id']
+                      require(restored_id != OLD_ID, 'Rollback ID must be newly allocated')
+                      mode = 'retry-after-rollback'
+
+                      def normal_read():
+                          return release, validate_release(release)
+
+                      def remove(*args):
+                          require(args == ('api', '--method', 'DELETE', f'repos/{REPO}/releases/assets/{restored_id}'), 'Retry deletes wrong asset')
+                          release['assets'] = [a for a in release['assets'] if a['id'] != restored_id]
+                          return b''
+
+                      with mock_patch.dict(globals(), read_checked=normal_read, download=fetch, patch=rename, gh=remove):
+                          promote_staged(b'new', b'old', assets[stage])
+                      resumed = validate_release(release)
+                      require(len(resumed) == 6 and stage not in resumed and resumed[DMG]['digest'] == 'sha256:' + CONFIG['sha256'], 'Normal retry after rollback failed')
               print('MACOS_PROMOTION_RECOVERY_REGRESSIONS_PASSED')
 
 
@@ -428,35 +466,23 @@ jobs:
                   backup = Path('macos-before'); backup.mkdir(exist_ok=True)
                   (backup / DMG).write_bytes(old)
                   (backup / 'release-before.json').write_text(json.dumps(release, ensure_ascii=False, indent=2))
-                  if assets.get(DMG, {}).get('id') == OLD_ID:
+                  if assets.get(DMG, {}).get('digest') == CONFIG['assets'][DMG]['digest']:
                       require(download(assets[DMG]) == old, 'Current original bytes changed')
                   print('MACOS_PREPARE_VERIFIED')
                   return
               require(mode == 'apply', 'Unknown mode')
               verify_backup(old)
               stage = CONFIG['staged_name']
-              if stage not in assets and assets.get(DMG, {}).get('id') == OLD_ID:
+              if stage not in assets and assets.get(DMG, {}).get('digest') == CONFIG['assets'][DMG]['digest']:
                   target = Path('/tmp') / stage; target.write_bytes(data)
                   read_checked()
                   gh('release', 'upload', 'v1.7.0', str(target), '--repo', REPO)
               _, assets = read_checked()
               staged = assets.get(stage)
               if staged:
-                  require(download(staged) == data, 'Staged bytes differ')
-                  try:
-                      if DMG in assets:
-                          require(assets[DMG]['id'] == OLD_ID and download(assets[DMG]) == old, 'Refusing non-original deletion')
-                          _, assets = read_checked()
-                          require(assets[stage]['id'] == staged['id'], 'Staged ID changed')
-                          gh('api', '--method', 'DELETE', f'repos/{REPO}/releases/assets/{OLD_ID}')
-                      _, assets = read_checked()
-                      require(DMG not in assets and assets[stage]['id'] == staged['id'], 'Rename conflict')
-                      patch(f'releases/assets/{staged["id"]}', {'name': DMG})
-                  except Exception:
-                      recover_canonical(data, old, staged['id'])
-                      raise
+                  promote_staged(data, old, staged)
               release, assets = read_checked()
-              require(len(assets) == 6 and stage not in assets and assets[DMG]['id'] != OLD_ID and download(assets[DMG]) == data, 'Final installer mismatch')
+              require(len(assets) == 6 and stage not in assets and assets[DMG]['digest'] == 'sha256:' + CONFIG['sha256'] and download(assets[DMG]) == data, 'Final installer mismatch')
               if release['body'] != body:
                   patch('releases/402088227', {'body': body})
               release, assets = read_checked()
