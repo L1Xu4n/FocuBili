@@ -185,10 +185,14 @@ class SubscriptionService extends ChangeNotifier {
     // Invalidate pending responses immediately, before waiting on disk.
     _epoch++;
     _timer?.cancel();
-    await _mutate(() {
-      enabled = value;
-    });
-    _schedule();
+    try {
+      await _mutate(() {
+        enabled = value;
+      });
+    } finally {
+      // Persistence rollback may restore enabled=true; restore its polling too.
+      _schedule();
+    }
     if (value && _foreground) unawaited(refresh());
   }
 

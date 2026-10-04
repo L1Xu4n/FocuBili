@@ -475,4 +475,39 @@ void main() {
       held.complete();
     },
   );
+  testWidgets(
+    'failed disable write restores enabled state and hourly polling',
+    (tester) async {
+      var now = DateTime(2026, 10, 4), reject = false;
+      final prefs = await SharedPreferences.getInstance();
+      final c = Content()
+        ..pages[1] = [
+          [item('old')],
+        ];
+      final s = SubscriptionService(
+        contentService: c,
+        clock: () => now,
+        preferencesLoader: () async => reject
+            ? RejectingPreferences(prefs, SubscriptionService.storageKey)
+            : prefs,
+      );
+      await s.initialize();
+      await baseline(s, [source(1)]);
+      final calls = c.calls.length;
+      reject = true;
+      await expectLater(
+        s.setEnabled(false),
+        throwsA(isA<SubscriptionStorageException>()),
+      );
+      expect(s.enabled, true);
+      reject = false;
+      now = now.add(const Duration(hours: 1));
+      await tester.pump(const Duration(hours: 1));
+      await tester.pumpAndSettle();
+      expect(c.calls.length, greaterThan(calls));
+      expect(s.checkpoint('creator:1')!.lastSuccess, now);
+      s.dispose();
+      await tester.pump();
+    },
+  );
 }

@@ -3,11 +3,16 @@
   "flutter": "3.44.6",
   "dart": "3.12.2",
   "tests": {
-    "flutterPassed": 755,
+    "flutterPassed": 757,
     "flutterSkipped": 1,
     "analyze": "passed",
     "format": "passed",
-    "androidJvm": "passed"
+    "androidJvm": "passed",
+    "macMetadataTests": 3,
+    "linuxPackagingTests": {
+      "passed": 1,
+      "umask": "022 (CI default)"
+    }
   },
   "apk": [
     {
@@ -15,8 +20,8 @@
       "package": "com.focubili.app.preview",
       "versionCode": 2021,
       "versionName": "1.8.0-beta.1",
-      "bytes": 96132791,
-      "sha256": "3bef37fb4bf5f4092b074ca9ad735b8aa8c821134d0e7af974d87fd79d6979a8",
+      "bytes": 96129859,
+      "sha256": "e5cd331b994f36115105d228d4ff2c37c3a88fbb11379154d592f930cd8bc792",
       "certificateSha256": "5bd1fc4daa8a0887e213c4dc1231d0eba4f7f309a0e64c2d15fe404302bd00b0",
       "minSdk": 24,
       "targetSdk": 36,
@@ -27,8 +32,8 @@
       "package": "com.focubili.app.preview",
       "versionCode": 1021,
       "versionName": "1.8.0-beta.1",
-      "bytes": 90254245,
-      "sha256": "20d85e56c3d77eb3d95d11631e3b17bb1746602832f39ec345c0a95aa9758153",
+      "bytes": 90251313,
+      "sha256": "493392d2bfc6e462a966956ab7452a9a6a6e1e825841fa0a24bfced49da378d3",
       "certificateSha256": "5bd1fc4daa8a0887e213c4dc1231d0eba4f7f309a0e64c2d15fe404302bd00b0",
       "minSdk": 24,
       "targetSdk": 36,
@@ -39,8 +44,8 @@
       "package": "com.focubili.app.preview",
       "versionCode": 4021,
       "versionName": "1.8.0-beta.1",
-      "bytes": 91957886,
-      "sha256": "fa4ce2015a6b2538586cc4f43ecec750769e90310b0c7ff290f1b1007a2efdf2",
+      "bytes": 91954954,
+      "sha256": "2a7a8403530f553d079e82a560a8c5c1a1fb590b9fb1edc51d81f75402413bd3",
       "certificateSha256": "5bd1fc4daa8a0887e213c4dc1231d0eba4f7f309a0e64c2d15fe404302bd00b0",
       "minSdk": 24,
       "targetSdk": 36,
@@ -53,7 +58,7 @@
     "abi": "x86_64",
     "hardware": "software emulator (no KVM)",
     "realDevice": false,
-    "status": "Actual app home badge, learning list statuses/progress, subscription settings/feed and mark-read viewed; real Android network/playback/login/notification success not claimed.",
+    "status": "Actual app home badge, learning list status/progress and subscription settings viewed; source preview started but real Android network success not verified.",
     "fixtures": true,
     "upgrade": {
       "allPreferencesUnchanged": true,
@@ -75,5 +80,7 @@
     "Physical Android playback, login and Android 13+ notification permission not verified"
   ],
   "artifactScope": "Local split APK evidence. Delivered GitHub CI universal APK has its own recorded metadata and signature.",
-  "library": "Materialize failed; prescribed upload helper tools/list HTTP 401. No Library file was saved."
+  "library": "Materialize failed; prescribed upload helper tools/list HTTP 401. No Library file was saved.",
+  "sharedVersion": "1.8.0+21",
+  "androidPreviewVersionSuffix": "-beta.1"
 }
