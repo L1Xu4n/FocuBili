@@ -34,6 +34,7 @@ jobs:
           import subprocess
           import sys
           import time
+          import urllib.request
           import zipfile
           
           # CONFIG is injected from the already validated, non-secret deployment pins.
@@ -88,7 +89,9 @@ jobs:
               "target_commitish": "master",
               "draft": false,
               "prerelease": false,
-              "immutable": false
+              "immutable": false,
+              "created_at": "2026-10-02T19:14:36Z",
+              "published_at": "2026-10-02T19:14:40Z"
             },
             "assets": {
               "FocuBili-v1.7.0-android.apk": {
@@ -363,6 +366,12 @@ jobs:
               require(release['body'] == body and download(assets[DMG]) == data, 'Final release verification failed')
               out = Path('macos-replacement'); out.mkdir(exist_ok=True)
               (out / 'release-after.json').write_text(json.dumps(release, ensure_ascii=False, indent=2))
+              public_url = f'https://github.com/{REPO}/releases/download/v1.7.0/{DMG}?fix=macos-login-{CONFIG["sha256"][:16]}'
+              require(assets[DMG]['browser_download_url'] == public_url.split('?')[0], 'Unexpected public download URL')
+              with urllib.request.urlopen(public_url, timeout=120) as response:
+                  public_bytes = response.read()
+              require(public_bytes == data, 'Public download bytes mismatch')
+              (out / 'download-verification.json').write_text(json.dumps({'asset_id': assets[DMG]['id'], 'source_sha': CONFIG['dev_sha'], 'sha256': sha(public_bytes), 'size': len(public_bytes), 'verified_download_url': public_url}, indent=2))
               print('MACOS_INSTALLER_REPLACED_AND_DOWNLOADED_BYTES_VERIFIED')
           
           
