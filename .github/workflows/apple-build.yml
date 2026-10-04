@@ -91,6 +91,9 @@ jobs:
           hdiutil create -volname FocuBili -srcfolder build/apple/dmg -ov -format UDZO build/apple/FocuBili-macos-preview.dmg
           rm -rf build/apple/dmg
           shasum -a 256 build/apple/FocuBili-macos-preview.dmg > build/apple/SHA256SUMS.txt
+      - name: Verify normal macOS DMG contents and identity
+        if: matrix.platform == 'macos'
+        run: python3 tool/verify_macos_dmg.py
       - name: Smoke-test macOS launch
         if: matrix.platform == 'macos'
         timeout-minutes: 15

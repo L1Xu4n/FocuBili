@@ -79,6 +79,8 @@ dependencies:
 
 
 dev_dependencies:
+  # 登录页回归测试使用官方平台接口替身，不创建原生 WebView 或读取真实账号。
+  webview_flutter_platform_interface: ^2.15.1
   integration_test:
     sdk: flutter
   flutter_test:
