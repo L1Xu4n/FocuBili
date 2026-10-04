@@ -192,8 +192,8 @@ class SubscriptionService extends ChangeNotifier {
     } finally {
       // Persistence rollback may restore enabled=true; restore its polling too.
       _schedule();
+      if (enabled && _foreground) unawaited(refresh());
     }
-    if (value && _foreground) unawaited(refresh());
   }
 
   Future<void> setNotificationsEnabled(bool value) => _mutate(() {
@@ -214,20 +214,27 @@ class SubscriptionService extends ChangeNotifier {
 
   Future<void> pauseSource(String key, bool value) async {
     _epoch++;
-    await _mutate(() {
-      final source = _sources[key];
-      if (source != null) _sources[key] = source.withPaused(value);
-    });
-    if (enabled && _foreground) unawaited(refresh());
+    try {
+      await _mutate(() {
+        final source = _sources[key];
+        if (source != null) _sources[key] = source.withPaused(value);
+      });
+    } finally {
+      // The epoch also cancels an in-flight scan when persistence rolls back.
+      if (enabled && _foreground) unawaited(refresh());
+    }
   }
 
   Future<void> deleteSource(String key) async {
     _epoch++;
-    await _mutate(() {
-      _sources.remove(key);
-      _checkpoints.remove(key);
-    });
-    if (enabled && _foreground) unawaited(refresh());
+    try {
+      await _mutate(() {
+        _sources.remove(key);
+        _checkpoints.remove(key);
+      });
+    } finally {
+      if (enabled && _foreground) unawaited(refresh());
+    }
   }
 
   Future<void> markRead(String bvid) => _mutate(() {

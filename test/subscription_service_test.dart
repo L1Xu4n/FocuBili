@@ -510,4 +510,59 @@ void main() {
       await tester.pump();
     },
   );
+  for (final action in ['disable', 'pause', 'delete']) {
+    test(
+      '$action write rollback replaces the invalidated manual scan',
+      () async {
+        var reject = false;
+        final prefs = await SharedPreferences.getInstance();
+        final c = Content()
+          ..pages[1] = [
+            [item('old')],
+          ];
+        final s = SubscriptionService(
+          contentService: c,
+          preferencesLoader: () async => reject
+              ? RejectingPreferences(prefs, SubscriptionService.storageKey)
+              : prefs,
+        );
+        addTearDown(s.dispose);
+        await s.initialize();
+        await baseline(s, [source(1)]);
+        final lastSuccess = s.checkpoint('creator:1')!.lastSuccess;
+        c.pages[1] = [
+          [item('new'), item('old')],
+        ];
+        final hold = Completer<void>();
+        c.hold = hold;
+        final pending = s.refresh(manual: true);
+        await Future<void>.delayed(Duration.zero);
+        final calls = c.calls.length;
+        reject = true;
+        final mutation = switch (action) {
+          'disable' => s.setEnabled(false),
+          'pause' => s.pauseSource('creator:1', true),
+          _ => s.deleteSource('creator:1'),
+        };
+        await expectLater(
+          mutation,
+          throwsA(isA<SubscriptionStorageException>()),
+        );
+        expect(s.enabled, true);
+        expect(s.sources.single.paused, false);
+        expect(s.checkpoint('creator:1')!.lastSuccess, lastSuccess);
+        reject = false;
+        c.hold = null;
+        hold.complete();
+        await pending;
+        // No extra manual request or lifecycle event: rollback itself queues it.
+        expect(c.calls.length, calls + 1);
+        expect(s.feed.single.bvid, 'new');
+        final stored = jsonDecode(
+          prefs.getString(SubscriptionService.storageKey)!,
+        );
+        expect((stored['feed'] as List).single['bvid'], 'new');
+      },
+    );
+  }
 }

@@ -20,6 +20,10 @@ void main() {
       expect(debug, contains('applicationIdSuffix ".preview"'));
       expect(debug, contains('versionNameSuffix "-beta.1"'));
       expect(debug, contains('焦点哔哩 Beta'));
+      final debugManifest = File(
+        'android/app/src/debug/AndroidManifest.xml',
+      ).readAsStringSync();
+      expect(debugManifest, contains(r'android:label="${appLabel}"'));
     },
   );
 }
