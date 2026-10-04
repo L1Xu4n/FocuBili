@@ -2756,6 +2756,7 @@ void main() {
       expect(find.text('0:00 / 120:00:00'), findsOneWidget);
       await tester.pumpWidget(const SizedBox.shrink());
     },
+    // This layout fixture requires the same Windows font as the screenshot.
     skip: !File('C:/Windows/Fonts/msyh.ttc').existsSync(),
   );
 

@@ -281,8 +281,9 @@ APK SHA-256：`4998C8EB9EF7F69C336F2A0BA50EF1772D6F154899506B4D2C10FFF5F91CFE95`
 
 ### 环境
 
-- Flutter 3.44.6 stable
-- Dart 3.12.2（随 Flutter SDK 提供，无需单独安装）
+- Android / Windows / Apple：Flutter 3.44.6 stable
+- Linux：Flutter 3.47.5 stable（修复 X11 下窗口缩放时的引擎合成器崩溃；不要使用 3.44.x 构建 Linux）
+- Dart 随对应 Flutter SDK 提供，无需单独安装（非 Linux 构建为 Dart 3.12.2）
 - JDK 21
 - Android SDK 36
 - Android NDK 28.2.13676358
@@ -290,7 +291,7 @@ APK SHA-256：`4998C8EB9EF7F69C336F2A0BA50EF1772D6F154899506B4D2C10FFF5F91CFE95`
 - Visual Studio 2022 Build Tools（使用 C++ 的桌面开发、Windows SDK 与 ATL）
 - Inno Setup 6（仅在生成 Windows EXE 安装器时需要）
 
-Android 构建链固定为 Gradle 8.14.3、Android Gradle Plugin 8.11.1 和 Kotlin 2.2.20；最低支持 Android 7.0（API 24）。项目当前使用 Flutter 3.44.6，构建命令见上方说明。
+Android 构建链固定为 Gradle 8.14.3、Android Gradle Plugin 8.11.1 和 Kotlin 2.2.20；最低支持 Android 7.0（API 24）。Android / Windows / Apple 构建使用 Flutter 3.44.6；Linux 固定使用 Flutter 3.47.5，构建命令见上方说明。
 
 专注计时的视频关联、打断和通知规则已经内置在应用流程中，并会继续通过自动化测试回归。
 
