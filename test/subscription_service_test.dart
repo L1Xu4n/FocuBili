@@ -398,10 +398,11 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       s.setForeground(false);
       s.setForeground(true);
-      final resumed = s.refresh(manual: true);
       c.hold = null;
       hold.complete();
-      await Future.wait([stale, resumed]);
+      // Production only invokes automatic refresh on resume; manual intent
+      // must come from the invalidated user-requested round.
+      await stale;
       expect(s.feed.map((e) => e.bvid), ['new']);
       expect(c.calls.where((e) => e == '1:1').length, greaterThanOrEqualTo(3));
     },
@@ -439,6 +440,7 @@ void main() {
       expect(s.feed.single.collectionAdded, true);
       expect(s.feed.single.readAt, readAt);
       expect(s.unreadCount, 0);
+      expect(c.calls.where((e) => e == '1:1').length, 3);
     },
   );
   test(

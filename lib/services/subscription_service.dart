@@ -38,6 +38,7 @@ class SubscriptionService extends ChangeNotifier {
   int _refreshEpoch = -1;
   Set<String> _refreshSources = {};
   bool _refreshAgain = false, _refreshAgainManual = false;
+  bool _refreshManual = false;
   Future<void>? _writes;
   Timer? _timer;
   Map<String, SubscriptionSource> _sources = {};
@@ -204,7 +205,7 @@ class SubscriptionService extends ChangeNotifier {
         _checkpoints[source.key] = SourceCheckpoint();
       }
     });
-    if (enabled && _foreground) unawaited(refresh(manual: true));
+    if (enabled && _foreground) unawaited(refresh());
   }
 
   Future<void> pauseSource(String key, bool value) async {
@@ -274,11 +275,15 @@ class SubscriptionService extends ChangeNotifier {
       if (_refreshEpoch != _epoch ||
           !setEquals(_refreshSources, activeSources)) {
         _refreshAgain = true;
-        _refreshAgainManual = _refreshAgainManual || manual;
+        _refreshAgainManual =
+            _refreshAgainManual ||
+            manual ||
+            (_refreshEpoch != _epoch && _refreshManual);
       }
       return _refresh!;
     }
     _refreshEpoch = _epoch;
+    _refreshManual = manual;
     _refreshSources = activeSources;
     late final Future<void> completed;
     completed = _refreshRound(manual).whenComplete(() async {

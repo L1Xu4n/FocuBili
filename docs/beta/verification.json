@@ -15,8 +15,8 @@
       "package": "com.focubili.app.preview",
       "versionCode": 2021,
       "versionName": "1.8.0-beta.1",
-      "bytes": 96133438,
-      "sha256": "312d6d21b482d9eb05c9a0dae10e3f005de39aa2ee87ed3babd0be23d79518bc",
+      "bytes": 96132791,
+      "sha256": "3bef37fb4bf5f4092b074ca9ad735b8aa8c821134d0e7af974d87fd79d6979a8",
       "certificateSha256": "5bd1fc4daa8a0887e213c4dc1231d0eba4f7f309a0e64c2d15fe404302bd00b0",
       "minSdk": 24,
       "targetSdk": 36,
@@ -27,8 +27,8 @@
       "package": "com.focubili.app.preview",
       "versionCode": 1021,
       "versionName": "1.8.0-beta.1",
-      "bytes": 90254892,
-      "sha256": "9556791261a59a13a8d834fb4faa5685ad0f1cfc9e5a37e1b1296ca984878c1a",
+      "bytes": 90254245,
+      "sha256": "20d85e56c3d77eb3d95d11631e3b17bb1746602832f39ec345c0a95aa9758153",
       "certificateSha256": "5bd1fc4daa8a0887e213c4dc1231d0eba4f7f309a0e64c2d15fe404302bd00b0",
       "minSdk": 24,
       "targetSdk": 36,
@@ -39,8 +39,8 @@
       "package": "com.focubili.app.preview",
       "versionCode": 4021,
       "versionName": "1.8.0-beta.1",
-      "bytes": 91958533,
-      "sha256": "28698722fed725d0fbf9b9d21c42814429082890b54e54e11d69e3488069c4e9",
+      "bytes": 91957886,
+      "sha256": "fa4ce2015a6b2538586cc4f43ecec750769e90310b0c7ff290f1b1007a2efdf2",
       "certificateSha256": "5bd1fc4daa8a0887e213c4dc1231d0eba4f7f309a0e64c2d15fe404302bd00b0",
       "minSdk": 24,
       "targetSdk": 36,
@@ -53,14 +53,21 @@
     "abi": "x86_64",
     "hardware": "software emulator (no KVM)",
     "realDevice": false,
-    "status": "Actual app home badge, learning list status/progress and subscription settings viewed; source preview started but real Android network success not verified.",
+    "status": "Actual app home badge, learning list statuses/progress, subscription settings/feed and mark-read viewed; real Android network/playback/login/notification success not claimed.",
     "fixtures": true,
     "upgrade": {
       "allPreferencesUnchanged": true,
       "learningTasks": 3,
       "learningProgressSeconds": 93.0,
       "source": "isolated emulator fixtures, not real video playback"
-    }
+    },
+    "readAction": {
+      "nativeUiUnreadCount": 1,
+      "nativeUiReadCount": 1,
+      "learningDataUnchanged": true,
+      "fixtures": true
+    },
+    "fontScaleChecked": 1.4
   },
   "limits": [
     "Anonymous UP WBI real API blocked (-352), fallback 412",
