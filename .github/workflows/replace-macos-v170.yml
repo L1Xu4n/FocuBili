@@ -295,6 +295,12 @@ jobs:
               gh('api', '--method', 'PATCH', f'repos/{REPO}/{path}', '--input', str(payload))
 
 
+          def finalize_release_notes(body):
+              current, _ = read_checked()
+              if current['body'] != body:
+                  patch('releases/402088227', {'body': body})
+
+
           def verify_backup(old):
               ident = int(os.environ['BACKUP_ARTIFACT_ID'])
               meta = api(f'actions/artifacts/{ident}')
@@ -512,6 +518,28 @@ jobs:
               print('MACOS_PINNED_PUBLICATION_RESUMES_AFTER_MASTER_ADVANCES_PASSED')
 
 
+          def selftest_notes_concurrency(original):
+              from unittest.mock import patch as mock_patch
+              body = desired_body(original['body'])
+              for current_body in (original['body'], body, 'concurrent unrelated notes'):
+                  release = copy.deepcopy(original)
+                  release['body'] = current_body
+                  writes = []
+
+                  def read():
+                      return release, validate_release(release)
+
+                  with mock_patch.dict(globals(), read_checked=read, patch=lambda *args: writes.append(args)):
+                      try:
+                          finalize_release_notes(body)
+                      except RuntimeError:
+                          require(current_body == 'concurrent unrelated notes' and not writes, 'Concurrent notes overwritten')
+                      else:
+                          require(current_body != 'concurrent unrelated notes', 'Concurrent notes accepted')
+                          require(writes == ([('releases/402088227', {'body': body})] if current_body != body else []), 'Wrong notes update')
+              print('MACOS_RELEASE_NOTES_RECHECKED_BEFORE_WRITE_PASSED')
+
+
           def selftest(original):
               validate_release(original)
               require(sha(desired_body(original['body']).encode()) == CONFIG['desired_body_sha256'], 'Notes regression')
@@ -544,6 +572,7 @@ jobs:
               selftest_recovery(release)
               selftest_promotion_failures(release)
               selftest_publication_source()
+              selftest_notes_concurrency(release)
               if mode == 'prepare':
                   backup = Path('macos-before'); backup.mkdir(exist_ok=True)
                   (backup / DMG).write_bytes(old)
@@ -565,8 +594,7 @@ jobs:
                   promote_staged(data, old, staged)
               release, assets = read_checked()
               require(len(assets) == 6 and stage not in assets and assets[DMG]['digest'] == 'sha256:' + CONFIG['sha256'] and download(assets[DMG]) == data, 'Final installer mismatch')
-              if release['body'] != body:
-                  patch('releases/402088227', {'body': body})
+              finalize_release_notes(body)
               release, assets = read_checked()
               require(release['body'] == body and download(assets[DMG]) == data, 'Final release verification failed')
               out = Path('macos-replacement'); out.mkdir(exist_ok=True)
