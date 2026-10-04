@@ -1,0 +1,64 @@
+name: Linux builds
+on:
+  push:
+    branches: [dev, master]
+    paths: ['linux/**', 'lib/**', 'test/**', 'integration_test/**', 'third_party/**', 'pubspec.*', 'tool/**', '.github/workflows/linux-build.yml']
+  pull_request:
+    branches: [dev, master]
+    paths: ['linux/**', 'lib/**', 'test/**', 'integration_test/**', 'third_party/**', 'pubspec.*', 'tool/**', '.github/workflows/linux-build.yml']
+permissions:
+  contents: read
+concurrency:
+  group: linux-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Linux build and desktop test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libmpv-dev libsecret-1-dev libjsoncpp-dev libasound2-dev libwebkit2gtk-4.1-dev xvfb dbus-x11 openbox dunst scrot gdb gnome-keyring xdg-desktop-portal-gtk desktop-file-utils
+      - uses: subosito/flutter-action@v2
+        with:
+          # Includes the X11 compositor framebuffer-size fix for resize uploads.
+          flutter-version: '3.47.5'
+          cache: true
+      - run: flutter pub get
+      - run: dart format --output=none --set-exit-if-changed lib test tool/linux_runtime_probe.dart
+      - run: flutter analyze --no-pub
+      - run: flutter test --no-pub
+      - name: Verify repeatable Linux packaging
+        run: |
+          python3 tool/test_linux_packaging.py
+          python3 tool/test_linux_runtime_runner.py
+      - name: Build normal release application
+        run: flutter build linux --release
+      - name: Package installable application
+        run: |
+          bash tool/package_linux.sh
+          desktop-file-validate linux/packaging/com.focubili.app.desktop
+          ldd build/linux/x64/release/bundle/focubili | tee build/linux-packages/ldd.txt
+          ! grep -q 'not found' build/linux-packages/ldd.txt
+      - name: Test normal application startup and single instance
+        timeout-minutes: 3
+        run: dbus-run-session -- xvfb-run -a -s '-screen 0 1280x900x24' bash tool/check_linux_launch.sh
+      - name: Build standalone native runtime probe
+        run: flutter build linux --release --target tool/linux_runtime_probe.dart
+      - name: Test real Linux desktop services and media
+        timeout-minutes: 8
+        run: dbus-run-session -- xvfb-run -a -s '-screen 0 1280x900x24' bash tool/check_linux_runtime.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: focubili-linux-${{ github.sha }}
+          path: |
+            build/linux-packages/*.deb
+            build/linux-packages/*.tar.gz
+            build/linux-packages/*.txt
+            build/linux-packages/*.log
+            build/linux-packages/*.png
+          if-no-files-found: warn
+          retention-days: 30

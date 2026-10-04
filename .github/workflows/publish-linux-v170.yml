@@ -1,0 +1,28 @@
+name: Publish Linux v1.7.0 assets
+on:
+  push:
+    branches: [dev]
+    paths: ['.github/workflows/publish-linux-v170.yml']
+permissions:
+  contents: read
+concurrency:
+  group: publish-linux-v170
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: "github.repository == 'L1Xu4n/FocuBili' && startsWith(github.event.head_commit.message, 'release: append Linux v1.7.0 assets')"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Test additive release publisher
+        run: python3 -m unittest discover -s tool -p test_publish_linux_v170.py -v
+      - name: Verify and append Linux release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tool/publish_linux_v170.py

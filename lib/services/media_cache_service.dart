@@ -148,7 +148,7 @@ class WindowsMediaCacheService implements MediaCacheService {
       await preferences.setInt(_capacityPreferenceKey, capacityBytes);
       final Directory directory = await resolveCacheDirectory();
       await _trimToCapacity(directory, capacityBytes);
-      return loadStatus();
+      return await loadStatus();
     } on MediaCacheException {
       rethrow;
     } catch (_) {
@@ -170,7 +170,7 @@ class WindowsMediaCacheService implements MediaCacheService {
       )) {
         await entity.delete(recursive: true);
       }
-      return loadStatus();
+      return await loadStatus();
     } on MediaCacheException {
       rethrow;
     } catch (_) {

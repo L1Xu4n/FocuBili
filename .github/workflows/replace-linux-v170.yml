@@ -1,0 +1,41 @@
+name: Replace Linux v1.7.0 renderer installer
+on:
+  push:
+    branches: [dev]
+    paths: ['.github/workflows/replace-linux-v170.yml']
+permissions:
+  contents: read
+concurrency:
+  group: publish-linux-v170
+  cancel-in-progress: false
+jobs:
+  replace:
+    if: "github.repository == 'L1Xu4n/FocuBili' && github.event.head_commit.message == 'release: replace Linux v1.7.0 renderer installer'"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Test DEB replacement safety
+        run: python3 -m unittest discover -s tool -p test_replace_linux_v170.py -v
+      - name: Verify source, runtime evidence, packages and original installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tool/replace_linux_v170.py prepare
+      - name: Preserve original installer before any deletion
+        id: backup
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-v170-before-render-${{ github.run_id }}-${{ github.run_attempt }}
+          path: linux-render-backup/FocuBili-v1.7.0-linux-amd64.deb
+          if-no-files-found: error
+          retention-days: 90
+      - name: Verify backup, stage and replace only Linux DEB
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BACKUP_ARTIFACT_ID: ${{ steps.backup.outputs.artifact-id }}
+        run: python3 tool/replace_linux_v170.py apply

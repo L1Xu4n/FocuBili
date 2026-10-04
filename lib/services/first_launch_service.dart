@@ -47,7 +47,7 @@ class FirstLaunchService {
   Future<bool> acceptAgreement() async {
     try {
       final SharedPreferences preferences = await _preferencesLoader();
-      return preferences.setBool(agreementAcceptedKey, true);
+      return await preferences.setBool(agreementAcceptedKey, true);
     } catch (_) {
       return false;
     }
@@ -57,7 +57,7 @@ class FirstLaunchService {
   Future<bool> markLoginGuideShown() async {
     try {
       final SharedPreferences preferences = await _preferencesLoader();
-      return preferences.setBool(loginGuideShownKey, true);
+      return await preferences.setBool(loginGuideShownKey, true);
     } catch (_) {
       return false;
     }

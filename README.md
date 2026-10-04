@@ -255,6 +255,13 @@ APK SHA-256：`4998C8EB9EF7F69C336F2A0BA50EF1772D6F154899506B4D2C10FFF5F91CFE95`
 - 支持只读查看收藏夹、收藏内容、已关注 UP 主和已订阅 UGC 合集。
 - 不提供收藏、取关、私信或其他账号写操作。
 
+### 软件收藏夹备份与迁移
+
+- “我的 → 软件收藏夹 → 导入 / 导出”可从 JSON 文件导入，或导出全部收藏夹；每个收藏夹的管理菜单也可单独导出。
+- 备份保留空收藏夹、视频标题、BV 号、封面地址、UP 主、时长、多 P 数和收藏时间，不包含账号 Cookie 或离线视频文件。
+- 导入前显示文件中的收藏夹和收藏数量；相同标识或同名收藏夹合并，同一目录按 BV 去重，并保留已有收藏的信息。取消操作不会改动本机数据。
+- Android、Windows 和文件插件支持的其他原生平台共用系统文件选择及保存流程，无需固定下载目录或额外的存储权限。单个备份最多 20 MB，超过时可按收藏夹分别导出。
+
 ## 当前限制
 
 - 项目依赖非官方公开接口，接口可能随平台策略调整而失效或触发风控。
@@ -274,8 +281,9 @@ APK SHA-256：`4998C8EB9EF7F69C336F2A0BA50EF1772D6F154899506B4D2C10FFF5F91CFE95`
 
 ### 环境
 
-- Flutter 3.44.6 stable
-- Dart 3.12.2（随 Flutter SDK 提供，无需单独安装）
+- Android / Windows / Apple：Flutter 3.44.6 stable
+- Linux：Flutter 3.47.5 stable（修复 X11 下窗口缩放时的引擎合成器崩溃；不要使用 3.44.x 构建 Linux）
+- Dart 随对应 Flutter SDK 提供，无需单独安装（非 Linux 构建为 Dart 3.12.2）
 - JDK 21
 - Android SDK 36
 - Android NDK 28.2.13676358
@@ -283,7 +291,7 @@ APK SHA-256：`4998C8EB9EF7F69C336F2A0BA50EF1772D6F154899506B4D2C10FFF5F91CFE95`
 - Visual Studio 2022 Build Tools（使用 C++ 的桌面开发、Windows SDK 与 ATL）
 - Inno Setup 6（仅在生成 Windows EXE 安装器时需要）
 
-Android 构建链固定为 Gradle 8.14.3、Android Gradle Plugin 8.11.1 和 Kotlin 2.2.20；最低支持 Android 7.0（API 24）。项目当前使用 Flutter 3.44.6，构建命令见上方说明。
+Android 构建链固定为 Gradle 8.14.3、Android Gradle Plugin 8.11.1 和 Kotlin 2.2.20；最低支持 Android 7.0（API 24）。Android / Windows / Apple 构建使用 Flutter 3.44.6；Linux 固定使用 Flutter 3.47.5，构建命令见上方说明。
 
 专注计时的视频关联、打断和通知规则已经内置在应用流程中，并会继续通过自动化测试回归。
 

@@ -1389,7 +1389,7 @@ void main() {
   });
 
   /// 验证尚未接入的平台展示安全说明，不误用 Android 登录入口。
-  testWidgets('Linux 登录页显示暂不支持说明', (WidgetTester tester) async {
+  testWidgets('Linux 登录页提供扫码和安全 Cookie 入口', (WidgetTester tester) async {
     await tester.pumpWidget(
       MaterialApp(
         home: LoginPage(
@@ -1399,9 +1399,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Linux 暂不支持账号登录'), findsOneWidget);
-    expect(find.text('安全登录和 Cookie 存储接入完成后，这里才会开放登录入口。'), findsOneWidget);
-    expect(find.text('Cookie'), findsNothing);
+    expect(find.text('Linux 暂不支持账号登录'), findsNothing);
+    expect(find.text('打开 B 站扫码登录'), findsWidgets);
+    expect(find.text('Cookie'), findsOneWidget);
   });
 
   /// 验证播放器只在真实就绪后写一次历史，并在切换分P后的下一次就绪更新同一视频。
@@ -2756,6 +2756,7 @@ void main() {
       expect(find.text('0:00 / 120:00:00'), findsOneWidget);
       await tester.pumpWidget(const SizedBox.shrink());
     },
+    // This layout fixture requires the same Windows font as the screenshot.
     skip: !File('C:/Windows/Fonts/msyh.ttc').existsSync(),
   );
 

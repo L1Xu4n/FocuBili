@@ -1,0 +1,57 @@
+{
+  "id": 402088227,
+  "tag_name": "v1.7.0",
+  "target_commitish": "master",
+  "name": "FocuBili v1.7.0",
+  "draft": false,
+  "prerelease": false,
+  "immutable": false,
+  "body": "# FocuBili v1.7.0 发布说明\n\n发布日期：2026-10-03\n版本号：`1.7.0+20`\nWindows 包版本：`1.7.0.20`\n\n国庆快乐！添加了一个国庆红主题～\n\n因为本次更新包含大量改动和功能更新，因此跳过 1.6.0 版本号，直接作为 1.7.0 发布（致敬某厂商）。\n\n(Only FocuBili can do)\n\n希望焦点哔哩会成为你最好用的第三方 B 站 App。\n\n<!-- focubili-update-summary:start -->\n- 国庆快乐！新增国庆红主题与首页五角星装饰。\n- 新增听视频功能，支持纯音频播放、Android 后台锁屏播放及定时暂停。\n- 首页和“我的”支持卡片布局自定义，可排序、隐藏、重新添加和恢复默认布局。\n- 新增离线缓存、下载队列、画质选择、暂停续传与本地播放。\n- 时间点笔记在进度条上显示旗标，点击即可打开对应笔记。\n- 新增软件收藏夹，支持管理、搜索和从 B 站收藏夹导入。\n- 手机全屏支持双指缩放、移动视频画面与双指双击复位。\n- 新增主题个性化，默认蓝更名为焦点蓝，优化开关配色。\n- 改进字幕加载与切换，修复字幕串台，支持字号调整和实时预览。\n- 改善华为老设备登录兼容，增加验证帮助、重载及诊断信息。\n- 修复多处 Bug，优化播放器、搜索、设置及 Windows 使用体验。\n<!-- focubili-update-summary:end -->\n\n## 主要更新\n\n1. **听视频功能**：只请求音频轨道；Android 支持后台和锁屏继续播放、系统媒体控制与定时暂停，切回视频保留播放位置和倍速。\n2. **自定义首页卡片和设置布局**：首页和“我的”支持拖动排序、隐藏和添加卡片；设置入口保留，支持恢复默认布局。个性化设置可直接搜索具体选项。\n3. **离线缓存**：支持下载队列、进度与速度、画质选择、暂停/继续、重试及断点续传；支持高清 DASH 音视频缓存，并与在线播放共用播放器。\n4. **时间点笔记旗标**：当前分 P 的笔记在进度条显示时间标记；同时间多条笔记合并入口，点击选择对应笔记，可在设置中关闭。\n5. **软件收藏夹**：在本机创建、改名、删除和搜索收藏夹，支持从 B 站收藏夹导入。\n6. **双指缩放视频**：手机全屏下可双指缩放和移动画面，双指双击恢复；只改变画面，不改变控制栏。\n7. **主题个性化**：提供多种主题色，支持浅色、深色和跟随系统；新增国庆红主题及五角星装饰。\n8. **字幕改进修复**：改善加载、刷新和失败重试，修复切视频、分 P 时的字幕串台；字幕字号支持 12～36 调整与实时预览。\n9. **兼容华为老设备**：改善官方登录页面兼容，增加验证帮助、重载和扫码恢复入口，诊断页自动读取 WebView 信息。\n\n## Bug 修复与体验优化\n\n- 优化搜索结果、收藏、个人中心及下载页面布局，筛选弹窗的关闭与应用入口保持可见。\n- 支持 0.5～5 倍速自定义，播放栏大小支持 80%～200% 调整，并提供全屏预览；双击触发区可自定义。\n- 改善播放器提示、字幕与控制栏避让，新增播放暂停及累计快进反馈动画。\n- 修复在线与缓存切换、打开剪贴板视频后返回的播放恢复问题，以及部分字幕异步请求覆盖问题。\n- 改善 Windows 高倍速声音、全屏任务栏与鼠标、横向滚动、截图笔记及分享图片复制。\n- 增加默认关闭的可选 WBI 签名开关，供遇到播放接口错误时尝试。\n\n## 使用说明\n\n- 华为老设备的登录与验证表现仍取决于系统 WebView、网络和服务端，兼容改进不保证每台设备都能通过验证。\n- WBI 签名保持默认关闭，不能保证解决 `-351`，部分账号或网络环境启用后也可能失败。\n- 软件收藏、笔记、缓存与布局保存在当前设备，暂不提供跨设备同步。\n\n## 后续计划\n\niOS、macOS 安装包已补充，见下方安装说明；下个大版本将对学习清单进行体验升级。\n\n本版本提供 Android、Windows、iOS 与 macOS 安装包，各平台签名和安装要求见下方说明。\n\n## 正式包与校验\n\n正式包来自 [Release Build 37047320494](https://github.com/L1Xu4n/FocuBili/actions/runs/37047320494)，构建提交为 `7189729015a2c4789c71419b7ee116a2c64d614d`。\n\n- dev 和 master CI 均通过；Flutter 全量检查 668 项通过、1 项跳过。\n- Android 正式包名为 `com.focubili.app`，版本 `1.7.0`、构建号 `20`，已核对历史签名证书。\n- Windows 正式产品名为“焦点哔哩”，版本 `1.7.0.20`；便携包包含完整运行库，45 个文件已逐一校验。\n\n| 文件 | 大小（字节） | SHA-256 |\n| --- | ---: | --- |\n| `FocuBili-v1.7.0-android.apk` | 33,393,099 | `ADC453F286E61D8C89650DDABA73C904DED53EB3E6F71C125304CC33E6ABCCBF` |\n| `FocuBili-v1.7.0-windows-x64-setup.exe` | 28,064,794 | `BBB198DE57EFFC6A5D10F031E448ABFB8F4FF07395CC9B9AD52A6EC63653437B` |\n| `FocuBili-v1.7.0-windows-x64-portable.zip` | 38,239,068 | `C6B48738945DBC67D63E513875A6F23DA974CC4681124037270D078FB646DE61` |\n\n<!-- focubili-apple-v170:start -->\n## iOS / macOS 正式版补充（2026-10-03）\n\n本次补充 FocuBili 1.7.0 的 iOS 与 macOS 安装包，包含圆角与深色图标。\n\n- iOS：下载 IPA 后需自行签名安装；免费个人签名通常需要每七天刷新。这不是 App Store 或 TestFlight 分发。\n- macOS：DMG 内的 App 使用 ad-hoc 签名，未进行 Apple 公证；首次安装可能被系统限制。\n- 已通过 Apple 编译、模拟器/原生播放检查、iOS 系统画中画、Mac 原生视频小窗及同身份覆盖升级数据保留检查。\n- 尚无 Apple 真机验收；真实账号登录、长时间后台播放、功耗及跨签名身份迁移仍需实测。\n- 更新时沿用原有签名身份与应用标识，覆盖安装前先备份重要笔记。画中画/视频小窗不包含 Flutter 字幕和弹幕叠加。\n\nApple 构建源码：[`c5e00cf15476baa1425b38a0be5b02ac5bb029d1`](https://github.com/L1Xu4n/FocuBili/commit/c5e00cf15476baa1425b38a0be5b02ac5bb029d1)，已合入主分支；[Apple CI 37117739928](https://github.com/L1Xu4n/FocuBili/actions/runs/37117739928)。\n原 v1.7.0 标签及 Android/Windows 安装包保持不变。Apple 适配为之后新增，原标签的源码压缩包不包含这些新增代码，请使用上述提交。\n\n| 文件 | 大小（字节） | SHA-256 |\n| --- | ---: | --- |\n| `FocuBili-v1.7.0-ios.ipa` | 20548173 | `c366a907b45b135ae6f6b14b16fb91ff20711039d6ca306af897cbe8cc821ae8` |\n| `FocuBili-v1.7.0-macos.dmg` | 49893320 | `3e8f56d5807ed522e3a65393a5e8696d5192c2f04eedba3c1a892ef8b519e502` |\n<!-- focubili-apple-v170:end -->\n",
+  "assets": [
+    {
+      "id": 606302402,
+      "name": "FocuBili-v1.7.0-android.apk",
+      "size": 33393099,
+      "digest": "sha256:adc453f286e61d8c89650ddaba73c904ded53eb3e6f71c125304cc33e6abccbf",
+      "state": "uploaded",
+      "label": "",
+      "content_type": "application/vnd.android.package-archive"
+    },
+    {
+      "id": 607785232,
+      "name": "FocuBili-v1.7.0-ios.ipa",
+      "size": 20548173,
+      "digest": "sha256:c366a907b45b135ae6f6b14b16fb91ff20711039d6ca306af897cbe8cc821ae8",
+      "state": "uploaded",
+      "label": "",
+      "content_type": "application/octet-stream"
+    },
+    {
+      "id": 607785273,
+      "name": "FocuBili-v1.7.0-macos.dmg",
+      "size": 49893320,
+      "digest": "sha256:3e8f56d5807ed522e3a65393a5e8696d5192c2f04eedba3c1a892ef8b519e502",
+      "state": "uploaded",
+      "label": "",
+      "content_type": "application/x-apple-diskimage"
+    },
+    {
+      "id": 606302405,
+      "name": "FocuBili-v1.7.0-windows-x64-portable.zip",
+      "size": 38239068,
+      "digest": "sha256:c6b48738945dbc67d63e513875a6f23da974cc4681124037270d078fb646de61",
+      "state": "uploaded",
+      "label": "",
+      "content_type": "application/zip"
+    },
+    {
+      "id": 606302403,
+      "name": "FocuBili-v1.7.0-windows-x64-setup.exe",
+      "size": 28064794,
+      "digest": "sha256:bbb198de57effc6a5d10f031e448abfb8f4ff07395cc9b9ad52a6ec63653437b",
+      "state": "uploaded",
+      "label": "",
+      "content_type": "application/octet-stream"
+    }
+  ]
+}
