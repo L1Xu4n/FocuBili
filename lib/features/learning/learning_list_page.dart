@@ -32,6 +32,11 @@ class _LearningListPageState extends State<LearningListPage> {
   late final TextEditingController _searchController;
   List<LearningListEntry> _entries = const <LearningListEntry>[];
   String _query = '';
+  LearningListStatus? _statusFilter;
+  bool _selecting = false;
+  final Set<String> _selected = {};
+  bool get _canReorder =>
+      _query.isEmpty && _statusFilter == null && !_selecting;
   bool _searching = false;
   bool _loading = true;
   bool _reordering = false;
@@ -66,7 +71,7 @@ class _LearningListPageState extends State<LearningListPage> {
       return;
     }
     setState(() {
-      _entries = entries;
+      if (!_learningListService.readFailed) _entries = entries;
       _loading = false;
     });
   }
@@ -92,6 +97,7 @@ class _LearningListPageState extends State<LearningListPage> {
 
   /// 判断一条任务是否匹配标题、UP 主、分 P 标题或 P 序号的本机搜索词。
   bool _matchesQuery(LearningListEntry entry) {
+    if (_statusFilter != null && entry.status != _statusFilter) return false;
     if (_query.isEmpty) {
       return true;
     }
@@ -138,6 +144,8 @@ class _LearningListPageState extends State<LearningListPage> {
       if (mounted) {
         await _reloadEntries();
       }
+    } catch (_) {
+      _showSaveError();
     } finally {
       if (mounted) {
         setState(() => _openingStableId = null);
@@ -161,6 +169,8 @@ class _LearningListPageState extends State<LearningListPage> {
         return;
       }
       setState(() => _entries = updated);
+    } catch (_) {
+      _showSaveError();
     } finally {
       if (mounted) {
         setState(() => _updatingStableId = null);
@@ -206,6 +216,8 @@ class _LearningListPageState extends State<LearningListPage> {
       if (mounted) {
         setState(() => _entries = updated);
       }
+    } catch (_) {
+      _showSaveError();
     } finally {
       if (mounted) {
         setState(() => _updatingStableId = null);
@@ -215,7 +227,7 @@ class _LearningListPageState extends State<LearningListPage> {
 
   /// 按拖拽结果持久化未完成任务顺序；搜索期间禁用拖拽，避免只排序局部结果。
   Future<void> _reorderActiveEntries(int oldIndex, int newIndex) async {
-    if (_query.isNotEmpty || _reordering || _updatingStableId != null) {
+    if (!_canReorder || _reordering || _updatingStableId != null) {
       return;
     }
     final List<LearningListEntry> activeEntries = _activeEntries;
@@ -242,10 +254,69 @@ class _LearningListPageState extends State<LearningListPage> {
       if (mounted) {
         setState(() => _entries = updated);
       }
+    } catch (_) {
+      _showSaveError();
     } finally {
       if (mounted) {
         setState(() => _reordering = false);
       }
+    }
+  }
+
+  Future<void> _removeSelected() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: const Text('移除所选学习任务'),
+        content: Text('移除 ${_selected.length} 条任务？观看记录和笔记保留。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialog, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialog, true),
+            child: const Text('移除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      final entries = await _learningListService.removeBatch(Set.of(_selected));
+      if (mounted) {
+        setState(() {
+          _entries = entries;
+          _selected.clear();
+        });
+      }
+    } catch (_) {
+      _showSaveError();
+    }
+  }
+
+  Future<void> _changeSelected(LearningListStatus status) async {
+    try {
+      final entries = await _learningListService.updateStatuses(
+        Set.of(_selected),
+        status,
+      );
+      if (mounted) {
+        setState(() {
+          _entries = entries;
+          _selected.clear();
+        });
+      }
+    } catch (_) {
+      _showSaveError();
+    }
+  }
+
+  void _showSaveError() {
+    if (mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('未保存，请检查设备存储后重试')));
     }
   }
 
@@ -309,14 +380,25 @@ class _LearningListPageState extends State<LearningListPage> {
         children: <Widget>[
           ListTile(
             contentPadding: const EdgeInsets.fromLTRB(12, 10, 8, 4),
-            leading: SizedBox(
-              width: 88,
-              height: 54,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: _buildThumbnail(entry),
-              ),
-            ),
+            leading: _selecting
+                ? Checkbox(
+                    value: _selected.contains(entry.stableId),
+                    onChanged: (checked) => setState(() {
+                      if (checked == true) {
+                        _selected.add(entry.stableId);
+                      } else {
+                        _selected.remove(entry.stableId);
+                      }
+                    }),
+                  )
+                : SizedBox(
+                    width: 88,
+                    height: 54,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: _buildThumbnail(entry),
+                    ),
+                  ),
             title: Text(
               entry.title,
               maxLines: 2,
@@ -463,6 +545,52 @@ class _LearningListPageState extends State<LearningListPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
+          if (_learningListService.readFailed)
+            const Text('学习清单读取失败，原数据保留。请重试。'),
+          Wrap(
+            spacing: 8,
+            children: [
+              ChoiceChip(
+                label: const Text('全部'),
+                selected: _statusFilter == null,
+                onSelected: (_) => setState(() => _statusFilter = null),
+              ),
+              for (final status in LearningListStatus.values)
+                ChoiceChip(
+                  label: Text(status.label),
+                  selected: _statusFilter == status,
+                  onSelected: (_) => setState(() => _statusFilter = status),
+                ),
+            ],
+          ),
+          if (_selecting)
+            Wrap(
+              spacing: 8,
+              children: [
+                TextButton(
+                  onPressed: () => setState(() {
+                    _selected.addAll(
+                      [
+                        ..._activeEntries,
+                        ..._completedEntries,
+                      ].map((e) => e.stableId),
+                    );
+                  }),
+                  child: const Text('选择当前结果'),
+                ),
+                TextButton(
+                  onPressed: _selected.isEmpty ? null : _removeSelected,
+                  child: Text('移除所选（${_selected.length}）'),
+                ),
+                for (final status in LearningListStatus.values)
+                  TextButton(
+                    onPressed: _selected.isEmpty
+                        ? null
+                        : () => _changeSelected(status),
+                    child: Text('标为${status.label}'),
+                  ),
+              ],
+            ),
           Text(
             _query.isEmpty ? '待学习' : '搜索结果',
             style: Theme.of(
@@ -471,9 +599,9 @@ class _LearningListPageState extends State<LearningListPage> {
           ),
           const SizedBox(height: 4),
           Text(
-            _query.isEmpty
+            _canReorder
                 ? '拖动右侧图标调整学习顺序；完成后会自动移到列表末尾。'
-                : '搜索时不能调整顺序，清空搜索后可继续拖动排序。',
+                : '筛选或多选时不能拖拽，恢复全部后可调整顺序。',
             style: Theme.of(context).textTheme.bodySmall,
           ),
           if (_reordering) ...<Widget>[
@@ -568,7 +696,7 @@ class _LearningListPageState extends State<LearningListPage> {
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
           child: _buildEntryCard(
             activeEntries[index],
-            reorderIndex: _query.isEmpty ? index : null,
+            reorderIndex: _canReorder ? index : null,
           ),
         ),
         // 重排回调在搜索为空时把完整未完成队列写回本机，避免局部搜索导致顺序意外变化。
@@ -600,6 +728,14 @@ class _LearningListPageState extends State<LearningListPage> {
               )
             : const Text('学习清单'),
         actions: <Widget>[
+          IconButton(
+            tooltip: _selecting ? '结束多选' : '多选管理',
+            icon: Icon(_selecting ? Icons.close : Icons.checklist),
+            onPressed: () => setState(() {
+              _selecting = !_selecting;
+              _selected.clear();
+            }),
+          ),
           IconButton(
             key: const Key('search-learning-list'),
             // 搜索按钮函数在标题和本机搜索输入框之间切换，不读取网络数据。

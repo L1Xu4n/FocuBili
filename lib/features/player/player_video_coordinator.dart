@@ -472,10 +472,11 @@ mixin _PlayerVideoCoordinator
           requestedPartCid = part.cid;
           break;
         }
-        if (part.pageNumber == requestedLearningEntry.partPageNumber) {
-          requestedPartCid = part.cid;
-        }
       }
+    }
+    if (requestedLearningEntry != null && requestedPartCid == null) {
+      _showPlayerNotice('原学习分 P 已失效，请重新选择；旧进度保留。');
+      return;
     }
     final WatchHistoryEntry? historyEntry = requestedLearningEntry == null
         ? await _loadWatchHistoryResumeEntry(video.bvid)

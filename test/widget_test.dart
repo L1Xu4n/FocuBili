@@ -1945,9 +1945,10 @@ void main() {
 
     await tester.tap(learningButton);
     await tester.pumpAndSettle();
-    expect(await learningListService.loadEntries(), hasLength(1));
-    expect(find.byType(SnackBar), findsOneWidget);
-    expect(find.text('已将 P1 加入学习清单'), findsOneWidget);
+    expect(await learningListService.loadEntries(), isEmpty);
+    await tester.tap(find.widgetWithText(FilledButton, '确认加入'));
+    await tester.pumpAndSettle();
+    expect(find.text('已加入所选分 P，已有进度已保留'), findsOneWidget);
     expect(find.byKey(const Key('player-floating-notice')), findsNothing);
     expect(
       find.descendant(of: learningButton, matching: find.text('P1 已加入')),
@@ -1956,7 +1957,7 @@ void main() {
 
     await tester.tap(learningButton);
     await tester.pumpAndSettle();
-    expect(find.text('取消加入学习清单'), findsOneWidget);
+    expect(find.text('当前 P 已在学习清单'), findsOneWidget);
     await tester.tap(find.widgetWithText(FilledButton, '取消加入'));
     await tester.pumpAndSettle();
 
@@ -1995,6 +1996,8 @@ void main() {
     );
     await tester.tap(learningButton);
     await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '确认加入'));
+    await tester.pumpAndSettle();
     expect(find.text('P1 已加入'), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('part-2')).first);
@@ -2007,6 +2010,8 @@ void main() {
     expect(onlyFirstPart.single.partCid, 137649199);
 
     await tester.tap(learningButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '确认加入'));
     await tester.pumpAndSettle();
     expect(find.text('P2 已加入'), findsOneWidget);
     expect(await learningListService.loadEntries(), hasLength(2));

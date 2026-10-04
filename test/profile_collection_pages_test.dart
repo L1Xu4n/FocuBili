@@ -388,7 +388,7 @@ void main() {
   });
 
   /// 验证投稿卡片只显示可切换图标，并能加入和确认取消学习清单。
-  testWidgets('UP主页投稿学习清单图标支持加入和取消', (WidgetTester tester) async {
+  testWidgets('UP主页投稿明确选择P，重复加入保留任务', (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
     final SharedPreferences preferences = await SharedPreferences.getInstance();
     final LearningListService learningListService = LearningListService(
@@ -415,22 +415,24 @@ void main() {
     await tester.tap(find.byKey(const Key('add-creator-video-BV1GJ411x7h7')));
     await tester.pumpAndSettle();
 
+    await tester.tap(find.widgetWithText(FilledButton, '确认加入'));
+    await tester.pumpAndSettle();
     expect(await learningListService.loadEntries(), hasLength(1));
-    expect(find.textContaining('已加入学习清单'), findsOneWidget);
+    expect(find.textContaining('已加入所选分 P'), findsOneWidget);
     expect(find.byIcon(Icons.playlist_add_check_rounded), findsWidgets);
 
     await tester.tap(find.byKey(const Key('add-creator-video-BV1GJ411x7h7')));
     await tester.pumpAndSettle();
-    expect(find.text('取消加入学习清单？'), findsOneWidget);
-    await tester.tap(find.widgetWithText(FilledButton, '取消加入'));
+    expect(find.textContaining('已存在 1'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, '确认加入'));
     await tester.pumpAndSettle();
 
-    expect(await learningListService.loadEntries(), isEmpty);
-    expect(find.byTooltip('加入学习清单'), findsWidgets);
+    expect(await learningListService.loadEntries(), hasLength(1));
+    expect(find.byTooltip('选择更多分 P'), findsWidgets);
   });
 
   /// 验证合集条目右侧播放图标被学习清单图标替换，并支持再次点击取消。
-  testWidgets('合集详情右侧学习清单图标支持加入和取消', (WidgetTester tester) async {
+  testWidgets('合集详情明确选择P，取消面板不修改任务', (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
     final SharedPreferences preferences = await SharedPreferences.getInstance();
     final LearningListService learningListService = LearningListService(
@@ -473,6 +475,8 @@ void main() {
       find.byKey(const Key('add-learning-collection-BV1GJ411x7h7')),
     );
     await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '确认加入'));
+    await tester.pumpAndSettle();
     expect(await learningListService.loadEntries(), hasLength(1));
     expect(
       find.descendant(
@@ -486,9 +490,9 @@ void main() {
       find.byKey(const Key('add-learning-collection-BV1GJ411x7h7')),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(FilledButton, '取消加入'));
+    await tester.tap(find.widgetWithText(TextButton, '取消'));
     await tester.pumpAndSettle();
-    expect(await learningListService.loadEntries(), isEmpty);
+    expect(await learningListService.loadEntries(), hasLength(1));
   });
 
   /// 验证投稿接口和标题都没有集数时，页面会从完整详情补出真实分P数。

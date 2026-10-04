@@ -17,6 +17,7 @@ class MainActivity : FlutterActivity() {
     private var focusNotificationController: FocusNotificationController? = null
     private var downloadProgressController: DownloadProgressController? = null
     private var deepLinkController: DeepLinkController? = null
+    private var subscriptionNotificationController: SubscriptionNotificationController? = null
     private var deferredDeepLink: String? = null
 
     /** Activity 创建时先确定平板方向，再允许横屏内容延伸到刘海短边。 */
@@ -56,6 +57,7 @@ class MainActivity : FlutterActivity() {
             activity = this,
             messenger = flutterEngine.dartExecutor.binaryMessenger,
         )
+        subscriptionNotificationController = SubscriptionNotificationController(this, flutterEngine.dartExecutor.binaryMessenger)
         deepLinkController = DeepLinkController(
             messenger = flutterEngine.dartExecutor.binaryMessenger,
             initialLink = deferredDeepLink,
@@ -68,6 +70,7 @@ class MainActivity : FlutterActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        subscriptionNotificationController?.handleIntent(intent)
         val link = externalLinkFromIntent(intent) ?: return
         val controller = deepLinkController
         if (controller == null) {
@@ -134,6 +137,8 @@ class MainActivity : FlutterActivity() {
         bilibiliCookieController = null
         deviceStatusController?.dispose()
         deviceStatusController = null
+        subscriptionNotificationController?.dispose()
+        subscriptionNotificationController = null
         focusNotificationController?.dispose()
         focusNotificationController = null
         downloadProgressController?.dispose()

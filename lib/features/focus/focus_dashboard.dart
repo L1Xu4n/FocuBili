@@ -1,3 +1,5 @@
+import '../../services/subscription_service.dart';
+import '../subscriptions/subscription_updates_page.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -756,6 +758,30 @@ class _FocusDashboardState extends State<FocusDashboard> {
                 SliverAppBar.large(
                   title: const Text('焦点哔哩'),
                   actions: <Widget>[
+                    ListenableBuilder(
+                      listenable: SubscriptionService.instance,
+                      builder: (context, _) =>
+                          SubscriptionService.instance.enabled
+                          ? IconButton(
+                              tooltip: '订阅更新',
+                              icon: Badge(
+                                label: Text(
+                                  '${SubscriptionService.instance.unreadCount}',
+                                ),
+                                isLabelVisible:
+                                    SubscriptionService.instance.unreadCount >
+                                    0,
+                                child: const Icon(Icons.rss_feed),
+                              ),
+                              onPressed: () => Navigator.of(context).push<void>(
+                                MaterialPageRoute(
+                                  builder: (_) =>
+                                      const SubscriptionUpdatesPage(),
+                                ),
+                              ),
+                            )
+                          : const SizedBox.shrink(),
+                    ),
                     if (widget.onOpenLearningList != null)
                       IconButton(
                         key: const Key('open-learning-list'),

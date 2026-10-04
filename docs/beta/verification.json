@@ -1,0 +1,63 @@
+{
+  "dateUtc": "2026-10-04",
+  "flutter": "3.44.6",
+  "dart": "3.12.2",
+  "tests": {
+    "flutterPassed": 746,
+    "flutterSkipped": 1,
+    "analyze": "passed",
+    "format": "passed",
+    "androidJvm": "passed"
+  },
+  "apk": [
+    {
+      "file": "app-arm64-v8a-debug.apk",
+      "package": "com.focubili.app.preview",
+      "versionCode": 2021,
+      "versionName": "1.8.0-beta.1",
+      "bytes": 66794283,
+      "sha256": "e6583d2469949946252c704b3b9d7d8594f657d6b05840ee9d20fadb6249ac51",
+      "certificateSha256": "5bd1fc4daa8a0887e213c4dc1231d0eba4f7f309a0e64c2d15fe404302bd00b0",
+      "minSdk": 24,
+      "targetSdk": 36,
+      "abi": "arm64-v8a"
+    },
+    {
+      "file": "app-armeabi-v7a-debug.apk",
+      "package": "com.focubili.app.preview",
+      "versionCode": 1021,
+      "versionName": "1.8.0-beta.1",
+      "bytes": 60915737,
+      "sha256": "12249ad73641339f3974b642762a22bc7a089791c9f3c63b56079a6e297a15b5",
+      "certificateSha256": "5bd1fc4daa8a0887e213c4dc1231d0eba4f7f309a0e64c2d15fe404302bd00b0",
+      "minSdk": 24,
+      "targetSdk": 36,
+      "abi": "armeabi-v7a"
+    },
+    {
+      "file": "app-x86_64-debug.apk",
+      "package": "com.focubili.app.preview",
+      "versionCode": 4021,
+      "versionName": "1.8.0-beta.1",
+      "bytes": 62619378,
+      "sha256": "d4662fe1b95a67cebcd7e7d2861c392c98e0b46fd0b814bee31ebad7fd3bb510",
+      "certificateSha256": "5bd1fc4daa8a0887e213c4dc1231d0eba4f7f309a0e64c2d15fe404302bd00b0",
+      "minSdk": 24,
+      "targetSdk": 36,
+      "abi": "x86_64"
+    }
+  ],
+  "emulator": {
+    "android": 10,
+    "api": 29,
+    "abi": "x86_64",
+    "hardware": "software emulator (no KVM)",
+    "realDevice": false,
+    "status": "installed and launched; final UI checks in progress"
+  },
+  "limits": [
+    "Anonymous UP WBI real API blocked (-352), fallback 412",
+    "No exited-app push",
+    "Physical Android playback, login and Android 13+ notification permission not verified"
+  ]
+}

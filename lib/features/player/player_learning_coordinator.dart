@@ -97,15 +97,16 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
     final bool hasLivePlayback = _playbackSnapshot.phase == PlaybackPhase.ready;
     setState(() => _addingLearningBvid = bvid);
     try {
-      final List<LearningListEntry> entries = await _learningListService
-          .addVideo(
-            video,
-            part: part,
-            position: hasLivePlayback ? _playbackSnapshot.position : null,
-            status: hasLivePlayback && _playing
-                ? LearningListStatus.learning
-                : null,
-          );
+      setState(() => _addingLearningBvid = null);
+      final result = await LearningAddSheet.show(
+        context,
+        video: video,
+        currentPart: part,
+        position: hasLivePlayback ? _playbackSnapshot.position : Duration.zero,
+        service: _learningListService,
+      );
+      if (result == null) return;
+      final entries = result.entries;
       if (!mounted ||
           _activeVideo.bvid != bvid ||
           _currentPart.cid != part.cid) {
@@ -117,7 +118,7 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
         _recordedLearningListPartCid = entry?.partCid;
         _lastLearningListSavedPosition = entry?.position ?? Duration.zero;
       });
-      _showTransientSnackBar('已将 P${part.pageNumber} 加入学习清单');
+      _showTransientSnackBar('已加入所选分 P，已有进度已保留');
     } catch (_) {
       if (mounted) {
         _showTransientSnackBar('加入学习清单失败，请稍后重试。');
@@ -138,31 +139,37 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
       await _addCurrentVideoToLearningList();
       return;
     }
-    final bool? confirmed = await showDialog<bool>(
+    final String? confirmed = await showDialog<String>(
       context: context,
       builder: (BuildContext dialogContext) => AlertDialog(
-        title: const Text('取消加入学习清单'),
+        title: const Text('当前 P 已在学习清单'),
         content: Text(
           '确定把“${_activeVideo.title}”的 P${_currentPart.pageNumber} 移出学习清单吗？观看记录和笔记不会被删除。',
         ),
         actions: <Widget>[
           TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop('select'),
+            child: const Text('选择其他 P'),
+          ),
+          TextButton(
             // 保留按钮函数只关闭确认框，不修改学习清单。
-            onPressed: () => Navigator.of(dialogContext).pop(false),
+            onPressed: () => Navigator.of(dialogContext).pop('keep'),
             child: const Text('保留'),
           ),
           FilledButton(
             // 取消加入按钮函数把确认结果交回播放器，再执行本机移除操作。
-            onPressed: () => Navigator.of(dialogContext).pop(true),
+            onPressed: () => Navigator.of(dialogContext).pop('remove'),
             child: const Text('取消加入'),
           ),
         ],
       ),
     );
-    if (confirmed != true || !mounted) {
+    if (!mounted) return;
+    if (confirmed == 'select') {
+      await _addCurrentVideoToLearningList();
       return;
     }
-    await _removeCurrentVideoFromLearningList();
+    if (confirmed == 'remove') await _removeCurrentVideoFromLearningList();
   }
 
   /// 从本机学习清单移除当前分 P，不影响同视频其他 P、观看记录或笔记。
@@ -440,6 +447,7 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
     }
     final String bvid = _activeVideo.bvid;
     setState(() => _addingLearningBvid = bvid);
+    bool completionSaved = false;
     try {
       final List<LearningListEntry> beforeCompletion =
           await _learningListService.loadEntries();
@@ -459,6 +467,7 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
           _currentPart.cid != current.partCid) {
         return;
       }
+      completionSaved = true;
       final LearningListEntry? completed = _entryForPart(
         updatedEntries,
         bvid,
@@ -485,7 +494,9 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
       await _switchActiveVideo(nextVideo, learningEntry: next);
     } catch (_) {
       if (mounted) {
-        if (_activeVideo.bvid == bvid && _currentPart.cid == current.partCid) {
+        if (completionSaved &&
+            _activeVideo.bvid == bvid &&
+            _currentPart.cid == current.partCid) {
           setState(() {
             _learningListEntry = _learningListEntry?.copyWith(
               status: LearningListStatus.completed,

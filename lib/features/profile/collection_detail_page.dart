@@ -1,3 +1,4 @@
+import '../learning/learning_add_sheet.dart';
 import 'dart:async';
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -239,65 +240,26 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
       );
   }
 
-  /// 确认是否移除合集视频对应的学习任务，避免误触图标直接丢失本机进度。
-  Future<bool> _confirmLearningListRemoval(CreatorVideo item) async {
-    return await showDialog<bool>(
-          context: context,
-          builder: (BuildContext dialogContext) => AlertDialog(
-            title: const Text('取消加入学习清单？'),
-            content: Text('将从学习清单移除“${item.title}”。'),
-            actions: <Widget>[
-              TextButton(
-                onPressed: () => Navigator.of(dialogContext).pop(false),
-                child: const Text('保留'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.of(dialogContext).pop(true),
-                child: const Text('取消加入'),
-              ),
-            ],
-          ),
-        ) ??
-        false;
-  }
-
-  /// 根据合集条目当前成员状态加入或取消学习清单；加入前查询完整视频与分P资料。
+  /// Opens explicit P selection even when another P of the BV already exists.
   Future<void> _toggleVideoLearningList(CreatorVideo item) async {
-    if (_openingBvid != null || _addingBvid != null) {
-      return;
-    }
-    final bool alreadyAdded = _learningListBvids.contains(item.bvid);
-    if (alreadyAdded && !await _confirmLearningListRemoval(item)) {
-      return;
-    }
+    if (_openingBvid != null || _addingBvid != null) return;
     setState(() => _addingBvid = item.bvid);
     try {
-      if (alreadyAdded) {
-        await _learningListService.remove(item.bvid);
-      } else {
-        final VideoPreview video = await _videoService.lookupVideo(item.bvid);
-        await _learningListService.addVideo(video);
-      }
-      if (mounted) {
-        setState(() {
-          final Set<String> nextBvids = _learningListBvids.toSet();
-          if (alreadyAdded) {
-            nextBvids.remove(item.bvid);
-          } else {
-            nextBvids.add(item.bvid);
-          }
-          _learningListBvids = Set<String>.unmodifiable(nextBvids);
-        });
-        _showMessage(alreadyAdded ? '已取消加入学习清单。' : '已加入学习清单，可在首页继续学习。');
-      }
+      final video = await _videoService.lookupVideo(item.bvid);
+      if (!mounted) return;
+      setState(() => _addingBvid = null);
+      final result = await LearningAddSheet.show(
+        context,
+        video: video,
+        service: _learningListService,
+      );
+      if (result == null || !mounted) return;
+      await _loadLearningListMembership();
+      if (mounted) _showMessage('已加入所选分 P，已有进度已保留。');
     } catch (_) {
-      if (mounted) {
-        _showMessage(alreadyAdded ? '取消加入失败，请稍后重试。' : '加入学习清单失败，请检查网络后重试。');
-      }
+      if (mounted) _showMessage('详情读取或保存失败，请重试。');
     } finally {
-      if (mounted) {
-        setState(() => _addingBvid = null);
-      }
+      if (mounted) setState(() => _addingBvid = null);
     }
   }
 
@@ -466,7 +428,7 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
                 padding: const EdgeInsets.all(6),
                 child: IconButton(
                   key: Key('add-learning-collection-${item.bvid}'),
-                  tooltip: added ? '取消加入学习清单' : '加入学习清单',
+                  tooltip: added ? '选择更多分 P' : '加入学习清单',
                   // 右侧学习清单图标函数替代播放三角，并独立处理加入或确认取消。
                   onPressed: adding
                       ? null
@@ -550,6 +512,21 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
           overflow: TextOverflow.ellipsis,
         ),
         actions: <Widget>[
+          IconButton(
+            tooltip: '批量加入学习清单',
+            icon: const Icon(Icons.playlist_add),
+            onPressed: () async {
+              await LearningAddSheet.showCollection(
+                context,
+                ownerMid: widget.collection.ownerMid,
+                collectionId: widget.collection.id,
+                contentService: _publicContentService,
+                videoService: _videoService,
+                service: _learningListService,
+              );
+              if (mounted) await _loadLearningListMembership();
+            },
+          ),
           IconButton(
             // 顶部刷新函数重新读取合集第一页。
             onPressed: _loading ? null : () => unawaited(_loadFirstPage()),

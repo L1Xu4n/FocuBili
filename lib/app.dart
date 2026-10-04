@@ -1,3 +1,6 @@
+import 'services/subscription_service.dart';
+import 'services/subscription_notification_service.dart';
+import 'features/subscriptions/subscription_updates_page.dart';
 import 'dart:async';
 import 'services/player_route_session.dart';
 import 'services/offline_download_queue.dart';
@@ -67,6 +70,9 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   final GlobalKey<ScaffoldMessengerState> _scaffoldMessengerKey =
       GlobalKey<ScaffoldMessengerState>();
+  final _subscriptions = SubscriptionService.instance;
+  final _subscriptionNotifications = SubscriptionNotificationService();
+  bool _pendingSubscriptionTap = false;
   String? _handledCompletionId;
   bool _completionDialogOpen = false;
   bool _firstLaunchReady = false;
@@ -85,6 +91,10 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
     _ownsFocusTimerController = widget.focusTimerController == null;
     _focusTimerController =
         widget.focusTimerController ?? FocusTimerController();
+    _subscriptions.suppressNotifications = () =>
+        _focusTimerController.hasActiveSession;
+    _subscriptions.notifySummary = _subscriptionNotifications.showSummary;
+    unawaited(_subscriptionNotifications.initialize(_handleSubscriptionTap));
     _focusTimerController.addListener(_handleFocusTimerChanged);
     unawaited(_focusTimerController.initialize());
     _ownsAppUpdateController = widget.appUpdateController == null;
@@ -129,6 +139,9 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _clipboardLinkMonitor.setForeground(state == AppLifecycleState.resumed);
+    if (_firstLaunchReady) {
+      _subscriptions.setForeground(state == AppLifecycleState.resumed);
+    }
   }
 
   /// 主题控制器变化时重建 MaterialApp，让整套界面立即切换配色。
@@ -214,9 +227,24 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
     }
   }
 
+  void _handleSubscriptionTap() {
+    _pendingSubscriptionTap = true;
+    if (!_firstLaunchReady || !mounted || _navigatorKey.currentState == null) {
+      return;
+    }
+    _pendingSubscriptionTap = false;
+    unawaited(
+      _navigatorKey.currentState!.push<void>(
+        MaterialPageRoute(builder: (_) => const SubscriptionUpdatesPage()),
+      ),
+    );
+  }
+
   /// 首次使用协议通过后开放外部导航，并继续处理冷启动时暂存的视频链接。
   void _handleFirstLaunchReady() {
     _firstLaunchReady = true;
+    _subscriptions.setForeground(true);
+    if (_pendingSubscriptionTap) _handleSubscriptionTap();
     _clipboardLinkMonitor.start(
       (String text) => unawaited(_handleClipboardText(text)),
     );
@@ -407,6 +435,10 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
   void dispose() {
     unawaited(_downloadCompletionSubscription?.cancel());
     WidgetsBinding.instance.removeObserver(this);
+    _subscriptions.setForeground(false);
+    _subscriptions.suppressNotifications = null;
+    _subscriptions.notifySummary = null;
+    _subscriptionNotifications.dispose();
     _clipboardLinkMonitor.dispose();
     _focusTimerController.removeListener(_handleFocusTimerChanged);
     if (_ownsFocusTimerController) {
