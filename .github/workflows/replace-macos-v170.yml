@@ -217,15 +217,19 @@ jobs:
               return assets
 
 
+          def check_publication_source(publication_sha, master_sha, fetch=api):
+              comparison = fetch(f'compare/{CONFIG["dev_sha"]}...{publication_sha}')
+              require(comparison['status'] in ('ahead', 'identical') and len(comparison['files']) <= 1 and all(f['filename'] == WORKFLOW and f.get('previous_filename', WORKFLOW) == WORKFLOW for f in comparison['files']), 'Publication application differs from reviewed build')
+              ancestry = fetch(f'compare/{publication_sha}...{master_sha}')
+              require(ancestry['status'] in ('ahead', 'identical'), 'Publication commit no longer belongs to master')
+
+
           def check_source():
               require(os.environ['GITHUB_REPOSITORY'] == REPO and os.environ['GITHUB_REF'] == 'refs/heads/master' and os.environ['GITHUB_EVENT_NAME'] == 'push', 'Only authorized master push allowed')
               require(subprocess.check_output(['git', 'log', '-1', '--format=%s'], text=True).strip() == 'release: replace macOS v1.7.0 login installer', 'Wrong publication subject')
-              require(api('git/ref/heads/master')['object']['sha'] == os.environ['GITHUB_SHA'], 'Master moved')
+              require(subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == os.environ['GITHUB_SHA'], 'Checkout differs from publication commit')
+              check_publication_source(os.environ['GITHUB_SHA'], api('git/ref/heads/master')['object']['sha'])
               require(api('git/ref/tags/v1.7.0')['object']['sha'] == TAG_SHA, 'Tag moved')
-              for branch in ('dev', 'master'):
-                  head = api('git/ref/heads/' + branch)['object']['sha']
-                  comparison = api(f'compare/{CONFIG["dev_sha"]}...{head}')
-                  require(comparison['status'] in ('ahead', 'identical') and len(comparison['files']) <= 1 and all(f['filename'] == WORKFLOW and f.get('previous_filename', WORKFLOW) == WORKFLOW for f in comparison['files']), 'Application differs from reviewed build: ' + branch)
               for number, base, merged in [(40, 'dev', CONFIG['dev_sha']), (41, 'master', CONFIG['master_sha'])]:
                   pr = api(f'pulls/{number}')
                   require(pr['merged'] and pr['base']['ref'] == base and pr['merge_commit_sha'] == merged, 'Application merge missing')
@@ -487,6 +491,27 @@ jobs:
               print('MACOS_RECOVERED_REPLACEMENT_CONTINUES_FINALIZATION_PASSED')
 
 
+          def selftest_publication_source():
+              for master_state in ('identical', 'ahead'):
+                  def fetch(path):
+                      if path == f'compare/{CONFIG["dev_sha"]}...publication':
+                          return {'status': 'ahead', 'files': [{'filename': WORKFLOW}]}
+                      require(path == 'compare/publication...current-master', 'Unexpected source comparison')
+                      return {'status': master_state, 'files': [{'filename': 'lib/later_work.dart'}] if master_state == 'ahead' else []}
+                  check_publication_source('publication', 'current-master', fetch)
+              for bad_publication, bad_ancestry in ((True, False), (False, True)):
+                  def fetch(path):
+                      if path == f'compare/{CONFIG["dev_sha"]}...publication':
+                          return {'status': 'ahead', 'files': [{'filename': 'lib/changed_app.dart' if bad_publication else WORKFLOW}]}
+                      return {'status': 'diverged' if bad_ancestry else 'ahead', 'files': []}
+                  try:
+                      check_publication_source('publication', 'current-master', fetch)
+                  except RuntimeError:
+                      continue
+                  raise RuntimeError('Invalid publication source accepted')
+              print('MACOS_PINNED_PUBLICATION_RESUMES_AFTER_MASTER_ADVANCES_PASSED')
+
+
           def selftest(original):
               validate_release(original)
               require(sha(desired_body(original['body']).encode()) == CONFIG['desired_body_sha256'], 'Notes regression')
@@ -518,6 +543,7 @@ jobs:
               selftest(release)
               selftest_recovery(release)
               selftest_promotion_failures(release)
+              selftest_publication_source()
               if mode == 'prepare':
                   backup = Path('macos-before'); backup.mkdir(exist_ok=True)
                   (backup / DMG).write_bytes(old)
