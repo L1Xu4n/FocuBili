@@ -1,0 +1,526 @@
+name: Replace macOS v1.7.0 login installer
+on:
+  push:
+    branches: [master]
+    paths: ['.github/workflows/replace-macos-v170.yml']
+permissions:
+  contents: read
+concurrency:
+  group: replace-macos-v170
+  cancel-in-progress: false
+jobs:
+  replace:
+    if: "github.repository == 'L1Xu4n/FocuBili' && startsWith(github.event.head_commit.message, 'release: replace macOS v1.7.0 login installer')"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prepare pinned macOS replacement helper
+        run: |
+          cat > /tmp/replace_macos_v170.py <<'PYTHON'
+          """Pinned, resumable macOS-only v1.7.0 replacement on a GitHub runner."""
+          import copy
+          import hashlib
+          import io
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+          import time
+          import urllib.request
+          import zipfile
+
+          # CONFIG is injected from the already validated, non-secret deployment pins.
+          CONFIG = json.loads(r'''{
+            "dev_sha": "efd9b70ca182a753c00f19d31ab501914a238e42",
+            "artifact_id": 11296883318,
+            "artifact_digest": "sha256:7f576368046c7244e3d8d7056581cab52b0cd3c3cf5190c1fd3e93c45d484718",
+            "size": 50079565,
+            "sha256": "ebcbc057e42a30531f702a6342701d7885b89d3caa80de3b01d6fa0bfc43f829",
+            "staged_name": "FocuBili-v1.7.0-macos-staged-ebcbc057e42a3053.dmg",
+            "promotion_pr": 41,
+            "apple_run": 37185615394,
+            "master_sha": "6e2de58a5018f0d3e23ba12f462633bd40be48e7",
+            "ci_runs": [
+              [
+                37185615396,
+                "efd9b70ca182a753c00f19d31ab501914a238e42",
+                ".github/workflows/ci.yml"
+              ],
+              [
+                37185615411,
+                "efd9b70ca182a753c00f19d31ab501914a238e42",
+                ".github/workflows/linux-build.yml"
+              ],
+              [
+                37185615394,
+                "efd9b70ca182a753c00f19d31ab501914a238e42",
+                ".github/workflows/apple-build.yml"
+              ],
+              [
+                37186425085,
+                "6e2de58a5018f0d3e23ba12f462633bd40be48e7",
+                ".github/workflows/ci.yml"
+              ],
+              [
+                37186425089,
+                "6e2de58a5018f0d3e23ba12f462633bd40be48e7",
+                ".github/workflows/linux-build.yml"
+              ],
+              [
+                37186425095,
+                "6e2de58a5018f0d3e23ba12f462633bd40be48e7",
+                ".github/workflows/release-build.yml"
+              ]
+            ],
+            "original_body_sha256": "a0fbbdfe2b0a53c40ccaf70a3271626dabbd672df25fab64f680cc80a3bff7ba",
+            "desired_body_sha256": "d293481d2a5daa2efd4a05d913fdaddbe700c479dea42e74781af780c864a28e",
+            "release_meta": {
+              "id": 402088227,
+              "tag_name": "v1.7.0",
+              "name": "FocuBili v1.7.0",
+              "target_commitish": "master",
+              "draft": false,
+              "prerelease": false,
+              "immutable": false,
+              "created_at": "2026-10-02T19:14:36Z",
+              "published_at": "2026-10-02T19:14:40Z"
+            },
+            "assets": {
+              "FocuBili-v1.7.0-android.apk": {
+                "id": 606302402,
+                "name": "FocuBili-v1.7.0-android.apk",
+                "size": 33393099,
+                "digest": "sha256:adc453f286e61d8c89650ddaba73c904ded53eb3e6f71c125304cc33e6abccbf",
+                "state": "uploaded",
+                "label": "",
+                "content_type": "application/vnd.android.package-archive"
+              },
+              "FocuBili-v1.7.0-ios.ipa": {
+                "id": 607785232,
+                "name": "FocuBili-v1.7.0-ios.ipa",
+                "size": 20548173,
+                "digest": "sha256:c366a907b45b135ae6f6b14b16fb91ff20711039d6ca306af897cbe8cc821ae8",
+                "state": "uploaded",
+                "label": "",
+                "content_type": "application/octet-stream"
+              },
+              "FocuBili-v1.7.0-linux-amd64.deb": {
+                "id": 609011459,
+                "name": "FocuBili-v1.7.0-linux-amd64.deb",
+                "size": 10558870,
+                "digest": "sha256:66d17241c13f02c913eb9846a4f1cd6f0b6185da82fa2960326ecbc2b5c8c24e",
+                "state": "uploaded",
+                "label": "",
+                "content_type": "application/x-debian-package"
+              },
+              "FocuBili-v1.7.0-macos.dmg": {
+                "id": 607785273,
+                "name": "FocuBili-v1.7.0-macos.dmg",
+                "size": 49893320,
+                "digest": "sha256:3e8f56d5807ed522e3a65393a5e8696d5192c2f04eedba3c1a892ef8b519e502",
+                "state": "uploaded",
+                "label": "",
+                "content_type": "application/x-apple-diskimage"
+              },
+              "FocuBili-v1.7.0-windows-x64-portable.zip": {
+                "id": 606302405,
+                "name": "FocuBili-v1.7.0-windows-x64-portable.zip",
+                "size": 38239068,
+                "digest": "sha256:c6b48738945dbc67d63e513875a6f23da974cc4681124037270d078fb646de61",
+                "state": "uploaded",
+                "label": "",
+                "content_type": "application/zip"
+              },
+              "FocuBili-v1.7.0-windows-x64-setup.exe": {
+                "id": 606302403,
+                "name": "FocuBili-v1.7.0-windows-x64-setup.exe",
+                "size": 28064794,
+                "digest": "sha256:bbb198de57effc6a5d10f031e448abfb8f4ff07395cc9b9ad52a6ec63653437b",
+                "state": "uploaded",
+                "label": "",
+                "content_type": "application/octet-stream"
+              }
+            }
+          }''')
+          REPO = 'L1Xu4n/FocuBili'
+          DMG = 'FocuBili-v1.7.0-macos.dmg'
+          OLD_ID = 607785273
+          TAG_SHA = '051200185455c217a90cf52634c6139d46ce085d'
+          WORKFLOW = '.github/workflows/replace-macos-v170.yml'
+          FIELDS = ('id', 'name', 'size', 'digest', 'state', 'label', 'content_type')
+
+
+          def require(condition, message):
+              if not condition:
+                  raise RuntimeError(message)
+
+
+          def sha(data):
+              return hashlib.sha256(data).hexdigest()
+
+
+          def gh(*args):
+              return subprocess.check_output(['gh', *args])
+
+
+          def api(path):
+              return json.loads(gh('api', f'repos/{REPO}/{path}'))
+
+
+          def desired_body(body):
+              digest = sha(body.encode())
+              if digest == CONFIG['desired_body_sha256']:
+                  return body
+              require(digest == CONFIG['original_body_sha256'], 'Release notes changed concurrently')
+              original = CONFIG['assets'][DMG]
+              row = f'| `{DMG}` | {original["size"]} | `{original["digest"].split(":")[1]}` |'
+              require(body.count(row) == 1, 'Original Mac row absent')
+              body = body.replace(row, f'| `{DMG}` | {CONFIG["size"]} | `{CONFIG["sha256"]}` |')
+              end = '<!-- focubili-apple-v170:end -->'
+              require(body.count(end) == 1, 'Apple notes boundary absent')
+              note = f'\nmacOS 登录修复（2026-10-04）：修复官方登录页初始化失败，已重新打包并替换上述 DMG。构建源码：[`{CONFIG["dev_sha"]}`](https://github.com/L1Xu4n/FocuBili/commit/{CONFIG["dev_sha"]})；[Apple CI {CONFIG["apple_run"]}](https://github.com/L1Xu4n/FocuBili/actions/runs/{CONFIG["apple_run"]})。CI 已核对 DMG 与正常应用内容一致、应用标识/版本/签名，并通过原生启动与运行检查；真实账号登录仍需真机实测。\n'
+              body = body.replace(end, note + end)
+              require(sha(body.encode()) == CONFIG['desired_body_sha256'], 'Unexpected notes transformation')
+              return body
+
+
+          def validate_release(release, recovery=False):
+              require(all(release.get(k) == v for k, v in CONFIG['release_meta'].items()), 'Release metadata changed')
+              assets = {a['name']: a for a in release['assets']}
+              require(len(assets) == len(release['assets']), 'Duplicate asset names')
+              require(set(assets) <= set(CONFIG['assets']) | {CONFIG['staged_name']}, 'Unexpected release assets')
+              for name, original in CONFIG['assets'].items():
+                  if name == DMG:
+                      continue
+                  require(name in assets and all(assets[name].get(k) == original.get(k) for k in FIELDS), 'Protected asset changed: ' + name)
+              for name in (DMG, CONFIG['staged_name']):
+                  if name not in assets:
+                      continue
+                  asset = assets[name]
+                  if asset['id'] == OLD_ID or (name == DMG and asset['digest'] == CONFIG['assets'][DMG]['digest']):
+                      fields = FIELDS if asset['id'] == OLD_ID else tuple(k for k in FIELDS if k != 'id')
+                      require(name == DMG and all(asset.get(k) == CONFIG['assets'][DMG].get(k) for k in fields), 'Original Mac metadata changed')
+                  else:
+                      require((asset['size'], asset['digest'], asset['state'], asset['content_type']) == (CONFIG['size'], 'sha256:' + CONFIG['sha256'], 'uploaded', CONFIG['assets'][DMG]['content_type']), 'Conflicting replacement')
+                      require(asset.get('label') in (None, ''), 'Unexpected Mac label')
+              require(recovery or DMG in assets or CONFIG['staged_name'] in assets, 'Both installers absent')
+              require(recovery or not (DMG in assets and assets[DMG]['digest'] != CONFIG['assets'][DMG]['digest'] and CONFIG['staged_name'] in assets), 'Duplicate replacements')
+              desired_body(release['body'])
+              return assets
+
+
+          def check_source():
+              require(os.environ['GITHUB_REPOSITORY'] == REPO and os.environ['GITHUB_REF'] == 'refs/heads/master' and os.environ['GITHUB_EVENT_NAME'] == 'push', 'Only authorized master push allowed')
+              require(subprocess.check_output(['git', 'log', '-1', '--format=%s'], text=True).strip() == 'release: replace macOS v1.7.0 login installer', 'Wrong publication subject')
+              require(api('git/ref/heads/master')['object']['sha'] == os.environ['GITHUB_SHA'], 'Master moved')
+              require(api('git/ref/tags/v1.7.0')['object']['sha'] == TAG_SHA, 'Tag moved')
+              for branch in ('dev', 'master'):
+                  head = api('git/ref/heads/' + branch)['object']['sha']
+                  comparison = api(f'compare/{CONFIG["dev_sha"]}...{head}')
+                  require(comparison['status'] in ('ahead', 'identical') and len(comparison['files']) <= 1 and all(f['filename'] == WORKFLOW and f.get('previous_filename', WORKFLOW) == WORKFLOW for f in comparison['files']), 'Application differs from reviewed build: ' + branch)
+              for number, base, merged in [(40, 'dev', CONFIG['dev_sha']), (41, 'master', CONFIG['master_sha'])]:
+                  pr = api(f'pulls/{number}')
+                  require(pr['merged'] and pr['base']['ref'] == base and pr['merge_commit_sha'] == merged, 'Application merge missing')
+              for ident, source, path in CONFIG['ci_runs']:
+                  run = api(f'actions/runs/{ident}')
+                  require((run['head_sha'], run['event'], run['path'], run['status'], run['conclusion']) == (source, 'push', path, 'completed', 'success'), 'Pinned application CI failed')
+
+
+          def wait_for_publication_ci():
+              deadline = time.monotonic() + 3600
+              while time.monotonic() < deadline:
+                  runs = api('actions/runs?head_sha=' + os.environ['GITHUB_SHA'] + '&per_page=100')['workflow_runs']
+                  ci = [r for r in runs if r['path'] == '.github/workflows/ci.yml' and r['event'] == 'push']
+                  require(len(ci) <= 1, 'Ambiguous publication CI')
+                  if ci and ci[0]['status'] == 'completed':
+                      require(ci[0]['conclusion'] == 'success', 'Normal publication commit CI failed')
+                      jobs = api(f'actions/runs/{ci[0]["id"]}/jobs?per_page=100')['jobs']
+                      require({j['name'] for j in jobs} == {'Dart quality', 'Android debug', 'Windows debug'} and all(j['conclusion'] == 'success' for j in jobs), 'Normal CI skipped a job')
+                      return
+                  time.sleep(20)
+              raise TimeoutError('Normal publication commit CI')
+
+
+          def archive(ident, expected, source, run_id):
+              meta = api(f'actions/artifacts/{ident}')
+              require(not meta['expired'] and meta['digest'] == expected and meta['workflow_run']['head_sha'] == source and meta['workflow_run']['id'] == run_id, 'Artifact provenance changed')
+              raw = gh('api', f'repos/{REPO}/actions/artifacts/{ident}/zip')
+              require('sha256:' + sha(raw) == expected, 'Artifact archive checksum mismatch')
+              return zipfile.ZipFile(io.BytesIO(raw))
+
+
+          def payloads():
+              with archive(CONFIG['artifact_id'], CONFIG['artifact_digest'], CONFIG['dev_sha'], CONFIG['apple_run']) as z:
+                  for name in ('FocuBili-macos-preview.dmg', 'macos-package-verification.json', 'macos-runtime.log', 'SHA256SUMS.txt'):
+                      require(z.namelist().count(name) == 1, 'Missing package evidence')
+                  data = z.read('FocuBili-macos-preview.dmg')
+                  require(sha(data) == CONFIG['sha256'] and len(data) == CONFIG['size'], 'Wrong replacement bytes')
+                  proof = json.loads(z.read('macos-package-verification.json'))
+                  require((proof['source_sha'], proof['bundle_id'], proof['version'], proof['build'], proof['dmg_sha256'], proof['dmg_size']) == (CONFIG['dev_sha'], 'com.focubili.app', '1.7.0', '20', CONFIG['sha256'], CONFIG['size']), 'Wrong package identity')
+                  require(all(proof[k] is True for k in ('normal_app_matches_dmg', 'adhoc_signature_verified', 'sandbox_and_network_entitlements_verified')) and set(proof['architectures']) == {'arm64', 'x86_64'} and len(proof['normal_app_manifest']) == 185, 'Normal app verification missing')
+                  require('APPLE_RUNTIME_ALL_CHECKS_PASSED' in z.read('macos-runtime.log').decode(), 'Native runtime checks missing')
+                  require([s.split()[0] for s in z.read('SHA256SUMS.txt').decode().splitlines() if s.split()[-1].endswith('/FocuBili-macos-preview.dmg')] == [CONFIG['sha256']], 'Package sums mismatch')
+              with archive(11272625337, 'sha256:1f209547e3cade3526a4fc77065847653a4ca708bcb16e4b0b8c23604deb5661', 'c5e00cf15476baa1425b38a0be5b02ac5bb029d1', 37117739928) as z:
+                  require(z.namelist().count('FocuBili-macos-preview.dmg') == 1, 'Original package missing')
+                  old = z.read('FocuBili-macos-preview.dmg')
+              require('sha256:' + sha(old) == CONFIG['assets'][DMG]['digest'], 'Original backup differs')
+              return data, old
+
+
+          def read_checked():
+              check_source()
+              release = api('releases/402088227')
+              return release, validate_release(release)
+
+
+          def download(asset):
+              return gh('api', f'repos/{REPO}/releases/assets/{asset["id"]}', '-H', 'Accept: application/octet-stream')
+
+
+          def patch(path, fields):
+              payload = Path('/tmp/mac-patch.json')
+              payload.write_text(json.dumps(fields, ensure_ascii=False))
+              gh('api', '--method', 'PATCH', f'repos/{REPO}/{path}', '--input', str(payload))
+
+
+          def verify_backup(old):
+              ident = int(os.environ['BACKUP_ARTIFACT_ID'])
+              meta = api(f'actions/artifacts/{ident}')
+              require(not meta['expired'] and meta['workflow_run']['id'] == int(os.environ['GITHUB_RUN_ID']) and meta['workflow_run']['head_sha'] == os.environ['GITHUB_SHA'] and meta['name'] == f'macos-v170-before-login-{os.environ["GITHUB_RUN_ID"]}-{os.environ["GITHUB_RUN_ATTEMPT"]}', 'Wrong durable backup')
+              raw = gh('api', f'repos/{REPO}/actions/artifacts/{ident}/zip')
+              require('sha256:' + sha(raw) == meta['digest'], 'Backup archive changed')
+              with zipfile.ZipFile(io.BytesIO(raw)) as z:
+                  require(set(z.namelist()) == {DMG, 'release-before.json'} and z.read(DMG) == old, 'Backup bytes mismatch')
+                  snapshot = json.loads(z.read('release-before.json'))
+                  validate_release(snapshot)
+
+
+          def recovery_read():
+              release = api('releases/402088227')
+              return validate_release(release, recovery=True)
+
+
+          def upload_original(old):
+              # The bytes have already been checked against the durable backup.
+              target = Path('/tmp') / DMG
+              target.write_bytes(old)
+              gh('release', 'upload', 'v1.7.0', str(target), '--repo', REPO)
+
+
+          def promote_staged(data, old, staged):
+              stage = CONFIG['staged_name']
+              require(download(staged) == data, 'Staged bytes differ')
+              try:
+                  _, assets = read_checked()
+                  if DMG in assets:
+                      current = assets[DMG]
+                      require(current['digest'] == CONFIG['assets'][DMG]['digest'] and download(current) == old, 'Refusing non-original deletion')
+                      _, assets = read_checked()
+                      require(assets[stage]['id'] == staged['id'] and assets[DMG]['id'] == current['id'], 'Installer IDs changed')
+                      gh('api', '--method', 'DELETE', f'repos/{REPO}/releases/assets/{current["id"]}')
+                  _, assets = read_checked()
+                  require(DMG not in assets and assets[stage]['id'] == staged['id'], 'Rename conflict')
+                  patch(f'releases/assets/{staged["id"]}', {'name': DMG})
+              except Exception:
+                  recover_canonical(data, old, staged['id'])
+                  raise
+
+
+          def recover_canonical(data, old, staged_id, read=recovery_read, fetch=download, rename=patch, upload=upload_original):
+              def observed():
+                  # Only reads are retried; an uncertain write is always observed first.
+                  for attempt in range(3):
+                      try:
+                          return read()
+                      except Exception:
+                          if attempt == 2:
+                              raise
+                          time.sleep(2)
+
+              def canonical(assets):
+                  if DMG not in assets:
+                      return False
+                  require(fetch(assets[DMG]) in (data, old), 'Recovery found conflicting canonical bytes')
+                  return True
+
+              assets = observed()
+              if canonical(assets):
+                  return
+              stage = CONFIG['staged_name']
+              if stage in assets:
+                  require(assets[stage]['id'] == staged_id and fetch(assets[stage]) == data, 'Recovery staged package changed')
+                  try:
+                      rename(f'releases/assets/{staged_id}', {'name': DMG})
+                  except Exception:
+                      # A lost rename response may already have restored the URL.
+                      pass
+                  assets = observed()
+                  if canonical(assets):
+                      return
+              # If promotion remains unavailable, restore the verified old DMG.
+              # One upload only; even a lost upload response is followed by a read.
+              try:
+                  upload(old)
+              except Exception:
+                  pass
+              require(canonical(observed()), 'Canonical installer recovery failed')
+
+
+          def selftest_recovery(original):
+              from unittest.mock import patch as mock_patch
+              stage = CONFIG['staged_name']
+              new_asset = dict(original['assets'][0], id=900001, name=stage, size=CONFIG['size'], digest='sha256:' + CONFIG['sha256'], content_type=CONFIG['assets'][DMG]['content_type'], label='')
+              for mode in ('delete-response-lost', 'read-failed-once', 'rename-response-lost', 'rename-failed', 'rollback-upload-response-lost'):
+                  release = copy.deepcopy(original)
+                  release['assets'] = [a for a in release['assets'] if a['name'] != DMG] + [copy.deepcopy(new_asset)]
+                  calls = {'reads': 0, 'renames': 0, 'uploads': 0}
+
+                  def read():
+                      calls['reads'] += 1
+                      if mode == 'read-failed-once' and calls['reads'] == 1:
+                          raise OSError('Simulated unavailable read')
+                      return validate_release(release, recovery=True)
+
+                  def fetch(asset):
+                      return b'old' if asset['digest'] == CONFIG['assets'][DMG]['digest'] else b'new'
+
+                  def rename(path, fields):
+                      calls['renames'] += 1
+                      if mode in ('rename-failed', 'rollback-upload-response-lost'):
+                          raise OSError('Simulated rename failure')
+                      next(a for a in release['assets'] if a['id'] == new_asset['id'])['name'] = DMG
+                      if mode == 'rename-response-lost':
+                          raise OSError('Simulated lost successful response')
+
+                  def upload(old):
+                      calls['uploads'] += 1
+                      restored = dict(CONFIG['assets'][DMG], id=900002)
+                      release['assets'].append(restored)
+                      if mode == 'rollback-upload-response-lost':
+                          raise OSError('Simulated lost successful upload response')
+
+                  with mock_patch('time.sleep'):
+                      recover_canonical(b'new', b'old', new_asset['id'], read, fetch, rename, upload)
+                  require(DMG in read() and calls['renames'] == 1 and calls['uploads'] <= 1, 'Recovery regression: ' + mode)
+                  # Re-enter the normal promotion path after an actual rollback.
+                  assets = validate_release(release)
+                  if calls['uploads']:
+                      restored_id = assets[DMG]['id']
+                      require(restored_id != OLD_ID, 'Rollback ID must be newly allocated')
+                      mode = 'retry-after-rollback'
+
+                      def normal_read():
+                          return release, validate_release(release)
+
+                      def remove(*args):
+                          require(args == ('api', '--method', 'DELETE', f'repos/{REPO}/releases/assets/{restored_id}'), 'Retry deletes wrong asset')
+                          release['assets'] = [a for a in release['assets'] if a['id'] != restored_id]
+                          return b''
+
+                      with mock_patch.dict(globals(), read_checked=normal_read, download=fetch, patch=rename, gh=remove):
+                          promote_staged(b'new', b'old', assets[stage])
+                      resumed = validate_release(release)
+                      require(len(resumed) == 6 and stage not in resumed and resumed[DMG]['digest'] == 'sha256:' + CONFIG['sha256'], 'Normal retry after rollback failed')
+              print('MACOS_PROMOTION_RECOVERY_REGRESSIONS_PASSED')
+
+
+          def selftest(original):
+              validate_release(original)
+              require(sha(desired_body(original['body']).encode()) == CONFIG['desired_body_sha256'], 'Notes regression')
+              for name in CONFIG['assets']:
+                  if name == DMG:
+                      continue
+                  bad = copy.deepcopy(original)
+                  next(a for a in bad['assets'] if a['name'] == name)['digest'] = 'changed'
+                  try:
+                      validate_release(bad)
+                  except RuntimeError:
+                      continue
+                  raise RuntimeError('Protected asset accepted: ' + name)
+              bad = copy.deepcopy(original); bad['body'] = 'concurrent edit'
+              try:
+                  validate_release(bad)
+              except RuntimeError:
+                  return
+              raise RuntimeError('Concurrent notes accepted')
+
+
+          def main():
+              mode = sys.argv[1]
+              check_source()
+              wait_for_publication_ci()
+              data, old = payloads()
+              release, assets = read_checked()
+              body = desired_body(release['body'])
+              selftest(release)
+              selftest_recovery(release)
+              if mode == 'prepare':
+                  backup = Path('macos-before'); backup.mkdir(exist_ok=True)
+                  (backup / DMG).write_bytes(old)
+                  (backup / 'release-before.json').write_text(json.dumps(release, ensure_ascii=False, indent=2))
+                  if assets.get(DMG, {}).get('digest') == CONFIG['assets'][DMG]['digest']:
+                      require(download(assets[DMG]) == old, 'Current original bytes changed')
+                  print('MACOS_PREPARE_VERIFIED')
+                  return
+              require(mode == 'apply', 'Unknown mode')
+              verify_backup(old)
+              stage = CONFIG['staged_name']
+              if stage not in assets and assets.get(DMG, {}).get('digest') == CONFIG['assets'][DMG]['digest']:
+                  target = Path('/tmp') / stage; target.write_bytes(data)
+                  read_checked()
+                  gh('release', 'upload', 'v1.7.0', str(target), '--repo', REPO)
+              _, assets = read_checked()
+              staged = assets.get(stage)
+              if staged:
+                  promote_staged(data, old, staged)
+              release, assets = read_checked()
+              require(len(assets) == 6 and stage not in assets and assets[DMG]['digest'] == 'sha256:' + CONFIG['sha256'] and download(assets[DMG]) == data, 'Final installer mismatch')
+              if release['body'] != body:
+                  patch('releases/402088227', {'body': body})
+              release, assets = read_checked()
+              require(release['body'] == body and download(assets[DMG]) == data, 'Final release verification failed')
+              out = Path('macos-replacement'); out.mkdir(exist_ok=True)
+              (out / 'release-after.json').write_text(json.dumps(release, ensure_ascii=False, indent=2))
+              public_url = f'https://github.com/{REPO}/releases/download/v1.7.0/{DMG}?fix=macos-login-{CONFIG["sha256"][:16]}'
+              require(assets[DMG]['browser_download_url'] == public_url.split('?')[0], 'Unexpected public download URL')
+              with urllib.request.urlopen(public_url, timeout=120) as response:
+                  public_bytes = response.read()
+              require(public_bytes == data, 'Public download bytes mismatch')
+              (out / 'download-verification.json').write_text(json.dumps({'asset_id': assets[DMG]['id'], 'source_sha': CONFIG['dev_sha'], 'sha256': sha(public_bytes), 'size': len(public_bytes), 'verified_download_url': public_url}, indent=2))
+              print('MACOS_INSTALLER_REPLACED_AND_DOWNLOADED_BYTES_VERIFIED')
+
+
+          if __name__ == '__main__':
+              main()
+          PYTHON
+      - name: Verify normal CI, app source, package evidence and original installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 /tmp/replace_macos_v170.py prepare
+      - name: Preserve verified original DMG before any release deletion
+        id: backup
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-v170-before-login-${{ github.run_id }}-${{ github.run_attempt }}
+          path: macos-before/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Verify durable backup, stage and replace only macOS DMG
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BACKUP_ARTIFACT_ID: ${{ steps.backup.outputs.artifact-id }}
+        run: python3 /tmp/replace_macos_v170.py apply
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-v170-replacement-${{ github.run_id }}-${{ github.run_attempt }}
+          path: macos-replacement/
+          if-no-files-found: error
+          retention-days: 90
