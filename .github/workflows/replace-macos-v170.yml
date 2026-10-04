@@ -193,12 +193,13 @@ jobs:
 
 
           def validate_release(release, recovery=False):
-              require(all(release.get(k) == v for k, v in CONFIG['release_meta'].items()), 'Release metadata changed')
+              meta_keys = ('id', 'tag_name') if recovery else CONFIG['release_meta']
+              require(all(release.get(k) == CONFIG['release_meta'][k] for k in meta_keys), 'Release metadata changed')
               assets = {a['name']: a for a in release['assets']}
               require(len(assets) == len(release['assets']), 'Duplicate asset names')
-              require(set(assets) <= set(CONFIG['assets']) | {CONFIG['staged_name']}, 'Unexpected release assets')
+              require(recovery or set(assets) <= set(CONFIG['assets']) | {CONFIG['staged_name']}, 'Unexpected release assets')
               for name, original in CONFIG['assets'].items():
-                  if name == DMG:
+                  if name == DMG or recovery:
                       continue
                   require(name in assets and all(assets[name].get(k) == original.get(k) for k in FIELDS), 'Protected asset changed: ' + name)
               for name in (DMG, CONFIG['staged_name']):
@@ -213,7 +214,8 @@ jobs:
                       require(asset.get('label') in (None, ''), 'Unexpected Mac label')
               require(recovery or DMG in assets or CONFIG['staged_name'] in assets, 'Both installers absent')
               require(recovery or not (DMG in assets and assets[DMG]['digest'] != CONFIG['assets'][DMG]['digest'] and CONFIG['staged_name'] in assets), 'Duplicate replacements')
-              desired_body(release['body'])
+              if not recovery:
+                  desired_body(release['body'])
               return assets
 
 
@@ -295,6 +297,12 @@ jobs:
               gh('api', '--method', 'PATCH', f'repos/{REPO}/{path}', '--input', str(payload))
 
 
+          def finalize_release_notes(body):
+              current, _ = read_checked()
+              if current['body'] != body:
+                  patch('releases/402088227', {'body': body})
+
+
           def verify_backup(old):
               ident = int(os.environ['BACKUP_ARTIFACT_ID'])
               meta = api(f'actions/artifacts/{ident}')
@@ -308,6 +316,7 @@ jobs:
 
 
           def recovery_read():
+              require(api('git/ref/tags/v1.7.0')['object']['sha'] == TAG_SHA, 'Recovery tag moved')
               release = api('releases/402088227')
               return validate_release(release, recovery=True)
 
@@ -445,7 +454,7 @@ jobs:
               from unittest.mock import patch as mock_patch
               recover = recover_canonical
               stage = CONFIG['staged_name']
-              for mode in ('delete-response-lost', 'rename-response-lost', 'rollback-to-original'):
+              for mode in ('delete-response-lost', 'rename-response-lost', 'rollback-to-original', 'concurrent-notes-after-delete', 'concurrent-asset-after-delete'):
                   release = copy.deepcopy(original)
                   release['assets'] = [a for a in release['assets'] if a['name'] not in (DMG, stage)] + [dict(CONFIG['assets'][DMG])]
                   staged = dict(CONFIG['assets'][DMG], id=900003, name=stage, size=CONFIG['size'], digest='sha256:' + CONFIG['sha256'])
@@ -463,6 +472,10 @@ jobs:
                   def remove(*args):
                       require(args == ('api', '--method', 'DELETE', f'repos/{REPO}/releases/assets/{OLD_ID}'), 'Wrong fault-test deletion')
                       release['assets'] = [a for a in release['assets'] if a['id'] != OLD_ID]
+                      if mode == 'concurrent-notes-after-delete':
+                          release['body'] = 'Concurrent notes that must survive recovery'
+                      if mode == 'concurrent-asset-after-delete':
+                          next(a for a in release['assets'] if a['name'].endswith('.deb'))['id'] = 900009
                       if mode == 'delete-response-lost':
                           raise OSError('Lost successful delete response')
 
@@ -486,8 +499,12 @@ jobs:
                       except OSError:
                           failed = True
                   require(failed == (mode == 'rollback-to-original'), 'Promotion completion regression: ' + mode)
-                  assets = validate_release(release)
+                  assets = validate_release(release, recovery=mode.startswith('concurrent-'))
                   require(fetch(assets[DMG]) == (b'old' if failed else b'new'), 'Wrong canonical result')
+                  if mode == 'concurrent-notes-after-delete':
+                      require(release['body'] == 'Concurrent notes that must survive recovery', 'Recovery overwrote concurrent notes')
+                  if mode == 'concurrent-asset-after-delete':
+                      require(next(a for a in release['assets'] if a['name'].endswith('.deb'))['id'] == 900009, 'Recovery overwrote concurrent asset')
               print('MACOS_RECOVERED_REPLACEMENT_CONTINUES_FINALIZATION_PASSED')
 
 
@@ -510,6 +527,28 @@ jobs:
                       continue
                   raise RuntimeError('Invalid publication source accepted')
               print('MACOS_PINNED_PUBLICATION_RESUMES_AFTER_MASTER_ADVANCES_PASSED')
+
+
+          def selftest_notes_concurrency(original):
+              from unittest.mock import patch as mock_patch
+              body = desired_body(original['body'])
+              for current_body in (original['body'], body, 'concurrent unrelated notes'):
+                  release = copy.deepcopy(original)
+                  release['body'] = current_body
+                  writes = []
+
+                  def read():
+                      return release, validate_release(release)
+
+                  with mock_patch.dict(globals(), read_checked=read, patch=lambda *args: writes.append(args)):
+                      try:
+                          finalize_release_notes(body)
+                      except RuntimeError:
+                          require(current_body == 'concurrent unrelated notes' and not writes, 'Concurrent notes overwritten')
+                      else:
+                          require(current_body != 'concurrent unrelated notes', 'Concurrent notes accepted')
+                          require(writes == ([('releases/402088227', {'body': body})] if current_body != body else []), 'Wrong notes update')
+              print('MACOS_RELEASE_NOTES_RECHECKED_BEFORE_WRITE_PASSED')
 
 
           def selftest(original):
@@ -544,6 +583,7 @@ jobs:
               selftest_recovery(release)
               selftest_promotion_failures(release)
               selftest_publication_source()
+              selftest_notes_concurrency(release)
               if mode == 'prepare':
                   backup = Path('macos-before'); backup.mkdir(exist_ok=True)
                   (backup / DMG).write_bytes(old)
@@ -565,8 +605,7 @@ jobs:
                   promote_staged(data, old, staged)
               release, assets = read_checked()
               require(len(assets) == 6 and stage not in assets and assets[DMG]['digest'] == 'sha256:' + CONFIG['sha256'] and download(assets[DMG]) == data, 'Final installer mismatch')
-              if release['body'] != body:
-                  patch('releases/402088227', {'body': body})
+              finalize_release_notes(body)
               release, assets = read_checked()
               require(release['body'] == body and download(assets[DMG]) == data, 'Final release verification failed')
               out = Path('macos-replacement'); out.mkdir(exist_ok=True)
