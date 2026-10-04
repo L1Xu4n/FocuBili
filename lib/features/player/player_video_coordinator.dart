@@ -448,19 +448,6 @@ mixin _PlayerVideoCoordinator
     LearningListEntry? learningEntry,
   }) async {
     final generation = _beginVideoNavigation();
-    await _deactivateFocusPlaybackForCurrentPart();
-    if (!_isCurrentVideoNavigation(generation)) return;
-    _notesPanelAnimationTimer?.cancel();
-    _flushVideoNoteAutoSave();
-    await _noteSaveCompletion?.future;
-    if (!_isCurrentVideoNavigation(generation)) return;
-    _flushCurrentWatchHistoryProgress();
-    _flushCurrentLearningListProgress();
-    await _playbackService.pause();
-    if (!_isCurrentVideoNavigation(generation)) return;
-    final SavedPlaybackState? savedState = await _playbackService
-        .loadSavedPlaybackState(video.bvid);
-    if (!_isCurrentVideoNavigation(generation)) return;
     final LearningListEntry? requestedLearningEntry =
         learningEntry != null && learningEntry.bvid == video.bvid
         ? learningEntry
@@ -478,6 +465,20 @@ mixin _PlayerVideoCoordinator
       _showPlayerNotice('原学习分 P 已失效，请重新选择；旧进度保留。');
       return;
     }
+    // Reject a known invalid target before pausing or changing the current UI.
+    await _deactivateFocusPlaybackForCurrentPart();
+    if (!_isCurrentVideoNavigation(generation)) return;
+    _notesPanelAnimationTimer?.cancel();
+    _flushVideoNoteAutoSave();
+    await _noteSaveCompletion?.future;
+    if (!_isCurrentVideoNavigation(generation)) return;
+    _flushCurrentWatchHistoryProgress();
+    _flushCurrentLearningListProgress();
+    await _playbackService.pause();
+    if (!_isCurrentVideoNavigation(generation)) return;
+    final SavedPlaybackState? savedState = await _playbackService
+        .loadSavedPlaybackState(video.bvid);
+    if (!_isCurrentVideoNavigation(generation)) return;
     final WatchHistoryEntry? historyEntry = requestedLearningEntry == null
         ? await _loadWatchHistoryResumeEntry(video.bvid)
         : null;

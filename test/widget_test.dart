@@ -3993,6 +3993,74 @@ void main() {
     );
   });
 
+  testWidgets('下一学习任务 CID 失效时保留当前完成界面与下一项进度', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final preferences = await SharedPreferences.getInstance();
+    final learning = LearningListService(
+      preferencesLoader: () async => preferences,
+    );
+    final video = _createMultiPartVideo();
+    const removedPart = VideoPart(
+      pageNumber: 3,
+      cid: 999999,
+      title: '已删除的 P',
+      duration: Duration(minutes: 5),
+    );
+    await learning.addVideo(video, part: video.parts.first);
+    final oldVideo = VideoPreview(
+      bvid: video.bvid,
+      cid: video.cid,
+      title: video.title,
+      ownerName: video.ownerName,
+      parts: [...video.parts, removedPart],
+    );
+    await learning.addVideo(oldVideo, part: removedPart);
+    await learning.updateProgress(
+      video.bvid,
+      part: removedPart,
+      position: const Duration(seconds: 73),
+      status: LearningListStatus.learning,
+    );
+    expect(await learning.loadEntries(), hasLength(2));
+    final playback = _FakePlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: video,
+          playbackService: playback,
+          learningListService: learning,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final opens = playback.openVideoRequests;
+    final pauses = playback.pauseRequests;
+    playback.emitEnded();
+    await tester.pump();
+    await tester.pump();
+    await tester.tap(
+      find.byKey(const Key('continue-learning-after-completion')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('已标记完成'), findsWidgets);
+    expect(find.text('已完成学习'), findsNothing);
+    expect(find.textContaining('原学习分 P 已失效'), findsOneWidget);
+    expect(playback.openVideoRequests, opens);
+    expect(playback.pauseRequests, pauses);
+    expect(playback.openedCid, video.parts.first.cid);
+    final entries = await learning.loadEntries();
+    expect(
+      entries.firstWhere((e) => e.partCid == video.parts.first.cid).status,
+      LearningListStatus.completed,
+    );
+    final stale = entries.firstWhere((e) => e.partCid == removedPart.cid);
+    expect(stale.status, LearningListStatus.learning);
+    expect(stale.position, const Duration(seconds: 73));
+    expect(tester.takeException(), isNull);
+  });
+
   /// 验证继续学习复用当前播放服务打开下一项，旧页面不会销毁后误释放新播放器。
   testWidgets('继续学习会在当前播放器内打开下一条任务', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));

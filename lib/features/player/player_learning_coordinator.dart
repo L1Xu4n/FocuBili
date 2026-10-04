@@ -473,15 +473,16 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
         bvid,
         current.partCid,
       );
+      // The current task is durably complete even if the next lookup/CID fails.
+      setState(() {
+        _learningListEntry = completed;
+        _completionPromptVisible = true;
+        _completionLearningFinished = next == null;
+        _recordedLearningListPartCid = _currentPart.cid;
+        _lastLearningListSavedPosition =
+            completed?.position ?? _displayDuration;
+      });
       if (next == null) {
-        setState(() {
-          _learningListEntry = completed;
-          _completionPromptVisible = true;
-          _completionLearningFinished = true;
-          _recordedLearningListPartCid = _currentPart.cid;
-          _lastLearningListSavedPosition =
-              completed?.position ?? _displayDuration;
-        });
         _showPlayerNotice('学习清单已完成');
         return;
       }
