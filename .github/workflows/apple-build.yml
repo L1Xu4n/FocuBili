@@ -23,6 +23,7 @@ jobs:
           cache: true
       - run: python3 tool/check_apple_sources.py
       - run: python3 tool/check_platform_icons.py
+      - run: python3 -m unittest discover -s tool -p test_verify_macos_dmg.py -v
       - run: flutter pub get
       - run: dart format --output=none --set-exit-if-changed lib test
       - run: flutter analyze --no-pub

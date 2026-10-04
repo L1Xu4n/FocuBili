@@ -3,6 +3,7 @@ import hashlib
 import json
 from pathlib import Path
 import plistlib
+import re
 import subprocess
 import tempfile
 
@@ -28,7 +29,18 @@ def manifest(app):
     }
 
 
+def project_version(metadata=Path("pubspec.yaml")):
+    # The build workflow uses the project's version without CLI overrides.
+    match = re.search(
+        r'''^version:\s*['"]?(\d+\.\d+\.\d+)\+(\d+)['"]?\s*(?:#.*)?$''',
+        metadata.read_text(), re.MULTILINE,
+    )
+    assert match, "Expected a project version with a build number"
+    return match.groups()
+
+
 def main():
+    version, build = project_version()
     dmg = Path("build/apple/FocuBili-macos-preview.dmg")
     normal = Path("build/macos/Build/Products/Release/FocuBili.app")
     expected = manifest(normal)
@@ -36,6 +48,7 @@ def main():
     run("hdiutil", "verify", str(dmg))
     with tempfile.TemporaryDirectory() as directory:
         mount = Path(directory) / "volume"
+        mount.mkdir()
         run("hdiutil", "attach", "-readonly", "-nobrowse", "-mountpoint",
             str(mount), str(dmg))
         try:
@@ -48,8 +61,8 @@ def main():
             assert "ad-hoc signed, not notarized" in (mount / "README.txt").read_text()
             info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
             assert info["CFBundleIdentifier"] == "com.focubili.app"
-            assert info["CFBundleShortVersionString"] == "1.7.0"
-            assert str(info["CFBundleVersion"]) == "20"
+            assert info["CFBundleShortVersionString"] == version
+            assert str(info["CFBundleVersion"]) == build
             assert info["CFBundleExecutable"] == "FocuBili"
             assert manifest(app) == expected, "DMG differs from normal application"
             run("codesign", "--verify", "--deep", "--strict", str(app))
