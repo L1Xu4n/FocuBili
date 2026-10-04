@@ -330,8 +330,8 @@ jobs:
                   require(DMG not in assets and assets[stage]['id'] == staged['id'], 'Rename conflict')
                   patch(f'releases/assets/{staged["id"]}', {'name': DMG})
               except Exception:
-                  recover_canonical(data, old, staged['id'])
-                  raise
+                  if recover_canonical(data, old, staged['id']) != 'replacement':
+                      raise
 
 
           def recover_canonical(data, old, staged_id, read=recovery_read, fetch=download, rename=patch, upload=upload_original):
@@ -347,13 +347,15 @@ jobs:
 
               def canonical(assets):
                   if DMG not in assets:
-                      return False
-                  require(fetch(assets[DMG]) in (data, old), 'Recovery found conflicting canonical bytes')
-                  return True
+                      return None
+                  actual = fetch(assets[DMG])
+                  require(actual in (data, old), 'Recovery found conflicting canonical bytes')
+                  return 'replacement' if actual == data else 'original'
 
               assets = observed()
-              if canonical(assets):
-                  return
+              result = canonical(assets)
+              if result:
+                  return result
               stage = CONFIG['staged_name']
               if stage in assets:
                   require(assets[stage]['id'] == staged_id and fetch(assets[stage]) == data, 'Recovery staged package changed')
@@ -363,24 +365,27 @@ jobs:
                       # A lost rename response may already have restored the URL.
                       pass
                   assets = observed()
-                  if canonical(assets):
-                      return
+                  result = canonical(assets)
+                  if result:
+                      return result
               # If promotion remains unavailable, restore the verified old DMG.
               # One upload only; even a lost upload response is followed by a read.
               try:
                   upload(old)
               except Exception:
                   pass
-              require(canonical(observed()), 'Canonical installer recovery failed')
+              result = canonical(observed())
+              require(result, 'Canonical installer recovery failed')
+              return result
 
 
           def selftest_recovery(original):
               from unittest.mock import patch as mock_patch
               stage = CONFIG['staged_name']
-              new_asset = dict(original['assets'][0], id=900001, name=stage, size=CONFIG['size'], digest='sha256:' + CONFIG['sha256'], content_type=CONFIG['assets'][DMG]['content_type'], label='')
+              new_asset = dict(CONFIG['assets'][DMG], id=900001, name=stage, size=CONFIG['size'], digest='sha256:' + CONFIG['sha256'])
               for mode in ('delete-response-lost', 'read-failed-once', 'rename-response-lost', 'rename-failed', 'rollback-upload-response-lost'):
                   release = copy.deepcopy(original)
-                  release['assets'] = [a for a in release['assets'] if a['name'] != DMG] + [copy.deepcopy(new_asset)]
+                  release['assets'] = [a for a in release['assets'] if a['name'] not in (DMG, stage)] + [copy.deepcopy(new_asset)]
                   calls = {'reads': 0, 'renames': 0, 'uploads': 0}
 
                   def read():
@@ -432,6 +437,56 @@ jobs:
               print('MACOS_PROMOTION_RECOVERY_REGRESSIONS_PASSED')
 
 
+          def selftest_promotion_failures(original):
+              from unittest.mock import patch as mock_patch
+              recover = recover_canonical
+              stage = CONFIG['staged_name']
+              for mode in ('delete-response-lost', 'rename-response-lost', 'rollback-to-original'):
+                  release = copy.deepcopy(original)
+                  release['assets'] = [a for a in release['assets'] if a['name'] not in (DMG, stage)] + [dict(CONFIG['assets'][DMG])]
+                  staged = dict(CONFIG['assets'][DMG], id=900003, name=stage, size=CONFIG['size'], digest='sha256:' + CONFIG['sha256'])
+                  release['assets'].append(staged)
+
+                  def normal_read():
+                      return release, validate_release(release)
+
+                  def recovery_read_fake():
+                      return validate_release(release, recovery=True)
+
+                  def fetch(asset):
+                      return b'old' if asset['digest'] == CONFIG['assets'][DMG]['digest'] else b'new'
+
+                  def remove(*args):
+                      require(args == ('api', '--method', 'DELETE', f'repos/{REPO}/releases/assets/{OLD_ID}'), 'Wrong fault-test deletion')
+                      release['assets'] = [a for a in release['assets'] if a['id'] != OLD_ID]
+                      if mode == 'delete-response-lost':
+                          raise OSError('Lost successful delete response')
+
+                  def rename(path, fields):
+                      if mode == 'rollback-to-original':
+                          raise OSError('Unavailable rename')
+                      staged['name'] = DMG
+                      if mode == 'rename-response-lost':
+                          raise OSError('Lost successful rename response')
+
+                  def upload(old):
+                      release['assets'].append(dict(CONFIG['assets'][DMG], id=900004))
+
+                  def recovery(data, old, ident):
+                      return recover(data, old, ident, recovery_read_fake, fetch, rename, upload)
+
+                  failed = False
+                  with mock_patch.dict(globals(), read_checked=normal_read, download=fetch, patch=rename, gh=remove, recover_canonical=recovery):
+                      try:
+                          promote_staged(b'new', b'old', staged)
+                      except OSError:
+                          failed = True
+                  require(failed == (mode == 'rollback-to-original'), 'Promotion completion regression: ' + mode)
+                  assets = validate_release(release)
+                  require(fetch(assets[DMG]) == (b'old' if failed else b'new'), 'Wrong canonical result')
+              print('MACOS_RECOVERED_REPLACEMENT_CONTINUES_FINALIZATION_PASSED')
+
+
           def selftest(original):
               validate_release(original)
               require(sha(desired_body(original['body']).encode()) == CONFIG['desired_body_sha256'], 'Notes regression')
@@ -462,6 +517,7 @@ jobs:
               body = desired_body(release['body'])
               selftest(release)
               selftest_recovery(release)
+              selftest_promotion_failures(release)
               if mode == 'prepare':
                   backup = Path('macos-before'); backup.mkdir(exist_ok=True)
                   (backup / DMG).write_bytes(old)
