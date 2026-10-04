@@ -382,10 +382,10 @@ jobs:
           def selftest_recovery(original):
               from unittest.mock import patch as mock_patch
               stage = CONFIG['staged_name']
-              new_asset = dict(original['assets'][0], id=900001, name=stage, size=CONFIG['size'], digest='sha256:' + CONFIG['sha256'], content_type=CONFIG['assets'][DMG]['content_type'], label='')
+              new_asset = dict(CONFIG['assets'][DMG], id=900001, name=stage, size=CONFIG['size'], digest='sha256:' + CONFIG['sha256'])
               for mode in ('delete-response-lost', 'read-failed-once', 'rename-response-lost', 'rename-failed', 'rollback-upload-response-lost'):
                   release = copy.deepcopy(original)
-                  release['assets'] = [a for a in release['assets'] if a['name'] != DMG] + [copy.deepcopy(new_asset)]
+                  release['assets'] = [a for a in release['assets'] if a['name'] not in (DMG, stage)] + [copy.deepcopy(new_asset)]
                   calls = {'reads': 0, 'renames': 0, 'uploads': 0}
 
                   def read():
@@ -443,7 +443,7 @@ jobs:
               stage = CONFIG['staged_name']
               for mode in ('delete-response-lost', 'rename-response-lost', 'rollback-to-original'):
                   release = copy.deepcopy(original)
-                  release['assets'] = [a for a in release['assets'] if a['name'] != DMG] + [dict(CONFIG['assets'][DMG])]
+                  release['assets'] = [a for a in release['assets'] if a['name'] not in (DMG, stage)] + [dict(CONFIG['assets'][DMG])]
                   staged = dict(CONFIG['assets'][DMG], id=900003, name=stage, size=CONFIG['size'], digest='sha256:' + CONFIG['sha256'])
                   release['assets'].append(staged)
 
