@@ -229,6 +229,7 @@ class DesktopPlayerOverlayService implements PlayerOverlayService {
       final Uri endpoint = Uri.https(
         'api.bilibili.com',
         '/x/v2/dm/web/seg.so',
+        // Query values must use the current video part and segment.
         <String, String>{
           'type': '1',
           'oid': cid.toString(),

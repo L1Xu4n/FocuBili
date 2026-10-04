@@ -1,7 +1,10 @@
 // A release-mode probe, packaged separately from the normal application.
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer' as developer;
+import 'dart:ui' as ui;
 import 'dart:io';
+
 import 'package:dbus/dbus.dart';
 import 'package:desktop_webview_window/desktop_webview_window.dart';
 import 'package:flutter/material.dart';
@@ -16,6 +19,7 @@ import 'package:focubili/services/flutter_video_frame_capture.dart';
 import 'package:focubili/services/linux_media_session.dart';
 import 'package:focubili/services/linux_mini_player.dart';
 import 'package:focubili/services/linux_focus_notification_service.dart';
+
 import '../integration_test/media_fixture.dart';
 
 Future<void> waitFor(bool Function() condition, String name) async {
@@ -39,6 +43,59 @@ Future<void> waitForBounds(Rect expected, String phase) async {
     await Future<void>.delayed(const Duration(milliseconds: 100));
   } while (DateTime.now().isBefore(deadline));
   throw StateError('$phase bounds: expected=$expected actual=$actual');
+}
+
+// Observe real metrics and raster completion, including while video is paused.
+// This is an assertion after the operation, not a delay masking the resize race.
+Future<void> verifyRenderedSize(
+  Size expected,
+  FlutterVideoFrameCapture capture,
+  String phase,
+) async {
+  final binding = WidgetsBinding.instance;
+  final view = binding.platformDispatcher.views.first;
+  await waitFor(() {
+    final logical = view.physicalSize / view.devicePixelRatio;
+    return (logical.width - expected.width).abs() <= 2 &&
+        (logical.height - expected.height).abs() <= 2;
+  }, '$phase Flutter metrics');
+  final rasterized = Completer<void>();
+  final requestedAt = developer.Timeline.now;
+  void onTimings(List<ui.FrameTiming> timings) {
+    if (!rasterized.isCompleted &&
+        timings.any(
+          (timing) =>
+              timing.timestampInMicroseconds(ui.FramePhase.buildStart) >=
+              requestedAt,
+        )) {
+      rasterized.complete();
+    }
+  }
+
+  binding.addTimingsCallback(onTimings);
+  try {
+    binding.scheduleFrame();
+    await rasterized.future.timeout(const Duration(seconds: 10));
+  } finally {
+    binding.removeTimingsCallback(onTimings);
+  }
+  final png = await capture.capturePngBytes();
+  if (png == null || png.length < 24) {
+    throw StateError('$phase screenshot missing');
+  }
+  final header = png.buffer.asByteData(png.offsetInBytes, png.length);
+  final logical = view.physicalSize / view.devicePixelRatio;
+  final width = logical.width < logical.height * 16 / 9
+      ? logical.width
+      : logical.height * 16 / 9;
+  if ((header.getUint32(16) - width).abs() > 2 ||
+      (header.getUint32(20) - width * 9 / 16).abs() > 2) {
+    throw StateError('$phase screenshot still has stale dimensions');
+  }
+  final output = Directory('build/linux-packages');
+  await output.create(recursive: true);
+  await File('${output.path}/linux-$phase.png').writeAsBytes(png);
+  stdout.writeln('LINUX_PROBE: $phase raster and screenshot passed');
 }
 
 Future<void> main(List<String> args) async {
@@ -199,12 +256,13 @@ Future<void> main(List<String> args) async {
       if (!await mini.toggle(16 / 9) || !mini.active) {
         throw StateError('Mini-player did not activate');
       }
+      await verifyRenderedSize(const Size(440, 295.5), capture, 'mini-$i');
       stdout.writeln('LINUX_MINI_READY');
       await stdout.flush();
-      await Future<void>.delayed(const Duration(seconds: 2));
       await mini.restore();
       if (mini.active) throw StateError('Mini-player did not restore');
       await waitForBounds(bounds, 'mini-player restore');
+      await verifyRenderedSize(bounds.size, capture, 'restored-$i');
     }
     final interruptedMini = LinuxMiniPlayer();
     final entering = interruptedMini.toggle(16 / 9);
@@ -215,7 +273,26 @@ Future<void> main(List<String> args) async {
     }
     await waitForBounds(bounds, 'interrupted mini-player restore');
     stdout.writeln('LINUX_PROBE: mini-player disposal interruption passed');
-    for (var i = 0; i < 2; i++) {
+    for (var i = 0; i < 8; i++) {
+      // Keep the original immediate interrupted-restore -> WebKit transition
+      // and repeat-close pair, then add six resize stress iterations.
+      if (i >= 2) {
+        if (p.state.playing) {
+          throw StateError('Resize stress requires paused video');
+        }
+        if (!await mini.toggle(16 / 9) || !mini.active) {
+          throw StateError('Stress mini-player did not activate');
+        }
+        await verifyRenderedSize(
+          const Size(440, 295.5),
+          capture,
+          'stress-shrink-$i',
+        );
+        await mini.restore();
+        if (mini.active) throw StateError('Stress mini-player did not restore');
+      }
+      // Deliberately no metrics/raster wait before opening WebKit: exercise the
+      // X11 old-framebuffer/new-window-size race that crashed Flutter 3.44.x.
       stdout.writeln('LINUX_WEBKIT: create $i');
       await stdout.flush();
       final webview = await WebviewWindow.create(
@@ -225,6 +302,8 @@ Future<void> main(List<String> args) async {
           windowHeight: 480,
         ),
       );
+      await waitForBounds(bounds, 'stress restore');
+      await verifyRenderedSize(bounds.size, capture, 'stress-expand-$i');
       stdout.writeln('LINUX_WEBKIT: created $i');
       await stdout.flush();
       await webview.setUserAgent('FocuBili synthetic QA');

@@ -18,9 +18,14 @@
 
 DEB 安装包声明系统依赖，可使用桌面软件安装器或 apt 安装；tar.gz 为已编译应用目录，需要自行安装依赖后运行其中的 focubili。两者不是 AppImage，不保证在任意发行版直接运行。
 
-源码构建需要 Flutter 3.44.6、Clang、CMake、Ninja、pkg-config，以及 GTK3、libmpv、libsecret、libjsoncpp、ALSA、WebKitGTK 4.1 的开发包。
+源码构建需要 Flutter 3.47.5 stable（自带 Dart 3.13.4）、Clang、CMake、Ninja、pkg-config，以及 GTK3、libmpv、libsecret、libjsoncpp、ALSA、WebKitGTK 4.1 的开发包。
+
+Linux SDK 单独固定为 3.47.5；Android、Windows 和 Apple 工作流仍使用 3.44.6。3.44.x 的 X11 非共享 OpenGL 合成路径会在窗口尺寸变化时，用新窗口尺寸上传旧 framebuffer 的像素缓冲区，可能导致越界读取和 SIGSEGV。3.47.5 使用 framebuffer 本身的宽高上传，修复这一引擎问题；不通过等待、关闭软件渲染或强制 Wayland 绕过。
+
+上游实现：[Flutter 3.47.5 fl_compositor_opengl.cc](https://github.com/flutter/flutter/blob/3.47.5/engine/src/flutter/shell/platform/linux/fl_compositor_opengl.cc)。
 
 ```
+flutter --version # 必须确认 Linux 使用 3.47.5
 flutter pub get
 flutter analyze
 flutter test
@@ -30,6 +35,6 @@ bash tool/package_linux.sh
 
 ## 验证边界
 
-Linux CI 会单独保存正常 release 安装包，再构建独立原生测试入口；测试入口不会进入用户安装包。测试覆盖本地合成视频、播放器操作、MPRIS、密钥环、通知、图片剪贴板、小窗恢复和网页登录窗口反复关闭。
+Linux CI 会单独保存正常 release 安装包，再构建独立原生测试入口；测试入口不会进入用户安装包。测试覆盖本地合成视频、播放器操作、MPRIS、密钥环、通知、图片剪贴板、小窗恢复和网页登录窗口反复关闭。暂停视频时额外重复六次缩小、恢复后立即打开 WebKit 的回归流程，随后验证 Flutter 窗口 metrics、完成的 raster frame 和截图尺寸；保留小窗进入时销毁、WebKit 关闭时仍有请求的中断测试。原生探针即使先输出成功标记，只要收到致命信号或没有正常退出，CI 仍会失败。
 
 本文件记录实现与验收计划，最终以对应提交的 CI 和运行诊断为准。合成素材与浏览器生命周期检查不等于真实账号登录、在线高码率视频、所有桌面环境或所有发行版兼容性均已实测。

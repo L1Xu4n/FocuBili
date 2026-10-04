@@ -115,7 +115,7 @@ class BilibiliVideoShotService implements VideoShotService {
       if (imageBytes.isEmpty) {
         return null;
       }
-      return _cropFramePng(imageBytes, frame);
+      return await _cropFramePng(imageBytes, frame);
     } catch (_) {
       return null;
     }
@@ -242,7 +242,7 @@ class BilibiliVideoShotService implements VideoShotService {
       if (response.statusCode != HttpStatus.ok) {
         return '';
       }
-      return response.transform(utf8.decoder).join();
+      return await response.transform(utf8.decoder).join();
     } finally {
       client.close(force: true);
     }
