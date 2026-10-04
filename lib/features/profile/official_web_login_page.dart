@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
@@ -64,7 +65,12 @@ class _OfficialWebLoginPageState extends State<OfficialWebLoginPage>
       await controller
           .setJavaScriptMode(JavaScriptMode.unrestricted)
           .timeout(_bridgeTimeout);
-      await controller.setBackgroundColor(Colors.white).timeout(_bridgeTimeout);
+      // WKWebView 的背景色接口在 macOS 会调用未实现的 setOpaque，保留原生默认背景。
+      if (defaultTargetPlatform != TargetPlatform.macOS) {
+        await controller
+            .setBackgroundColor(Colors.white)
+            .timeout(_bridgeTimeout);
+      }
       await _configureCaptchaCookies(controller).timeout(_bridgeTimeout);
       String? userAgent;
       try {
