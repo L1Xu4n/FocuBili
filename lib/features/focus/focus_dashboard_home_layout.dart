@@ -130,6 +130,7 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
                                       ),
                                 ),
                               ),
+                              _buildSubscriptionButton(),
                               IconButton(
                                 key: const Key('home-profile-button'),
                                 // 我的按钮函数切换到个人中心页面。

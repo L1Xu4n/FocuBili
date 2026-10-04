@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../models/video_preview.dart';
@@ -41,24 +43,22 @@ abstract final class LearningAddSheet {
       ),
     );
     if (selected == null || selected.isEmpty || !context.mounted) return null;
-    final videos = <VideoPreview>[];
-    final failed = <String>[];
-    // Details are fetched only for selected videos, never every feed item.
-    for (final item in selected) {
-      try {
-        videos.add(await videoService.lookupVideo(item.bvid));
-      } catch (_) {
-        failed.add(item.title);
-      }
-      if (!context.mounted) return null;
-    }
+    final details = await showDialog<_LoadedCollection>(
+      context: context,
+      builder: (_) =>
+          _CollectionDetailLoader(items: selected, service: videoService),
+    );
+    if (details == null || !context.mounted) return null;
+    final videos = details.videos, failed = details.failed;
     if (failed.isNotEmpty) {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (dialog) => AlertDialog(
           title: const Text('部分视频详情读取失败'),
-          content: Text(
-            '${failed.length} 支失败：${failed.join('、')}\n可继续选择已读取的 ${videos.length} 支视频，失败项不会加入。',
+          content: SingleChildScrollView(
+            child: Text(
+              '${failed.length} 支失败：${failed.join('、')}\n可继续选择已读取的 ${videos.length} 支视频，失败项不会加入。',
+            ),
           ),
           actions: [
             TextButton(
@@ -103,6 +103,69 @@ abstract final class LearningAddSheet {
       ),
     );
   }
+}
+
+class _LoadedCollection {
+  const _LoadedCollection(this.videos, this.failed);
+  final List<VideoPreview> videos;
+  final List<String> failed;
+}
+
+class _CollectionDetailLoader extends StatefulWidget {
+  const _CollectionDetailLoader({required this.items, required this.service});
+  final List<CreatorVideo> items;
+  final BilibiliService service;
+  @override
+  State<_CollectionDetailLoader> createState() =>
+      _CollectionDetailLoaderState();
+}
+
+class _CollectionDetailLoaderState extends State<_CollectionDetailLoader> {
+  int _finished = 0;
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    final videos = <VideoPreview>[], failed = <String>[];
+    // Canceling the dialog stops new requests and discards the current result.
+    for (final item in widget.items) {
+      if (!mounted) return;
+      try {
+        final video = await widget.service
+            .lookupVideo(item.bvid)
+            .timeout(const Duration(seconds: 30));
+        if (!mounted) return;
+        videos.add(video);
+      } catch (_) {
+        if (!mounted) return;
+        failed.add(item.title);
+      }
+      setState(() => _finished++);
+    }
+    if (mounted) Navigator.pop(context, _LoadedCollection(videos, failed));
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('读取所选视频分 P'),
+    content: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        LinearProgressIndicator(value: _finished / widget.items.length),
+        const SizedBox(height: 12),
+        Text('已读取 $_finished / ${widget.items.length}，此时尚未加入学习清单。'),
+      ],
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('取消'),
+      ),
+    ],
+  );
 }
 
 class _PartSelection extends StatefulWidget {
@@ -337,11 +400,13 @@ class _CollectionSelectionState extends State<_CollectionSelection> {
       _error = null;
     });
     try {
-      final page = await widget.service.loadCollectionVideos(
-        widget.ownerMid,
-        widget.collectionId,
-        page: _page,
-      );
+      final page = await widget.service
+          .loadCollectionVideos(
+            widget.ownerMid,
+            widget.collectionId,
+            page: _page,
+          )
+          .timeout(const Duration(seconds: 30));
       if (!mounted) return;
       setState(() {
         final seen = _videos.map((e) => e.bvid).toSet();

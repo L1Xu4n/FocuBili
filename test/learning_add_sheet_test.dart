@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -5,6 +7,9 @@ import 'package:focubili/features/learning/learning_add_sheet.dart';
 import 'package:focubili/features/learning/learning_video_launcher.dart';
 import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/services/learning_list_service.dart';
+import 'package:focubili/services/bilibili_service.dart';
+import 'package:focubili/services/bilibili_public_content_service.dart';
+import 'package:focubili/models/public_profile.dart';
 import 'learning_batch_test.dart' show video;
 
 VideoPreview partsVideo() => VideoPreview(
@@ -22,6 +27,47 @@ VideoPreview partsVideo() => VideoPreview(
       ),
   ],
 );
+
+class CollectionContent implements BilibiliPublicContentService {
+  @override
+  Future<CreatorContentPage<CreatorVideo>> loadCollectionVideos(
+    int ownerMid,
+    int collectionId, {
+    int page = 1,
+  }) async => CreatorContentPage(
+    items: [
+      for (var i = 1; i <= 2; i++)
+        CreatorVideo(
+          bvid: 'BV$i',
+          title: '课程$i',
+          coverUrl: '',
+          duration: const Duration(minutes: 1),
+        ),
+    ],
+    page: page,
+    hasMore: false,
+    totalCount: 2,
+  );
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class CollectionDetails implements BilibiliService {
+  final hold = Completer<VideoPreview>();
+  final calls = <String>[];
+  bool failSecond = false, blocked = true;
+  @override
+  Future<VideoPreview> lookupVideo(String input) async {
+    calls.add(input);
+    if (blocked) return hold.future;
+    if (failSecond && input == 'BV2') throw StateError('network');
+    return partsVideo();
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
   Future<LearningListService> service() async {
@@ -106,6 +152,72 @@ void main() {
         throwsException,
       );
       expect((await s.loadEntries()).single.position.inSeconds, 30);
+    },
+  );
+  Future<void> openCollection(
+    WidgetTester tester,
+    LearningListService learning,
+    CollectionDetails details,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () => LearningAddSheet.showCollection(
+                context,
+                ownerMid: 1,
+                collectionId: 1,
+                contentService: CollectionContent(),
+                videoService: details,
+                service: learning,
+              ),
+              child: const Text('批量'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('批量'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('选择已加载视频'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('下一步（2 支）'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+  }
+
+  testWidgets(
+    'cancel collection detail loading discards result and stops next lookup',
+    (tester) async {
+      final learning = await service(), details = CollectionDetails();
+      await openCollection(tester, learning, details);
+      expect(find.text('读取所选视频分 P'), findsOneWidget);
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      details.hold.complete(partsVideo());
+      await tester.pumpAndSettle();
+      expect(details.calls, ['BV1']);
+      expect(await learning.loadEntries(), isEmpty);
+      expect(find.text('选择加入的分 P'), findsNothing);
+    },
+  );
+  testWidgets(
+    'partial collection detail failure requires confirmation before selecting and saving',
+    (tester) async {
+      final learning = await service();
+      final details = CollectionDetails()
+        ..blocked = false
+        ..failSecond = true;
+      await openCollection(tester, learning, details);
+      await tester.pumpAndSettle();
+      expect(find.text('部分视频详情读取失败'), findsOneWidget);
+      expect(await learning.loadEntries(), isEmpty);
+      await tester.tap(find.text('继续选择成功项'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, '确认加入'));
+      await tester.pumpAndSettle();
+      expect((await learning.loadEntries()).length, 1);
     },
   );
 }

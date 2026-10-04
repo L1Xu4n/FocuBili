@@ -76,6 +76,26 @@ class _FocusDashboardState extends State<FocusDashboard> {
   ScrollDirection _homeScrollDirection = ScrollDirection.idle;
   double? _homeScrollStartOffset;
 
+  Widget _buildSubscriptionButton() => ListenableBuilder(
+    listenable: SubscriptionService.instance,
+    builder: (context, _) {
+      final service = SubscriptionService.instance;
+      if (!service.enabled) return const SizedBox.shrink();
+      return IconButton(
+        key: const Key('home-subscription-button'),
+        tooltip: '订阅更新',
+        icon: Badge(
+          label: Text('${service.unreadCount}'),
+          isLabelVisible: service.unreadCount > 0,
+          child: const Icon(Icons.rss_feed),
+        ),
+        onPressed: () => Navigator.of(context).push<void>(
+          MaterialPageRoute(builder: (_) => const SubscriptionUpdatesPage()),
+        ),
+      );
+    },
+  );
+
   /// 监听目标文字变化，使开始按钮能立即更新可用状态。
   @override
   void initState() {
@@ -758,30 +778,7 @@ class _FocusDashboardState extends State<FocusDashboard> {
                 SliverAppBar.large(
                   title: const Text('焦点哔哩'),
                   actions: <Widget>[
-                    ListenableBuilder(
-                      listenable: SubscriptionService.instance,
-                      builder: (context, _) =>
-                          SubscriptionService.instance.enabled
-                          ? IconButton(
-                              tooltip: '订阅更新',
-                              icon: Badge(
-                                label: Text(
-                                  '${SubscriptionService.instance.unreadCount}',
-                                ),
-                                isLabelVisible:
-                                    SubscriptionService.instance.unreadCount >
-                                    0,
-                                child: const Icon(Icons.rss_feed),
-                              ),
-                              onPressed: () => Navigator.of(context).push<void>(
-                                MaterialPageRoute(
-                                  builder: (_) =>
-                                      const SubscriptionUpdatesPage(),
-                                ),
-                              ),
-                            )
-                          : const SizedBox.shrink(),
-                    ),
+                    _buildSubscriptionButton(),
                     if (widget.onOpenLearningList != null)
                       IconButton(
                         key: const Key('open-learning-list'),

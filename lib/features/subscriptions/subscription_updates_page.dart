@@ -400,7 +400,10 @@ class _AddSourceDialogState extends State<_AddSourceDialog> {
         if (mid == null || mid <= 0) {
           throw const FormatException('请填写有效 UP 主 mid 或空间链接');
         }
-        final profile = await widget.service.content.loadProfile(mid);
+        final profile = await widget.service.content
+            .loadProfile(mid)
+            .timeout(widget.service.requestTimeout);
+        if (!mounted) return;
         _preview = SubscriptionSource(
           kind: _kind,
           mid: mid,
@@ -433,10 +436,11 @@ class _AddSourceDialogState extends State<_AddSourceDialog> {
         }
         CreatorCollection? found;
         for (var page = 1; page <= 20; page++) {
-          final result = await widget.service.content.loadCollections(
-            mid,
-            page: page,
-          );
+          if (!mounted) return;
+          final result = await widget.service.content
+              .loadCollections(mid, page: page)
+              .timeout(widget.service.requestTimeout);
+          if (!mounted) return;
           for (final item in result.items) {
             if (item.id == season) found = item;
           }
@@ -510,6 +514,7 @@ class _AddSourceDialogState extends State<_AddSourceDialog> {
           const SizedBox(height: 12),
           TextField(
             controller: _input,
+            enabled: !_busy,
             onChanged: (_) => setState(() => _preview = null),
             decoration: InputDecoration(
               labelText: _kind == SubscriptionKind.creator
@@ -520,6 +525,7 @@ class _AddSourceDialogState extends State<_AddSourceDialog> {
           if (_kind == SubscriptionKind.collection)
             TextField(
               controller: _mid,
+              enabled: !_busy,
               onChanged: (_) => setState(() => _preview = null),
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(
@@ -534,7 +540,9 @@ class _AddSourceDialogState extends State<_AddSourceDialog> {
     ),
     actions: [
       TextButton(
-        onPressed: _busy ? null : () => Navigator.pop(context),
+        onPressed: _busy && _preview != null
+            ? null
+            : () => Navigator.pop(context),
         child: const Text('取消'),
       ),
       FilledButton(

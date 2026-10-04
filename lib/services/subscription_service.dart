@@ -17,6 +17,7 @@ class SubscriptionService extends ChangeNotifier {
     DateTime Function()? clock,
     this.pageBudget = 20,
     this.maxSources = 20,
+    this.requestTimeout = const Duration(seconds: 30),
   }) : content = contentService ?? BilibiliHttpPublicContentService(),
        _preferencesLoader = preferencesLoader ?? SharedPreferences.getInstance,
        _clock = clock ?? DateTime.now;
@@ -28,12 +29,16 @@ class SubscriptionService extends ChangeNotifier {
   final Future<SharedPreferences> Function() _preferencesLoader;
   final DateTime Function() _clock;
   final int pageBudget, maxSources;
+  final Duration requestTimeout;
   bool enabled = false, notificationsEnabled = false, refreshing = false;
   String? storageError;
-  bool _loaded = false, _foreground = false;
+  bool _loaded = false, _foreground = false, _disposed = false;
   int _epoch = 0;
   Future<void>? _loading, _refresh;
-  Future<void> _writes = Future.value();
+  int _refreshEpoch = -1;
+  Set<String> _refreshSources = {};
+  bool _refreshAgain = false, _refreshAgainManual = false;
+  Future<void>? _writes;
   Timer? _timer;
   Map<String, SubscriptionSource> _sources = {};
   Map<String, SourceCheckpoint> _checkpoints = {};
@@ -50,7 +55,11 @@ class SubscriptionService extends ChangeNotifier {
   bool Function()? suppressNotifications;
   Future<bool> Function(int count)? notifySummary;
 
-  Future<void> initialize() => _loading ??= _initialize();
+  Future<void> initialize() {
+    if (_loaded) return Future.value();
+    return _loading ??= _initialize().whenComplete(() => _loading = null);
+  }
+
   Future<void> _initialize() async {
     try {
       final prefs = await _preferencesLoader();
@@ -71,11 +80,11 @@ class SubscriptionService extends ChangeNotifier {
       }
       _loaded = true;
       _schedule();
-      notifyListeners();
+      if (!_disposed) notifyListeners();
     } catch (_) {
       storageError = '无法读取订阅数据，原数据已保留；请重启后重试。';
       _loaded = false;
-      notifyListeners();
+      if (!_disposed) notifyListeners();
     }
   }
 
@@ -128,8 +137,9 @@ class SubscriptionService extends ChangeNotifier {
 
   Future<T> _mutate<T>(T Function() action) async {
     await initialize();
-    final next = _writes.then((_) async {
-      if (!_loaded) throw const SubscriptionStorageException();
+    final prior = _writes ?? Future<void>.value();
+    final next = prior.then((_) async {
+      if (!_loaded || _disposed) throw const SubscriptionStorageException();
       final previous = jsonEncode(_json());
       final result = action();
       try {
@@ -146,7 +156,7 @@ class SubscriptionService extends ChangeNotifier {
           throw const SubscriptionStorageException();
         }
         storageError = null;
-        notifyListeners();
+        if (!_disposed) notifyListeners();
         return result;
       } catch (_) {
         try {
@@ -156,11 +166,17 @@ class SubscriptionService extends ChangeNotifier {
         }
         _restore(jsonDecode(previous));
         storageError = '订阅变更未保存，请检查设备存储后重试。';
-        notifyListeners();
+        if (!_disposed) notifyListeners();
         throw const SubscriptionStorageException();
       }
     });
-    _writes = next.then<void>((_) {}, onError: (Object _, StackTrace _) {});
+    late final Future<void> barrier;
+    barrier = next
+        .then<void>((_) {}, onError: (Object _, StackTrace _) {})
+        .whenComplete(() {
+          if (identical(_writes, barrier)) _writes = null;
+        });
+    _writes = barrier;
     return next;
   }
 
@@ -197,6 +213,7 @@ class SubscriptionService extends ChangeNotifier {
       final source = _sources[key];
       if (source != null) _sources[key] = source.withPaused(value);
     });
+    if (enabled && _foreground) unawaited(refresh());
   }
 
   Future<void> deleteSource(String key) async {
@@ -205,6 +222,7 @@ class SubscriptionService extends ChangeNotifier {
       _sources.remove(key);
       _checkpoints.remove(key);
     });
+    if (enabled && _foreground) unawaited(refresh());
   }
 
   Future<void> markRead(String bvid) => _mutate(() {
@@ -245,19 +263,42 @@ class SubscriptionService extends ChangeNotifier {
       _sources[source.key]?.paused == false;
 
   Future<void> refresh({bool manual = false}) {
-    if (_refresh != null) return _refresh!;
-    final running = _refreshRound(manual);
-    _refresh = running;
-    return running.whenComplete(() {
-      _refresh = null;
+    if (_disposed) return Future.value();
+    final activeSources = {
+      for (final source in sources.where((e) => !e.paused))
+        '${source.key}:${source.token}',
+    };
+    if (_refresh != null) {
+      // Ordinary repeated refreshes share a round. A resumed epoch or newly
+      // added source needs one follow-up after the stale request releases.
+      if (_refreshEpoch != _epoch ||
+          !setEquals(_refreshSources, activeSources)) {
+        _refreshAgain = true;
+        _refreshAgainManual = _refreshAgainManual || manual;
+      }
+      return _refresh!;
+    }
+    _refreshEpoch = _epoch;
+    _refreshSources = activeSources;
+    late final Future<void> completed;
+    completed = _refreshRound(manual).whenComplete(() async {
+      if (identical(_refresh, completed)) _refresh = null;
+      final again = _refreshAgain, againManual = _refreshAgainManual;
+      _refreshAgain = false;
+      _refreshAgainManual = false;
+      if (again && enabled && _foreground) {
+        await refresh(manual: againManual);
+      }
     });
+    _refresh = completed;
+    return completed;
   }
 
   Future<void> _refreshRound(bool manual) async {
     await initialize();
-    if (!enabled || !_foreground || !_loaded) return;
+    if (!enabled || !_foreground || !_loaded || _disposed) return;
     refreshing = true;
-    notifyListeners();
+    if (!_disposed) notifyListeners();
     final epoch = _epoch;
     final pending = sources.where((e) => !e.paused).toList();
     var index = 0;
@@ -317,7 +358,7 @@ class SubscriptionService extends ChangeNotifier {
       // Durable save failure is already exposed via storageError; never crash automatic polling.
     } finally {
       refreshing = false;
-      notifyListeners();
+      if (!_disposed) notifyListeners();
     }
   }
 
@@ -327,17 +368,18 @@ class SubscriptionService extends ChangeNotifier {
       Map<String, dynamic>.from(_checkpoints[source.key]!.toJson()),
     );
     Future<CreatorContentPage<CreatorVideo>> request(int page) =>
-        source.kind == SubscriptionKind.creator
-        ? content.loadVideos(
-            source.mid,
-            page: page,
-            order: CreatorVideoOrder.latest,
-          )
-        : content.loadCollectionVideos(
-            source.mid,
-            source.seasonId!,
-            page: page,
-          );
+        (source.kind == SubscriptionKind.creator
+                ? content.loadVideos(
+                    source.mid,
+                    page: page,
+                    order: CreatorVideoOrder.latest,
+                  )
+                : content.loadCollectionVideos(
+                    source.mid,
+                    source.seasonId!,
+                    page: page,
+                  ))
+            .timeout(requestTimeout);
     final discovered = <String>{};
     int? overlapPage;
     var complete = false;
@@ -405,14 +447,15 @@ class SubscriptionService extends ChangeNotifier {
       if (!_active(source, epoch)) return <String>{};
       if (complete) {
         for (final item in cp.pending.values) {
-          if (!cp.initialized || cp.seen.contains(item.bvid)) continue;
           final previous = _feed[item.bvid];
           if (previous != null) {
             _feed[item.bvid] = previous.copyWith(
               sources: {...previous.sources, ...item.sources},
               collectionAdded: previous.collectionAdded || item.collectionAdded,
             );
-          } else if (!_announced.contains(item.bvid)) {
+          } else if (cp.initialized &&
+              !cp.seen.contains(item.bvid) &&
+              !_announced.contains(item.bvid)) {
             _feed[item.bvid] = item;
             discovered.add(item.bvid);
           }
@@ -439,6 +482,9 @@ class SubscriptionService extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
+    _foreground = false;
+    _refreshAgain = false;
     _epoch++;
     _timer?.cancel();
     super.dispose();

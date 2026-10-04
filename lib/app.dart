@@ -38,6 +38,7 @@ class FocuBiliApp extends StatefulWidget {
     this.incomingLinkResolver,
     this.clipboardLinkMonitor,
     this.videoService,
+    this.subscriptionService,
     this.checkForUpdatesOnStart = false,
   });
 
@@ -48,6 +49,7 @@ class FocuBiliApp extends StatefulWidget {
   final BilibiliIncomingLinkResolver? incomingLinkResolver;
   final ClipboardLinkMonitor? clipboardLinkMonitor;
   final BilibiliService? videoService;
+  final SubscriptionService? subscriptionService;
   final bool checkForUpdatesOnStart;
 
   /// 创建持有全应用专注状态的根组件状态。
@@ -70,7 +72,8 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   final GlobalKey<ScaffoldMessengerState> _scaffoldMessengerKey =
       GlobalKey<ScaffoldMessengerState>();
-  final _subscriptions = SubscriptionService.instance;
+  late final _subscriptions =
+      widget.subscriptionService ?? SubscriptionService.instance;
   final _subscriptionNotifications = SubscriptionNotificationService();
   bool _pendingSubscriptionTap = false;
   String? _handledCompletionId;
@@ -243,7 +246,9 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
   /// 首次使用协议通过后开放外部导航，并继续处理冷启动时暂存的视频链接。
   void _handleFirstLaunchReady() {
     _firstLaunchReady = true;
-    _subscriptions.setForeground(true);
+    _subscriptions.setForeground(
+      WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed,
+    );
     if (_pendingSubscriptionTap) _handleSubscriptionTap();
     _clipboardLinkMonitor.start(
       (String text) => unawaited(_handleClipboardText(text)),

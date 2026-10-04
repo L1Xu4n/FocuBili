@@ -3,7 +3,7 @@
   "flutter": "3.44.6",
   "dart": "3.12.2",
   "tests": {
-    "flutterPassed": 746,
+    "flutterPassed": 755,
     "flutterSkipped": 1,
     "analyze": "passed",
     "format": "passed",
@@ -15,8 +15,8 @@
       "package": "com.focubili.app.preview",
       "versionCode": 2021,
       "versionName": "1.8.0-beta.1",
-      "bytes": 66794283,
-      "sha256": "e6583d2469949946252c704b3b9d7d8594f657d6b05840ee9d20fadb6249ac51",
+      "bytes": 96133438,
+      "sha256": "312d6d21b482d9eb05c9a0dae10e3f005de39aa2ee87ed3babd0be23d79518bc",
       "certificateSha256": "5bd1fc4daa8a0887e213c4dc1231d0eba4f7f309a0e64c2d15fe404302bd00b0",
       "minSdk": 24,
       "targetSdk": 36,
@@ -27,8 +27,8 @@
       "package": "com.focubili.app.preview",
       "versionCode": 1021,
       "versionName": "1.8.0-beta.1",
-      "bytes": 60915737,
-      "sha256": "12249ad73641339f3974b642762a22bc7a089791c9f3c63b56079a6e297a15b5",
+      "bytes": 90254892,
+      "sha256": "9556791261a59a13a8d834fb4faa5685ad0f1cfc9e5a37e1b1296ca984878c1a",
       "certificateSha256": "5bd1fc4daa8a0887e213c4dc1231d0eba4f7f309a0e64c2d15fe404302bd00b0",
       "minSdk": 24,
       "targetSdk": 36,
@@ -39,8 +39,8 @@
       "package": "com.focubili.app.preview",
       "versionCode": 4021,
       "versionName": "1.8.0-beta.1",
-      "bytes": 62619378,
-      "sha256": "d4662fe1b95a67cebcd7e7d2861c392c98e0b46fd0b814bee31ebad7fd3bb510",
+      "bytes": 91958533,
+      "sha256": "28698722fed725d0fbf9b9d21c42814429082890b54e54e11d69e3488069c4e9",
       "certificateSha256": "5bd1fc4daa8a0887e213c4dc1231d0eba4f7f309a0e64c2d15fe404302bd00b0",
       "minSdk": 24,
       "targetSdk": 36,
@@ -53,11 +53,20 @@
     "abi": "x86_64",
     "hardware": "software emulator (no KVM)",
     "realDevice": false,
-    "status": "installed and launched; final UI checks in progress"
+    "status": "Actual app home badge, learning list status/progress and subscription settings viewed; source preview started but real Android network success not verified.",
+    "fixtures": true,
+    "upgrade": {
+      "allPreferencesUnchanged": true,
+      "learningTasks": 3,
+      "learningProgressSeconds": 93.0,
+      "source": "isolated emulator fixtures, not real video playback"
+    }
   },
   "limits": [
     "Anonymous UP WBI real API blocked (-352), fallback 412",
     "No exited-app push",
     "Physical Android playback, login and Android 13+ notification permission not verified"
-  ]
+  ],
+  "artifactScope": "Local split APK evidence. Delivered GitHub CI universal APK has its own recorded metadata and signature.",
+  "library": "Materialize failed; prescribed upload helper tools/list HTTP 401. No Library file was saved."
 }

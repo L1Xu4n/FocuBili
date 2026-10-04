@@ -30,9 +30,12 @@ class Content implements BilibiliPublicContentService {
   final List<String> calls = [];
   int? failPage;
   Completer<void>? hold;
+  int? holdMid;
   Future<CreatorContentPage<CreatorVideo>> page(int mid, int index) async {
     calls.add('$mid:$index');
-    if (hold != null) await hold!.future;
+    if (hold != null && (holdMid == null || holdMid == mid)) {
+      await hold!.future;
+    }
     if (index == failPage) throw StateError('429 / network');
     final data = pages[mid] ?? [[]];
     return CreatorContentPage(
@@ -375,6 +378,99 @@ void main() {
         throwsA(isA<SubscriptionStorageException>()),
       );
       expect(prefs.getString(SubscriptionService.storageKey), '{bad');
+    },
+  );
+  test(
+    'resume during canceled HTTP queues a fresh round before callers finish',
+    () async {
+      final c = Content()
+        ..pages[1] = [
+          [item('old')],
+        ];
+      final s = await create(c);
+      await baseline(s, [source(1)]);
+      c.pages[1] = [
+        [item('new'), item('old')],
+      ];
+      final hold = Completer<void>();
+      c.hold = hold;
+      final stale = s.refresh(manual: true);
+      await Future<void>.delayed(Duration.zero);
+      s.setForeground(false);
+      s.setForeground(true);
+      final resumed = s.refresh(manual: true);
+      c.hold = null;
+      hold.complete();
+      await Future.wait([stale, resumed]);
+      expect(s.feed.map((e) => e.bvid), ['new']);
+      expect(c.calls.where((e) => e == '1:1').length, greaterThanOrEqualTo(3));
+    },
+  );
+
+  test(
+    'source added mid-round receives silent baseline and merges existing card',
+    () async {
+      final c = Content()
+        ..pages[1] = [
+          [item('old')],
+        ];
+      final s = await create(c);
+      await baseline(s, [source(1)]);
+      c.pages[1] = [
+        [item('new'), item('old')],
+      ];
+      await s.refresh(manual: true);
+      await s.markRead('new');
+      final readAt = s.feed.single.readAt;
+      c.pages[2] = [
+        [item('new'), item('historic')],
+      ];
+      final hold = Completer<void>();
+      c.hold = hold;
+      final round = s.refresh(manual: true);
+      await Future<void>.delayed(Duration.zero);
+      await s.addSource(source(2, collection: true));
+      c.hold = null;
+      hold.complete();
+      await round;
+      expect(s.checkpoint('collection:2:100')!.initialized, true);
+      expect(s.feed.length, 1);
+      expect(s.feed.single.sources.length, 2);
+      expect(s.feed.single.collectionAdded, true);
+      expect(s.feed.single.readAt, readAt);
+      expect(s.unreadCount, 0);
+    },
+  );
+  test(
+    'unresponsive source times out while independent source completes baseline',
+    () async {
+      final held = Completer<void>();
+      final c = Content()
+        ..pages[1] = [
+          [item('blocked')],
+        ]
+        ..pages[2] = [
+          [item('healthy')],
+        ]
+        ..hold = held
+        ..holdMid = 1;
+      final s = SubscriptionService(
+        contentService: c,
+        requestTimeout: const Duration(milliseconds: 20),
+      );
+      addTearDown(s.dispose);
+      await s.initialize();
+      await s.addSource(source(1));
+      await s.addSource(source(2));
+      await s.setEnabled(true);
+      s.setForeground(true);
+      await s.refresh(manual: true);
+      expect(s.checkpoint('creator:1')!.initialized, false);
+      expect(s.checkpoint('creator:1')!.retryAt, isNotNull);
+      expect(s.checkpoint('creator:2')!.initialized, true);
+      expect(s.feed, isEmpty);
+      s.setForeground(false);
+      held.complete();
     },
   );
 }
