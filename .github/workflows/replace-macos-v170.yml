@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   replace:
-    if: "github.repository == 'L1Xu4n/FocuBili' && github.event.head_commit.message == 'release: replace macOS v1.7.0 login installer'"
+    if: "github.repository == 'L1Xu4n/FocuBili' && startsWith(github.event.head_commit.message, 'release: replace macOS v1.7.0 login installer')"
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     permissions:
