@@ -80,16 +80,54 @@ jobs:
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew :app:testDebugUnitTest --no-daemon
+          ./gradlew :app:testDebugUnitTest :focubili_android:testDebugUnitTest --no-daemon
 
       - name: Build debug APK
         run: flutter build apk --debug --no-pub
+
+      - name: Verify debug APK metadata
+        shell: bash
+        run: |
+          apk='build/app/outputs/flutter-apk/app-debug.apk'
+          build_tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          "$build_tools/aapt" dump badging "$apk" > build/app/outputs/flutter-apk/apk-badging.txt
+          "$build_tools/apksigner" verify --print-certs "$apk" > build/app/outputs/flutter-apk/apk-signature.txt
+          python3 - <<'PY'
+          import hashlib, json, os, re
+          from pathlib import Path
+          folder = Path('build/app/outputs/flutter-apk')
+          apk = folder / 'app-debug.apk'
+          badging = (folder / 'apk-badging.txt').read_text()
+          signature = (folder / 'apk-signature.txt').read_text()
+          package = re.search(r"package: name='([^']+)' versionCode='(\d+)' versionName='([^']+)'", badging)
+          version = re.search(r'^version:\s*(\d+\.\d+\.\d+)\+(\d+)\s*$', Path('pubspec.yaml').read_text(), re.M)
+          suffix = re.search(r'versionNameSuffix\s+"([^"]+)"', Path('android/app/build.gradle').read_text())
+          assert package and version and suffix, 'APK/source version metadata missing'
+          assert package[1] == 'com.focubili.app.preview', 'Unexpected debug package'
+          assert package[2] == version[2], 'Unexpected versionCode'
+          assert package[3] == version[1] + suffix[1], 'Unexpected beta version'
+          certificates = set(re.findall(r'^(?:Signer #\d+|V[\d.]+ Signer):? certificate SHA-256 digest: ([0-9a-fA-F]+)$', signature, re.M))
+          assert len(certificates) == 1, 'Expected one verified APK signing certificate'
+          digest = hashlib.sha256(apk.read_bytes()).hexdigest()
+          record = {'commit': os.environ['GITHUB_SHA'], 'file': apk.name, 'bytes': apk.stat().st_size,
+                    'sha256': digest, 'package': package[1], 'versionCode': int(package[2]),
+                    'versionName': package[3], 'certificateSha256': certificates.pop().lower(),
+                    'signatureVerification': 'passed'}
+          (folder / 'apk-verification.json').write_text(json.dumps(record, indent=2) + '\n')
+          (folder / 'APK-SHA256SUMS.txt').write_text(digest + '  ' + apk.name + '\n')
+          print(json.dumps(record, indent=2))
+          PY
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: focubili-debug-apk
-          path: build/app/outputs/flutter-apk/app-debug.apk
+          path: |
+            build/app/outputs/flutter-apk/app-debug.apk
+            build/app/outputs/flutter-apk/apk-verification.json
+            build/app/outputs/flutter-apk/APK-SHA256SUMS.txt
+            build/app/outputs/flutter-apk/apk-badging.txt
+            build/app/outputs/flutter-apk/apk-signature.txt
           if-no-files-found: error
           retention-days: 7
 
