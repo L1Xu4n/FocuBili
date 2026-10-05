@@ -83,7 +83,7 @@ class _FocusDashboardState extends State<FocusDashboard> {
       if (!service.enabled) return const SizedBox.shrink();
       return IconButton(
         key: const Key('home-subscription-button'),
-        tooltip: '订阅更新',
+        tooltip: '焦点订阅',
         icon: Badge(
           label: Text('${service.unreadCount}'),
           isLabelVisible: service.unreadCount > 0,

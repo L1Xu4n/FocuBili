@@ -1,4 +1,3 @@
-import '../learning/learning_add_sheet.dart';
 import 'dart:async';
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -8,10 +7,14 @@ import '../../core/layout/adaptive_page_frame.dart';
 import '../../core/layout/adaptive_two_column_list.dart';
 import '../../core/router/app_router.dart';
 import '../../models/public_profile.dart';
+import '../../models/subscription.dart';
 import '../../models/video_preview.dart';
 import '../../services/bilibili_public_content_service.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/learning_list_service.dart';
+import '../../services/subscription_service.dart';
+import '../learning/learning_add_sheet.dart';
+import '../subscriptions/subscription_updates_page.dart';
 
 /// 展示一个 UGC 合集中的独立视频列表，不把它解释为单视频分P。
 class CollectionDetailPage extends StatefulWidget {
@@ -22,8 +25,10 @@ class CollectionDetailPage extends StatefulWidget {
     this.publicContentService,
     this.videoService,
     this.learningListService,
+    this.subscriptionService,
   });
 
+  final SubscriptionService? subscriptionService;
   final CreatorCollection collection;
   final BilibiliPublicContentService? publicContentService;
   final BilibiliService? videoService;
@@ -512,6 +517,17 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
           overflow: TextOverflow.ellipsis,
         ),
         actions: <Widget>[
+          FocusSubscriptionButton(
+            service: widget.subscriptionService,
+            source: SubscriptionSource(
+              kind: SubscriptionKind.collection,
+              mid: widget.collection.ownerMid,
+              seasonId: widget.collection.id,
+              name: widget.collection.title,
+              imageUrl: widget.collection.coverUrl,
+              token: DateTime.now().microsecondsSinceEpoch.toString(),
+            ),
+          ),
           IconButton(
             tooltip: '批量加入学习清单',
             icon: const Icon(Icons.playlist_add),

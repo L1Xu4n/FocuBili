@@ -156,10 +156,12 @@ class NativePlaybackController(
 
     /** 保存一组已验证的 DASH 主备地址、实际清晰度和媒体请求信息。 */
     private data class PlaybackSources(
+        val bvid: String,
+        val cid: Long,
         val videoUrls: List<String>,
         val audioUrls: List<String>,
-        val videoCodec: String,
-        val audioCodec: String,
+        val videoRepresentation: PlaybackCacheRepresentation,
+        val audioRepresentation: PlaybackCacheRepresentation,
         val referer: String,
         val actualQuality: Int,
         val qualities: List<PlaybackQualityOption>,
@@ -168,7 +170,7 @@ class NativePlaybackController(
     /** 保存一条选中媒体轨道的编码名称和主备地址，供兼容选择与缓存隔离使用。 */
     private data class SelectedMediaTrack(
         val urls: List<String>,
-        val codec: String,
+        val representation: PlaybackCacheRepresentation = PlaybackCacheRepresentation(),
     )
 
     /** 保存播放失败中可安全展示的原因类型和 HTTP 状态，不含地址、请求头或会话资料。 */
@@ -1251,10 +1253,12 @@ class NativePlaybackController(
         val referer = buildVideoPageUrl(bvid)
             ?: throw PlaybackSourceException("无法生成视频页面地址。")
         return PlaybackSources(
+            bvid = bvid,
+            cid = cid,
             videoUrls = videoTrack.urls,
             audioUrls = audioTrack.urls,
-            videoCodec = videoTrack.codec,
-            audioCodec = audioTrack.codec,
+            videoRepresentation = videoTrack.representation,
+            audioRepresentation = audioTrack.representation,
             referer = referer,
             actualQuality = actualQuality,
             qualities = parseQualityOptions(data, dash),
@@ -2123,7 +2127,7 @@ class NativePlaybackController(
         preferredId: Int? = null,
     ): SelectedMediaTrack {
         if (mediaItems == null) {
-            return SelectedMediaTrack(emptyList(), "")
+            return SelectedMediaTrack(emptyList())
         }
         var selectedMedia: JSONObject? = null
         var bestScore = Long.MIN_VALUE
@@ -2159,11 +2163,28 @@ class NativePlaybackController(
             }
         }
         return selectedMedia?.let { media ->
+            val urls = readMediaUrls(media)
+            val segmentBase = media.optJSONObject("segment_base") ?: media.optJSONObject("SegmentBase")
             SelectedMediaTrack(
-                urls = readMediaUrls(media),
-                codec = media.optString("codecs").trim(),
+                urls = urls,
+                representation = PlaybackCacheRepresentation(
+                    id = media.optInt("id"),
+                    bandwidth = media.optLong("bandwidth"),
+                    codec = media.optString("codecs").trim(),
+                    mimeType = media.optString("mime_type").ifBlank { media.optString("mimeType") },
+                    width = media.optInt("width"),
+                    height = media.optInt("height"),
+                    frameRate = media.optString("frame_rate").ifBlank { media.optString("frameRate") },
+                    initialization = segmentBase?.let {
+                        it.optString("initialization").ifBlank { it.optString("Initialization") }
+                    }.orEmpty(),
+                    indexRange = segmentBase?.let {
+                        it.optString("index_range").ifBlank { it.optString("indexRange") }
+                    }.orEmpty(),
+                    resourceUrl = urls.firstOrNull().orEmpty(),
+                ),
             )
-        } ?: SelectedMediaTrack(emptyList(), "")
+        } ?: SelectedMediaTrack(emptyList())
     }
 
     /** 从一条 DASH 轨道读取并去重主备地址，只保留 B 站 HTTPS 媒体域名。 */
@@ -2321,12 +2342,15 @@ class NativePlaybackController(
         return urls.getOrElse(index) { urls.first() }
     }
 
-    /** 生成当前视频或音频轨道的稳定缓存键，使清理和写入始终指向同一资源。 */
+    /** 由请求时固定的 BV/CID 和实际 DASH 表示生成版本化键，不读取可变播放状态。 */
     private fun playbackCacheKey(sources: PlaybackSources, video: Boolean): String {
-        val codec = if (video) sources.videoCodec else sources.audioCodec
-        val trackType = if (video) "video" else "audio"
-        return "$currentBvid:$currentCid:$currentQuality:" +
-            "${PlaybackTrackPolicy.cacheKey(codec)}:$trackType"
+        return PlaybackCacheIdentity.key(
+            bvid = sources.bvid,
+            cid = sources.cid,
+            quality = sources.actualQuality,
+            video = video,
+            representation = if (video) sources.videoRepresentation else sources.audioRepresentation,
+        )
     }
 
     /**
@@ -2344,6 +2368,7 @@ class NativePlaybackController(
 
     /** 合并当前候选线路的 DASH 音视频，并按历史位置、倍速和播放状态启动唯一播放器。 */
     private fun prepareMediaSources(sources: PlaybackSources) {
+        if (sources.bvid != currentBvid || sources.cid != currentCid) return
         val nativePlayer = player ?: return
         if (latestPlaybackSources !== sources) {
             latestPlaybackSources = sources

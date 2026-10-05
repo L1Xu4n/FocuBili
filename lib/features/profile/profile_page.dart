@@ -517,7 +517,7 @@ class _ProfilePageState extends State<ProfilePage> {
       ),
       _ProfileTile(
         icon: Icons.rss_feed,
-        title: '订阅更新',
+        title: '焦点订阅',
         id: 'subscription-updates',
         onTap: () => Navigator.of(context).push<void>(
           MaterialPageRoute(builder: (_) => const SubscriptionUpdatesPage()),

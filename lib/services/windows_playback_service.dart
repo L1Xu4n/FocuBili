@@ -107,9 +107,14 @@ class WindowsPlaybackService
     final position = _player.state.position;
     final playing = _player.state.playing;
     final previous = _audioOnly;
+    final generation = _beginSourceRequest();
     _audioOnly = enabled;
+    _opening = true;
+    _shouldPlayAfterFallback = playing;
     try {
-      await _player.stop();
+      // 冻结已捕获的位置；暂停返回后必须确认仍是这次切换，不能重开旧视频。
+      await _player.pause();
+      if (!_isCurrentSourceRequest(generation)) return;
       if (_localSource) {
         await _openLocalMedia(
           filePath: _localVideoPath!,
@@ -118,20 +123,23 @@ class WindowsPlaybackService
           part: part,
           title: video.title,
           initialPosition: position,
-          shouldPlay: playing,
+          shouldPlay: _shouldPlayAfterFallback,
+          sourceGeneration: generation,
         );
       } else {
         await _openCurrentSource(
-          generation: _beginSourceRequest(),
+          generation: generation,
           video: video,
           part: part,
           quality: _currentQuality,
           resumePosition: position,
-          shouldPlay: playing,
+          shouldPlay: _shouldPlayAfterFallback,
         );
       }
     } catch (_) {
+      if (!_isCurrentSourceRequest(generation)) return;
       _audioOnly = previous;
+      _opening = false;
       _emitPlayerState();
       rethrow;
     }
@@ -319,6 +327,7 @@ class WindowsPlaybackService
     VideoPreview? video,
     VideoPart? part,
     bool shouldPlay = true,
+    int? sourceGeneration,
   }) async {
     _ensureAvailable();
     if (filePath.trim().isEmpty || (initialPosition?.isNegative ?? false)) {
@@ -327,7 +336,7 @@ class WindowsPlaybackService
     if (audioFilePath != null && audioFilePath.trim().isEmpty) {
       throw ArgumentError('本地音频路径无效');
     }
-    final generation = _beginSourceRequest();
+    final generation = sourceGeneration ?? _beginSourceRequest();
     final file = File(filePath);
     if (!await file.exists()) throw StateError('离线文件不存在');
     final audioFile = audioFilePath == null ? null : File(audioFilePath);
@@ -351,7 +360,7 @@ class WindowsPlaybackService
     _restoredPosition = initialPosition ?? saved?.position ?? Duration.zero;
     final resumePosition = _restoredPosition;
     _restoringPosition = resumePosition > Duration.zero;
-    _shouldPlayAfterFallback = shouldPlay;
+    if (sourceGeneration == null) _shouldPlayAfterFallback = shouldPlay;
     final localAttempt = audioFile == null || _audioOnly
         ? null
         : WindowsDashMediaAttempt(
@@ -397,7 +406,7 @@ class WindowsPlaybackService
         if (!_isCurrentSourceRequest(generation)) return;
         _pendingResumePositionAfterDecode = resumePosition;
       }
-      if (!await _waitForLocalMediaReady(generation)) {
+      if (!await _waitForMediaReady(generation)) {
         if (!_isCurrentSourceRequest(generation)) return;
         throw StateError('本地媒体未能完成加载');
       }
@@ -440,8 +449,8 @@ class WindowsPlaybackService
     }
   }
 
-  /// 等待本地文件产生真实时长与视频解码输出，避免把收到加载命令误当成就绪。
-  Future<bool> _waitForLocalMediaReady(int generation) async {
+  /// 等待当前媒体产生真实时长（视频还需解码画面），避免把收到加载命令误当成就绪。
+  Future<bool> _waitForMediaReady(int generation) async {
     final deadline = DateTime.now().add(_audioDecoderReadyTimeout);
     while (_isCurrentSourceRequest(generation)) {
       if (_player.state.duration > Duration.zero && _hasDecodedVideo()) {
@@ -939,18 +948,49 @@ class WindowsPlaybackService
     required Duration resumePosition,
     required bool shouldPlay,
   }) async {
+    if (!_isCurrentSourceRequest(generation)) return;
     if (_audioOnly) {
-      final media = attempt.createAudioMedia(_activeMediaHeaders);
+      final media = attempt.createAudioMedia(
+        _activeMediaHeaders,
+        start: resumePosition,
+      );
       _activeAudioMedia = media;
       await _player.stop();
       if (!_isCurrentSourceRequest(generation)) return;
       await _player.open(media, play: false);
       if (!_isCurrentSourceRequest(generation)) return;
-      await _player.seek(resumePosition);
-      if (!_isCurrentSourceRequest(generation)) return;
-      if (_shouldPlayAfterFallback) await _player.play();
-      if (_shouldPlayAfterFallback && !await _waitForDecodedAudio(generation)) {
+      // open/seek 的 Future 只表示命令已接收。先等本次音轨元数据，
+      // 再定位；首次真正解码也可能重置时间轴，因此仍保留一次解码后复核。
+      _pendingResumePositionAfterDecode = resumePosition;
+      if (!await _waitForMediaReady(generation)) {
+        if (!_isCurrentSourceRequest(generation)) return;
         throw const DesktopPlaybackSourceException('独立音轨未能完成加载。');
+      }
+      await _restoreResumePositionAfterDecode(
+        generation,
+        resumePosition,
+        restorePlayback: false,
+      );
+      if (!_isCurrentSourceRequest(generation)) return;
+      if (_isResumePositionBehindTarget(
+        _clampResumePositionToMediaDuration(resumePosition),
+      )) {
+        throw const DesktopPlaybackSourceException('独立音轨未能恢复当前位置。');
+      }
+      if (_shouldPlayAfterFallback) {
+        await _player.play();
+        if (!await _waitForDecodedAudio(generation)) {
+          if (!_isCurrentSourceRequest(generation)) return;
+          throw const DesktopPlaybackSourceException('独立音轨未能完成加载。');
+        }
+        await _restoreResumePositionAfterDecode(generation, resumePosition);
+        if (!_isCurrentSourceRequest(generation)) return;
+        if (_isResumePositionBehindTarget(
+          _clampResumePositionToMediaDuration(resumePosition),
+        )) {
+          throw const DesktopPlaybackSourceException('独立音轨未能恢复当前位置。');
+        }
+        _pendingResumePositionAfterDecode = Duration.zero;
       }
       _externalAudioNeedsReload = false;
       return;
@@ -964,10 +1004,13 @@ class WindowsPlaybackService
     );
     // 显式暂停旧媒体，避免新视频准备期间沿用上一条线路的播放状态。
     await _player.pause();
+    // 原生命令完成可能晚于换视频；每次继续修改播放器前都复核来源代次。
+    if (!_isCurrentSourceRequest(generation)) return;
     await _player.open(
       attempt.createVideoMedia(_activeMediaHeaders),
       play: false,
     );
+    if (!_isCurrentSourceRequest(generation)) return;
     await _player.setVideoTrack(VideoTrack.auto());
     if (!_isCurrentSourceRequest(generation)) {
       return;
@@ -990,6 +1033,7 @@ class WindowsPlaybackService
     _pendingResumePositionAfterDecode = resumePosition;
     // 外部音轨挂载可能改变底层时间轴；保持暂停并只在发生明显偏移时补一次跳转。
     await _player.pause();
+    if (!_isCurrentSourceRequest(generation)) return;
     if (_needsResumePositionCorrection(resumePosition)) {
       await _player.seek(resumePosition);
     }

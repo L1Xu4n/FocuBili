@@ -1,4 +1,3 @@
-import '../learning/learning_add_sheet.dart';
 import 'dart:async';
 import 'dart:collection';
 
@@ -10,12 +9,16 @@ import '../../core/layout/adaptive_two_column_list.dart';
 import '../../core/router/app_router.dart';
 import '../../features/common/watch_history_badge.dart';
 import '../../models/public_profile.dart';
+import '../../models/subscription.dart';
 import '../../models/video_preview.dart';
 import '../../models/watch_history_entry.dart';
 import '../../services/bilibili_public_content_service.dart';
 import '../../services/bilibili_interaction_service.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/learning_list_service.dart';
+import '../../services/subscription_service.dart';
+import '../learning/learning_add_sheet.dart';
+import '../subscriptions/subscription_updates_page.dart';
 import '../../services/watch_history_service.dart';
 import 'collection_detail_page.dart';
 
@@ -34,8 +37,10 @@ class UserProfilePage extends StatefulWidget {
     this.videoService,
     this.learningListService,
     this.watchHistoryService,
+    this.subscriptionService,
   });
 
+  final SubscriptionService? subscriptionService;
   final int mid;
   final String initialName;
   final String initialAvatarUrl;
@@ -1542,6 +1547,16 @@ class _UserProfilePageState extends State<UserProfilePage>
                   overflow: TextOverflow.ellipsis,
                 ),
                 actions: <Widget>[
+                  FocusSubscriptionButton(
+                    service: widget.subscriptionService,
+                    source: SubscriptionSource(
+                      kind: SubscriptionKind.creator,
+                      mid: widget.mid,
+                      name: title,
+                      imageUrl: _profile?.avatarUrl ?? widget.initialAvatarUrl,
+                      token: DateTime.now().microsecondsSinceEpoch.toString(),
+                    ),
+                  ),
                   if (_selectedTab == _CreatorTab.videos)
                     IconButton(
                       // 搜索按钮函数展开或收起当前 UP 主的投稿搜索框。

@@ -21,11 +21,17 @@ class SubscriptionNotificationService {
     }
   }
 
-  Future<bool> showSummary(int count) async {
+  Future<bool> showSummary(
+    int count, {
+    int? generation,
+    bool background = false,
+  }) async {
     if (!_available) return false;
     try {
       return await _channel.invokeMethod<bool>('showSummary', {
             'count': count,
+            'generation': ?generation,
+            'background': background,
           }) ??
           false;
     } on PlatformException {

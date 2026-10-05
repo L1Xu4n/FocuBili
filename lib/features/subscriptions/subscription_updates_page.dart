@@ -36,6 +36,7 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage> {
   late final LearningListService _learning =
       widget.learningService ?? LearningListService();
   bool _unreadOnly = true, _todayOnly = false, _busy = false;
+  bool _settingsOpen = false;
   @override
   void initState() {
     super.initState();
@@ -62,47 +63,20 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage> {
     }
   }
 
-  Future<void> _notifications(bool value) async {
-    await _action(() async {
-      if (value) {
-        final allowed = await widget.notificationService.requestPermission();
-        if (!mounted) return;
-        if (!allowed) {
-          _message('通知未获授权，更新列表仍可使用。');
-          return;
-        }
-      }
-      await _service.setNotificationsEnabled(value);
-    });
-  }
-
-  Future<void> _addSource() async {
-    await showDialog<void>(
-      context: context,
-      builder: (_) => _AddSourceDialog(service: _service),
-    );
-  }
-
-  Future<void> _delete(SubscriptionSource source) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialog) => AlertDialog(
-        title: const Text('删除订阅源'),
-        content: Text('删除“${source.name}”？已有更新历史和学习任务保留。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialog, false),
-            child: const Text('取消'),
+  Future<void> _openSettings() async {
+    if (_settingsOpen) return;
+    _settingsOpen = true;
+    try {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (_) => SubscriptionSettingsPage(
+            service: _service,
+            notificationService: widget.notificationService,
           ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialog, true),
-            child: const Text('删除'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed == true && mounted) {
-      await _action(() => _service.deleteSource(source.key));
+        ),
+      );
+    } finally {
+      _settingsOpen = false;
     }
   }
 
@@ -142,7 +116,7 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage> {
           .toList();
       return Scaffold(
         appBar: AppBar(
-          title: const Text('订阅更新'),
+          title: const Text('焦点订阅'),
           actions: [
             IconButton(
               tooltip: '手动刷新',
@@ -150,6 +124,11 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage> {
                   ? null
                   : () => unawaited(_service.refresh(manual: true)),
               icon: const Icon(Icons.refresh),
+            ),
+            IconButton(
+              tooltip: '焦点订阅设置',
+              icon: const Icon(Icons.settings_outlined),
+              onPressed: _openSettings,
             ),
           ],
         ),
@@ -159,14 +138,6 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage> {
             child: ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                SwitchListTile(
-                  title: const Text('开启订阅更新'),
-                  value: _service.enabled,
-                  subtitle: const Text('仅在启动、回到前台、手动或前台每小时尝试刷新。退出后不推送。'),
-                  onChanged: _busy
-                      ? null
-                      : (value) => _action(() => _service.setEnabled(value)),
-                ),
                 if (_service.storageError != null)
                   Text(
                     _service.storageError!,
@@ -174,84 +145,10 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage> {
                       color: Theme.of(context).colorScheme.error,
                     ),
                   ),
-                if (_service.enabled) ...[
-                  SwitchListTile(
-                    title: const Text('系统通知（默认关闭）'),
-                    value: _service.notificationsEnabled,
-                    subtitle: const Text('明确开启时才请求权限；专注期间只更新角标。'),
-                    onChanged: _busy ? null : _notifications,
-                  ),
-                  FilledButton.tonalIcon(
-                    onPressed: _busy ? null : _addSource,
-                    icon: const Icon(Icons.add),
-                    label: const Text('添加 UP 主或 UGC 合集'),
-                  ),
-                ],
-                const SizedBox(height: 16),
-                Text(
-                  '订阅源（${_service.sources.length}/${_service.maxSources}）',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                if (_service.sources.isEmpty)
+                if (!_service.enabled)
                   const Padding(
                     padding: EdgeInsets.symmetric(vertical: 12),
-                    child: Text('主动选择你的学习来源。首次订阅只建立基线，不显示历史视频。'),
-                  ),
-                for (final source in _service.sources)
-                  Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            source.name,
-                            style: const TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          Text(
-                            source.kind == SubscriptionKind.creator
-                                ? 'UP主 ${source.mid}'
-                                : 'UGC合集 ${source.seasonId} · UP主 ${source.mid}',
-                          ),
-                          Text(
-                            source.paused
-                                ? '已暂停 · 历史保留'
-                                : _service
-                                          .checkpoint(source.key)
-                                          ?.initialized ==
-                                      true
-                                ? '基线已建立'
-                                : '正在建立基线 · 历史不会刷屏',
-                          ),
-                          if (_service.checkpoint(source.key)?.error != null)
-                            Text(_service.checkpoint(source.key)!.error!),
-                          if (_service.checkpoint(source.key)?.partial == true)
-                            Text(
-                              '未完成扫描 · 下一页 ${_service.checkpoint(source.key)!.nextPage}',
-                            ),
-                          Wrap(
-                            spacing: 12,
-                            children: [
-                              TextButton(
-                                onPressed: _busy
-                                    ? null
-                                    : () => _action(
-                                        () => _service.pauseSource(
-                                          source.key,
-                                          !source.paused,
-                                        ),
-                                      ),
-                                child: Text(source.paused ? '恢复订阅' : '暂停'),
-                              ),
-                              TextButton(
-                                onPressed: _busy ? null : () => _delete(source),
-                                child: const Text('删除源'),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
+                    child: Text('焦点订阅尚未开启，请在右上角设置中选择学习来源。'),
                   ),
                 if (_service.refreshing) const LinearProgressIndicator(),
                 const SizedBox(height: 16),
@@ -281,7 +178,7 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage> {
                 if (items.isEmpty)
                   const Padding(
                     padding: EdgeInsets.symmetric(vertical: 28),
-                    child: Text('暂无匹配的更新。订阅后首次成功扫描只建立基线。'),
+                    child: Text('暂无匹配的更新。首次订阅会先获取已有内容，之后的新视频会出现在这里。'),
                   ),
                 for (final item in items)
                   Card(
@@ -359,8 +256,276 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage> {
   );
 }
 
+/// Source management stays one level below the update feed.
+class SubscriptionSettingsPage extends StatefulWidget {
+  const SubscriptionSettingsPage({
+    super.key,
+    required this.service,
+    this.notificationService = const FocusNotificationService(),
+  });
+  final SubscriptionService service;
+  final FocusNotificationService notificationService;
+  @override
+  State<SubscriptionSettingsPage> createState() =>
+      _SubscriptionSettingsPageState();
+}
+
+class _SubscriptionSettingsPageState extends State<SubscriptionSettingsPage> {
+  SubscriptionService get _service => widget.service;
+  bool _busy = false;
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_service.initialize());
+  }
+
+  void _message(String message) {
+    if (mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
+
+  Future<void> _action(Future<void> Function() action) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await action();
+    } catch (_) {
+      _message('操作未保存，请稍后重试。');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _notifications(bool value) async {
+    await _action(() async {
+      if (value) {
+        final allowed = await widget.notificationService.requestPermission();
+        if (!mounted) return;
+        if (!allowed) {
+          _message('通知未获授权，更新列表仍可使用。');
+          return;
+        }
+      }
+      await _service.setNotificationsEnabled(value);
+    });
+  }
+
+  Future<void> _addSource() => _action(() async {
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _AddSourceDialog(service: _service),
+    );
+  });
+
+  Future<void> _delete(SubscriptionSource source) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: const Text('删除订阅源'),
+        content: Text('删除“${source.name}”？已有更新历史和学习任务保留。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialog, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialog, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) {
+      await _action(() => _service.deleteSource(source.key));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: _service,
+    builder: (context, _) => Scaffold(
+      appBar: AppBar(
+        title: const Text('焦点订阅设置'),
+        actions: [
+          IconButton(
+            tooltip: '检查更新',
+            icon: const Icon(Icons.refresh),
+            onPressed: !_service.enabled || _service.refreshing
+                ? null
+                : () => _action(() => _service.refresh(manual: true)),
+          ),
+        ],
+      ),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 900),
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              SwitchListTile(
+                title: const Text('开启焦点订阅'),
+                value: _service.enabled,
+                subtitle: const Text('启动、回到前台、手动及前台每小时检查更新。'),
+                onChanged: _busy
+                    ? null
+                    : (value) => _action(() => _service.setEnabled(value)),
+              ),
+              if (_service.storageError != null)
+                Text(
+                  _service.storageError!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              if (_service.enabled) ...[
+                SwitchListTile(
+                  title: const Text('系统通知（默认关闭）'),
+                  value: _service.notificationsEnabled,
+                  subtitle: const Text('明确开启时才请求权限；专注期间只更新角标。'),
+                  onChanged: _busy ? null : _notifications,
+                ),
+                SwitchListTile(
+                  key: const Key('subscription-background-switch'),
+                  title: const Text('Android 后台每小时检查（默认关闭）'),
+                  value: _service.backgroundRefreshEnabled,
+                  subtitle: Text(
+                    _service.backgroundRefreshSupported
+                        ? '系统可能延后执行；强行停止应用后需重新打开。后台检查不代表一定收到通知。'
+                        : '当前平台不支持后台检查，可在前台检查更新。',
+                  ),
+                  onChanged: _busy || !_service.backgroundRefreshSupported
+                      ? null
+                      : (value) => _action(
+                          () => _service.setBackgroundRefreshEnabled(value),
+                        ),
+                ),
+                Text(
+                  _service.lastBackgroundCheckAt == null
+                      ? '最近后台检查：尚无记录'
+                      : '最近后台检查：${_service.lastBackgroundCheckAt!.toLocal().toString().split('.').first}',
+                ),
+                if (_service.backgroundStatus != null)
+                  Text(_service.backgroundStatus!),
+                FilledButton.tonalIcon(
+                  onPressed: _busy ? null : _addSource,
+                  icon: const Icon(Icons.add),
+                  label: const Text('添加 UP 主或 UGC 合集'),
+                ),
+              ],
+              const SizedBox(height: 16),
+              Text(
+                '订阅源（${_service.sources.length}/${_service.maxSources}）',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              if (_service.sources.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Text('主动选择学习来源。先获取已有内容，之后只提醒新增视频。'),
+                ),
+              for (final source in _service.sources)
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SubscriptionSourceImage(source: source),
+                        const SizedBox(height: 8),
+                        Text(
+                          source.name,
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        Text(
+                          source.kind == SubscriptionKind.creator
+                              ? 'UP主 ${source.mid}'
+                              : 'UGC合集 ${source.seasonId} · UP主 ${source.mid}',
+                        ),
+                        Text(
+                          source.paused
+                              ? '已暂停 · 历史保留'
+                              : _service.checkpoint(source.key)?.error != null
+                              ? _service.checkpoint(source.key)?.initialized ==
+                                        true
+                                    ? '更新检查失败 · 请刷新重试'
+                                    : '获取已有内容失败 · 请刷新重试'
+                              : _service.checkpoint(source.key)?.initialized ==
+                                    true
+                              ? '已订阅更新'
+                              : '正在获取已有内容',
+                        ),
+                        if (_service.checkpoint(source.key)?.error != null)
+                          Text(_service.checkpoint(source.key)!.error!),
+                        if (_service.checkpoint(source.key)?.partial == true)
+                          Text(
+                            '正在继续获取内容 · 下一页 ${_service.checkpoint(source.key)!.nextPage}',
+                          ),
+                        Wrap(
+                          spacing: 12,
+                          children: [
+                            TextButton(
+                              onPressed: _busy
+                                  ? null
+                                  : () => _action(
+                                      () => _service.pauseSource(
+                                        source.key,
+                                        !source.paused,
+                                      ),
+                                    ),
+                              child: Text(source.paused ? '恢复订阅' : '暂停'),
+                            ),
+                            TextButton(
+                              onPressed: _busy ? null : () => _delete(source),
+                              child: const Text('删除源'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              if (_service.refreshing) const LinearProgressIndicator(),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+/// Bilibili images can be absent or blocked without breaking source management.
+class SubscriptionSourceImage extends StatelessWidget {
+  const SubscriptionSourceImage({super.key, required this.source});
+  final SubscriptionSource source;
+  @override
+  Widget build(BuildContext context) {
+    final creator = source.kind == SubscriptionKind.creator;
+    final fallback = Icon(
+      creator ? Icons.person_outline : Icons.video_library_outlined,
+      size: 32,
+    );
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(creator ? 28 : 8),
+      child: SizedBox(
+        width: creator ? 56 : 96,
+        height: 56,
+        child: source.imageUrl.isEmpty
+            ? fallback
+            : Image.network(
+                source.imageUrl,
+                headers: const {'Referer': 'https://www.bilibili.com/'},
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => fallback,
+              ),
+      ),
+    );
+  }
+}
+
 class _AddSourceDialog extends StatefulWidget {
-  const _AddSourceDialog({required this.service});
+  const _AddSourceDialog({required this.service, this.initialSource});
+  final SubscriptionSource? initialSource;
   final SubscriptionService service;
   @override
   State<_AddSourceDialog> createState() => _AddSourceDialogState();
@@ -370,8 +535,16 @@ class _AddSourceDialogState extends State<_AddSourceDialog> {
   final _input = TextEditingController(), _mid = TextEditingController();
   SubscriptionKind _kind = SubscriptionKind.creator;
   bool _busy = false;
+  bool _cancelled = false;
   String? _error;
   SubscriptionSource? _preview;
+  @override
+  void initState() {
+    super.initState();
+    _preview = widget.initialSource;
+    _kind = _preview?.kind ?? SubscriptionKind.creator;
+  }
+
   @override
   void dispose() {
     _input.dispose();
@@ -381,6 +554,7 @@ class _AddSourceDialogState extends State<_AddSourceDialog> {
 
   int? _number(String value) => int.tryParse(value.trim());
   Future<void> _check() async {
+    if (_busy) return;
     setState(() {
       _busy = true;
       _error = null;
@@ -388,7 +562,9 @@ class _AddSourceDialogState extends State<_AddSourceDialog> {
     });
     try {
       final raw = _input.text.trim();
-      final uri = Uri.tryParse(raw);
+      final uri = Uri.tryParse(
+        raw.startsWith('space.bilibili.com/') ? 'https://$raw' : raw,
+      );
       int? mid, season;
       if (_kind == SubscriptionKind.creator) {
         mid = _number(raw);
@@ -403,11 +579,12 @@ class _AddSourceDialogState extends State<_AddSourceDialog> {
         final profile = await widget.service.content
             .loadProfile(mid)
             .timeout(widget.service.requestTimeout);
-        if (!mounted) return;
+        if (!mounted || _cancelled) return;
         _preview = SubscriptionSource(
           kind: _kind,
           mid: mid,
           name: profile.name,
+          imageUrl: profile.avatarUrl,
           token: DateTime.now().microsecondsSinceEpoch.toString(),
         );
       } else {
@@ -415,8 +592,9 @@ class _AddSourceDialogState extends State<_AddSourceDialog> {
         season = _number(raw);
         if (uri?.host == 'space.bilibili.com') {
           final paths = uri!.pathSegments;
-          if (paths.isNotEmpty) mid ??= _number(paths.first);
-          if (uri.queryParameters['type'] == 'series') {
+          if (paths.isNotEmpty) mid = _number(paths.first) ?? mid;
+          if (uri.queryParameters['type'] == 'series' ||
+              paths.contains('seriesdetail')) {
             throw const FormatException('暂不支持普通 series，请使用 UGC 合集');
           }
           season = _number(
@@ -436,11 +614,11 @@ class _AddSourceDialogState extends State<_AddSourceDialog> {
         }
         CreatorCollection? found;
         for (var page = 1; page <= 20; page++) {
-          if (!mounted) return;
+          if (!mounted || _cancelled) return;
           final result = await widget.service.content
               .loadCollections(mid, page: page)
               .timeout(widget.service.requestTimeout);
-          if (!mounted) return;
+          if (!mounted || _cancelled) return;
           for (final item in result.items) {
             if (item.id == season) found = item;
           }
@@ -456,6 +634,7 @@ class _AddSourceDialogState extends State<_AddSourceDialog> {
           mid: mid,
           seasonId: season,
           name: found.title,
+          imageUrl: found.coverUrl,
           token: DateTime.now().microsecondsSinceEpoch.toString(),
         );
       }
@@ -469,15 +648,22 @@ class _AddSourceDialogState extends State<_AddSourceDialog> {
   }
 
   Future<void> _save() async {
+    if (_busy || _preview == null) return;
     setState(() => _busy = true);
     try {
       await widget.service.addSource(_preview!);
+      if (!widget.service.enabled) await widget.service.setEnabled(true);
       if (mounted) Navigator.pop(context);
     } catch (error) {
       if (mounted) {
         setState(() {
           _busy = false;
-          _error = error is StateError
+          _error =
+              widget.service.sources.any(
+                (source) => source.key == _preview!.key,
+              )
+              ? '订阅源已保存，但开启检查失败；请在设置中重试。'
+              : error is StateError
               ? error.message.toString()
               : '订阅未保存，请重试。';
         });
@@ -486,79 +672,163 @@ class _AddSourceDialogState extends State<_AddSourceDialog> {
   }
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
-    title: const Text('添加订阅源'),
-    content: SingleChildScrollView(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SegmentedButton<SubscriptionKind>(
-            segments: const [
-              ButtonSegment(
-                value: SubscriptionKind.creator,
-                label: Text('UP主'),
+  Widget build(BuildContext context) => PopScope(
+    canPop: !_busy || _preview == null,
+    onPopInvokedWithResult: (didPop, _) {
+      if (didPop) _cancelled = true;
+    },
+    child: AlertDialog(
+      title: const Text('添加订阅源'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (widget.initialSource == null) ...[
+              SegmentedButton<SubscriptionKind>(
+                segments: const [
+                  ButtonSegment(
+                    value: SubscriptionKind.creator,
+                    label: Text('UP主'),
+                  ),
+                  ButtonSegment(
+                    value: SubscriptionKind.collection,
+                    label: Text('UGC合集'),
+                  ),
+                ],
+                selected: {_kind},
+                onSelectionChanged: _busy
+                    ? null
+                    : (set) => setState(() {
+                        _kind = set.single;
+                        _preview = null;
+                      }),
               ),
-              ButtonSegment(
-                value: SubscriptionKind.collection,
-                label: Text('UGC合集'),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _input,
+                enabled: !_busy,
+                onChanged: (_) => setState(() => _preview = null),
+                decoration: InputDecoration(
+                  labelText: _kind == SubscriptionKind.creator
+                      ? 'mid 或空间链接'
+                      : 'seasonId 或 UGC 合集链接',
+                ),
+              ),
+              if (_kind == SubscriptionKind.collection)
+                TextField(
+                  controller: _mid,
+                  enabled: !_busy,
+                  onChanged: (_) => setState(() => _preview = null),
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'UP主 mid（链接解析不到时必填）',
+                  ),
+                ),
+              const SizedBox(height: 8),
+              Text(
+                _kind == SubscriptionKind.creator
+                    ? 'mid 是 UP 主空间网址中的数字，例如 space.bilibili.com/12345 中的 12345。可在 UP 主主页分享菜单复制空间链接，也可直接点主页的焦点订阅按钮。'
+                    : '打开 UP 主空间 → 合集 → 目标合集，复制链接。例如 space.bilibili.com/12345/lists/67890?type=season。无法解析时，分别填写 UP 主 mid 和合集 seasonId。暂不支持普通 series 列表。',
+                style: Theme.of(context).textTheme.bodySmall,
               ),
             ],
-            selected: {_kind},
-            onSelectionChanged: _busy
-                ? null
-                : (set) => setState(() {
-                    _kind = set.single;
-                    _preview = null;
-                  }),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _input,
-            enabled: !_busy,
-            onChanged: (_) => setState(() => _preview = null),
-            decoration: InputDecoration(
-              labelText: _kind == SubscriptionKind.creator
-                  ? 'mid 或空间链接'
-                  : 'seasonId 或 UGC 合集链接',
-            ),
-          ),
-          if (_kind == SubscriptionKind.collection)
-            TextField(
-              controller: _mid,
-              enabled: !_busy,
-              onChanged: (_) => setState(() => _preview = null),
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'UP主 mid（链接解析不到时必填）',
-              ),
-            ),
-          if (_error != null) Text(_error!),
-          if (_preview != null)
-            Text('确认来源：${_preview!.name}\n首次扫描只建立基线；不修改 B站关注或收藏。'),
-        ],
-      ),
-    ),
-    actions: [
-      TextButton(
-        onPressed: _busy && _preview != null
-            ? null
-            : () => Navigator.pop(context),
-        child: const Text('取消'),
-      ),
-      FilledButton(
-        onPressed: _busy
-            ? null
-            : _preview == null
-            ? _check
-            : _save,
-        child: Text(
-          _busy
-              ? '处理中…'
-              : _preview == null
-              ? '预览名称'
-              : '确认订阅',
+            if (_error != null) Text(_error!),
+            if (_preview != null) ...[
+              const SizedBox(height: 12),
+              SubscriptionSourceImage(source: _preview!),
+              Text('确认来源：${_preview!.name}\n先获取已有内容，之后只提醒新视频；不修改 B站关注或收藏。'),
+              if (!widget.service.enabled) const Text('确认订阅后将开启焦点订阅。'),
+            ],
+          ],
         ),
       ),
-    ],
+      actions: [
+        TextButton(
+          onPressed: _busy && _preview != null
+              ? null
+              : () {
+                  _cancelled = true;
+                  Navigator.pop(context);
+                },
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: _busy
+              ? null
+              : _preview == null
+              ? _check
+              : _save,
+          child: Text(
+            _busy
+                ? '处理中…'
+                : _preview == null
+                ? '预览名称'
+                : '确认订阅',
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+/// Adds an already resolved profile or collection without requiring copied IDs.
+class FocusSubscriptionButton extends StatefulWidget {
+  const FocusSubscriptionButton({
+    super.key,
+    required this.source,
+    this.service,
+  });
+  final SubscriptionSource source;
+  final SubscriptionService? service;
+  @override
+  State<FocusSubscriptionButton> createState() =>
+      _FocusSubscriptionButtonState();
+}
+
+class _FocusSubscriptionButtonState extends State<FocusSubscriptionButton> {
+  late final SubscriptionService _service =
+      widget.service ?? SubscriptionService.instance;
+  bool _opening = false;
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_service.initialize());
+  }
+
+  Future<void> _open() async {
+    if (_opening) return;
+    setState(() => _opening = true);
+    try {
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) =>
+            _AddSourceDialog(service: _service, initialSource: widget.source),
+      );
+    } finally {
+      if (mounted) setState(() => _opening = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: _service,
+    builder: (context, _) {
+      final subscribed = _service.sources.any(
+        (source) => source.key == widget.source.key,
+      );
+      return IconButton(
+        key: const Key('focus-subscribe-button'),
+        tooltip: subscribed ? '已加入焦点订阅' : '加入焦点订阅',
+        onPressed: _opening || subscribed || widget.source.mid <= 0
+            ? null
+            : _open,
+        icon: Icon(
+          subscribed
+              ? Icons.notifications_active_outlined
+              : Icons.notification_add_outlined,
+        ),
+      );
+    },
   );
 }

@@ -154,7 +154,7 @@ extension _PlayerFeedbackView on _PlayerPageState {
     );
   }
 
-  /// 将短消息、续播、字幕和操作卡片排成一列，并协调同一操作的动画。
+  /// 将短消息、续播、字幕和操作卡片排成一列；听视频状态使用独立画面层。
   Widget _buildPlayerFeedback() {
     if (_playbackSnapshot.isInPictureInPicture) return const SizedBox.shrink();
     return ListenableBuilder(
@@ -184,9 +184,7 @@ extension _PlayerFeedbackView on _PlayerPageState {
                     _interactivePromptVisible ||
                     subtitleVisible
                 ? Alignment.bottomCenter
-                : gestureVisible ||
-                      playbackHintVisible ||
-                      _playbackSnapshot.audioOnly
+                : gestureVisible || playbackHintVisible
                 ? Alignment.center
                 : Alignment.topCenter,
             children: [
@@ -230,8 +228,6 @@ extension _PlayerFeedbackView on _PlayerPageState {
                   ),
                 ),
               if (playbackHintVisible) _buildPlaybackHint(),
-              if (_playbackSnapshot.audioOnly && !playbackHintVisible)
-                _buildListeningSurface(),
               if (_completionPromptVisible) _buildPlaybackCompletionPrompt(),
               if (_interactivePromptVisible) _buildInteractiveVideoPrompt(),
               if (subtitleVisible) _buildSubtitleOverlay(),

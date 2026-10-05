@@ -8,19 +8,32 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/public_profile.dart';
 import '../models/subscription.dart';
 import 'bilibili_public_content_service.dart';
+import '../platform/app_platform.dart';
+import 'subscription_snapshot_store.dart';
+import 'subscription_background_service.dart';
 
-/// Foreground-only local RSS-style polling. No background service or cloud writes.
+/// Device-local polling with optional Android WorkManager checks. No cloud writes.
 class SubscriptionService extends ChangeNotifier {
   SubscriptionService({
     BilibiliPublicContentService? contentService,
     Future<SharedPreferences> Function()? preferencesLoader,
     DateTime Function()? clock,
+    SubscriptionSnapshotStore? snapshotStore,
+    Future<void> Function(bool enabled, int generation)? backgroundScheduler,
     this.pageBudget = 20,
-    this.maxSources = 20,
+    this.maxSources = 50,
     this.requestTimeout = const Duration(seconds: 30),
   }) : content = contentService ?? BilibiliHttpPublicContentService(),
        _preferencesLoader = preferencesLoader ?? SharedPreferences.getInstance,
-       _clock = clock ?? DateTime.now;
+       _clock = clock ?? DateTime.now,
+       _snapshotStore =
+           snapshotStore ??
+           (preferencesLoader == null &&
+                   AppPlatformDetector.current == AppPlatform.android &&
+                   !AppPlatformDetector.isFlutterTest
+               ? SqliteSubscriptionSnapshotStore()
+               : null),
+       _backgroundScheduler = backgroundScheduler;
   static final SubscriptionService instance = SubscriptionService();
   static const storageKey = 'focubili_subscriptions_v1';
   static const backupKey = '${storageKey}_backup';
@@ -28,6 +41,26 @@ class SubscriptionService extends ChangeNotifier {
   final BilibiliPublicContentService content;
   final Future<SharedPreferences> Function() _preferencesLoader;
   final DateTime Function() _clock;
+  final SubscriptionSnapshotStore? _snapshotStore;
+  final Future<void> Function(bool enabled, int generation)?
+  _backgroundScheduler;
+  bool backgroundRefreshEnabled = false;
+  DateTime? lastBackgroundCheckAt;
+  String? backgroundStatus;
+  int _generation = 0, _refreshGeneration = 0, _backgroundCursor = 0;
+  int? _backgroundRunGeneration;
+  int get notificationGeneration => _generation;
+  DateTime? _runDeadline;
+  bool get backgroundRefreshSupported =>
+      _backgroundScheduler != null ||
+      (AppPlatformDetector.current == AppPlatform.android &&
+          !AppPlatformDetector.isFlutterTest);
+  bool get _canRun =>
+      _foreground ||
+      (_backgroundRunGeneration != null &&
+          backgroundRefreshEnabled &&
+          _backgroundRunGeneration == _generation);
+
   final int pageBudget, maxSources;
   final Duration requestTimeout;
   bool enabled = false, notificationsEnabled = false, refreshing = false;
@@ -64,20 +97,48 @@ class SubscriptionService extends ChangeNotifier {
   Future<void> _initialize() async {
     try {
       final prefs = await _preferencesLoader();
-      final raw = prefs.getString(storageKey);
+      await prefs.reload();
+      final databaseRaw = await _snapshotStore?.read();
+      final raw = databaseRaw ?? prefs.getString(storageKey);
       if (raw != null) {
         try {
           _restore(jsonDecode(raw));
         } catch (_) {
-          final backup = prefs.getString(backupKey);
-          if (backup == null) rethrow;
-          _restore(jsonDecode(backup));
-          // Keep corrupt bytes separately before future writes; never erase evidence.
-          if (!await prefs.setString('${storageKey}_quarantine', raw)) {
-            throw const SubscriptionStorageException();
+          if (databaseRaw != null) {
+            // Recover only the transactional SQLite backup, never stale legacy data.
+            final recovered = await _snapshotStore!.recover((value) {
+              try {
+                _restore(jsonDecode(value));
+                return true;
+              } catch (_) {
+                return false;
+              }
+            });
+            if (recovered == null) rethrow;
+            _restore(jsonDecode(recovered));
+            storageError = '订阅数据损坏，已恢复上份有效快照。';
+          } else {
+            final backup = prefs.getString(backupKey);
+            if (backup == null) rethrow;
+            _restore(jsonDecode(backup));
+            // Keep corrupt bytes separately before future writes; never erase evidence.
+            if (!await prefs.setString('${storageKey}_quarantine', raw)) {
+              throw const SubscriptionStorageException();
+            }
+            storageError = '订阅数据损坏，已恢复上份有效快照。';
           }
-          storageError = '订阅数据损坏，已恢复上份有效快照。';
         }
+      }
+      if (_snapshotStore != null && databaseRaw == null) {
+        // One-time non-destructive migration. Keep the legacy snapshot/backup;
+        // SQLite becomes authoritative, including on every future process start.
+        await _snapshotStore.transact((current, save) {
+          if (current != null) {
+            _restore(jsonDecode(current));
+          } else {
+            save(jsonEncode(_json()));
+          }
+        });
       }
       _loaded = true;
       _schedule();
@@ -93,6 +154,11 @@ class SubscriptionService extends ChangeNotifier {
     'version': 1,
     'enabled': enabled,
     'notificationsEnabled': notificationsEnabled,
+    'backgroundRefreshEnabled': backgroundRefreshEnabled,
+    'generation': _generation,
+    'backgroundCursor': _backgroundCursor,
+    'lastBackgroundCheckAt': lastBackgroundCheckAt?.toIso8601String(),
+    'backgroundStatus': backgroundStatus,
     'sources': _sources.values.map((e) => e.toJson()).toList(),
     'checkpoints': _checkpoints.map((k, v) => MapEntry(k, v.toJson())),
     'feed': _feed.values.map((e) => e.toJson()).toList(),
@@ -134,16 +200,45 @@ class SubscriptionService extends ChangeNotifier {
     _notificationClaims = Set<String>.from(j['notificationClaims'] as List);
     enabled = j['enabled'] == true;
     notificationsEnabled = j['notificationsEnabled'] == true;
+    backgroundRefreshEnabled = j['backgroundRefreshEnabled'] == true;
+    _generation = j['generation'] as int? ?? 0;
+    _backgroundCursor = j['backgroundCursor'] as int? ?? 0;
+    lastBackgroundCheckAt = DateTime.tryParse(
+      j['lastBackgroundCheckAt'] as String? ?? '',
+    );
+    backgroundStatus = j['backgroundStatus'] as String?;
   }
 
-  Future<T> _mutate<T>(T Function() action) async {
+  Future<T> _mutate<T>(FutureOr<T> Function() action) async {
     await initialize();
     final prior = _writes ?? Future<void>.value();
     final next = prior.then((_) async {
       if (!_loaded || _disposed) throw const SubscriptionStorageException();
-      final previous = jsonEncode(_json());
-      final result = action();
+      var previous = jsonEncode(_json());
+      Object? actionFailure;
+      Future<T> apply() async {
+        try {
+          return await action();
+        } catch (error) {
+          actionFailure = error;
+          rethrow;
+        }
+      }
+
       try {
+        if (_snapshotStore != null) {
+          final result = await _snapshotStore.transact((current, save) async {
+            if (current != null) _restore(jsonDecode(current));
+            previous = jsonEncode(_json());
+            final value = await apply();
+            save(jsonEncode(_json()));
+            return value;
+          });
+          storageError = null;
+          if (!_disposed) notifyListeners();
+          return result;
+        }
+        final result = await apply();
         final prefs = await _preferencesLoader();
         if (!await prefs.setString(backupKey, previous)) {
           throw const SubscriptionStorageException();
@@ -166,6 +261,7 @@ class SubscriptionService extends ChangeNotifier {
           /* retain last valid in-memory snapshot */
         }
         _restore(jsonDecode(previous));
+        if (actionFailure != null) rethrow;
         storageError = '订阅变更未保存，请检查设备存储后重试。';
         if (!_disposed) notifyListeners();
         throw const SubscriptionStorageException();
@@ -188,11 +284,92 @@ class SubscriptionService extends ChangeNotifier {
     try {
       await _mutate(() {
         enabled = value;
+        _generation++;
       });
     } finally {
       // Persistence rollback may restore enabled=true; restore its polling too.
       _schedule();
+      await reconcileBackgroundSchedule();
       if (enabled && _foreground) unawaited(refresh());
+    }
+  }
+
+  Future<void> setBackgroundRefreshEnabled(bool value) async {
+    if (value && !backgroundRefreshSupported) {
+      throw UnsupportedError('仅 Android 支持后台检查');
+    }
+    _epoch++;
+    await _mutate(() {
+      backgroundRefreshEnabled = value;
+      _generation++;
+      backgroundStatus = value ? '等待系统安排检查' : '后台检查已关闭';
+    });
+    await reconcileBackgroundSchedule();
+  }
+
+  Future<void> reconcileBackgroundSchedule() async {
+    if (!backgroundRefreshSupported) return;
+    final generation = _generation;
+    final requested = enabled && backgroundRefreshEnabled;
+    try {
+      await (_backgroundScheduler ?? SubscriptionBackgroundScheduler.configure)(
+        requested,
+        generation,
+      );
+      if (backgroundStatus == '后台任务安排失败，请重新开关后重试') {
+        await _mutate(() {
+          if (_generation == generation) {
+            backgroundStatus = requested ? '等待系统安排检查' : '后台检查已关闭';
+          }
+        });
+      }
+    } catch (_) {
+      // Stored opt-in remains truthful; startup/toggle retries reconciliation.
+      await _mutate(() {
+        if (_generation == generation) {
+          backgroundStatus = '后台任务安排失败，请重新开关后重试';
+        }
+      });
+    }
+  }
+
+  /// Reload after headless work. No stale whole-snapshot writes on foreground resume.
+  Future<void> reload() async {
+    await initialize();
+    if (_snapshotStore == null || !_loaded) return;
+    await _mutate(() {});
+  }
+
+  Future<void> runBackgroundCheck(int generation) async {
+    await reload();
+    if (!_loaded ||
+        !enabled ||
+        !backgroundRefreshEnabled ||
+        generation != _generation) {
+      return;
+    }
+    _backgroundRunGeneration = generation;
+    _runDeadline = _clock().add(const Duration(minutes: 8));
+    try {
+      await refresh();
+      await _mutate(() {
+        if (generation != _generation ||
+            !backgroundRefreshEnabled ||
+            !enabled) {
+          return;
+        }
+        lastBackgroundCheckAt = _clock();
+        backgroundStatus = storageError != null
+            ? '检查未保存，请检查设备存储'
+            : (_runDeadline != null && !_clock().isBefore(_runDeadline!))
+            ? '本轮检查已到时限，剩余订阅下次继续'
+            : _checkpoints.values.any((e) => e.error != null)
+            ? '检查结束，部分订阅未完成；保留缓存并稍后重试'
+            : '后台检查完成';
+      });
+    } finally {
+      _backgroundRunGeneration = null;
+      _runDeadline = null;
     }
   }
 
@@ -207,8 +384,10 @@ class SubscriptionService extends ChangeNotifier {
       if (!_sources.containsKey(source.key)) {
         _sources[source.key] = source;
         _checkpoints[source.key] = SourceCheckpoint();
+        _generation++;
       }
     });
+    await reconcileBackgroundSchedule();
     if (enabled && _foreground) unawaited(refresh());
   }
 
@@ -216,10 +395,12 @@ class SubscriptionService extends ChangeNotifier {
     _epoch++;
     try {
       await _mutate(() {
+        _generation++;
         final source = _sources[key];
         if (source != null) _sources[key] = source.withPaused(value);
       });
     } finally {
+      await reconcileBackgroundSchedule();
       // The epoch also cancels an in-flight scan when persistence rolls back.
       if (enabled && _foreground) unawaited(refresh());
     }
@@ -229,10 +410,12 @@ class SubscriptionService extends ChangeNotifier {
     _epoch++;
     try {
       await _mutate(() {
+        _generation++;
         _sources.remove(key);
         _checkpoints.remove(key);
       });
     } finally {
+      await reconcileBackgroundSchedule();
       if (enabled && _foreground) unawaited(refresh());
     }
   }
@@ -254,7 +437,16 @@ class SubscriptionService extends ChangeNotifier {
     _foreground = value;
     if (!value) _epoch++;
     _schedule();
-    if (value) unawaited(initialize().then((_) => refresh()));
+    if (value) {
+      unawaited(() async {
+        try {
+          await reload();
+          await refresh();
+        } catch (_) {
+          /* Storage error is displayed; lifecycle must not crash. */
+        }
+      }());
+    }
   }
 
   void _schedule() {
@@ -269,8 +461,10 @@ class SubscriptionService extends ChangeNotifier {
 
   bool _active(SubscriptionSource source, int epoch) =>
       enabled &&
-      _foreground &&
+      _canRun &&
       epoch == _epoch &&
+      _generation == _refreshGeneration &&
+      (_runDeadline == null || _clock().isBefore(_runDeadline!)) &&
       _sources[source.key]?.token == source.token &&
       _sources[source.key]?.paused == false;
 
@@ -312,21 +506,32 @@ class SubscriptionService extends ChangeNotifier {
 
   Future<void> _refreshRound(bool manual) async {
     await initialize();
-    if (!enabled || !_foreground || !_loaded || _disposed) return;
+    try {
+      await reload();
+    } catch (_) {
+      return;
+    }
+    if (!enabled || !_canRun || !_loaded || _disposed) return;
+    _refreshGeneration = _generation;
     refreshing = true;
     if (!_disposed) notifyListeners();
     final epoch = _epoch;
-    final pending = sources.where((e) => !e.paused).toList();
+    final allSources = sources;
+    final offset = allSources.isEmpty
+        ? 0
+        : _backgroundCursor % allSources.length;
+    final ordered = _backgroundRunGeneration == null
+        ? allSources
+        : [...allSources.skip(offset), ...allSources.take(offset)];
+    final pending = ordered.where((e) => !e.paused).toList();
     var index = 0;
     final candidates = <String>{};
     // At most two sources; pages within a source remain sequential.
     Future<void> worker() async {
-      while (index < pending.length &&
-          enabled &&
-          _foreground &&
-          epoch == _epoch) {
+      while (index < pending.length && enabled && _canRun && epoch == _epoch) {
         final source = pending[index++];
-        final cp = _checkpoints[source.key]!;
+        final cp = _checkpoints[source.key];
+        if (cp == null || !_active(source, epoch)) continue;
         final now = _clock();
         if (cp.retryAt != null && now.isBefore(cp.retryAt!)) continue;
         if (!manual &&
@@ -335,6 +540,14 @@ class SubscriptionService extends ChangeNotifier {
           continue;
         }
         try {
+          if (_backgroundRunGeneration != null) {
+            await _mutate(() {
+              if (!_active(source, epoch)) return;
+              final keys = _sources.keys.toList();
+              _backgroundCursor = (keys.indexOf(source.key) + 1) % keys.length;
+            });
+          }
+          if (!_active(source, epoch)) continue;
           candidates.addAll(await _scan(source, epoch));
         } catch (_) {
           // Storage failure is visible; independent sources may still be read.
@@ -346,25 +559,42 @@ class SubscriptionService extends ChangeNotifier {
       await Future.wait([worker(), worker()]);
       if (candidates.isNotEmpty &&
           enabled &&
-          _foreground &&
+          _canRun &&
           epoch == _epoch &&
           notificationsEnabled &&
           suppressNotifications?.call() != true) {
         // Claim durably before sending. A crash may miss a system hint, never lose unread.
         final claimed = await _mutate(() {
-          if (!enabled || epoch != _epoch) return <String>{};
+          if (!enabled ||
+              !_canRun ||
+              epoch != _epoch ||
+              _generation != _refreshGeneration ||
+              !notificationsEnabled) {
+            return <String>{};
+          }
           final ids = candidates.difference(_notificationClaims);
           _notificationClaims.addAll(ids);
           return ids;
         });
         if (claimed.isNotEmpty &&
             enabled &&
-            _foreground &&
+            _canRun &&
             epoch == _epoch &&
             notificationsEnabled &&
             suppressNotifications?.call() != true) {
           try {
-            await notifySummary?.call(claimed.length);
+            // Recheck persisted state. Native dispatch validates the same
+            // generation under its own short SQLite transaction, serializing
+            // notification posting against disabling without a Dart-held lock.
+            await reload();
+            if (enabled &&
+                _canRun &&
+                epoch == _epoch &&
+                _generation == _refreshGeneration &&
+                notificationsEnabled &&
+                suppressNotifications?.call() != true) {
+              await notifySummary?.call(claimed.length);
+            }
           } catch (_) {
             /* unread remains */
           }
@@ -380,6 +610,7 @@ class SubscriptionService extends ChangeNotifier {
 
   Future<Set<String>> _scan(SubscriptionSource source, int epoch) async {
     // Work on a detached checkpoint, never mutate durable state while requesting.
+    final initialCheckpoint = jsonEncode(_checkpoints[source.key]!.toJson());
     final cp = SourceCheckpoint.fromJson(
       Map<String, dynamic>.from(_checkpoints[source.key]!.toJson()),
     );
@@ -396,7 +627,6 @@ class SubscriptionService extends ChangeNotifier {
                     page: page,
                   ))
             .timeout(requestTimeout);
-    final discovered = <String>{};
     int? overlapPage;
     var complete = false;
     try {
@@ -412,7 +642,14 @@ class SubscriptionService extends ChangeNotifier {
       cp.total = first.totalCount;
       var pageNumber = cp.nextPage;
       var page = pageNumber == 1 ? first : null;
-      for (var budget = 0; budget < pageBudget; budget++) {
+      for (
+        var budget = 0;
+        budget <
+            (_backgroundRunGeneration == null
+                ? pageBudget
+                : min(pageBudget, 3));
+        budget++
+      ) {
         if (!_active(source, epoch)) return {};
         page ??= await request(pageNumber);
         if (!_active(source, epoch)) return {};
@@ -459,8 +696,21 @@ class SubscriptionService extends ChangeNotifier {
           '刷新未完成：网络、会话或 B 站风控异常。已保留缓存，${cp.retryAt!.toLocal().hour}:${cp.retryAt!.toLocal().minute.toString().padLeft(2, '0')}后可重试。';
     }
     if (!_active(source, epoch)) return {};
+    // A CAS conflict replays the mutation against the newest whole snapshot.
+    // Keep the network result immutable: each attempt must get a fresh copy
+    // before clearing pending entries or extending the deduplication index.
+    final scannedCheckpoint = jsonEncode(cp.toJson());
     return _mutate(() {
       if (!_active(source, epoch)) return <String>{};
+      // Another engine may have scanned this source meanwhile. Never replace
+      // newer checkpoints with a detached stale scan. Read state is merged below.
+      if (jsonEncode(_checkpoints[source.key]!.toJson()) != initialCheckpoint) {
+        return <String>{};
+      }
+      final cp = SourceCheckpoint.fromJson(
+        Map<String, dynamic>.from(jsonDecode(scannedCheckpoint) as Map),
+      );
+      final discovered = <String>{};
       if (complete) {
         for (final item in cp.pending.values) {
           final previous = _feed[item.bvid];
@@ -503,6 +753,8 @@ class SubscriptionService extends ChangeNotifier {
     _refreshAgain = false;
     _epoch++;
     _timer?.cancel();
+    final store = _snapshotStore;
+    if (store is SqliteSubscriptionSnapshotStore) unawaited(store.close());
     super.dispose();
   }
 }

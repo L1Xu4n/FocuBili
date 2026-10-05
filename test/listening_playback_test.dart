@@ -107,6 +107,56 @@ class ListeningPlayer extends Fake implements Player {
   Future<void> dispose() async {}
 }
 
+/// 模拟 mpv 接收 open 后稍后才载入，以及首次解码重置早期 seek。
+class DelayedListeningPlayer extends ListeningPlayer {
+  Completer<Media> audioOpened = Completer<Media>();
+  bool waitingForAudio = false;
+  bool resetOnNextPlay = false;
+  int prematureSeeks = 0;
+
+  @override
+  Future<void> open(Playable playable, {bool play = true}) async {
+    final media = playable as Media;
+    if (!media.uri.contains('/audio.m4s')) {
+      waitingForAudio = false;
+      await super.open(playable, play: play);
+      return;
+    }
+    opened.add(media);
+    waitingForAudio = true;
+    current = PlayerState(rate: current.rate);
+    audioOpened.complete(media);
+  }
+
+  void finishAudioLoad() {
+    waitingForAudio = false;
+    // 故意忽略 start，以覆盖底层未兑现加载位置时的补偿路径。
+    current = current.copyWith(duration: const Duration(minutes: 3));
+    resetOnNextPlay = true;
+  }
+
+  @override
+  Future<void> seek(Duration position) async {
+    if (waitingForAudio) {
+      prematureSeeks++;
+      return;
+    }
+    await super.seek(position);
+  }
+
+  @override
+  Future<void> play() async {
+    if (resetOnNextPlay) {
+      resetOnNextPlay = false;
+      current = current.copyWith(
+        position: Duration.zero,
+        audioParams: const AudioParams(format: 'float', channelCount: 2),
+      );
+    }
+    await super.play();
+  }
+}
+
 /// 只验证纯音频媒体选择、进度和暂停保持，以及后端定时与取消。
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -159,6 +209,84 @@ void main() {
       await service.dispose();
     }
   });
+  for (final paused in [false, true]) {
+    test('音轨延迟加载及首次解码归零后恢复位置，暂停=$paused', () async {
+      final player = DelayedListeningPlayer();
+      final service = WindowsPlaybackService(
+        player: player,
+        sourceService: ListeningSources(),
+      );
+      final snapshots = <PlaybackSnapshot>[];
+      final subscription = service.states.listen(snapshots.add);
+      try {
+        await service.openVideo(VideoPreview.placeholder());
+        await service.seekTo(const Duration(seconds: 42));
+        await service.setPlaybackSpeed(1.5);
+        if (paused) await service.pause();
+        final plays = player.plays;
+        final switching = service.setAudioOnly(true);
+        final media = await player.audioOpened.future;
+        expect(media.start, const Duration(seconds: 42));
+        expect(player.prematureSeeks, 0);
+        await expectLater(service.setAudioOnly(false), throwsStateError);
+        player.finishAudioLoad();
+        await switching;
+        expect(player.state.position, const Duration(seconds: 42));
+        expect(player.state.rate, 1.5);
+        expect(player.state.playing, !paused);
+        if (paused) {
+          expect(player.plays, plays);
+          await service.play();
+          expect(player.state.position, const Duration(seconds: 42));
+        }
+        await service.setAudioOnly(false);
+        expect(player.state.position, const Duration(seconds: 42));
+        // 再次切换必须使用当前位置，而不是第一次切换保存的旧进度。
+        await service.seekTo(const Duration(seconds: 65));
+        player.audioOpened = Completer<Media>();
+        final secondSwitch = service.setAudioOnly(true);
+        expect(
+          (await player.audioOpened.future).start,
+          const Duration(seconds: 65),
+        );
+        player.finishAudioLoad();
+        await secondSwitch;
+        expect(player.state.position, const Duration(seconds: 65));
+        await Future<void>.delayed(Duration.zero);
+        expect(snapshots.last.phase, PlaybackPhase.ready);
+      } finally {
+        await subscription.cancel();
+        await service.dispose();
+      }
+    });
+  }
+
+  test('新视频使仍在等待音轨元数据的模式切换失效', () async {
+    final player = DelayedListeningPlayer();
+    final service = WindowsPlaybackService(
+      player: player,
+      sourceService: ListeningSources(),
+    );
+    try {
+      await service.openVideo(VideoPreview.placeholder());
+      await service.seekTo(const Duration(seconds: 42));
+      final switching = service.setAudioOnly(true);
+      await player.audioOpened.future;
+      player.audioOpened = Completer<Media>();
+      final newer = service.openVideo(
+        VideoPreview.placeholder(),
+        initialPosition: const Duration(seconds: 70),
+      );
+      final media = await player.audioOpened.future;
+      expect(media.start, const Duration(seconds: 70));
+      player.finishAudioLoad();
+      await Future.wait([switching, newer]);
+      expect(player.state.position, const Duration(seconds: 70));
+    } finally {
+      await service.dispose();
+    }
+  });
+
   test('本地听视频只读取缓存音轨且暂停切换不自动播放', () async {
     final root = await Directory.systemTemp.createTemp('listening-pair-');
     final video = File('${root.path}/video.mp4');

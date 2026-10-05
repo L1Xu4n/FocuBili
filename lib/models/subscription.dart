@@ -9,11 +9,13 @@ class SubscriptionSource {
     required this.name,
     required this.token,
     this.paused = false,
+    this.imageUrl = '',
   });
   final SubscriptionKind kind;
   final int mid;
   final int? seasonId;
   final String name, token;
+  final String imageUrl;
   final bool paused;
   String get key => kind == SubscriptionKind.creator
       ? 'creator:$mid'
@@ -25,6 +27,7 @@ class SubscriptionSource {
     name: name,
     token: token,
     paused: value,
+    imageUrl: imageUrl,
   );
   Map<String, Object?> toJson() => {
     'kind': kind.name,
@@ -33,6 +36,7 @@ class SubscriptionSource {
     'name': name,
     'token': token,
     'paused': paused,
+    'imageUrl': imageUrl,
   };
   factory SubscriptionSource.fromJson(Map<String, dynamic> json) {
     final kind = SubscriptionKind.values.byName(json['kind'] as String);
@@ -50,6 +54,7 @@ class SubscriptionSource {
       name: json['name'] as String,
       token: json['token'] as String,
       paused: json['paused'] == true,
+      imageUrl: json['imageUrl'] as String? ?? '',
     );
   }
 }

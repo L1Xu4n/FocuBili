@@ -39,7 +39,7 @@ extension _PlayerListeningView on _PlayerPageState {
     return '${_formatSeconds(current).padLeft(5, '0')}/${_formatSeconds(total).padLeft(5, '0')}';
   }
 
-  /// 创建轻量听视频状态卡，位置由统一反馈区避让放大后的控制栏。
+  /// 独立铺满播放画面并保持居中，字幕和临时通知不改变其布局。
   Widget _buildListeningSurface() => ColoredBox(
     key: const Key('audio-only-surface'),
     color: const Color(0xff17131b),

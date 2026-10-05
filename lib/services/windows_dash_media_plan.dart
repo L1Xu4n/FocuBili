@@ -21,8 +21,8 @@ class WindowsDashMediaAttempt {
   }
 
   /// 创建并返回带请求头的外部音频 Media。
-  Media createAudioMedia(Map<String, String> headers) {
-    return Media(audioUrl, httpHeaders: headers);
+  Media createAudioMedia(Map<String, String> headers, {Duration? start}) {
+    return Media(audioUrl, httpHeaders: headers, start: start);
   }
 
   /// 根据已保留的音频 Media 和本次尝试的唯一标题创建外部音轨，供 libmpv 稳定确认当前音轨身份。

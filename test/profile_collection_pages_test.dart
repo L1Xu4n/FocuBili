@@ -8,6 +8,7 @@ import 'package:focubili/features/profile/collection_detail_page.dart';
 import 'package:focubili/features/profile/user_profile_page.dart';
 import 'package:focubili/models/account_collection.dart';
 import 'package:focubili/models/public_profile.dart';
+import 'package:focubili/services/subscription_service.dart';
 import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/models/watch_history_entry.dart';
 import 'package:focubili/services/bilibili_account_data_service.dart';
@@ -633,5 +634,63 @@ void main() {
     );
     expect(firstVideo.top, secondVideo.top);
     expect(secondVideo.left, greaterThan(firstVideo.right));
+  });
+  testWidgets('UP 主页可直接确认焦点订阅且不修改关注', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final subscriptions = SubscriptionService();
+    addTearDown(subscriptions.dispose);
+    final interaction = _FakeInteractionService();
+    await tester.pumpWidget(
+      _host(
+        UserProfilePage(
+          mid: 7,
+          publicContentService: _FakePublicContentService(),
+          videoService: _FakeVideoService(),
+          interactionService: interaction,
+          subscriptionService: subscriptions,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('加入焦点订阅'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('确认来源：测试UP主'), findsOneWidget);
+    await tester.tap(find.text('确认订阅'));
+    await tester.pumpAndSettle();
+    expect(subscriptions.sources.single.key, 'creator:7');
+    expect(interaction.writeRequests, 0);
+    expect(find.byTooltip('已加入焦点订阅'), findsOneWidget);
+  });
+
+  testWidgets('UGC 合集详情可直接确认焦点订阅', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final subscriptions = SubscriptionService();
+    addTearDown(subscriptions.dispose);
+    await tester.pumpWidget(
+      _host(
+        CollectionDetailPage(
+          collection: const CreatorCollection(
+            id: 900,
+            ownerMid: 7,
+            title: '测试合集',
+            coverUrl: '',
+            description: '',
+            totalCount: 2,
+            previewVideos: [],
+          ),
+          publicContentService: _FakePublicContentService(),
+          videoService: _FakeVideoService(),
+          subscriptionService: subscriptions,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('加入焦点订阅'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('确认来源：测试合集'), findsOneWidget);
+    await tester.tap(find.text('确认订阅'));
+    await tester.pumpAndSettle();
+    expect(subscriptions.sources.single.key, 'collection:7:900');
+    expect(find.byTooltip('已加入焦点订阅'), findsOneWidget);
   });
 }
