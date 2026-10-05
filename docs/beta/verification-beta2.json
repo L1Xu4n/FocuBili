@@ -1,0 +1,72 @@
+{
+  "dateUtc": "2026-10-05T15:44:08.947699+00:00",
+  "baseCommit": "99839fa7a3f46340d5d4f4130a8b8909533785b4",
+  "branch": "feat/android-v180-beta2",
+  "incomingHandoffSha256": "9093b532590a230dcfb5f6acf8a6783d3ee6507a2d86ca26ae6aa4930031842f",
+  "environment": {
+    "os": "Linux",
+    "flutter": "3.44.6",
+    "dart": "3.12.2",
+    "jdk": 21,
+    "connectedAndroidDevices": 0,
+    "windowsHost": false,
+    "repositoryInstructions": "No AGENTS.md or project .agents/skills found; CONTRIBUTING.md read",
+    "network": "GitHub fetch and pub.dev access succeeded; Flutter dependency resolution and Gradle builds succeeded; real Bilibili source access not tested in this run"
+  },
+  "tests": {
+    "flutterPassed": 791,
+    "flutterSkipped": 1,
+    "skipReason": "Windows Microsoft YaHei font not present on Linux",
+    "analyze": "passed",
+    "format": "25 files; 0 changed",
+    "androidJvm": {
+      "tests": 35,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "androidJvmSuites": 9,
+    "realSqfliteIntegration": "not run; no Android device or emulator"
+  },
+  "apk": [
+    {
+      "file": "FocuBili-1.8.0-beta.2-preview-universal.apk",
+      "package": "com.focubili.app.preview",
+      "versionCode": 22,
+      "versionName": "1.8.0-beta.2",
+      "bytes": 97352158,
+      "sha256": "44682307ac770b06a8a9408c821c43431b657d8887d73341cf41c29a15fcfa9f",
+      "certificateSha256": "5bd1fc4daa8a0887e213c4dc1231d0eba4f7f309a0e64c2d15fe404302bd00b0",
+      "abis": [
+        "arm64-v8a",
+        "armeabi-v7a",
+        "x86_64"
+      ],
+      "minSdk": 24,
+      "targetSdk": 36,
+      "signatureVerification": "passed"
+    },
+    {
+      "file": "FocuBili-1.8.0-beta.2-preview-arm64.apk",
+      "package": "com.focubili.app.preview",
+      "versionCode": 2022,
+      "versionName": "1.8.0-beta.2",
+      "bytes": 67600224,
+      "sha256": "dc0296df614f663eb6f355019809ee390e5ea7471409747fa2b06deac0e74d17",
+      "certificateSha256": "5bd1fc4daa8a0887e213c4dc1231d0eba4f7f309a0e64c2d15fe404302bd00b0",
+      "abis": [
+        "arm64-v8a"
+      ],
+      "minSdk": 24,
+      "targetSdk": 36,
+      "signatureVerification": "passed"
+    }
+  ],
+  "limits": [
+    "No device installation or upgrade was executed in this run.",
+    "WorkManager process death, Doze, OEM restrictions, notification permission and notification taps require Android acceptance testing.",
+    "Windows actual media playback and native mpv behavior were not executed on this Linux host.",
+    "Same signing certificate as recorded local beta.1 APKs; CI or other historical preview signature compatibility was not verified."
+  ],
+  "distribution": "Local debug test artifacts only; no GitHub release, tag, push or PR created."
+}

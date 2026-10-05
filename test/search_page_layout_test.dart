@@ -389,6 +389,9 @@ void main() {
     await tester.tap(find.byKey(const Key('add-learning-search-$bvid')));
     await tester.pumpAndSettle();
     expect(service.lookupRequests, <String>[bvid]);
+    expect(await learningListService.loadEntries(), isEmpty);
+    await tester.tap(find.widgetWithText(FilledButton, '确认加入'));
+    await tester.pumpAndSettle();
     expect((await learningListService.loadEntries()).single.bvid, bvid);
 
     await tester.tap(find.byKey(const Key('more-search-$bvid')));

@@ -1,3 +1,4 @@
+import '../subscriptions/subscription_updates_page.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/layout/adaptive_layout.dart';
@@ -513,6 +514,14 @@ class _ProfilePageState extends State<ProfilePage> {
         // 设置入口函数进入个性化设置页，其中仍保留独立缓存管理入口。
         onTap: () =>
             Navigator.of(context).pushNamed(AppRoutes.personalizationSettings),
+      ),
+      _ProfileTile(
+        icon: Icons.rss_feed,
+        title: '焦点订阅',
+        id: 'subscription-updates',
+        onTap: () => Navigator.of(context).push<void>(
+          MaterialPageRoute(builder: (_) => const SubscriptionUpdatesPage()),
+        ),
       ),
     ];
   }

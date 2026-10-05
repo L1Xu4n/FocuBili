@@ -1,3 +1,4 @@
+import 'learning_add_sheet.dart';
 import 'package:flutter/material.dart';
 
 import '../../models/learning_list_entry.dart';
@@ -28,6 +29,17 @@ abstract final class LearningVideoLauncher {
       if (!context.mounted) {
         return false;
       }
+      if (!video.parts.any((part) => part.cid == entry.partCid)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('原分 P 已失效，请重新选择；旧任务进度保留。')),
+        );
+        await LearningAddSheet.show(
+          context,
+          video: video,
+          service: learningListService ?? LearningListService(),
+        );
+        return false;
+      }
       await Navigator.of(context).push<void>(
         MaterialPageRoute<void>(
           // 播放页构建函数恢复学习任务的分P、时间点和同一份本机清单服务。
@@ -50,7 +62,7 @@ abstract final class LearningVideoLauncher {
     }
   }
 
-  /// 创建带学习位置的播放器，保存的 CID 失效时播放器会按分P序号安全回退。
+  /// 按保存的 CID 创建带学习位置的播放器；CID 失效时拒绝套用旧进度。
   static PlayerPage buildPlayerPage(
     VideoPreview video,
     LearningListEntry entry, {
@@ -68,18 +80,13 @@ abstract final class LearningVideoLauncher {
     );
   }
 
-  /// 优先按 CID 找回任务分P，旧数据 CID 失效时再按页码匹配。
+  /// 按 CID 找回同一分 P；页码变化不会把旧进度应用到其他分 P。
   static VideoPart _findPart(VideoPreview video, LearningListEntry entry) {
     for (final VideoPart part in video.parts) {
       if (part.cid == entry.partCid) {
         return part;
       }
     }
-    for (final VideoPart part in video.parts) {
-      if (part.pageNumber == entry.partPageNumber) {
-        return part;
-      }
-    }
-    return video.initialPart;
+    throw const BilibiliLookupException('原分 P 已失效，请重新选择');
   }
 }

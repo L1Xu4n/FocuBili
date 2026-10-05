@@ -200,7 +200,7 @@ class BilibiliCookieController(
         }
     }
 
-    /** Activity 销毁时注销方法通道，避免 Flutter 引擎释放后仍接收调用。 */
+    /** 引擎销毁时注销方法通道；前台和后台各自管理自己的通道，不清理共享会话。 */
     fun dispose() {
         channel.setMethodCallHandler(null)
     }

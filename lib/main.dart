@@ -16,6 +16,7 @@ import 'services/problem_diagnostics_service.dart';
 import 'services/apple_video_capabilities.dart';
 import 'services/linux_focus_notification_service.dart';
 import 'services/linux_mini_player.dart';
+import 'services/subscription_service.dart';
 
 /// 注册框架和 Dart 未捕获错误的最小诊断记录；只保存固定操作名与异常类型，绝不保存异常原文或堆栈。
 void _installProblemDiagnostics() {
@@ -107,6 +108,14 @@ Future<void> main(List<String> args) async {
   }
   _installProblemDiagnostics();
   await _prepareWindowsDesktop();
+  // Reconcile persisted opt-in after an upgrade/restart; disabled by default.
+  try {
+    await SubscriptionService.instance.initialize();
+    await SubscriptionService.instance.reconcileBackgroundSchedule();
+  } catch (_) {
+    // Subscription storage/scheduler failures must not prevent app startup.
+    // The subscriptions page exposes its persisted/error status for retry.
+  }
   // Android 启动方向由 MainActivity 在 Flutter 首帧前决定，避免未稳定的窗口尺寸把平板误判成手机。
   await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   // 首帧前先按浅色背景设置深色系统图标，后续由应用主题自动同步明暗模式。

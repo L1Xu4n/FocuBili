@@ -9,12 +9,16 @@ import '../../core/layout/adaptive_two_column_list.dart';
 import '../../core/router/app_router.dart';
 import '../../features/common/watch_history_badge.dart';
 import '../../models/public_profile.dart';
+import '../../models/subscription.dart';
 import '../../models/video_preview.dart';
 import '../../models/watch_history_entry.dart';
 import '../../services/bilibili_public_content_service.dart';
 import '../../services/bilibili_interaction_service.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/learning_list_service.dart';
+import '../../services/subscription_service.dart';
+import '../learning/learning_add_sheet.dart';
+import '../subscriptions/subscription_updates_page.dart';
 import '../../services/watch_history_service.dart';
 import 'collection_detail_page.dart';
 
@@ -33,8 +37,10 @@ class UserProfilePage extends StatefulWidget {
     this.videoService,
     this.learningListService,
     this.watchHistoryService,
+    this.subscriptionService,
   });
 
+  final SubscriptionService? subscriptionService;
   final int mid;
   final String initialName;
   final String initialAvatarUrl;
@@ -591,65 +597,26 @@ class _UserProfilePageState extends State<UserProfilePage>
     }
   }
 
-  /// 确认是否移除投稿对应的学习任务，避免误触图标直接丢失本机进度。
-  Future<bool> _confirmLearningListRemoval(CreatorVideo item) async {
-    return await showDialog<bool>(
-          context: context,
-          builder: (BuildContext dialogContext) => AlertDialog(
-            title: const Text('取消加入学习清单？'),
-            content: Text('将从学习清单移除“${item.title}”。'),
-            actions: <Widget>[
-              TextButton(
-                onPressed: () => Navigator.of(dialogContext).pop(false),
-                child: const Text('保留'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.of(dialogContext).pop(true),
-                child: const Text('取消加入'),
-              ),
-            ],
-          ),
-        ) ??
-        false;
-  }
-
-  /// 根据投稿当前成员状态加入或取消学习清单；加入前查询完整分P以保存真实 CID。
+  /// Opens explicit P selection even when another P of the BV already exists.
   Future<void> _toggleVideoLearningList(CreatorVideo item) async {
-    if (_openingBvid != null || _addingBvid != null) {
-      return;
-    }
-    final bool alreadyAdded = _learningListBvids.contains(item.bvid);
-    if (alreadyAdded && !await _confirmLearningListRemoval(item)) {
-      return;
-    }
+    if (_openingBvid != null || _addingBvid != null) return;
     setState(() => _addingBvid = item.bvid);
     try {
-      if (alreadyAdded) {
-        await _learningListService.remove(item.bvid);
-      } else {
-        final VideoPreview video = await _videoService.lookupVideo(item.bvid);
-        await _learningListService.addVideo(video);
-      }
-      if (mounted) {
-        setState(() {
-          final Set<String> nextBvids = _learningListBvids.toSet();
-          if (alreadyAdded) {
-            nextBvids.remove(item.bvid);
-          } else {
-            nextBvids.add(item.bvid);
-          }
-          _learningListBvids = Set<String>.unmodifiable(nextBvids);
-        });
-        _showMessage(alreadyAdded ? '已取消加入学习清单。' : '已加入学习清单，可在首页继续学习。');
-      }
+      final video = await _videoService.lookupVideo(item.bvid);
+      if (!mounted) return;
+      setState(() => _addingBvid = null);
+      final result = await LearningAddSheet.show(
+        context,
+        video: video,
+        service: _learningListService,
+      );
+      if (result == null || !mounted) return;
+      await _loadLearningListMembership();
+      if (mounted) _showMessage('已加入所选分 P，已有进度已保留。');
     } catch (_) {
-      if (mounted) {
-        _showMessage(alreadyAdded ? '取消加入失败，请稍后重试。' : '加入学习清单失败，请检查网络后重试。');
-      }
+      if (mounted) _showMessage('详情读取或保存失败，请重试。');
     } finally {
-      if (mounted) {
-        setState(() => _addingBvid = null);
-      }
+      if (mounted) setState(() => _addingBvid = null);
     }
   }
 
@@ -1285,7 +1252,7 @@ class _UserProfilePageState extends State<UserProfilePage>
                               dimension: 36,
                               child: IconButton(
                                 key: Key('add-creator-video-${item.bvid}'),
-                                tooltip: added ? '取消加入学习清单' : '加入学习清单',
+                                tooltip: added ? '选择更多分 P' : '加入学习清单',
                                 // 学习清单图标函数按当前 BV 状态执行加入或确认取消。
                                 onPressed: opening || adding
                                     ? null
@@ -1580,6 +1547,16 @@ class _UserProfilePageState extends State<UserProfilePage>
                   overflow: TextOverflow.ellipsis,
                 ),
                 actions: <Widget>[
+                  FocusSubscriptionButton(
+                    service: widget.subscriptionService,
+                    source: SubscriptionSource(
+                      kind: SubscriptionKind.creator,
+                      mid: widget.mid,
+                      name: title,
+                      imageUrl: _profile?.avatarUrl ?? widget.initialAvatarUrl,
+                      token: DateTime.now().microsecondsSinceEpoch.toString(),
+                    ),
+                  ),
                   if (_selectedTab == _CreatorTab.videos)
                     IconButton(
                       // 搜索按钮函数展开或收起当前 UP 主的投稿搜索框。

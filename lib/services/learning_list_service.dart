@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
@@ -28,31 +29,61 @@ class LearningListService {
   final LearningListPreferencesLoader _preferencesLoader;
   final WatchHistoryService _watchHistoryService;
 
-  /// 读取全部合法任务：未完成任务保持手动顺序，已完成任务自动置底。
-  Future<List<LearningListEntry>> loadEntries() async {
+  /// 同一偏好设置实例上的所有清单服务共用写入队列。
+  static final Expando<Future<void>> _writeQueues = Expando('learning writes');
+  bool readFailed = false;
+
+  Future<T> _serialized<T>(Future<T> Function() action) async {
+    final preferences = await _preferencesLoader();
+    final previous = _writeQueues[preferences];
+    final release = Completer<void>();
+    _writeQueues[preferences] = release.future;
+    if (previous != null) await previous;
     try {
-      final SharedPreferences preferences = await _preferencesLoader();
-      final String? currentJson = preferences.getString(_storageKey);
-      final String? legacyJson = currentJson == null
-          ? preferences.getString(_legacyStorageKey)
-          : null;
-      final List<LearningListEntry> entries = _decodeEntries(
-        currentJson ?? legacyJson,
-      );
-      _sortEntries(entries);
-      if (currentJson == null && legacyJson != null) {
-        final List<LearningListEntry> migrated = _rebuildLegacySortOrders(
-          entries,
-        );
-        await _writeEntries(migrated, preferences: preferences);
-        await preferences.remove(_legacyStorageKey);
-        return List<LearningListEntry>.unmodifiable(migrated);
+      return await action();
+    } finally {
+      release.complete();
+      if (identical(_writeQueues[preferences], release.future)) {
+        _writeQueues[preferences] = null;
       }
-      return List<LearningListEntry>.unmodifiable(entries);
-    } catch (_) {
-      // 本地存储暂时不可用时不阻止搜索和播放功能，页面以空清单继续工作。
-      return const <LearningListEntry>[];
     }
+  }
+
+  /// 读取合法任务，失败时标记 readFailed 并保留磁盘原数据。
+  Future<List<LearningListEntry>> loadEntries() =>
+      _serialized(() async {
+        try {
+          final entries = await _loadStrict();
+          readFailed = false;
+          return entries;
+        } catch (_) {
+          readFailed = true;
+          return const <LearningListEntry>[];
+        }
+      }).catchError((Object _) {
+        readFailed = true;
+        return const <LearningListEntry>[];
+      });
+
+  Future<List<LearningListEntry>> _loadStrict() async {
+    final preferences = await _preferencesLoader();
+    final current = preferences.getString(_storageKey);
+    final legacy = current == null
+        ? preferences.getString(_legacyStorageKey)
+        : null;
+    final entries = _decodeEntries(current ?? legacy);
+    _sortEntries(entries);
+    if (legacy != null) {
+      final migrated = _rebuildLegacySortOrders(entries);
+      if (!await preferences.setString('${_legacyStorageKey}_backup', legacy)) {
+        throw const LearningListStorageException();
+      }
+      await _writeEntries(migrated, preferences: preferences);
+      // Only remove the original after a verified v2 write. The backup remains.
+      await preferences.remove(_legacyStorageKey);
+      return List.unmodifiable(migrated);
+    }
+    return List.unmodifiable(entries);
   }
 
   /// 读取首页应突出的一条未完成任务，严格遵循用户当前的手动学习顺序。
@@ -114,58 +145,135 @@ class LearningListService {
     Duration? position,
     LearningListStatus? status,
   }) async {
-    final String normalizedBvid = video.bvid.trim();
-    if (normalizedBvid.isEmpty) {
-      return loadEntries();
-    }
-    final List<LearningListEntry> existing = List<LearningListEntry>.of(
-      await loadEntries(),
-    );
-    final WatchHistoryEntry? history = part == null
-        ? await _findWatchHistory(normalizedBvid)
-        : null;
-    final VideoPart resolvedPart =
+    final history = part == null ? await _findWatchHistory(video.bvid) : null;
+    final resolved =
         part ?? _findPart(video, pageNumber: history?.lastPartPageNumber);
-    final int existingIndex = existing.indexWhere(
-      (LearningListEntry entry) =>
-          entry.matchesPart(normalizedBvid, resolvedPart.cid),
-    );
-    final LearningListEntry? previous = existingIndex >= 0
-        ? existing[existingIndex]
-        : null;
-    final Duration resolvedPosition = _clampPosition(
-      position ?? previous?.position ?? history?.lastPosition ?? Duration.zero,
-      resolvedPart.duration,
-    );
-    final LearningListStatus resolvedStatus =
-        status ??
-        previous?.status ??
-        (resolvedPosition > Duration.zero
-            ? LearningListStatus.learning
-            : LearningListStatus.notStarted);
-    final DateTime now = DateTime.now();
-    final LearningListEntry entry = LearningListEntry(
-      bvid: normalizedBvid,
-      title: video.title.trim().isEmpty ? '未命名视频' : video.title.trim(),
-      ownerName: video.ownerName.trim(),
-      thumbnailUrl: video.thumbnailUrl.trim(),
-      partCid: resolvedPart.cid,
-      partPageNumber: resolvedPart.pageNumber,
-      partTitle: resolvedPart.title.trim(),
-      position: resolvedPosition,
-      duration: resolvedPart.duration,
-      status: resolvedStatus,
-      addedAt: previous?.addedAt ?? now,
-      updatedAt: now,
-      sortOrder: previous?.sortOrder ?? _nextSortOrder(existing),
-    );
-    if (existingIndex >= 0) {
-      existing[existingIndex] = entry;
-    } else {
-      existing.add(entry);
-    }
-    return _saveEntries(existing);
+    final result = await addBatch([
+      LearningPartSelection(
+        video,
+        resolved,
+        position: position ?? history?.lastPosition ?? Duration.zero,
+        status: status,
+      ),
+    ]);
+    if (!result.persisted) throw const LearningListStorageException();
+    if (result.capacityExceeded) throw const LearningListCapacityException();
+    return result.entries;
   }
+
+  Future<LearningBatchResult> addParts(
+    VideoPreview video,
+    List<VideoPart> parts,
+  ) => addBatch([for (final part in parts) LearningPartSelection(video, part)]);
+
+  /// Atomic capacity check; duplicates never replace progress, status or order.
+  Future<LearningBatchResult> addBatch(
+    List<LearningPartSelection> selections,
+  ) => _serialized(() async {
+    List<LearningListEntry> entries;
+    try {
+      entries = List.of(await _loadStrict());
+    } catch (_) {
+      return const LearningBatchResult(persisted: false);
+    }
+    final existing = entries.map((e) => e.stableId).toSet();
+    final added = <String>[];
+    final duplicates = <String>[];
+    final failed = <String>[];
+    final now = DateTime.now();
+    var order = _nextSortOrder(entries);
+    final pending = <LearningListEntry>[];
+    for (final selection in selections) {
+      final video = selection.video;
+      final part = selection.part;
+      final entry = LearningListEntry(
+        bvid: video.bvid.trim(),
+        title: video.title,
+        ownerName: video.ownerName,
+        thumbnailUrl: video.thumbnailUrl,
+        partCid: part.cid,
+        partPageNumber: part.pageNumber,
+        partTitle: part.title,
+        position: _clampPosition(selection.position, part.duration),
+        duration: part.duration,
+        status:
+            selection.status ??
+            (selection.position > Duration.zero
+                ? LearningListStatus.learning
+                : LearningListStatus.notStarted),
+        addedAt: now,
+        updatedAt: now,
+        sortOrder: order,
+      );
+      if (LearningListEntry.tryParse(entry.toJson()) == null ||
+          !video.parts.any((p) => p.cid == part.cid)) {
+        failed.add('${video.bvid}:${part.cid}');
+      } else if (!existing.add(entry.stableId)) {
+        duplicates.add(entry.stableId);
+      } else {
+        pending.add(entry);
+        added.add(entry.stableId);
+        order++;
+      }
+    }
+    if (entries.length + pending.length > maximumEntries) {
+      return LearningBatchResult(
+        entries: entries,
+        existingIds: duplicates,
+        failedItems: failed,
+        capacityExceeded: true,
+        persisted: true,
+      );
+    }
+    try {
+      if (pending.isNotEmpty) {
+        entries = List.of(await _saveEntries([...entries, ...pending]));
+      }
+      return LearningBatchResult(
+        entries: entries,
+        addedIds: added,
+        existingIds: duplicates,
+        failedItems: failed,
+        persisted: true,
+      );
+    } catch (_) {
+      return LearningBatchResult(
+        entries: await loadEntriesAfterFailure(),
+        existingIds: duplicates,
+        failedItems: failed,
+        persisted: false,
+      );
+    }
+  }).catchError((Object _) => const LearningBatchResult(persisted: false));
+
+  Future<List<LearningListEntry>> loadEntriesAfterFailure() async {
+    try {
+      return await _loadStrict();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<List<LearningListEntry>> updateStatuses(
+    Set<String> ids,
+    LearningListStatus status,
+  ) => _serialized(() async {
+    final entries = await _loadStrict();
+    return _saveEntries([
+      for (final entry in entries)
+        ids.contains(entry.stableId)
+            ? entry.copyWith(status: status, updatedAt: DateTime.now())
+            : entry,
+    ]);
+  });
+
+  Future<List<LearningListEntry>> removeBatch(Set<String> ids) =>
+      _serialized(() async {
+        final entries = await _loadStrict();
+        return _saveEntries(
+          entries.where((e) => !ids.contains(e.stableId)).toList(),
+        );
+      });
 
   /// 更新指定分 P 的进度；未加入的其他分 P 不会被播放器悄悄创建或覆盖。
   Future<List<LearningListEntry>> updateProgress(
@@ -173,13 +281,13 @@ class LearningListService {
     required VideoPart part,
     required Duration position,
     LearningListStatus? status,
-  }) async {
+  }) => _serialized(() async {
     final String normalizedBvid = bvid.trim();
     if (normalizedBvid.isEmpty || part.cid <= 0 || part.pageNumber <= 0) {
-      return loadEntries();
+      return _loadStrict();
     }
     final List<LearningListEntry> entries = List<LearningListEntry>.of(
-      await loadEntries(),
+      await _loadStrict(),
     );
     final int index = entries.indexWhere(
       (LearningListEntry entry) => entry.matchesPart(normalizedBvid, part.cid),
@@ -196,20 +304,20 @@ class LearningListService {
       updatedAt: DateTime.now(),
     );
     return _saveEntries(entries);
-  }
+  });
 
   /// 修改一个视频或指定分 P 的状态；省略 CID 时保留旧版“同 BV 全部修改”行为。
   Future<List<LearningListEntry>> updateStatus(
     String bvid,
     LearningListStatus status, {
     int? partCid,
-  }) async {
+  }) => _serialized(() async {
     final String normalizedBvid = bvid.trim();
     if (normalizedBvid.isEmpty) {
-      return loadEntries();
+      return _loadStrict();
     }
     final List<LearningListEntry> entries = List<LearningListEntry>.of(
-      await loadEntries(),
+      await _loadStrict(),
     );
     bool changed = false;
     final DateTime now = DateTime.now();
@@ -225,14 +333,14 @@ class LearningListService {
     return changed
         ? _saveEntries(entries)
         : List<LearningListEntry>.unmodifiable(entries);
-  }
+  });
 
   /// 按拖拽得到的稳定标识重新排列未完成任务，已完成任务始终保持在末尾分区。
   Future<List<LearningListEntry>> reorderIncomplete(
     List<String> orderedStableIds,
-  ) async {
+  ) => _serialized(() async {
     final List<LearningListEntry> entries = List<LearningListEntry>.of(
-      await loadEntries(),
+      await _loadStrict(),
     );
     final List<LearningListEntry> activeEntries = entries
         .where(
@@ -268,39 +376,34 @@ class LearningListService {
       ),
     ];
     return _saveEntries(ranked);
-  }
+  });
 
   /// 移除指定 BV 的全部任务，或在传入 CID 时只移除当前视频分 P。
-  Future<List<LearningListEntry>> remove(String bvid, {int? partCid}) async {
-    final String normalizedBvid = bvid.trim();
-    if (normalizedBvid.isEmpty) {
-      return loadEntries();
-    }
-    final List<LearningListEntry> entries = await loadEntries();
-    final List<LearningListEntry> updated = entries
-        .where(
-          (LearningListEntry entry) =>
-              entry.bvid != normalizedBvid ||
-              (partCid != null && entry.partCid != partCid),
-        )
-        .toList(growable: false);
-    if (updated.length == entries.length) {
-      return List<LearningListEntry>.unmodifiable(entries);
-    }
-    return _saveEntries(updated);
-  }
+  Future<List<LearningListEntry>> remove(String bvid, {int? partCid}) =>
+      _serialized(() async {
+        final String normalizedBvid = bvid.trim();
+        if (normalizedBvid.isEmpty) {
+          return _loadStrict();
+        }
+        final List<LearningListEntry> entries = await _loadStrict();
+        final List<LearningListEntry> updated = entries
+            .where(
+              (LearningListEntry entry) =>
+                  entry.bvid != normalizedBvid ||
+                  (partCid != null && entry.partCid != partCid),
+            )
+            .toList(growable: false);
+        if (updated.length == entries.length) {
+          return List<LearningListEntry>.unmodifiable(entries);
+        }
+        return _saveEntries(updated);
+      });
 
   /// 清空设备中的全部学习任务；观看记录和笔记不会受到影响。
-  Future<List<LearningListEntry>> clear() async {
-    try {
-      final SharedPreferences preferences = await _preferencesLoader();
-      await preferences.remove(_storageKey);
-      await preferences.remove(_legacyStorageKey);
-    } catch (_) {
-      // 偏好设置暂时不可用时仍返回空状态，让页面能够立即恢复可操作状态。
-    }
-    return const <LearningListEntry>[];
-  }
+  Future<List<LearningListEntry>> clear() => _serialized(() async {
+    await _loadStrict();
+    return _saveEntries([]);
+  });
 
   /// 从观看记录中查找同一 BV 的最近进度，读取失败时安全回退为空。
   Future<WatchHistoryEntry?> _findWatchHistory(String bvid) async {
@@ -358,7 +461,7 @@ class LearningListService {
     return maximumOrder + 1;
   }
 
-  /// 写入任务前校验、按“未完成在前”排序并裁剪上限，再返回不可变列表。
+  /// 写入任务前校验并排序，超出容量时拒绝整次写入，再返回不可变列表。
   Future<List<LearningListEntry>> _saveEntries(
     List<LearningListEntry> entries,
   ) async {
@@ -373,9 +476,10 @@ class LearningListService {
       }
     }
     _sortEntries(normalized);
-    final List<LearningListEntry> limited = normalized
-        .take(maximumEntries)
-        .toList(growable: false);
+    if (normalized.length > maximumEntries) {
+      throw const LearningListCapacityException();
+    }
+    final List<LearningListEntry> limited = normalized;
     await _writeEntries(limited);
     return List<LearningListEntry>.unmodifiable(limited);
   }
@@ -418,37 +522,40 @@ class LearningListService {
         : left.stableId.compareTo(right.stableId);
   }
 
-  /// 把内存任务序列化写入本机；写入失败不会中断调用方的界面更新。
+  /// 把任务序列化写入本机，重读验证后才返回；失败时向调用方报告。
   Future<void> _writeEntries(
     List<LearningListEntry> entries, {
     SharedPreferences? preferences,
   }) async {
+    final target = preferences ?? await _preferencesLoader();
+    final previous = target.getString(_storageKey);
+    if (previous != null &&
+        !await target.setString('${_storageKey}_backup', previous)) {
+      throw const LearningListStorageException();
+    }
+    final encoded = jsonEncode(entries.map((e) => e.toJson()).toList());
     try {
-      final SharedPreferences target =
-          preferences ?? await _preferencesLoader();
-      await target.setString(
-        _storageKey,
-        jsonEncode(
-          entries
-              .map((LearningListEntry entry) => entry.toJson())
-              .toList(growable: false),
-        ),
-      );
+      if (!await target.setString(_storageKey, encoded)) {
+        throw const LearningListStorageException();
+      }
+      await target.reload();
+      if (target.getString(_storageKey) != encoded) {
+        throw const LearningListStorageException();
+      }
     } catch (_) {
-      // 本机写入失败时用户仍可继续播放，后续操作会再次尝试保存。
+      await target.reload();
+      throw const LearningListStorageException();
     }
   }
 
-  /// 解析本机 JSON，只保留合法、以“BV + CID”去重且数量受控的学习任务。
+  /// 解析本机 JSON 并按“BV + CID”去重，读取时保留所有已有合法任务。
   List<LearningListEntry> _decodeEntries(String? rawJson) {
     if (rawJson == null || rawJson.trim().isEmpty) {
       return <LearningListEntry>[];
     }
     try {
       final Object? decoded = jsonDecode(rawJson);
-      if (decoded is! List<Object?>) {
-        return <LearningListEntry>[];
-      }
+      if (decoded is! List<Object?>) throw const LearningListStorageException();
       final Set<String> seenStableIds = <String>{};
       final List<LearningListEntry> entries = <LearningListEntry>[];
       for (final Object? item in decoded) {
@@ -461,14 +568,55 @@ class LearningListService {
         if (entry != null && seenStableIds.add(entry.stableId)) {
           entries.add(entry);
         }
-        if (entries.length == maximumEntries) {
-          break;
-        }
+      }
+      if (decoded.isNotEmpty && entries.isEmpty) {
+        throw const LearningListStorageException();
       }
       return entries;
     } catch (_) {
-      // JSON 被截断或被手动修改时按空任务处理，避免应用启动崩溃。
-      return <LearningListEntry>[];
+      throw const LearningListStorageException();
     }
   }
+}
+
+class LearningPartSelection {
+  const LearningPartSelection(
+    this.video,
+    this.part, {
+    this.position = Duration.zero,
+    this.status,
+  });
+  final VideoPreview video;
+  final VideoPart part;
+  final Duration position;
+  final LearningListStatus? status;
+}
+
+class LearningBatchResult {
+  const LearningBatchResult({
+    this.entries = const [],
+    this.addedIds = const [],
+    this.existingIds = const [],
+    this.failedItems = const [],
+    this.capacityExceeded = false,
+    required this.persisted,
+  });
+  final List<LearningListEntry> entries;
+  final List<String> addedIds;
+  final List<String> existingIds;
+  final List<String> failedItems;
+  final bool capacityExceeded;
+  final bool persisted;
+}
+
+class LearningListStorageException implements Exception {
+  const LearningListStorageException();
+  @override
+  String toString() => '学习清单未保存，请检查设备存储后重试';
+}
+
+class LearningListCapacityException implements Exception {
+  const LearningListCapacityException();
+  @override
+  String toString() => '学习清单最多100条，请先移除不需要的任务';
 }

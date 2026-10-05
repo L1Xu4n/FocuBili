@@ -1,3 +1,5 @@
+import '../../services/subscription_service.dart';
+import '../subscriptions/subscription_updates_page.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -73,6 +75,26 @@ class _FocusDashboardState extends State<FocusDashboard> {
   bool _isSnappingHomeScroll = false;
   ScrollDirection _homeScrollDirection = ScrollDirection.idle;
   double? _homeScrollStartOffset;
+
+  Widget _buildSubscriptionButton() => ListenableBuilder(
+    listenable: SubscriptionService.instance,
+    builder: (context, _) {
+      final service = SubscriptionService.instance;
+      if (!service.enabled) return const SizedBox.shrink();
+      return IconButton(
+        key: const Key('home-subscription-button'),
+        tooltip: '焦点订阅',
+        icon: Badge(
+          label: Text('${service.unreadCount}'),
+          isLabelVisible: service.unreadCount > 0,
+          child: const Icon(Icons.rss_feed),
+        ),
+        onPressed: () => Navigator.of(context).push<void>(
+          MaterialPageRoute(builder: (_) => const SubscriptionUpdatesPage()),
+        ),
+      );
+    },
+  );
 
   /// 监听目标文字变化，使开始按钮能立即更新可用状态。
   @override
@@ -756,6 +778,7 @@ class _FocusDashboardState extends State<FocusDashboard> {
                 SliverAppBar.large(
                   title: const Text('焦点哔哩'),
                   actions: <Widget>[
+                    _buildSubscriptionButton(),
                     if (widget.onOpenLearningList != null)
                       IconButton(
                         key: const Key('open-learning-list'),

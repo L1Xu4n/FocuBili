@@ -1,3 +1,4 @@
+import '../learning/learning_add_sheet.dart';
 import 'dart:async';
 import 'dart:collection';
 
@@ -26,7 +27,7 @@ import 'search_video_row.dart';
 enum _SearchMode { videos, users }
 
 /// 标识视频结果“更多选项”菜单中可以执行的操作。
-enum _SearchResultMenuAction { toggleLearningList }
+enum _SearchResultMenuAction { toggleLearningList, selectParts }
 
 /// 保存搜索筛选面板中的内容分区编号和中文名称。
 class _SearchCategory {
@@ -636,11 +637,17 @@ class _SearchPageState extends State<SearchPage> {
     }
     setState(() => _addingBvid = video.bvid);
     try {
-      final List<LearningListEntry> entries = await _learningListService
-          .addVideo(video, part: video.initialPart);
+      setState(() => _addingBvid = null);
+      final batchResult = await LearningAddSheet.show(
+        context,
+        video: video,
+        service: _learningListService,
+      );
+      if (batchResult == null) return;
+      final entries = batchResult.entries;
       if (mounted) {
         setState(() => _replaceLearningTaskIds(entries));
-        _showTransientMessage('已将 P${video.initialPart.pageNumber} 加入学习清单。');
+        _showTransientMessage('已加入所选分 P，已有进度已保留。');
       }
     } catch (_) {
       if (mounted) {
@@ -661,14 +668,21 @@ class _SearchPageState extends State<SearchPage> {
     setState(() => _addingBvid = result.bvid);
     try {
       final VideoPreview video = await _service.lookupVideo(result.bvid);
-      final List<LearningListEntry> entries = await _learningListService
-          .addVideo(video, part: video.initialPart);
+      if (!mounted) return;
+      setState(() => _addingBvid = null);
+      final batchResult = await LearningAddSheet.show(
+        context,
+        video: video,
+        service: _learningListService,
+      );
+      if (batchResult == null) return;
+      final entries = batchResult.entries;
       if (mounted) {
         setState(() {
           _knownSearchInitialPartCids[result.bvid] = video.initialPart.cid;
           _replaceLearningTaskIds(entries);
         });
-        _showTransientMessage('已将 P${video.initialPart.pageNumber} 加入学习清单。');
+        _showTransientMessage('已加入所选分 P，已有进度已保留。');
       }
     } on BilibiliLookupException catch (error) {
       if (mounted) {
@@ -770,6 +784,9 @@ class _SearchPageState extends State<SearchPage> {
     VideoPreview video,
   ) {
     switch (action) {
+      case _SearchResultMenuAction.selectParts:
+        unawaited(_addVideoToLearningList(video));
+        break;
       case _SearchResultMenuAction.toggleLearningList:
         if (_isVideoPartInLearningList(video)) {
           unawaited(_removeVideoFromLearningList(video));
@@ -786,6 +803,9 @@ class _SearchPageState extends State<SearchPage> {
     VideoSearchResult result,
   ) {
     switch (action) {
+      case _SearchResultMenuAction.selectParts:
+        unawaited(_addSearchResultToLearningList(result));
+        break;
       case _SearchResultMenuAction.toggleLearningList:
         final int? initialPartCid = _knownSearchInitialPartCids[result.bvid];
         if (initialPartCid != null &&
@@ -1944,6 +1964,15 @@ class _SearchPageState extends State<SearchPage> {
               ),
         itemBuilder: (BuildContext context) =>
             <PopupMenuEntry<_SearchResultMenuAction>>[
+              if (isInLearningList)
+                const PopupMenuItem(
+                  value: _SearchResultMenuAction.selectParts,
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.playlist_add),
+                    title: Text('选择更多分 P'),
+                  ),
+                ),
               PopupMenuItem<_SearchResultMenuAction>(
                 key: Key(
                   '${isDirectResult ? 'add-learning-direct' : 'add-learning-search'}-'

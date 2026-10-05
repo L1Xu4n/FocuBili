@@ -788,7 +788,9 @@ class _FakePlayerOverlayService implements PlayerOverlayService {
   final Future<SubtitleTrackLoadResult> Function(int cid)? tracksLoader;
   final Future<SubtitleCueLoadResult> Function(int cid)? cuesLoader;
   final List<int> subtitleTrackRequests = <int>[];
+  final List<(String, int)> subtitleTrackIdentities = [];
   final List<int> subtitleCueRequests = <int>[];
+  final List<(String, int)> subtitleCueIdentities = [];
   final DanmakuSegmentLoadResult danmakuResult;
   final Future<DanmakuSegmentLoadResult> Function(int segmentIndex)?
   danmakuLoader;
@@ -801,6 +803,7 @@ class _FakePlayerOverlayService implements PlayerOverlayService {
     required int cid,
   }) async {
     subtitleTrackRequests.add(cid);
+    subtitleTrackIdentities.add((bvid, cid));
     return tracksLoader == null ? tracksResult : await tracksLoader!(cid);
   }
 
@@ -812,6 +815,7 @@ class _FakePlayerOverlayService implements PlayerOverlayService {
     required String trackId,
   }) async {
     subtitleCueRequests.add(cid);
+    subtitleCueIdentities.add((bvid, cid));
     return cuesLoader == null ? cuesResult : await cuesLoader!(cid);
   }
 
@@ -1945,9 +1949,10 @@ void main() {
 
     await tester.tap(learningButton);
     await tester.pumpAndSettle();
-    expect(await learningListService.loadEntries(), hasLength(1));
-    expect(find.byType(SnackBar), findsOneWidget);
-    expect(find.text('已将 P1 加入学习清单'), findsOneWidget);
+    expect(await learningListService.loadEntries(), isEmpty);
+    await tester.tap(find.widgetWithText(FilledButton, '确认加入'));
+    await tester.pumpAndSettle();
+    expect(find.text('已加入所选分 P，已有进度已保留'), findsOneWidget);
     expect(find.byKey(const Key('player-floating-notice')), findsNothing);
     expect(
       find.descendant(of: learningButton, matching: find.text('P1 已加入')),
@@ -1956,7 +1961,7 @@ void main() {
 
     await tester.tap(learningButton);
     await tester.pumpAndSettle();
-    expect(find.text('取消加入学习清单'), findsOneWidget);
+    expect(find.text('当前 P 已在学习清单'), findsOneWidget);
     await tester.tap(find.widgetWithText(FilledButton, '取消加入'));
     await tester.pumpAndSettle();
 
@@ -1995,6 +2000,8 @@ void main() {
     );
     await tester.tap(learningButton);
     await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '确认加入'));
+    await tester.pumpAndSettle();
     expect(find.text('P1 已加入'), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('part-2')).first);
@@ -2007,6 +2014,8 @@ void main() {
     expect(onlyFirstPart.single.partCid, 137649199);
 
     await tester.tap(learningButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '确认加入'));
     await tester.pumpAndSettle();
     expect(find.text('P2 已加入'), findsOneWidget);
     expect(await learningListService.loadEntries(), hasLength(2));
@@ -3988,6 +3997,74 @@ void main() {
     );
   });
 
+  testWidgets('下一学习任务 CID 失效时保留当前完成界面与下一项进度', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final preferences = await SharedPreferences.getInstance();
+    final learning = LearningListService(
+      preferencesLoader: () async => preferences,
+    );
+    final video = _createMultiPartVideo();
+    const removedPart = VideoPart(
+      pageNumber: 3,
+      cid: 999999,
+      title: '已删除的 P',
+      duration: Duration(minutes: 5),
+    );
+    await learning.addVideo(video, part: video.parts.first);
+    final oldVideo = VideoPreview(
+      bvid: video.bvid,
+      cid: video.cid,
+      title: video.title,
+      ownerName: video.ownerName,
+      parts: [...video.parts, removedPart],
+    );
+    await learning.addVideo(oldVideo, part: removedPart);
+    await learning.updateProgress(
+      video.bvid,
+      part: removedPart,
+      position: const Duration(seconds: 73),
+      status: LearningListStatus.learning,
+    );
+    expect(await learning.loadEntries(), hasLength(2));
+    final playback = _FakePlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: video,
+          playbackService: playback,
+          learningListService: learning,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final opens = playback.openVideoRequests;
+    final pauses = playback.pauseRequests;
+    playback.emitEnded();
+    await tester.pump();
+    await tester.pump();
+    await tester.tap(
+      find.byKey(const Key('continue-learning-after-completion')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('已标记完成'), findsWidgets);
+    expect(find.text('已完成学习'), findsNothing);
+    expect(find.textContaining('原学习分 P 已失效'), findsOneWidget);
+    expect(playback.openVideoRequests, opens);
+    expect(playback.pauseRequests, pauses);
+    expect(playback.openedCid, video.parts.first.cid);
+    final entries = await learning.loadEntries();
+    expect(
+      entries.firstWhere((e) => e.partCid == video.parts.first.cid).status,
+      LearningListStatus.completed,
+    );
+    final stale = entries.firstWhere((e) => e.partCid == removedPart.cid);
+    expect(stale.status, LearningListStatus.learning);
+    expect(stale.position, const Duration(seconds: 73));
+    expect(tester.takeException(), isNull);
+  });
+
   /// 验证继续学习复用当前播放服务打开下一项，旧页面不会销毁后误释放新播放器。
   testWidgets('继续学习会在当前播放器内打开下一条任务', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
@@ -5094,6 +5171,144 @@ void main() {
     await openSubtitleMenu(tester);
     expect(overlays.subtitleTrackRequests.last, 137649300);
     expect(playback.openedCid, 137649300);
+  });
+
+  /// 旧字幕正文返回时，即使切回相同 BV/CID，也只能显示当前代次选择的正文。
+  for (final roundTrip in [false, true]) {
+    testWidgets(roundTrip ? '字幕正文按代次隔离同分P往返切换' : '字幕正文晚到不能覆盖其他视频', (
+      tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({});
+      await tester.binding.setSurfaceSize(const Size(1080, 2400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final pendingCues = Completer<SubtitleCueLoadResult>();
+      var reads = 0;
+      const currentCues = SubtitleCueLoadResult(
+        status: SubtitleLoadStatus.available,
+        message: '',
+        cues: [
+          SubtitleCue(
+            from: Duration.zero,
+            to: Duration(minutes: 1),
+            content: '当前请求的字幕',
+          ),
+        ],
+      );
+      final playback = _FakePlaybackService();
+      final overlays = _FakePlayerOverlayService(
+        tracksResult: subtitleTracks,
+        cuesResult: currentCues,
+        cuesLoader: (_) async =>
+            ++reads == 1 ? pendingCues.future : currentCues,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PlayerPage(
+            video: _createCollectionVideo(),
+            playbackService: playback,
+            bilibiliService: _CollectionSwitchVideoService(),
+            playerOverlayService: overlays,
+            interactionService: _FakePlayerInteractionService(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await openSubtitleMenu(tester);
+      await tester.tap(find.text('测试中文字幕'));
+      await tester.pumpAndSettle();
+      expect(overlays.subtitleCueIdentities, [('BV1GJ411x7h7', 137649199)]);
+      if (roundTrip) {
+        tester
+            .widget<IconButton>(find.byKey(const Key('next-part-button')))
+            .onPressed!();
+        await tester.pumpAndSettle();
+        tester
+            .widget<IconButton>(find.byKey(const Key('previous-part-button')))
+            .onPressed!();
+        await tester.pumpAndSettle();
+      } else {
+        await tester.tap(
+          find.byKey(const Key('collection-preview-BV1Q541167Qg')),
+        );
+        await tester.pumpAndSettle();
+      }
+      await openSubtitleMenu(tester);
+      await tester.tap(find.text('测试中文字幕'));
+      await tester.pumpAndSettle();
+      expect(
+        overlays.subtitleCueIdentities.last,
+        roundTrip ? ('BV1GJ411x7h7', 137649199) : ('BV1Q541167Qg', 137649300),
+      );
+      expect(find.text('当前请求的字幕'), findsOneWidget);
+      pendingCues.complete(subtitleCues);
+      await tester.pumpAndSettle();
+      expect(find.text('第一 P 的字幕'), findsNothing);
+      expect(find.text('当前请求的字幕'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
+  /// 音频面板独立居中，字幕进出和切换提示的消失都不能推挤计时位置。
+  testWidgets('听视频计时位置不受字幕和临时提示影响', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.binding.setSurfaceSize(const Size(800, 600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final service = _FakeListeningPlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: VideoPreview.placeholder(),
+          playbackService: service,
+          playerOverlayService: _FakePlayerOverlayService(
+            tracksResult: subtitleTracks,
+            cuesResult: subtitleCues,
+          ),
+          interactionService: _FakePlayerInteractionService(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await openSubtitleMenu(tester);
+    await tester.tap(find.text('测试中文字幕'));
+    await tester.pumpAndSettle();
+    service.emitPosition(const Duration(seconds: 70));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('active-subtitle')), findsNothing);
+    tester
+        .widget<IconButton>(
+          find.byWidgetPredicate(
+            (widget) => widget is IconButton && widget.tooltip == '进入全屏',
+          ),
+        )
+        .onPressed!();
+    await tester.pumpAndSettle();
+    final dynamic menu = tester.state(
+      find.byKey(const Key('more-settings-menu')),
+    );
+    menu.showButtonMenu();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('listening-menu-item')));
+    await tester.pump(const Duration(milliseconds: 300));
+    final progress = find.byKey(const Key('listening-time-progress'));
+    final center = tester.getCenter(progress);
+    expect(find.byKey(const Key('player-floating-notice')), findsOneWidget);
+    expect(
+      tester.getCenter(find.byKey(const Key('audio-only-surface'))),
+      tester.getCenter(find.byKey(const Key('player-surface'))),
+    );
+    service.emitPosition(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('active-subtitle')), findsOneWidget);
+    expect(tester.getCenter(progress), center);
+    await tester.pump(const Duration(seconds: 4));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('player-floating-notice')), findsNothing);
+    expect(tester.getCenter(progress), center);
+    service.emitPosition(const Duration(seconds: 70));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('active-subtitle')), findsNothing);
+    expect(tester.getCenter(progress), center);
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 
   /// 听视频入口切换真实状态视图，并把定时与取消交给后端。

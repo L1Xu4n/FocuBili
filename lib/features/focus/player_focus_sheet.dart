@@ -321,6 +321,10 @@ class _PlayerFocusSheetState extends State<PlayerFocusSheet> {
   /// 创建活动专注的倒计时、暂停继续、续时和结束控制区。
   Widget _buildActiveContent(FocusSession session) {
     final bool paused = session.status == FocusSessionStatus.paused;
+    final bool matches =
+        !session.hasVideoAssociation ||
+        (session.sourceBvid == widget.bvid &&
+            session.sourcePartCid == widget.partCid);
     return Column(
       key: const Key('player-focus-active'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -331,6 +335,41 @@ class _PlayerFocusSheetState extends State<PlayerFocusSheet> {
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
         ),
+        if (!matches) ...[
+          const SizedBox(height: 12),
+          const Text('计时已暂停：当前视频或分 P 与专注任务关联不一致。'),
+          TextButton(
+            onPressed: () async {
+              final confirmed = await showFocusVideoAssociationSheet(
+                context,
+                goal: session.goal,
+                videoTitle: widget.videoTitle,
+                partPageNumber: widget.partPageNumber,
+                partTitle: widget.partTitle,
+              );
+              if (confirmed == true && mounted) {
+                await widget.controller.associateVideo(
+                  bvid: widget.bvid,
+                  videoTitle: widget.videoTitle,
+                  partCid: widget.partCid,
+                  partPageNumber: widget.partPageNumber,
+                  partTitle: widget.partTitle,
+                  isPlaying: widget.videoIsPlaying,
+                  framePath: widget.sourceFramePath,
+                  position: widget.sourcePosition,
+                );
+              }
+            },
+            child: const Text('重新关联当前 P'),
+          ),
+        ] else if (paused) ...[
+          const SizedBox(height: 8),
+          Text(
+            session.pauseReason == FocusPauseReason.playback
+                ? '计时已暂停：当前视频尚未播放。'
+                : '计时已暂停，请继续专注。',
+          ),
+        ],
         const SizedBox(height: 12),
         Text(
           session.completeOnPartEnd
@@ -355,11 +394,13 @@ class _PlayerFocusSheetState extends State<PlayerFocusSheet> {
             FilledButton.icon(
               key: Key(paused ? 'resume-player-focus' : 'pause-player-focus'),
               // 暂停继续函数根据当前状态调用唯一合法的控制器操作。
-              onPressed: () => unawaited(
-                paused
-                    ? widget.controller.resumeFocus()
-                    : _pauseWithEncouragement(),
-              ),
+              onPressed: !matches
+                  ? null
+                  : () => unawaited(
+                      paused
+                          ? widget.controller.resumeFocus()
+                          : _pauseWithEncouragement(),
+                    ),
               icon: Icon(
                 paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
               ),
