@@ -150,6 +150,9 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Run Windows gesture widget regressions
+        run: flutter test --no-pub test/player_action_feedback_test.dart test/player_feedback_layout_test.dart test/player_tap_gesture_test.dart
+
       - name: Build Windows debug application
         run: flutter build windows --debug --no-pub
 

@@ -104,7 +104,7 @@ android {
         // 调试测试包需压缩 JNI 库，确保 arm64 APK 可作为单一 GitHub 文件下载。
         debug {
             applicationIdSuffix ".preview"
-            versionNameSuffix "-beta.2"
+            versionNameSuffix "-beta.3"
             manifestPlaceholders.appLabel = "焦点哔哩 Beta"
         }
         release {
