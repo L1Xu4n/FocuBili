@@ -79,12 +79,21 @@ class SubscriptionService extends ChangeNotifier {
   Map<String, SubscriptionFeedItem> _feed = {};
   Set<String> _announced = {};
   Set<String> _notificationClaims = {};
+  String? _snapshotText;
+  List<SubscriptionFeedItem>? _feedView;
+  int? _unreadCount;
+  void _invalidateFeed() {
+    _feedView = null;
+    _unreadCount = null;
+  }
+
   List<SubscriptionSource> get sources => List.unmodifiable(_sources.values);
-  List<SubscriptionFeedItem> get feed => List.unmodifiable(
+  List<SubscriptionFeedItem> get feed => _feedView ??= List.unmodifiable(
     _feed.values.toList()
       ..sort((a, b) => b.discoveredAt.compareTo(a.discoveredAt)),
   );
-  int get unreadCount => _feed.values.where((e) => e.readAt == null).length;
+  int get unreadCount =>
+      _unreadCount ??= _feed.values.where((e) => e.readAt == null).length;
   SourceCheckpoint? checkpoint(String key) => _checkpoints[key];
   bool Function()? suppressNotifications;
   Future<bool> Function(int count)? notifySummary;
@@ -102,25 +111,25 @@ class SubscriptionService extends ChangeNotifier {
       final raw = databaseRaw ?? prefs.getString(storageKey);
       if (raw != null) {
         try {
-          _restore(jsonDecode(raw));
+          _restoreRaw(raw);
         } catch (_) {
           if (databaseRaw != null) {
             // Recover only the transactional SQLite backup, never stale legacy data.
             final recovered = await _snapshotStore!.recover((value) {
               try {
-                _restore(jsonDecode(value));
+                _restoreRaw(value);
                 return true;
               } catch (_) {
                 return false;
               }
             });
             if (recovered == null) rethrow;
-            _restore(jsonDecode(recovered));
+            _restoreRaw(recovered);
             storageError = '订阅数据损坏，已恢复上份有效快照。';
           } else {
             final backup = prefs.getString(backupKey);
             if (backup == null) rethrow;
-            _restore(jsonDecode(backup));
+            _restoreRaw(backup);
             // Keep corrupt bytes separately before future writes; never erase evidence.
             if (!await prefs.setString('${storageKey}_quarantine', raw)) {
               throw const SubscriptionStorageException();
@@ -134,7 +143,7 @@ class SubscriptionService extends ChangeNotifier {
         // SQLite becomes authoritative, including on every future process start.
         await _snapshotStore.transact((current, save) {
           if (current != null) {
-            _restore(jsonDecode(current));
+            _restoreRaw(current);
           } else {
             save(jsonEncode(_json()));
           }
@@ -165,6 +174,15 @@ class SubscriptionService extends ChangeNotifier {
     'announced': _announced.toList(),
     'notificationClaims': _notificationClaims.toList(),
   };
+  // Still read the store on every cross-engine boundary. Only decoding an
+  // identical authoritative snapshot can be skipped; CAS always reads afresh.
+  void _restoreRaw(String raw) {
+    if (_snapshotText == raw) return;
+    _snapshotText = null;
+    _restore(jsonDecode(raw));
+    _snapshotText = raw;
+  }
+
   void _restore(Object? object) {
     final j = Map<String, dynamic>.from(object as Map);
     if (j['version'] != 1) {
@@ -196,6 +214,7 @@ class SubscriptionService extends ChangeNotifier {
     _sources = sources;
     _checkpoints = checkpoints;
     _feed = feed;
+    _invalidateFeed();
     _announced = Set<String>.from(j['announced'] as List);
     _notificationClaims = Set<String>.from(j['notificationClaims'] as List);
     enabled = j['enabled'] == true;
@@ -209,15 +228,23 @@ class SubscriptionService extends ChangeNotifier {
     backgroundStatus = j['backgroundStatus'] as String?;
   }
 
-  Future<T> _mutate<T>(FutureOr<T> Function() action) async {
+  Future<T> _mutate<T>(
+    FutureOr<T> Function() action, {
+    bool readOnly = false,
+  }) async {
     await initialize();
     final prior = _writes ?? Future<void>.value();
     final next = prior.then((_) async {
       if (!_loaded || _disposed) throw const SubscriptionStorageException();
-      var previous = jsonEncode(_json());
+      final before = _snapshotText ?? jsonEncode(_json());
+      final hadError = storageError != null;
+      var previous = before;
       Object? actionFailure;
       Future<T> apply() async {
         try {
+          // An action may partially change memory before failing. Force rollback
+          // and every CAS replay to restore a fresh authoritative snapshot.
+          _snapshotText = null;
           return await action();
         } catch (error) {
           actionFailure = error;
@@ -226,33 +253,42 @@ class SubscriptionService extends ChangeNotifier {
       }
 
       try {
-        if (_snapshotStore != null) {
-          final result = await _snapshotStore.transact((current, save) async {
-            if (current != null) _restore(jsonDecode(current));
-            previous = jsonEncode(_json());
+        late final T result;
+        if (readOnly && _snapshotStore != null) {
+          final current = await _snapshotStore.read();
+          if (current != null) _restoreRaw(current);
+          result = await action();
+        } else if (_snapshotStore != null) {
+          String? committed;
+          result = await _snapshotStore.transact((current, save) async {
+            if (current != null) _restoreRaw(current);
+            previous = _snapshotText ?? jsonEncode(_json());
             final value = await apply();
-            save(jsonEncode(_json()));
+            committed = jsonEncode(_json());
+            if (committed != current) save(committed!);
             return value;
           });
-          storageError = null;
-          if (!_disposed) notifyListeners();
-          return result;
-        }
-        final result = await apply();
-        final prefs = await _preferencesLoader();
-        if (!await prefs.setString(backupKey, previous)) {
-          throw const SubscriptionStorageException();
-        }
-        final encoded = jsonEncode(_json());
-        if (!await prefs.setString(storageKey, encoded)) {
-          throw const SubscriptionStorageException();
-        }
-        await prefs.reload();
-        if (prefs.getString(storageKey) != encoded) {
-          throw const SubscriptionStorageException();
+          _snapshotText = committed;
+        } else {
+          result = await apply();
+          final encoded = jsonEncode(_json());
+          if (encoded != previous) {
+            final prefs = await _preferencesLoader();
+            if (!await prefs.setString(backupKey, previous) ||
+                !await prefs.setString(storageKey, encoded)) {
+              throw const SubscriptionStorageException();
+            }
+            await prefs.reload();
+            if (prefs.getString(storageKey) != encoded) {
+              throw const SubscriptionStorageException();
+            }
+          }
+          _snapshotText = encoded;
         }
         storageError = null;
-        if (!_disposed) notifyListeners();
+        if (!_disposed && (before != _snapshotText || hadError)) {
+          notifyListeners();
+        }
         return result;
       } catch (_) {
         try {
@@ -260,7 +296,7 @@ class SubscriptionService extends ChangeNotifier {
         } catch (_) {
           /* retain last valid in-memory snapshot */
         }
-        _restore(jsonDecode(previous));
+        _restoreRaw(previous);
         if (actionFailure != null) rethrow;
         storageError = '订阅变更未保存，请检查设备存储后重试。';
         if (!_disposed) notifyListeners();
@@ -337,7 +373,7 @@ class SubscriptionService extends ChangeNotifier {
   Future<void> reload() async {
     await initialize();
     if (_snapshotStore == null || !_loaded) return;
-    await _mutate(() {});
+    await _mutate(() {}, readOnly: true);
   }
 
   Future<void> runBackgroundCheck(int generation) async {
@@ -422,15 +458,22 @@ class SubscriptionService extends ChangeNotifier {
 
   Future<void> markRead(String bvid) => _mutate(() {
     final item = _feed[bvid];
-    if (item != null) _feed[bvid] = item.copyWith(readAt: _clock());
+    if (item != null && item.readAt == null) {
+      _feed[bvid] = item.copyWith(readAt: _clock());
+      _invalidateFeed();
+    }
   });
   Future<void> markAllRead() => _mutate(() {
     for (final item in _feed.values.toList()) {
-      _feed[item.bvid] = item.copyWith(readAt: _clock());
+      if (item.readAt == null) {
+        _feed[item.bvid] = item.copyWith(readAt: _clock());
+        _invalidateFeed();
+      }
     }
   });
   Future<void> clearDisplayCache() => _mutate(() {
     _feed.clear();
+    _invalidateFeed();
   });
 
   void setForeground(bool value) {
@@ -440,7 +483,6 @@ class SubscriptionService extends ChangeNotifier {
     if (value) {
       unawaited(() async {
         try {
-          await reload();
           await refresh();
         } catch (_) {
           /* Storage error is displayed; lifecycle must not crash. */
@@ -513,8 +555,6 @@ class SubscriptionService extends ChangeNotifier {
     }
     if (!enabled || !_canRun || !_loaded || _disposed) return;
     _refreshGeneration = _generation;
-    refreshing = true;
-    if (!_disposed) notifyListeners();
     final epoch = _epoch;
     final allSources = sources;
     final offset = allSources.isEmpty
@@ -523,7 +563,19 @@ class SubscriptionService extends ChangeNotifier {
     final ordered = _backgroundRunGeneration == null
         ? allSources
         : [...allSources.skip(offset), ...allSources.take(offset)];
-    final pending = ordered.where((e) => !e.paused).toList();
+    final now = _clock();
+    final pending = ordered.where((source) {
+      final cp = _checkpoints[source.key];
+      return !source.paused &&
+          cp != null &&
+          (cp.retryAt == null || !now.isBefore(cp.retryAt!)) &&
+          (manual ||
+              cp.lastSuccess == null ||
+              now.difference(cp.lastSuccess!) >= const Duration(hours: 1));
+    }).toList();
+    if (pending.isEmpty) return;
+    refreshing = true;
+    if (!_disposed) notifyListeners();
     var index = 0;
     final candidates = <String>{};
     // At most two sources; pages within a source remain sequential.
@@ -711,18 +763,26 @@ class SubscriptionService extends ChangeNotifier {
         Map<String, dynamic>.from(jsonDecode(scannedCheckpoint) as Map),
       );
       final discovered = <String>{};
+      var feedChanged = false;
       if (complete) {
         for (final item in cp.pending.values) {
           final previous = _feed[item.bvid];
           if (previous != null) {
-            _feed[item.bvid] = previous.copyWith(
-              sources: {...previous.sources, ...item.sources},
-              collectionAdded: previous.collectionAdded || item.collectionAdded,
-            );
+            final mergedSources = {...previous.sources, ...item.sources};
+            if (!mapEquals(previous.sources, mergedSources) ||
+                (!previous.collectionAdded && item.collectionAdded)) {
+              _feed[item.bvid] = previous.copyWith(
+                sources: mergedSources,
+                collectionAdded:
+                    previous.collectionAdded || item.collectionAdded,
+              );
+              feedChanged = true;
+            }
           } else if (cp.initialized &&
               !cp.seen.contains(item.bvid) &&
               !_announced.contains(item.bvid)) {
             _feed[item.bvid] = item;
+            feedChanged = true;
             discovered.add(item.bvid);
           }
         }
@@ -738,8 +798,15 @@ class SubscriptionService extends ChangeNotifier {
         cp.nextPage = 1;
         cp.lastSuccess = _clock();
         cp.error = null;
-        final sorted = feed;
-        _feed = {for (final item in sorted.take(displayLimit)) item.bvid: item};
+        if (feedChanged) {
+          _invalidateFeed();
+          if (_feed.length > displayLimit) {
+            _feed = {
+              for (final item in feed.take(displayLimit)) item.bvid: item,
+            };
+            _invalidateFeed();
+          }
+        }
       }
       _checkpoints[source.key] = cp;
       return discovered;

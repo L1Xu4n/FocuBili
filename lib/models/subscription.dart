@@ -83,7 +83,7 @@ class SubscriptionFeedItem {
     bvid: bvid,
     title: title,
     coverUrl: coverUrl,
-    sources: sources ?? this.sources,
+    sources: Map.unmodifiable(sources ?? this.sources),
     discoveredAt: discoveredAt,
     publishedAt: publishedAt,
     readAt: readAt ?? this.readAt,
@@ -104,7 +104,7 @@ class SubscriptionFeedItem {
         bvid: j['bvid'] as String,
         title: j['title'] as String,
         coverUrl: j['coverUrl'] as String,
-        sources: Map<String, String>.from(j['sources'] as Map),
+        sources: Map<String, String>.unmodifiable(j['sources'] as Map),
         discoveredAt: DateTime.parse(j['discoveredAt'] as String),
         publishedAt: j['publishedAt'] == null
             ? null
