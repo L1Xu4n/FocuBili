@@ -12,13 +12,13 @@ void main() {
       ).firstMatch(pubspec);
       expect(numeric, isNotNull);
       expect(numeric!.group(1), '1.8.0');
-      expect(numeric.group(2), '23');
+      expect(numeric.group(2), '24');
       final gradle = File('android/app/build.gradle').readAsStringSync();
       final debug = RegExp(
         r'debug\s*\{([^}]+)\}',
       ).firstMatch(gradle)!.group(1)!;
       expect(debug, contains('applicationIdSuffix ".preview"'));
-      expect(debug, contains('versionNameSuffix "-beta.3"'));
+      expect(debug, contains('versionNameSuffix "-beta.4"'));
       expect(debug, contains('焦点哔哩 Beta'));
       final debugManifest = File(
         'android/app/src/debug/AndroidManifest.xml',

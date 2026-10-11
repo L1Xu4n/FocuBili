@@ -11,12 +11,13 @@ class SubscriptionFeedTile extends StatelessWidget {
     this.onTap,
     this.actions,
     this.compact = false,
+    this.historical = false,
   });
 
   final SubscriptionFeedItem item;
   final VoidCallback? onTap;
   final Widget? actions;
-  final bool compact;
+  final bool compact, historical;
 
   static String date(DateTime? value) => value == null
       ? '未知'
@@ -95,7 +96,9 @@ class SubscriptionFeedTile extends StatelessWidget {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            '${item.readAt == null ? '未读 · ' : ''}${item.collectionAdded ? '合集新增 · ' : ''}${compact ? '收到 ${date(item.discoveredAt)}' : '发布 ${date(item.publishedAt)} · 收到 ${date(item.discoveredAt)}'}',
+                            historical
+                                ? '历史内容 · 发布 ${date(item.publishedAt)}'
+                                : '${item.readAt == null ? '未读 · ' : ''}${item.collectionAdded ? '合集新增 · ' : ''}${compact ? '收到 ${date(item.discoveredAt)}' : '发布 ${date(item.publishedAt)} · 收到 ${date(item.discoveredAt)}'}',
                             style: theme.textTheme.labelSmall?.copyWith(
                               color: theme.colorScheme.primary,
                             ),

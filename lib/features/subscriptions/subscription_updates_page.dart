@@ -11,6 +11,7 @@ import '../../services/learning_list_service.dart';
 import '../learning/learning_add_sheet.dart';
 import '../player/player_page.dart';
 import 'subscription_feed_tile.dart';
+import 'subscription_history_page.dart';
 
 class SubscriptionUpdatesPage extends StatefulWidget {
   const SubscriptionUpdatesPage({
@@ -201,7 +202,9 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage> {
                           if (items.isEmpty)
                             const Padding(
                               padding: EdgeInsets.symmetric(vertical: 28),
-                              child: Text('暂无匹配的更新。首次订阅会先获取已有内容，之后的新视频会出现在这里。'),
+                              child: Text(
+                                '暂无匹配的更新。UP 主只检查最近内容即可开始订阅；历史视频可在订阅源设置中单独导入。',
+                              ),
                             ),
                         ],
                       ),
@@ -437,7 +440,7 @@ class _SubscriptionSettingsPageState extends State<SubscriptionSettingsPage> {
               if (_service.sources.isEmpty)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 12),
-                  child: Text('主动选择学习来源。先获取已有内容，之后只提醒新增视频。'),
+                  child: Text('UP 主快速开启新视频检查。合集分批核对，历史导入与更新提醒相互独立。'),
                 ),
               for (final source in _service.sources)
                 Card(
@@ -484,7 +487,10 @@ class _SubscriptionSettingsPageState extends State<SubscriptionSettingsPage> {
                                                   ?.initialized ==
                                               true
                                         ? '已订阅更新'
-                                        : '正在获取已有内容',
+                                        : source.kind ==
+                                              SubscriptionKind.creator
+                                        ? '正在读取最近两页'
+                                        : '合集首次核对中 · 未知范围静默记录',
                                   ),
                                   if (_service.checkpoint(source.key)?.error !=
                                       null)
@@ -496,11 +502,41 @@ class _SubscriptionSettingsPageState extends State<SubscriptionSettingsPage> {
                                           ?.partial ==
                                       true)
                                     Text(
-                                      '正在继续获取内容 · 下一页 ${_service.checkpoint(source.key)!.nextPage}',
+                                      '${source.kind == SubscriptionKind.collection ? '合集核对' : '补查更新'}中 · 下一页 ${_service.checkpoint(source.key)!.nextPage}',
+                                    ),
+                                  if (source.kind ==
+                                      SubscriptionKind.collection)
+                                    Text(
+                                      '最近完整核对：${_service.checkpoint(source.key)?.lastSuccess?.toLocal().toString() ?? '尚未完成'}；排序变化可能影响覆盖。',
                                     ),
                                   Wrap(
                                     spacing: 12,
                                     children: [
+                                      TextButton(
+                                        onPressed: () =>
+                                            Navigator.of(context).push<void>(
+                                              MaterialPageRoute(
+                                                builder: (_) =>
+                                                    SubscriptionHistoryPage(
+                                                      service: _service,
+                                                      source: source,
+                                                    ),
+                                              ),
+                                            ),
+                                        child: const Text('历史内容'),
+                                      ),
+                                      if (_service
+                                              .checkpoint(source.key)
+                                              ?.blocked ==
+                                          true)
+                                        TextButton(
+                                          onPressed: () => _action(
+                                            () => _service.retrySource(
+                                              source.key,
+                                            ),
+                                          ),
+                                          child: const Text('重新检查'),
+                                        ),
                                       TextButton(
                                         onPressed: _busy
                                             ? null
@@ -782,7 +818,9 @@ class _AddSourceDialogState extends State<_AddSourceDialog> {
             if (_preview != null) ...[
               const SizedBox(height: 12),
               SubscriptionSourceImage(source: _preview!),
-              Text('确认来源：${_preview!.name}\n先获取已有内容，之后只提醒新视频；不修改 B站关注或收藏。'),
+              Text(
+                '确认来源：${_preview!.name}\nUP 主读取最近两页后开始检查新视频；合集分批核对。历史可单独导入，不修改 B站关注或收藏。',
+              ),
               if (!widget.service.enabled) const Text('确认订阅后将开启焦点订阅。'),
             ],
           ],
