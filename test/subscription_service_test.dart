@@ -190,7 +190,7 @@ void main() {
     },
   );
   test(
-    'half-page failure preserves cache and successful baseline; retries after backoff',
+    'page failure preserves committed discoveries and the last complete checkpoint',
     () async {
       var now = DateTime(2026);
       final c = Content()
@@ -210,7 +210,7 @@ void main() {
       final cp = s.checkpoint('collection:1:100')!;
       expect(cp.partial, true);
       expect(cp.lastSuccess, last);
-      expect(s.feed, isEmpty);
+      expect(s.feed.single.bvid, 'new');
       final calls = c.calls.length;
       await s.refresh(manual: true);
       expect(c.calls.length, calls);
@@ -243,12 +243,11 @@ void main() {
       expect(restored.feed, isEmpty);
     },
   );
-  test('creator known boundary includes overlapping following page', () async {
+  test('creator does not stop at one known BV in a mixed page', () async {
     final c = Content()
       ..pages[1] = [
         [item('a')],
-        [item('b')],
-        [item('c')],
+        [item('b'), item('c')],
       ];
     final s = await create(c);
     await baseline(s, [source(1)]);
@@ -259,7 +258,7 @@ void main() {
       [item('c')],
     ];
     await s.refresh(manual: true);
-    expect(c.calls, ['1:1', '1:2']);
+    expect(c.calls, ['1:1', '1:2', '1:3']);
     expect(s.feed.map((e) => e.bvid).toSet(), {'new', 'late'});
   });
   for (final action in ['disable', 'delete', 'pause', 'background']) {

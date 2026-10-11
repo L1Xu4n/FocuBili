@@ -234,7 +234,7 @@ void main() {
       MaterialApp(home: SubscriptionSettingsPage(service: s)),
     );
     await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(find.text('正在获取已有内容'), 200);
+    await tester.scrollUntilVisible(find.text('正在读取最近两页'), 200);
     expect(find.text('基线已建立'), findsNothing);
     s.checkpoint(source.key)!.error = '网络不可用';
     await tester.pumpWidget(

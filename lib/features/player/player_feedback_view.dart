@@ -177,60 +177,75 @@ extension _PlayerFeedbackView on _PlayerPageState {
             _playbackActionPlaying != null;
         // 这里仍有控制栏之间的有限高度；进入可滚动提示列后高度约束会丢失。
         return LayoutBuilder(
-          builder: (context, constraints) => PlayerFeedbackStack(
-            interactive: actionVisible,
-            alignment:
-                _completionPromptVisible ||
-                    _interactivePromptVisible ||
-                    subtitleVisible
-                ? Alignment.bottomCenter
-                : gestureVisible || playbackHintVisible
-                ? Alignment.center
-                : Alignment.topCenter,
+          builder: (context, constraints) => Stack(
+            fit: StackFit.expand,
             children: [
-              if (_temporarySpeedActive)
-                const PlayerNoticeCard(
-                  key: Key('temporary-triple-speed'),
-                  message: '三倍速中>>',
-                ),
-              for (final entry in _playerNotices.entries)
-                PlayerNoticeCard(
-                  key: entry.message == _playerNotices.messages.first
-                      ? const Key('player-floating-notice')
-                      : ValueKey('player-notice-${entry.message}'),
-                  message: entry.message,
-                  actionLabel: entry.actionLabel,
-                  onAction: entry.onAction,
-                ),
-              if (_resumeNotice != null)
-                PlayerNoticeCard(
-                  key: const Key('player-resume-notice'),
-                  message: _resumeNotice!,
-                ),
-              // 直接拖动优先于尚未消失的旧动画，避免同一手势重复反馈。
-              if (_seekFeedback != null)
-                _buildSeekFeedback()
-              else if (_doubleTapSeekSeconds != 0)
-                SizedBox(
-                  height: constraints.maxHeight.clamp(0.0, 72.0),
-                  child: PlayerSeekFeedback(
-                    key: ValueKey('seek-$_doubleTapFeedbackSequence'),
-                    seconds: _doubleTapSeekSeconds,
-                    compact: true,
-                  ),
-                )
-              else if (_playbackActionPlaying != null)
-                SizedBox(
-                  height: constraints.maxHeight.clamp(0.0, 84.0),
-                  child: PlayerActionFeedback(
-                    key: ValueKey('playback-action-$_playbackActionSequence'),
-                    playing: _playbackActionPlaying!,
+              // Direction feedback belongs to the video edges, outside the
+              // 620px notice column and its scrolling/overflow state.
+              if (_seekFeedback == null && _doubleTapSeekSeconds != 0)
+                Align(
+                  alignment: Alignment.center,
+                  child: SizedBox(
+                    width: double.infinity,
+                    height: constraints.maxHeight.clamp(0.0, 72.0),
+                    child: PlayerSeekFeedback(
+                      key: ValueKey('seek-$_doubleTapFeedbackSequence'),
+                      seconds: _doubleTapSeekSeconds,
+                      compact: true,
+                    ),
                   ),
                 ),
-              if (playbackHintVisible) _buildPlaybackHint(),
-              if (_completionPromptVisible) _buildPlaybackCompletionPrompt(),
-              if (_interactivePromptVisible) _buildInteractiveVideoPrompt(),
-              if (subtitleVisible) _buildSubtitleOverlay(),
+              PlayerFeedbackStack(
+                interactive: actionVisible,
+                alignment:
+                    _completionPromptVisible ||
+                        _interactivePromptVisible ||
+                        subtitleVisible
+                    ? Alignment.bottomCenter
+                    : gestureVisible || playbackHintVisible
+                    ? Alignment.center
+                    : Alignment.topCenter,
+                children: [
+                  if (_temporarySpeedActive)
+                    const PlayerNoticeCard(
+                      key: Key('temporary-triple-speed'),
+                      message: '三倍速中>>',
+                    ),
+                  for (final entry in _playerNotices.entries)
+                    PlayerNoticeCard(
+                      key: entry.message == _playerNotices.messages.first
+                          ? const Key('player-floating-notice')
+                          : ValueKey('player-notice-${entry.message}'),
+                      message: entry.message,
+                      actionLabel: entry.actionLabel,
+                      onAction: entry.onAction,
+                    ),
+                  if (_resumeNotice != null)
+                    PlayerNoticeCard(
+                      key: const Key('player-resume-notice'),
+                      message: _resumeNotice!,
+                    ),
+                  // 直接拖动优先于尚未消失的旧动画，避免同一手势重复反馈。
+                  if (_seekFeedback != null)
+                    _buildSeekFeedback()
+                  else if (_doubleTapSeekSeconds == 0 &&
+                      _playbackActionPlaying != null)
+                    SizedBox(
+                      height: constraints.maxHeight.clamp(0.0, 84.0),
+                      child: PlayerActionFeedback(
+                        key: ValueKey(
+                          'playback-action-$_playbackActionSequence',
+                        ),
+                        playing: _playbackActionPlaying!,
+                      ),
+                    ),
+                  if (playbackHintVisible) _buildPlaybackHint(),
+                  if (_completionPromptVisible)
+                    _buildPlaybackCompletionPrompt(),
+                  if (_interactivePromptVisible) _buildInteractiveVideoPrompt(),
+                  if (subtitleVisible) _buildSubtitleOverlay(),
+                ],
+              ),
             ],
           ),
         );

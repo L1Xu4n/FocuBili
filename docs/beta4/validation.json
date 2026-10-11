@@ -1,0 +1,49 @@
+{
+  "environment": "Linux; Flutter 3.44.6 / Dart 3.12.2",
+  "fullFlutter": {
+    "command": "flutter test --no-pub",
+    "passed": 821,
+    "skipped": 1,
+    "failed": 0
+  },
+  "targetedFlutter": {
+    "passed": 84,
+    "failed": 0,
+    "scope": [
+      "subscription live/background/CAS",
+      "history and migration",
+      "actual HTTP client cancellation",
+      "compact UI and custom card",
+      "desktop gesture animation and layout",
+      "beta version"
+    ]
+  },
+  "captureAndPerformance": {
+    "passed": 8,
+    "failed": 0,
+    "screenshots": 13
+  },
+  "androidJvm": {
+    "suites": 9,
+    "tests": 35,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "gradle": "BUILD SUCCESSFUL; unchanged test tasks up-to-date"
+  },
+  "androidBuild": [
+    "armeabi-v7a debug",
+    "arm64-v8a debug",
+    "x86_64 debug"
+  ],
+  "staticChecks": [
+    "flutter analyze --no-pub: no issues",
+    "dart format lib test: no changes",
+    "git diff --check: passed"
+  ],
+  "notValidated": [
+    "real Bilibili deep pagination or API timing",
+    "Android device / emulator / real WorkManager lifecycle",
+    "Windows device video playback and gesture acceptance"
+  ]
+}

@@ -1,14 +1,16 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
-import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 
 import '../models/public_profile.dart';
 import '../models/video_preview.dart';
 import 'bilibili_auth_service.dart';
 import 'bilibili_service.dart';
+import 'bilibili_wbi_signing_service.dart';
+import 'subscription_request_scope.dart';
 
 /// 定义可注入的公开 JSON 请求函数，测试时无需连接真实网络。
 typedef PublicContentJsonRequest = Future<String> Function(Uri endpoint);
@@ -81,79 +83,28 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
   static final RegExp _titlePartCountPattern = RegExp(
     r'(?:全|共|整整)\s*(\d{2,5})\s*(?:集|[Pp]|期)',
   );
-  static final RegExp _wbiFilenamePattern = RegExp(r'/([^/]+)\.[A-Za-z0-9]+$');
-  static final RegExp _wbiFilteredCharacters = RegExp(r"[!'()*]");
   static final Random _secureRandom = Random.secure();
-  static const List<int> _wbiMixinKeyOrder = <int>[
-    46,
-    47,
-    18,
-    2,
-    53,
-    8,
-    23,
-    32,
-    15,
-    50,
-    10,
-    31,
-    58,
-    3,
-    45,
-    35,
-    27,
-    43,
-    5,
-    49,
-    33,
-    9,
-    42,
-    19,
-    29,
-    28,
-    14,
-    39,
-    12,
-    38,
-    41,
-    13,
-    37,
-    48,
-    7,
-    16,
-    24,
-    55,
-    40,
-    61,
-    26,
-    17,
-    0,
-    1,
-    60,
-    51,
-    30,
-    4,
-    22,
-    25,
-    54,
-    21,
-    56,
-    59,
-    6,
-    63,
-    57,
-    62,
-    11,
-    36,
-    20,
-    34,
-    44,
-    52,
-  ];
   final PublicContentJsonRequest _requestJson;
   final PublicContentSessionJsonRequest _requestSessionJson;
   final BilibiliCookieStore _cookieStore;
   final bool _skipPlatformCookie;
+  late final _wbi = BilibiliWbiSigningService(
+    requestJson: (uri, headers) => _requestSessionJson(
+      uri,
+      cookieHeader: headers['Cookie'] ?? '',
+      referer: 'https://www.bilibili.com/',
+    ),
+  );
+  Future<Map<String, String>> _signed(
+    Map<String, String> parameters,
+    String cookie,
+  ) async {
+    try {
+      return await _wbi.signParameters(parameters, headers: {'Cookie': cookie});
+    } on WbiSigningException {
+      throw const BilibiliLookupException('WBI 签名材料暂时不可用，请稍后重试。');
+    }
+  }
 
   /// 将只记录 URI 的旧测试请求适配成会话请求，避免测试接触真实 Cookie 或网络。
   static PublicContentSessionJsonRequest _adaptInjectedRequest(
@@ -220,7 +171,6 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
     int mid, {
     required String cookieHeader,
   }) async {
-    final String mixinKey = await _loadWbiMixinKey(cookieHeader: cookieHeader);
     final Map<String, String> parameters = <String, String>{
       'mid': mid.toString(),
       'token': '',
@@ -231,7 +181,7 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
     final Uri profileEndpoint = Uri.https(
       _apiHost,
       '/x/space/wbi/acc/info',
-      _signWbiParameters(parameters, mixinKey),
+      await _signed(parameters, cookieHeader),
     );
     final Map<Object?, Object?> profile = await _requestSpaceData(
       profileEndpoint,
@@ -289,6 +239,7 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
       if (!_isTransientRiskControl(error)) {
         rethrow;
       }
+      _wbi.invalidate();
       try {
         data = await _loadVideosFromLegacyEndpoint(
           mid,
@@ -311,9 +262,9 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
     final int total = _readNonNegativeInt(_readObject(data['page'])['count']);
     return CreatorContentPage<CreatorVideo>(
       items: List<CreatorVideo>.unmodifiable(videos),
-      page: safePage,
-      hasMore: safePage * 20 < total,
-      totalCount: total,
+      page: _readPositiveInt(_readObject(data['page'])['pn']) ?? safePage,
+      hasMore: total > 0 ? safePage * 20 < total : videos.length == 20,
+      totalCount: total > 0 ? total : null,
     );
   }
 
@@ -333,7 +284,6 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
     required CreatorVideoOrder order,
     required String cookieHeader,
   }) async {
-    final String mixinKey = await _loadWbiMixinKey(cookieHeader: cookieHeader);
     final Map<String, String> parameters = <String, String>{
       'mid': mid.toString(),
       'pn': safePage.toString(),
@@ -350,7 +300,7 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
     final Uri endpoint = Uri.https(
       _apiHost,
       '/x/space/wbi/arc/search',
-      _signWbiParameters(parameters, mixinKey),
+      await _signed(parameters, cookieHeader),
     );
     return _requestSpaceData(endpoint, mid: mid, cookieHeader: cookieHeader);
   }
@@ -381,65 +331,6 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
       CreatorVideoOrder.mostPlayed => 'click',
       CreatorVideoOrder.mostFavorited => 'stow',
     };
-  }
-
-  /// 从导航接口读取当天 WBI 图片密钥；导航接口未登录码 -101 仍会携带公开密钥。
-  Future<String> _loadWbiMixinKey({String cookieHeader = ''}) async {
-    final Uri endpoint = Uri.https(_apiHost, '/x/web-interface/nav');
-    final String responseText = await _requestSessionJson(
-      endpoint,
-      cookieHeader: cookieHeader,
-      referer: 'https://www.bilibili.com/',
-    );
-    final Object? decoded = jsonDecode(responseText);
-    if (decoded is! Map) {
-      throw const BilibiliLookupException('WBI 密钥接口返回的数据格式不正确。');
-    }
-    final Map<Object?, Object?> root = Map<Object?, Object?>.from(decoded);
-    final Map<Object?, Object?> data = _readObject(root['data']);
-    final Map<Object?, Object?> wbiImage = _readObject(data['wbi_img']);
-    final String imageKey = _wbiFilename(_readText(wbiImage['img_url'], ''));
-    final String subKey = _wbiFilename(_readText(wbiImage['sub_url'], ''));
-    final String rawKey = '$imageKey$subKey';
-    if (rawKey.length < 64) {
-      throw const BilibiliLookupException('WBI 密钥暂时不可用，请稍后重试。');
-    }
-    final StringBuffer mixed = StringBuffer();
-    for (final int index in _wbiMixinKeyOrder) {
-      if (index < rawKey.length) {
-        mixed.write(rawKey[index]);
-      }
-    }
-    return mixed.toString().substring(0, 32);
-  }
-
-  /// 从 WBI 图片地址中提取不含扩展名的文件名，用于生成混淆密钥。
-  String _wbiFilename(String url) {
-    return _wbiFilenamePattern.firstMatch(url)?.group(1) ?? '';
-  }
-
-  /// 为参数加入秒级时间戳并计算 w_rid，签名过程不会读取或保存用户 Cookie。
-  Map<String, String> _signWbiParameters(
-    Map<String, String> parameters,
-    String mixinKey,
-  ) {
-    final Map<String, String> values = Map<String, String>.from(parameters)
-      ..['wts'] = (DateTime.now().millisecondsSinceEpoch ~/ 1000).toString();
-    final List<String> keys = values.keys.toList(growable: false)..sort();
-    final String query = keys
-        .map((String key) {
-          final String filteredValue = values[key]!.replaceAll(
-            _wbiFilteredCharacters,
-            '',
-          );
-          return '${Uri.encodeQueryComponent(key)}='
-              '${Uri.encodeQueryComponent(filteredValue)}';
-        })
-        .join('&');
-    final String signature = md5
-        .convert(utf8.encode('$query$mixinKey'))
-        .toString();
-    return <String, String>{...values, 'w_rid': signature};
   }
 
   /// 创建不含真实设备信息的临时空间环境字段，满足公开 WBI 接口的完整参数格式。
@@ -566,7 +457,7 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
     final int total = _readNonNegativeInt(meta['total'] ?? data['total']);
     return CreatorContentPage<CreatorVideo>(
       items: List<CreatorVideo>.unmodifiable(videos),
-      page: safePage,
+      page: _readPositiveInt(_readObject(data['page'])['page_num']) ?? safePage,
       hasMore: total > 0 ? safePage * 20 < total : videos.length == 20,
       totalCount: total > 0 ? total : null,
     );
@@ -758,8 +649,13 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
     }
   }
 
-  /// 把页码限制在公开接口的合理范围内。
-  int _safePage(int page) => page.clamp(1, 50).toInt();
+  /// Never silently request a different page. Server capacity is not assumed.
+  int _safePage(int page) {
+    if (page < 1 || page > 100000) {
+      throw const BilibiliLookupException('页码超出本地请求保护范围，已停止获取。');
+    }
+    return page;
+  }
 
   /// 将未知 JSON 对象转换为可安全读取的 Map。
   Map<Object?, Object?> _readObject(Object? value) {
@@ -860,7 +756,11 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
     String cookieHeader = '',
     required String referer,
   }) async {
+    final scope = SubscriptionRequestScope.current;
+    await scope?.beforeRequest();
     final HttpClient client = HttpClient();
+    void abort() => client.close(force: true);
+    scope?.attach(abort);
     try {
       final HttpClientRequest request = await client.getUrl(endpoint);
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
@@ -886,6 +786,7 @@ class BilibiliHttpPublicContentService implements BilibiliPublicContentService {
     } on HttpException {
       throw const BilibiliLookupException('公开内容接口响应异常，请稍后重试。');
     } finally {
+      scope?.detach(abort);
       client.close(force: true);
     }
   }

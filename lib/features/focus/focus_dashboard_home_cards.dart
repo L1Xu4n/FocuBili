@@ -57,6 +57,12 @@ extension _FocusDashboardHomeCards on _FocusDashboardState {
         icon: Icons.apps_rounded,
         builder: _buildHomeActionsCard,
       ),
+      DashboardCardDefinition(
+        id: 'home.focus_subscriptions',
+        title: '焦点订阅',
+        icon: Icons.rss_feed_rounded,
+        builder: (_) => const SubscriptionHomeCard(),
+      ),
     ];
   }
 
