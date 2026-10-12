@@ -1,3 +1,4 @@
+import 'cached_player_overlay_service.dart';
 import 'package:flutter/services.dart';
 
 import '../models/player_overlay_data.dart';
@@ -55,11 +56,17 @@ abstract interface class PlayerOverlayService {
 }
 
 /// 通过受限 MethodChannel 获取字幕和弹幕数据，并把平台异常转换为可展示状态。
-class NativePlayerOverlayService implements PlayerOverlayService {
+class NativePlayerOverlayService
+    implements PlayerOverlayService, SubtitleSessionInvalidator {
   /// 创建叠加数据服务；测试可传入内存通道，生产环境使用 Android 原生通道。
   NativePlayerOverlayService({PlayerOverlayPlatformChannel? platformChannel})
     : _platformChannel =
           platformChannel ?? const MethodChannelPlayerOverlayPlatformChannel();
+
+  @override
+  Future<void> clearSubtitleSessions() async {
+    await _platformChannel.invokeMethod('clearSubtitleSessions');
+  }
 
   static final RegExp _bvidPattern = RegExp(
     r'^BV[0-9A-Za-z]{10}$',

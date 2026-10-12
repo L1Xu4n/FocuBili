@@ -24,7 +24,7 @@ extension _PlayerFeedbackView on _PlayerPageState {
                 top: -frame.row * frame.frameHeight * scale,
                 width: sheetWidth,
                 height: sheetHeight,
-                child: CachedNetworkImage(
+                child: AppNetworkImage(
                   imageUrl: frame.imageUrl,
                   width: sheetWidth,
                   height: sheetHeight,

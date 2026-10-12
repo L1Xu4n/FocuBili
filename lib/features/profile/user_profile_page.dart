@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 
-import 'package:cached_network_image/cached_network_image.dart';
+import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/layout/adaptive_page_frame.dart';
@@ -686,7 +686,7 @@ class _UserProfilePageState extends State<UserProfilePage>
     if (url.isEmpty) {
       return _buildImagePlaceholder(width, height, placeholderIcon);
     }
-    return CachedNetworkImage(
+    return AppNetworkImage(
       imageUrl: url,
       httpHeaders: const <String, String>{
         'Referer': 'https://www.bilibili.com/',
@@ -695,7 +695,6 @@ class _UserProfilePageState extends State<UserProfilePage>
       height: height,
       fit: fit,
       memCacheWidth: 480,
-      maxWidthDiskCache: 720,
       placeholder: (BuildContext context, String value) =>
           _buildImagePlaceholder(width, height, placeholderIcon),
       errorWidget: (BuildContext context, String value, Object error) =>

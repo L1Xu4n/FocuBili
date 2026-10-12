@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
@@ -63,6 +64,14 @@ const List<int> supportedMediaCacheBytes = <int>[
 /// 新安装 App 使用的默认缓存上限：512MB。
 const int defaultMediaCacheBytes = 512 * 1024 * 1024;
 
+/// Each mpv demuxer receives this combined forward/backward packet budget.
+const supportedMemoryBufferBytes = [
+  32 * 1024 * 1024,
+  64 * 1024 * 1024,
+  128 * 1024 * 1024,
+];
+const defaultMemoryBufferBytes = 64 * 1024 * 1024;
+
 /// 约束 Flutter 缓存管理页需要的原生能力，便于页面测试使用假实现。
 abstract interface class MediaCacheService {
   /// 读取当前缓存用量、容量上限和播放器是否正在占用缓存。
@@ -111,9 +120,27 @@ class WindowsMediaCacheService implements MediaCacheService {
            playbackActiveLoader ??
            (() => WindowsMediaCacheRuntime.isPlaybackActive);
 
+  static Future<void> _mutations = Future.value();
+
+  Future<T> _serial<T>(Future<T> Function() action) {
+    final operation = _mutations.then((_) => action());
+    _mutations = operation.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return operation;
+  }
+
+  /// No new disk packets are written. Sweep abandoned old buffers on startup
+  /// and after playback releases them, rather than on every segment access.
+  Future<void> maintain() => _serial(() async {
+    if (_playbackActiveLoader()) return;
+    final directory = await resolveCacheDirectory();
+    await _trimToCapacity(directory, 0);
+  });
+
   static const String cacheDirectoryName = 'media_kit_video_cache';
-  static const String _capacityPreferenceKey =
-      'windows_media_cache_capacity_bytes';
+  static const String _capacityPreferenceKey = 'media_kit_memory_buffer_bytes';
 
   final WindowsMediaCacheDirectoryLoader _directoryLoader;
   final Future<SharedPreferences> Function() _preferencesLoader;
@@ -133,42 +160,46 @@ class WindowsMediaCacheService implements MediaCacheService {
     );
   }
 
-  /// 保存受支持的新容量，并在播放器未占用目录时按最后修改时间清理超出容量的旧文件。
+  /// 保存受支持的新容量，并在播放器未占用目录时按最后访问时间清理超出容量的旧文件。
   @override
-  Future<MediaCacheStatus> setCapacityBytes(int capacityBytes) async {
-    if (!supportedMediaCacheBytes.contains(capacityBytes)) {
-      throw const MediaCacheException(
-        'invalid_cache_capacity',
-        '请选择支持的视频缓存上限。',
-      );
-    }
-    _ensurePlaybackIdle();
-    try {
-      final SharedPreferences preferences = await _preferencesLoader();
-      await preferences.setInt(_capacityPreferenceKey, capacityBytes);
-      final Directory directory = await resolveCacheDirectory();
-      await _trimToCapacity(directory, capacityBytes);
-      return await loadStatus();
-    } on MediaCacheException {
-      rethrow;
-    } catch (_) {
-      throw const MediaCacheException(
-        'cache_error',
-        'Windows 视频缓冲上限暂时无法保存，请稍后重试。',
-      );
-    }
-  }
+  Future<MediaCacheStatus> setCapacityBytes(int capacityBytes) =>
+      _serial(() async {
+        if (!supportedMemoryBufferBytes.contains(capacityBytes)) {
+          throw const MediaCacheException(
+            'invalid_cache_capacity',
+            '请选择支持的视频缓存上限。',
+          );
+        }
+        _ensurePlaybackIdle();
+        try {
+          final SharedPreferences preferences = await _preferencesLoader();
+          await preferences.setInt(_capacityPreferenceKey, capacityBytes);
+          final Directory directory = await resolveCacheDirectory();
+          await _trimToCapacity(directory, 0);
+          return await loadStatus();
+        } on MediaCacheException {
+          rethrow;
+        } catch (_) {
+          throw const MediaCacheException(
+            'cache_error',
+            'Windows 视频缓冲上限暂时无法保存，请稍后重试。',
+          );
+        }
+      });
 
   /// 删除应用专属 media_kit 缓冲目录内的内容，不触碰账号、笔记、截图或其他用户文件。
   @override
-  Future<MediaCacheStatus> clearCache() async {
+  Future<MediaCacheStatus> clearCache() => _serial(() async {
     _ensurePlaybackIdle();
     try {
       final Directory directory = await resolveCacheDirectory();
       await for (final FileSystemEntity entity in directory.list(
         followLinks: false,
       )) {
-        await entity.delete(recursive: true);
+        _ensurePlaybackIdle();
+        // No await between the guard and unlink: a newly created player cannot
+        // race deletion in this isolate. Links are unlinked, never traversed.
+        entity.deleteSync(recursive: true);
       }
       return await loadStatus();
     } on MediaCacheException {
@@ -179,18 +210,18 @@ class WindowsMediaCacheService implements MediaCacheService {
         'Windows 视频缓冲暂时无法清空，请稍后重试。',
       );
     }
-  }
+  });
 
-  /// 读取已保存容量，缺失或损坏时使用 512MB 安全默认值。
+  /// 读取已保存容量，缺失或损坏时使用 64MB 内存缓冲默认值。
   Future<int> loadCapacityBytes() async {
     try {
       final SharedPreferences preferences = await _preferencesLoader();
       final int? value = preferences.getInt(_capacityPreferenceKey);
-      return supportedMediaCacheBytes.contains(value)
+      return supportedMemoryBufferBytes.contains(value)
           ? value!
-          : defaultMediaCacheBytes;
+          : defaultMemoryBufferBytes;
     } catch (_) {
-      return defaultMediaCacheBytes;
+      return defaultMemoryBufferBytes;
     }
   }
 
@@ -209,6 +240,10 @@ class WindowsMediaCacheService implements MediaCacheService {
         'unsafe_cache_path',
         'Windows 视频缓冲目录不安全，已停止操作。',
       );
+    }
+    if (await FileSystemEntity.type(directory.path, followLinks: false) ==
+        FileSystemEntityType.link) {
+      throw const MediaCacheException('unsafe_cache_path', '视频缓冲目录不能是符号链接。');
     }
     await directory.create(recursive: true);
     return directory;
@@ -239,7 +274,7 @@ class WindowsMediaCacheService implements MediaCacheService {
     }
   }
 
-  /// 按最后修改时间从旧到新删除超出新上限的缓冲文件，容量内文件保持不变。
+  /// 按最后访问时间从旧到新删除超出新上限的缓冲文件，容量内文件保持不变。
   Future<void> _trimToCapacity(Directory directory, int capacityBytes) async {
     final List<File> files = <File>[];
     await for (final FileSystemEntity entity in directory.list(
@@ -250,25 +285,26 @@ class WindowsMediaCacheService implements MediaCacheService {
         files.add(entity);
       }
     }
-    final List<({File file, int size, DateTime modified})> entries =
-        <({File file, int size, DateTime modified})>[];
+    final List<({File file, int size, DateTime accessed})> entries =
+        <({File file, int size, DateTime accessed})>[];
     int total = 0;
     for (final File file in files) {
       final FileStat stat = await file.stat();
       total += stat.size;
-      entries.add((file: file, size: stat.size, modified: stat.modified));
+      entries.add((file: file, size: stat.size, accessed: stat.accessed));
     }
     entries.sort(
       (
-        ({File file, DateTime modified, int size}) left,
-        ({File file, DateTime modified, int size}) right,
-      ) => left.modified.compareTo(right.modified),
+        ({File file, DateTime accessed, int size}) left,
+        ({File file, DateTime accessed, int size}) right,
+      ) => left.accessed.compareTo(right.accessed),
     );
-    for (final ({File file, int size, DateTime modified}) entry in entries) {
+    for (final ({File file, int size, DateTime accessed}) entry in entries) {
       if (total <= capacityBytes) {
         break;
       }
-      await entry.file.delete();
+      _ensurePlaybackIdle();
+      entry.file.deleteSync();
       total -= entry.size;
     }
   }

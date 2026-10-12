@@ -757,13 +757,17 @@ class WindowsPlaybackService
     } finally {
       _activeAudioMedia = null;
       WindowsMediaCacheRuntime.unregisterPlaybackSession();
+      unawaited(
+        WindowsMediaCacheService().maintain().catchError((Object _) {}),
+      );
       if (!_stateController.isClosed) {
         await _stateController.close();
       }
     }
   }
 
-  /// 把用户选择的 Windows 缓冲目录和容量交给 libmpv；配置失败时仍允许纯内存播放。
+  /// Apply a bounded forward/backward memory packet budget per demuxer.
+  /// Separate audio/video tracks each have a budget; decoded frames are extra.
   Future<void> _configureWindowsMediaCache() async {
     if (_cacheConfigured || _disposed) {
       return;
@@ -775,18 +779,17 @@ class WindowsPlaybackService
     }
     try {
       final WindowsMediaCacheService cacheService = WindowsMediaCacheService();
-      final Directory directory = await cacheService.resolveCacheDirectory();
       final int capacityBytes = await cacheService.loadCapacityBytes();
       await platformPlayer.setProperty('cache', 'yes');
-      await platformPlayer.setProperty('cache-on-disk', 'yes');
-      await platformPlayer.setProperty('cache-dir', directory.path);
+      // mpv disk packet files are append-only and cannot enforce a byte cap.
+      await platformPlayer.setProperty('cache-on-disk', 'no');
       await platformPlayer.setProperty(
         'demuxer-max-bytes',
-        capacityBytes.toString(),
+        (capacityBytes * 3 ~/ 4).toString(),
       );
       await platformPlayer.setProperty(
         'demuxer-max-back-bytes',
-        capacityBytes.toString(),
+        (capacityBytes ~/ 4).toString(),
       );
     } catch (_) {
       // 应用缓存目录或偏好设置异常时保留 media_kit 默认内存缓冲，不能阻止视频播放。

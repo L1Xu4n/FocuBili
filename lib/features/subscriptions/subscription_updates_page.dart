@@ -1,3 +1,4 @@
+import 'package:focubili/features/common/app_network_image.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -594,11 +595,11 @@ class SubscriptionSourceImage extends StatelessWidget {
         height: 56,
         child: source.imageUrl.isEmpty
             ? fallback
-            : Image.network(
-                source.imageUrl,
-                headers: const {'Referer': 'https://www.bilibili.com/'},
+            : AppNetworkImage(
+                imageUrl: source.imageUrl,
+                httpHeaders: const {'Referer': 'https://www.bilibili.com/'},
                 fit: BoxFit.cover,
-                errorBuilder: (_, _, _) => fallback,
+                errorWidget: (_, _, _) => fallback,
               ),
       ),
     );

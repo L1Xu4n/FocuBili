@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:cached_network_image/cached_network_image.dart';
+import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/layout/adaptive_page_frame.dart';
@@ -196,15 +196,13 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
             if (video.coverUrl.isEmpty)
               _buildThumbnailPlaceholder()
             else
-              CachedNetworkImage(
+              AppNetworkImage(
                 imageUrl: video.coverUrl,
                 httpHeaders: const <String, String>{
                   'Referer': 'https://www.bilibili.com/',
                 },
                 fit: BoxFit.cover,
                 memCacheWidth: 320,
-                maxWidthDiskCache: 640,
-                fadeInDuration: const Duration(milliseconds: 120),
                 placeholder: (BuildContext context, String url) =>
                     _buildThumbnailPlaceholder(),
                 errorWidget: (BuildContext context, String url, Object error) =>

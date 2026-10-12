@@ -1,3 +1,4 @@
+import 'cache_lifecycle.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -166,14 +167,32 @@ class BilibiliAuthService {
 
   /// 正常页面每次都验证当前会话，保留现有账号读取接口。
   Future<BilibiliSessionState> loadCurrentSession() =>
-      _loadCurrentSession(reuseUnchangedSession: false);
+      _loadScopedSession(reuseUnchangedSession: false);
 
   /// 登录页轮询复用未变化的已确认结果，手动检测和网络失败仍允许重试。
   Future<BilibiliSessionState> loadCurrentSessionForWebLogin({
     bool force = false,
-  }) => _loadCurrentSession(reuseUnchangedSession: !force);
+  }) => _loadScopedSession(reuseUnchangedSession: !force);
 
   /// 限时读取 Cookie，并按调用场景决定是否复用本次页面生命周期内的验证结果。
+  Future<BilibiliSessionState> _loadScopedSession({
+    required bool reuseUnchangedSession,
+  }) async {
+    final revision = CacheLifecycle.account.value;
+    final result = await _loadCurrentSession(
+      reuseUnchangedSession: reuseUnchangedSession,
+    );
+    if (revision == CacheLifecycle.account.value) {
+      if (result.isActive) {
+        await CacheLifecycle.setAccount(result.account!.mid);
+      } else if (result.status == BilibiliSessionStatus.signedOut ||
+          result.status == BilibiliSessionStatus.expired) {
+        await CacheLifecycle.setAccount(null);
+      }
+    }
+    return result;
+  }
+
   Future<BilibiliSessionState> _loadCurrentSession({
     required bool reuseUnchangedSession,
   }) async {
@@ -239,6 +258,7 @@ class BilibiliAuthService {
       throw const BilibiliAuthException('Cookie 已失效，B 站没有确认登录状态。');
     }
     await _saveVerifiedCookies(cookie);
+    await CacheLifecycle.setAccount(verifiedSession.account!.mid);
     return verifiedSession.account!;
   }
 
@@ -257,6 +277,7 @@ class BilibiliAuthService {
       return verifiedSession;
     }
     await _saveVerifiedCookies(cookie);
+    await CacheLifecycle.setAccount(verifiedSession.account!.mid);
     return verifiedSession;
   }
 
@@ -283,6 +304,7 @@ class BilibiliAuthService {
       );
     }
     await _saveVerifiedCookies(cookie);
+    await CacheLifecycle.setAccount(verifiedSession.account!.mid);
     return verifiedSession;
   }
 
@@ -290,7 +312,12 @@ class BilibiliAuthService {
   Future<String> readCookieHeader() => _cookieStore.readCookies();
 
   /// 仅清理 B 站域 Cookie，用于退出或切换账号，不会自动响应网络错误。
-  Future<void> clearBilibiliSession() => _cookieStore.clearBilibiliCookies();
+  Future<void> clearBilibiliSession() async {
+    // Fence old asynchronous results before changing the underlying account.
+    CacheLifecycle.accountChanged();
+    await _cookieStore.clearBilibiliCookies();
+    await CacheLifecycle.setAccount(null);
+  }
 
   /// 保留退出登录名称，实际执行仅清理 B 站域 Cookie 的安全操作。
   Future<void> logout() => clearBilibiliSession();

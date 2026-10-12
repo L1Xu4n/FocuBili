@@ -1,3 +1,4 @@
+import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../../models/subscription.dart';
@@ -54,19 +55,19 @@ class SubscriptionFeedTile extends StatelessWidget {
                             color: theme.colorScheme.surfaceContainerHighest,
                             child: item.coverUrl.isEmpty
                                 ? const Icon(Icons.video_library_outlined)
-                                : Image.network(
-                                    item.coverUrl,
-                                    headers: const {
+                                : AppNetworkImage(
+                                    imageUrl: item.coverUrl,
+                                    httpHeaders: const {
                                       'Referer': 'https://www.bilibili.com/',
                                     },
                                     fit: BoxFit.cover,
-                                    cacheWidth:
+                                    memCacheWidth:
                                         (width *
                                                 MediaQuery.devicePixelRatioOf(
                                                   context,
                                                 ))
                                             .ceil(),
-                                    errorBuilder: (_, _, _) => const Icon(
+                                    errorWidget: (_, _, _) => const Icon(
                                       Icons.video_library_outlined,
                                     ),
                                   ),

@@ -2,7 +2,7 @@ import '../learning/learning_add_sheet.dart';
 import 'dart:async';
 import 'dart:collection';
 
-import 'package:cached_network_image/cached_network_image.dart';
+import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/layout/adaptive_layout.dart';
@@ -1825,17 +1825,17 @@ class _SearchPageState extends State<SearchPage> {
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         leading: CircleAvatar(
           radius: 28,
-          backgroundImage: result.avatarUrl.isEmpty
-              ? null
-              : CachedNetworkImageProvider(
-                  result.avatarUrl,
-                  headers: const <String, String>{
-                    'Referer': 'https://www.bilibili.com/',
-                  },
-                ),
           child: result.avatarUrl.isEmpty
               ? const Icon(Icons.person_rounded)
-              : null,
+              : ClipOval(
+                  child: AppNetworkImage(
+                    imageUrl: result.avatarUrl,
+                    width: 56,
+                    height: 56,
+                    fit: BoxFit.cover,
+                    errorWidget: (_, _, _) => const Icon(Icons.person_rounded),
+                  ),
+                ),
         ),
         title: Row(
           children: <Widget>[
@@ -2019,15 +2019,13 @@ class _SearchPageState extends State<SearchPage> {
             if (result.thumbnailUrl.isEmpty)
               _buildThumbnailPlaceholder(context, '')
             else
-              CachedNetworkImage(
+              AppNetworkImage(
                 imageUrl: result.thumbnailUrl,
                 httpHeaders: const <String, String>{
                   'Referer': 'https://www.bilibili.com/',
                 },
                 fit: BoxFit.cover,
                 memCacheWidth: 320,
-                maxWidthDiskCache: 640,
-                fadeInDuration: const Duration(milliseconds: 120),
                 placeholder: _buildThumbnailPlaceholder,
                 errorWidget: _buildThumbnailError,
               ),

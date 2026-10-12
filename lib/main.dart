@@ -1,3 +1,6 @@
+import 'services/media_cache_service.dart';
+import 'services/cache_lifecycle.dart';
+import 'services/image_resource_cache.dart';
 import 'dart:async';
 import 'dart:ui';
 
@@ -107,6 +110,20 @@ Future<void> main(List<String> args) async {
     return;
   }
   _installProblemDiagnostics();
+  try {
+    await CacheLifecycle.initialize();
+  } catch (_) {}
+  unawaited(
+    ImageResourceCache.instance.status().catchError(
+      (Object _) => const ImageCacheUsage(0, 0, 0),
+    ),
+  );
+  if (PlatformServices.current.capabilities.mediaCacheBackend ==
+      MediaCacheBackendKind.windowsMediaKit) {
+    try {
+      await WindowsMediaCacheService().maintain();
+    } catch (_) {}
+  }
   await _prepareWindowsDesktop();
   // Reconcile persisted opt-in after an upgrade/restart; disabled by default.
   try {

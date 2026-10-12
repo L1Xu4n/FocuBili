@@ -207,7 +207,7 @@ class _CollectionPickerSheetState extends State<_CollectionPickerSheet> {
               ),
             )
           else
-            CachedNetworkImage(
+            AppNetworkImage(
               imageUrl: entry.thumbnailUrl,
               width: 96,
               height: 54,
