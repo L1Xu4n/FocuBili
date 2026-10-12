@@ -24,11 +24,11 @@ Android 保留默认 512 MiB 的 Media3 边播缓存，改为访问 LRU，保护
 
 实现使用正确的 `demuxer-cache-dir`、`demuxer-cache-unlink-files=whendone` 和每个播放器的独立目录，每 500 ms 汇总专属目录内真实文件长度。达到软阈值后请求 `cache-on-disk=no`，保留已打开的 packet 文件，后续新数据改用每路前后各 64 MiB 的 RAM 预算；独立音视频 demuxer 各有一份，解码器/画面内存另计。只在旧媒体文件都关闭且总占用低于阈值后为新媒体恢复写盘。回看仍取决于保留的索引范围，范围外需联网。
 
-**该阈值不是硬上限**：采样、UI isolate 暂停及 demuxer 工作线程接收设置有延迟，超出量没有严格上界。每次设置均回读，因为 media_kit 的 setter 不返回 mpv 的错误码；运行中的读取/设置失败会显示明确状态并在下次检查重试；初始化失败会明确回退，不能宣称配额已生效。Windows 固定 mpv 依赖的工作线程会更新磁盘选项，关闭新增写入不会立即销毁已有文件。[固定版本源码：选项传播](https://github.com/mpv-player/mpv/blob/652a1dd90711839acdccc08004056d25514ef2d8/demux/demux.c#L2318-L2323)、[临时文件生命周期](https://github.com/mpv-player/mpv/blob/652a1dd90711839acdccc08004056d25514ef2d8/demux/cache.c#L74-L120)。这不等于 Windows 真实播放验收。
+**该阈值不是硬上限**：采样、UI isolate 暂停及 demuxer 工作线程接收设置有延迟，超出量没有严格上界。每次设置均回读，因为 media_kit 的 setter 不返回 mpv 的错误码；运行中的读取/设置失败会显示明确状态并在下次检查重试；初始化失败会明确回退，不能宣称配额已生效。Windows 固定 mpv 依赖的工作线程会更新磁盘选项，关闭新增写入不会立即销毁已有文件。[固定版本源码：选项传播](https://github.com/mpv-player/mpv/blob/652a1dd90711839acdccc08004056d25514ef2d8/demux/demux.c#L2486-L2522)、[临时文件生命周期](https://github.com/mpv-player/mpv/blob/652a1dd90711839acdccc08004056d25514ef2d8/demux/cache.c#L74-L120)。这不等于 Windows 真实播放验收。
 
 每个会话持有 OS 文件锁直到播放器完成释放；目录创建/回收另有跨进程锁。维护只清理已结束或崩溃遗留的会话，保留本进程/其他 isolate/其他进程的活跃文件。播放器关闭后自动回收，启动时回收残留；离线下载不受影响。相关单测覆盖真实文件字节、跨 isolate 互斥、播放中清空拒绝、设置失败及配置/释放竞态。
 
-`tool/desktop_disk_cache_probe.dart` 随 Linux/macOS 既有原生探针运行，使用本机 HTTP 合成媒体和独立音轨，检查真实 packet 文件、缓存回看、阈值后的设置回读/保留文件和关闭清理。探针用明确记录的 256 KiB 测试填充文件触发阈值，不是 B站流量或长视频磁盘增长基准；最终结果见对应 Actions 日志。
+`tool/desktop_disk_cache_probe.dart` 随 Linux/macOS 既有原生探针运行，使用本机 HTTP 合成媒体和独立音轨，检查真实 packet 文件、缓存回看、阈值后的设置回读/保留文件、关闭 HTTP 源后从 2.5 秒回看 0.5 秒并恢复播放，以及关闭清理。探针用明确记录的 256 KiB 测试填充文件触发阈值，不是 B站流量或长视频磁盘增长基准；最终结果见对应 Actions 日志。
 
 ## 可复现证据
 

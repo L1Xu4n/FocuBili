@@ -36,6 +36,7 @@ Future<void> verifyDesktopDiskCache() async {
   );
   final bytes = base64Decode(appleSmokeVideoBase64);
   final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+  var serverClosed = false;
   var requests = 0;
   server.listen((request) async {
     requests++;
@@ -134,22 +135,37 @@ Future<void> verifyDesktopDiskCache() async {
       }
     }
     await padding.delete();
-    await player.seek(const Duration(seconds: 1));
+    // Take the only media origin offline. Property readback/file existence
+    // alone cannot prove that old packets remain usable after disabling disk.
+    await server.close(force: true);
+    serverClosed = true;
+    await player.seek(const Duration(milliseconds: 2500));
     await _waitFor(
-      () async => (player.state.position.inMilliseconds - 1000).abs() < 250,
-      'seek after threshold',
+      () async => (player.state.position.inMilliseconds - 2500).abs() < 250,
+      'post-threshold forward seek with origin offline',
     );
+    await player.seek(const Duration(milliseconds: 500));
+    await _waitFor(
+      () async => (player.state.position.inMilliseconds - 500).abs() < 250,
+      'post-threshold rewind with origin offline',
+    );
+    await player.play();
+    await _waitFor(
+      () async => player.state.position.inMilliseconds >= 1250,
+      'decode and advance after offline rewind',
+    );
+    await player.pause();
     if (requests != beforeSeek) {
       throw StateError('Retained fixture packets were not reused');
     }
     stdout.writeln(
-      'DESKTOP_DISK_CACHE_RESULT: ${jsonEncode({'nativeVersion': await native.getProperty('mpv-version'), 'packetFiles': packetFiles.length, 'packetBytes': packetBytes, 'thresholdBytes': 256 * 1024, 'testPaddingBytes': 256 * 1024, 'measuredBytesAtThreshold': measuredAtThreshold, 'httpRequests': requests, 'rewindAdditionalRequests': requests - beforeSeek, 'cacheOnDiskAfterThreshold': await native.getProperty('cache-on-disk'), 'activeFilesRetained': true})}',
+      'DESKTOP_DISK_CACHE_RESULT: ${jsonEncode({'nativeVersion': await native.getProperty('mpv-version'), 'packetFiles': packetFiles.length, 'packetBytes': packetBytes, 'thresholdBytes': 256 * 1024, 'testPaddingBytes': 256 * 1024, 'measuredBytesAtThreshold': measuredAtThreshold, 'httpRequests': requests, 'rewindAdditionalRequests': requests - beforeSeek, 'cacheOnDiskAfterThreshold': await native.getProperty('cache-on-disk'), 'activeFilesRetained': true, 'originClosedBeforePostThresholdSeek': true, 'postThresholdRewindFromMs': 2500, 'postThresholdRewindToMs': 500, 'postRewindPlaybackPositionMs': player.state.position.inMilliseconds})}',
     );
   } finally {
     await cache.stopMonitoring();
     await player.dispose();
     await cache.releaseAfterPlayerClosed();
-    await server.close(force: true);
+    if (!serverClosed) await server.close(force: true);
     if (cache.directoryPath != null &&
         await Directory(cache.directoryPath!).exists()) {
       throw StateError('Closed media session was not reclaimed');
