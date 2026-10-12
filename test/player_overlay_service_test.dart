@@ -29,6 +29,40 @@ class _FakePlayerOverlayPlatformChannel
 
 /// 运行字幕、弹幕通道、状态转换与数据上限的纯 Dart 回归测试。
 void main() {
+  test(
+    'native expired URL retry rejects a changed language for the same ID',
+    () async {
+      var tracks = 0, cues = 0;
+      final channel = _FakePlayerOverlayPlatformChannel((method, args) async {
+        if (method == 'loadSubtitleTracks')
+          return {
+            'status': 'available',
+            'tracks': [
+              {
+                'id': '101',
+                'label': 'test',
+                'language': ++tracks == 1 ? 'zh' : 'en',
+                'isLocked': false,
+              },
+            ],
+          };
+        cues++;
+        throw PlatformException(code: 'subtitle_document_expired');
+      });
+      final service = NativePlayerOverlayService(platformChannel: channel);
+      await service.loadSubtitleTracks(bvid: 'BV1GJ411x7h7', cid: 137649199);
+      final result = await service.loadSubtitleCues(
+        bvid: 'BV1GJ411x7h7',
+        cid: 137649199,
+        trackId: '101',
+      );
+      expect(result.status, SubtitleLoadStatus.locked);
+      expect(result.cues, isEmpty);
+      expect(tracks, 2);
+      expect(cues, 1);
+    },
+  );
+
   for (final failure in [
     'subtitle_track_not_loaded',
     'subtitle_document_expired',

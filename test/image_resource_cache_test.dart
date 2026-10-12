@@ -49,6 +49,37 @@ void main() {
   });
 
   test(
+    'removal fences an outstanding writer and repairs malformed leases',
+    () async {
+      final started = Completer<void>(), release = Completer<void>();
+      cache.dispose();
+      cache = make(
+        request: (_, _) async {
+          started.complete();
+          await release.future;
+          return response();
+        },
+      );
+      final pending = cache.load(url);
+      final rejected = expectLater(
+        pending,
+        throwsA(isA<ImageCacheCancelled>()),
+      );
+      await started.future;
+      await cache.remove(url);
+      release.complete();
+      await rejected;
+      expect((await cache.status()).objects, 0);
+      final file = File('${(await directory()).path}/index.json');
+      final index =
+          jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      index['leases'] = 'broken';
+      await file.writeAsString(jsonEncode(index));
+      expect((await cache.status()).objects, 0);
+    },
+  );
+
+  test(
     '20 concurrent consumers and a new service/restart share one persisted download',
     () async {
       final values = await Future.wait(

@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:cached_network_image/cached_network_image.dart';
+import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -217,7 +217,7 @@ void main() {
     expect(
       find.byWidgetPredicate(
         (Widget widget) =>
-            widget is CachedNetworkImage && widget.imageUrl == thumbnailUrl,
+            widget is AppNetworkImage && widget.imageUrl == thumbnailUrl,
       ),
       findsOneWidget,
     );
@@ -267,7 +267,7 @@ void main() {
     expect(
       find.byWidgetPredicate(
         (Widget widget) =>
-            widget is CachedNetworkImage && widget.imageUrl == thumbnailUrl,
+            widget is AppNetworkImage && widget.imageUrl == thumbnailUrl,
       ),
       findsOneWidget,
     );

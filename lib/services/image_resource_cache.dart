@@ -1,3 +1,4 @@
+import 'cache_file_lock.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -5,6 +6,8 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
 import 'cache_lifecycle.dart';
 
@@ -24,10 +27,25 @@ class ImageResourceCache extends ChangeNotifier {
     if (accountScoped) CacheLifecycle.account.addListener(_accountChanged);
   }
 
+  /// Remove only entries owned by the previous image cache. Never scan or
+  /// delete the surrounding application cache/download directories.
+  static Future<void> cleanLegacyCache() async {
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      const key = 'legacy_image_cache_cleaned_v1';
+      if (preferences.getBool(key) == true) return;
+      await DefaultCacheManager().emptyCache();
+      await preferences.setBool(key, true);
+    } catch (_) {
+      // Retry next startup when the legacy cache database is available.
+    }
+  }
+
   static final instance = ImageResourceCache(accountScoped: true);
   static const capacities = [64, 128, 256, 512]; // MiB
   static const maximumObjectBytes = 16 * 1024 * 1024;
   static final Map<String, Future<void>> _locks = {};
+  static int _leaseSerial = 0;
   final Future<Directory> Function() _directory;
   final ImageCacheRequest _request;
   final DateTime Function() _clock;
@@ -39,7 +57,10 @@ class ImageResourceCache extends ChangeNotifier {
   final Map<String, DateTime> _retryAfter = {};
   int _revision = 0;
   int get revision => _revision;
+  bool _accountInvalidation = false;
+  bool get accountInvalidation => _accountInvalidation;
   void _accountChanged() {
+    _accountInvalidation = true;
     _revision++;
     _retryAfter.clear();
     notifyListeners();
@@ -94,6 +115,8 @@ class ImageResourceCache extends ChangeNotifier {
     Map<String, dynamic>? record;
     CachedImageBytes? previous;
     String? epoch;
+    String? lease;
+    bool waitForWriter = false;
     try {
       await _locked((dir, index) async {
         epoch = index['epoch'] as String;
@@ -121,11 +144,36 @@ class ImageResourceCache extends ChangeNotifier {
             record = null;
           }
         }
+        if (!(_retryAfter[key]?.isAfter(_clock()) ?? false) &&
+            (previous == null ||
+                (record!['expires'] as int) <=
+                    _clock().millisecondsSinceEpoch)) {
+          final leases =
+              index.putIfAbsent('leases', () => <String, dynamic>{}) as Map;
+          final existing = leases[key];
+          if (existing != null || leases.length >= 6) {
+            waitForWriter = true;
+          } else {
+            lease =
+                '$pid:${DateTime.now().microsecondsSinceEpoch}:${_leaseSerial++}';
+            leases[key] = {
+              'owner': lease,
+              'until': DateTime.now()
+                  .add(const Duration(seconds: 30))
+                  .millisecondsSinceEpoch,
+            };
+          }
+        }
       });
     } on FileSystemException {
       // A full/unavailable cache disk must not stop images from loading online.
     }
     _checkRevision(revision);
+    if (waitForWriter) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      _checkRevision(revision);
+      return _load(url, headers, key, revision);
+    }
     if (previous != null &&
         (record!['expires'] as int) > _clock().millisecondsSinceEpoch) {
       return previous!;
@@ -165,7 +213,7 @@ class ImageResourceCache extends ChangeNotifier {
       final digest = sha256.convert(bytes).toString();
       final control =
           response.headers['cache-control']?.toLowerCase() ??
-          record?['control'] as String? ??
+          (response.status == 304 ? (record?['control'] as String?) : null) ??
           '';
       final noStore =
           control.contains('no-store') ||
@@ -182,11 +230,14 @@ class ImageResourceCache extends ChangeNotifier {
           ? 0
           : ((seconds ?? 86400) - age).clamp(0, 86400);
       final now = _clock();
-      if (epoch != null) {
+      if (epoch != null && lease != null) {
         try {
           await _locked((dir, index) async {
             _checkRevision(revision);
             if (index['epoch'] != epoch) throw const ImageCacheCancelled();
+            if ((index['leases'] as Map?)?[key]?['owner'] != lease) {
+              throw const ImageCacheCancelled();
+            }
             final entries = index['entries'] as Map<String, dynamic>;
             final capacity = index['capacity'] as int;
             if (noStore || bytes.length > capacity) {
@@ -195,6 +246,10 @@ class ImageResourceCache extends ChangeNotifier {
               return;
             }
             final temp = File('${dir.path}/$key.part');
+            if (await FileSystemEntity.type(temp.path, followLinks: false) ==
+                FileSystemEntityType.link) {
+              await Link(temp.path).delete();
+            }
             await temp.writeAsBytes(bytes, flush: true);
             await temp.rename('${dir.path}/$key.bin');
             entries[key] = {
@@ -206,9 +261,12 @@ class ImageResourceCache extends ChangeNotifier {
               'mustRevalidate':
                   control.contains('must-revalidate') ||
                   control.contains('no-cache'),
-              'etag': response.headers['etag'] ?? record?['etag'],
+              'etag':
+                  response.headers['etag'] ??
+                  (response.status == 304 ? (record?['etag']) : null),
               'modified':
-                  response.headers['last-modified'] ?? record?['modified'],
+                  response.headers['last-modified'] ??
+                  (response.status == 304 ? (record?['modified']) : null),
             };
             await _trim(dir, index);
           });
@@ -232,6 +290,21 @@ class ImageResourceCache extends ChangeNotifier {
         return previous!;
       }
       throw const ImageCacheFailure();
+    } finally {
+      if (lease != null) {
+        try {
+          await _locked((_, index) async {
+            final leases = index['leases'];
+            if (leases is Map &&
+                leases[key] is Map &&
+                leases[key]['owner'] == lease) {
+              leases.remove(key);
+            }
+          });
+        } catch (_) {
+          /* Expiring lease repairs a killed writer or full disk. */
+        }
+      }
     }
   }
 
@@ -254,12 +327,14 @@ class ImageResourceCache extends ChangeNotifier {
 
   /// Fence first, then delete. Old downloads cannot repopulate after completion.
   Future<ImageCacheUsage> clear() {
+    _accountInvalidation = false;
     _revision++;
     _retryAfter.clear();
     notifyListeners();
     return _locked((dir, index) async {
       index['epoch'] = '${DateTime.now().microsecondsSinceEpoch}-$_revision';
       index['entries'] = <String, dynamic>{};
+      index['leases'] = <String, dynamic>{};
       await _repair(dir, index);
       return _usage(index);
     });
@@ -269,6 +344,7 @@ class ImageResourceCache extends ChangeNotifier {
       _locked((dir, index) async {
         final key = _key(url, headers);
         (index['entries'] as Map).remove(key);
+        (index['leases'] as Map).remove(key);
         await _delete(File('${dir.path}/$key.bin'));
       });
 
@@ -330,19 +406,40 @@ class ImageResourceCache extends ChangeNotifier {
     final done = Completer<void>();
     _locks[dir.path] = done.future;
     await prior;
-    RandomAccessFile? lock;
+    CacheFileLock? lock;
     try {
-      lock = await File('${dir.path}/cache.lock').open(mode: FileMode.append);
-      await lock.lock(FileLock.blockingExclusive);
+      for (final name in ['cache.lock', 'index.json', 'index.part']) {
+        if (await FileSystemEntity.type(
+              '${dir.path}/$name',
+              followLinks: false,
+            ) ==
+            FileSystemEntityType.link) {
+          throw const FileSystemException('Unsafe image cache metadata');
+        }
+      }
+      lock = await CacheFileLock.acquire('${dir.path}/cache.lock');
       final file = File('${dir.path}/index.json');
       Map<String, dynamic> index;
       try {
         index = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
         if (index['epoch'] is! String ||
             index['entries'] is! Map ||
-            index['capacity'] is! int) {
+            index['capacity'] is! int ||
+            (index['capacity'] as int) < 0) {
           throw const FormatException();
         }
+        (index['entries'] as Map).removeWhere(
+          (key, value) =>
+              key is! String ||
+              !RegExp(r'^[a-f0-9]{64}$').hasMatch(key) ||
+              value is! Map ||
+              value['size'] is! int ||
+              value['size'] < 0 ||
+              value['size'] > maximumObjectBytes ||
+              value['used'] is! int ||
+              value['expires'] is! int ||
+              value['digest'] is! String,
+        );
       } catch (_) {
         index = {
           'epoch': DateTime.now().microsecondsSinceEpoch.toString(),
@@ -351,15 +448,32 @@ class ImageResourceCache extends ChangeNotifier {
         };
         await _repair(dir, index);
       }
+      if (index['leases'] is! Map) index['leases'] = <String, dynamic>{};
+      (index['leases'] as Map).removeWhere(
+        (key, value) =>
+            key is! String ||
+            !RegExp(r'^[a-f0-9]{64}$').hasMatch(key) ||
+            value is! Map ||
+            value['owner'] is! String ||
+            value['until'] is! int ||
+            value['until'] <= DateTime.now().millisecondsSinceEpoch ||
+            value['until'] >
+                DateTime.now()
+                    .add(const Duration(seconds: 31))
+                    .millisecondsSinceEpoch,
+      );
       final result = await action(dir, index);
       final temp = File('${dir.path}/index.part');
       await temp.writeAsString(jsonEncode(index), flush: true);
       await temp.rename(file.path);
       return result;
     } finally {
-      await lock?.close();
-      done.complete();
-      if (identical(_locks[dir.path], done.future)) _locks.remove(dir.path);
+      try {
+        await lock?.release();
+      } finally {
+        done.complete();
+        if (identical(_locks[dir.path], done.future)) _locks.remove(dir.path);
+      }
     }
   }
 

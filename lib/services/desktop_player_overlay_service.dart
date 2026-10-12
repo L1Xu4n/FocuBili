@@ -34,6 +34,7 @@ class _DesktopSubtitleSession {
   _DesktopSubtitleSession();
 
   Map<String, Uri> readableUrls = const <String, Uri>{};
+  Map<String, String> languages = const {};
 }
 
 /// 在 Windows 上直接读取官方字幕与弹幕接口，同时维持与 Android 相同的安全边界。
@@ -163,10 +164,15 @@ class DesktopPlayerOverlayService
         !_isValidSubtitleTrackId(normalizedTrackId)) {
       return const SubtitleCueLoadResult.unavailable(message: '字幕请求参数无效。');
     }
+    final expectedLanguage =
+        _subtitleSessions[(normalizedBvid, cid)]?.languages[normalizedTrackId];
     for (var attempt = 0; attempt < 2; attempt++) {
       final session = _subtitleSessions[(normalizedBvid, cid)];
       if (session == null) {
         return const SubtitleCueLoadResult.locked(message: '请先读取当前视频的字幕轨道。');
+      }
+      if (session.languages[normalizedTrackId] != expectedLanguage) {
+        return const SubtitleCueLoadResult.locked(message: '字幕语言已变化，请重新选择轨道。');
       }
       _subtitleSessions.remove((normalizedBvid, cid));
       _subtitleSessions[(normalizedBvid, cid)] = session;
@@ -395,6 +401,10 @@ class DesktopPlayerOverlayService
       }
     }
     session.readableUrls = Map<String, Uri>.unmodifiable(readableUrls);
+    session.languages = {
+      for (final track in tracks)
+        track['id'] as String: track['language'] as String,
+    };
     final bool needsLogin = rawData['need_login_subtitle'] == true;
     final String status = readableUrls.isNotEmpty
         ? 'available'

@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.8.0+24
+version: 1.8.0+25
 
 environment:
   # Flutter 3.44 随附 Dart 3.12；明确下限可避免旧工具链误用新的依赖锁定结果。
@@ -36,11 +36,12 @@ dependencies:
     path: packages/focubili_apple
   # 以下版本已在 Flutter 3.44.6 下完成解析、测试和 Android 构建验证。
   archive: ^4.0.9
-  cached_network_image: ^3.4.1
+  flutter_cache_manager: ^3.4.1
   crypto: ^3.0.7
   # Windows 账号密码登录使用仓库内已修复导航时序的 WebView2 插件；App 不接触密码正文。
   desktop_webview_window:
     path: third_party/desktop_webview_window
+  ffi: ^2.1.4
   file_picker: ^11.0.2
   flutter:
     sdk: flutter

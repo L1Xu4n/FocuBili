@@ -25,6 +25,12 @@ internal class PinnedLruCacheEvictor(private val maximumBytes: Long) : CacheEvic
         if (keys.isEmpty()) reservations.clear()
         evict(cache, 0L)
     }
+    fun releaseReservations(cache: Cache, key: String, position: Long, length: Long) = synchronized(cache) {
+        reservations.keys.removeAll { (reservedKey, start) ->
+            reservedKey == key && start >= position &&
+                (length == C.LENGTH_UNSET.toLong() || start - position < length)
+        }
+    }
     override fun requiresCacheSpanTouches() = true
     override fun onCacheInitialized() = Unit
 

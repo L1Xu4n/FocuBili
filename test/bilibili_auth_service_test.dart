@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:focubili/services/bilibili_auth_service.dart';
+import 'package:focubili/services/cache_lifecycle.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// 用于测试的 Cookie 容器，会记录读取、替换和仅清理 B 站 Cookie 的调用。
 class _RecordingCookieStore implements BilibiliCookieStore {
@@ -78,6 +80,41 @@ BilibiliNavResponse _expiredResponse() {
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+  test('older verification cannot overwrite a newer login or logout', () async {
+    for (final logout in [false, true]) {
+      final oldResponse = Completer<BilibiliNavResponse>();
+      final store = _RecordingCookieStore();
+      final older = BilibiliAuthService(
+        cookieStore: store,
+        api: _CallbackAuthApi((_) => oldResponse.future),
+      );
+      final newer = BilibiliAuthService(
+        cookieStore: store,
+        api: _CallbackAuthApi(
+          (_) async => BilibiliNavResponse(
+            statusCode: 200,
+            body: _activeResponse().body.replaceFirst('42', '43'),
+          ),
+        ),
+      );
+      final old = older.loginWithCookie('SESSDATA=old-fixture');
+      final rejected = expectLater(old, throwsA(isA<BilibiliAuthException>()));
+      if (logout) {
+        await newer.logout();
+      } else {
+        await newer.loginWithCookie('SESSDATA=new-fixture');
+      }
+      oldResponse.complete(_activeResponse());
+      await rejected;
+      expect(store.cookies, logout ? '' : 'SESSDATA=new-fixture');
+      expect(CacheLifecycle.accountScope, logout ? 'guest' : 'mid:43');
+    }
+  });
+
   /// 登录页复用未变化的过期会话，Cookie 改变或手动检测时重新验证。
   test('网页登录轮询只验证变化的会话，手动检测强制刷新', () async {
     final store = _RecordingCookieStore(cookies: 'SESSDATA=expired');

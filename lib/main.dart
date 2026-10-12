@@ -113,6 +113,7 @@ Future<void> main(List<String> args) async {
   try {
     await CacheLifecycle.initialize();
   } catch (_) {}
+  unawaited(ImageResourceCache.cleanLegacyCache());
   unawaited(
     ImageResourceCache.instance.status().catchError(
       (Object _) => const ImageCacheUsage(0, 0, 0),

@@ -2248,7 +2248,11 @@ class NativePlaybackController(
         return CacheDataSource.Factory()
             .setCache(cache)
             .setCacheWriteDataSinkFactory {
-                OptionalCacheDataSink(CacheDataSink(cache, 2L * 1024 * 1024))
+                OptionalCacheDataSink(CacheDataSink(cache, 2L * 1024 * 1024)) { spec ->
+                    spec.key?.let { key ->
+                        pinnedCacheEvictor?.releaseReservations(cache, key, spec.position, spec.length)
+                    }
+                }
             }
             .setUpstreamDataSourceFactory(networkFactory)
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
@@ -2419,10 +2423,10 @@ class NativePlaybackController(
             .build()
         if (!bypassMediaCacheForPlayback) {
             val cache = ensureMediaCache()
-            pinnedCacheEvictor?.pin(cache, setOf(
-                playbackCacheKey(sources, video = true),
-                playbackCacheKey(sources, video = false),
-            ))
+            pinnedCacheEvictor?.pin(cache, buildSet {
+                if (!audioOnly) add(playbackCacheKey(sources, video = true))
+                if (isSafeMediaUrl(audioUrl)) add(playbackCacheKey(sources, video = false))
+            })
         }
         val sourceFactory = ProgressiveMediaSource.Factory(
             createMediaDataSourceFactory(

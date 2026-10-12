@@ -23,7 +23,7 @@ final _settingsAliases = <Key, String>{
   Key('theme-color-setting'): '主题强调色 蓝色 B站粉 玫红 珊瑚橙 翠绿 湖蓝 薰衣草紫 外观',
   Key('open-android-permissions'): '权限管理 系统能力 通知 后台运行',
   Key('enable-startup-update-check'): '启动时检查更新 GitHub Release',
-  Key('open-cache-management'): '视频缓存管理 存储 空间 清理',
+  Key('open-cache-management'): '缓存管理 图片 头像 封面 视频 字幕 存储 空间 自动 清理 上限',
   Key('open-about-page'): '关于 项目地址 负责人 版本 更新',
 };
 

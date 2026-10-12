@@ -1,3 +1,4 @@
+import 'package:focubili/services/image_resource_cache.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -44,9 +45,26 @@ class _FakeMediaCacheService implements MediaCacheService {
   }
 }
 
+class _MemoryImageCache extends ImageResourceCache {
+  ImageCacheUsage value = const ImageCacheUsage(0, 256 * 1024 * 1024, 0);
+  @override
+  Future<ImageCacheUsage> status() async => value;
+  @override
+  Future<ImageCacheUsage> clear() async =>
+      value = ImageCacheUsage(0, value.capacityBytes, 0);
+  @override
+  Future<ImageCacheUsage> setCapacity(int bytes) async =>
+      value = ImageCacheUsage(value.usedBytes, bytes, value.objects);
+}
+
 /// 为页面创建带 Material 主题和独立缓存服务的测试宿主。
 Widget _buildTestApp(MediaCacheService service) {
-  return MaterialApp(home: CacheManagementPage(service: service));
+  return MaterialApp(
+    home: CacheManagementPage(
+      service: service,
+      imageCache: _MemoryImageCache(),
+    ),
+  );
 }
 
 /// 验证缓存管理页面的占用、容量和播放保护行为。
@@ -81,7 +99,7 @@ void main() {
 
     await tester.pumpWidget(_buildTestApp(service));
     await tester.pumpAndSettle();
-    await tester.tap(find.byType(DropdownButtonFormField<int>));
+    await tester.tap(find.byKey(const Key('video-cache-capacity')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('1.0 GB').last);
     await tester.pumpAndSettle();
@@ -125,7 +143,7 @@ void main() {
     await tester.pumpAndSettle();
 
     final DropdownButtonFormField<int> picker = tester.widget(
-      find.byType(DropdownButtonFormField<int>),
+      find.byKey(const Key('video-cache-capacity')),
     );
     expect(find.text('播放中暂不能管理缓存'), findsOneWidget);
     expect(find.text('清空已缓存视频'), findsOneWidget);
@@ -137,7 +155,7 @@ void main() {
     final _FakeMediaCacheService service = _FakeMediaCacheService(
       const MediaCacheStatus(
         usedBytes: 16 * 1024 * 1024,
-        capacityBytes: defaultMediaCacheBytes,
+        capacityBytes: defaultMemoryBufferBytes,
         isPlaybackActive: false,
         storageKind: MediaCacheStorageKind.windowsPlaybackBuffer,
       ),
@@ -146,10 +164,10 @@ void main() {
     await tester.pumpWidget(_buildTestApp(service));
     await tester.pumpAndSettle();
 
-    expect(find.text('播放缓冲'), findsOneWidget);
-    expect(find.text('当前缓冲占用'), findsOneWidget);
+    expect(find.text('缓存管理'), findsOneWidget);
+    expect(find.text('历史磁盘缓冲残留'), findsOneWidget);
     expect(find.text('清空播放缓冲'), findsOneWidget);
-    expect(find.textContaining('下一次打开播放器时生效'), findsOneWidget);
+    expect(find.textContaining('下次打开播放器时生效'), findsOneWidget);
     expect(find.textContaining('不是离线下载'), findsOneWidget);
   });
 }

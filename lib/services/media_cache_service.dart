@@ -173,6 +173,7 @@ class WindowsMediaCacheService implements MediaCacheService {
         _ensurePlaybackIdle();
         try {
           final SharedPreferences preferences = await _preferencesLoader();
+          _ensurePlaybackIdle();
           await preferences.setInt(_capacityPreferenceKey, capacityBytes);
           final Directory directory = await resolveCacheDirectory();
           await _trimToCapacity(directory, 0);

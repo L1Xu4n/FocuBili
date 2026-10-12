@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:collection';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -110,11 +109,18 @@ class CachedPlayerOverlayService implements PlayerOverlayService {
     final revision = CacheLifecycle.subtitles.value;
     _trackRequests[identity] = token;
     await _clearing;
-    final result = await delegate.loadSubtitleTracks(bvid: bvid, cid: cid);
+    final SubtitleTrackLoadResult result;
+    try {
+      result = await delegate.loadSubtitleTracks(bvid: bvid, cid: cid);
+    } catch (_) {
+      if (_trackRequests[identity] == token) _trackRequests.remove(identity);
+      rethrow;
+    }
     if (revision != CacheLifecycle.subtitles.value ||
         _trackRequests[identity] != token) {
       return const SubtitleTrackLoadResult.unavailable();
     }
+    _trackRequests.remove(identity);
     if (result.status != SubtitleLoadStatus.unavailable) {
       final old = _sessions.remove(identity);
       if (old != null) {

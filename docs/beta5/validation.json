@@ -1,0 +1,31 @@
+{
+  "environment": "Linux; Flutter 3.44.6 / Dart 3.12.2; no real Windows/Android playback host",
+  "fullFlutter": {
+    "command": "flutter test --no-pub",
+    "passed": 855,
+    "skipped": 1,
+    "failed": 0
+  },
+  "targetedCache": {
+    "passed": 64,
+    "failed": 0
+  },
+  "captureAndImagePerformance": {
+    "passed": 4,
+    "screenshots": 12
+  },
+  "subscriptionPerformance": {
+    "passed": 3
+  },
+  "androidJvm": {
+    "tests": 42,
+    "suites": 10,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "analyze": "passed",
+  "apkBuild": "debug split-per-ABI passed",
+  "ci": "not yet started",
+  "desktopBufferDecision": "memory proposal reduces same-session backseek range; explicit review pending"
+}

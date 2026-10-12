@@ -81,6 +81,14 @@ class _AppNetworkImageState extends State<AppNetworkImage> {
         _error = null;
       });
     }
+    // Public covers reload in the new account partition. Credential-bearing
+    // widgets must receive fresh headers before issuing another request.
+    if (cache.accountInvalidation &&
+        !widget.httpHeaders.keys.any(
+          (key) => ['cookie', 'authorization'].contains(key.toLowerCase()),
+        )) {
+      unawaited(_load());
+    }
   }
 
   Future<void> _load() async {
@@ -129,6 +137,12 @@ class _AppNetworkImageState extends State<AppNetworkImage> {
           height: widget.memCacheHeight,
           allowUpscaling: false,
         );
+        final revision = cache.revision;
+        unawaited(
+          _provider!.obtainKey(ImageConfiguration.empty).then((key) {
+            if (revision == cache.revision) _DecodedImages.track(cache, key);
+          }),
+        );
         return Image(
           image: _provider!,
           width: widget.width,
@@ -151,22 +165,42 @@ class _AppNetworkImageState extends State<AppNetworkImage> {
 
 /// Content identity shares Flutter's decoded cache across newly read byte
 /// buffers, but includes the disk epoch/resource identity to isolate clears.
-class _ContentImage extends ImageProvider<_ContentImage> {
+class _ContentImage extends ImageProvider<String> {
   _ContentImage(this.data);
   final CachedImageBytes data;
   @override
-  Future<_ContentImage> obtainKey(ImageConfiguration configuration) =>
-      SynchronousFuture(this);
+  Future<String> obtainKey(ImageConfiguration configuration) =>
+      SynchronousFuture('focubili-image:${data.identity}');
   @override
-  ImageStreamCompleter loadImage(
-    _ContentImage key,
-    ImageDecoderCallback decode,
-  ) => MultiFrameImageStreamCompleter(codec: _decode(decode), scale: 1);
+  ImageStreamCompleter loadImage(String key, ImageDecoderCallback decode) =>
+      MultiFrameImageStreamCompleter(codec: _decode(decode), scale: 1);
   Future<ui.Codec> _decode(ImageDecoderCallback decode) async =>
       decode(await ui.ImmutableBuffer.fromUint8List(data.bytes));
-  @override
-  bool operator ==(Object other) =>
-      other is _ContentImage && other.data.identity == data.identity;
-  @override
-  int get hashCode => data.identity.hashCode;
+}
+
+/// Keep only lightweight decode keys, never the encoded payloads. Evict our
+/// off-screen images too on clear/account changes, without clearing app assets.
+abstract final class _DecodedImages {
+  static final _keys = Expando<Set<Object>>();
+  static void track(ImageResourceCache cache, Object key) {
+    var keys = _keys[cache];
+    if (keys == null) {
+      keys = <Object>{};
+      _keys[cache] = keys;
+      final owned = keys;
+      cache.addListener(() {
+        for (final key in owned) {
+          PaintingBinding.instance.imageCache.evict(key);
+        }
+        owned.clear();
+      });
+    }
+    keys.remove(key);
+    keys.add(key);
+    if (keys.length > 4096) {
+      final oldest = keys.first;
+      PaintingBinding.instance.imageCache.evict(oldest);
+      keys.remove(oldest);
+    }
+  }
 }

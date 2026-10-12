@@ -194,6 +194,7 @@ class _CacheManagementPageState extends State<CacheManagementPage> {
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: DropdownButtonFormField<int>(
+          isExpanded: true,
           initialValue: status.capacityBytes,
           key: const Key('video-cache-capacity'),
           decoration: InputDecoration(
@@ -211,7 +212,11 @@ class _CacheManagementPageState extends State<CacheManagementPage> {
                   .map(
                     (int capacityBytes) => DropdownMenuItem<int>(
                       value: capacityBytes,
-                      child: Text(formatMediaCacheBytes(capacityBytes)),
+                      child: Text(
+                        formatMediaCacheBytes(capacityBytes),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   )
                   .toList(growable: false),
@@ -334,6 +339,7 @@ class _CacheManagementPageState extends State<CacheManagementPage> {
             const SizedBox(height: 12),
             if (usage != null)
               DropdownButtonFormField<int>(
+                isExpanded: true,
                 key: ValueKey('image-cache-capacity-${usage.capacityBytes}'),
                 initialValue: usage.capacityBytes,
                 decoration: const InputDecoration(
@@ -351,8 +357,9 @@ class _CacheManagementPageState extends State<CacheManagementPage> {
                 onChanged: _mutating
                     ? null
                     : (value) {
-                        if (value != null)
+                        if (value != null) {
                           unawaited(_manageImages(capacity: value));
+                        }
                       },
               ),
             const SizedBox(height: 8),

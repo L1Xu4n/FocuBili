@@ -1,3 +1,4 @@
+import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -428,7 +429,7 @@ void main() {
     expect(
       find.descendant(
         of: find.byKey(const Key('home-profile-button')),
-        matching: find.byType(Image),
+        matching: find.byType(AppNetworkImage),
       ),
       findsOneWidget,
     );

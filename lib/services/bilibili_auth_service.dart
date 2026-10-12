@@ -159,6 +159,9 @@ class BilibiliAuthService {
        _api = api ?? BilibiliHttpAuthApi(),
        _requestTimeout = requestTimeout;
 
+  static int _loginGeneration = 0;
+  static Future<void> _accountWrites = Future.value();
+
   final BilibiliCookieStore _cookieStore;
   final BilibiliAuthApi _api;
   final Duration _requestTimeout;
@@ -178,17 +181,23 @@ class BilibiliAuthService {
   Future<BilibiliSessionState> _loadScopedSession({
     required bool reuseUnchangedSession,
   }) async {
+    await _accountWrites;
     final revision = CacheLifecycle.account.value;
+    final generation = _loginGeneration;
     final result = await _loadCurrentSession(
       reuseUnchangedSession: reuseUnchangedSession,
     );
-    if (revision == CacheLifecycle.account.value) {
-      if (result.isActive) {
-        await CacheLifecycle.setAccount(result.account!.mid);
-      } else if (result.status == BilibiliSessionStatus.signedOut ||
-          result.status == BilibiliSessionStatus.expired) {
-        await CacheLifecycle.setAccount(null);
-      }
+    if (revision != CacheLifecycle.account.value ||
+        generation != _loginGeneration) {
+      return const BilibiliSessionState.networkError(
+        message: '账号正在切换，请重新读取登录状态。',
+      );
+    }
+    if (result.isActive) {
+      await CacheLifecycle.setAccount(result.account!.mid);
+    } else if (result.status == BilibiliSessionStatus.signedOut ||
+        result.status == BilibiliSessionStatus.expired) {
+      await CacheLifecycle.setAccount(null);
     }
     return result;
   }
@@ -246,6 +255,7 @@ class BilibiliAuthService {
     if (!_containsSessionCookie(cookie)) {
       throw const BilibiliAuthException('Cookie 中没有找到有效的 SESSDATA，无法建立登录状态。');
     }
+    final generation = ++_loginGeneration;
     final BilibiliSessionState verifiedSession = await _requestCurrentSession(
       cookie,
     );
@@ -257,8 +267,10 @@ class BilibiliAuthService {
     if (!verifiedSession.isActive) {
       throw const BilibiliAuthException('Cookie 已失效，B 站没有确认登录状态。');
     }
-    await _saveVerifiedCookies(cookie);
-    await CacheLifecycle.setAccount(verifiedSession.account!.mid);
+    await _commitAccount(generation, () async {
+      await _saveVerifiedCookies(cookie);
+      await CacheLifecycle.setAccount(verifiedSession.account!.mid);
+    });
     return verifiedSession.account!;
   }
 
@@ -270,14 +282,17 @@ class BilibiliAuthService {
     if (cookie.isEmpty) {
       return const BilibiliSessionState.signedOut();
     }
+    final generation = ++_loginGeneration;
     final BilibiliSessionState verifiedSession = await _requestCurrentSession(
       cookie,
     );
     if (!verifiedSession.isActive) {
       return verifiedSession;
     }
-    await _saveVerifiedCookies(cookie);
-    await CacheLifecycle.setAccount(verifiedSession.account!.mid);
+    await _commitAccount(generation, () async {
+      await _saveVerifiedCookies(cookie);
+      await CacheLifecycle.setAccount(verifiedSession.account!.mid);
+    });
     return verifiedSession;
   }
 
@@ -286,6 +301,7 @@ class BilibiliAuthService {
     required String responseText,
     required String rawCookie,
   }) async {
+    final generation = ++_loginGeneration;
     final BilibiliSessionState verifiedSession;
     try {
       verifiedSession = _parseCurrentSession(responseText);
@@ -303,8 +319,10 @@ class BilibiliAuthService {
         message: '网页已确认登录，但没有读取到完整会话，请重新打开登录窗口。',
       );
     }
-    await _saveVerifiedCookies(cookie);
-    await CacheLifecycle.setAccount(verifiedSession.account!.mid);
+    await _commitAccount(generation, () async {
+      await _saveVerifiedCookies(cookie);
+      await CacheLifecycle.setAccount(verifiedSession.account!.mid);
+    });
     return verifiedSession;
   }
 
@@ -313,10 +331,41 @@ class BilibiliAuthService {
 
   /// 仅清理 B 站域 Cookie，用于退出或切换账号，不会自动响应网络错误。
   Future<void> clearBilibiliSession() async {
-    // Fence old asynchronous results before changing the underlying account.
-    CacheLifecycle.accountChanged();
-    await _cookieStore.clearBilibiliCookies();
-    await CacheLifecycle.setAccount(null);
+    final generation = ++_loginGeneration;
+    await _commitAccount(generation, () async {
+      await _cookieStore.clearBilibiliCookies();
+      await CacheLifecycle.setAccount(null);
+    });
+  }
+
+  /// Cookie replacement and the matching public cache scope form one ordered
+  /// transaction across auth service instances. A late verification cannot
+  /// overwrite a newer login/logout, and readers wait for a completed write.
+  Future<void> _commitAccount(
+    int generation,
+    Future<void> Function() write,
+  ) async {
+    final operation = _accountWrites.then((_) async {
+      if (generation != _loginGeneration) {
+        throw const BilibiliAuthException('登录操作已被更新的账号操作取代。');
+      }
+      CacheLifecycle.accountChanged();
+      try {
+        await write();
+        _checkedWebSession = null;
+        _checkedWebSessionState = null;
+      } finally {
+        CacheLifecycle.accountChanged();
+      }
+    });
+    _accountWrites = operation.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    await operation;
+    if (generation != _loginGeneration) {
+      throw const BilibiliAuthException('登录操作已被更新的账号操作取代。');
+    }
   }
 
   /// 保留退出登录名称，实际执行仅清理 B 站域 Cookie 的安全操作。

@@ -65,8 +65,13 @@ class NativePlayerOverlayService
 
   @override
   Future<void> clearSubtitleSessions() async {
+    _subtitleRevision++;
+    _knownTracks.clear();
     await _platformChannel.invokeMethod('clearSubtitleSessions');
   }
+
+  final _knownTracks = <(String, int), List<SubtitleTrack>>{};
+  int _subtitleRevision = 0;
 
   static final RegExp _bvidPattern = RegExp(
     r'^BV[0-9A-Za-z]{10}$',
@@ -81,6 +86,7 @@ class NativePlayerOverlayService
     required String bvid,
     required int cid,
   }) async {
+    final revision = _subtitleRevision;
     final Map<String, Object?>? arguments = _createVideoArguments(bvid, cid);
     if (arguments == null) {
       return const SubtitleTrackLoadResult.unavailable(message: '字幕请求参数无效。');
@@ -90,12 +96,23 @@ class NativePlayerOverlayService
         'loadSubtitleTracks',
         arguments,
       );
+      if (revision != _subtitleRevision) {
+        return const SubtitleTrackLoadResult.unavailable();
+      }
       if (result is! Map) {
         return const SubtitleTrackLoadResult.unavailable();
       }
-      return SubtitleTrackLoadResult.fromPlatformMap(
+      final parsed = SubtitleTrackLoadResult.fromPlatformMap(
         Map<Object?, Object?>.from(result),
       );
+      if (parsed.status != SubtitleLoadStatus.unavailable) {
+        _knownTracks.remove((bvid, cid));
+        _knownTracks[(bvid, cid)] = parsed.tracks;
+        while (_knownTracks.length > 8) {
+          _knownTracks.remove(_knownTracks.keys.first);
+        }
+      }
+      return parsed;
     } on PlatformException catch (error) {
       return _trackResultFromPlatformError(error);
     } on MissingPluginException {
@@ -114,18 +131,25 @@ class NativePlayerOverlayService
     required int cid,
     required String trackId,
   }) async {
+    final revision = _subtitleRevision;
     final Map<String, Object?>? arguments = _createVideoArguments(bvid, cid);
     final String normalizedTrackId = trackId.trim();
     if (arguments == null || normalizedTrackId.isEmpty) {
       return const SubtitleCueLoadResult.unavailable(message: '字幕请求参数无效。');
     }
     bool restoredSession = false;
+    final expected = _knownTracks[(bvid, cid)]
+        ?.where((track) => track.id == normalizedTrackId)
+        .firstOrNull;
     while (true) {
       try {
         final Object? result = await _platformChannel.invokeMethod(
           'loadSubtitleCues',
           <String, Object?>{...arguments, 'trackId': normalizedTrackId},
         );
+        if (revision != _subtitleRevision) {
+          return const SubtitleCueLoadResult.unavailable();
+        }
         if (result is! Map) {
           return const SubtitleCueLoadResult.unavailable();
         }
@@ -133,6 +157,9 @@ class NativePlayerOverlayService
           Map<Object?, Object?>.from(result),
         );
       } on PlatformException catch (error) {
+        if (revision != _subtitleRevision) {
+          return const SubtitleCueLoadResult.unavailable();
+        }
         if ((error.code == 'subtitle_track_not_loaded' ||
                 error.code == 'subtitle_document_expired') &&
             !restoredSession) {
@@ -150,7 +177,9 @@ class NativePlayerOverlayService
           }
           if (!tracks.tracks.any(
             (SubtitleTrack track) =>
-                track.id == normalizedTrackId && !track.isLocked,
+                track.id == normalizedTrackId &&
+                !track.isLocked &&
+                (expected == null || track.language == expected.language),
           )) {
             return const SubtitleCueLoadResult.locked();
           }
