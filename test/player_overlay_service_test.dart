@@ -34,7 +34,7 @@ void main() {
     () async {
       var tracks = 0, cues = 0;
       final channel = _FakePlayerOverlayPlatformChannel((method, args) async {
-        if (method == 'loadSubtitleTracks')
+        if (method == 'loadSubtitleTracks') {
           return {
             'status': 'available',
             'tracks': [
@@ -46,6 +46,7 @@ void main() {
               },
             ],
           };
+        }
         cues++;
         throw PlatformException(code: 'subtitle_document_expired');
       });
