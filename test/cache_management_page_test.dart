@@ -155,7 +155,7 @@ void main() {
     final _FakeMediaCacheService service = _FakeMediaCacheService(
       const MediaCacheStatus(
         usedBytes: 16 * 1024 * 1024,
-        capacityBytes: defaultMemoryBufferBytes,
+        capacityBytes: defaultMediaCacheBytes,
         isPlaybackActive: false,
         storageKind: MediaCacheStorageKind.windowsPlaybackBuffer,
       ),
@@ -165,7 +165,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('缓存管理'), findsOneWidget);
-    expect(find.text('历史磁盘缓冲残留'), findsOneWidget);
+    expect(find.text('磁盘播放缓冲实际占用'), findsOneWidget);
     expect(find.text('清空播放缓冲'), findsOneWidget);
     expect(find.textContaining('下次打开播放器时生效'), findsOneWidget);
     expect(find.textContaining('不是离线下载'), findsOneWidget);

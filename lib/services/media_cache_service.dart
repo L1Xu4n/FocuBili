@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'cache_file_lock.dart';
+
 /// 区分 Android 持久边播缓存和 Windows media_kit 临时播放缓冲，供页面展示准确说明。
 enum MediaCacheStorageKind { androidPersistent, windowsPlaybackBuffer }
 
@@ -16,12 +18,14 @@ class MediaCacheStatus {
     required this.capacityBytes,
     required this.isPlaybackActive,
     this.storageKind = MediaCacheStorageKind.androidPersistent,
+    this.bufferMessage,
   });
 
   final int usedBytes;
   final int capacityBytes;
   final bool isPlaybackActive;
   final MediaCacheStorageKind storageKind;
+  final String? bufferMessage;
 
   /// 把 Android 方法通道返回的字典转换为经过边界保护的 Dart 数据。
   factory MediaCacheStatus.fromPlatformMap(Map<Object?, Object?> values) {
@@ -64,13 +68,9 @@ const List<int> supportedMediaCacheBytes = <int>[
 /// 新安装 App 使用的默认缓存上限：512MB。
 const int defaultMediaCacheBytes = 512 * 1024 * 1024;
 
-/// Each mpv demuxer receives this combined forward/backward packet budget.
-const supportedMemoryBufferBytes = [
-  32 * 1024 * 1024,
-  64 * 1024 * 1024,
-  128 * 1024 * 1024,
-];
-const defaultMemoryBufferBytes = 64 * 1024 * 1024;
+/// New packet data after the disk soft threshold uses this budget per
+/// direction/demuxer. Existing disk files remain open for cached seeks.
+const desktopFallbackMemoryBytes = 64 * 1024 * 1024;
 
 /// 约束 Flutter 缓存管理页需要的原生能力，便于页面测试使用假实现。
 abstract interface class MediaCacheService {
@@ -87,6 +87,8 @@ abstract interface class MediaCacheService {
 /// 记录当前进程中仍存活的 Windows 播放器，防止清理正在被 libmpv 使用的缓冲文件。
 abstract final class WindowsMediaCacheRuntime {
   static int _activePlaybackSessions = 0;
+  static final diskMessages = <Object, String>{};
+  static String? get bufferMessage => diskMessages.values.firstOrNull;
 
   /// 在 Windows 播放服务创建后登记一个活跃会话。
   static void registerPlaybackSession() {
@@ -121,6 +123,7 @@ class WindowsMediaCacheService implements MediaCacheService {
            (() => WindowsMediaCacheRuntime.isPlaybackActive);
 
   static Future<void> _mutations = Future.value();
+  static int _sessionSerial = 0;
 
   Future<T> _serial<T>(Future<T> Function() action) {
     final operation = _mutations.then((_) => action());
@@ -131,16 +134,17 @@ class WindowsMediaCacheService implements MediaCacheService {
     return operation;
   }
 
-  /// No new disk packets are written. Sweep abandoned old buffers on startup
-  /// and after playback releases them, rather than on every segment access.
-  Future<void> maintain() => _serial(() async {
-    if (_playbackActiveLoader()) return;
-    final directory = await resolveCacheDirectory();
-    await _trimToCapacity(directory, 0);
-  });
+  /// Closed mpv packet files cannot be reused. Reclaim abandoned sessions
+  /// only after obtaining their lifetime lock; never unlink a live session.
+  Future<void> maintain() => _serial(
+    () => _withDirectory((directory) async {
+      await _cleanInactive(directory);
+    }),
+  );
 
   static const String cacheDirectoryName = 'media_kit_video_cache';
-  static const String _capacityPreferenceKey = 'media_kit_memory_buffer_bytes';
+  static const String _capacityPreferenceKey =
+      'windows_media_cache_capacity_bytes';
 
   final WindowsMediaCacheDirectoryLoader _directoryLoader;
   final Future<SharedPreferences> Function() _preferencesLoader;
@@ -155,74 +159,65 @@ class WindowsMediaCacheService implements MediaCacheService {
     return MediaCacheStatus(
       usedBytes: usedBytes,
       capacityBytes: capacityBytes,
-      isPlaybackActive: _playbackActiveLoader(),
+      isPlaybackActive:
+          _playbackActiveLoader() || await _hasLiveSession(directory),
       storageKind: MediaCacheStorageKind.windowsPlaybackBuffer,
+      bufferMessage: WindowsMediaCacheRuntime.bufferMessage,
     );
   }
 
-  /// 保存受支持的新容量，并在播放器未占用目录时按最后访问时间清理超出容量的旧文件。
+  /// 保存磁盘软阈值；关闭后不可复用的 packet 文件在空闲时回收。
   @override
   Future<MediaCacheStatus> setCapacityBytes(int capacityBytes) =>
       _serial(() async {
-        if (!supportedMemoryBufferBytes.contains(capacityBytes)) {
+        if (!supportedMediaCacheBytes.contains(capacityBytes)) {
           throw const MediaCacheException(
             'invalid_cache_capacity',
-            '请选择支持的视频缓存上限。',
+            '请选择支持的视频缓存阈值。',
           );
         }
-        _ensurePlaybackIdle();
-        try {
-          final SharedPreferences preferences = await _preferencesLoader();
-          _ensurePlaybackIdle();
-          await preferences.setInt(_capacityPreferenceKey, capacityBytes);
-          final Directory directory = await resolveCacheDirectory();
-          await _trimToCapacity(directory, 0);
-          return await loadStatus();
-        } on MediaCacheException {
-          rethrow;
-        } catch (_) {
-          throw const MediaCacheException(
-            'cache_error',
-            'Windows 视频缓冲上限暂时无法保存，请稍后重试。',
-          );
-        }
+        await _guardMutation(
+          () => _withDirectory((directory) async {
+            _ensurePlaybackIdle();
+            if (await _hasLiveSession(directory)) {
+              throw const MediaCacheException('cache_busy', '另一个播放器正在使用缓存。');
+            }
+            final preferences = await _preferencesLoader();
+            _ensurePlaybackIdle();
+            await preferences.setInt(_capacityPreferenceKey, capacityBytes);
+            await _cleanInactive(directory);
+          }),
+        );
+        return _guardMutation(loadStatus);
       });
 
   /// 删除应用专属 media_kit 缓冲目录内的内容，不触碰账号、笔记、截图或其他用户文件。
   @override
   Future<MediaCacheStatus> clearCache() => _serial(() async {
     _ensurePlaybackIdle();
-    try {
-      final Directory directory = await resolveCacheDirectory();
-      await for (final FileSystemEntity entity in directory.list(
-        followLinks: false,
-      )) {
+    await _guardMutation(
+      () => _withDirectory((directory) async {
+        if (await _hasLiveSession(directory)) {
+          throw const MediaCacheException('cache_busy', '另一个播放器正在使用缓存。');
+        }
         _ensurePlaybackIdle();
-        // No await between the guard and unlink: a newly created player cannot
-        // race deletion in this isolate. Links are unlinked, never traversed.
-        entity.deleteSync(recursive: true);
-      }
-      return await loadStatus();
-    } on MediaCacheException {
-      rethrow;
-    } catch (_) {
-      throw const MediaCacheException(
-        'cache_error',
-        'Windows 视频缓冲暂时无法清空，请稍后重试。',
-      );
-    }
+        await _cleanInactive(directory);
+        _ensurePlaybackIdle();
+      }),
+    );
+    return _guardMutation(loadStatus);
   });
 
-  /// 读取已保存容量，缺失或损坏时使用 64MB 内存缓冲默认值。
+  /// 读取已保存容量，缺失或损坏时使用 512MB 磁盘软阈值默认值。
   Future<int> loadCapacityBytes() async {
     try {
       final SharedPreferences preferences = await _preferencesLoader();
       final int? value = preferences.getInt(_capacityPreferenceKey);
-      return supportedMemoryBufferBytes.contains(value)
+      return supportedMediaCacheBytes.contains(value)
           ? value!
-          : defaultMemoryBufferBytes;
+          : defaultMediaCacheBytes;
     } catch (_) {
-      return defaultMemoryBufferBytes;
+      return defaultMediaCacheBytes;
     }
   }
 
@@ -266,7 +261,11 @@ class WindowsMediaCacheService implements MediaCacheService {
         followLinks: false,
       )) {
         if (entity is File) {
-          total += await entity.length();
+          try {
+            total += await entity.length();
+          } on FileSystemException {
+            if (await entity.exists()) rethrow;
+          }
         }
       }
       return total;
@@ -275,40 +274,102 @@ class WindowsMediaCacheService implements MediaCacheService {
     }
   }
 
-  /// 按最后访问时间从旧到新删除超出新上限的缓冲文件，容量内文件保持不变。
-  Future<void> _trimToCapacity(Directory directory, int capacityBytes) async {
-    final List<File> files = <File>[];
-    await for (final FileSystemEntity entity in directory.list(
-      recursive: true,
-      followLinks: false,
-    )) {
-      if (entity is File) {
-        files.add(entity);
-      }
+  Future<T> _withDirectory<T>(Future<T> Function(Directory) action) async {
+    final directory = await resolveCacheDirectory();
+    final path = '${directory.path}/sessions.lock';
+    if (await FileSystemEntity.type(path, followLinks: false) ==
+        FileSystemEntityType.link) {
+      throw const MediaCacheException('unsafe_cache_path', '缓存锁不能是符号链接。');
     }
-    final List<({File file, int size, DateTime accessed})> entries =
-        <({File file, int size, DateTime accessed})>[];
-    int total = 0;
-    for (final File file in files) {
-      final FileStat stat = await file.stat();
-      total += stat.size;
-      entries.add((file: file, size: stat.size, accessed: stat.accessed));
-    }
-    entries.sort(
-      (
-        ({File file, DateTime accessed, int size}) left,
-        ({File file, DateTime accessed, int size}) right,
-      ) => left.accessed.compareTo(right.accessed),
-    );
-    for (final ({File file, int size, DateTime accessed}) entry in entries) {
-      if (total <= capacityBytes) {
-        break;
-      }
-      _ensurePlaybackIdle();
-      entry.file.deleteSync();
-      total -= entry.size;
+    final lock = await CacheFileLock.acquire(path);
+    try {
+      return await action(directory);
+    } finally {
+      await lock.release();
     }
   }
+
+  Future<T> _guardMutation<T>(Future<T> Function() action) async {
+    try {
+      return await action();
+    } on MediaCacheException {
+      rethrow;
+    } catch (_) {
+      throw const MediaCacheException('cache_error', '磁盘缓冲暂时无法清理，请稍后重试。');
+    }
+  }
+
+  Future<CacheFileLock?> _trySessionLock(Directory session) async {
+    final path = '${session.path}/owner.lock';
+    final type = await FileSystemEntity.type(path, followLinks: false);
+    if (type == FileSystemEntityType.link ||
+        type == FileSystemEntityType.directory) {
+      return null;
+    }
+    try {
+      return await CacheFileLock.acquire(path, timeout: Duration.zero);
+    } on FileSystemException {
+      return null;
+    }
+  }
+
+  Future<bool> _hasLiveSession(Directory directory) async {
+    await for (final entity in directory.list(followLinks: false)) {
+      if (entity is! Directory ||
+          !entity.uri.pathSegments
+              .where((s) => s.isNotEmpty)
+              .last
+              .startsWith('session_')) {
+        continue;
+      }
+      final lock = await _trySessionLock(entity);
+      if (lock == null) return true;
+      await lock.release();
+    }
+    return false;
+  }
+
+  Future<void> _cleanInactive(Directory directory) async {
+    final legacy = <FileSystemEntity>[];
+    var live = false;
+    await for (final entity in directory.list(followLinks: false)) {
+      final name = entity.uri.pathSegments.where((s) => s.isNotEmpty).last;
+      if (name == 'sessions.lock') continue;
+      if (entity is Directory && name.startsWith('session_')) {
+        final lock = await _trySessionLock(entity);
+        if (lock == null) {
+          live = true;
+          continue;
+        }
+        await lock.release();
+        // Creation and cleanup share sessions.lock, so nobody can claim this
+        // old unique directory between releasing owner.lock and unlinking it.
+        entity.deleteSync(recursive: true);
+      } else {
+        legacy.add(entity);
+      }
+    }
+    if (live || _playbackActiveLoader()) return;
+    for (final entity in legacy) {
+      _ensurePlaybackIdle();
+      entity.deleteSync(recursive: true); // Links are removed, never followed.
+    }
+  }
+
+  /// A unique directory plus an OS lifetime lock also protects another process.
+  Future<MediaCacheDirectoryLease> openSession() => _serial(
+    () => _withDirectory((directory) async {
+      await _cleanInactive(directory);
+      final session = await Directory(
+        '${directory.path}/session_${pid}_${DateTime.now().microsecondsSinceEpoch}_${_sessionSerial++}',
+      ).create();
+      final lock = await CacheFileLock.acquire('${session.path}/owner.lock');
+      return MediaCacheDirectoryLease(session, lock, this);
+    }),
+  );
+
+  Future<int> diskBytes() async =>
+      _calculateDirectorySize(await resolveCacheDirectory());
 
   /// 在 path_provider 返回的应用缓存目录下追加固定子目录，确保卸载和系统清理边界明确。
   static Future<Directory> _loadDefaultCacheDirectory() async {
@@ -316,6 +377,22 @@ class WindowsMediaCacheService implements MediaCacheService {
     return Directory(
       '${applicationCache.path}${Platform.pathSeparator}$cacheDirectoryName',
     );
+  }
+}
+
+class MediaCacheDirectoryLease {
+  MediaCacheDirectoryLease(this.directory, this._lock, this._service);
+  final Directory directory;
+  final CacheFileLock _lock;
+  final WindowsMediaCacheService _service;
+  bool _closed = false;
+
+  /// Call only after mpv has closed all handles using this directory.
+  Future<void> close() async {
+    if (_closed) return;
+    _closed = true;
+    await _lock.release();
+    await _service.maintain();
   }
 }
 

@@ -15,6 +15,7 @@ import '../models/video_preview.dart';
 import 'desktop_playback_source_service.dart';
 import 'flutter_video_frame_capture.dart';
 import 'media_cache_service.dart';
+import 'desktop_disk_cache_session.dart';
 import 'native_playback_service.dart';
 import 'local_file_playback_service.dart';
 import 'listening_playback_service.dart';
@@ -172,6 +173,7 @@ class WindowsPlaybackService
   bool _restoringPosition = false;
   bool _handlingMediaError = false;
   bool _cacheConfigured = false;
+  DesktopDiskCacheSession? _diskCacheSession;
   bool _shouldPlayAfterFallback = true;
   int _sourceGeneration = 0;
   int _currentMediaAttemptIndex = 0;
@@ -743,6 +745,7 @@ class WindowsPlaybackService
         // 偏好设置写入失败不能阻止播放器、磁盘缓冲句柄和活跃会话标记释放。
       }
       _disposed = true;
+      await _diskCacheSession?.stopMonitoring();
       for (final StreamSubscription<dynamic> subscription in _subscriptions) {
         await subscription.cancel();
       }
@@ -752,7 +755,10 @@ class WindowsPlaybackService
         await _linuxSession.dispose();
         await _linuxMiniPlayer.dispose();
       } finally {
+        // Keep the lifetime lock if mpv disposal fails; its file handles may
+        // still be live. A later process can reclaim them only after exit.
         await _player.dispose();
+        await _diskCacheSession?.releaseAfterPlayerClosed();
       }
     } finally {
       _activeAudioMedia = null;
@@ -766,34 +772,18 @@ class WindowsPlaybackService
     }
   }
 
-  /// Apply a bounded forward/backward memory packet budget per demuxer.
-  /// Separate audio/video tracks each have a budget; decoded frames are extra.
+  /// Preserve mpv disk-backed seeks with a measured soft disk threshold.
   Future<void> _configureWindowsMediaCache() async {
-    if (_cacheConfigured || _disposed) {
-      return;
-    }
+    if (_cacheConfigured || _disposed) return;
     _cacheConfigured = true;
-    final PlatformPlayer? platformPlayer = _player.platform;
-    if (platformPlayer is! NativePlayer) {
-      return;
-    }
-    try {
-      final WindowsMediaCacheService cacheService = WindowsMediaCacheService();
-      final int capacityBytes = await cacheService.loadCapacityBytes();
-      await platformPlayer.setProperty('cache', 'yes');
-      // mpv disk packet files are append-only and cannot enforce a byte cap.
-      await platformPlayer.setProperty('cache-on-disk', 'no');
-      await platformPlayer.setProperty(
-        'demuxer-max-bytes',
-        (capacityBytes * 3 ~/ 4).toString(),
-      );
-      await platformPlayer.setProperty(
-        'demuxer-max-back-bytes',
-        (capacityBytes ~/ 4).toString(),
-      );
-    } catch (_) {
-      // 应用缓存目录或偏好设置异常时保留 media_kit 默认内存缓冲，不能阻止视频播放。
-    }
+    final platformPlayer = _player.platform;
+    if (platformPlayer is! NativePlayer) return;
+    final session = DesktopDiskCacheSession(
+      writeProperty: platformPlayer.setProperty,
+      readProperty: platformPlayer.getProperty,
+    );
+    _diskCacheSession = session;
+    await session.configure();
   }
 
   /// 订阅底层播放、缓冲、进度、尺寸、结束和错误事件，并统一转换为页面快照。

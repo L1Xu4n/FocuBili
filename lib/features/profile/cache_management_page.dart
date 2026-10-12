@@ -162,7 +162,7 @@ class _CacheManagementPageState extends State<CacheManagementPage> {
           children: <Widget>[
             Text(
               status.storageKind == MediaCacheStorageKind.windowsPlaybackBuffer
-                  ? '历史磁盘缓冲残留'
+                  ? '磁盘播放缓冲实际占用'
                   : '当前占用',
               style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
             ),
@@ -176,7 +176,7 @@ class _CacheManagementPageState extends State<CacheManagementPage> {
             const SizedBox(height: 8),
             Text(
               status.storageKind == MediaCacheStorageKind.windowsPlaybackBuffer
-                  ? '每路内存缓冲预算：${formatMediaCacheBytes(status.capacityBytes)}'
+                  ? '磁盘软阈值：${formatMediaCacheBytes(status.capacityBytes)}（可能超出）'
                   : '容量上限：${formatMediaCacheBytes(status.capacityBytes)}',
               style: TextStyle(
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -201,25 +201,22 @@ class _CacheManagementPageState extends State<CacheManagementPage> {
             labelText:
                 status.storageKind ==
                     MediaCacheStorageKind.windowsPlaybackBuffer
-                ? '每路内存缓冲预算'
+                ? '磁盘播放缓冲软阈值'
                 : '视频磁盘缓存上限',
             border: const OutlineInputBorder(),
           ),
-          items:
-              (status.storageKind == MediaCacheStorageKind.windowsPlaybackBuffer
-                      ? supportedMemoryBufferBytes
-                      : supportedMediaCacheBytes)
-                  .map(
-                    (int capacityBytes) => DropdownMenuItem<int>(
-                      value: capacityBytes,
-                      child: Text(
-                        formatMediaCacheBytes(capacityBytes),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  )
-                  .toList(growable: false),
+          items: supportedMediaCacheBytes
+              .map(
+                (int capacityBytes) => DropdownMenuItem<int>(
+                  value: capacityBytes,
+                  child: Text(
+                    formatMediaCacheBytes(capacityBytes),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              )
+              .toList(growable: false),
           // 选择函数只在没有活跃播放器且没有其他操作时发送容量变更。
           onChanged: _mutating || status.isPlaybackActive
               ? null
@@ -262,12 +259,21 @@ class _CacheManagementPageState extends State<CacheManagementPage> {
               '缓存与缓冲说明',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
             ),
+            if (status?.bufferMessage != null)
+              Text(
+                status!.bufferMessage!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
             const SizedBox(height: 8),
             Text(
               windowsBuffer
-                  ? '播放使用有界内存缓冲，不再向磁盘追加临时视频文件。'
-                        '默认每路 64 MB，前向占 3/4、回看占 1/4；独立音视频各有一份预算，解码内存另计。'
-                        '容量调整在下次打开播放器时生效。启动或退出播放后自动清理旧磁盘残留；不是离线下载，不能跨重启复用。'
+                  ? '保留本次播放的磁盘回看缓冲，默认软阈值 512 MB。每 0.5 秒按实际文件大小检查；'
+                        '达到阈值后请求暂停新增磁盘写入，已有文件保留到播放结束，绝不删除活跃文件。'
+                        '检查和播放器响应存在延迟，实际占用可能超过阈值；这不是磁盘硬上限。'
+                        '随后新增数据使用每路前后各 64 MB 的内存预算，独立音视频各有一份，解码内存另计。'
+                        '回看受播放器保留范围限制，范围外需重新联网。内存索引预算不代表磁盘字节。'
+                        '设置在下次打开播放器时生效。关闭后自动清理已结束会话，启动时回收崩溃残留；'
+                        '不是离线下载，不能跨重启复用，不影响手动离线文件。'
                   : '边播边缓存默认 512 MB，超过上限自动淘汰最久未使用的内容，不是离线下载。'
                         '当前播放内容和写入中的分片受到保护；全部被占用时暂停新增缓存，继续联网播放。'
                         '系统也可能清理临时缓存，手动离线下载不参与自动清理。',

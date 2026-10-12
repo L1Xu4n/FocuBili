@@ -194,7 +194,7 @@ void main() {
       (const Size(390, 844), 1.0, Brightness.light, 'mobile'),
       (const Size(320, 850), 1.8, Brightness.light, 'large-text'),
       (const Size(1280, 950), 1.0, Brightness.dark, 'desktop-dark'),
-      (const Size(1280, 950), 1.0, Brightness.dark, 'desktop-memory'),
+      (const Size(1280, 950), 1.0, Brightness.dark, 'desktop-buffer'),
     ]) {
       tester.view.physicalSize = config.$1;
       tester.view.devicePixelRatio = 1;
@@ -222,11 +222,9 @@ void main() {
               service: _Media(
                 MediaCacheStatus(
                   usedBytes: 128 * 1024 * 1024,
-                  capacityBytes: config.$4 == 'desktop-memory'
-                      ? defaultMemoryBufferBytes
-                      : defaultMediaCacheBytes,
+                  capacityBytes: defaultMediaCacheBytes,
                   isPlaybackActive: false,
-                  storageKind: config.$4 == 'desktop-memory'
+                  storageKind: config.$4 == 'desktop-buffer'
                       ? MediaCacheStorageKind.windowsPlaybackBuffer
                       : MediaCacheStorageKind.androidPersistent,
                 ),

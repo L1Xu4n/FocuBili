@@ -1,10 +1,26 @@
 import 'dart:io';
 import 'dart:async';
+import 'dart:isolate';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:focubili/services/media_cache_service.dart';
+
+Future<void> _holdPeerSession((String, SendPort) input) async {
+  final service = WindowsMediaCacheService(
+    directoryLoader: () async => Directory(input.$1),
+    playbackActiveLoader: () => false,
+  );
+  final lease = await service.openSession();
+  await File('${lease.directory.path}/peer-packet').writeAsBytes([8, 9]);
+  final commands = ReceivePort();
+  input.$2.send((commands.sendPort, lease.directory.path));
+  await commands.first;
+  commands.close();
+  await lease.close();
+  input.$2.send('closed');
+}
 
 /// 验证 Windows media_kit 缓冲只在应用专属目录内统计、限额和清理。
 void main() {
@@ -38,6 +54,50 @@ void main() {
       playbackActiveLoader: () => playbackActive,
     );
   }
+
+  test('another isolate owns a lifetime lock until media has closed', () async {
+    final replies = ReceivePort();
+    final messages = StreamIterator<Object?>(replies);
+    await Isolate.spawn(_holdPeerSession, (
+      cacheDirectory.path,
+      replies.sendPort,
+    ));
+    await messages.moveNext();
+    final (command, path) = messages.current as (SendPort, String);
+    try {
+      final service = createService();
+      expect((await service.loadStatus()).isPlaybackActive, isTrue);
+      await service.maintain();
+      expect(await File('$path/peer-packet').readAsBytes(), [8, 9]);
+      await expectLater(
+        service.clearCache(),
+        throwsA(isA<MediaCacheException>()),
+      );
+      await expectLater(
+        service.setCapacityBytes(supportedMediaCacheBytes.first),
+        throwsA(isA<MediaCacheException>()),
+      );
+    } finally {
+      command.send('close');
+      await messages.moveNext();
+      expect(messages.current, 'closed');
+      await messages.cancel();
+      replies.close();
+    }
+    expect(await Directory(path).exists(), isFalse);
+  });
+
+  test(
+    'startup reclaims an abandoned session with an absent owner lock',
+    () async {
+      final abandoned = await Directory(
+        '${cacheDirectory.path}/session_abandoned',
+      ).create(recursive: true);
+      await File('${abandoned.path}/mpv-packet').writeAsBytes([1]);
+      await createService().maintain();
+      expect(await abandoned.exists(), isFalse);
+    },
+  );
 
   test(
     'maintenance preserves active playback and explicit offline downloads',
@@ -118,13 +178,13 @@ void main() {
 
     final MediaCacheStatus initial = await service.loadStatus();
     expect(initial.usedBytes, 7);
-    expect(initial.capacityBytes, defaultMemoryBufferBytes);
+    expect(initial.capacityBytes, defaultMediaCacheBytes);
     expect(initial.storageKind, MediaCacheStorageKind.windowsPlaybackBuffer);
 
     final MediaCacheStatus resized = await service.setCapacityBytes(
-      supportedMemoryBufferBytes.first,
+      supportedMediaCacheBytes.first,
     );
-    expect(resized.capacityBytes, supportedMemoryBufferBytes.first);
+    expect(resized.capacityBytes, supportedMediaCacheBytes.first);
     expect(resized.usedBytes, 0);
 
     final MediaCacheStatus cleared = await service.clearCache();
@@ -140,7 +200,7 @@ void main() {
     );
 
     await expectLater(
-      service.setCapacityBytes(supportedMemoryBufferBytes.first),
+      service.setCapacityBytes(supportedMediaCacheBytes.first),
       throwsA(
         isA<MediaCacheException>().having(
           (MediaCacheException error) => error.code,

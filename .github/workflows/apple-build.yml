@@ -58,7 +58,7 @@ jobs:
       - run: flutter pub get
       - name: Check cache locking and subtitle lifecycle on macOS
         if: matrix.platform == 'macos'
-        run: flutter test --no-pub test/cache_file_lock_test.dart test/image_resource_cache_test.dart test/cached_player_overlay_service_test.dart test/windows_media_cache_service_test.dart
+        run: flutter test --no-pub test/cache_file_lock_test.dart test/image_resource_cache_test.dart test/cached_player_overlay_service_test.dart test/windows_media_cache_service_test.dart test/desktop_disk_cache_session_test.dart
       - name: Build iOS device archive (unsigned)
         if: matrix.platform == 'ios'
         run: |

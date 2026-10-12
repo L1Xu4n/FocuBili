@@ -23,7 +23,10 @@ class CacheFileLock {
   static final _flock = _library.lookupFunction<_FlockNative, _Flock>('flock');
   static final _close = _library.lookupFunction<_CloseNative, _Close>('close');
 
-  static Future<CacheFileLock> acquire(String path) async {
+  static Future<CacheFileLock> acquire(
+    String path, {
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
     int? descriptor;
     RandomAccessFile? file;
     try {
@@ -47,7 +50,7 @@ class CacheFileLock {
         }
       }
       final watch = Stopwatch()..start();
-      while (watch.elapsed < const Duration(seconds: 10)) {
+      while (true) {
         if (descriptor != null) {
           if (_flock(descriptor, 2 | 4) == 0) {
             return CacheFileLock._(descriptor, null); // LOCK_EX | LOCK_NB
@@ -60,6 +63,7 @@ class CacheFileLock {
             /* Retry a held Windows handle lock. */
           }
         }
+        if (watch.elapsed >= timeout) break;
         await Future<void>.delayed(const Duration(milliseconds: 5));
       }
       throw const FileSystemException('Cache lock busy');

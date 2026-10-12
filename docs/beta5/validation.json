@@ -2,12 +2,12 @@
   "environment": "Linux; Flutter 3.44.6 / Dart 3.12.2; no real Windows/Android playback host",
   "fullFlutter": {
     "command": "flutter test --no-pub",
-    "passed": 855,
+    "passed": 865,
     "skipped": 1,
     "failed": 0
   },
   "targetedCache": {
-    "passed": 64,
+    "passed": 78,
     "failed": 0
   },
   "captureAndImagePerformance": {
@@ -26,6 +26,8 @@
   },
   "analyze": "passed",
   "apkBuild": "debug split-per-ABI passed",
-  "ci": "not yet started",
-  "desktopBufferDecision": "memory proposal reduces same-session backseek range; explicit review pending"
+  "ci": "Final disk-preserving revision will run all platform workflows; terminal links recorded in draft PR #52.",
+  "desktopBufferDecision": "Preserve disk-backed rewind. Default 512 MiB soft threshold sampled every 500 ms; active files retained; no hard disk cap claim. Original preference key retained.",
+  "desktopSessionNewTests": 10,
+  "desktopNativeProbe": "Linux/macOS loopback fixture, separate external audio, real packet files and 256 KiB explicit padding trigger; results in final CI logs."
 }

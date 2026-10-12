@@ -1,8 +1,8 @@
 {
   "localArm64": {
     "file": "app-arm64-v8a-debug.apk",
-    "bytes": 67603928,
-    "sha256": "244ad74143f10bb5757691cb33cb4067f31f5a57b4624b070ff14692171e681b",
+    "bytes": 97107678,
+    "sha256": "4d69567e4b6456f93b801c2d65ed507767f12c3dfaaac9b4ddd31ac66e6dcd97",
     "package": "com.focubili.app.preview",
     "versionName": "1.8.0-beta.5",
     "versionCode": 2025,
@@ -12,5 +12,5 @@
   "releaseSigningConfigurationPresent": false,
   "userInstalledCertificateKnown": false,
   "libraryUpload": "HTTP 401; no Library file created",
-  "ciArtifact": "pending; separate CI debug certificate may differ"
+  "ciArtifact": "Final disk-preserving commit artifacts and independently verified CI certificate will be recorded in draft PR #52."
 }

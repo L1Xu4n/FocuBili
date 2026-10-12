@@ -16,15 +16,19 @@
 
 这些确定性测试证明上述竞态被阻断，不代表真实设备中所有“串字幕”症状均已现场验收。
 
-## 视频与桌面取舍（待确认）
+## 视频与桌面磁盘回看
 
-Android 保留 Media3 边播缓存，改为访问 LRU，保护当前音视频 representation 和写入预约。听视频只保护正在使用的音轨。容量满或写盘失败时停止可选缓存写入，继续向解码器传递网络数据；关闭失败 writer 会释放对应范围预约。显式离线视频目录不参与此清理。
+Android 保留默认 512 MiB 的 Media3 边播缓存，改为访问 LRU，保护当前音视频 representation 和写入预约。听视频只保护正在使用的音轨。容量满或写盘失败时停止可选缓存写入，继续向解码器传递网络数据；关闭失败 writer 会释放对应范围预约。显式离线视频目录不参与此清理。
 
-旧桌面配置是 `cache-on-disk=yes`，两项 demuxer 字节设置各取默认 512 MiB。[旧实现](https://github.com/L1Xu4n/FocuBili/blob/5a49fc60288e11265eda38b1da9c7b77171a9710/lib/services/windows_playback_service.dart#L767) 未实现按 BV/CID/分段检索文件或跨播放器重开的文件索引。mpv 文档说明该 packet 文件仅追加，关闭媒体即删除，不能作为后续播放资源复用；磁盘模式下字节设置限制的是内存元数据，不是磁盘文件大小。[官方依据](https://mpv.io/manual/stable/#cache)
+桌面最终保留 `cache-on-disk=yes`，撤回纯内存默认方案。原 `windows_media_cache_capacity_bytes` 偏好继续有效，默认 **512 MiB 磁盘软阈值**，可选 128/256/512/1024/2048 MiB。原来的前后各一份 demuxer 预算在磁盘模式下计量的是内存元数据，不能当作磁盘上限。mpv 使用只追加的临时 packet 文件；关闭媒体后不可复用，也没有本项目可调用的磁盘硬配额。[mpv 官方说明](https://mpv.io/manual/stable/#options-cache-on-disk)
 
-当前草案改为每路 64 MiB 内存缓冲（可选 32/64/128），前向 3/4、回看 1/4。音视频独立 demuxer 各有一份预算，解码器/画面/其他内存另计，不能视为进程 RSS 硬上限。启动和最后播放器关闭后自动清理旧的专属磁盘残留，播放中拒绝删除。
+实现使用正确的 `demuxer-cache-dir`、`demuxer-cache-unlink-files=whendone` 和每个播放器的独立目录，每 500 ms 汇总专属目录内真实文件长度。达到软阈值后请求 `cache-on-disk=no`，保留已打开的 packet 文件，后续新数据改用每路前后各 64 MiB 的 RAM 预算；独立音视频 demuxer 各有一份，解码器/画面内存另计。只在旧媒体文件都关闭且总占用低于阈值后为新媒体恢复写盘。回看仍取决于保留的索引范围，范围外需联网。
 
-**实际取舍：没有移除跨重启复用能力，因为旧模式从未实现它；但确实缩短了单次长视频播放中的回看范围。** 仍在缓冲范围内的 seek 可复用，范围外需要网络重新取数据；同会话长距离重复播放可能比旧磁盘模式耗更多流量，压缩媒体数据转入内存也可能比旧短时播放占更多 RAM。跨关闭/重启的重复播放两者都需重新联网。这里是配置和播放器语义推导，没有实测真实 B站流量或 Windows RSS；不把它写成无代价提升。已向用户提出明确取舍，draft 保留待审状态。
+**该阈值不是硬上限**：采样、UI isolate 暂停及 demuxer 工作线程接收设置有延迟，超出量没有严格上界。每次设置均回读，因为 media_kit 的 setter 不返回 mpv 的错误码；运行中的读取/设置失败会显示明确状态并在下次检查重试；初始化失败会明确回退，不能宣称配额已生效。Windows 固定 mpv 依赖的工作线程会更新磁盘选项，关闭新增写入不会立即销毁已有文件。[固定版本源码：选项传播](https://github.com/mpv-player/mpv/blob/652a1dd90711839acdccc08004056d25514ef2d8/demux/demux.c#L2318-L2323)、[临时文件生命周期](https://github.com/mpv-player/mpv/blob/652a1dd90711839acdccc08004056d25514ef2d8/demux/cache.c#L74-L120)。这不等于 Windows 真实播放验收。
+
+每个会话持有 OS 文件锁直到播放器完成释放；目录创建/回收另有跨进程锁。维护只清理已结束或崩溃遗留的会话，保留本进程/其他 isolate/其他进程的活跃文件。播放器关闭后自动回收，启动时回收残留；离线下载不受影响。相关单测覆盖真实文件字节、跨 isolate 互斥、播放中清空拒绝、设置失败及配置/释放竞态。
+
+`tool/desktop_disk_cache_probe.dart` 随 Linux/macOS 既有原生探针运行，使用本机 HTTP 合成媒体和独立音轨，检查真实 packet 文件、缓存回看、阈值后的设置回读/保留文件和关闭清理。探针用明确记录的 256 KiB 测试填充文件触发阈值，不是 B站流量或长视频磁盘增长基准；最终结果见对应 Actions 日志。
 
 ## 可复现证据
 
@@ -41,7 +45,7 @@ Android 保留 Media3 边播缓存，改为访问 LRU，保护当前音视频 re
 图片对照是本机 HTTP server + Flutter 实际解码，模拟内存压力或重启；只针对旧的 Image.network 入口，不声称旧 cached_network_image 的每次打开都联网。时间记录不作为跨机器速度承诺。[原始图片计数](image-performance.json)、[订阅复测](subscription-performance.json)、[分页复测](subscription-paging.json)、[dev 对照说明](../beta4/README.md)。
 
 ```sh
-flutter test --no-pub test/image_resource_cache_test.dart test/cache_file_lock_test.dart test/cache_review_probe_test.dart test/cached_player_overlay_service_test.dart test/bilibili_auth_service_test.dart test/windows_media_cache_service_test.dart test/player_overlay_service_test.dart
+flutter test --no-pub test/image_resource_cache_test.dart test/cache_file_lock_test.dart test/cache_review_probe_test.dart test/cached_player_overlay_service_test.dart test/bilibili_auth_service_test.dart test/windows_media_cache_service_test.dart test/desktop_disk_cache_session_test.dart test/async_service_failure_test.dart test/player_overlay_service_test.dart
 flutter test --no-pub --dart-define=CACHE_PERF_OUTPUT=/tmp/image-performance.json test/cache_review_probe_test.dart
 flutter test --no-pub --dart-define=PERF_OUTPUT=/tmp/subscription-performance.json --dart-define=PAGING_OUTPUT=/tmp/subscription-paging.json test/subscription_performance_probe_test.dart test/subscription_paging_probe_test.dart
 flutter test --no-pub
@@ -49,16 +53,16 @@ cd android
 bash ./gradlew :app:testDebugUnitTest :focubili_android:testDebugUnitTest
 ```
 
-本地完整 Flutter 855 通过、1 项原有跳过；缓存定向 64 通过；截图/图片请求 4 通过；订阅性能 3 通过；Android JVM 42 项 / 10 suite 通过。analyze、格式、diff check 和三 ABI debug 构建通过。最终机器记录见 [validation.json](validation.json)。先前全量运行遇到测试文件编辑期间的加载失败，最终固定源码后重跑全量通过。
+本地完整 Flutter 865 通过、1 项原有跳过；缓存定向 78 通过；截图/图片请求 4 通过；订阅性能 3 通过；Android JVM 42 项 / 10 suite 通过。analyze、格式、diff check 和三 ABI debug 构建通过。最终机器记录见 [validation.json](validation.json)。最终全量固定源码运行通过。桌面修改的首轮全量发现两项异步状态错误转换回归，已修复并完整重跑；相关错误处理用例纳入定向测试。
 
 ## 实际 UI 截图
 
-以下是 Linux Flutter widget 夹具真实渲染，使用可控内容和缓存用量，不是设计图，也不是 Windows 真机画面。12 张覆盖 390px、320px/180% 字号、1280px 深色及桌面内存草案。
+以下是 Linux Flutter widget 夹具真实渲染，使用可控内容和缓存用量，不是设计图，也不是 Windows 真机画面。12 张覆盖 390px、320px/180% 字号、1280px 深色及桌面磁盘缓冲。
 
 | 手机 | 大字号 | 桌面 |
 |---|---|---|
 | [视频](cache-video-mobile.png) | [图片](cache-images-large-text.png) | [磁盘缓存 UI 深色布局](cache-video-desktop-dark.png) |
-| [图片](cache-images-mobile.png) | [字幕](cache-subtitles-large-text.png) | [桌面内存草案](cache-video-desktop-memory.png) |
+| [图片](cache-images-mobile.png) | [字幕](cache-subtitles-large-text.png) | [桌面磁盘缓冲](cache-video-desktop-buffer.png) |
 
 订阅布局、首页卡片和宽屏双击反馈沿用 [Beta4 截图](../beta4/README.md)。其回归包含在本轮全量测试中。
 
