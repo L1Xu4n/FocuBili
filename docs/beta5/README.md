@@ -22,7 +22,7 @@ Android 保留默认 512 MiB 的 Media3 边播缓存，改为访问 LRU，保护
 
 桌面最终保留 `cache-on-disk=yes`，撤回纯内存默认方案。原 `windows_media_cache_capacity_bytes` 偏好继续有效，默认 **512 MiB 磁盘软阈值**，可选 128/256/512/1024/2048 MiB。原来的前后各一份 demuxer 预算在磁盘模式下计量的是内存元数据，不能当作磁盘上限。mpv 使用只追加的临时 packet 文件；关闭媒体后不可复用，也没有本项目可调用的磁盘硬配额。[mpv 官方说明](https://mpv.io/manual/stable/#options-cache-on-disk)
 
-实现使用正确的 `demuxer-cache-dir`、`demuxer-cache-unlink-files=whendone` 和每个播放器的独立目录，每 500 ms 汇总专属目录内真实文件长度。达到软阈值后请求 `cache-on-disk=no`，保留已打开的 packet 文件，后续新数据改用每路前后各 64 MiB 的 RAM 预算；独立音视频 demuxer 各有一份，解码器/画面内存另计。只在旧媒体文件都关闭且总占用低于阈值后为新媒体恢复写盘。回看仍取决于保留的索引范围，范围外需联网。
+实现使用 `demuxer-cache-dir`、`demuxer-cache-unlink-files=whendone`；Apple 捆绑的 mpv 0.36 则使用旧名称 `cache-dir` / `cache-unlink-files`，两项均回读验证后才启用写盘（[0.36 官方选项](https://github.com/mpv-player/mpv/blob/v0.36.0/demux/cache.c#L41-L49)）。每个播放器使用独立目录，每 500 ms 汇总专属目录内真实文件长度。达到软阈值后请求 `cache-on-disk=no`，保留已打开的 packet 文件，后续新数据改用每路前后各 64 MiB 的 RAM 预算；独立音视频 demuxer 各有一份，解码器/画面内存另计。只在旧媒体文件都关闭且总占用低于阈值后为新媒体恢复写盘。回看仍取决于保留的索引范围，范围外需联网。
 
 **该阈值不是硬上限**：采样、UI isolate 暂停及 demuxer 工作线程接收设置有延迟，超出量没有严格上界。每次设置均回读，因为 media_kit 的 setter 不返回 mpv 的错误码；运行中的读取/设置失败会显示明确状态并在下次检查重试；初始化失败会明确回退，不能宣称配额已生效。Windows 固定 mpv 依赖的工作线程会更新磁盘选项，关闭新增写入不会立即销毁已有文件。[固定版本源码：选项传播](https://github.com/mpv-player/mpv/blob/652a1dd90711839acdccc08004056d25514ef2d8/demux/demux.c#L2486-L2522)、[临时文件生命周期](https://github.com/mpv-player/mpv/blob/652a1dd90711839acdccc08004056d25514ef2d8/demux/cache.c#L74-L120)。这不等于 Windows 真实播放验收。
 
@@ -53,7 +53,7 @@ cd android
 bash ./gradlew :app:testDebugUnitTest :focubili_android:testDebugUnitTest
 ```
 
-本地完整 Flutter 865 通过、1 项原有跳过；缓存定向 78 通过；截图/图片请求 4 通过；订阅性能 3 通过；Android JVM 42 项 / 10 suite 通过。analyze、格式、diff check 和三 ABI debug 构建通过。最终机器记录见 [validation.json](validation.json)。最终全量固定源码运行通过。桌面修改的首轮全量发现两项异步状态错误转换回归，已修复并完整重跑；相关错误处理用例纳入定向测试。
+本地完整 Flutter 866 通过、1 项原有跳过；缓存定向 79 通过；截图/图片请求 4 通过；订阅性能 3 通过；Android JVM 42 项 / 10 suite 通过。analyze、格式、diff check 和三 ABI debug 构建通过。最终机器记录见 [validation.json](validation.json)。最终全量固定源码运行通过。桌面修改的首轮全量发现两项异步状态错误转换回归，已修复并完整重跑；相关错误处理用例纳入定向测试。
 
 ## 实际 UI 截图
 

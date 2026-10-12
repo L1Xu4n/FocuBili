@@ -26,7 +26,7 @@ void main() {
   late TestDiskStorage storage;
   late DesktopDiskCacheSession session;
   late Map<String, String> properties;
-  String? rejectedProperty;
+  late Set<String> rejectedProperties;
   Completer<void>? blockWrite;
   Completer<void>? enteredWrite;
   setUp(() async {
@@ -35,7 +35,7 @@ void main() {
       Directory('${root.path}/${WindowsMediaCacheService.cacheDirectoryName}'),
     );
     properties = {};
-    rejectedProperty = null;
+    rejectedProperties = {};
     blockWrite = null;
     enteredWrite = null;
     session = DesktopDiskCacheSession(
@@ -47,7 +47,7 @@ void main() {
           await blockWrite!.future;
           blockWrite = null;
         }
-        if (name != rejectedProperty) properties[name] = value;
+        if (!rejectedProperties.contains(name)) properties[name] = value;
       },
       readProperty: (name) async => properties[name] ?? '',
     );
@@ -68,6 +68,19 @@ void main() {
       expect(properties['demuxer-max-bytes'], '128');
       expect(properties['demuxer-max-back-bytes'], '128');
       expect(WindowsMediaCacheRuntime.bufferMessage, isNull);
+      expect(session.configurationError, isNull);
+    },
+  );
+
+  test(
+    'mpv 0.36 legacy names preserve disk mode with verified directory and unlink policy',
+    () async {
+      rejectedProperties = {'demuxer-cache-dir'};
+      await session.configure();
+      expect(properties['cache-dir'], session.directoryPath);
+      expect(properties['cache-unlink-files'], 'whendone');
+      expect(properties['cache-on-disk'], 'yes');
+      expect(session.configurationError, isNull);
     },
   );
 
@@ -139,11 +152,11 @@ void main() {
     await File(
       '${session.directoryPath}/packet',
     ).writeAsBytes(List.filled(150, 1));
-    rejectedProperty = 'cache-on-disk';
+    rejectedProperties = {'cache-on-disk'};
     await session.sample();
     expect(session.writesSuspended, isFalse);
     expect(WindowsMediaCacheRuntime.bufferMessage, contains('未能暂停'));
-    rejectedProperty = null;
+    rejectedProperties = {};
     await session.sample();
     expect(session.writesSuspended, isTrue);
     expect(properties['cache-on-disk'], 'no');
@@ -168,17 +181,21 @@ void main() {
   test(
     'unsupported required option falls back with an explicit diagnostic',
     () async {
-      rejectedProperty = 'demuxer-cache-unlink-files';
+      rejectedProperties = {'demuxer-cache-unlink-files', 'cache-unlink-files'};
       await session.configure();
       expect(properties['cache-on-disk'], 'no');
       expect(WindowsMediaCacheRuntime.bufferMessage, contains('未能启用'));
+      expect(
+        session.configurationError.toString(),
+        contains('cache-unlink-files'),
+      );
     },
   );
 
   test(
     'failed fallback does not claim that the threshold is enforced',
     () async {
-      rejectedProperty = 'cache-on-disk';
+      rejectedProperties = {'cache-on-disk'};
       await session.configure();
       expect(WindowsMediaCacheRuntime.bufferMessage, contains('无法确认'));
     },

@@ -70,7 +70,12 @@ Future<void> verifyDesktopDiskCache() async {
   final native = player.platform as NativePlayer;
   final cache = DesktopDiskCacheSession(
     writeProperty: native.setProperty,
-    readProperty: native.getProperty,
+    readProperty: (name) async {
+      final actual = await native.getProperty(name);
+      // Only synthetic cache options/temporary paths; never account data.
+      stdout.writeln('DESKTOP_DISK_PROPERTY: $name=$actual');
+      return actual;
+    },
     storage: storage,
     pollInterval: const Duration(
       days: 1,
@@ -81,7 +86,8 @@ Future<void> verifyDesktopDiskCache() async {
     await cache.configure();
     if (await native.getProperty('cache-on-disk') != 'yes') {
       throw StateError(
-        'Native disk configuration failed: ${WindowsMediaCacheRuntime.bufferMessage}',
+        'Native disk configuration failed: ${cache.configurationError}; '
+        '${WindowsMediaCacheRuntime.bufferMessage}',
       );
     }
     final url = 'http://127.0.0.1:${server.port}/fixture.mp4';

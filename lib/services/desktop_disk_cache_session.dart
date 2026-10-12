@@ -25,6 +25,8 @@ class DesktopDiskCacheSession {
   bool _stopped = false;
   bool _suspended = false;
   int _threshold = defaultMediaCacheBytes;
+  Object? _configurationError;
+  Object? get configurationError => _configurationError;
   bool get writesSuspended => _suspended;
   String? get directoryPath => _lease?.directory.path;
 
@@ -50,14 +52,14 @@ class DesktopDiskCacheSession {
   }
 
   Future<void> configure() => _serial(() async {
+    _configurationError = null;
     try {
       _lease = await storage.openSession();
       _threshold = await storage.loadCapacityBytes();
       // Enable only after every required path/accounting option succeeded.
       await _set('cache-on-disk', 'no');
       await _set('cache', 'yes');
-      await _set('demuxer-cache-dir', _lease!.directory.path);
-      await _set('demuxer-cache-unlink-files', 'whendone');
+      await _setCacheLocation(_lease!.directory.path);
       if (await storage.diskBytes() >= _threshold) {
         await _suspend('已达到磁盘软阈值，保留已有文件，暂停新增磁盘缓冲。');
       } else {
@@ -69,7 +71,8 @@ class DesktopDiskCacheSession {
         if (_sampling) return;
         unawaited(sample());
       });
-    } catch (_) {
+    } catch (error) {
+      _configurationError = error;
       try {
         await _suspend('磁盘缓冲未能启用，暂用内存缓冲；磁盘软阈值不可用。');
       } catch (_) {
@@ -78,6 +81,18 @@ class DesktopDiskCacheSession {
       }
     }
   });
+
+  Future<void> _setCacheLocation(String path) async {
+    try {
+      await _set('demuxer-cache-dir', path);
+      await _set('demuxer-cache-unlink-files', 'whendone');
+    } catch (_) {
+      // The bundled Apple mpv 0.36 uses the old option names. Both options
+      // must pass readback before disk writes are enabled on either version.
+      await _set('cache-dir', path);
+      await _set('cache-unlink-files', 'whendone');
+    }
+  }
 
   Future<void> _enableDisk() async {
     // Preserve the previous metadata budgets while using disk packets. These
