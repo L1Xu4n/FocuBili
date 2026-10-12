@@ -1,8 +1,8 @@
 {
   "localArm64": {
     "file": "app-arm64-v8a-debug.apk",
-    "bytes": 97107678,
-    "sha256": "4d69567e4b6456f93b801c2d65ed507767f12c3dfaaac9b4ddd31ac66e6dcd97",
+    "bytes": 97108032,
+    "sha256": "289c2e684fdc4d64b1d412c684894354793455da1a2e9e9ef2d4f78f8b090d06",
     "package": "com.focubili.app.preview",
     "versionName": "1.8.0-beta.5",
     "versionCode": 2025,

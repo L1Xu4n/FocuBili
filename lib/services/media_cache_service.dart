@@ -381,7 +381,13 @@ class WindowsMediaCacheService implements MediaCacheService {
 }
 
 class MediaCacheDirectoryLease {
-  MediaCacheDirectoryLease(this.directory, this._lock, this._service);
+  MediaCacheDirectoryLease(this.directory, this._lock, this._service) {
+    _live.add(this);
+  }
+  // A failed player disposal must retain its Windows file handle even after
+  // the page/service becomes unreachable. Only explicit media close releases
+  // it; process exit remains the conservative fallback for abandoned owners.
+  static final _live = <MediaCacheDirectoryLease>{};
   final Directory directory;
   final CacheFileLock _lock;
   final WindowsMediaCacheService _service;
@@ -392,6 +398,7 @@ class MediaCacheDirectoryLease {
     if (_closed) return;
     _closed = true;
     await _lock.release();
+    _live.remove(this);
     await _service.maintain();
   }
 }

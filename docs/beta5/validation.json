@@ -29,5 +29,10 @@
   "ci": "Final disk-preserving revision will run all platform workflows; terminal links recorded in draft PR #52.",
   "desktopBufferDecision": "Preserve disk-backed rewind. Default 512 MiB soft threshold sampled every 500 ms; active files retained; no hard disk cap claim. Original preference key retained.",
   "desktopSessionNewTests": 10,
-  "desktopNativeProbe": "Linux/macOS loopback fixture, separate external audio, real packet files and 256 KiB explicit padding trigger; results in final CI logs."
+  "desktopNativeProbe": "Linux/macOS loopback fixture, separate external audio, real packet files and 256 KiB explicit padding trigger; results in final CI logs.",
+  "lifetimeLeaseRegression": {
+    "passed": 20,
+    "failed": 0,
+    "fullSuiteRerunPassed": 865
+  }
 }
