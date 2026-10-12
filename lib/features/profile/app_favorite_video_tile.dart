@@ -1,4 +1,4 @@
-import 'package:cached_network_image/cached_network_image.dart';
+import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../../models/app_favorite.dart';
@@ -68,14 +68,13 @@ class _AppFavoriteVideoTileState extends State<AppFavoriteVideoTile> {
                   borderRadius: BorderRadius.circular(6),
                   child: item.coverUrl.isEmpty
                       ? const Icon(Icons.bookmark_rounded)
-                      : CachedNetworkImage(
+                      : AppNetworkImage(
                           imageUrl: item.coverUrl,
                           httpHeaders: const {
                             'Referer': 'https://www.bilibili.com/',
                           },
                           fit: BoxFit.cover,
                           memCacheWidth: 256,
-                          maxWidthDiskCache: 512,
                           errorWidget: (context, url, error) =>
                               const Icon(Icons.broken_image_outlined),
                         ),

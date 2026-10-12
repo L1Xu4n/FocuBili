@@ -85,7 +85,7 @@ void main() {
         tester.getBottomLeft(find.byKey(const Key('home-utility-actions'))).dy,
       ),
     );
-    expect(_board(tester).items, hasLength(6));
+    expect(_board(tester).items, hasLength(7));
     expect(_board(tester).items.every((card) => !card.required), isTrue);
     await _tapVisible(tester, custom);
     await _tapVisible(
@@ -183,7 +183,7 @@ void main() {
     final restored = await service.load('home', []);
     expect(restored.order, saved.order);
     expect(restored.hidden, saved.hidden);
-    expect(_board(tester).items, hasLength(6));
+    expect(_board(tester).items, hasLength(7));
     expect(tester.takeException(), isNull);
   });
 

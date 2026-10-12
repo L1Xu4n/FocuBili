@@ -1063,8 +1063,8 @@ class _PersonalizationSettingsPageState
         ListTile(
           key: const Key('open-cache-management'),
           leading: const Icon(Icons.storage_outlined),
-          title: const Text('视频缓存管理'),
-          subtitle: const Text('查看和清理边播边缓存的数据'),
+          title: const Text('缓存管理'),
+          subtitle: const Text('图片、视频和字幕 · 上限与自动清理'),
           trailing: const Icon(Icons.chevron_right_rounded),
           // 缓存入口函数进入已有缓存管理页面，不把两种设置混在一个开关中。
           onTap: () =>

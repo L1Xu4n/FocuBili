@@ -205,13 +205,14 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
       return Icon(Icons.person_outline_rounded, color: fallbackColor);
     }
     return ClipOval(
-      child: Image.network(
-        avatarUrl,
+      child: AppNetworkImage(
+        imageUrl: avatarUrl,
         width: 46,
         height: 46,
         fit: BoxFit.cover,
         // 头像加载失败函数回退为人物图标，避免网络图片破坏按钮布局。
-        errorBuilder: _buildProfileAvatarError,
+        errorWidget: (context, url, error) =>
+            _buildProfileAvatarError(context, error, null),
       ),
     );
   }

@@ -12,6 +12,7 @@ import 'package:focubili/services/apple_playback_session.dart';
 import 'package:focubili/services/apple_video_capabilities.dart';
 import 'package:focubili/services/flutter_video_frame_capture.dart';
 import '../integration_test/media_fixture.dart';
+import 'desktop_disk_cache_probe.dart';
 
 Future<void> waitFor(bool Function() condition, String phase) async {
   final end = DateTime.now().add(const Duration(seconds: 20));
@@ -30,6 +31,7 @@ Future<void> main() async {
   var success = false;
   try {
     MediaKit.ensureInitialized();
+    await verifyDesktopDiskCache();
     await AppleVideoCapabilities.initialize();
     final dir = await getTemporaryDirectory();
     await dir.create(recursive: true);

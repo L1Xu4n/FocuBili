@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:cached_network_image/cached_network_image.dart';
+import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/layout/adaptive_page_frame.dart';
@@ -326,7 +326,7 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
     if (url.isEmpty) {
       return _buildCoverPlaceholder(width, height);
     }
-    return CachedNetworkImage(
+    return AppNetworkImage(
       imageUrl: url,
       httpHeaders: const <String, String>{
         'Referer': 'https://www.bilibili.com/',
@@ -335,7 +335,6 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
       height: height,
       fit: BoxFit.cover,
       memCacheWidth: 480,
-      maxWidthDiskCache: 720,
       placeholder: (BuildContext context, String value) =>
           _buildCoverPlaceholder(width, height),
       errorWidget: (BuildContext context, String value, Object error) =>

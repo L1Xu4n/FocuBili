@@ -1,3 +1,4 @@
+import 'package:focubili/services/cached_player_overlay_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -151,7 +152,8 @@ void main() {
 
     expect(playback, isA<NativePlaybackService>());
     expect(
-      services.createPlayerOverlayService(),
+      (services.createPlayerOverlayService() as CachedPlayerOverlayService)
+          .delegate,
       isA<NativePlayerOverlayService>(),
     );
     expect(services.createMediaCacheService(), isA<NativeMediaCacheService>());

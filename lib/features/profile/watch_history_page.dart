@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:cached_network_image/cached_network_image.dart';
+import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/layout/adaptive_page_frame.dart';
@@ -292,7 +292,7 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
             if (entry.thumbnailUrl.isEmpty)
               _buildThumbnailPlaceholder()
             else
-              CachedNetworkImage(
+              AppNetworkImage(
                 imageUrl: entry.thumbnailUrl,
                 httpHeaders: const <String, String>{
                   'Referer': 'https://www.bilibili.com/',
@@ -301,8 +301,6 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
                 },
                 fit: BoxFit.cover,
                 memCacheWidth: 320,
-                maxWidthDiskCache: 640,
-                fadeInDuration: const Duration(milliseconds: 120),
                 placeholder: (BuildContext context, String url) =>
                     _buildThumbnailPlaceholder(),
                 errorWidget: (BuildContext context, String url, Object error) =>

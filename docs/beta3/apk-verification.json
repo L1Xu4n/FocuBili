@@ -1,0 +1,12 @@
+{
+  "file": "FocuBili-1.8.0-beta.3-preview-arm64.apk",
+  "bytes": 67548572,
+  "sha256": "3876cd261a57787b59e1c0f90a2f78065459f894ed34f25d74745afe66ca805f",
+  "package": "com.focubili.app.preview",
+  "versionCode": 2023,
+  "versionName": "1.8.0-beta.3",
+  "certificateSha256": "5bd1fc4daa8a0887e213c4dc1231d0eba4f7f309a0e64c2d15fe404302bd00b0",
+  "signatureVerification": "passed",
+  "abi": "arm64-v8a",
+  "usesExistingEnvironmentDebugSignature": true
+}

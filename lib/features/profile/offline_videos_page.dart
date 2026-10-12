@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:cached_network_image/cached_network_image.dart';
+import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/layout/adaptive_page_frame.dart';
@@ -243,15 +243,13 @@ class _OfflineVideosPageState extends State<OfflineVideosPage> {
                 color: Theme.of(context).colorScheme.surfaceContainerHighest,
                 child: const Icon(Icons.offline_pin_rounded),
               )
-            : CachedNetworkImage(
+            : AppNetworkImage(
                 imageUrl: download.coverUrl,
                 httpHeaders: const <String, String>{
                   'Referer': 'https://www.bilibili.com/',
                 },
                 fit: BoxFit.cover,
                 memCacheWidth: 256,
-                maxWidthDiskCache: 512,
-                fadeInDuration: const Duration(milliseconds: 120),
                 placeholder: (BuildContext context, String url) => ColoredBox(
                   color: Theme.of(context).colorScheme.surfaceContainerHighest,
                 ),
