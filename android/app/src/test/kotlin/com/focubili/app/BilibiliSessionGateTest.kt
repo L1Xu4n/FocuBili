@@ -19,6 +19,20 @@ class BilibiliSessionGateTest {
         assertTrue(BilibiliSessionGate.validateResponse(fresh.generation) { browserCookie })
     }
 
+    @Test fun guestResponseWithStillUnknownSessionRemainsValid() {
+        val guest = BilibiliSessionGate.read { throw IllegalStateException() }
+        assertEquals(BilibiliCookiePolicy.State.UNKNOWN, guest.state)
+        assertTrue(BilibiliSessionGate.validateResponse(guest.generation) { throw IllegalStateException() })
+    }
+
+    @Test fun guestResponseRechecksUnobservedLoginBeforePublication() {
+        val guest = BilibiliSessionGate.read { throw IllegalStateException() }
+        // 游客请求发出后 WebView 完成登录，尚未有任何应用端轮询。
+        assertTrue(BilibiliSessionGate.isCurrent(guest.generation))
+        assertFalse(BilibiliSessionGate.validateResponse(guest.generation) { "SESSDATA=fixture-new-login" })
+        assertFalse(BilibiliSessionGate.isCurrent(guest.generation))
+    }
+
     @Test fun responseCannotBePublishedWhenSessionReadBecomesUnknown() {
         val request = BilibiliSessionGate.read { "SESSDATA=fixture-A" }
         assertFalse(BilibiliSessionGate.validateResponse(request.generation) { throw IllegalStateException() })
