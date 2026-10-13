@@ -12,6 +12,11 @@ class _VersionProvider implements AppVersionProvider {
 
 /// 为关于页测试提供不访问真实设备的更新检查开关。
 class _Preferences extends AppUpdatePreferencesService {
+  @override
+  Future<String?> loadIgnoredUpdate() async => null;
+  @override
+  Future<void> saveIgnoredUpdate(String? identity) async {}
+
   /// 测试默认允许执行更新检查。
   @override
   Future<bool> loadEnabled() async => true;

@@ -2199,6 +2199,47 @@ void main() {
     expect(find.byType(SnackBar), findsNothing);
   });
 
+  for (final platform in [
+    AppPlatform.windows,
+    AppPlatform.macos,
+    AppPlatform.linux,
+    AppPlatform.ios,
+  ]) {
+    testWidgets('${platform.name} 共用画质提示不声称提供 Android 请求记录或游客入口', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(1080, 2400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final service = _FakePlaybackService(rejectQuality: true);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PlayerPage(
+            video: _createMultiPartVideo(),
+            appPlatform: platform,
+            playbackService: service,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final PopupMenuButton<int> menu = tester.widget(
+        find.byKey(const Key('quality-menu')),
+      );
+      menu.onSelected!(32);
+      await tester.pump();
+      expect(find.textContaining('请检查登录状态'), findsOneWidget);
+      expect(find.textContaining('查看请求记录'), findsNothing);
+      service._emit(
+        phase: PlaybackPhase.error,
+        canContinueAsGuest: true,
+        message: '网络暂时不可用',
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(find.byKey(const Key('continue-playback-as-guest')), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets('未知会话的游客入口需用户点击，普通错误不显示', (tester) async {
     await tester.binding.setSurfaceSize(const Size(360, 800));
     addTearDown(() => tester.binding.setSurfaceSize(null));

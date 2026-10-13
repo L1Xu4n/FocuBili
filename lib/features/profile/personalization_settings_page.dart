@@ -1085,7 +1085,7 @@ class _PersonalizationSettingsPageState
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              if (updateController.hasUpdate) ...<Widget>[
+              if (updateController.showUpdateBadge) ...<Widget>[
                 Container(
                   key: const Key('settings-update-dot'),
                   width: 9,

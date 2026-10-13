@@ -258,7 +258,10 @@ mixin _PlayerControlsCoordinator
     final String suffix = details == null || details.trim().isEmpty
         ? ''
         : '（${details.trim()}）';
-    _showPlayerNotice('画质切换未达到所选档位，请检查登录状态、该视频支持的画质或网络；可在“问题诊断”查看请求记录$suffix');
+    final String diagnosis = _playbackService is NativePlaybackService
+        ? '；可在“问题诊断”查看请求记录'
+        : '';
+    _showPlayerNotice('画质切换未达到所选档位，请检查登录状态、该视频支持的画质或网络$diagnosis$suffix');
   }
 
   /// 显示独立到期的三秒提示，多条结果按出现顺序排列。

@@ -379,7 +379,7 @@ class _ProblemDiagnosticsPageState extends State<ProblemDiagnosticsPage> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      '暂无诊断记录。播放数据请求和播放、网络错误会在这里留下脱敏信息。',
+                      '暂无诊断记录。遇到播放或网络问题时，可在这里查看最近的脱敏信息。',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   ),
