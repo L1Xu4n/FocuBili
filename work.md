@@ -90,3 +90,7 @@
 - 六个安装包已核验实际内容和哈希，APK 公开证书与 v1.7.0 一致。macOS 正常应用盘内容/双架构/既有签名验证通过；iOS 模拟器原生解码、暂停/跳转/倍速、PiP、偏好、Cookie/WebView/通知桥检查通过，IPA 仍为需用户自行签名的 unsigned 包。
 - Release 草稿 411328089 已创建，但云端直接访问 uploads.github.com 连续返回 401，管理 API 正常、草稿为空且未公开。采用独立交付分支上的 Actions 工作流，使用既有 Actions 授权，仅下载指定成功 run/artifact 的六个文件并核对固定哈希后上传；不重新编译、不读写签名秘密、不生成凭据、不移动标签、不发布或替换已有资产。
 - 上传脚本校验发布 ID/草稿状态/标签/源码树、成功构建来源、文件大小和 SHA-256；意外文件、损坏/不完整资产、重复资产均拒绝。上传中断可保留正确资产并仅补传缺失项。3 项离线保护条件回归和 Python 编译检查通过。此交付分支不合入 dev/master，应用发布源码保持已审查版本。
+
+- 最终交付完成：Actions 38354113925 成功，仅上传六个固定哈希资产；GitHub 服务端大小/digest 与已核验文件一致。2026-10-13 05:59:55 UTC 正式公开 https://github.com/L1Xu4n/FocuBili/releases/tag/v1.7.1 并设置为 Latest。随后无鉴权访问六个公开下载链接，逐个重新计算哈希均匹配。
+- 最终 master/tag 提交为 83a9d70ad1bbb7c4c07a7292baca3439ecde7be3，dev 合并提交为 da0946b98994fea9020a58c870b0ddddcde72a42；审查/构建源码分别为 208cff6e139eb0f4d6362a592f6b5ca967ead6ad 和 1ad7552bc18e39d3275f6da75e15f77a2eed3dda，源码树均与合并结果一致。所有工作分支保留，没有整体合并 Beta 分支。
+- 未发布 SHA256 文件或 Linux tar.gz。Android APK 证书/包名兼容基线已验证；受影响 Android 真机/账号、真机覆盖安装和 Windows 交互播放仍未验收。iOS 明确 unsigned 需自行签名，macOS 仍为 ad-hoc 未公证。共享更新/UI 变更覆盖五平台，非 Android 鉴权/选轨算法不变。
