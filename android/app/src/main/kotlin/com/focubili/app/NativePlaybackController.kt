@@ -1259,14 +1259,13 @@ class NativePlaybackController(
             val sourceResult = runCatching {
                 loadPlaybackSources(bvid, cid, quality, diagnostic)
             }
-            val sessionStillCurrent = if (diagnostic.playurlAttempted) {
-                BilibiliSessionGate.validateResponse(diagnostic.sessionGeneration) {
-                    CookieManager.getInstance().getCookie(it)
-                }
-            } else true
             mainHandler.post {
                 if (!isCurrentPlaybackRequest(requestToken, bvid, cid, quality)) {
                     return@post
+                }
+                // 在主线程实际发布结果时复查，覆盖后台完成到主线程执行间的网页登录/切换。
+                val sessionStillCurrent = BilibiliSessionGate.validateResponse(diagnostic.sessionGeneration) {
+                    CookieManager.getInstance().getCookie(it)
                 }
                 if (!sessionStillCurrent || !BilibiliSessionGate.isCurrent(diagnostic.sessionGeneration)) {
                     canContinueAsGuest = false
