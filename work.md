@@ -70,3 +70,10 @@
 - 生产 requestPlaybackSources 方法提取隔离回归（替换调度器、CookieManager、HTTP）：旧实现在后台完成后、主线程执行前切换账号仍会 prepare，已明确复现失败；修正后的游客/登录态 × 无变化/HTTP 中变化/排队时变化，加两项 Cookie 失败发布，共 8 场景通过。脚本及红绿日志在 /workspace/scratch/focubili-v171-release/publication_response_harness.py 和 publication-before/after-result.log；不是设备实测。
 - 本次只改 Android 返回结果的验证位置，Flutter 更新逻辑不变；此前最终 Dart CI 为发布 748 passed / dev 815 passed，各 1 原有 skipped。新提交继续走最终审查和 CI，产物必须与实际待发布代码对应。
 - 发布时序修正后再次运行 Android JVM：发布 50 项、dev 67 项全部通过；git diff --check 通过。
+
+## 2026-10-13：可选偏好损坏和诊断备用版本修正
+
+- Codex 对 dev 0993aa6 返回未发现主要问题；对发布 0b7573a 指出可选忽略记录读取失败会阻止版本初始化，以及诊断备用版本未随发布更新。两项有效反馈均修正，并同步适用的 dev 变更。
+- 忽略偏好读取独立容错，异常或类型损坏时按未忽略处理，仍加载真实安装版本并允许自动/手动检查。新增两个真实 SharedPreferences 类型损坏/注入读取错误回归，旧实现均会得到空安装版本，修正后各自能发起自动和手动请求。
+- 诊断插件返回空值或抛错时，发布分支使用 1.7.1+21、dev 使用其现有 1.8.0+22；没有把 dev 的产品版本降为 1.7。新增两个诊断快照/导出回归直接比对 pubspec 版本，避免下次版本升级再次遗漏。旧实现两项均明确失败。
+- 四项新增回归先在旧生产代码运行并失败；修正后两分支更新、真实页面和诊断定向各 29 项通过，analyze 无问题。原生代码未改，保留上轮 JVM 发布 50 / dev 67 和调度夹具 8 场景通过证据；新 head 重新审查、执行完整 CI 和构建最终候选。
