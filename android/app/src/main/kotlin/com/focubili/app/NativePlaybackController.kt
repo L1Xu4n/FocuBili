@@ -21,6 +21,10 @@ import android.view.Surface
 import android.view.PixelCopy
 import android.webkit.CookieManager
 import androidx.media3.common.AudioAttributes
+import androidx.media3.common.Format
+import androidx.media3.common.MimeTypes
+import androidx.media3.exoplayer.ExoPlaybackException
+import androidx.media3.exoplayer.mediacodec.MediaCodecUtil
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -123,6 +127,10 @@ class NativePlaybackController(
     private var currentOwnerName = ""
     private var requestedQuality = DEFAULT_QUALITY
     private var wbiSigningEnabled = false
+    @Volatile private var failedVideoTracks: Set<Pair<Int, String>> = emptySet()
+    private var canContinueAsGuest = false
+    private var guestOfferGeneration: Long? = null
+    private var guestConsentGeneration: Long? = null
     private val wbiSigner = PlaybackWbiSigner()
     private var currentQuality = DEFAULT_QUALITY
     private var availableQualities = listOf(
@@ -163,12 +171,15 @@ class NativePlaybackController(
         val referer: String,
         val actualQuality: Int,
         val qualities: List<PlaybackQualityOption>,
+        val videoAlternatives: List<SelectedMediaTrack>,
+        val diagnostic: PlaybackRequestDiagnostic,
     )
 
     /** 保存一条选中媒体轨道的编码名称和主备地址，供兼容选择与缓存隔离使用。 */
     private data class SelectedMediaTrack(
         val urls: List<String>,
         val codec: String,
+        val quality: Int = 0,
     )
 
     /** 保存播放失败中可安全展示的原因类型和 HTTP 状态，不含地址、请求头或会话资料。 */
@@ -275,6 +286,20 @@ class NativePlaybackController(
                         ownerName = call.argument<String>("ownerName").orEmpty(),
                         initialPositionMs = initialPositionMs,
                     )
+                    result.success(null)
+                }
+            }
+            "continueAsGuest" -> {
+                if (!canContinueAsGuest || currentBvid.isEmpty() || currentCid <= 0L ||
+                    guestOfferGeneration?.let(BilibiliSessionGate::isCurrent) != true) {
+                    result.error("guest_unavailable", "当前播放无需游客重试。", null)
+                } else {
+                    guestConsentGeneration = guestOfferGeneration
+                    canContinueAsGuest = false
+                    playbackPhase = PHASE_LOADING
+                    playbackMessage = "正在以游客身份播放本次视频…"
+                    emitPlaybackState()
+                    requestPlaybackSources(currentBvid, currentCid, requestedQuality)
                     result.success(null)
                 }
             }
@@ -717,11 +742,10 @@ class NativePlaybackController(
 
     /** 为 ARM 真机保留默认异步解码；x86 模拟器改用同步适配器，避免竖屏高分辨率视频帧严重积压。 */
     private fun createNativePlayer(): ExoPlayer {
-        if (!PlaybackTrackPolicy.shouldUseSynchronousCodec(Build.SUPPORTED_ABIS.toList())) {
-            return ExoPlayer.Builder(activity).build()
+        val renderersFactory = DefaultRenderersFactory(activity).setEnableDecoderFallback(true)
+        if (PlaybackTrackPolicy.shouldUseSynchronousCodec(Build.SUPPORTED_ABIS.toList())) {
+            renderersFactory.forceDisableMediaCodecAsynchronousQueueing()
         }
-        val renderersFactory = DefaultRenderersFactory(activity)
-            .forceDisableMediaCodecAsynchronousQueueing()
         return ExoPlayer.Builder(activity, renderersFactory).build()
     }
 
@@ -746,6 +770,31 @@ class NativePlaybackController(
         resumeAfterPrepare = nativePlayer.playWhenReady || resumeAfterPrepare
         playbackPrepared = false
         val sources = latestPlaybackSources
+        val decoderFailure = error is ExoPlaybackException &&
+            MimeTypes.isVideo(error.rendererFormat?.sampleMimeType) &&
+            PlaybackTrackPolicy.isDecoderFailure(error.errorCode)
+        if (decoderFailure && sources != null) {
+            failedVideoTracks = failedVideoTracks + (sources.actualQuality to sources.videoCodec)
+            val fallback = sources.videoAlternatives.firstOrNull()
+            if (fallback == null) {
+                reportError("当前设备无法解码该视频的可用轨道，请尝试其他清晰度。")
+                return
+            }
+            sources.diagnostic.codecFallback = true
+            sources.diagnostic.selectedQuality = fallback.quality
+            channel.invokeMethod("playbackRequestDiagnostic", sources.diagnostic.toMap(true))
+            playbackPhase = PHASE_LOADING
+            playbackMessage = "当前编码无法解码，正在切换兼容轨道…"
+            emitPlaybackState()
+            prepareMediaSources(sources.copy(
+                videoUrls = fallback.urls,
+                videoCodec = fallback.codec,
+                actualQuality = fallback.quality,
+                videoAlternatives = sources.videoAlternatives.drop(1),
+            ))
+            return
+        }
+
         if (
             failureDetails.malformedContainer &&
             !bypassMediaCacheForPlayback &&
@@ -1001,6 +1050,9 @@ class NativePlaybackController(
         player?.stop()
         player?.clearMediaItems()
         currentBvid = bvid
+        canContinueAsGuest = false
+        guestConsentGeneration = null
+        failedVideoTracks = emptySet()
         localSource = false
         currentCid = cid
         currentPageNumber = pageNumber
@@ -1052,6 +1104,10 @@ class NativePlaybackController(
         currentCid = cid
         currentPageNumber = pageNumber
         localSource = true
+        canContinueAsGuest = false
+        guestOfferGeneration = null
+        guestConsentGeneration = null
+        failedVideoTracks = emptySet()
         localVideoPath = filePath
         localAudioPath = audioFilePath
         currentTitle = title.ifBlank { "离线视频" }
@@ -1147,7 +1203,7 @@ class NativePlaybackController(
         if (localSource) {
             openLocalVideo(localVideoPath!!, localAudioPath, currentTitle, position,
                 currentBvid, currentCid, currentPageNumber, shouldPlay)
-        } else if (sources != null) {
+        } else if (sources != null && (enabled || sources.videoUrls.isNotEmpty())) {
             prepareMediaSources(sources)
         } else {
             // 听视频请求失败或正在刷新地址时，仍允许用户回到视频并重新查询。
@@ -1194,16 +1250,33 @@ class NativePlaybackController(
     /** 在单线程后台请求播放数据，并只让最新请求更新当前视频。 */
     private fun requestPlaybackSources(bvid: String, cid: Long, quality: Int) {
         val requestToken = createPlaybackRequestToken()
-        val useWbi = wbiSigningEnabled
+        val diagnostic = PlaybackRequestDiagnostic(requestToken, wbiSigningEnabled, quality)
+        val explicitGuest = guestConsentGeneration?.takeIf(BilibiliSessionGate::isCurrent)
+        diagnostic.guestSelected = explicitGuest != null
+        diagnostic.sessionGeneration = explicitGuest ?: BilibiliSessionGate.generation()
+        canContinueAsGuest = false
         playbackRequestExecutor.execute {
             val sourceResult = runCatching {
-                loadPlaybackSources(bvid, cid, quality, useWbi)
+                loadPlaybackSources(bvid, cid, quality, diagnostic)
             }
             mainHandler.post {
                 if (!isCurrentPlaybackRequest(requestToken, bvid, cid, quality)) {
                     return@post
                 }
+                // 在主线程实际发布结果时复查，覆盖后台完成到主线程执行间的网页登录/切换。
+                val sessionStillCurrent = BilibiliSessionGate.validateResponse(diagnostic.sessionGeneration) {
+                    CookieManager.getInstance().getCookie(it)
+                }
+                if (!sessionStillCurrent || !BilibiliSessionGate.isCurrent(diagnostic.sessionGeneration)) {
+                    canContinueAsGuest = false
+                    reportError("登录状态已变化，请重试播放。")
+                    return@post
+                }
+                channel.invokeMethod("playbackRequestDiagnostic", diagnostic.toMap(sourceResult.isSuccess))
                 sourceResult.onSuccess(::prepareMediaSources).onFailure { error ->
+                    canContinueAsGuest = error is BilibiliCookiePolicy.Unavailable &&
+                        error.state == BilibiliCookiePolicy.State.UNKNOWN
+                    guestOfferGeneration = diagnostic.sessionGeneration.takeIf { canContinueAsGuest }
                     reportError(describePlaybackFetchFailure(error))
                 }
             }
@@ -1215,11 +1288,15 @@ class NativePlaybackController(
         bvid: String,
         cid: Long,
         quality: Int,
-        useWbi: Boolean,
+        diagnostic: PlaybackRequestDiagnostic,
     ): PlaybackSources {
-        val responseText = requestPlaybackInfoJson(bvid, cid, quality, useWbi)
+        val useWbi = diagnostic.wbiEnabled
+        val responseText = requestPlaybackInfoJson(bvid, cid, quality, diagnostic)
+        diagnostic.stage = "parse"
         val root = JSONObject(responseText)
         val code = root.optInt("code", -1)
+        diagnostic.apiCode = code
+        if (code == -101) diagnostic.observeNavigation(code, false)
         if (code != 0) {
             if (code == -351) {
                 throw PlaybackSourceException(
@@ -1242,11 +1319,16 @@ class NativePlaybackController(
             ?: throw PlaybackSourceException("播放数据服务没有返回视频信息。")
         val dash = data.optJSONObject("dash")
             ?: throw PlaybackSourceException("该视频没有可用的 DASH 播放数据。")
-        val actualQuality = data.optInt("quality", quality).takeIf { it > 0 } ?: quality
-        val videoTrack = selectMediaTrack(dash.optJSONArray("video"), actualQuality)
-        val audioTrack = selectMediaTrack(dash.optJSONArray("audio"))
-        if (videoTrack.urls.isEmpty()) {
-            throw PlaybackSourceException("播放数据没有返回安全的视频地址。")
+        val returnedQuality = data.optInt("quality", quality).takeIf { it > 0 } ?: quality
+        diagnostic.returnedQuality = returnedQuality
+        val videoTracks = selectMediaTracks(dash.optJSONArray("video"), minOf(quality, returnedQuality))
+            .filterNot { (it.quality to it.codec) in failedVideoTracks }
+        val videoTrack = videoTracks.firstOrNull() ?: SelectedMediaTrack(emptyList(), "")
+        diagnostic.selectedQuality = videoTrack.quality.takeIf { it > 0 }
+        val audioTrack = selectMediaTracks(dash.optJSONArray("audio")).firstOrNull()
+            ?: SelectedMediaTrack(emptyList(), "")
+        if (videoTrack.urls.isEmpty() && !audioOnly) {
+            throw PlaybackSourceException("没有当前设备可解码的安全视频轨道，请尝试其他清晰度或听视频。")
         }
         val referer = buildVideoPageUrl(bvid)
             ?: throw PlaybackSourceException("无法生成视频页面地址。")
@@ -1256,8 +1338,10 @@ class NativePlaybackController(
             videoCodec = videoTrack.codec,
             audioCodec = audioTrack.codec,
             referer = referer,
-            actualQuality = actualQuality,
-            qualities = parseQualityOptions(data, dash),
+            actualQuality = videoTrack.quality.takeIf { it > 0 } ?: returnedQuality,
+            qualities = parseQualityOptions(data, dash, videoTrack.quality.takeIf { it > 0 } ?: returnedQuality),
+            videoAlternatives = videoTracks.drop(1),
+            diagnostic = diagnostic,
         )
     }
 
@@ -1266,20 +1350,50 @@ class NativePlaybackController(
         bvid: String,
         cid: Long,
         quality: Int,
-        useWbi: Boolean,
+        diagnostic: PlaybackRequestDiagnostic,
     ): String {
-        val cookie = readBilibiliCookieHeader()
+        val useWbi = diagnostic.wbiEnabled
+        val snapshot = if (diagnostic.guestSelected) {
+            if (!BilibiliSessionGate.isCurrent(diagnostic.sessionGeneration)) {
+                throw BilibiliCookiePolicy.Unavailable(BilibiliCookiePolicy.State.CHANGING)
+            }
+            BilibiliCookiePolicy.Snapshot(BilibiliCookiePolicy.State.ANONYMOUS, generation = diagnostic.sessionGeneration)
+        } else readCookieSnapshot()
+        diagnostic.sessionGeneration = snapshot.generation
+        diagnostic.sessionRead = if (diagnostic.guestSelected) "unknown" else when {
+            snapshot.state == BilibiliCookiePolicy.State.UNKNOWN -> "unknown"
+            snapshot.state == BilibiliCookiePolicy.State.CONFLICT -> "conflict"
+            snapshot.state == BilibiliCookiePolicy.State.CHANGING -> "changing"
+            snapshot.partial -> "partial"
+            else -> "ok"
+        }
+        diagnostic.authState = when (snapshot.state) {
+            BilibiliCookiePolicy.State.SESSION -> "session_present_unverified"
+            BilibiliCookiePolicy.State.ANONYMOUS -> "anonymous"
+            else -> "unknown"
+        }
+        if (snapshot.state != BilibiliCookiePolicy.State.SESSION && snapshot.state != BilibiliCookiePolicy.State.ANONYMOUS) {
+            throw BilibiliCookiePolicy.Unavailable(snapshot.state)
+        }
+        val cookie = snapshot.header
         val referer = buildVideoPageUrl(bvid).orEmpty()
         val parameters = mapOf(
             "bvid" to bvid, "cid" to cid.toString(), "qn" to quality.toString(),
             "fnval" to DASH_FEATURE_FLAG.toString(), "fourk" to "1",
         )
         val query = if (useWbi) {
+            diagnostic.stage = "signing"
             try {
                 wbiSigner.sign(parameters + mapOf("fnver" to "0", "web_location" to "1315873")) {
                     requestPlaybackApiJson(
-                        Uri.parse("https://$PLAYBACK_API_HOST/x/web-interface/nav"), referer, cookie,
-                    )
+                        Uri.parse("https://$PLAYBACK_API_HOST/x/web-interface/nav"), referer, cookie, diagnostic,
+                    ).also { response ->
+                        val nav = JSONObject(response)
+                        val data = nav.optJSONObject("data")
+                        diagnostic.observeNavigation(
+                            nav.optInt("code", -1), data?.opt("isLogin") as? Boolean,
+                        )
+                    }
                 }
             } catch (_: Exception) {
                 throw PlaybackSourceException(WbiSigningPolicy.UNAVAILABLE_MESSAGE)
@@ -1287,11 +1401,20 @@ class NativePlaybackController(
         } else parameters
         val path = if (useWbi) "/x/player/wbi/playurl" else "/x/player/playurl"
         val endpoint = Uri.parse("https://$PLAYBACK_API_HOST$path?${WbiSigningPolicy.encodeQuery(query)}")
-        return requestPlaybackApiJson(endpoint, referer, cookie)
+        diagnostic.stage = "playurl"
+        diagnostic.wbiSigned = useWbi && query.containsKey("w_rid") && query.containsKey("wts")
+        diagnostic.playurlAttempted = true
+        diagnostic.httpStatus = null
+        return requestPlaybackApiJson(endpoint, referer, cookie, diagnostic)
     }
 
     /** 读取固定官方 HTTPS API，禁止重定向携带会话，错误不回显响应正文。 */
-    private fun requestPlaybackApiJson(endpoint: Uri, referer: String, cookie: String): String {
+    private fun requestPlaybackApiJson(
+        endpoint: Uri,
+        referer: String,
+        cookie: String,
+        diagnostic: PlaybackRequestDiagnostic,
+    ): String {
         val connection = URL(endpoint.toString()).openConnection() as HttpsURLConnection
         try {
             connection.requestMethod = "GET"
@@ -1305,6 +1428,7 @@ class NativePlaybackController(
                 connection.setRequestProperty("Cookie", cookie)
             }
             val statusCode = connection.responseCode
+            diagnostic.httpStatus = statusCode
             val responseBody = (if (statusCode in 200..299) {
                 connection.inputStream
             } else {
@@ -2064,6 +2188,7 @@ class NativePlaybackController(
     private fun parseQualityOptions(
         data: JSONObject,
         dash: JSONObject,
+        selectedQuality: Int,
     ): List<PlaybackQualityOption> {
         val qualities = mutableListOf<PlaybackQualityOption>()
         val ids = data.optJSONArray("accept_quality")
@@ -2094,9 +2219,9 @@ class NativePlaybackController(
                 }
             }
         }
-        if (qualities.none { option -> option.id == currentQuality }) {
+        if (qualities.none { option -> option.id == selectedQuality }) {
             qualities.add(
-                PlaybackQualityOption(currentQuality, qualityFallbackLabel(currentQuality)),
+                PlaybackQualityOption(selectedQuality, qualityFallbackLabel(selectedQuality)),
             )
         }
         return qualities.sortedByDescending { option -> option.id }
@@ -2117,54 +2242,36 @@ class NativePlaybackController(
         }
     }
 
-    /** 从 DASH 轨道选择目标质量并优先 AVC/H.264，避开部分 HEVC 初始化数据解析崩溃。 */
-    private fun selectMediaTrack(
-        mediaItems: JSONArray?,
-        preferredId: Int? = null,
-    ): SelectedMediaTrack {
-        if (mediaItems == null) {
-            return SelectedMediaTrack(emptyList(), "")
+    /** 先过滤设备不支持的格式，再按清晰度和同档编码兼容性排序，保留有限回退队列。 */
+    private fun selectMediaTracks(mediaItems: JSONArray?, preferredId: Int? = null): List<SelectedMediaTrack> {
+        if (mediaItems == null) return emptyList()
+        val candidates = (0 until mediaItems.length()).mapNotNull(mediaItems::optJSONObject)
+            .filter { readMediaUrls(it).isNotEmpty() }
+        fun score(media: JSONObject): Long =
+            (if (preferredId != null) PlaybackTrackPolicy.compatibilityScore(media.optString("codecs")) else 0L) +
+                media.optInt("height").coerceAtLeast(0).toLong() * HEIGHT_SCORE_UNIT +
+                media.optLong("bandwidth").coerceAtLeast(0L)
+        val sorted = if (preferredId == null) candidates.sortedByDescending(::score) else {
+            PlaybackTrackPolicy.playableTracks(candidates, preferredId, { it.optInt("id") }, ::score, ::isVideoTrackSupported)
         }
-        var selectedMedia: JSONObject? = null
-        var bestScore = Long.MIN_VALUE
-        for (index in 0 until mediaItems.length()) {
-            val media = mediaItems.optJSONObject(index) ?: continue
-            val candidateQuality = media.optInt("id")
-            if (
-                preferredId != null &&
-                !PlaybackTrackPolicy.isAtOrBelowPreferred(candidateQuality, preferredId)
-            ) {
-                continue
-            }
-            val candidateUrls = readMediaUrls(media)
-            if (candidateUrls.isEmpty()) {
-                continue
-            }
-            val qualityBonus = if (preferredId != null && candidateQuality == preferredId) {
-                PREFERRED_TRACK_SCORE
-            } else {
-                0L
-            }
-            val compatibilityBonus = if (preferredId != null) {
-                PlaybackTrackPolicy.compatibilityScore(media.optString("codecs"))
-            } else {
-                0L
-            }
-            val heightScore = media.optInt("height").coerceAtLeast(0).toLong() * HEIGHT_SCORE_UNIT
-            val bandwidthScore = media.optLong("bandwidth").coerceAtLeast(0L)
-            val score = qualityBonus + compatibilityBonus + heightScore + bandwidthScore
-            if (score > bestScore) {
-                selectedMedia = media
-                bestScore = score
-            }
-        }
-        return selectedMedia?.let { media ->
-            SelectedMediaTrack(
-                urls = readMediaUrls(media),
-                codec = media.optString("codecs").trim(),
-            )
-        } ?: SelectedMediaTrack(emptyList(), "")
+        return sorted.map { media ->
+            SelectedMediaTrack(readMediaUrls(media), media.optString("codecs").trim(), media.optInt("id"))
+        }.distinctBy { it.quality to it.codec }
     }
+
+    /** Media3 按真实 codec/profile、尺寸和帧率查询设备解码能力；探测失败不冒充支持。 */
+    private fun isVideoTrackSupported(media: JSONObject): Boolean = runCatching {
+        val codec = media.optString("codecs").trim()
+        val mime = MimeTypes.getMediaMimeType(codec) ?: return@runCatching false
+        if (!MimeTypes.isVideo(mime)) return@runCatching false
+        val format = Format.Builder().setCodecs(codec).setSampleMimeType(mime).apply {
+            media.optInt("width").takeIf { it > 0 }?.let(::setWidth)
+            media.optInt("height").takeIf { it > 0 }?.let(::setHeight)
+            PlaybackTrackPolicy.frameRate(media.optString("frame_rate").ifBlank { media.optString("frameRate") })
+                ?.let(::setFrameRate)
+        }.build()
+        MediaCodecUtil.getDecoderInfos(mime, false, false).any { it.isFormatSupported(activity, format) }
+    }.getOrDefault(false)
 
     /** 从一条 DASH 轨道读取并去重主备地址，只保留 B 站 HTTPS 媒体域名。 */
     private fun readMediaUrls(media: JSONObject): List<String> {
@@ -2324,9 +2431,9 @@ class NativePlaybackController(
     /** 生成当前视频或音频轨道的稳定缓存键，使清理和写入始终指向同一资源。 */
     private fun playbackCacheKey(sources: PlaybackSources, video: Boolean): String {
         val codec = if (video) sources.videoCodec else sources.audioCodec
-        val trackType = if (video) "video" else "audio"
-        return "$currentBvid:$currentCid:$currentQuality:" +
-            "${PlaybackTrackPolicy.cacheKey(codec)}:$trackType"
+        return PlaybackTrackPolicy.mediaCacheKey(
+            currentBvid, currentCid, sources.actualQuality, codec, video,
+        )
     }
 
     /**
@@ -2344,6 +2451,10 @@ class NativePlaybackController(
 
     /** 合并当前候选线路的 DASH 音视频，并按历史位置、倍速和播放状态启动唯一播放器。 */
     private fun prepareMediaSources(sources: PlaybackSources) {
+        if (!BilibiliSessionGate.isCurrent(sources.diagnostic.sessionGeneration)) {
+            reportError("登录状态已变化，请重试播放。")
+            return
+        }
         val nativePlayer = player ?: return
         if (latestPlaybackSources !== sources) {
             latestPlaybackSources = sources
@@ -2427,6 +2538,7 @@ class NativePlaybackController(
 
     /** 将网络或解析异常转换为用户能理解的播放失败提示。 */
     private fun describePlaybackFetchFailure(error: Throwable): String {
+        if (error is BilibiliCookiePolicy.Unavailable) return error.message ?: "登录会话暂不可用。"
         if (error is PlaybackSourceException) {
             return error.message ?: "无法取得播放数据。"
         }
@@ -2486,6 +2598,7 @@ class NativePlaybackController(
             "playbackEvent",
             mapOf(
                 "phase" to playbackPhase,
+                "canContinueAsGuest" to canContinueAsGuest,
                 "isPlaying" to (nativePlayer?.isPlaying == true),
                 "audioOnly" to audioOnly,
                 "sleepTimerRemainingMs" to sleepTimer.remainingMs(),
@@ -2744,12 +2857,16 @@ class NativePlaybackController(
     }
 
     /** 从本应用 WebView 的 B 站会话中读取 Cookie，使登录后的播放请求复用同一状态。 */
+    private fun readCookieSnapshot(): BilibiliCookiePolicy.Snapshot =
+        BilibiliSessionGate.read { CookieManager.getInstance().getCookie(it) }
+
     private fun readBilibiliCookieHeader(): String {
-        return runCatching {
-            CookieManager.getInstance()
-                .getCookie("https://www.bilibili.com")
-                .orEmpty()
-        }.getOrDefault("")
+        if (guestConsentGeneration?.let(BilibiliSessionGate::isCurrent) == true) return ""
+        val snapshot = readCookieSnapshot()
+        if (snapshot.state != BilibiliCookiePolicy.State.SESSION && snapshot.state != BilibiliCookiePolicy.State.ANONYMOUS) {
+            throw BilibiliCookiePolicy.Unavailable(snapshot.state)
+        }
+        return snapshot.header
     }
 
     /** 将 Flutter 传入的 BV 号转换为视频页 Referer，并验证格式。 */
@@ -2827,7 +2944,6 @@ class NativePlaybackController(
         private const val PICTURE_IN_PICTURE_RATIO_BASE = 1000
         private const val MEDIA_CACHE_DEFAULT_MAX_BYTES = 512L * 1024L * 1024L
         private const val MEDIA_CACHE_DIRECTORY_NAME = "focubili_media_cache"
-        private const val PREFERRED_TRACK_SCORE = 1_000_000_000_000L
         private const val HEIGHT_SCORE_UNIT = 1_000_000L
         private const val PLAYBACK_API_HOST = "api.bilibili.com"
         private const val SUBTITLE_CDN_HOST = "aisubtitle.hdslb.com"

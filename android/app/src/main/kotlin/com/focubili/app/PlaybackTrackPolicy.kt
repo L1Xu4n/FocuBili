@@ -25,12 +25,61 @@ internal object PlaybackTrackPolicy {
         return candidateQuality > 0 && candidateQuality <= preferredQuality
     }
 
+    /** 先选目标上限以内最高档，再在同档优先兼容编码；音频继续按原分值排序。 */
+    fun shouldReplaceTrack(
+        candidateQuality: Int,
+        candidateScore: Long,
+        selectedQuality: Int,
+        selectedScore: Long,
+        preferredQuality: Int?,
+    ): Boolean {
+        if (preferredQuality == null) return candidateScore > selectedScore
+        if (!isAtOrBelowPreferred(candidateQuality, preferredQuality)) return false
+        return candidateQuality > selectedQuality ||
+            (candidateQuality == selectedQuality && candidateScore > selectedScore)
+    }
+
+    /** 设备支持为前置条件；保留有界的同档/低档候选供解码器失败后顺序回退。 */
+    fun <T> playableTracks(items: List<T>, preferred: Int, quality: (T) -> Int,
+        score: (T) -> Long, supported: (T) -> Boolean): List<T> =
+        items.filter { isAtOrBelowPreferred(quality(it), preferred) && supported(it) }
+            .sortedWith(compareByDescending<T> { quality(it) }.thenByDescending { score(it) })
+
+    fun frameRate(text: String): Float? {
+        val parts = text.split('/')
+        val value = when (parts.size) {
+            1 -> parts[0].toFloatOrNull()
+            2 -> {
+                val numerator = parts[0].toFloatOrNull() ?: return null
+                val denominator = parts[1].toFloatOrNull() ?: return null
+                if (denominator <= 0f) return null
+                numerator / denominator
+            }
+            else -> null
+        }
+        return value?.takeIf { it.isFinite() && it > 0f && it <= 1000f }
+    }
+
+    /** 仅处理解码器故障，HTTP、音频错误与容器损坏仍走原有恢复路径。 */
+    fun isDecoderFailure(code: Int): Boolean = code in setOf(
+        androidx.media3.common.PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+        androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FAILED,
+        androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
+        androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+    )
+
     /** x86 桌面模拟器优先使用同步 MediaCodec，避开部分虚拟显卡异步回调造成的秒级视频帧延迟。 */
     fun shouldUseSynchronousCodec(supportedAbis: List<String>): Boolean {
         return supportedAbis.any { abi ->
             val normalized = abi.trim().lowercase(Locale.ROOT)
             normalized == "x86" || normalized == "x86_64"
         }
+    }
+
+    /** 新命名空间不复用旧版可能把低清轨道记为高清的缓存；旧字节留给既有 LRU 淘汰。 */
+    fun mediaCacheKey(bvid: String, cid: Long, selectedQuality: Int, codec: String, video: Boolean): String {
+        val trackType = if (video) "video" else "audio"
+        return "focubili-quality-v2:$bvid:$cid:$selectedQuality:${cacheKey(codec)}:$trackType"
     }
 
     /** 把不可信编码名称限制成稳定安全的缓存键，空名称使用 unknown。 */

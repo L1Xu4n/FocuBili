@@ -24,6 +24,11 @@ class _SettingsVersionProvider implements AppVersionProvider {
 
 /// 为设置页更新摘要测试提供始终开启且不访问真实存储的偏好服务。
 class _SettingsUpdatePreferences extends AppUpdatePreferencesService {
+  @override
+  Future<String?> loadIgnoredUpdate() async => null;
+  @override
+  Future<void> saveIgnoredUpdate(String? identity) async {}
+
   /// 测试默认允许执行启动更新检查。
   @override
   Future<bool> loadEnabled() async => true;
@@ -176,19 +181,23 @@ void main() {
     );
   });
 
-  /// 验证检测到新版本后，设置页“关于”入口直接展示第一条简略更新内容。
-  testWidgets('设置页关于入口展示新版本简略', (WidgetTester tester) async {
+  /// 验证已知更新的摘要在忽略、后续检查失败时仍保留。
+  testWidgets('设置页关于入口保留已知更新摘要', (WidgetTester tester) async {
+    var failCheck = false;
     final AppUpdateController updateController = AppUpdateController(
       versionProvider: _SettingsVersionProvider(),
       preferencesService: _SettingsUpdatePreferences(),
       updateService: AppUpdateService(
-        releaseLoader: () async => <String, Object?>{
-          'tag_name': 'v1.2.1',
-          'body': '''
+        releaseLoader: () async {
+          if (failCheck) throw StateError('模拟网络失败');
+          return <String, Object?>{
+            'tag_name': 'v1.2.1',
+            'body': '''
 <!-- focubili-update-summary:start -->
 - 优化平板播放器和账号卡片
 <!-- focubili-update-summary:end -->
 ''',
+          };
         },
       ),
     );
@@ -213,6 +222,17 @@ void main() {
       tester,
       const Key('open-appearance-application-settings'),
     );
+    expect(find.text('新版本：优化平板播放器和账号卡片'), findsOneWidget);
+    await updateController.ignoreCurrentUpdate();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('settings-update-dot')), findsNothing);
+    expect(find.text('新版本：优化平板播放器和账号卡片'), findsOneWidget);
+
+    failCheck = true;
+    await updateController.checkNow();
+    await tester.pumpAndSettle();
+    expect(updateController.result.releaseHighlights, isEmpty);
+    expect(find.byKey(const Key('settings-update-dot')), findsOneWidget);
     expect(find.text('新版本：优化平板播放器和账号卡片'), findsOneWidget);
   });
 

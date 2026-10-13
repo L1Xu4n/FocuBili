@@ -33,24 +33,26 @@ class BilibiliCookieController(
             "setCookies" -> {
                 val rawCookie = call.argument<String>("cookie").orEmpty()
                 val cookies = parseCookiePairs(rawCookie)
-                if (cookies.none { cookie -> cookie.first.equals("SESSDATA", true) }) {
+                if (cookies.none { cookie -> cookie.first == "SESSDATA" }) {
                     result.error("missing_session", "Cookie 中没有找到 SESSDATA。", null)
                     return
                 }
-                replaceBilibiliCookies(cookies, result)
+                mutate(result) { guarded -> replaceBilibiliCookies(cookies, guarded) }
             }
             "replaceCookies" -> {
                 val rawCookie = call.argument<String>("cookie").orEmpty()
                 val cookies = parseCookiePairs(rawCookie)
-                if (cookies.none { cookie -> cookie.first.equals("SESSDATA", true) }) {
+                if (cookies.none { cookie -> cookie.first == "SESSDATA" }) {
                     result.error("missing_session", "Cookie 中没有找到 SESSDATA。", null)
                     return
                 }
-                replaceBilibiliCookies(cookies, result)
+                mutate(result) { guarded -> replaceBilibiliCookies(cookies, guarded) }
             }
-            "clearCookies", "clearBilibiliCookies" -> clearBilibiliCookies(result)
+            "clearCookies", "clearBilibiliCookies" -> mutate(result, ::clearBilibiliCookies)
             else -> result.notImplemented()
         }
+        } catch (error: BilibiliCookiePolicy.Unavailable) {
+            result.error("session_unavailable", error.message, null)
         } catch (_: Exception) {
             result.error("webview_unavailable", "系统 WebView 会话容器暂时不可用。", null)
         } catch (_: LinkageError) {
@@ -58,24 +60,36 @@ class BilibiliCookieController(
         }
     }
 
-    /** 从 B 站常用子域读取 Cookie，并按名称去重后组合为标准请求头。 */
+    /** 登录与播放选择同一个完整快照，切换期间拒绝读取半写入会话。 */
     private fun readBilibiliCookies(): String {
-        return readBilibiliCookieValues().entries.joinToString("; ") { entry ->
-            "${entry.key}=${entry.value}"
+        val snapshot = BilibiliSessionGate.read { cookieManager.getCookie(it) }
+        if (snapshot.state != BilibiliCookiePolicy.State.SESSION && snapshot.state != BilibiliCookiePolicy.State.ANONYMOUS) {
+            throw BilibiliCookiePolicy.Unavailable(snapshot.state)
         }
+        return snapshot.header
     }
 
-    /** 汇总 B 站常用子域的 Cookie 名称和值，供读取和仅限 B 站的清理操作复用。 */
-    private fun readBilibiliCookieValues(): LinkedHashMap<String, String> {
-        val valuesByName = linkedMapOf<String, String>()
-        BILIBILI_COOKIE_URLS.forEach { url ->
-            cookieManager.getCookie(url)
-                .orEmpty()
-                .split(';')
-                .mapNotNull(::parseCookiePair)
-                .forEach { cookie -> valuesByName[cookie.first] = cookie.second }
+    /** 会话修改互斥到最后一个原生回调；失败也必须释放写入状态并作废旧请求。 */
+    private fun mutate(result: MethodChannel.Result, operation: (MethodChannel.Result) -> Unit) {
+        if (!BilibiliSessionGate.beginWrite()) {
+            result.error("session_busy", "登录状态正在切换，请稍后重试。", null)
+            return
         }
-        return valuesByName
+        var completed = false
+        val guarded = object : MethodChannel.Result {
+            private fun finish(action: () -> Unit) {
+                if (completed) return
+                completed = true
+                BilibiliSessionGate.endWrite()
+                action()
+            }
+            override fun success(value: Any?) = finish { result.success(value) }
+            override fun error(code: String, message: String?, details: Any?) = finish { result.error(code, message, details) }
+            override fun notImplemented() = finish { result.notImplemented() }
+        }
+        try { operation(guarded) }
+        catch (_: Exception) { guarded.error("cookie_write_failed", "无法修改登录会话，请稍后重试。", null) }
+        catch (_: LinkageError) { guarded.error("webview_unavailable", "系统 WebView 无法加载。", null) }
     }
 
     /** 将用户粘贴的 Cookie 文本拆成合法名称和值，并忽略 Domain 等属性字段。 */
@@ -113,24 +127,13 @@ class BilibiliCookieController(
         cookies: List<Pair<String, String>>,
         result: MethodChannel.Result,
     ) {
-        var remainingCount = cookies.size
-        var writeFailed = false
-        cookies.forEach { cookie ->
-            cookieManager.setCookie(
-                BILIBILI_ROOT_URL,
-                "${cookie.first}=${cookie.second}; Domain=.bilibili.com; Path=/; Secure",
-            ) { accepted ->
-                writeFailed = writeFailed || !accepted
-                remainingCount -= 1
-                if (remainingCount == 0) {
-                    cookieManager.flush()
-                    if (writeFailed) {
-                        result.error("cookie_write_failed", "部分 Cookie 无法写入。", null)
-                    } else {
-                        result.success(null)
-                    }
-                }
-            }
+        BilibiliCookieWrites.apply(
+            cookies.map { (name, value) -> BILIBILI_ROOT_URL to "$name=$value; Domain=.bilibili.com; Path=/; Secure" },
+            { url, value, done -> cookieManager.setCookie(url, value) { done(it) } },
+            { cookieManager.flush() },
+        ) { success ->
+            if (success) result.success(null)
+            else result.error("cookie_write_failed", "部分 Cookie 无法写入。", null)
         }
     }
 
@@ -143,7 +146,9 @@ class BilibiliCookieController(
             if (!cleared) {
                 result.error("cookie_clear_failed", "旧 B 站 Cookie 无法清除。", null)
             } else {
-                writeBilibiliCookies(cookies, result)
+                try { writeBilibiliCookies(cookies, result) }
+                catch (_: Exception) { result.error("cookie_write_failed", "无法保存登录会话，请重试。", null) }
+                catch (_: LinkageError) { result.error("webview_unavailable", "系统 WebView 无法加载。", null) }
             }
         }
     }
@@ -152,7 +157,6 @@ class BilibiliCookieController(
     private fun clearBilibiliCookies(result: MethodChannel.Result) {
         clearBilibiliCookies { cleared ->
             if (cleared) {
-                cookieManager.flush()
                 result.success(null)
             } else {
                 result.error("cookie_clear_failed", "B 站 Cookie 无法清除。", null)
@@ -163,7 +167,7 @@ class BilibiliCookieController(
     /** 收集当前 B 站 Cookie 名称并逐个过期，避免误删同一 WebView 的其他网站数据。 */
     private fun clearBilibiliCookies(onComplete: (Boolean) -> Unit) {
         expireBilibiliCookies(
-            readBilibiliCookieValues().keys,
+            BilibiliCookiePolicy.namesForClear(cookieManager::getCookie),
             onComplete,
         )
     }
@@ -181,23 +185,9 @@ class BilibiliCookieController(
                 )
             }
         }
-        if (deleteOperations.isEmpty()) {
-            cookieManager.flush()
-            onComplete(true)
-            return
-        }
-        var remainingCount = deleteOperations.size
-        var deleteFailed = false
-        deleteOperations.forEach { operation ->
-            cookieManager.setCookie(operation.first, operation.second) { accepted ->
-                deleteFailed = deleteFailed || !accepted
-                remainingCount -= 1
-                if (remainingCount == 0) {
-                    cookieManager.flush()
-                    onComplete(!deleteFailed)
-                }
-            }
-        }
+        BilibiliCookieWrites.apply(deleteOperations,
+            { url, value, done -> cookieManager.setCookie(url, value) { done(it) } },
+            { cookieManager.flush() }, onComplete)
     }
 
     /** Activity 销毁时注销方法通道，避免 Flutter 引擎释放后仍接收调用。 */
@@ -208,11 +198,7 @@ class BilibiliCookieController(
     companion object {
         private const val CHANNEL_NAME = "com.focubili.app/auth"
         private const val BILIBILI_ROOT_URL = "https://www.bilibili.com"
-        private val BILIBILI_COOKIE_URLS = listOf(
-            BILIBILI_ROOT_URL,
-            "https://api.bilibili.com",
-            "https://passport.bilibili.com",
-        )
+        private val BILIBILI_COOKIE_URLS = BilibiliCookiePolicy.urls
         private val COOKIE_NAME_PATTERN = Regex("^[A-Za-z0-9_]+$")
         private val RESERVED_COOKIE_ATTRIBUTES = setOf(
             "domain",

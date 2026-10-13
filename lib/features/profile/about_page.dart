@@ -54,6 +54,30 @@ class _AboutPageState extends State<AboutPage> {
     }
   }
 
+  Future<void> _ignoreUpdate() async {
+    try {
+      await _controller!.ignoreCurrentUpdate();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('无法保存忽略状态，请重试。')));
+      }
+    }
+  }
+
+  Future<void> _checkUpdate() async {
+    try {
+      await _controller!.checkNow();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('无法保存更新偏好，请重试。')));
+      }
+    }
+  }
+
   /// 交给系统打开项目、负责人、QQ 群或 Release 链接，失败时展示对应提示。
   Future<void> _open(Uri uri, {String failureMessage = '无法打开外部链接。'}) async {
     final ExternalUrlLauncher launcher =
@@ -117,6 +141,7 @@ class _AboutPageState extends State<AboutPage> {
   Widget build(BuildContext context) {
     final AppUpdateController controller = _controller!;
     final AppUpdateResult result = controller.result;
+    final AppUpdateResult? update = controller.availableUpdate;
     return Scaffold(
       appBar: AppBar(title: const Text('关于')),
       body: AdaptivePageFrame(
@@ -212,7 +237,7 @@ class _AboutPageState extends State<AboutPage> {
             ),
             const SizedBox(height: 12),
             Card(
-              color: result.updateAvailable
+              color: update != null
                   ? Theme.of(context).colorScheme.errorContainer
                   : null,
               child: Padding(
@@ -223,7 +248,7 @@ class _AboutPageState extends State<AboutPage> {
                     Row(
                       children: <Widget>[
                         Icon(
-                          result.updateAvailable
+                          update != null
                               ? Icons.system_update_alt_rounded
                               : Icons.update_rounded,
                         ),
@@ -235,7 +260,7 @@ class _AboutPageState extends State<AboutPage> {
                                 ?.copyWith(fontWeight: FontWeight.w700),
                           ),
                         ),
-                        if (result.updateAvailable)
+                        if (update != null)
                           const _UpdateDot(key: Key('about-update-dot')),
                       ],
                     ),
@@ -244,10 +269,21 @@ class _AboutPageState extends State<AboutPage> {
                       _statusText(result),
                       key: const Key('about-update-status'),
                     ),
-                    if (result.updateAvailable &&
-                        result.releaseHighlights.isNotEmpty) ...<Widget>[
+                    if (update != null &&
+                        update.releaseHighlights.isNotEmpty) ...<Widget>[
                       const SizedBox(height: 12),
-                      _buildUpdateHighlights(result),
+                      _buildUpdateHighlights(update),
+                    ],
+                    if (controller.updateIgnored) ...<Widget>[
+                      const SizedBox(height: 8),
+                      Text(
+                        '已忽略 ${update!.latestVersion} 的主界面红点，仍可下载。主动检查更新会取消忽略。',
+                        key: const Key('about-update-ignored'),
+                      ),
+                    ] else if (update != null &&
+                        result.status != AppUpdateStatus.available) ...<Widget>[
+                      const SizedBox(height: 8),
+                      Text('已检测到的更新：${update.latestVersion}'),
                     ],
                     const SizedBox(height: 14),
                     Wrap(
@@ -255,10 +291,19 @@ class _AboutPageState extends State<AboutPage> {
                       runSpacing: 10,
                       alignment: WrapAlignment.end,
                       children: <Widget>[
+                        TextButton.icon(
+                          key: const Key('ignore-current-update'),
+                          onPressed: controller.canIgnoreUpdate
+                              ? _ignoreUpdate
+                              : null,
+                          icon: const Icon(Icons.notifications_off_outlined),
+                          label: Text(
+                            controller.updateIgnored ? '已忽略此版本' : '忽略本次更新',
+                          ),
+                        ),
                         OutlinedButton.icon(
-                          onPressed: controller.checking
-                              ? null
-                              : controller.checkNow,
+                          key: const Key('check-update-now'),
+                          onPressed: controller.checking ? null : _checkUpdate,
                           icon: controller.checking
                               ? const SizedBox.square(
                                   dimension: 16,
@@ -269,23 +314,23 @@ class _AboutPageState extends State<AboutPage> {
                               : const Icon(Icons.refresh_rounded),
                           label: const Text('重新检查'),
                         ),
-                        if (result.updateAvailable)
+                        if (update != null)
                           FilledButton.icon(
                             key: const Key('open-release-page'),
                             onPressed: () => _open(
-                              result.downloadUrl ??
-                                  result.releaseUrl ??
+                              update.downloadUrl ??
+                                  update.releaseUrl ??
                                   AppUpdateService.releasesUri,
-                              failureMessage: result.downloadUrl == null
+                              failureMessage: update.downloadUrl == null
                                   ? '无法打开 Release 页面。'
                                   : '无法打开安装包下载地址，请前往 Release 页面重试。',
                             ),
                             icon: Icon(
-                              result.downloadUrl == null
+                              update.downloadUrl == null
                                   ? Icons.open_in_new_rounded
                                   : Icons.download_rounded,
                             ),
-                            label: Text(result.downloadActionLabel),
+                            label: Text(update.downloadActionLabel),
                           ),
                       ],
                     ),

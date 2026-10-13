@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -27,6 +29,33 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues(<String, Object>{});
   });
+
+  for (final throws in [false, true]) {
+    test('诊断备用版本与当前发布元数据一致：${throws ? '插件异常' : '空版本'}', () async {
+      final expected = RegExp(
+        r'^version:\s*(\S+)',
+        multiLine: true,
+      ).firstMatch(File('pubspec.yaml').readAsStringSync())!.group(1)!;
+      final preferences = await SharedPreferences.getInstance();
+      final service = ProblemDiagnosticsService(
+        preferencesLoader: () async => preferences,
+        appVersionLoader: () async {
+          if (throws) throw StateError('version unavailable');
+          return '   ';
+        },
+        deviceInfoLoader: () async => const DiagnosticDeviceInfo(
+          platformName: 'Windows',
+          systemVersion: '11',
+          apiLevel: null,
+          model: 'fixture',
+        ),
+        reminderDiagnosticsLoader: () async =>
+            ReminderDiagnosticsSnapshot.unavailable(),
+      );
+      expect((await service.loadSnapshot()).appVersion, expected);
+      expect(await service.buildCopyText(), contains('应用版本：$expected'));
+    });
+  }
 
   test('播放412错误会生成脱敏风险控制诊断文本', () async {
     final SharedPreferences preferences = await SharedPreferences.getInstance();

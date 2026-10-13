@@ -550,7 +550,8 @@ class _ProfilePageState extends State<ProfilePage> {
   /// 创建登录状态卡片以及历史、收藏、笔记和设置入口。
   @override
   Widget build(BuildContext context) {
-    final bool hasUpdate = AppUpdateScope.maybeOf(context)?.hasUpdate ?? false;
+    final bool hasUpdate =
+        AppUpdateScope.maybeOf(context)?.showUpdateBadge ?? false;
     return Scaffold(
       appBar: AppBar(
         leading: widget.onBackRequested == null
