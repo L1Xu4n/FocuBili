@@ -31,3 +31,18 @@
 - 生产方法提取隔离验证 `boundary_harness.py`（替换平台 CookieManager、JSON/网络和设备能力探测；不是设备实测）：关闭 WBI 为 1 playurl/0 nav；开启首次为 1 playurl+1 nav，缓存后新增 1 playurl/0 nav。未知会话自动请求 0，显式游客后 1，且无会话 Header；身份冲突为 0；模拟不支持 HD 时 selected=16 / reported=16，支持时 selected=80。保留匿名、过期、已认证但服务端降清，以及签名失败不回退的覆盖。
 - 本轮证据位于 `/workspace/scratch/focubili-360p-investigation/`：`boundary-full.log`、`boundary-targeted.log`、`boundary-guest-widget.log`、`boundary-jvm-final.log`、`boundary-analyze.log`、`boundary-harness-results.txt`。此前不带 boundary 前缀的 final/harness 记录仅对应 24a95b1 阶段，不能作为本次最终测试证据。
 - 限制：所有自动验证在 Linux 云端进行，无受影响 Android 真机验收，也没有真实账号/服务端返回验证；仍未确定用户视频范围或个案根因。未改包名、版本、签名配置或用户数据；未读取/生成/上传秘密或新凭据。正式签名状态沿用前节限制，本轮不构建交付安装包。dev 的模块迁移适配和后续用户试包需另行授权。
+
+
+## 2026-10-13：1.7.1 发布准备（用户已授权）
+
+- 后续用户授权覆盖前节“仅本地”限制：推送 dev、请求 @codex 审查、有效反馈修正、CI 后再合入 master 并发布 1.7.1。以最终本地补丁 `200077e4423fc172381c951d929392b26c27e800` 为来源，旧中间补丁不得单独发布。
+- 已重新 fetch：master=`9156ad90060d156095bc5484d5fe372fac26fa94`，dev=`dcb9368f7cb905b6d2723eb72a2912081d2775df`。dev 已含 1.8 Beta1/2，Beta3/4/5 分别为未合入草稿 PR #49/#51/#52。采用独立发布分支从最新 master 拣选两段完整补丁；dev 单独适配模块迁移，不整体合并 dev 到 master，也不覆盖 dev 的 1.8 版本和历史。
+- 发布版本为 1.7.1+21；Windows 版本元数据同步为 1.7.1.21。正式包名、Windows 安装器 AppId、Apple Bundle ID、签名配置保持不变。Flutter build number 自动进入 Android/iOS/macOS 产物。
+- master 相对最初 v1.7.0 标签已包含 1.7 Apple/Linux 支持及既有维护更新；本次 diff 以最新 master 为基线，仅增加高清切换、会话边界、设备解码回退、必要诊断及发布元数据，不引入 1.8 开发功能。
+- 平台影响：Kotlin Cookie/会话代次、Media3 解码探测和回退、媒体轨道缓存身份仅在 Android 执行。其他四个平台使用既有 media_kit 后端，本次不修改其 playurl、签名、Cookie 或轨道算法。共用 Flutter 画质失败提示和诊断存储/页面会执行；原生请求记录及显式游客入口只由 Android NativePlaybackService 提供。新增四平台组件回归，确保非 Android 不出现不可用的游客入口或 Android 请求记录指引。
+- 签名预检：下载现有 v1.7.0 Android 资产，公开证书 SHA-256=`65EF1FB301FB1121C1803E752F5B1EB24E55846502D8B5478F0FC11F58E9A8A9`，包名 `com.focubili.app`、versionCode=20、versionName=1.7.0，与 CI 固定证书一致。证书 DN 含 Android Debug，判断覆盖兼容性依赖证书字节一致而非名称。已有签名构建 run 37186425095 的恢复密钥及证书验证步骤成功；当前新包仍需实际签名验证。只查看配置/公开证书，没有读取签名秘密。
+- GitHub secret 名称和分支保护详情查询返回 HTTP 403，不能以此断言签名未配置。iOS workflow 明确 `--no-codesign`；现有 v1.7.0 IPA 无 embedded.mobileprovision，不能宣称存在正式可安装签名。macOS 沿用既有 ad-hoc/无公证方式。发布前继续验证各平台实际资产。
+
+- 用户随后明确扩展 1.7.1 范围，新增“忽略本次收到的更新”。本轮仅增加这项已授权功能，不扩展到 Beta 功能。忽略身份绑定仓库、平台、stable/prerelease 通道与版本，不是全局关闭提醒；独立保存检查结果和红点状态。主界面/设置入口红点隐藏，关于页下载与详情保留；自动检查和重新启用启动检查不取消，主动检查立即取消且网络失败不恢复。
+- 新增忽略状态并发存储协调，覆盖迟到的忽略保存不能覆盖之后的手动检查，以及手动检查撞上自动请求仍取消忽略但不重复请求。保存失败明确提示，不假装持久化成功。四平台共用画质提示定向 4 项通过；更新服务/页面初步定向 29 项通过。最终全套结果在后续验证阶段追加。
+- 实际 UI 布局检查证据见 `docs/reviews/v1.7.1/`：真实 AboutPage / 应用主题、合成更新响应的 Linux Flutter 渲染截图，另覆盖 320 宽深色大字体。明确不称为移动端真机验收。

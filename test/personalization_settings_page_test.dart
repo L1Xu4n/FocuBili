@@ -24,6 +24,11 @@ class _SettingsVersionProvider implements AppVersionProvider {
 
 /// 为设置页更新摘要测试提供始终开启且不访问真实存储的偏好服务。
 class _SettingsUpdatePreferences extends AppUpdatePreferencesService {
+  @override
+  Future<String?> loadIgnoredUpdate() async => null;
+  @override
+  Future<void> saveIgnoredUpdate(String? identity) async {}
+
   /// 测试默认允许执行启动更新检查。
   @override
   Future<bool> loadEnabled() async => true;

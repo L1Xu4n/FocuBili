@@ -21,6 +21,7 @@ class AppUpdateResult {
     required this.status,
     required this.currentVersion,
     this.latestVersion,
+    this.updateIdentity,
     this.releaseUrl,
     this.downloadUrl,
     this.downloadActionLabel = '查看 Release',
@@ -33,6 +34,7 @@ class AppUpdateResult {
     : status = AppUpdateStatus.idle,
       currentVersion = '',
       latestVersion = null,
+      updateIdentity = null,
       releaseUrl = null,
       downloadUrl = null,
       downloadActionLabel = '查看 Release',
@@ -42,6 +44,9 @@ class AppUpdateResult {
   final AppUpdateStatus status;
   final String currentVersion;
   final String? latestVersion;
+
+  /// 当前仓库、平台、发布通道和版本组成的本地忽略身份。
+  final String? updateIdentity;
   final Uri? releaseUrl;
   final Uri? downloadUrl;
   final String downloadActionLabel;
@@ -50,7 +55,7 @@ class AppUpdateResult {
   final List<String> releaseHighlights;
   final String? message;
 
-  /// 指示当前结果是否需要显示新版本红点。
+  /// 指示此次检查是否发现更新，独立于用户是否忽略红点。
   bool get updateAvailable => status == AppUpdateStatus.available;
 }
 
@@ -79,6 +84,18 @@ class AppUpdatePreferencesService {
   const AppUpdatePreferencesService();
 
   static const String _enabledKey = 'app_update.check_on_start';
+  static const String _ignoredUpdateKey = 'app_update.ignored_release';
+
+  Future<String?> loadIgnoredUpdate() async =>
+      (await SharedPreferences.getInstance()).getString(_ignoredUpdateKey);
+
+  Future<void> saveIgnoredUpdate(String? identity) async {
+    final preferences = await SharedPreferences.getInstance();
+    final saved = identity == null
+        ? await preferences.remove(_ignoredUpdateKey)
+        : await preferences.setString(_ignoredUpdateKey, identity);
+    if (!saved) throw StateError('无法保存更新提示偏好。');
+  }
 
   /// 读取启动检查开关；首次安装默认开启。
   Future<bool> loadEnabled() async {
@@ -146,6 +163,14 @@ class AppUpdateService {
             : AppUpdateStatus.upToDate,
         currentVersion: currentVersion,
         latestVersion: latestVersion,
+        updateIdentity: jsonEncode([
+          'L1Xu4n/FocuBili',
+          _targetPlatform.name,
+          release['prerelease'] == true || latestVersion.contains('-')
+              ? 'prerelease'
+              : 'stable',
+          latestVersion,
+        ]),
         releaseUrl: releaseUrl,
         downloadUrl: downloadUrl,
         downloadActionLabel: _downloadActionLabel(downloadUrl),
@@ -441,6 +466,11 @@ class AppUpdateController extends ChangeNotifier {
   final AppVersionProvider _versionProvider;
 
   AppUpdateResult _result = const AppUpdateResult.idle();
+  AppUpdateResult? _availableUpdate;
+  String? _ignoredUpdate;
+  int _ignoreGeneration = 0;
+  bool _savingIgnore = false;
+  Future<void> _preferenceWrites = Future<void>.value();
   bool _enabled = true;
   bool _loaded = false;
   bool _checking = false;
@@ -461,7 +491,45 @@ class AppUpdateController extends ChangeNotifier {
   bool get checking => _checking;
 
   /// 返回设置入口是否应显示新版本红点。
-  bool get hasUpdate => _result.updateAvailable;
+  bool get hasUpdate => _availableUpdate != null;
+
+  /// 保留已经检测到的详情，后续检查失败不会移除下载入口。
+  AppUpdateResult? get availableUpdate => _availableUpdate;
+  bool get updateIgnored =>
+      _availableUpdate?.updateIdentity != null &&
+      _availableUpdate!.updateIdentity == _ignoredUpdate;
+  bool get showUpdateBadge => hasUpdate && !updateIgnored;
+  bool get canIgnoreUpdate =>
+      _availableUpdate?.updateIdentity != null &&
+      !checking &&
+      !_savingIgnore &&
+      !updateIgnored;
+
+  Future<void> _saveIgnoredUpdate(String? identity) {
+    final operation = _preferenceWrites.then(
+      (_) => _preferencesService.saveIgnoredUpdate(identity),
+    );
+    _preferenceWrites = operation.catchError((Object _) {});
+    return operation;
+  }
+
+  /// 只忽略调用时已经检测到的版本；迟到的写入不能撤销之后的手动检查。
+  Future<void> ignoreCurrentUpdate() async {
+    if (!canIgnoreUpdate || _disposed) return;
+    final identity = _availableUpdate!.updateIdentity!;
+    final generation = ++_ignoreGeneration;
+    _savingIgnore = true;
+    _notify();
+    try {
+      await _saveIgnoredUpdate(identity);
+      if (!_disposed && generation == _ignoreGeneration) {
+        _ignoredUpdate = identity;
+      }
+    } finally {
+      _savingIgnore = false;
+      _notify();
+    }
+  }
 
   /// 启动时读取开关和安装版本；仅在用户启用时访问 GitHub。
   Future<void> initialize({bool checkOnStart = true}) async {
@@ -471,14 +539,17 @@ class AppUpdateController extends ChangeNotifier {
       _loadingFuture = null;
     }
     if (!_disposed && checkOnStart && _enabled) {
-      await checkNow();
+      await checkNow(manual: false);
     }
   }
 
   /// 合并并发初始化请求，页面快速重建时不会重复访问平台插件。
   Future<void> _loadInitialState() async {
+    final ignoreGeneration = _ignoreGeneration;
     try {
       _enabled = await _preferencesService.loadEnabled();
+      final ignored = await _preferencesService.loadIgnoredUpdate();
+      if (ignoreGeneration == _ignoreGeneration) _ignoredUpdate = ignored;
       final String currentVersion = await _versionProvider.loadVersion();
       _result = AppUpdateResult(
         status: _enabled ? AppUpdateStatus.idle : AppUpdateStatus.disabled,
@@ -506,6 +577,7 @@ class AppUpdateController extends ChangeNotifier {
     _checking = false;
     _enabled = enabled;
     if (!enabled) {
+      _availableUpdate = null;
       _result = AppUpdateResult(
         status: AppUpdateStatus.disabled,
         currentVersion: _result.currentVersion,
@@ -515,18 +587,25 @@ class AppUpdateController extends ChangeNotifier {
       return;
     }
     _notify();
-    await checkNow();
+    await checkNow(manual: false);
   }
 
   /// 手动检查始终执行，即使启动自动检查开关处于关闭状态。
-  Future<void> checkNow() async {
-    if (_checking) {
+  Future<void> checkNow({bool manual = true}) async {
+    if (_disposed) return;
+    if (manual) {
+      _ignoreGeneration++;
+      _ignoredUpdate = null;
+      _notify();
+      await _saveIgnoredUpdate(null);
+    }
+    if (_checking || _disposed) {
       return;
     }
     if (!_loaded) {
       await initialize(checkOnStart: false);
     }
-    if (_result.currentVersion.isEmpty) {
+    if (_checking || _disposed || _result.currentVersion.isEmpty) {
       return;
     }
     final int requestGeneration = ++_requestGeneration;
@@ -544,6 +623,11 @@ class AppUpdateController extends ChangeNotifier {
       return;
     }
     _result = checkedResult;
+    if (checkedResult.updateAvailable) {
+      _availableUpdate = checkedResult;
+    } else if (checkedResult.status == AppUpdateStatus.upToDate) {
+      _availableUpdate = null;
+    }
     _checking = false;
     _notify();
   }
