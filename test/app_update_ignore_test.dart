@@ -24,6 +24,7 @@ Map<String, Object?> _release(String version, {bool prerelease = false}) => {
 
 class _DelayedPreferences extends AppUpdatePreferencesService {
   final pendingIgnore = Completer<void>();
+  Completer<void>? pendingClear;
   String? identity;
   bool fail = false;
   @override
@@ -31,6 +32,7 @@ class _DelayedPreferences extends AppUpdatePreferencesService {
   @override
   Future<void> saveIgnoredUpdate(String? value) async {
     if (value != null) await pendingIgnore.future;
+    if (value == null) await pendingClear?.future;
     if (fail) throw StateError('storage unavailable');
     identity = value;
   }
@@ -198,6 +200,26 @@ void main() {
     expect(updates.checking, isFalse);
     preferences.fail = false;
     await updates.checkNow();
+    expect(preferences.identity, isNull);
+  });
+
+  test('首次加载前手动检查不会从慢存储重新引入旧忽略记录', () async {
+    final previous = controller();
+    await previous.initialize();
+    final preferences = _DelayedPreferences()
+      ..identity = previous.availableUpdate!.updateIdentity
+      ..pendingClear = Completer<void>();
+    final updates = controller(preferences: preferences);
+    final manual = updates.checkNow();
+    await Future<void>.delayed(Duration.zero);
+    expect(updates.loaded, isTrue);
+    expect(updates.hasUpdate, isTrue);
+    expect(updates.checking, isFalse);
+    expect(updates.showUpdateBadge, isTrue);
+    expect(preferences.pendingClear!.isCompleted, isFalse);
+    preferences.pendingClear!.complete();
+    await manual;
+    expect(updates.showUpdateBadge, isTrue);
     expect(preferences.identity, isNull);
   });
 
