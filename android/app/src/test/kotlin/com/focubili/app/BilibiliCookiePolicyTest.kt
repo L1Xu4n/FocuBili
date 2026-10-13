@@ -3,37 +3,37 @@ package com.focubili.app
 import org.junit.Assert.*
 import org.junit.Test
 
-/** 纯内存域容器，不接触设备 Cookie 或真实账号。 */
 class BilibiliCookiePolicyTest {
-    @Test fun loginAndPlaybackFindApiOnlySession() {
-        val domains = mapOf("https://api.bilibili.com" to "SESSDATA=synthetic; bili_jct=synthetic")
-        val loginValues = BilibiliCookiePolicy.readValues(domains::get)
-        val playbackHeader = BilibiliCookiePolicy.readHeader(domains::get)
-        assertTrue(loginValues.containsKey("SESSDATA"))
-        assertTrue(BilibiliCookiePolicy.hasSession(playbackHeader))
-        assertEquals(2, loginValues.size)
-    }
-
-    @Test fun rootAndPassportSessionsUseExistingLoginPrecedence() {
-        val values = BilibiliCookiePolicy.readValues { url ->
-            if (url.endsWith("passport.bilibili.com")) "SESSDATA=second"
-            else "SESSDATA=first; invalid name=x; empty=; path_token=a=b"
-        }
-        assertTrue(values["SESSDATA"] == "second")
-        assertTrue(values["path_token"] == "a=b")
-        assertFalse(values.containsKey("invalid name"))
-        assertFalse(values.containsKey("empty"))
-    }
-
-    @Test fun readFailureNeverReturnsPartialOrAnonymousSession() {
-        var failed = false
-        try {
-            BilibiliCookiePolicy.readHeader { url ->
-                if (url.endsWith("api.bilibili.com")) throw IllegalStateException()
-                "SESSDATA=synthetic"
+    @Test fun logoutCollectsKnownIdentityNamesDespitePartialOrTotalReadFailure() {
+        for (failed in BilibiliCookiePolicy.urls) {
+            val names = BilibiliCookiePolicy.namesForClear {
+                if (it == failed) throw IllegalStateException()
+                "extra=fixture"
             }
-        } catch (_: IllegalStateException) { failed = true }
-        assertTrue(failed)
-        assertFalse(BilibiliCookiePolicy.hasSession(BilibiliCookiePolicy.readHeader { null }))
+            assertTrue(names.containsAll(listOf("SESSDATA", "bili_jct", "DedeUserID", "DedeUserID__ckMd5", "extra")))
+        }
+        assertEquals(4, BilibiliCookiePolicy.namesForClear { throw IllegalStateException() }.size)
+    }
+    @Test fun apiOnlySessionIsSharedWithoutSupplementingOtherDomains() {
+        val domains = mapOf("https://api.bilibili.com" to "SESSDATA=fixture; bili_jct=fixture")
+        val snapshot = BilibiliCookiePolicy.inspect(domains::get)
+        assertEquals(BilibiliCookiePolicy.State.SESSION, snapshot.state)
+        assertTrue(BilibiliCookiePolicy.hasSession(snapshot.header))
+    }
+    @Test fun partialEmptyIsUnknownAndCompleteEmptyIsAnonymous() {
+        val partial = BilibiliCookiePolicy.inspect { url ->
+            if (url.endsWith("api.bilibili.com")) throw IllegalStateException()
+            null
+        }
+        assertEquals(BilibiliCookiePolicy.State.UNKNOWN, partial.state)
+        assertTrue(partial.partial)
+        assertEquals(BilibiliCookiePolicy.State.ANONYMOUS, BilibiliCookiePolicy.inspect { null }.state)
+    }
+    @Test fun conflictingSessionStillAllowsCollectingNamesForExplicitLogout() {
+        val names = BilibiliCookiePolicy.namesForClear { url ->
+            if (url.endsWith("api.bilibili.com")) "SESSDATA=fixture-A; extra=one"
+            else "SESSDATA=fixture-B; bili_jct=fixture-B"
+        }
+        assertTrue(names.containsAll(listOf("SESSDATA", "bili_jct", "extra")))
     }
 }

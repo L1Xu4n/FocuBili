@@ -6,6 +6,9 @@ internal class PlaybackRequestDiagnostic(
     val wbiEnabled: Boolean,
     val requestedQuality: Int,
 ) {
+    var sessionGeneration = 0L
+    var guestSelected = false
+    var codecFallback = false
     var wbiSigned = false
     var playurlAttempted = false
     var sessionRead = "not_attempted"
@@ -19,7 +22,7 @@ internal class PlaybackRequestDiagnostic(
     /** nav 实际执行且明确验证时才标记认证；WBI 材料缓存命中不会伪造验证结果。 */
     fun observeNavigation(code: Int, isLogin: Boolean?) {
         authState = when {
-            code == 0 && isLogin == true -> "authenticated"
+            code == 0 && isLogin == true && authState == "session_present_unverified" -> "authenticated"
             code == -101 || (code == 0 && isLogin == false) ->
                 if (authState == "anonymous") "anonymous" else "expired"
             else -> authState
@@ -29,6 +32,8 @@ internal class PlaybackRequestDiagnostic(
     /** 当前实现从不自动回退到无签名接口；失败和成功均保留本次实际执行状态。 */
     fun toMap(succeeded: Boolean): Map<String, Any?> = mapOf(
         "request_id" to requestId,
+        "guest_selected" to guestSelected,
+        "codec_fallback" to codecFallback,
         "wbi_enabled" to wbiEnabled,
         "wbi_signed" to wbiSigned,
         "wbi_fallback" to false,

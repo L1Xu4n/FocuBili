@@ -4,10 +4,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/models/playback_request_diagnostic.dart';
 import 'package:focubili/services/native_playback_service.dart';
+import 'package:focubili/services/app_behavior_preferences_service.dart';
 import 'package:focubili/services/problem_diagnostics_service.dart';
 
 Map<String, Object?> request({int id = 1}) => {
   'request_id': id,
+  'guest_selected': false,
+  'codec_fallback': false,
   'wbi_enabled': true,
   'wbi_signed': true,
   'wbi_fallback': false,
@@ -71,7 +74,7 @@ void main() {
       await send(request());
       final entry = (await diagnostics.loadRecentErrors()).single;
       expect(entry.categoryLabel, '播放请求');
-      expect(entry.additionalInfo.length, 14);
+      expect(entry.additionalInfo.length, 16);
       expect(entry.additionalInfo['requested_quality'], '80');
       expect(entry.additionalInfo['returned_quality'], '16');
       expect(entry.additionalInfo['selected_quality'], '16');
@@ -115,8 +118,7 @@ void main() {
   test(
     'diagnosis uses captured request settings rather than later preferences',
     () async {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('app_behavior_preferences.wbi_signing_enabled', true);
+      await AppBehaviorPreferencesService().saveWbiSigningEnabled(true);
       final diagnostics = await service();
       final player = NativePlaybackService(diagnosticsService: diagnostics);
       await send(
@@ -129,6 +131,26 @@ void main() {
       await player.dispose();
     },
   );
+
+  test('session boundaries and explicit guest choice survive export', () async {
+    final diagnostics = await service();
+    final player = NativePlaybackService(diagnosticsService: diagnostics);
+    for (final state in ['unknown', 'partial', 'conflict', 'changing']) {
+      await send(
+        request()..addAll({
+          'session_read': state,
+          'guest_selected': true,
+          'codec_fallback': true,
+        }),
+      );
+      final fields =
+          (await diagnostics.loadRecentErrors()).first.additionalInfo;
+      expect(fields['session_read'], state);
+      expect(fields['guest_selected'], 'true');
+      expect(fields['codec_fallback'], 'true');
+    }
+    await player.dispose();
+  });
 
   test(
     'malformed native values and unknown fields cannot leak into exported text',

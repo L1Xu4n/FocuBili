@@ -40,6 +40,19 @@ void main() {
     await original.dispose();
   });
 
+  test('游客继续仅在显式方法调用后发送，快照默认关闭入口', () async {
+    final service = NativePlaybackService();
+    expect(calls, isEmpty);
+    expect(PlaybackSnapshot.fromPlatformMap({}).canContinueAsGuest, isFalse);
+    final snapshot = PlaybackSnapshot.fromPlatformMap({
+      'canContinueAsGuest': true,
+    });
+    expect(snapshot.copyWith().canContinueAsGuest, isTrue);
+    await service.continueAsGuest();
+    expect(calls.single.method, 'continueAsGuest');
+    await service.dispose();
+  });
+
   /// 验证最高五倍速会穿过 Flutter 校验并被完整发送给 Android 原生播放器。
   test('原生播放服务允许并发送五倍速', () async {
     final NativePlaybackService service = NativePlaybackService();

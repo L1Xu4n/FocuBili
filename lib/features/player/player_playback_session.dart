@@ -753,6 +753,25 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     _stopControlsAutoHideTimer();
   }
 
+  /// 用户主动降为本次视频游客模式；重试和重新打开仍默认使用账号会话。
+  Future<void> _continuePlaybackAsGuest() async {
+    final service = _playbackService;
+    if (_isRetrying ||
+        !mounted ||
+        service is! GuestPlaybackService ||
+        !_playbackSnapshot.canContinueAsGuest) {
+      return;
+    }
+    setState(() => _isRetrying = true);
+    try {
+      await (service as GuestPlaybackService).continueAsGuest();
+    } catch (_) {
+      if (mounted) _showPlaybackError('暂时无法以游客播放，请重试。');
+    } finally {
+      if (mounted) setState(() => _isRetrying = false);
+    }
+  }
+
   /// 再次请求当前视频、分 P 和清晰度，等待后端快照决定是否替换原错误提示。
   Future<void> _retryPlayback() async {
     if (_isRetrying || !mounted) {

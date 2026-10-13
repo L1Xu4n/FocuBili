@@ -295,6 +295,21 @@ class _FakeListeningPlaybackService extends _FakePlaybackService
   }
 }
 
+class _FakeGuestPlaybackService extends _FakePlaybackService
+    implements GuestPlaybackService {
+  int guestRequests = 0;
+  void emitUnknownSession() => _emit(
+    phase: PlaybackPhase.error,
+    canContinueAsGuest: true,
+    message: '暂时无法读取登录会话，可重试或仅以游客播放本次视频。',
+  );
+  @override
+  Future<void> continueAsGuest() async {
+    guestRequests++;
+    emitReady();
+  }
+}
+
 /// 提供无 Android 平台依赖的播放器替身，让组件测试只检查 Flutter 控制层交互。
 class _FakePlaybackService implements PlaybackService {
   /// 创建用于播放器组件测试的无网络服务替身。
@@ -514,6 +529,7 @@ class _FakePlaybackService implements PlaybackService {
     String? message,
     int? currentQuality,
     bool isRestoringPosition = false,
+    bool canContinueAsGuest = false,
     Duration restoredPosition = Duration.zero,
   }) {
     _states.add(
@@ -530,6 +546,7 @@ class _FakePlaybackService implements PlaybackService {
           PlaybackQuality(id: 32, label: '清晰 480P'),
         ],
         isRestoringPosition: isRestoringPosition,
+        canContinueAsGuest: canContinueAsGuest,
         restoredPosition: restoredPosition,
         message: message,
       ),
@@ -2171,6 +2188,38 @@ void main() {
     expect(find.textContaining('请检查登录状态'), findsOneWidget);
     expect(find.byKey(const Key('player-floating-notice')), findsOneWidget);
     expect(find.byType(SnackBar), findsNothing);
+  });
+
+  testWidgets('未知会话的游客入口需用户点击，普通错误不显示', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(360, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final service = _FakeGuestPlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _createMultiPartVideo(),
+          playbackService: service,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    service.emitUnknownSession();
+    await tester.pump();
+    await tester.pump();
+    final guest = find.byKey(const Key('continue-playback-as-guest'));
+    expect(guest, findsOneWidget);
+    expect(service.guestRequests, 0);
+    expect(tester.takeException(), isNull);
+    await tester.tap(guest);
+    await tester.pumpAndSettle();
+    expect(service.guestRequests, 1);
+    expect(guest, findsNothing);
+    service.emitPlaybackError('不同域的登录会话存在冲突，请重新登录。');
+    await tester.pump();
+    await tester.pump();
+    expect(guest, findsNothing);
+    expect(find.byKey(const Key('retry-playback')), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   /// 验证播放错误显示重试入口，重复点击只会发起一次请求且保留当前分P与清晰度。
