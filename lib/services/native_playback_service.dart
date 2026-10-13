@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'app_behavior_preferences_service.dart';
+import 'problem_diagnostics_service.dart';
+import '../models/playback_request_diagnostic.dart';
 
 import 'package:flutter/services.dart';
 
@@ -264,9 +266,12 @@ class NativePlaybackService
         LocalTrackPlaybackService,
         ListeningPlaybackService {
   /// 注册 Android 到 Flutter 的状态回调，让此页面能接收原生播放状态。
-  NativePlaybackService({AppBehaviorPreferencesService? behaviorPreferences})
-    : _behaviorPreferences =
-          behaviorPreferences ?? AppBehaviorPreferencesService() {
+  NativePlaybackService({
+    AppBehaviorPreferencesService? behaviorPreferences,
+    ProblemDiagnosticsService? diagnosticsService,
+  }) : _diagnosticsService = diagnosticsService ?? ProblemDiagnosticsService(),
+       _behaviorPreferences =
+           behaviorPreferences ?? AppBehaviorPreferencesService() {
     _claimPlatformChannel();
   }
 
@@ -283,6 +288,7 @@ class NativePlaybackService
       StreamController<PlaybackSnapshot>.broadcast();
   bool _disposed = false;
   final AppBehaviorPreferencesService _behaviorPreferences;
+  final ProblemDiagnosticsService _diagnosticsService;
 
   /// 让 Android 原生层替换媒体源，纯音频模式不提交视频轨道给播放器。
   @override
@@ -572,13 +578,20 @@ class NativePlaybackService
 
   /// 接收 Android 主动推送的播放状态，并转换为 Dart 中稳定的类型。
   Future<void> _handlePlatformCall(MethodCall call) async {
-    if (_disposed || call.method != 'playbackEvent' || call.arguments is! Map) {
+    if (_disposed || !ownsPlatformChannel || call.arguments is! Map) {
       return;
     }
     final Map<Object?, Object?> values = Map<Object?, Object?>.from(
       call.arguments as Map<Object?, Object?>,
     );
-    _stateController.add(PlaybackSnapshot.fromPlatformMap(values));
+    if (call.method == 'playbackRequestDiagnostic') {
+      final diagnostic = PlaybackRequestDiagnostic.fromPlatformMap(values);
+      if (diagnostic != null) {
+        await _diagnosticsService.recordPlaybackRequest(diagnostic);
+      }
+    } else if (call.method == 'playbackEvent') {
+      _stateController.add(PlaybackSnapshot.fromPlatformMap(values));
+    }
   }
 
   /// 只在当前服务仍拥有原生通道时释放播放器，迟到的旧页面销毁不影响新所有者。
