@@ -48,3 +48,12 @@
 - 实际 UI 布局检查证据见 `docs/reviews/v1.7.1/`：真实 AboutPage / 应用主题、合成更新响应的 Linux Flutter 渲染截图，另覆盖 320 宽深色大字体。明确不称为移动端真机验收。
 
 - dev 移植保留 `PlaybackCacheRepresentation` / `PlaybackCacheIdentity` 和 BV/CID 来源校验；新会话策略与写入协调器移入既有 focubili_android 模块，两个跨模块使用对象提供公开 API，模块测试移到对应插件。dev 版本仍为 1.8.0+22，不降级或覆盖开发元数据。发布分支不包含这些 dev 已有的缓存实现。
+
+## 2026-10-13：PR 审查与手动更新检查修正
+
+- 草稿 PR #54（dev）和 #55（master 发布候选）均已显式请求 @codex 审查；#55 对 039cf0f 的审查指出手动检查等待本地偏好写入会导致存储失败/阻塞时无法联网，属于有效反馈。保留偏好队列顺序，改为与网络检查同时执行；内存忽略立即取消，持久化错误继续提示，网络结果独立更新。
+- 回归先在旧实现运行：存储失败后期望累计 2 次请求、实际仅 1 次，测试失败；修正后新增存储失败和慢写入两条路径均能返回新的版本。更新服务及真实页面定向 18 项通过。
+- 前一提交完整本地验证：发布候选 Flutter 746 passed / 1 原有 skipped、Android JVM 48 全部通过；dev Flutter 813 passed / 1 原有 skipped、Android app 33 + plugin 32 JVM 全部通过；两分支 analyze 无问题。当前补丁只改共享更新控制器与其回归，不改平台播放代码。最终构建、审查、公开签名证书比对及发布状态以 PR / Actions 和 Release 的实际记录为准，尚未合并或发布。
+- dev 审查另指出游客请求在 HTTP 返回后跳过 Cookie 重新读取。现已让所有实际发出的 playurl 请求（包括显式游客）重新验证会话代次；未知状态持续时继续允许游客响应，网页端登录/切换后拒绝旧响应。不增加 HTTP 请求，每次最多 3 次本地 Cookie 读取。新增 JVM 回归覆盖两种状态。
+- 审查修正后的验证：发布分支 Flutter 全套 747 passed / 1 原有 skipped，更新与 UI 定向两分支各 18 passed，发布 JVM 50 / dev JVM 67 全部通过，analyze 无问题。JVM 首次离线执行因动态依赖 runner:1.2+ 缺少缓存失败，正常联网重试通过。
+- 另提取生产 requestPlaybackSources 方法、替换线程调度/CookieManager/HTTP 的隔离回归：旧实现会在游客请求期间网页登录后仍 prepare，修正后丢弃；仍未知时照常允许。该验证不是真机测试。首轮 039cf0f 的 CI APK 已下载实际比对证书，与 v1.7.0 完全一致（SHA-256 65EF1FB301FB1121C1803E752F5B1EB24E55846502D8B5478F0FC11F58E9A8A9），包名 com.focubili.app、版本 1.7.1 / 21；最终修正提交仍需重新构建及验证。

@@ -593,12 +593,22 @@ class AppUpdateController extends ChangeNotifier {
   /// 手动检查始终执行，即使启动自动检查开关处于关闭状态。
   Future<void> checkNow({bool manual = true}) async {
     if (_disposed) return;
+    Future<void>? clearIgnoredUpdate;
     if (manual) {
       _ignoreGeneration++;
       _ignoredUpdate = null;
       _notify();
-      await _saveIgnoredUpdate(null);
+      clearIgnoredUpdate = _saveIgnoredUpdate(null);
     }
+    // 保持偏好写入顺序，但存储迟缓或失败不能阻止主动联网检查。
+    // 同时接管两个 Future 的错误，持久化失败仍由调用页面明确提示。
+    await Future.wait<void>([
+      ?clearIgnoredUpdate,
+      _checkLatestUpdate(),
+    ], eagerError: true);
+  }
+
+  Future<void> _checkLatestUpdate() async {
     if (_checking || _disposed) {
       return;
     }

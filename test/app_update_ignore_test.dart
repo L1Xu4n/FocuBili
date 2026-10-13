@@ -148,15 +148,57 @@ void main() {
 
   test('迟到的忽略保存不能覆盖之后的手动检查', () async {
     final preferences = _DelayedPreferences();
-    final updates = controller(preferences: preferences);
+    var calls = 0;
+    final updates = controller(
+      preferences: preferences,
+      load: () async {
+        calls++;
+        return _release(calls == 1 ? '1.7.1' : '1.7.2');
+      },
+    );
     await updates.initialize();
     final ignore = updates.ignoreCurrentUpdate();
     await Future<void>.delayed(Duration.zero);
     final manual = updates.checkNow();
+    await Future<void>.delayed(Duration.zero);
+    expect(calls, 2);
+    expect(updates.availableUpdate!.latestVersion, '1.7.2');
+    expect(updates.checking, isFalse);
+    expect(preferences.pendingIgnore.isCompleted, isFalse);
     preferences.pendingIgnore.complete();
     await Future.wait([ignore, manual]);
     expect(preferences.identity, isNull);
     expect(updates.showUpdateBadge, isTrue);
+  });
+
+  test('取消忽略写入失败仍发起手动检查并呈现新结果', () async {
+    final preferences = _DelayedPreferences();
+    preferences.pendingIgnore.complete();
+    var calls = 0;
+    final response = Completer<Map<String, Object?>>();
+    final updates = controller(
+      preferences: preferences,
+      load: () {
+        calls++;
+        return calls == 1 ? Future.value(_release('1.7.1')) : response.future;
+      },
+    );
+    await updates.initialize();
+    await updates.ignoreCurrentUpdate();
+    preferences.fail = true;
+    await expectLater(updates.checkNow(), throwsStateError);
+    expect(calls, 2);
+    expect(updates.updateIgnored, isFalse);
+    expect(updates.checking, isTrue);
+    response.complete(_release('1.7.2'));
+    await Future<void>.delayed(Duration.zero);
+    expect(updates.result.status, AppUpdateStatus.available);
+    expect(updates.availableUpdate!.latestVersion, '1.7.2');
+    expect(updates.showUpdateBadge, isTrue);
+    expect(updates.checking, isFalse);
+    preferences.fail = false;
+    await updates.checkNow();
+    expect(preferences.identity, isNull);
   });
 
   test('没有更新时不能忽略；重新开启启动检查也不取消已忽略版本', () async {

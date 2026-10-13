@@ -1263,7 +1263,7 @@ class NativePlaybackController(
             val sourceResult = runCatching {
                 loadPlaybackSources(bvid, cid, quality, diagnostic)
             }
-            val sessionStillCurrent = if (diagnostic.playurlAttempted && !diagnostic.guestSelected) {
+            val sessionStillCurrent = if (diagnostic.playurlAttempted) {
                 BilibiliSessionGate.validateResponse(diagnostic.sessionGeneration) {
                     CookieManager.getInstance().getCookie(it)
                 }
