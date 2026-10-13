@@ -25,12 +25,32 @@ internal object PlaybackTrackPolicy {
         return candidateQuality > 0 && candidateQuality <= preferredQuality
     }
 
+    /** 先选目标上限以内最高档，再在同档优先兼容编码；音频继续按原分值排序。 */
+    fun shouldReplaceTrack(
+        candidateQuality: Int,
+        candidateScore: Long,
+        selectedQuality: Int,
+        selectedScore: Long,
+        preferredQuality: Int?,
+    ): Boolean {
+        if (preferredQuality == null) return candidateScore > selectedScore
+        if (!isAtOrBelowPreferred(candidateQuality, preferredQuality)) return false
+        return candidateQuality > selectedQuality ||
+            (candidateQuality == selectedQuality && candidateScore > selectedScore)
+    }
+
     /** x86 桌面模拟器优先使用同步 MediaCodec，避开部分虚拟显卡异步回调造成的秒级视频帧延迟。 */
     fun shouldUseSynchronousCodec(supportedAbis: List<String>): Boolean {
         return supportedAbis.any { abi ->
             val normalized = abi.trim().lowercase(Locale.ROOT)
             normalized == "x86" || normalized == "x86_64"
         }
+    }
+
+    /** 新命名空间不复用旧版可能把低清轨道记为高清的缓存；旧字节留给既有 LRU 淘汰。 */
+    fun mediaCacheKey(bvid: String, cid: Long, selectedQuality: Int, codec: String, video: Boolean): String {
+        val trackType = if (video) "video" else "audio"
+        return "focubili-quality-v2:$bvid:$cid:$selectedQuality:${cacheKey(codec)}:$trackType"
     }
 
     /** 把不可信编码名称限制成稳定安全的缓存键，空名称使用 unknown。 */

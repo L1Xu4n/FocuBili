@@ -67,15 +67,7 @@ class BilibiliCookieController(
 
     /** 汇总 B 站常用子域的 Cookie 名称和值，供读取和仅限 B 站的清理操作复用。 */
     private fun readBilibiliCookieValues(): LinkedHashMap<String, String> {
-        val valuesByName = linkedMapOf<String, String>()
-        BILIBILI_COOKIE_URLS.forEach { url ->
-            cookieManager.getCookie(url)
-                .orEmpty()
-                .split(';')
-                .mapNotNull(::parseCookiePair)
-                .forEach { cookie -> valuesByName[cookie.first] = cookie.second }
-        }
-        return valuesByName
+        return BilibiliCookiePolicy.readValues(cookieManager::getCookie)
     }
 
     /** 将用户粘贴的 Cookie 文本拆成合法名称和值，并忽略 Domain 等属性字段。 */
@@ -208,11 +200,7 @@ class BilibiliCookieController(
     companion object {
         private const val CHANNEL_NAME = "com.focubili.app/auth"
         private const val BILIBILI_ROOT_URL = "https://www.bilibili.com"
-        private val BILIBILI_COOKIE_URLS = listOf(
-            BILIBILI_ROOT_URL,
-            "https://api.bilibili.com",
-            "https://passport.bilibili.com",
-        )
+        private val BILIBILI_COOKIE_URLS = BilibiliCookiePolicy.urls
         private val COOKIE_NAME_PATTERN = Regex("^[A-Za-z0-9_]+$")
         private val RESERVED_COOKIE_ATTRIBUTES = setOf(
             "domain",

@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/playback_request_diagnostic.dart';
 import '../platform/app_platform.dart';
 import 'focus_notification_service.dart';
 import 'webview_environment_service.dart';
@@ -262,6 +263,7 @@ class ProblemDiagnosticEntry {
     'riskControl' => '播放错误 / 请求限制',
     'network' => '网络错误',
     'playback' => '播放错误',
+    'playbackRequest' => '播放请求',
     'app' => '应用错误',
     _ => '其他错误',
   };
@@ -327,7 +329,7 @@ class ProblemDiagnosticEntry {
             value.isEmpty ||
             key.length > 40 ||
             value.length > 120 ||
-            additionalInfo.length >= 8) {
+            additionalInfo.length >= 16) {
           continue;
         }
         additionalInfo[key] = value;
@@ -398,6 +400,9 @@ class ProblemDiagnosticsService {
   /// 最多保存二十条错误，既足够定位最近问题，也避免本机偏好设置无限增长。
   static const int maximumRecentErrors = 20;
 
+  // 请求结果与紧随其后的播放器错误可能同时到达，所有实例共用写入队列。
+  static Future<void> _pendingWrites = Future<void>.value();
+
   static const MethodChannel _deviceChannel = MethodChannel(
     'com.focubili.app/device_status',
   );
@@ -461,6 +466,27 @@ class ProblemDiagnosticsService {
       // 诊断存储本身不可用时保持空列表，绝不影响正常播放、搜索和笔记功能。
       return const <ProblemDiagnosticEntry>[];
     }
+  }
+
+  /// 保存本次请求的安全执行事实，成功返回低画质也会留下诊断证据。
+  Future<void> recordPlaybackRequest(PlaybackRequestDiagnostic diagnostic) {
+    final fields = diagnostic.fields;
+    final apiCode = int.tryParse(fields['api_code'] ?? '');
+    final description = switch (fields['outcome']) {
+      'success' => '播放数据请求成功。',
+      'quality_downgrade' => '实际视频轨低于请求清晰度，请结合会话状态检查。',
+      _ => '播放数据请求未完成，请结合请求阶段检查。',
+    };
+    return record(
+      ProblemDiagnosticEntry(
+        occurredAt: _clock(),
+        category: 'playbackRequest',
+        operation: 'load_play_url',
+        errorCode: apiCode == 0 ? null : apiCode,
+        description: description,
+        additionalInfo: fields,
+      ),
+    );
   }
 
   /// 记录播放器失败；只提取状态码、固定操作名和脱敏状态，不记录地址或会话数据。
@@ -530,7 +556,13 @@ class ProblemDiagnosticsService {
   }
 
   /// 将一条已脱敏记录写入设备，并只保留最新的固定数量。
-  Future<void> record(ProblemDiagnosticEntry entry) async {
+  Future<void> record(ProblemDiagnosticEntry entry) {
+    final operation = _pendingWrites.then((_) => _recordEntry(entry));
+    _pendingWrites = operation;
+    return operation;
+  }
+
+  Future<void> _recordEntry(ProblemDiagnosticEntry entry) async {
     try {
       final List<ProblemDiagnosticEntry> existing = await loadRecentErrors();
       final ProblemDiagnosticEntry safeEntry = _sanitizeEntry(entry);
@@ -557,7 +589,13 @@ class ProblemDiagnosticsService {
   }
 
   /// 清空本机诊断记录；登录状态、观看记录、笔记和学习清单不会受到影响。
-  Future<void> clearRecentErrors() async {
+  Future<void> clearRecentErrors() {
+    final operation = _pendingWrites.then((_) => _clearRecentErrors());
+    _pendingWrites = operation;
+    return operation;
+  }
+
+  Future<void> _clearRecentErrors() async {
     try {
       final SharedPreferences preferences = await _preferencesLoader();
       await preferences.remove(_storageKey);
@@ -650,7 +688,7 @@ class ProblemDiagnosticsService {
     }
     text
       ..writeln()
-      ..writeln('最近错误：');
+      ..writeln('最近诊断记录：');
     if (snapshot.recentErrors.isEmpty) {
       text.writeln('（暂无记录）');
     } else {
@@ -734,7 +772,7 @@ class ProblemDiagnosticsService {
     for (final MapEntry<String, String> item in entry.additionalInfo.entries) {
       final String key = _sanitizeInfoKey(item.key);
       final String value = _sanitizeText(item.value, fallback: 'unknown');
-      if (key.isEmpty || additionalInfo.length >= 8) {
+      if (key.isEmpty || additionalInfo.length >= 16) {
         continue;
       }
       additionalInfo[key] = value;
@@ -820,6 +858,7 @@ class ProblemDiagnosticsService {
       'riskControl' => 'riskControl',
       'network' => 'network',
       'playback' => 'playback',
+      'playbackRequest' => 'playbackRequest',
       'app' => 'app',
       _ => 'other',
     };
