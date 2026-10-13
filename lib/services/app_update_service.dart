@@ -549,7 +549,10 @@ class AppUpdateController extends ChangeNotifier {
     try {
       _enabled = await _preferencesService.loadEnabled();
       final ignored = await _preferencesService.loadIgnoredUpdate();
-      if (ignoreGeneration == _ignoreGeneration) _ignoredUpdate = ignored;
+      // 手动检查可能早于首次初始化；不能重新载入它已经取消的旧记录。
+      if (ignoreGeneration == 0 && ignoreGeneration == _ignoreGeneration) {
+        _ignoredUpdate = ignored;
+      }
       final String currentVersion = await _versionProvider.loadVersion();
       _result = AppUpdateResult(
         status: _enabled ? AppUpdateStatus.idle : AppUpdateStatus.disabled,
