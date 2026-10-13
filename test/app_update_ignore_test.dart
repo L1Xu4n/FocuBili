@@ -38,6 +38,12 @@ class _DelayedPreferences extends AppUpdatePreferencesService {
   }
 }
 
+class _UnreadableIgnorePreferences extends AppUpdatePreferencesService {
+  @override
+  Future<String?> loadIgnoredUpdate() async =>
+      throw StateError('optional preference unavailable');
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUp(() => SharedPreferences.setMockInitialValues({}));
@@ -78,6 +84,32 @@ void main() {
     expect(restarted.hasUpdate, isTrue);
     expect(restarted.showUpdateBadge, isFalse);
   });
+
+  for (final wrongType in [false, true]) {
+    test('忽略记录读取${wrongType ? '类型损坏' : '异常'}不阻止自动或手动检查', () async {
+      if (wrongType) {
+        SharedPreferences.setMockInitialValues({
+          'app_update.ignored_release': 42,
+        });
+      }
+      var calls = 0;
+      final updates = controller(
+        preferences: wrongType ? null : _UnreadableIgnorePreferences(),
+        load: () async {
+          calls++;
+          return _release('1.7.1');
+        },
+      );
+      await updates.initialize();
+      expect(updates.result.currentVersion, '1.7.0');
+      expect(calls, 1);
+      expect(updates.showUpdateBadge, isTrue);
+      expect(updates.availableUpdate!.downloadUrl, isNotNull);
+      await updates.checkNow();
+      expect(calls, 2);
+      expect(updates.showUpdateBadge, isTrue);
+    });
+  }
 
   test('新版本、发布通道或平台不同不会被旧忽略记录屏蔽', () async {
     var version = '1.7.1';

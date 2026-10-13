@@ -548,7 +548,12 @@ class AppUpdateController extends ChangeNotifier {
     final ignoreGeneration = _ignoreGeneration;
     try {
       _enabled = await _preferencesService.loadEnabled();
-      final ignored = await _preferencesService.loadIgnoredUpdate();
+      String? ignored;
+      try {
+        ignored = await _preferencesService.loadIgnoredUpdate();
+      } catch (_) {
+        // 忽略记录是可选偏好；损坏或读取失败时仍应加载版本并检查更新。
+      }
       // 手动检查可能早于首次初始化；不能重新载入它已经取消的旧记录。
       if (ignoreGeneration == 0 && ignoreGeneration == _ignoreGeneration) {
         _ignoredUpdate = ignored;

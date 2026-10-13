@@ -718,13 +718,13 @@ class ProblemDiagnosticsService {
     return text.toString().trimRight();
   }
 
-  /// 安全读取安装版本；插件不可用时回退到当前源码的 v1.7.0 版本标识。
+  /// 安全读取安装版本；插件不可用时回退到当前源码的 v1.7.1 版本标识。
   Future<String> _loadVersionSafely() async {
     try {
       final String version = (await _appVersionLoader()).trim();
-      return version.isEmpty ? '1.7.0+20' : version;
+      return version.isEmpty ? '1.7.1+21' : version;
     } catch (_) {
-      return '1.7.0+20';
+      return '1.7.1+21';
     }
   }
 
