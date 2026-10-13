@@ -1,0 +1,31 @@
+name: Upload verified v1.7.1 assets
+
+on:
+  push:
+    branches: [codex/deliver-v1.7.1-assets]
+    paths:
+      - .github/workflows/upload-v171-assets.yml
+      - tool/upload_v171_assets.py
+      - tool/v171_upload_manifest.json
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: focubili-v171-verified-assets
+  cancel-in-progress: false
+
+jobs:
+  upload:
+    if: github.repository == 'L1Xu4n/FocuBili' && github.ref == 'refs/heads/codex/deliver-v1.7.1-assets'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Validate upload guards
+        run: python3 tool/upload_v171_assets.py --self-test
+      - name: Upload only the six verified packages to the existing draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tool/upload_v171_assets.py

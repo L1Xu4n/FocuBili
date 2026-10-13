@@ -1,0 +1,58 @@
+{
+  "repo": "L1Xu4n/FocuBili",
+  "tag": "v1.7.1",
+  "release_id": 411328089,
+  "source_commit": "208cff6e139eb0f4d6362a592f6b5ca967ead6ad",
+  "tag_commit": "83a9d70ad1bbb7c4c07a7292baca3439ecde7be3",
+  "source_tree": "c0e52122ba8a5d86dffe2bf8549094d61bd03027",
+  "assets": [
+    {
+      "name": "FocuBili-v1.7.1-android.apk",
+      "size": 33191523,
+      "sha256": "002913b4b99335007f940f50fc21f9b4bf00393e8be488bc50f1b723b7609e2a",
+      "artifact_id": 11790749917,
+      "run_id": 38351346008,
+      "source_name": "app-release.apk"
+    },
+    {
+      "name": "FocuBili-v1.7.1-windows-x64-setup.exe",
+      "size": 27446614,
+      "sha256": "8c2968e17a41321a8afd9fcb69e2fcf08cde1dffa411559e2e9949857e650bb6",
+      "artifact_id": 11790589860,
+      "run_id": 38351346008,
+      "source_name": "FocuBili-v1.7.1-windows-x64-setup.exe"
+    },
+    {
+      "name": "FocuBili-v1.7.1-windows-x64-portable.zip",
+      "size": 37666508,
+      "sha256": "d45aab33fa2758f67c552edce2148a76e190a044477d8d6922d1da332d9d49d1",
+      "artifact_id": 11790589860,
+      "run_id": 38351346008,
+      "source_name": "FocuBili-v1.7.1-windows-x64-portable.zip"
+    },
+    {
+      "name": "FocuBili-v1.7.1-linux-amd64.deb",
+      "size": 10559558,
+      "sha256": "ce443c9edfd2825ed54b7d696a2319488cad6cbac5fe58e7ae49e60d2ae2c8f8",
+      "artifact_id": 11791246453,
+      "run_id": 38351317413,
+      "source_name": "FocuBili-v1.7.1-linux-amd64.deb"
+    },
+    {
+      "name": "FocuBili-v1.7.1-ios-unsigned.ipa",
+      "size": 20680005,
+      "sha256": "1b99e84567b509e4cdbe65d8f1effbb3adbe77cae37926f838461863ba523d1d",
+      "artifact_id": 11791373676,
+      "run_id": 38351349290,
+      "source_name": "FocuBili-ios-unsigned.ipa"
+    },
+    {
+      "name": "FocuBili-v1.7.1-macos.dmg",
+      "size": 50091849,
+      "sha256": "b175f5344d36aa39f5ad603de1391db57c950973efaf04240d9e733ba2182837",
+      "artifact_id": 11791441314,
+      "run_id": 38351349290,
+      "source_name": "FocuBili-macos-preview.dmg"
+    }
+  ]
+}
