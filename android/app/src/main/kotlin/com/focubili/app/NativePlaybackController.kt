@@ -169,6 +169,7 @@ class NativePlaybackController(
     private data class SelectedMediaTrack(
         val urls: List<String>,
         val codec: String,
+        val quality: Int = 0,
     )
 
     /** 保存播放失败中可安全展示的原因类型和 HTTP 状态，不含地址、请求头或会话资料。 */
@@ -1194,15 +1195,16 @@ class NativePlaybackController(
     /** 在单线程后台请求播放数据，并只让最新请求更新当前视频。 */
     private fun requestPlaybackSources(bvid: String, cid: Long, quality: Int) {
         val requestToken = createPlaybackRequestToken()
-        val useWbi = wbiSigningEnabled
+        val diagnostic = PlaybackRequestDiagnostic(requestToken, wbiSigningEnabled, quality)
         playbackRequestExecutor.execute {
             val sourceResult = runCatching {
-                loadPlaybackSources(bvid, cid, quality, useWbi)
+                loadPlaybackSources(bvid, cid, quality, diagnostic)
             }
             mainHandler.post {
                 if (!isCurrentPlaybackRequest(requestToken, bvid, cid, quality)) {
                     return@post
                 }
+                channel.invokeMethod("playbackRequestDiagnostic", diagnostic.toMap(sourceResult.isSuccess))
                 sourceResult.onSuccess(::prepareMediaSources).onFailure { error ->
                     reportError(describePlaybackFetchFailure(error))
                 }
@@ -1215,11 +1217,15 @@ class NativePlaybackController(
         bvid: String,
         cid: Long,
         quality: Int,
-        useWbi: Boolean,
+        diagnostic: PlaybackRequestDiagnostic,
     ): PlaybackSources {
-        val responseText = requestPlaybackInfoJson(bvid, cid, quality, useWbi)
+        val useWbi = diagnostic.wbiEnabled
+        val responseText = requestPlaybackInfoJson(bvid, cid, quality, diagnostic)
+        diagnostic.stage = "parse"
         val root = JSONObject(responseText)
         val code = root.optInt("code", -1)
+        diagnostic.apiCode = code
+        if (code == -101) diagnostic.observeNavigation(code, false)
         if (code != 0) {
             if (code == -351) {
                 throw PlaybackSourceException(
@@ -1242,8 +1248,10 @@ class NativePlaybackController(
             ?: throw PlaybackSourceException("播放数据服务没有返回视频信息。")
         val dash = data.optJSONObject("dash")
             ?: throw PlaybackSourceException("该视频没有可用的 DASH 播放数据。")
-        val actualQuality = data.optInt("quality", quality).takeIf { it > 0 } ?: quality
-        val videoTrack = selectMediaTrack(dash.optJSONArray("video"), actualQuality)
+        val returnedQuality = data.optInt("quality", quality).takeIf { it > 0 } ?: quality
+        diagnostic.returnedQuality = returnedQuality
+        val videoTrack = selectMediaTrack(dash.optJSONArray("video"), minOf(quality, returnedQuality))
+        diagnostic.selectedQuality = videoTrack.quality.takeIf { it > 0 }
         val audioTrack = selectMediaTrack(dash.optJSONArray("audio"))
         if (videoTrack.urls.isEmpty()) {
             throw PlaybackSourceException("播放数据没有返回安全的视频地址。")
@@ -1256,8 +1264,8 @@ class NativePlaybackController(
             videoCodec = videoTrack.codec,
             audioCodec = audioTrack.codec,
             referer = referer,
-            actualQuality = actualQuality,
-            qualities = parseQualityOptions(data, dash),
+            actualQuality = videoTrack.quality,
+            qualities = parseQualityOptions(data, dash, videoTrack.quality),
         )
     }
 
@@ -1266,20 +1274,41 @@ class NativePlaybackController(
         bvid: String,
         cid: Long,
         quality: Int,
-        useWbi: Boolean,
+        diagnostic: PlaybackRequestDiagnostic,
     ): String {
-        val cookie = readBilibiliCookieHeader()
+        val useWbi = diagnostic.wbiEnabled
+        val cookie = try {
+            readBilibiliCookieHeader().also {
+                diagnostic.sessionRead = "ok"
+                diagnostic.authState = if (BilibiliCookiePolicy.hasSession(it)) {
+                    "session_present_unverified"
+                } else "anonymous"
+            }
+        } catch (_: Exception) {
+            diagnostic.sessionRead = "error"
+            throw PlaybackSourceException("无法读取登录会话，请检查系统 WebView 后重试。")
+        } catch (_: LinkageError) {
+            diagnostic.sessionRead = "error"
+            throw PlaybackSourceException("系统 WebView 无法加载，请更新或启用后重试。")
+        }
         val referer = buildVideoPageUrl(bvid).orEmpty()
         val parameters = mapOf(
             "bvid" to bvid, "cid" to cid.toString(), "qn" to quality.toString(),
             "fnval" to DASH_FEATURE_FLAG.toString(), "fourk" to "1",
         )
         val query = if (useWbi) {
+            diagnostic.stage = "signing"
             try {
                 wbiSigner.sign(parameters + mapOf("fnver" to "0", "web_location" to "1315873")) {
                     requestPlaybackApiJson(
-                        Uri.parse("https://$PLAYBACK_API_HOST/x/web-interface/nav"), referer, cookie,
-                    )
+                        Uri.parse("https://$PLAYBACK_API_HOST/x/web-interface/nav"), referer, cookie, diagnostic,
+                    ).also { response ->
+                        val nav = JSONObject(response)
+                        val data = nav.optJSONObject("data")
+                        diagnostic.observeNavigation(
+                            nav.optInt("code", -1), data?.opt("isLogin") as? Boolean,
+                        )
+                    }
                 }
             } catch (_: Exception) {
                 throw PlaybackSourceException(WbiSigningPolicy.UNAVAILABLE_MESSAGE)
@@ -1287,11 +1316,20 @@ class NativePlaybackController(
         } else parameters
         val path = if (useWbi) "/x/player/wbi/playurl" else "/x/player/playurl"
         val endpoint = Uri.parse("https://$PLAYBACK_API_HOST$path?${WbiSigningPolicy.encodeQuery(query)}")
-        return requestPlaybackApiJson(endpoint, referer, cookie)
+        diagnostic.stage = "playurl"
+        diagnostic.wbiSigned = useWbi && query.containsKey("w_rid") && query.containsKey("wts")
+        diagnostic.playurlAttempted = true
+        diagnostic.httpStatus = null
+        return requestPlaybackApiJson(endpoint, referer, cookie, diagnostic)
     }
 
     /** 读取固定官方 HTTPS API，禁止重定向携带会话，错误不回显响应正文。 */
-    private fun requestPlaybackApiJson(endpoint: Uri, referer: String, cookie: String): String {
+    private fun requestPlaybackApiJson(
+        endpoint: Uri,
+        referer: String,
+        cookie: String,
+        diagnostic: PlaybackRequestDiagnostic,
+    ): String {
         val connection = URL(endpoint.toString()).openConnection() as HttpsURLConnection
         try {
             connection.requestMethod = "GET"
@@ -1305,6 +1343,7 @@ class NativePlaybackController(
                 connection.setRequestProperty("Cookie", cookie)
             }
             val statusCode = connection.responseCode
+            diagnostic.httpStatus = statusCode
             val responseBody = (if (statusCode in 200..299) {
                 connection.inputStream
             } else {
@@ -2064,6 +2103,7 @@ class NativePlaybackController(
     private fun parseQualityOptions(
         data: JSONObject,
         dash: JSONObject,
+        selectedQuality: Int,
     ): List<PlaybackQualityOption> {
         val qualities = mutableListOf<PlaybackQualityOption>()
         val ids = data.optJSONArray("accept_quality")
@@ -2094,9 +2134,9 @@ class NativePlaybackController(
                 }
             }
         }
-        if (qualities.none { option -> option.id == currentQuality }) {
+        if (qualities.none { option -> option.id == selectedQuality }) {
             qualities.add(
-                PlaybackQualityOption(currentQuality, qualityFallbackLabel(currentQuality)),
+                PlaybackQualityOption(selectedQuality, qualityFallbackLabel(selectedQuality)),
             )
         }
         return qualities.sortedByDescending { option -> option.id }
@@ -2127,6 +2167,7 @@ class NativePlaybackController(
         }
         var selectedMedia: JSONObject? = null
         var bestScore = Long.MIN_VALUE
+        var bestQuality = 0
         for (index in 0 until mediaItems.length()) {
             val media = mediaItems.optJSONObject(index) ?: continue
             val candidateQuality = media.optInt("id")
@@ -2140,11 +2181,6 @@ class NativePlaybackController(
             if (candidateUrls.isEmpty()) {
                 continue
             }
-            val qualityBonus = if (preferredId != null && candidateQuality == preferredId) {
-                PREFERRED_TRACK_SCORE
-            } else {
-                0L
-            }
             val compatibilityBonus = if (preferredId != null) {
                 PlaybackTrackPolicy.compatibilityScore(media.optString("codecs"))
             } else {
@@ -2152,9 +2188,13 @@ class NativePlaybackController(
             }
             val heightScore = media.optInt("height").coerceAtLeast(0).toLong() * HEIGHT_SCORE_UNIT
             val bandwidthScore = media.optLong("bandwidth").coerceAtLeast(0L)
-            val score = qualityBonus + compatibilityBonus + heightScore + bandwidthScore
-            if (score > bestScore) {
+            val score = compatibilityBonus + heightScore + bandwidthScore
+            if (PlaybackTrackPolicy.shouldReplaceTrack(
+                    candidateQuality, score, bestQuality, bestScore, preferredId,
+                )
+            ) {
                 selectedMedia = media
+                bestQuality = candidateQuality
                 bestScore = score
             }
         }
@@ -2162,6 +2202,7 @@ class NativePlaybackController(
             SelectedMediaTrack(
                 urls = readMediaUrls(media),
                 codec = media.optString("codecs").trim(),
+                quality = media.optInt("id"),
             )
         } ?: SelectedMediaTrack(emptyList(), "")
     }
@@ -2324,9 +2365,9 @@ class NativePlaybackController(
     /** 生成当前视频或音频轨道的稳定缓存键，使清理和写入始终指向同一资源。 */
     private fun playbackCacheKey(sources: PlaybackSources, video: Boolean): String {
         val codec = if (video) sources.videoCodec else sources.audioCodec
-        val trackType = if (video) "video" else "audio"
-        return "$currentBvid:$currentCid:$currentQuality:" +
-            "${PlaybackTrackPolicy.cacheKey(codec)}:$trackType"
+        return PlaybackTrackPolicy.mediaCacheKey(
+            currentBvid, currentCid, sources.actualQuality, codec, video,
+        )
     }
 
     /**
@@ -2744,13 +2785,8 @@ class NativePlaybackController(
     }
 
     /** 从本应用 WebView 的 B 站会话中读取 Cookie，使登录后的播放请求复用同一状态。 */
-    private fun readBilibiliCookieHeader(): String {
-        return runCatching {
-            CookieManager.getInstance()
-                .getCookie("https://www.bilibili.com")
-                .orEmpty()
-        }.getOrDefault("")
-    }
+    private fun readBilibiliCookieHeader(): String =
+        BilibiliCookiePolicy.readHeader(CookieManager.getInstance()::getCookie)
 
     /** 将 Flutter 传入的 BV 号转换为视频页 Referer，并验证格式。 */
     private fun buildVideoPageUrl(bvid: String?): String? {
@@ -2827,7 +2863,6 @@ class NativePlaybackController(
         private const val PICTURE_IN_PICTURE_RATIO_BASE = 1000
         private const val MEDIA_CACHE_DEFAULT_MAX_BYTES = 512L * 1024L * 1024L
         private const val MEDIA_CACHE_DIRECTORY_NAME = "focubili_media_cache"
-        private const val PREFERRED_TRACK_SCORE = 1_000_000_000_000L
         private const val HEIGHT_SCORE_UNIT = 1_000_000L
         private const val PLAYBACK_API_HOST = "api.bilibili.com"
         private const val SUBTITLE_CDN_HOST = "aisubtitle.hdslb.com"

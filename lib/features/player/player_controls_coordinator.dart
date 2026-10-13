@@ -249,7 +249,7 @@ mixin _PlayerControlsCoordinator
     }
   }
 
-  /// 用播放器内三秒悬浮提示说明高画质切换失败通常与大会员权限有关。
+  /// 用播放器内提示区分可能原因，不把登录失效、网络错误一律归为会员权限。
   @override
   void _showMembershipQualityNotice([String? details]) {
     if (!mounted) {
@@ -258,7 +258,7 @@ mixin _PlayerControlsCoordinator
     final String suffix = details == null || details.trim().isEmpty
         ? ''
         : '（${details.trim()}）';
-    _showPlayerNotice('画质切换失败：可能未开通大会员或当前账号无此画质权限$suffix');
+    _showPlayerNotice('画质切换未达到所选档位，请检查登录状态、该视频支持的画质或网络；可在“问题诊断”查看请求记录$suffix');
   }
 
   /// 显示独立到期的三秒提示，多条结果按出现顺序排列。

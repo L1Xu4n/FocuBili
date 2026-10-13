@@ -2146,7 +2146,7 @@ void main() {
   });
 
   /// 验证服务端回退到原画质时，页面明确提示大会员或账号权限原因。
-  testWidgets('高画质切换失败会提示大会员权限', (WidgetTester tester) async {
+  testWidgets('高画质切换失败提示检查登录和请求诊断', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final _FakePlaybackService service = _FakePlaybackService(
@@ -2168,7 +2168,7 @@ void main() {
     qualityMenu.onSelected!(32);
     await tester.pump();
 
-    expect(find.textContaining('可能未开通大会员'), findsOneWidget);
+    expect(find.textContaining('请检查登录状态'), findsOneWidget);
     expect(find.byKey(const Key('player-floating-notice')), findsOneWidget);
     expect(find.byType(SnackBar), findsNothing);
   });

@@ -7,6 +7,33 @@ import org.junit.Test
 
 /** 验证部分视频播放失败对应的编码优先级与缓存隔离规则。 */
 class PlaybackTrackPolicyTest {
+    /** 复现 v1.7 的低清 AVC 压过目标高清 HEVC；新策略必须先满足清晰度。 */
+    @Test
+    fun requestedHdHevcWinsOver360pAvcInEitherOrder() {
+        val avc = PlaybackTrackPolicy.compatibilityScore("avc1.fixture") + 360_000_000L
+        val hevc = PlaybackTrackPolicy.compatibilityScore("hvc1.fixture") + 1080_000_000L
+        assertTrue(PlaybackTrackPolicy.shouldReplaceTrack(80, hevc, 16, avc, 80))
+        assertFalse(PlaybackTrackPolicy.shouldReplaceTrack(16, avc, 80, hevc, 80))
+        assertTrue(PlaybackTrackPolicy.shouldReplaceTrack(80, avc, 80, hevc, 80))
+        assertFalse(PlaybackTrackPolicy.shouldReplaceTrack(120, avc, 80, hevc, 80))
+    }
+
+    @Test
+    fun missingTargetUsesHighestLowerQualityAndAudioRetainsScoreOrdering() {
+        assertTrue(PlaybackTrackPolicy.shouldReplaceTrack(64, 100, 16, 10000, 80))
+        assertFalse(PlaybackTrackPolicy.shouldReplaceTrack(0, 10000, 16, 1, 80))
+        assertTrue(PlaybackTrackPolicy.shouldReplaceTrack(30216, 100, 30280, 50, null))
+    }
+
+    @Test
+    fun actualQualityCacheKeysCannotReuseLegacyMislabeledBytes() {
+        val low = PlaybackTrackPolicy.mediaCacheKey("fixture", 1L, 16, "avc1", true)
+        val high = PlaybackTrackPolicy.mediaCacheKey("fixture", 1L, 80, "avc1", true)
+        assertFalse(low == high)
+        assertFalse(high == "fixture:1:80:avc1:video")
+        assertTrue(high.startsWith("focubili-quality-v2:"))
+    }
+
     /** AVC 应始终比 HEVC 和 AV1 获得更高兼容分，优先选择稳定轨道。 */
     @Test
     fun avcIsPreferredOverHevcAndAv1() {

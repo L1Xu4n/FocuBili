@@ -307,7 +307,14 @@ class _ProblemDiagnosticsPageState extends State<ProblemDiagnosticsPage> {
           children: <Widget>[
             Row(
               children: <Widget>[
-                Icon(Icons.error_outline_rounded, color: colors.error),
+                Icon(
+                  entry.category == 'playbackRequest'
+                      ? Icons.info_outline_rounded
+                      : Icons.error_outline_rounded,
+                  color: entry.category == 'playbackRequest'
+                      ? colors.primary
+                      : colors.error,
+                ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -356,7 +363,7 @@ class _ProblemDiagnosticsPageState extends State<ProblemDiagnosticsPage> {
         Padding(
           padding: const EdgeInsets.fromLTRB(4, 14, 4, 6),
           child: Text(
-            '最近错误',
+            '最近诊断记录',
             style: Theme.of(
               context,
             ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
@@ -372,7 +379,7 @@ class _ProblemDiagnosticsPageState extends State<ProblemDiagnosticsPage> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      '暂无诊断记录。发生播放或网络错误后，会在这里显示最近的脱敏信息。',
+                      '暂无诊断记录。播放数据请求和播放、网络错误会在这里留下脱敏信息。',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   ),
