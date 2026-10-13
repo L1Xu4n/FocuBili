@@ -1012,6 +1012,8 @@ class _PersonalizationSettingsPageState
     AppUpdateController updateController,
     AppThemeModeController themeModeController,
   ) {
+    final releaseHighlights =
+        updateController.availableUpdate?.releaseHighlights ?? const <String>[];
     final bool usesWindowsCapabilities =
         widget.focusNotificationService.usesWindowsBackend;
     final bool usesUnavailableCapabilities =
@@ -1075,9 +1077,8 @@ class _PersonalizationSettingsPageState
           leading: const Icon(Icons.info_outline_rounded),
           title: const Text('关于'),
           subtitle: Text(
-            updateController.hasUpdate &&
-                    updateController.result.releaseHighlights.isNotEmpty
-                ? '新版本：${updateController.result.releaseHighlights.first}'
+            releaseHighlights.isNotEmpty
+                ? '新版本：${releaseHighlights.first}'
                 : '项目地址、负责人、版本与更新',
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
