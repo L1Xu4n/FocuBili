@@ -29,7 +29,7 @@ class PlaybackRequestDiagnosticTest {
         assertEquals(16, values["selected_quality"])
         assertEquals("quality_downgrade", values["outcome"])
         assertEquals("session_present_unverified", values["auth_state"])
-        assertEquals(14, values.size)
+        assertEquals(16, values.size)
     }
 
     @Test fun onlyAnExplicitNavResultConfirmsAuthentication() {
@@ -42,6 +42,8 @@ class PlaybackRequestDiagnosticTest {
         diagnostic.observeNavigation(-101, null)
         assertEquals("expired", diagnostic.authState)
         diagnostic.authState = "anonymous"
+        diagnostic.observeNavigation(0, true)
+        assertEquals("anonymous", diagnostic.authState)
         diagnostic.observeNavigation(-101, false)
         assertEquals("anonymous", diagnostic.authState)
     }

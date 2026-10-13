@@ -463,6 +463,16 @@ extension _PlayerControlsView on _PlayerPageState {
                   side: const BorderSide(color: Colors.white70),
                 ),
               ),
+              if (_playbackSnapshot.canContinueAsGuest &&
+                  _playbackService is GuestPlaybackService)
+                TextButton(
+                  key: const Key('continue-playback-as-guest'),
+                  onPressed: _isRetrying
+                      ? null
+                      : () => unawaited(_continuePlaybackAsGuest()),
+                  style: TextButton.styleFrom(foregroundColor: Colors.white),
+                  child: const Text('仅以游客播放本次视频'),
+                ),
             ],
           ),
         ),

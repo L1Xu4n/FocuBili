@@ -90,6 +90,7 @@ class PlaybackSnapshot {
   /// 创建一个可安全用于页面初始渲染的播放状态。
   const PlaybackSnapshot({
     this.phase = PlaybackPhase.idle,
+    this.canContinueAsGuest = false,
     this.isPlaying = false,
     this.audioOnly = false,
     this.sleepTimerRemaining = Duration.zero,
@@ -106,6 +107,7 @@ class PlaybackSnapshot {
   });
 
   final PlaybackPhase phase;
+  final bool canContinueAsGuest;
   final bool isPlaying;
   final bool audioOnly;
   final Duration sleepTimerRemaining;
@@ -142,6 +144,7 @@ class PlaybackSnapshot {
         // 未知阶段名时回退到空闲状态，兼容未来 Android 端的新增状态。
         orElse: () => PlaybackPhase.idle,
       ),
+      canContinueAsGuest: values['canContinueAsGuest'] == true,
       isPlaying: values['isPlaying'] as bool? ?? false,
       audioOnly: values['audioOnly'] == true,
       sleepTimerRemaining: Duration(
@@ -169,6 +172,7 @@ class PlaybackSnapshot {
   /// 基于原状态替换指定字段，便于页面在拖动进度条时暂存显示进度。
   PlaybackSnapshot copyWith({
     PlaybackPhase? phase,
+    bool? canContinueAsGuest,
     bool? isPlaying,
     bool? audioOnly,
     Duration? sleepTimerRemaining,
@@ -186,6 +190,7 @@ class PlaybackSnapshot {
   }) {
     return PlaybackSnapshot(
       phase: phase ?? this.phase,
+      canContinueAsGuest: canContinueAsGuest ?? this.canContinueAsGuest,
       isPlaying: isPlaying ?? this.isPlaying,
       audioOnly: audioOnly ?? this.audioOnly,
       sleepTimerRemaining: sleepTimerRemaining ?? this.sleepTimerRemaining,
@@ -201,6 +206,11 @@ class PlaybackSnapshot {
       message: clearMessage ? null : (message ?? this.message),
     );
   }
+}
+
+/// 仅在会话读取未知时，由用户主动选择本次视频的游客重试。
+abstract interface class GuestPlaybackService {
+  Future<void> continueAsGuest();
 }
 
 /// 约束 Flutter 播放页需要的播放器能力，测试时可替换为无网络的假实现。
@@ -263,6 +273,7 @@ abstract interface class PlaybackService {
 class NativePlaybackService
     implements
         PlaybackService,
+        GuestPlaybackService,
         LocalTrackPlaybackService,
         ListeningPlaybackService {
   /// 注册 Android 到 Flutter 的状态回调，让此页面能接收原生播放状态。
@@ -289,6 +300,9 @@ class NativePlaybackService
   bool _disposed = false;
   final AppBehaviorPreferencesService _behaviorPreferences;
   final ProblemDiagnosticsService _diagnosticsService;
+
+  @override
+  Future<void> continueAsGuest() => _invokeVoid('continueAsGuest');
 
   /// 让 Android 原生层替换媒体源，纯音频模式不提交视频轨道给播放器。
   @override

@@ -33,10 +33,20 @@ class PlaybackRequestDiagnostic {
       'wbi_signed',
       'wbi_fallback',
       'playurl_attempted',
+      'guest_selected',
+      'codec_fallback',
     ]) {
       boolean(key);
     }
-    enumeration('session_read', {'not_attempted', 'ok', 'error'});
+    enumeration('session_read', {
+      'not_attempted',
+      'ok',
+      'error',
+      'unknown',
+      'partial',
+      'conflict',
+      'changing',
+    });
     enumeration('auth_state', {
       'anonymous',
       'session_present_unverified',

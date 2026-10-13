@@ -39,6 +39,35 @@ internal object PlaybackTrackPolicy {
             (candidateQuality == selectedQuality && candidateScore > selectedScore)
     }
 
+    /** 设备支持为前置条件；保留有界的同档/低档候选供解码器失败后顺序回退。 */
+    fun <T> playableTracks(items: List<T>, preferred: Int, quality: (T) -> Int,
+        score: (T) -> Long, supported: (T) -> Boolean): List<T> =
+        items.filter { isAtOrBelowPreferred(quality(it), preferred) && supported(it) }
+            .sortedWith(compareByDescending<T> { quality(it) }.thenByDescending { score(it) })
+
+    fun frameRate(text: String): Float? {
+        val parts = text.split('/')
+        val value = when (parts.size) {
+            1 -> parts[0].toFloatOrNull()
+            2 -> {
+                val numerator = parts[0].toFloatOrNull() ?: return null
+                val denominator = parts[1].toFloatOrNull() ?: return null
+                if (denominator <= 0f) return null
+                numerator / denominator
+            }
+            else -> null
+        }
+        return value?.takeIf { it.isFinite() && it > 0f && it <= 1000f }
+    }
+
+    /** 仅处理解码器故障，HTTP、音频错误与容器损坏仍走原有恢复路径。 */
+    fun isDecoderFailure(code: Int): Boolean = code in setOf(
+        androidx.media3.common.PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+        androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FAILED,
+        androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
+        androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+    )
+
     /** x86 桌面模拟器优先使用同步 MediaCodec，避开部分虚拟显卡异步回调造成的秒级视频帧延迟。 */
     fun shouldUseSynchronousCodec(supportedAbis: List<String>): Boolean {
         return supportedAbis.any { abi ->
