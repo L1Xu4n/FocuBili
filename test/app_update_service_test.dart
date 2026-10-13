@@ -13,6 +13,11 @@ class _MemoryVersionProvider implements AppVersionProvider {
 }
 
 class _MemoryUpdatePreferences extends AppUpdatePreferencesService {
+  @override
+  Future<String?> loadIgnoredUpdate() async => null;
+  @override
+  Future<void> saveIgnoredUpdate(String? identity) async {}
+
   _MemoryUpdatePreferences(this.value, {this.failSaving = false});
 
   bool value;
