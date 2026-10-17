@@ -1,3 +1,4 @@
+import 'cached_player_overlay_service.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -33,10 +34,12 @@ class _DesktopSubtitleSession {
   _DesktopSubtitleSession();
 
   Map<String, Uri> readableUrls = const <String, Uri>{};
+  Map<String, String> languages = const {};
 }
 
 /// 在 Windows 上直接读取官方字幕与弹幕接口，同时维持与 Android 相同的安全边界。
-class DesktopPlayerOverlayService implements PlayerOverlayService {
+class DesktopPlayerOverlayService
+    implements PlayerOverlayService, SubtitleSessionInvalidator {
   /// 创建桌面叠加数据服务；测试可注入内存请求函数和内存 Cookie 容器。
   DesktopPlayerOverlayService({
     BilibiliAuthService? authService,
@@ -65,6 +68,12 @@ class DesktopPlayerOverlayService implements PlayerOverlayService {
   final Map<(String, int), _DesktopSubtitleSession> _subtitleSessions =
       <(String, int), _DesktopSubtitleSession>{};
   final Map<(String, int), Object> _subtitleRequests = {};
+
+  @override
+  Future<void> clearSubtitleSessions() async {
+    _subtitleSessions.clear();
+    _subtitleRequests.clear();
+  }
 
   /// 校验视频编号后读取官方播放器元数据，并仅向页面返回无敏感信息的轨道描述。
   @override
@@ -155,11 +164,18 @@ class DesktopPlayerOverlayService implements PlayerOverlayService {
         !_isValidSubtitleTrackId(normalizedTrackId)) {
       return const SubtitleCueLoadResult.unavailable(message: '字幕请求参数无效。');
     }
+    final expectedLanguage =
+        _subtitleSessions[(normalizedBvid, cid)]?.languages[normalizedTrackId];
     for (var attempt = 0; attempt < 2; attempt++) {
       final session = _subtitleSessions[(normalizedBvid, cid)];
       if (session == null) {
         return const SubtitleCueLoadResult.locked(message: '请先读取当前视频的字幕轨道。');
       }
+      if (session.languages[normalizedTrackId] != expectedLanguage) {
+        return const SubtitleCueLoadResult.locked(message: '字幕语言已变化，请重新选择轨道。');
+      }
+      _subtitleSessions.remove((normalizedBvid, cid));
+      _subtitleSessions[(normalizedBvid, cid)] = session;
       final endpoint = session.readableUrls[normalizedTrackId];
       if (endpoint == null) {
         return const SubtitleCueLoadResult.locked(
@@ -176,6 +192,11 @@ class DesktopPlayerOverlayService implements PlayerOverlayService {
           ),
           _maximumSubtitleDocumentBytes,
         );
+        if (!identical(_subtitleSessions[(normalizedBvid, cid)], session)) {
+          return const SubtitleCueLoadResult.unavailable(
+            message: '字幕轨道已更新，请重新选择。',
+          );
+        }
         if (response.statusCode >= 200 && response.statusCode <= 299) {
           return _parseSubtitleCues(_decodeJsonObject(response.bodyBytes));
         }
@@ -380,6 +401,10 @@ class DesktopPlayerOverlayService implements PlayerOverlayService {
       }
     }
     session.readableUrls = Map<String, Uri>.unmodifiable(readableUrls);
+    session.languages = {
+      for (final track in tracks)
+        track['id'] as String: track['language'] as String,
+    };
     final bool needsLogin = rawData['need_login_subtitle'] == true;
     final String status = readableUrls.isNotEmpty
         ? 'available'

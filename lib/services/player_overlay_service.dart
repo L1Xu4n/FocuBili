@@ -1,3 +1,4 @@
+import 'cached_player_overlay_service.dart';
 import 'package:flutter/services.dart';
 
 import '../models/player_overlay_data.dart';
@@ -55,11 +56,22 @@ abstract interface class PlayerOverlayService {
 }
 
 /// 通过受限 MethodChannel 获取字幕和弹幕数据，并把平台异常转换为可展示状态。
-class NativePlayerOverlayService implements PlayerOverlayService {
+class NativePlayerOverlayService
+    implements PlayerOverlayService, SubtitleSessionInvalidator {
   /// 创建叠加数据服务；测试可传入内存通道，生产环境使用 Android 原生通道。
   NativePlayerOverlayService({PlayerOverlayPlatformChannel? platformChannel})
     : _platformChannel =
           platformChannel ?? const MethodChannelPlayerOverlayPlatformChannel();
+
+  @override
+  Future<void> clearSubtitleSessions() async {
+    _subtitleRevision++;
+    _knownTracks.clear();
+    await _platformChannel.invokeMethod('clearSubtitleSessions');
+  }
+
+  final _knownTracks = <(String, int), List<SubtitleTrack>>{};
+  int _subtitleRevision = 0;
 
   static final RegExp _bvidPattern = RegExp(
     r'^BV[0-9A-Za-z]{10}$',
@@ -74,6 +86,7 @@ class NativePlayerOverlayService implements PlayerOverlayService {
     required String bvid,
     required int cid,
   }) async {
+    final revision = _subtitleRevision;
     final Map<String, Object?>? arguments = _createVideoArguments(bvid, cid);
     if (arguments == null) {
       return const SubtitleTrackLoadResult.unavailable(message: '字幕请求参数无效。');
@@ -83,12 +96,23 @@ class NativePlayerOverlayService implements PlayerOverlayService {
         'loadSubtitleTracks',
         arguments,
       );
+      if (revision != _subtitleRevision) {
+        return const SubtitleTrackLoadResult.unavailable();
+      }
       if (result is! Map) {
         return const SubtitleTrackLoadResult.unavailable();
       }
-      return SubtitleTrackLoadResult.fromPlatformMap(
+      final parsed = SubtitleTrackLoadResult.fromPlatformMap(
         Map<Object?, Object?>.from(result),
       );
+      if (parsed.status != SubtitleLoadStatus.unavailable) {
+        _knownTracks.remove((bvid, cid));
+        _knownTracks[(bvid, cid)] = parsed.tracks;
+        while (_knownTracks.length > 8) {
+          _knownTracks.remove(_knownTracks.keys.first);
+        }
+      }
+      return parsed;
     } on PlatformException catch (error) {
       return _trackResultFromPlatformError(error);
     } on MissingPluginException {
@@ -107,18 +131,25 @@ class NativePlayerOverlayService implements PlayerOverlayService {
     required int cid,
     required String trackId,
   }) async {
+    final revision = _subtitleRevision;
     final Map<String, Object?>? arguments = _createVideoArguments(bvid, cid);
     final String normalizedTrackId = trackId.trim();
     if (arguments == null || normalizedTrackId.isEmpty) {
       return const SubtitleCueLoadResult.unavailable(message: '字幕请求参数无效。');
     }
     bool restoredSession = false;
+    final expected = _knownTracks[(bvid, cid)]
+        ?.where((track) => track.id == normalizedTrackId)
+        .firstOrNull;
     while (true) {
       try {
         final Object? result = await _platformChannel.invokeMethod(
           'loadSubtitleCues',
           <String, Object?>{...arguments, 'trackId': normalizedTrackId},
         );
+        if (revision != _subtitleRevision) {
+          return const SubtitleCueLoadResult.unavailable();
+        }
         if (result is! Map) {
           return const SubtitleCueLoadResult.unavailable();
         }
@@ -126,6 +157,9 @@ class NativePlayerOverlayService implements PlayerOverlayService {
           Map<Object?, Object?>.from(result),
         );
       } on PlatformException catch (error) {
+        if (revision != _subtitleRevision) {
+          return const SubtitleCueLoadResult.unavailable();
+        }
         if ((error.code == 'subtitle_track_not_loaded' ||
                 error.code == 'subtitle_document_expired') &&
             !restoredSession) {
@@ -143,7 +177,9 @@ class NativePlayerOverlayService implements PlayerOverlayService {
           }
           if (!tracks.tracks.any(
             (SubtitleTrack track) =>
-                track.id == normalizedTrackId && !track.isLocked,
+                track.id == normalizedTrackId &&
+                !track.isLocked &&
+                (expected == null || track.language == expected.language),
           )) {
             return const SubtitleCueLoadResult.locked();
           }

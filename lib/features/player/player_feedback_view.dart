@@ -24,7 +24,7 @@ extension _PlayerFeedbackView on _PlayerPageState {
                 top: -frame.row * frame.frameHeight * scale,
                 width: sheetWidth,
                 height: sheetHeight,
-                child: CachedNetworkImage(
+                child: AppNetworkImage(
                   imageUrl: frame.imageUrl,
                   width: sheetWidth,
                   height: sheetHeight,
@@ -57,33 +57,36 @@ extension _PlayerFeedbackView on _PlayerPageState {
         child: AnimatedOpacity(
           opacity: _seekFeedback == null ? 0 : 1,
           duration: const Duration(milliseconds: 160),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: Colors.black87,
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  if (frame != null) _buildVideoShotFrame(frame),
-                  if (_horizontalScrubbing && _videoShotLoading) ...<Widget>[
-                    const SizedBox(
-                      width: 22,
-                      height: 22,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.black87,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    if (frame != null) _buildVideoShotFrame(frame),
+                    if (_horizontalScrubbing && _videoShotLoading) ...<Widget>[
+                      const SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
                       ),
+                      const SizedBox(height: 6),
+                    ],
+                    Text(
+                      _seekFeedback ?? '',
+                      style: const TextStyle(color: Colors.white),
                     ),
-                    const SizedBox(height: 6),
                   ],
-                  Text(
-                    _seekFeedback ?? '',
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                ],
+                ),
               ),
             ),
           ),
@@ -154,7 +157,7 @@ extension _PlayerFeedbackView on _PlayerPageState {
     );
   }
 
-  /// 将短消息、续播、字幕和操作卡片排成一列；听视频状态使用独立画面层。
+  /// 顶部状态、中央手势和底部字幕独立布局；听视频仍留在画面层。
   Widget _buildPlayerFeedback() {
     if (_playbackSnapshot.isInPictureInPicture) return const SizedBox.shrink();
     return ListenableBuilder(
@@ -166,32 +169,20 @@ extension _PlayerFeedbackView on _PlayerPageState {
         final phase = _playbackSnapshot.phase;
         final playbackHintVisible =
             phase == PlaybackPhase.error || phase == PlaybackPhase.loading;
-        final actionVisible =
-            _completionPromptVisible ||
-            _interactivePromptVisible ||
-            phase == PlaybackPhase.error ||
-            _playerNotices.entries.any((entry) => entry.onAction != null);
-        final gestureVisible =
-            _seekFeedback != null ||
-            _doubleTapSeekSeconds != 0 ||
-            _playbackActionPlaying != null;
-        // 这里仍有控制栏之间的有限高度；进入可滚动提示列后高度约束会丢失。
-        return LayoutBuilder(
-          builder: (context, constraints) => PlayerFeedbackStack(
-            interactive: actionVisible,
-            alignment:
-                _completionPromptVisible ||
-                    _interactivePromptVisible ||
-                    subtitleVisible
-                ? Alignment.bottomCenter
-                : gestureVisible || playbackHintVisible
-                ? Alignment.center
-                : Alignment.topCenter,
+        final bottomInteractive =
+            _completionPromptVisible || _interactivePromptVisible;
+        return PlayerFeedbackLanes(
+          top: PlayerFeedbackStack(
+            interactive: _playerNotices.entries.any(
+              (entry) => entry.onAction != null,
+            ),
             children: [
               if (_temporarySpeedActive)
-                const PlayerNoticeCard(
-                  key: Key('temporary-triple-speed'),
-                  message: '三倍速中>>',
+                PlayerNoticeCard(
+                  key: const Key('temporary-triple-speed'),
+                  message: _playbackPreferences.longPressPlaybackSpeed == 3
+                      ? '三倍速中>>'
+                      : '${_playbackPreferences.longPressPlaybackSpeed}倍速中>>',
                 ),
               for (final entry in _playerNotices.entries)
                 PlayerNoticeCard(
@@ -207,27 +198,56 @@ extension _PlayerFeedbackView on _PlayerPageState {
                   key: const Key('player-resume-notice'),
                   message: _resumeNotice!,
                 ),
-              // 直接拖动优先于尚未消失的旧动画，避免同一手势重复反馈。
-              if (_seekFeedback != null)
-                _buildSeekFeedback()
-              else if (_doubleTapSeekSeconds != 0)
-                SizedBox(
-                  height: constraints.maxHeight.clamp(0.0, 72.0),
-                  child: PlayerSeekFeedback(
-                    key: ValueKey('seek-$_doubleTapFeedbackSequence'),
-                    seconds: _doubleTapSeekSeconds,
-                    compact: true,
+            ],
+          ),
+          center: LayoutBuilder(
+            builder: (context, constraints) {
+              final hasGesture =
+                  _seekFeedback != null ||
+                  _doubleTapSeekSeconds != 0 ||
+                  _playbackActionPlaying != null;
+              final Widget gesture = _seekFeedback != null
+                  ? _buildSeekFeedback()
+                  : _doubleTapSeekSeconds != 0
+                  ? PlayerSeekFeedback(
+                      key: ValueKey('seek-$_doubleTapFeedbackSequence'),
+                      seconds: _doubleTapSeekSeconds,
+                      compact: true,
+                    )
+                  : _playbackActionPlaying != null
+                  ? PlayerActionFeedback(
+                      key: ValueKey('playback-action-$_playbackActionSequence'),
+                      playing: _playbackActionPlaying!,
+                    )
+                  : const SizedBox.shrink();
+              final hint = PlayerFeedbackStack(
+                interactive: phase == PlaybackPhase.error,
+                alignment: Alignment.center,
+                children: [if (playbackHintVisible) _buildPlaybackHint()],
+              );
+              if (!playbackHintVisible) return gesture;
+              if (!hasGesture) return hint;
+              // Native seek may temporarily enter loading. Its spinner/retry
+              // row must not paint over the still-running direction animation.
+              final height = (constraints.maxHeight * .45).clamp(0.0, 72.0);
+              final gap = (constraints.maxHeight - height).clamp(0.0, 6.0);
+              return Column(
+                children: [
+                  SizedBox(
+                    width: double.infinity,
+                    height: height,
+                    child: gesture,
                   ),
-                )
-              else if (_playbackActionPlaying != null)
-                SizedBox(
-                  height: constraints.maxHeight.clamp(0.0, 84.0),
-                  child: PlayerActionFeedback(
-                    key: ValueKey('playback-action-$_playbackActionSequence'),
-                    playing: _playbackActionPlaying!,
-                  ),
-                ),
-              if (playbackHintVisible) _buildPlaybackHint(),
+                  SizedBox(height: gap),
+                  Expanded(child: hint),
+                ],
+              );
+            },
+          ),
+          bottom: PlayerFeedbackStack(
+            interactive: bottomInteractive,
+            alignment: Alignment.bottomCenter,
+            children: [
               if (_completionPromptVisible) _buildPlaybackCompletionPrompt(),
               if (_interactivePromptVisible) _buildInteractiveVideoPrompt(),
               if (subtitleVisible) _buildSubtitleOverlay(),

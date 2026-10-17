@@ -1,0 +1,25 @@
+{
+  "1000_feed_reads": {
+    "distinct_sorted_lists": 1,
+    "microseconds_including_assertions": 10239
+  },
+  "100_unchanged_reloads": {
+    "reads": 100,
+    "transactions": 0,
+    "save_callbacks": 0,
+    "notifications": 0
+  },
+  "20_simultaneous_refresh_calls": {
+    "requests": 20,
+    "max_in_flight": 2
+  },
+  "100_automatic_refreshes_within_hour": {
+    "requests": 0,
+    "notifications": 0
+  },
+  "500_item_feed_390x844": {
+    "preconstructed_card_widgets": 4,
+    "mounted_rows": 4,
+    "delegate": "SliverChildBuilderDelegate"
+  }
+}

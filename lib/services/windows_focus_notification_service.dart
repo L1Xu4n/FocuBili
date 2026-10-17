@@ -145,6 +145,29 @@ class WindowsFocusNotificationBackend {
     return _initialization ??= _initializeSafely();
   }
 
+  /// Uses each desktop's native notification client; no closed-process polling.
+  Future<bool> showSubscriptionUpdate({
+    required String title,
+    required String source,
+    required int count,
+    bool Function()? allowDelivery,
+  }) async {
+    if (!await isAvailable()) return false;
+    try {
+      // Provider preparation can outlive a committed opt-out or source change.
+      // Recheck this request immediately before handing it to the native client.
+      if (allowDelivery != null && !allowDelivery()) return false;
+      await _client.show(
+        id: 48108,
+        title: title,
+        body: count > 1 ? '$source\n另有 ${count - 1} 条更新，打开焦点订阅查看' : source,
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// 显示专注完成 Toast；失败仅影响系统提示，不影响已保存的专注记录。
   Future<void> showFocusCompleted({
     required String sessionId,

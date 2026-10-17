@@ -15,6 +15,7 @@ import '../models/video_preview.dart';
 import 'desktop_playback_source_service.dart';
 import 'flutter_video_frame_capture.dart';
 import 'media_cache_service.dart';
+import 'desktop_disk_cache_session.dart';
 import 'native_playback_service.dart';
 import 'local_file_playback_service.dart';
 import 'listening_playback_service.dart';
@@ -87,6 +88,9 @@ class WindowsPlaybackService
   String? _localVideoPath;
   String? _localAudioPath;
   Timer? _sleepTimer;
+  Timer? _bufferTimer;
+  bool _samplingBuffer = false;
+  List<PlaybackBufferRange> _bufferedRanges = const [];
   DateTime? _sleepDeadline;
 
   /// 原地切换音频媒体，停止旧画面传输，保留当前位置和播放意图。
@@ -172,6 +176,7 @@ class WindowsPlaybackService
   bool _restoringPosition = false;
   bool _handlingMediaError = false;
   bool _cacheConfigured = false;
+  DesktopDiskCacheSession? _diskCacheSession;
   bool _shouldPlayAfterFallback = true;
   int _sourceGeneration = 0;
   int _currentMediaAttemptIndex = 0;
@@ -223,6 +228,9 @@ class WindowsPlaybackService
       setVolume: setMediaVolume,
     );
     await _configureWindowsMediaCache();
+    _bufferTimer ??= Timer.periodic(const Duration(milliseconds: 500), (_) {
+      unawaited(_sampleBufferedRanges());
+    });
     return _videoController.id.value;
   }
 
@@ -733,6 +741,7 @@ class WindowsPlaybackService
   @override
   Future<void> dispose() async {
     _sleepTimer?.cancel();
+    _bufferTimer?.cancel();
     if (_disposed) {
       return;
     }
@@ -743,6 +752,7 @@ class WindowsPlaybackService
         // 偏好设置写入失败不能阻止播放器、磁盘缓冲句柄和活跃会话标记释放。
       }
       _disposed = true;
+      await _diskCacheSession?.stopMonitoring();
       for (final StreamSubscription<dynamic> subscription in _subscriptions) {
         await subscription.cancel();
       }
@@ -752,45 +762,35 @@ class WindowsPlaybackService
         await _linuxSession.dispose();
         await _linuxMiniPlayer.dispose();
       } finally {
+        // Keep the lifetime lock if mpv disposal fails; its file handles may
+        // still be live. A later process can reclaim them only after exit.
         await _player.dispose();
+        await _diskCacheSession?.releaseAfterPlayerClosed();
       }
     } finally {
       _activeAudioMedia = null;
       WindowsMediaCacheRuntime.unregisterPlaybackSession();
+      unawaited(
+        WindowsMediaCacheService().maintain().catchError((Object _) {}),
+      );
       if (!_stateController.isClosed) {
         await _stateController.close();
       }
     }
   }
 
-  /// 把用户选择的 Windows 缓冲目录和容量交给 libmpv；配置失败时仍允许纯内存播放。
+  /// Preserve mpv disk-backed seeks with a measured soft disk threshold.
   Future<void> _configureWindowsMediaCache() async {
-    if (_cacheConfigured || _disposed) {
-      return;
-    }
+    if (_cacheConfigured || _disposed) return;
     _cacheConfigured = true;
-    final PlatformPlayer? platformPlayer = _player.platform;
-    if (platformPlayer is! NativePlayer) {
-      return;
-    }
-    try {
-      final WindowsMediaCacheService cacheService = WindowsMediaCacheService();
-      final Directory directory = await cacheService.resolveCacheDirectory();
-      final int capacityBytes = await cacheService.loadCapacityBytes();
-      await platformPlayer.setProperty('cache', 'yes');
-      await platformPlayer.setProperty('cache-on-disk', 'yes');
-      await platformPlayer.setProperty('cache-dir', directory.path);
-      await platformPlayer.setProperty(
-        'demuxer-max-bytes',
-        capacityBytes.toString(),
-      );
-      await platformPlayer.setProperty(
-        'demuxer-max-back-bytes',
-        capacityBytes.toString(),
-      );
-    } catch (_) {
-      // 应用缓存目录或偏好设置异常时保留 media_kit 默认内存缓冲，不能阻止视频播放。
-    }
+    final platformPlayer = _player.platform;
+    if (platformPlayer is! NativePlayer) return;
+    final session = DesktopDiskCacheSession(
+      writeProperty: platformPlayer.setProperty,
+      readProperty: platformPlayer.getProperty,
+    );
+    _diskCacheSession = session;
+    await session.configure();
   }
 
   /// 订阅底层播放、缓冲、进度、尺寸、结束和错误事件，并统一转换为页面快照。
@@ -1322,6 +1322,7 @@ class WindowsPlaybackService
   /// 开始新的播放源请求并让先前仍在等待网络的分P或清晰度请求立即失效。
   int _beginSourceRequest() {
     _sourceGeneration += 1;
+    _bufferedRanges = const [];
     _restoringPosition = false;
     _restoredPosition = Duration.zero;
     _activeAudioTrackToken = '';
@@ -1342,6 +1343,31 @@ class WindowsPlaybackService
   }
 
   /// 把 media_kit 即时状态转换为项目统一快照，并计算稳定视频宽高比。
+  Future<void> _sampleBufferedRanges() async {
+    if (_disposed || _opening || _samplingBuffer) return;
+    final platform = _player.platform;
+    if (platform is! NativePlayer) return;
+    final generation = _sourceGeneration;
+    final attempt = _currentMediaAttemptIndex;
+    _samplingBuffer = true;
+    try {
+      final raw = await platform.getProperty('demuxer-cache-state');
+      if (!_isCurrentMediaAttempt(generation, attempt) || _opening) return;
+      _bufferedRanges = playbackBufferRangesFromMpv(
+        raw,
+        duration: _player.state.duration,
+      );
+      _emitPlayerState();
+    } catch (_) {
+      if (_isCurrentMediaAttempt(generation, attempt)) {
+        _bufferedRanges = const [];
+        _emitPlayerState();
+      }
+    } finally {
+      _samplingBuffer = false;
+    }
+  }
+
   void _emitPlayerState({
     PlaybackPhase? phaseOverride,
     String? message,
@@ -1376,6 +1402,16 @@ class WindowsPlaybackService
             ),
       position: _player.state.position,
       duration: _player.state.duration,
+      bufferedRanges: _opening
+          ? const []
+          : _localSource && _player.state.duration > Duration.zero
+          ? [
+              PlaybackBufferRange(
+                start: Duration.zero,
+                end: _player.state.duration,
+              ),
+            ]
+          : _bufferedRanges,
       speed: _player.state.rate,
       currentQuality: _currentQuality,
       availableQualities: _availableQualities,

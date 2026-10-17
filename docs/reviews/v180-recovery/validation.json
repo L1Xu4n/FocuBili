@@ -1,0 +1,273 @@
+{
+  "recordedUtc": "2026-10-17T21:23:19.336326+00:00",
+  "branch": "codex/release-v180-recovery",
+  "originalIntegrationBase": "f4828c9f2075cd61e0e0ec03cdcd0b4f585e62a9",
+  "missingOriginalCommits": 0,
+  "subscriptionSourceCommit": "fab4c972d491c4ef70772fd97c9d51a3cfe26498",
+  "subscriptionIntegratedCommit": "91471397cd49239717314f3497bfe72b28168e40",
+  "playerOriginalCommit": "79844dabc69d050c75bbbcc4f9816b9e313517b6",
+  "playerIntegratedCommit": "0c48370b8ab0064ba33fc2b17dc72ec1fa18cb70",
+  "playerDuplicateCherryPick": false,
+  "testedCodeCommit": "d95b1bd594c8d3cc4044ef491b69cec23d51211b",
+  "semanticProductChangesAfterTestedCodeCommit": false,
+  "validation": {
+    "initialFullFlutter": {
+      "passed": 971,
+      "skipped": 1,
+      "failed": 1,
+      "failure": "34px RenderFlex overflow on the first large-text subscription introduction frame; fixed"
+    },
+    "finalFullFlutter": {
+      "passed": 976,
+      "skipped": 1,
+      "failed": 0,
+      "skip": "Existing Windows developer-mode symlink limitation; no system setting changed"
+    },
+    "directed": {
+      "passed": 76,
+      "failed": 0
+    },
+    "diagnosticsAfterGeneratedMetadata": {
+      "passed": 8,
+      "failed": 0
+    },
+    "analysis": {
+      "command": "flutter analyze --no-pub --fatal-infos .",
+      "result": "No issues found"
+    },
+    "format": {
+      "files": 414,
+      "changed": 0
+    },
+    "windowsNormalRelease": {
+      "success": true,
+      "elapsedSeconds": 119.7,
+      "signed": false,
+      "executableSha256": "21f46361c6b542bc39a7d6fdffdcb4591a37d58af9e3339d9aea42c71526cc97",
+      "productVersion": "1.8.0+26",
+      "sourceCommit": "d95b1bd594c8d3cc4044ef491b69cec23d51211b",
+      "fileVersion": "1.8.0+26",
+      "aotSha256": "aec470dbd9b3ad028c5a4c1eb5d4f29a9da2ef2f98129fe2e10d73945899cd9e",
+      "normalApplication": true,
+      "numericVersion": "1.8.0.26",
+      "authenticodeStatus": "NotSigned",
+      "metadataValues": {
+        "appBuildTime": "2026-10-17T21:10:32.808766Z",
+        "appSourceRevision": "d95b1bd594c8d3cc4044ef491b69cec23d51211b",
+        "appFallbackVersion": "1.8.0+26"
+      },
+      "metadataEmbeddedInAot": {
+        "appBuildTime": true,
+        "appSourceRevision": true,
+        "appFallbackVersion": true
+      },
+      "metadataEncodingChecks": {
+        "appBuildTime": {
+          "utf-8": true,
+          "utf-16-le": true
+        },
+        "appSourceRevision": {
+          "utf-8": false,
+          "utf-16-le": true
+        },
+        "appFallbackVersion": {
+          "utf-8": true,
+          "utf-16-le": false
+        }
+      },
+      "metadataEncodingNote": "Source revision is part of a folded Chinese diagnostic string and appears as UTF-16LE; the initial UTF-8-only assertion was too strict."
+    },
+    "windowsNativeScheduler": {
+      "releaseBuildSuccess": true,
+      "elapsedSeconds": 78.2,
+      "executed": true,
+      "result": {
+        "success": true,
+        "platform": "windows",
+        "runId": "",
+        "checks": [
+          "native_timer_callback",
+          "native_generation_replacement",
+          "native_timer_cancel"
+        ]
+      },
+      "usesAccounts": false,
+      "usesNotifications": false,
+      "usesHttp": false,
+      "usesOsScheduledTasks": false
+    },
+    "homeScreenshots": {
+      "testsPassed": 2,
+      "captures": [
+        "introduction-header.png",
+        "introduction-search.png",
+        "shortcuts-header.png",
+        "shortcuts-search.png"
+      ],
+      "visuallyInspected": true,
+      "viewport": "320x430",
+      "textScales": [
+        2,
+        2.5
+      ],
+      "fonts": "Existing Microsoft YaHei and Material Icons",
+      "kind": "Actual Flutter FocusDashboard with synthetic state; not device acceptance",
+      "published": false
+    },
+    "workflowYaml": {
+      "files": 5,
+      "parsed": true
+    },
+    "appleSourceMetadata": "passed",
+    "pythonProbeSyntax": "passed",
+    "android": {
+      "status": "blocked_before_compilation",
+      "gradleBatchExitCode": 5,
+      "reason": "Process creation for existing Android Studio jbr/bin/java.exe denied; direct and explicit Start-Process version probes fail after reconnection. Existing alternative JDK11 is insufficient.",
+      "kotlinCompiled": false,
+      "jvmTestsRun": false,
+      "apkBuilt": false
+    },
+    "appleNative": {
+      "compiledLocally": false,
+      "executedLocally": false
+    },
+    "linuxNative": {
+      "compiledLocally": false,
+      "executedLocally": false
+    }
+  },
+  "review": {
+    "independentReviewBase": "9147139",
+    "confirmedCoverageFinding": "iOS cancel bridge completion did not prove removal of an existing pending request; renamed check and corrected documentation.",
+    "pendingPlatformCoverage": [
+      "Production iOS package libraryURI and SQLite initialization/migration/disposal",
+      "Actual existing iOS pending request cancellation",
+      "iOS real opportunistic refresh, expiration and foreground/headless overlap",
+      "Linux/macOS native compile and callbacks",
+      "One-hour desktop minimized notification delivery, sleep/exit, actual notification taps",
+      "Android OEM power policy and real signed upgrade"
+    ],
+    "unconfirmedLifecycleRisk": "iOS expiration callback has no task-identity guard; an abstract stale-expiration/new-task ordering was identified but not reproduced under the one-hour schedule and 25-second watchdog."
+  },
+  "environmentNotes": [
+    "Task-local SDK dev/examples read-only junctions completed missing copied SDK topology; final full-repository analysis succeeded.",
+    "Optional MSBuild incremental tracking disabled only in a temporary task-local Directory.Build.targets, removed after builds.",
+    "Existing MPV/ANGLE archives reused after MD5 matches; no unknown dependency installation.",
+    "Initial screenshot fixture blocked on real I/O inside fake async and was interrupted; corrected external fixture uses runAsync and passed. Interrupted attempt is not counted as passing.",
+    "Initial AOT source-revision UTF8-only search was too strict; the folded Chinese diagnostic string contains the exact SHA as UTF16LE. Both encodings checked."
+  ],
+  "connectionVerification": {
+    "sameHost": "DESKTOP-4QI4B5C",
+    "dartAfterReconnect": "3.12.2 executable succeeded",
+    "fullTestCompletedBeforeReconnect": true,
+    "windowsNativeBuildAndRunCompletedAfterReconnect": true
+  },
+  "remoteAudit": {
+    "checkedUtc": "2026-10-17 21:21:26 UTC",
+    "dev": {
+      "sha": "da0946b98994fea9020a58c870b0ddddcde72a42",
+      "date": "2026-10-13T05:51:24Z"
+    },
+    "master": {
+      "sha": "83a9d70ad1bbb7c4c07a7292baca3439ecde7be3",
+      "date": "2026-10-13T05:51:55Z"
+    },
+    "latestPullRequest": 55,
+    "latestActionsRun": 38354113925,
+    "v18TagFound": false,
+    "newReleaseOrPushObserved": false,
+    "workflowAuditCandidateCount": 6,
+    "writesPerformed": false
+  },
+  "requiredCI": [
+    "ci.yml",
+    "release-build.yml",
+    "apple-build.yml",
+    "linux-build.yml"
+  ],
+  "publishWorkflow": "publish-release.yml, only after unique publisher designation and exact-source gates",
+  "externalWrites": {
+    "push": false,
+    "pullRequestCreated": false,
+    "merge": false,
+    "tag": false,
+    "release": false,
+    "issueCommentOrClosure": false,
+    "workflowOrBranchDeletion": false
+  },
+  "credentials": {
+    "realLoginExported": false,
+    "signingMaterialReadOrCreated": false,
+    "securitySettingsChanged": false
+  },
+  "logsLocal": {
+    "full-test-initial.log": {
+      "bytes": 195549,
+      "sha256": "ce0c9661005bd7c76e98729d66f4fca5ab39e538e45687a274c845c5229b2fdb"
+    },
+    "full-test-final.log": {
+      "bytes": 173629,
+      "sha256": "5189d749ef0415870c84ba84530686e0192004aa5a8d5739e77af1027cbc2e16"
+    },
+    "targeted-recovery.log": {
+      "bytes": 14954,
+      "sha256": "8985479d648fce966d8651da1d5bd73de199443edeb9c1ff15c2a71eafadea5d"
+    },
+    "diagnostics-generated-metadata.log": {
+      "bytes": 720,
+      "sha256": "d2566a6b74af1a0b61c1c71d7f6050bb4624bcd3ea10796f467b6155024bc910"
+    },
+    "analyze-all-final.log": {
+      "bytes": 97,
+      "sha256": "851a995202a121b2b6f5f30df380adc70ab2f6eae6047223a22e8bcb47da8327"
+    },
+    "format-final.log": {
+      "bytes": 50,
+      "sha256": "938940cba5601150ec9e6bf2b91cd775ee554c585d3db3152a4c1f4e6f717262"
+    },
+    "windows-release-build.log": {
+      "bytes": 1281,
+      "sha256": "af130e2a9fcb9a16531a5b5bd86df69b7edac26b27442700b1f964c8bc509ebf"
+    },
+    "windows-native-probe-build.log": {
+      "bytes": 129,
+      "sha256": "6a67ec7b1391903455e0920c334a40ccb4b0b29e9624ae6836f744c2ede4e6fb"
+    },
+    "native-subscription-windows.log": {
+      "bytes": 215,
+      "sha256": "8653ab7a9d1831a73246dcbdd91c7baa9760018e0330ca8aa439ca1fcee9cbb6"
+    },
+    "native-subscription-windows.json": {
+      "bytes": 137,
+      "sha256": "83f9e1f83ea5f7a91791c00d7c248c1a324cf92ab96c39abd62cc1d13e6d2688"
+    },
+    "android-compile-jvm.log": {
+      "bytes": 19,
+      "sha256": "44b2ac5ce7ac17126a71095779faca21c3d4c8ba6f6f6315ce612bd9419e6f9e"
+    },
+    "java-explicit-start-error.log": {
+      "bytes": 62,
+      "sha256": "3bc070945e972f111e485c218962154c85b6cb9cb603703985f767deaf52d64b"
+    },
+    "home-visual.log": {
+      "bytes": 215,
+      "sha256": "5628a3aeaaa4ffff62c918d18899bfdc4ce636c55293f9af9af03db99b22e824"
+    },
+    "home-visual-initial-interrupted.log": {
+      "bytes": 150,
+      "sha256": "4894722dd0eab0193e7b6984769d36712114188a80e58086a20f49ad84fb4d19"
+    },
+    "workflows-yaml.log": {
+      "bytes": 282,
+      "sha256": "6ff91e5492331dce424849705350faf88b9226b09e223e18fde0cd8af683bbcc"
+    }
+  },
+  "publicationScope": {
+    "localRecoveryHead": "9c4c36b4f154d86636e37d12113f3947212152d6",
+    "localScreenshotsRetained": true,
+    "publicBranchExcludesNewReviewImages": true,
+    "reason": "Automatic approval review did not authorize local image export; no bypass used.",
+    "productSourceChanged": false
+  }
+}

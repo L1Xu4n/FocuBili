@@ -158,4 +158,96 @@ void main() {
     expect(taps, 1);
     expect(tester.takeException(), isNull);
   });
+  testWidgets('独立短提示消失时快速淡出并连续收拢后续位置', (tester) async {
+    var first = true;
+    late StateSetter rebuild;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            height: 220,
+            child: StatefulBuilder(
+              builder: (context, update) {
+                rebuild = update;
+                return PlayerFeedbackStack(
+                  children: [
+                    if (first)
+                      const PlayerNoticeCard(key: Key('first'), message: '第一条'),
+                    const PlayerNoticeCard(key: Key('second'), message: '第二条'),
+                  ],
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final before = tester.getTopLeft(find.byKey(const Key('second'))).dy;
+    rebuild(() => first = false);
+    await tester.pump();
+    expect(find.text('第一条'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 80));
+    final middle = tester.getTopLeft(find.byKey(const Key('second'))).dy;
+    expect(middle, lessThan(before));
+    await tester.pumpAndSettle();
+    final after = tester.getTopLeft(find.byKey(const Key('second'))).dy;
+    expect(after, lessThan(middle));
+    expect(find.text('第一条'), findsNothing);
+  });
+
+  testWidgets('顶部倍速不受中央亮度提示与底部字幕进出影响', (tester) async {
+    var adjustment = false;
+    late StateSetter rebuild;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 640,
+            height: 360,
+            child: StatefulBuilder(
+              builder: (context, update) {
+                rebuild = update;
+                return PlayerFeedbackLanes(
+                  top: const PlayerFeedbackStack(
+                    children: [
+                      PlayerNoticeCard(key: Key('speed'), message: '三倍速播放'),
+                    ],
+                  ),
+                  center: adjustment
+                      ? const Center(
+                          child: PlayerNoticeCard(
+                            key: Key('level'),
+                            message: '亮度 85%',
+                          ),
+                        )
+                      : const SizedBox.shrink(),
+                  bottom: adjustment
+                      ? const PlayerFeedbackStack(
+                          children: [
+                            PlayerNoticeCard(
+                              key: Key('subtitle'),
+                              message: '字幕',
+                            ),
+                          ],
+                        )
+                      : const SizedBox.shrink(),
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final speed = tester.getRect(find.byKey(const Key('speed')));
+    rebuild(() => adjustment = true);
+    await tester.pumpAndSettle();
+    expect(tester.getRect(find.byKey(const Key('speed'))), speed);
+    final level = tester.getRect(find.byKey(const Key('level')));
+    final subtitle = tester.getRect(find.byKey(const Key('subtitle')));
+    expect(level.top, greaterThan(speed.bottom));
+    expect(level.bottom, lessThan(subtitle.top));
+    expect(tester.takeException(), isNull);
+  });
 }

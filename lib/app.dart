@@ -98,6 +98,8 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
         _focusTimerController.hasActiveSession;
     _subscriptions.notifySummary = (count) => _subscriptionNotifications
         .showSummary(count, generation: _subscriptions.notificationGeneration);
+    _subscriptions.notifyItems = (items) => _subscriptionNotifications
+        .showItems(items, generation: _subscriptions.notificationGeneration);
     unawaited(_subscriptionNotifications.initialize(_handleSubscriptionTap));
     _focusTimerController.addListener(_handleFocusTimerChanged);
     unawaited(_focusTimerController.initialize());
@@ -444,6 +446,7 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
     _subscriptions.setForeground(false);
     _subscriptions.suppressNotifications = null;
     _subscriptions.notifySummary = null;
+    _subscriptions.notifyItems = null;
     _subscriptionNotifications.dispose();
     _clipboardLinkMonitor.dispose();
     _focusTimerController.removeListener(_handleFocusTimerChanged);

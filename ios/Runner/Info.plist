@@ -74,6 +74,11 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
+		<string>fetch</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.focubili.app.subscription.refresh</string>
 	</array>
 	<key>FlutterDeepLinkingEnabled</key>
 	<false/>

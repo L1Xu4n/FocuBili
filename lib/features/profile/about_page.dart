@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/layout/adaptive_page_frame.dart';
 import '../../core/router/app_router.dart';
 import '../../services/app_update_service.dart';
+import '../../core/build_metadata.g.dart';
 
 /// 打开外部链接的可注入函数类型，组件测试用它避免真的离开 App。
 typedef ExternalUrlLauncher = Future<bool> Function(Uri uri);
@@ -177,6 +178,12 @@ class _AboutPageState extends State<AboutPage> {
                       style: Theme.of(context).textTheme.bodyLarge,
                     ),
                     const SizedBox(height: 8),
+                    const SelectableText(
+                      'BuildTime：$appBuildTime',
+                      key: Key('about-build-time'),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 8),
                     Text(
                       '用于个人学习、技术研究和专注观看公开视频的第三方客户端。',
                       textAlign: TextAlign.center,
@@ -193,7 +200,13 @@ class _AboutPageState extends State<AboutPage> {
                   ListTile(
                     leading: const Icon(Icons.code_rounded),
                     title: const Text('项目地址'),
-                    subtitle: const Text('github.com/L1Xu4n/FocuBili'),
+                    subtitle: const Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('github.com/L1Xu4n/FocuBili'),
+                        Text('给焦点哔哩点个star叭~'),
+                      ],
+                    ),
                     trailing: const Icon(Icons.open_in_new_rounded),
                     onTap: () => _open(_projectUri),
                   ),
@@ -201,7 +214,10 @@ class _AboutPageState extends State<AboutPage> {
                   ListTile(
                     leading: const Icon(Icons.person_outline_rounded),
                     title: const Text('项目负责人'),
-                    subtitle: const Text('@L1Xu4n'),
+                    subtitle: const Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [Text('@L1Xu4n'), Text('follow看看ta还有什么项目？')],
+                    ),
                     trailing: const Icon(Icons.open_in_new_rounded),
                     onTap: () => _open(_ownerUri),
                   ),
@@ -210,7 +226,13 @@ class _AboutPageState extends State<AboutPage> {
                     key: const Key('open-project-qq-group'),
                     leading: const Icon(Icons.groups_rounded),
                     title: const Text('项目QQ群'),
-                    subtitle: const Text('焦点哔哩交流群 · 1055054828'),
+                    subtitle: const Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('焦点哔哩交流群 · 1055054828'),
+                        Text('进来反馈问题，提供建议，相互交流，或是请开发者喝杯奶茶？'),
+                      ],
+                    ),
                     trailing: const Icon(Icons.open_in_new_rounded),
                     // QQ 群入口函数把官方邀请链接交给系统，优先由已安装的 QQ 处理。
                     onTap: () => _open(

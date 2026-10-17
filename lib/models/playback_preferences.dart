@@ -113,6 +113,12 @@ class PlaybackPreferences {
       ? (value.clamp(minControlScale, maxControlScale) * 20).round() / 20
       : defaultControlScale;
   static const defaultSpeeds = <double>[0.75, 1, 1.25, 1.5, 2, 3];
+  static const double defaultLongPressPlaybackSpeed = 3;
+
+  /// 限制长按倍速为 1–5 倍，以 0.25 倍为步长，损坏配置沿用三倍速。
+  static double normalizeLongPressPlaybackSpeed(double value) => value.isFinite
+      ? (value.clamp(1, 5) * 4).round() / 4
+      : defaultLongPressPlaybackSpeed;
   static const double defaultSubtitleFontSize = 16;
   static const double minSubtitleFontSize = 12;
   static const double maxSubtitleFontSize = 36;
@@ -150,6 +156,7 @@ class PlaybackPreferences {
     this.mobileDefaultQuality = PreferredPlaybackQuality.p720,
     this.preferOfflineCache = false,
     this.playbackSpeeds = defaultSpeeds,
+    this.longPressPlaybackSpeed = defaultLongPressPlaybackSpeed,
   });
 
   final bool enableDoubleTapSeek;
@@ -163,6 +170,7 @@ class PlaybackPreferences {
   final PreferredPlaybackQuality mobileDefaultQuality;
   final bool preferOfflineCache;
   final List<double> playbackSpeeds;
+  final double longPressPlaybackSpeed;
 
   /// 返回只替换指定字段的新配置，避免页面直接修改旧对象。
   PlaybackPreferences copyWith({
@@ -177,6 +185,7 @@ class PlaybackPreferences {
     PreferredPlaybackQuality? mobileDefaultQuality,
     bool? preferOfflineCache,
     List<double>? playbackSpeeds,
+    double? longPressPlaybackSpeed,
   }) {
     return PlaybackPreferences(
       enableDoubleTapSeek: enableDoubleTapSeek ?? this.enableDoubleTapSeek,
@@ -198,6 +207,9 @@ class PlaybackPreferences {
       playbackSpeeds: playbackSpeeds == null
           ? this.playbackSpeeds
           : normalizeSpeeds(playbackSpeeds),
+      longPressPlaybackSpeed: longPressPlaybackSpeed == null
+          ? this.longPressPlaybackSpeed
+          : normalizeLongPressPlaybackSpeed(longPressPlaybackSpeed),
     );
   }
 }

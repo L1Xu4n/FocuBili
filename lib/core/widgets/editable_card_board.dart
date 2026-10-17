@@ -60,9 +60,13 @@ class _EditableCardBoardState extends State<EditableCardBoard>
   late _DashboardCommitState _commitState;
   final Set<String> _hiding = {};
   final GlobalKey _footerKey = GlobalKey();
+  final GlobalKey _boardKey = GlobalKey();
+  final Map<String, GlobalKey> _cardKeys = {};
   int _footerVisibilityRevision = 0;
   static final Map<String, Future<void>> _pendingWrites = {};
   DashboardLayout? _dragLayout;
+  DashboardLayout? _pendingDropLayout;
+  int _pendingDropRevision = 0;
   Future<void> _operations = Future.value();
   Timer? _edgeTimer;
   Offset? _pointer;
@@ -113,11 +117,14 @@ class _EditableCardBoardState extends State<EditableCardBoard>
     } else {
       _layout = _layout.reconcile(_cards);
       _dragLayout = _dragLayout?.reconcile(_cards);
+      _pendingDropLayout = _pendingDropLayout?.reconcile(_cards);
     }
   }
 
   /// 只让当前页面的最新读取结果生效，损坏配置由服务安全恢复。
   Future<void> _load() async {
+    _pendingDropRevision++;
+    _pendingDropLayout = null;
     final generation = ++_generation;
     final storageId = widget.storageId;
     final service = _service;
@@ -368,7 +375,7 @@ class _EditableCardBoardState extends State<EditableCardBoard>
     setState(() {
       _dragging = id;
       _hoverTarget = null;
-      _dragLayout = _layout;
+      _dragLayout = _pendingDropLayout ?? _layout;
     });
     _edgeTimer?.cancel();
     _edgeTimer = Timer.periodic(
@@ -380,6 +387,7 @@ class _EditableCardBoardState extends State<EditableCardBoard>
   /// 记录真实指针位置，让自动滚动不依赖拖动截图的锚点。
   void _updateDrag(DragUpdateDetails details) {
     _pointer = details.globalPosition;
+    _previewPointer(details.globalPosition);
   }
 
   /// 使用外层视口的位置和边界，在指针靠近上下边缘时持续滚动。
@@ -406,32 +414,84 @@ class _EditableCardBoardState extends State<EditableCardBoard>
       position.minScrollExtent,
       position.maxScrollExtent,
     );
-    if (next != position.pixels) position.jumpTo(next);
+    if (next != position.pixels) {
+      position.jumpTo(next);
+      _previewPointer(_pointer!);
+    }
+  }
+
+  /// 使用指针而非反馈卡片左上角命中整个棋盘，卡片间隙也能插入。
+  void _previewPointer(Offset point) {
+    final id = _dragging;
+    if (id == null || _dragLayout == null) return;
+    Rect? rectFor(String cardId) {
+      final render = _cardKeys[cardId]?.currentContext?.findRenderObject();
+      if (render is! RenderBox || !render.hasSize) return null;
+      return render.localToGlobal(Offset.zero) & render.size;
+    }
+
+    // 重排后指针通常落在新占位中，保留该插入位置以防来回抖动。
+    if (rectFor(id)?.contains(point) == true) return;
+    String? closest;
+    Rect? targetRect;
+    var distance = double.infinity;
+    for (final card in _dragLayout!.visibleCards(_cards)) {
+      if (card.id == id) continue;
+      final rect = rectFor(card.id);
+      if (rect == null) continue;
+      final dx = math.max(
+        rect.left - point.dx,
+        math.max(0.0, point.dx - rect.right),
+      );
+      final dy = math.max(
+        rect.top - point.dy,
+        math.max(0.0, point.dy - rect.bottom),
+      );
+      final next = dx * dx + dy * dy;
+      if (next < distance) {
+        distance = next;
+        closest = card.id;
+        targetRect = rect;
+      }
+    }
+    if (closest == null || targetRect == null) return;
+    final rect = targetRect;
+    final after = point.dy >= rect.bottom
+        ? true
+        : point.dy <= rect.top
+        ? false
+        : point.dx < rect.left
+        ? false
+        : point.dx > rect.right
+        ? true
+        : (point.dy - rect.center.dy).abs() < rect.height * .18
+        ? _dragLayout!.order.indexOf(id) < _dragLayout!.order.indexOf(closest)
+        : point.dy > rect.center.dy;
+    final slot = '$closest:$after';
+    if (_hoverTarget == slot) return;
+    _hoverTarget = slot;
+    final next = _dragLayout!.move(id, closest, after: after);
+    if (!listEquals(next.order, _dragLayout!.order)) {
+      setState(() => _dragLayout = next);
+    }
   }
 
   /// 进入另一张卡片时按可见顺序预览插入，允许跨列和跨行移动。
-  void _previewDrop(String target) {
-    final id = _dragging;
-    if (id == null ||
-        id == target ||
-        _dragLayout == null ||
-        _hoverTarget == target) {
-      return;
-    }
-    _hoverTarget = target;
-    final order = _dragLayout!.order;
-    final after = order.indexOf(id) < order.indexOf(target);
-    setState(() => _dragLayout = _dragLayout!.move(id, target, after: after));
-  }
-
   /// 将当前拖动预览提交一次，写入失败自动恢复最后保存的布局。
   void _acceptDrop(DragTargetDetails<String> details) {
     final preview = _dragLayout;
     if (preview == null) return;
-    _commit(
+    final revision = ++_pendingDropRevision;
+    _pendingDropLayout = preview;
+    final saved = _commit(
       (layout) => DashboardLayout(order: preview.order, hidden: layout.hidden),
     );
     _stopDrag();
+    saved.whenComplete(() {
+      if (mounted && revision == _pendingDropRevision) {
+        setState(() => _pendingDropLayout = null);
+      }
+    });
   }
 
   /// 拖动结束或取消时释放边缘定时器及临时预览。
@@ -451,10 +511,10 @@ class _EditableCardBoardState extends State<EditableCardBoard>
   @override
   Widget build(BuildContext context) {
     final generation = _generation;
-    final displayLayout = _dragLayout ?? _layout;
+    final displayLayout = _dragLayout ?? _pendingDropLayout ?? _layout;
     final visible = DashboardLayout(
       order: displayLayout.order,
-      hidden: displayLayout.hidden.difference(_hiding),
+      hidden: _layout.hidden.difference(_hiding),
     ).visibleCards(_cards);
     final desktop = switch (defaultTargetPlatform) {
       TargetPlatform.windows ||
@@ -483,41 +543,44 @@ class _EditableCardBoardState extends State<EditableCardBoard>
               1.0,
               (constraints.maxWidth - widget.spacing * (columns - 1)) / columns,
             );
-            return Wrap(
-              spacing: widget.spacing,
-              runSpacing: widget.spacing,
-              children: [
-                for (final card in visible)
-                  SizedBox(
-                    key: ValueKey('dashboard-card-${card.id}'),
-                    width: card.fullWidth ? constraints.maxWidth : width,
-                    child: DragTarget<String>(
-                      onWillAcceptWithDetails: (details) =>
-                          _editing && details.data == _dragging,
-                      onMove: (_) => _previewDrop(card.id),
-                      onAcceptWithDetails: _acceptDrop,
-                      builder: (context, candidates, rejected) =>
-                          _EditableCardTile(
-                            key: ValueKey(card.id),
-                            card: card,
-                            editing: _editing,
-                            desktop: desktop,
-                            wiggle: _wiggle,
-                            dragging: _dragging == card.id,
-                            width: card.fullWidth
-                                ? constraints.maxWidth
-                                : width,
-                            onHide: () => _hide(card.id),
-                            onRemovalFinished: () =>
-                                _finishHide(card.id, generation),
-                            onMove: (step) => _moveStep(card.id, step),
-                            onDragStarted: () => _startDrag(card.id),
-                            onDragUpdate: _updateDrag,
-                            onDragEnd: (_) => _stopDrag(),
-                          ),
+            return DragTarget<String>(
+              onWillAcceptWithDetails: (details) =>
+                  _editing && _layout.order.contains(details.data),
+              onMove: (details) => _previewPointer(_pointer ?? details.offset),
+              onAcceptWithDetails: _acceptDrop,
+              builder: (context, candidates, rejected) => Wrap(
+                key: _boardKey,
+                spacing: widget.spacing,
+                runSpacing: widget.spacing,
+                children: [
+                  for (final card in visible)
+                    SizedBox(
+                      key: ValueKey('dashboard-card-${card.id}'),
+                      width: card.fullWidth ? constraints.maxWidth : width,
+                      child: _DashboardCardPlacement(
+                        key: _cardKeys.putIfAbsent(card.id, () => GlobalKey()),
+                        boardKey: _boardKey,
+                        animate: _dragging != null,
+                        child: _EditableCardTile(
+                          key: ValueKey(card.id),
+                          card: card,
+                          editing: _editing,
+                          desktop: desktop,
+                          wiggle: _wiggle,
+                          dragging: _dragging == card.id,
+                          width: card.fullWidth ? constraints.maxWidth : width,
+                          onHide: () => _hide(card.id),
+                          onRemovalFinished: () =>
+                              _finishHide(card.id, generation),
+                          onMove: (step) => _moveStep(card.id, step),
+                          onDragStarted: () => _startDrag(card.id),
+                          onDragUpdate: _updateDrag,
+                          onDragEnd: (_) => _stopDrag(),
+                        ),
+                      ),
                     ),
-                  ),
-              ],
+                ],
+              ),
             );
           },
         ),

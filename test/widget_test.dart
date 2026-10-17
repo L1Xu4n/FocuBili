@@ -4033,6 +4033,7 @@ void main() {
     await gesture.up();
     await tester.pump();
     expect(service._speed, 1);
+    await tester.pumpAndSettle();
     expect(find.text('三倍速中>>'), findsNothing);
   });
 

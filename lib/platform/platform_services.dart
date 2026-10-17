@@ -1,3 +1,4 @@
+import '../services/cached_player_overlay_service.dart';
 import 'dart:async';
 
 import '../models/player_overlay_data.dart';
@@ -42,14 +43,21 @@ class PlatformServices {
   }
 
   /// 创建 Android 方法通道、桌面 Dart 网络或明确不可用的字幕弹幕服务。
-  PlayerOverlayService createPlayerOverlayService() {
-    return switch (capabilities.playerOverlayBackend) {
-      PlayerOverlayBackendKind.androidChannel => NativePlayerOverlayService(),
-      PlayerOverlayBackendKind.dartHttp => DesktopPlayerOverlayService(),
-      PlayerOverlayBackendKind.unavailable =>
-        const _UnavailablePlayerOverlayService(),
-    };
-  }
+  static final _overlayServices =
+      <PlayerOverlayBackendKind, PlayerOverlayService>{};
+  PlayerOverlayService createPlayerOverlayService() =>
+      _overlayServices.putIfAbsent(capabilities.playerOverlayBackend, () {
+        return switch (capabilities.playerOverlayBackend) {
+          PlayerOverlayBackendKind.androidChannel => CachedPlayerOverlayService(
+            NativePlayerOverlayService(),
+          ),
+          PlayerOverlayBackendKind.dartHttp => CachedPlayerOverlayService(
+            DesktopPlayerOverlayService(),
+          ),
+          PlayerOverlayBackendKind.unavailable =>
+            const _UnavailablePlayerOverlayService(),
+        };
+      });
 
   /// 创建 Android 持久缓存、Windows 播放缓冲或明确不可用的缓存服务。
   MediaCacheService createMediaCacheService() {

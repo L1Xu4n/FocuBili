@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:cached_network_image/cached_network_image.dart';
+import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/layout/adaptive_page_frame.dart';
@@ -166,7 +166,7 @@ class _FollowedCreatorsPageState extends State<FollowedCreatorsPage> {
     return CircleAvatar(
       radius: 26,
       child: ClipOval(
-        child: CachedNetworkImage(
+        child: AppNetworkImage(
           imageUrl: creator.avatarUrl,
           httpHeaders: const <String, String>{
             'Referer': 'https://www.bilibili.com/',
@@ -175,8 +175,6 @@ class _FollowedCreatorsPageState extends State<FollowedCreatorsPage> {
           height: 52,
           fit: BoxFit.cover,
           memCacheWidth: 160,
-          maxWidthDiskCache: 320,
-          fadeInDuration: const Duration(milliseconds: 120),
           placeholder: (BuildContext context, String url) =>
               _buildAvatarPlaceholder(),
           errorWidget: (BuildContext context, String url, Object error) =>

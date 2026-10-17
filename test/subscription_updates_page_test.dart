@@ -9,6 +9,7 @@ import 'package:focubili/services/bilibili_public_content_service.dart';
 import 'package:focubili/models/public_profile.dart';
 import 'package:focubili/models/subscription.dart';
 import 'package:focubili/services/focus_notification_service.dart';
+import 'package:focubili/platform/app_platform.dart';
 
 class Permission extends FocusNotificationService {
   int requests = 0;
@@ -182,13 +183,19 @@ void main() {
       await tester.pumpAndSettle();
       expect(s.sources.single.key, source.key);
       expect(s.enabled, isTrue);
-      expect(find.byTooltip('已加入焦点订阅'), findsOneWidget);
+      expect(find.byTooltip('取消焦点订阅'), findsOneWidget);
       expect(
         tester
             .widget<IconButton>(find.byKey(const Key('focus-subscribe-button')))
             .onPressed,
-        isNull,
+        isNotNull,
       );
+      await tester.tap(find.byTooltip('取消焦点订阅'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('取消订阅'));
+      await tester.pumpAndSettle();
+      expect(s.sources, isEmpty);
+      expect(find.byTooltip('加入焦点订阅'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );
@@ -234,7 +241,7 @@ void main() {
       MaterialApp(home: SubscriptionSettingsPage(service: s)),
     );
     await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(find.text('正在获取已有内容'), 200);
+    await tester.scrollUntilVisible(find.text('正在读取最近两页'), 200);
     expect(find.text('基线已建立'), findsNothing);
     s.checkpoint(source.key)!.error = '网络不可用';
     await tester.pumpWidget(
@@ -325,6 +332,7 @@ void main() {
     (tester) async {
       final scheduled = <bool>[];
       final s = SubscriptionService(
+        platform: AppPlatform.android,
         backgroundScheduler: (enabled, generation) async {
           scheduled.add(enabled);
         },
@@ -349,6 +357,10 @@ void main() {
       expect(scheduled, contains(true));
       expect(s.notificationsEnabled, isFalse);
       expect(permission.requests, 0);
+      expect(find.text('让每小时检查更可靠'), findsOneWidget);
+      expect(find.textContaining('多任务界面加锁'), findsOneWidget);
+      await tester.tap(find.text('知道了'));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('subscription-background-switch')));
       await tester.pumpAndSettle();
       expect(s.backgroundRefreshEnabled, isFalse);

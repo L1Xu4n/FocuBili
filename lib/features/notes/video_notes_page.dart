@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:cached_network_image/cached_network_image.dart';
+import 'package:focubili/features/common/app_network_image.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
@@ -380,7 +380,7 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
     if (note.videoCoverUrl.isEmpty) {
       return placeholder;
     }
-    return CachedNetworkImage(
+    return AppNetworkImage(
       key: Key('managed-video-note-cover-${note.id}'),
       imageUrl: note.videoCoverUrl,
       fit: BoxFit.cover,

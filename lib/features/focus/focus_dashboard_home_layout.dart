@@ -21,8 +21,8 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
     final double titleHeight = _measureHeroText(
       context,
       '焦点哔哩',
-      theme.textTheme.headlineSmall,
-      width - 58,
+      theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
+      width - kMinInteractiveDimension * (_subscriptions.enabled ? 2 : 1),
     );
     final double welcomeHeight = _measureHeroText(
       context,
@@ -45,7 +45,14 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
         30 +
         24 +
         34 +
-        48;
+        48 +
+        (_showSubscriptionIntroduction
+            ? 100 *
+                  (MediaQuery.textScalerOf(context).scale(14) / 14).clamp(
+                    1.0,
+                    2.5,
+                  )
+            : 0);
     return preferred > minimum ? preferred : minimum;
   }
 
@@ -121,13 +128,20 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
                               // 保留首页文字节点，便于旧版无障碍和启动回归测试识别当前页面。
                               const SizedBox.shrink(child: Text('首页')),
                               Expanded(
-                                child: Text(
-                                  '焦点哔哩',
-                                  style: theme.textTheme.headlineSmall
-                                      ?.copyWith(
-                                        fontWeight: FontWeight.w800,
-                                        color: textColor,
-                                      ),
+                                child: GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  key: const Key('home-open-about'),
+                                  onTap: () => Navigator.of(
+                                    context,
+                                  ).pushNamed(AppRoutes.about),
+                                  child: Text(
+                                    '焦点哔哩',
+                                    style: theme.textTheme.headlineSmall
+                                        ?.copyWith(
+                                          fontWeight: FontWeight.w800,
+                                          color: textColor,
+                                        ),
+                                  ),
                                 ),
                               ),
                               _buildSubscriptionButton(),
@@ -149,6 +163,7 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
                               const SizedBox.shrink(child: Text('我的')),
                             ],
                           ),
+                          _buildSubscriptionIntroduction(),
                           const Spacer(),
                           Text(
                             '今天要学点什么？',
@@ -205,13 +220,14 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
       return Icon(Icons.person_outline_rounded, color: fallbackColor);
     }
     return ClipOval(
-      child: Image.network(
-        avatarUrl,
+      child: AppNetworkImage(
+        imageUrl: avatarUrl,
         width: 46,
         height: 46,
         fit: BoxFit.cover,
         // 头像加载失败函数回退为人物图标，避免网络图片破坏按钮布局。
-        errorBuilder: _buildProfileAvatarError,
+        errorWidget: (context, url, error) =>
+            _buildProfileAvatarError(context, error, null),
       ),
     );
   }
@@ -281,10 +297,16 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
                 ),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: Text(
-                    '焦点哔哩',
-                    style: theme.textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w800,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    key: const Key('workspace-open-about'),
+                    onTap: () =>
+                        Navigator.of(context).pushNamed(AppRoutes.about),
+                    child: Text(
+                      '焦点哔哩',
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
                   ),
                 ),
@@ -292,6 +314,7 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
                 const SizedBox.shrink(child: Text('首页')),
               ],
             ),
+            _buildSubscriptionIntroduction(),
             const SizedBox(height: 42),
             Text(
               '今天要学点什么？',

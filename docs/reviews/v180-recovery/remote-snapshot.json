@@ -1,0 +1,342 @@
+{
+  "checkedUtc": "2026-10-17 21:21:26 UTC",
+  "repo": "L1Xu4n/FocuBili",
+  "dev": {
+    "sha": "da0946b98994fea9020a58c870b0ddddcde72a42",
+    "date": "2026-10-13T05:51:24Z"
+  },
+  "master": {
+    "sha": "83a9d70ad1bbb7c4c07a7292baca3439ecde7be3",
+    "date": "2026-10-13T05:51:55Z"
+  },
+  "tagPrefixV18": [],
+  "pullRequests": [
+    {
+      "number": 55,
+      "title": "release: v1.7.1 高清播放修复与单版本更新忽略",
+      "state": "closed",
+      "draft": false,
+      "head": "208cff6e139eb0f4d6362a592f6b5ca967ead6ad",
+      "base": "master",
+      "updated": "2026-10-13T06:01:37Z",
+      "merged": "2026-10-13T05:51:56Z",
+      "url": "https://github.com/L1Xu4n/FocuBili/pull/55"
+    },
+    {
+      "number": 54,
+      "title": "fix: 移植1.7.1高清播放修复并支持忽略本次更新",
+      "state": "closed",
+      "draft": false,
+      "head": "1ad7552bc18e39d3275f6da75e15f77a2eed3dda",
+      "base": "dev",
+      "updated": "2026-10-13T06:01:36Z",
+      "merged": "2026-10-13T05:51:25Z",
+      "url": "https://github.com/L1Xu4n/FocuBili/pull/54"
+    },
+    {
+      "number": 52,
+      "title": "feat: Beta5 统一图片缓存、字幕会话隔离与播放缓存保护",
+      "state": "open",
+      "draft": true,
+      "head": "a6c83343a6bfbeb5378e89558617414fa1935823",
+      "base": "dev",
+      "updated": "2026-10-12T03:44:43Z",
+      "merged": null,
+      "url": "https://github.com/L1Xu4n/FocuBili/pull/52"
+    },
+    {
+      "number": 51,
+      "title": "feat: Beta4 轻量订阅、可恢复历史导入与紧凑订阅体验",
+      "state": "open",
+      "draft": true,
+      "head": "5a49fc60288e11265eda38b1da9c7b77171a9710",
+      "base": "dev",
+      "updated": "2026-10-11T18:02:50Z",
+      "merged": null,
+      "url": "https://github.com/L1Xu4n/FocuBili/pull/51"
+    },
+    {
+      "number": 49,
+      "title": "feat: Beta3 焦点订阅性能、紧凑布局与首页卡片，修复宽屏双击动画",
+      "state": "open",
+      "draft": true,
+      "head": "8341bd930152582bba17d110e9fe5addd66a9938",
+      "base": "dev",
+      "updated": "2026-10-10T16:59:04Z",
+      "merged": null,
+      "url": "https://github.com/L1Xu4n/FocuBili/pull/49"
+    }
+  ],
+  "workflowRuns": [
+    {
+      "id": 38354113925,
+      "name": "Upload verified v1.7.1 assets",
+      "branch": "codex/deliver-v1.7.1-assets",
+      "sha": "8c17477ec5101f485fce1bd3ec3453270248f42b",
+      "created": "2026-10-13T05:57:51Z",
+      "updated": "2026-10-13T05:58:38Z",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/L1Xu4n/FocuBili/actions/runs/38354113925",
+      "path": ".github/workflows/upload-v171-assets.yml"
+    },
+    {
+      "id": 38353598741,
+      "name": "FocuBili CI",
+      "branch": "master",
+      "sha": "83a9d70ad1bbb7c4c07a7292baca3439ecde7be3",
+      "created": "2026-10-13T05:51:58Z",
+      "updated": "2026-10-13T06:03:51Z",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/L1Xu4n/FocuBili/actions/runs/38353598741",
+      "path": ".github/workflows/ci.yml"
+    },
+    {
+      "id": 38353598678,
+      "name": "Publish FocuBili Release",
+      "branch": "master",
+      "sha": "83a9d70ad1bbb7c4c07a7292baca3439ecde7be3",
+      "created": "2026-10-13T05:51:58Z",
+      "updated": "2026-10-13T05:52:06Z",
+      "status": "completed",
+      "conclusion": "skipped",
+      "url": "https://github.com/L1Xu4n/FocuBili/actions/runs/38353598678",
+      "path": ".github/workflows/publish-release.yml"
+    },
+    {
+      "id": 38353598639,
+      "name": "FocuBili Release Build",
+      "branch": "master",
+      "sha": "83a9d70ad1bbb7c4c07a7292baca3439ecde7be3",
+      "created": "2026-10-13T05:51:58Z",
+      "updated": "2026-10-13T05:59:18Z",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/L1Xu4n/FocuBili/actions/runs/38353598639",
+      "path": ".github/workflows/release-build.yml"
+    },
+    {
+      "id": 38353598628,
+      "name": "Linux builds",
+      "branch": "master",
+      "sha": "83a9d70ad1bbb7c4c07a7292baca3439ecde7be3",
+      "created": "2026-10-13T05:51:58Z",
+      "updated": "2026-10-13T05:59:34Z",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/L1Xu4n/FocuBili/actions/runs/38353598628",
+      "path": ".github/workflows/linux-build.yml"
+    }
+  ],
+  "releases": [
+    {
+      "tag": "v1.7.1",
+      "draft": false,
+      "prerelease": false,
+      "published": "2026-10-13T05:59:55Z",
+      "updated": "2026-10-13T05:59:55Z",
+      "url": "https://github.com/L1Xu4n/FocuBili/releases/tag/v1.7.1"
+    },
+    {
+      "tag": "v1.7.0",
+      "draft": false,
+      "prerelease": false,
+      "published": "2026-10-02T19:14:40Z",
+      "updated": "2026-10-04T10:24:26Z",
+      "url": "https://github.com/L1Xu4n/FocuBili/releases/tag/v1.7.0"
+    },
+    {
+      "tag": "v1.5.0",
+      "draft": false,
+      "prerelease": false,
+      "published": "2026-09-02T11:44:14Z",
+      "updated": "2026-09-02T11:48:15Z",
+      "url": "https://github.com/L1Xu4n/FocuBili/releases/tag/v1.5.0"
+    },
+    {
+      "tag": "v1.4.1",
+      "draft": false,
+      "prerelease": false,
+      "published": "2026-08-15T21:46:37Z",
+      "updated": "2026-08-16T06:57:04Z",
+      "url": "https://github.com/L1Xu4n/FocuBili/releases/tag/v1.4.1"
+    },
+    {
+      "tag": "v1.4.0",
+      "draft": false,
+      "prerelease": false,
+      "published": "2026-08-14T08:10:26Z",
+      "updated": "2026-08-14T08:10:26Z",
+      "url": "https://github.com/L1Xu4n/FocuBili/releases/tag/v1.4.0"
+    }
+  ],
+  "tags": [
+    {
+      "name": "v1.7.1",
+      "sha": "83a9d70ad1bbb7c4c07a7292baca3439ecde7be3"
+    },
+    {
+      "name": "v1.7.0",
+      "sha": "4a99e44efeb2ad2b374e3cb6c3d296b61558eed6"
+    },
+    {
+      "name": "v1.5.0",
+      "sha": "2274ffb75691e0294682826baee2599cd9adb2e5"
+    },
+    {
+      "name": "v1.4.1",
+      "sha": "867ecffba19b5479d98bc7ceb0739c2b62e7eeef"
+    },
+    {
+      "name": "v1.4.0",
+      "sha": "3aa3e7a1d426930ac8ea3fecaa8dded0c69275cc"
+    },
+    {
+      "name": "v1.3.1",
+      "sha": "cfd28cc53693db7995a17f822b031dff0e4fbb93"
+    },
+    {
+      "name": "v1.3.0",
+      "sha": "d0680c0bc673fd16a9359aa73df6ed2be0548118"
+    },
+    {
+      "name": "v1.2.0",
+      "sha": "90c1169545aaebc1fb76bd39f2985a20cecfb490"
+    },
+    {
+      "name": "v1.1.1",
+      "sha": "aaf84a562385ce48a24c9c55e9be3c0f895ee9fb"
+    },
+    {
+      "name": "v1.1.0",
+      "sha": "b5aa67195b76a6e24565f833c434fe505bc34af6"
+    },
+    {
+      "name": "v1.0.1",
+      "sha": "5ce44a46c2d6e4f043b67f6688232a77a1479374"
+    },
+    {
+      "name": "v1.0.0",
+      "sha": "993c7344fa58bb8da56c7d7a4ba8abaa20c81e55"
+    },
+    {
+      "name": "v0.2.2",
+      "sha": "f136fb9c2b3a5f5b20a8ebc50a54bd23619239f1"
+    },
+    {
+      "name": "v0.2.1",
+      "sha": "d2aed5836d104d12de3d3c36da89797245d1e676"
+    },
+    {
+      "name": "v0.2.0",
+      "sha": "f782fea1aa73f06ba5ddddb4b740690310382d7a"
+    }
+  ],
+  "workflowInventory": [
+    {
+      "id": 373500938,
+      "name": "Apple builds",
+      "path": ".github/workflows/apple-build.yml",
+      "state": "active"
+    },
+    {
+      "id": 332357620,
+      "name": "FocuBili CI",
+      "path": ".github/workflows/ci.yml",
+      "state": "active"
+    },
+    {
+      "id": 374095637,
+      "name": "Keep Linux v1.7.0 installer only",
+      "path": ".github/workflows/cleanup-linux-v170.yml",
+      "state": "active"
+    },
+    {
+      "id": 373918488,
+      "name": "Linux builds",
+      "path": ".github/workflows/linux-build.yml",
+      "state": "active"
+    },
+    {
+      "id": 373897417,
+      "name": "Publish Apple v1.7.0 assets",
+      "path": ".github/workflows/publish-apple-v170.yml",
+      "state": "active"
+    },
+    {
+      "id": 374087110,
+      "name": "Publish Linux v1.7.0 assets",
+      "path": ".github/workflows/publish-linux-v170.yml",
+      "state": "active"
+    },
+    {
+      "id": 335236462,
+      "name": "Publish FocuBili Release",
+      "path": ".github/workflows/publish-release.yml",
+      "state": "active"
+    },
+    {
+      "id": 335207043,
+      "name": "FocuBili Release Build",
+      "path": ".github/workflows/release-build.yml",
+      "state": "active"
+    },
+    {
+      "id": 374326278,
+      "name": "Replace Linux v1.7.0 renderer installer",
+      "path": ".github/workflows/replace-linux-v170.yml",
+      "state": "active"
+    },
+    {
+      "id": 374515164,
+      "name": "Replace macOS v1.7.0 login installer",
+      "path": ".github/workflows/replace-macos-v170.yml",
+      "state": "active"
+    },
+    {
+      "id": 382871297,
+      "name": "Upload verified v1.7.1 assets",
+      "path": ".github/workflows/upload-v171-assets.yml",
+      "state": "active"
+    }
+  ],
+  "workflowAuditCandidates": [
+    {
+      "id": 374095637,
+      "name": "Keep Linux v1.7.0 installer only",
+      "path": ".github/workflows/cleanup-linux-v170.yml",
+      "state": "active"
+    },
+    {
+      "id": 373897417,
+      "name": "Publish Apple v1.7.0 assets",
+      "path": ".github/workflows/publish-apple-v170.yml",
+      "state": "active"
+    },
+    {
+      "id": 374087110,
+      "name": "Publish Linux v1.7.0 assets",
+      "path": ".github/workflows/publish-linux-v170.yml",
+      "state": "active"
+    },
+    {
+      "id": 374326278,
+      "name": "Replace Linux v1.7.0 renderer installer",
+      "path": ".github/workflows/replace-linux-v170.yml",
+      "state": "active"
+    },
+    {
+      "id": 374515164,
+      "name": "Replace macOS v1.7.0 login installer",
+      "path": ".github/workflows/replace-macos-v170.yml",
+      "state": "active"
+    },
+    {
+      "id": 382871297,
+      "name": "Upload verified v1.7.1 assets",
+      "path": ".github/workflows/upload-v171-assets.yml",
+      "state": "active"
+    }
+  ]
+}

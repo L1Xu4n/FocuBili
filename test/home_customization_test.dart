@@ -8,6 +8,7 @@ import 'package:focubili/features/focus/focus_timer_controller.dart';
 import 'package:focubili/models/dashboard_layout.dart';
 import 'package:focubili/models/focus_session.dart';
 import 'package:focubili/services/dashboard_layout_service.dart';
+import 'package:focubili/services/subscription_service.dart';
 
 /// 设置实际逻辑窗口，让首页断点和卡片的约束一致。
 void _setWindow(WidgetTester tester, Size size) {
@@ -22,6 +23,7 @@ Widget _homeHost(
   FocusTimerController controller,
   DashboardLayoutService service, {
   TextScaler textScaler = TextScaler.noScaling,
+  SubscriptionService? subscriptions,
 }) {
   return MaterialApp(
     // 继承真实窗口尺寸，仅修改本项测试需要的无障碍参数。
@@ -35,6 +37,7 @@ Widget _homeHost(
       body: FocusDashboard(
         controller: controller,
         layoutService: service,
+        subscriptionService: subscriptions,
         // 首页业务入口在本组测试中只验证保留，不执行路由。
         onOpenVideo: () {},
         onOpenStatistics: () {},
@@ -85,7 +88,7 @@ void main() {
         tester.getBottomLeft(find.byKey(const Key('home-utility-actions'))).dy,
       ),
     );
-    expect(_board(tester).items, hasLength(6));
+    expect(_board(tester).items, hasLength(7));
     expect(_board(tester).items.every((card) => !card.required), isTrue);
     await _tapVisible(tester, custom);
     await _tapVisible(
@@ -183,7 +186,7 @@ void main() {
     final restored = await service.load('home', []);
     expect(restored.order, saved.order);
     expect(restored.hidden, saved.hidden);
-    expect(_board(tester).items, hasLength(6));
+    expect(_board(tester).items, hasLength(7));
     expect(tester.takeException(), isNull);
   });
 
@@ -250,6 +253,7 @@ void main() {
       _homeHost(controller, service, textScaler: const TextScaler.linear(2)),
     );
     await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull, reason: '大字体首页首帧不溢出');
     expect(
       tester.getSize(find.byKey(const Key('focus-home-hero'))).height,
       greaterThan(366),
@@ -261,6 +265,7 @@ void main() {
       findsOneWidget,
     );
     await _tapVisible(tester, find.text('自定义').last);
+    expect(tester.takeException(), isNull, reason: '大字体布局编辑区不溢出');
     await _tapVisible(tester, find.text('添加卡片'));
     expect(
       find.byKey(const ValueKey('dashboard-add-home.continue_learning')),
@@ -268,4 +273,52 @@ void main() {
     );
     expect(tester.takeException(), isNull);
   });
+
+  for (final scale in [2.0, 2.5]) {
+    testWidgets('订阅快捷入口在窄屏 $scale 倍字体下保留标题和搜索', (tester) async {
+      _setWindow(tester, const Size(320, 430));
+      final controller = FocusTimerController(
+        tickInterval: const Duration(days: 1),
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      final subscriptions = SubscriptionService(
+        backgroundScheduler: (_, _) async {},
+      );
+      addTearDown(subscriptions.dispose);
+      await subscriptions.initialize();
+      await subscriptions.setEnabled(true);
+      final layouts = DashboardLayoutService();
+      const ids = [
+        'home.continue_learning',
+        'home.focus_finished',
+        'home.focus_session',
+        'home.today_summary',
+        'home.recent_history',
+        'home.quick_actions',
+        'home.focus_subscriptions',
+      ];
+      await layouts.save('home', DashboardLayout(order: ids, hidden: ids));
+      await tester.pumpWidget(
+        _homeHost(
+          controller,
+          layouts,
+          textScaler: TextScaler.linear(scale),
+          subscriptions: subscriptions,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('home-subscription-button')), findsOneWidget);
+      expect(find.byKey(const Key('new-focus-subscription')), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.ensureVisible(find.byKey(const Key('home-start-search')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('home-start-search')).hitTestable(),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
 }

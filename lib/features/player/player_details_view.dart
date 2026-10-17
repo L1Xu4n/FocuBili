@@ -68,7 +68,7 @@ extension _PlayerDetailsView on _PlayerPageState {
     if (url.isEmpty) {
       return _buildDetailImagePlaceholder(width, height, placeholderIcon);
     }
-    return CachedNetworkImage(
+    return AppNetworkImage(
       imageUrl: url,
       httpHeaders: const <String, String>{
         'Referer': 'https://www.bilibili.com/',
@@ -77,7 +77,6 @@ extension _PlayerDetailsView on _PlayerPageState {
       height: height,
       fit: fit,
       memCacheWidth: 480,
-      maxWidthDiskCache: 720,
       placeholder: (BuildContext context, String value) =>
           _buildDetailImagePlaceholder(width, height, placeholderIcon),
       errorWidget: (BuildContext context, String value, Object error) =>

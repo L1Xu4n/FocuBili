@@ -471,4 +471,89 @@ void main() {
     expect(tester.takeException(), isNull);
     debugDefaultTargetPlatformOverride = null;
   });
+  testWidgets('卡片之间留白可直接插入，反向移回仍响应', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    final service = DashboardLayoutService();
+    await tester.pumpWidget(
+      host(
+        items: [card('a'), card('b'), card('c')],
+        service: service,
+        columns: 1,
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('自定义'));
+    await tester.pump();
+    final first = tester.getRect(
+      find.byKey(const ValueKey('dashboard-card-a')),
+    );
+    final second = tester.getRect(
+      find.byKey(const ValueKey('dashboard-card-b')),
+    );
+    final gesture = await tester.startGesture(
+      tester.getCenter(find.byKey(const ValueKey('dashboard-drag-c'))),
+      kind: PointerDeviceKind.mouse,
+    );
+    await gesture.moveBy(const Offset(8, 0));
+    await tester.pump();
+    await gesture.moveTo(
+      Offset(first.center.dx, (first.bottom + second.top) / 2),
+    );
+    await tester.pump();
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect((await service.load('home', [])).order, ['a', 'c', 'b']);
+    final again = await tester.startGesture(
+      tester.getCenter(find.byKey(const ValueKey('dashboard-drag-c'))),
+      kind: PointerDeviceKind.mouse,
+    );
+    await again.moveBy(const Offset(8, 0));
+    await tester.pump();
+    await again.moveTo(
+      tester.getCenter(find.byKey(const ValueKey('dashboard-card-b'))),
+    );
+    await tester.pump();
+    await again.up();
+    await tester.pumpAndSettle();
+    expect((await service.load('home', [])).order, ['a', 'b', 'c']);
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  });
+  testWidgets('放手后保存尚未完成时保持新顺序，不闪回旧布局', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    final service = DelayedService();
+    await tester.pumpWidget(
+      host(items: [card('a'), card('b')], service: service, columns: 1),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('自定义'));
+    await tester.pump();
+    final firstTop = tester
+        .getTopLeft(find.byKey(const ValueKey('dashboard-card-a')))
+        .dy;
+    final gesture = await tester.startGesture(
+      tester.getCenter(find.byKey(const ValueKey('dashboard-drag-a'))),
+      kind: PointerDeviceKind.mouse,
+    );
+    await gesture.moveBy(const Offset(8, 0));
+    await tester.pump();
+    await gesture.moveTo(
+      tester.getCenter(find.byKey(const ValueKey('dashboard-card-b'))),
+    );
+    await tester.pump();
+    await gesture.up();
+    await tester.pump(const Duration(milliseconds: 80));
+    expect(
+      tester.getTopLeft(find.byKey(const ValueKey('dashboard-card-b'))).dy,
+      firstTop,
+    );
+    service.gate.complete();
+    await tester.pumpAndSettle();
+    expect((await service.load('home', [])).order, ['b', 'a']);
+    expect(
+      tester.getTopLeft(find.byKey(const ValueKey('dashboard-card-b'))).dy,
+      firstTop,
+    );
+    debugDefaultTargetPlatformOverride = null;
+  });
 }

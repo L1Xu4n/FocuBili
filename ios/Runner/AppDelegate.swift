@@ -1,5 +1,6 @@
 import Flutter
 import UIKit
+import focubili_apple
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
@@ -7,6 +8,9 @@ import UIKit
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    FocuBiliSubscriptionScheduler.shared.register { engine in
+      GeneratedPluginRegistrant.register(with: engine)
+    }
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 

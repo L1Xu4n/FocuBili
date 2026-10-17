@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:cached_network_image/cached_network_image.dart';
+import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../../../models/player_enhancement.dart';
@@ -455,7 +455,7 @@ class _VideoChapterPanelState extends State<VideoChapterPanel> {
                             color: colors.surfaceContainerHighest,
                             child: const Icon(Icons.movie_filter_outlined),
                           )
-                        : CachedNetworkImage(
+                        : AppNetworkImage(
                             key: ValueKey<String>(
                               'video-chapter-preview-$index',
                             ),

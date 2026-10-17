@@ -83,7 +83,7 @@ class SubscriptionFeedItem {
     bvid: bvid,
     title: title,
     coverUrl: coverUrl,
-    sources: sources ?? this.sources,
+    sources: Map.unmodifiable(sources ?? this.sources),
     discoveredAt: discoveredAt,
     publishedAt: publishedAt,
     readAt: readAt ?? this.readAt,
@@ -104,7 +104,7 @@ class SubscriptionFeedItem {
         bvid: j['bvid'] as String,
         title: j['title'] as String,
         coverUrl: j['coverUrl'] as String,
-        sources: Map<String, String>.from(j['sources'] as Map),
+        sources: Map<String, String>.unmodifiable(j['sources'] as Map),
         discoveredAt: DateTime.parse(j['discoveredAt'] as String),
         publishedAt: j['publishedAt'] == null
             ? null
@@ -129,7 +129,21 @@ class SourceCheckpoint {
     this.failures = 0,
     this.retryAt,
     this.error,
-  }) : seen = seen ?? {},
+    this.algorithm = 2,
+    this.baselineAt,
+    this.fullBaseline = false,
+    this.watermark,
+    this.scanNewest,
+    this.knownPages = 0,
+    this.blocked = false,
+    this.needsHeadRecheck = false,
+    this.catchingUp = false,
+    Set<String>? anchors,
+    Map<String, int>? signatures,
+    this.secondPage = const [],
+  }) : anchors = anchors ?? {},
+       signatures = signatures ?? {},
+       seen = seen ?? {},
        pending = pending ?? {};
   Set<String> seen;
   bool initialized;
@@ -139,8 +153,27 @@ class SourceCheckpoint {
   int? total;
   DateTime? lastSuccess, retryAt;
   String? error;
-  bool get partial => nextPage > 1 || pending.isNotEmpty;
+  int algorithm, knownPages;
+  bool fullBaseline, blocked, needsHeadRecheck, catchingUp;
+  DateTime? baselineAt, watermark, scanNewest;
+  Set<String> anchors;
+  Map<String, int> signatures;
+  List<String> secondPage;
+  bool get partial =>
+      catchingUp || nextPage > 1 || (algorithm == 1 && pending.isNotEmpty);
   Map<String, Object?> toJson() => {
+    'algorithm': algorithm,
+    'baselineAt': baselineAt?.toIso8601String(),
+    'fullBaseline': fullBaseline,
+    'watermark': watermark?.toIso8601String(),
+    'scanNewest': scanNewest?.toIso8601String(),
+    'knownPages': knownPages,
+    'blocked': blocked,
+    'needsHeadRecheck': needsHeadRecheck,
+    'catchingUp': catchingUp,
+    'anchors': anchors.toList(),
+    'signatures': signatures,
+    'secondPage': secondPage,
     'seen': seen.toList(),
     'initialized': initialized,
     'nextPage': nextPage,
@@ -153,6 +186,18 @@ class SourceCheckpoint {
     'error': error,
   };
   factory SourceCheckpoint.fromJson(Map<String, dynamic> j) => SourceCheckpoint(
+    algorithm: j['algorithm'] as int? ?? 1,
+    baselineAt: DateTime.tryParse(j['baselineAt'] as String? ?? ''),
+    fullBaseline: j['fullBaseline'] == true,
+    watermark: DateTime.tryParse(j['watermark'] as String? ?? ''),
+    scanNewest: DateTime.tryParse(j['scanNewest'] as String? ?? ''),
+    knownPages: j['knownPages'] as int? ?? 0,
+    blocked: j['blocked'] == true,
+    needsHeadRecheck: j['needsHeadRecheck'] == true,
+    catchingUp: j['catchingUp'] == true,
+    anchors: Set<String>.from(j['anchors'] as List? ?? []),
+    signatures: Map<String, int>.from(j['signatures'] as Map? ?? {}),
+    secondPage: List<String>.from(j['secondPage'] as List? ?? []),
     seen: Set<String>.from(j['seen'] as List),
     initialized: j['initialized'] == true,
     nextPage: j['nextPage'] as int,

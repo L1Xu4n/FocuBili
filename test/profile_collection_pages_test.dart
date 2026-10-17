@@ -659,7 +659,14 @@ void main() {
     await tester.pumpAndSettle();
     expect(subscriptions.sources.single.key, 'creator:7');
     expect(interaction.writeRequests, 0);
-    expect(find.byTooltip('已加入焦点订阅'), findsOneWidget);
+    expect(find.byTooltip('取消焦点订阅'), findsOneWidget);
+    await tester.tap(find.byTooltip('取消焦点订阅'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('取消订阅'));
+    await tester.pumpAndSettle();
+    expect(subscriptions.sources, isEmpty);
+    expect(find.byTooltip('加入焦点订阅'), findsOneWidget);
+    expect(interaction.writeRequests, 0);
   });
 
   testWidgets('UGC 合集详情可直接确认焦点订阅', (tester) async {
@@ -691,6 +698,12 @@ void main() {
     await tester.tap(find.text('确认订阅'));
     await tester.pumpAndSettle();
     expect(subscriptions.sources.single.key, 'collection:7:900');
-    expect(find.byTooltip('已加入焦点订阅'), findsOneWidget);
+    expect(find.byTooltip('取消焦点订阅'), findsOneWidget);
+    await tester.tap(find.byTooltip('取消焦点订阅'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('取消订阅'));
+    await tester.pumpAndSettle();
+    expect(subscriptions.sources, isEmpty);
+    expect(find.byTooltip('加入焦点订阅'), findsOneWidget);
   });
 }

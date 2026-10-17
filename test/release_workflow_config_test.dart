@@ -60,7 +60,9 @@ void main() {
     expect(workflow, contains('gh release create'));
     expect(workflow, contains('FocuBili-v\${VERSION}-android.apk'));
     expect(workflow, contains('windows-x64-setup.exe'));
-    expect(workflow, contains('windows-x64-portable.zip'));
+    expect(workflow, contains('macos-universal.dmg'));
+    expect(workflow, contains('linux-amd64.deb'));
+    expect(workflow, contains("run['headSha'] == os.environ['GITHUB_SHA']"));
     expect(workflow.toLowerCase(), isNot(contains('.msix')));
   });
 }

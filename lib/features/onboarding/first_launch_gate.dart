@@ -5,6 +5,10 @@ import 'package:flutter/services.dart';
 
 import '../../core/router/app_router.dart';
 import '../../services/first_launch_service.dart';
+import '../../services/app_layout_preferences_service.dart';
+import '../../core/layout/device_orientation_policy.dart';
+import '../../platform/app_platform.dart';
+import '../profile/personalization_settings_page.dart';
 import 'user_agreement_page.dart';
 
 typedef ApplicationExit = Future<void> Function();
@@ -20,12 +24,14 @@ class FirstLaunchGate extends StatefulWidget {
     this.exitApplication,
     this.openLoginPage,
     this.onReady,
+    this.isLargeScreenMobile,
   });
 
   final Widget child;
   final FirstLaunchService? service;
   final ApplicationExit? exitApplication;
   final LoginPageLauncher? openLoginPage;
+  final bool? isLargeScreenMobile;
 
   /// 协议已同意且真实主页可以安全接收外部导航时调用一次。
   final VoidCallback? onReady;
@@ -71,7 +77,6 @@ class _FirstLaunchGateState extends State<FirstLaunchGate> {
     });
     if (_agreementAccepted) {
       _scheduleLoginGuide();
-      _notifyReady();
     } else {
       _startUnlockCountdown();
     }
@@ -122,7 +127,6 @@ class _FirstLaunchGateState extends State<FirstLaunchGate> {
       _agreementAccepted = true;
     });
     _scheduleLoginGuide();
-    _notifyReady();
   }
 
   /// 在主页完成当前帧构建后只通知一次，防止深链越过首次使用协议。
@@ -159,13 +163,82 @@ class _FirstLaunchGateState extends State<FirstLaunchGate> {
 
   /// 在主页完成首帧布局后安排一次登录引导，避免在 build 中直接弹窗。
   void _scheduleLoginGuide() {
-    if (_loginGuideShown || _loginGuideScheduled || !_agreementAccepted) {
+    if (_loginGuideScheduled || !_agreementAccepted) {
       return;
     }
     _loginGuideScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      unawaited(_showLoginGuide());
+      unawaited(_showStartupGuides());
     });
+  }
+
+  /// 按顺序展示大屏布局和登录引导，避免弹窗重叠或深链抢占首次选择。
+  Future<void> _showStartupGuides() async {
+    try {
+      await _showTabletLayoutGuide();
+    } catch (_) {
+      // 存储暂不可读时仍允许进入应用，未完成的引导会在下次启动重试。
+    }
+    if (!mounted) return;
+    _notifyReady();
+    await _showLoginGuide();
+  }
+
+  /// 在协议之后询问大屏布局；升级、接受和拒绝均持久化为一次性选择。
+  Future<void> _showTabletLayoutGuide() async {
+    final isTablet =
+        widget.isLargeScreenMobile ??
+        (AppPlatformDetector.current.isMobile &&
+            View.of(context).physicalSize.shortestSide /
+                    View.of(context).devicePixelRatio >=
+                AdaptiveDeviceSize.tabletShortestSide);
+    const service = AppLayoutPreferencesService();
+    if (!isTablet || await service.guideShown() || !mounted) return;
+    final portrait = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          key: const Key('tablet-layout-guide'),
+          title: const Text('大屏布局'),
+          content: const Text('焦点哔哩为大屏设备设计了横屏布局，具有更棒的使用体验，现已为你启用，你也可以切换到竖屏布局'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('不，我使用竖屏布局'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('好的，我使用横屏布局'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || portrait == null) return;
+    try {
+      await service.save(
+        portrait ? AppLayoutMode.portrait : AppLayoutMode.landscape,
+      );
+      await service.markGuideShown();
+      if (!mounted || !portrait) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('已设为竖屏布局，请重启 APP 以应用设置。')));
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (_) =>
+              const PersonalizationSettingsPage(showLayoutSettings: true),
+        ),
+      );
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('布局选择保存失败，下次启动会再次提示。')));
+      }
+    }
   }
 
   /// 先记录引导已经展示，再询问用户现在登录还是暂时跳过。

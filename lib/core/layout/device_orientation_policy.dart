@@ -1,6 +1,7 @@
 import 'dart:ui' show FlutterView, Size;
 
 import 'package:flutter/services.dart';
+import '../../services/app_layout_preferences_service.dart';
 
 /// 统一计算手机、平板以及未来桌面端应该允许的屏幕方向。
 abstract final class DeviceOrientationPolicy {
@@ -19,7 +20,10 @@ abstract final class DeviceOrientationPolicy {
     if (!isAndroid) {
       return const <DeviceOrientation>[];
     }
-    if (logicalSize.shortestSide >= AdaptiveDeviceSize.tabletShortestSide) {
+    if (AppLayoutPreferencesService.activeMode == AppLayoutMode.landscape ||
+        (AppLayoutPreferencesService.activeMode == AppLayoutMode.adaptive &&
+            logicalSize.shortestSide >=
+                AdaptiveDeviceSize.tabletShortestSide)) {
       return const <DeviceOrientation>[
         DeviceOrientation.landscapeLeft,
         DeviceOrientation.landscapeRight,
@@ -38,7 +42,10 @@ abstract final class DeviceOrientationPolicy {
     if (!isAndroid) {
       return const <DeviceOrientation>[];
     }
-    if (logicalSize.shortestSide >= AdaptiveDeviceSize.tabletShortestSide) {
+    if (AppLayoutPreferencesService.activeMode == AppLayoutMode.landscape ||
+        (AppLayoutPreferencesService.activeMode == AppLayoutMode.adaptive &&
+            logicalSize.shortestSide >=
+                AdaptiveDeviceSize.tabletShortestSide)) {
       return const <DeviceOrientation>[
         DeviceOrientation.landscapeLeft,
         DeviceOrientation.landscapeRight,

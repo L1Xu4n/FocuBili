@@ -1,3 +1,4 @@
+import 'package:focubili/features/common/app_network_image.dart';
 import '../subscriptions/subscription_updates_page.dart';
 import 'package:flutter/material.dart';
 
@@ -356,13 +357,14 @@ class _ProfilePageState extends State<ProfilePage> {
       key: key,
       radius: radius,
       child: ClipOval(
-        child: Image.network(
-          avatarUrl,
+        child: AppNetworkImage(
+          imageUrl: avatarUrl,
           width: radius * 2,
           height: radius * 2,
           fit: BoxFit.cover,
           // 头像错误函数回退为本地图标，避免图片地址失效破坏账号卡片。
-          errorBuilder: _buildAvatarError,
+          errorWidget: (context, url, error) =>
+              _buildAvatarError(context, error, null),
         ),
       ),
     );
@@ -507,21 +509,20 @@ class _ProfilePageState extends State<ProfilePage> {
         onTap: () => _openFollowedCreators(),
       ),
       _ProfileTile(
-        icon: Icons.settings_outlined,
-        title: '设置',
-        id: 'settings',
-        showBadge: hasUpdate,
-        // 设置入口函数进入个性化设置页，其中仍保留独立缓存管理入口。
-        onTap: () =>
-            Navigator.of(context).pushNamed(AppRoutes.personalizationSettings),
-      ),
-      _ProfileTile(
         icon: Icons.rss_feed,
         title: '焦点订阅',
         id: 'subscription-updates',
         onTap: () => Navigator.of(context).push<void>(
           MaterialPageRoute(builder: (_) => const SubscriptionUpdatesPage()),
         ),
+      ),
+      _ProfileTile(
+        icon: Icons.settings_outlined,
+        title: '设置',
+        id: 'settings',
+        showBadge: hasUpdate,
+        onTap: () =>
+            Navigator.of(context).pushNamed(AppRoutes.personalizationSettings),
       ),
     ];
   }

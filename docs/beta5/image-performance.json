@@ -1,0 +1,13 @@
+{
+  "before_network_image_10_reopens": {
+    "http_requests": 10
+  },
+  "after_10_reopens_plus_service_restart": {
+    "http_requests": 1,
+    "elapsed_microseconds": 88041,
+    "encoded_bytes": 3084
+  },
+  "two_instances_concurrent": {
+    "http_requests": 1
+  }
+}
