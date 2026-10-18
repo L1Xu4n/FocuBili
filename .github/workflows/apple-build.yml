@@ -6,10 +6,18 @@ on:
     branches: [dev, master, "iOS＆MacOS"]
     paths: ['ios/**', 'macos/**', 'packages/focubili_apple/**', 'lib/**', 'integration_test/**', 'assets/icon/**', 'tool/**', 'pubspec.*', '.github/workflows/apple-build.yml']
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      source_sha:
+        type: string
+        default: ''
+      beta_number:
+        type: string
+        default: ''
 permissions:
   contents: read
 concurrency:
-  group: apple-${{ github.event.pull_request.number || github.ref }}
+  group: apple-${{ inputs.source_sha && format('beta-{0}', github.run_id) || github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 jobs:
   quality:
@@ -17,6 +25,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
       # Automatic events also run ci.yml; keep complete checks for manual Apple runs.
       - uses: subosito/flutter-action@v2
         if: github.event_name == 'workflow_dispatch'
@@ -38,6 +48,8 @@ jobs:
   apple:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    env:
+      BETA_NUMBER: ${{ inputs.beta_number }}
     strategy:
       fail-fast: false
       matrix:
@@ -48,16 +60,17 @@ jobs:
             os: macos-26
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
       - name: Select Xcode 26 for Apple runtime checks
         run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.44.6'
           cache: true
-      - run: python3 tool/check_apple_sources.py
-      - run: python3 tool/check_platform_icons.py
       - run: flutter pub get
       - name: Verify native subscription cancellation and generation policy
+        if: matrix.platform == 'macos'
         run: |
           swiftc packages/focubili_apple/ios/Classes/SubscriptionRunGate.swift tool/subscription_gate_probe.swift -o "$RUNNER_TEMP/subscription-gate-probe"
           "$RUNNER_TEMP/subscription-gate-probe"
@@ -68,7 +81,11 @@ jobs:
         if: matrix.platform == 'ios'
         run: |
           dart tool/write_build_metadata.dart
-          flutter build ios --release --no-codesign
+          if test -n "$BETA_NUMBER"; then
+            python3 tool/beta_release.py build --platform ios --beta-number "$BETA_NUMBER" --source-sha "$(git rev-parse HEAD)"
+          else
+            flutter build ios --release --no-codesign
+          fi
           mkdir -p build/apple/Payload
           cp -R build/ios/iphoneos/Runner.app build/apple/Payload/
           cd build/apple
@@ -76,10 +93,17 @@ jobs:
           rm -rf Payload
           printf '%s\n' 'Unsigned developer build. Requires your own Apple signing/provisioning before iPhone installation. Not an App Store/TestFlight package.' > INSTALL.txt
           shasum -a 256 FocuBili-ios-unsigned.ipa > SHA256SUMS.txt
+      - name: Verify unsigned Beta iOS bundle metadata
+        if: matrix.platform == 'ios' && inputs.beta_number != ''
+        run: python3 tool/beta_release.py ios --beta-number "$BETA_NUMBER" --source-sha "$(git rev-parse HEAD)" --ipa build/apple/FocuBili-ios-unsigned.ipa --output build/apple/ios-beta-verification.json
       - name: Compile iOS simulator
         if: matrix.platform == 'ios'
         run: |
-          flutter build ios --simulator --debug
+          if test -n "$BETA_NUMBER"; then
+            python3 tool/beta_release.py build --platform ios-simulator --beta-number "$BETA_NUMBER" --source-sha "$(git rev-parse HEAD)"
+          else
+            flutter build ios --simulator --debug
+          fi
           ditto -c -k --sequesterRsrc --keepParent build/ios/iphonesimulator/Runner.app build/apple/FocuBili-ios-simulator.zip
       - name: Smoke-test iOS launch on simulator
         if: matrix.platform == 'ios'
@@ -100,7 +124,11 @@ jobs:
         if: matrix.platform == 'macos'
         run: |
           dart tool/write_build_metadata.dart
-          flutter build macos --release
+          if test -n "$BETA_NUMBER"; then
+            python3 tool/beta_release.py build --platform macos --beta-number "$BETA_NUMBER" --source-sha "$(git rev-parse HEAD)"
+          else
+            flutter build macos --release
+          fi
           mkdir -p build/apple/dmg
           ditto build/macos/Build/Products/Release/FocuBili.app build/apple/dmg/FocuBili.app
           codesign --verify --deep --strict build/apple/dmg/FocuBili.app
@@ -179,7 +207,7 @@ jobs:
           retention-days: 7
       - uses: actions/upload-artifact@v4
         with:
-          name: focubili-apple-${{ matrix.platform }}-${{ github.sha }}
+          name: focubili-apple-${{ matrix.platform }}-${{ inputs.source_sha || github.sha }}
           path: build/apple/
           if-no-files-found: error
           retention-days: 30

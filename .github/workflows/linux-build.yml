@@ -6,17 +6,29 @@ on:
   pull_request:
     branches: [dev, master]
     paths: ['linux/**', 'lib/**', 'test/**', 'integration_test/**', 'third_party/**', 'pubspec.*', 'docs/RELEASE_NOTES_v*.md', 'tool/**', '.github/workflows/linux-build.yml']
+  workflow_call:
+    inputs:
+      source_sha:
+        type: string
+        default: ''
+      beta_number:
+        type: string
+        default: ''
 permissions:
   contents: read
 concurrency:
-  group: linux-${{ github.event.pull_request.number || github.ref }}
+  group: linux-${{ inputs.source_sha && format('beta-{0}', github.run_id) || github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 jobs:
   linux:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      BETA_NUMBER: ${{ inputs.beta_number }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
       - name: Install Linux build and desktop test dependencies
         run: |
           sudo apt-get update
@@ -37,13 +49,23 @@ jobs:
       - name: Build normal release application
         run: |
           dart tool/write_build_metadata.dart
-          flutter build linux --release
+          if test -n "$BETA_NUMBER"; then
+            python3 tool/beta_release.py build --platform linux --beta-number "$BETA_NUMBER" --source-sha "$(git rev-parse HEAD)"
+          else
+            flutter build linux --release
+          fi
       - name: Package installable application
         run: |
+          if test -n "$BETA_NUMBER"; then
+            export FOCUBILI_PACKAGE_VERSION="$(python3 tool/beta_release.py plan --beta-number "$BETA_NUMBER" --source-sha "$(git rev-parse HEAD)" | python3 -c 'import json,sys; print(json.load(sys.stdin)["debVersion"])')"
+          fi
           bash tool/package_linux.sh
           desktop-file-validate linux/packaging/com.focubili.app.desktop
           ldd build/linux/x64/release/bundle/focubili | tee build/linux-packages/ldd.txt
           ! grep -q 'not found' build/linux-packages/ldd.txt
+      - name: Verify Beta Debian metadata and package bytes
+        if: inputs.beta_number != ''
+        run: python3 tool/beta_release.py linux --beta-number "$BETA_NUMBER" --source-sha "$(git rev-parse HEAD)" --folder build/linux-packages --output build/linux-packages/linux-beta-verification.json
       - name: Test normal application startup and single instance
         timeout-minutes: 3
         run: dbus-run-session -- xvfb-run -a -s '-screen 0 1280x900x24' bash tool/check_linux_launch.sh
@@ -60,7 +82,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: focubili-linux-${{ github.sha }}
+          name: focubili-linux-${{ inputs.source_sha || github.sha }}
           path: |
             build/linux-packages/*.deb
             build/linux-packages/*.tar.gz
@@ -68,5 +90,6 @@ jobs:
             build/linux-packages/*.log
             build/linux-packages/*.png
             build/linux-packages/native-subscription.json
+            build/linux-packages/linux-beta-verification.json
           if-no-files-found: warn
           retention-days: 30
