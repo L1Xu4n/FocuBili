@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 version="$(sed -nE 's/^version: ([0-9]+\.[0-9]+\.[0-9]+)\+.*/\1/p' pubspec.yaml)"
+if test -n "${FOCUBILI_PACKAGE_VERSION:-}"; then
+  [[ "$FOCUBILI_PACKAGE_VERSION" =~ ^1\.9\.[0-9]+~beta\.[1-9][0-9]*\+[1-9][0-9]*$ ]]
+  version="$FOCUBILI_PACKAGE_VERSION"
+fi
 test -n "$version"
 bundle=build/linux/x64/release/bundle
 out=build/linux-packages

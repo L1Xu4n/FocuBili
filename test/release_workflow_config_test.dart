@@ -60,7 +60,19 @@ void main() {
     expect(workflow, contains('gh release create'));
     expect(workflow, contains('FocuBili-v\${VERSION}-android.apk'));
     expect(workflow, contains('windows-x64-setup.exe'));
+    expect(workflow, contains('windows-x64-portable.zip'));
     expect(workflow, contains('macos-universal.dmg'));
+    expect(workflow, contains('FocuBili-v\${VERSION}-ios-unsigned.ipa'));
+    expect(
+      workflow,
+      contains(
+        r'gh run download "$APPLE_RUN" --name "focubili-apple-ios-${GITHUB_SHA}"',
+      ),
+    );
+    expect(
+      workflow,
+      contains(r'test "$(find release -maxdepth 1 -type f | wc -l)" -eq 6'),
+    );
     expect(workflow, contains('linux-amd64.deb'));
     expect(workflow, contains("run['headSha'] == os.environ['GITHUB_SHA']"));
     expect(workflow.toLowerCase(), isNot(contains('.msix')));
