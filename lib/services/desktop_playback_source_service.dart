@@ -10,6 +10,8 @@ import 'media_url_policy.dart';
 import '../models/video_preview.dart';
 import 'bilibili_course_link.dart';
 import 'bilibili_course_service.dart';
+import '../models/playback_request_diagnostic.dart';
+import 'problem_diagnostics_service.dart';
 
 /// 定义桌面播放数据请求函数，测试可直接返回固定 JSON 而不访问网络。
 typedef DesktopPlaybackJsonRequest =
@@ -28,6 +30,7 @@ class DesktopPlaybackSources {
     required this.qualities,
     required this.videoCodec,
     required this.audioCodec,
+    this.validateSession,
   });
 
   final List<String> videoUrls;
@@ -39,6 +42,7 @@ class DesktopPlaybackSources {
   final List<PlaybackQuality> qualities;
   final String videoCodec;
   final String audioCodec;
+  final Future<void> Function()? validateSession;
 
   /// 生成视频与音频 CDN 共同使用的最小请求头，不把 Cookie 写入地址或日志。
   Map<String, String> get mediaHeaders {
@@ -53,11 +57,20 @@ class DesktopPlaybackSources {
 }
 
 /// 表示桌面端无法取得或解析安全播放源，并只携带可展示的中文说明。
-class DesktopPlaybackSourceException implements Exception {
+class DesktopPlaybackSourceException
+    implements Exception, BilibiliRequestFailure {
   /// 创建不会包含 Cookie、临时地址或响应正文的播放源异常。
-  const DesktopPlaybackSourceException(this.message);
+  const DesktopPlaybackSourceException(
+    this.message, {
+    this.httpStatus,
+    this.apiCode,
+  });
 
   final String message;
+  @override
+  final int? httpStatus;
+  @override
+  final int? apiCode;
 
   /// 返回可直接展示给普通用户的错误文字。
   @override
@@ -71,8 +84,10 @@ class BilibiliDesktopPlaybackSourceService {
     BilibiliAuthService? authService,
     DesktopPlaybackJsonRequest? requestJson,
     AppBehaviorPreferencesService? behaviorPreferences,
+    ProblemDiagnosticsService? diagnosticsService,
   }) : _authService = authService ?? BilibiliAuthService(),
-       _requestJson = requestJson ?? _requestPlaybackJson,
+       _requestJson = requestJson,
+       _diagnostics = diagnosticsService ?? ProblemDiagnosticsService(),
        _behaviorPreferences =
            behaviorPreferences ?? AppBehaviorPreferencesService();
 
@@ -86,9 +101,11 @@ class BilibiliDesktopPlaybackSourceService {
   );
 
   final BilibiliAuthService _authService;
-  final DesktopPlaybackJsonRequest _requestJson;
+  final DesktopPlaybackJsonRequest? _requestJson;
+  final ProblemDiagnosticsService _diagnostics;
   final AppBehaviorPreferencesService _behaviorPreferences;
-  late final _wbiSigner = BilibiliWbiSigningService(requestJson: _requestJson);
+  late final _wbiSigner = BilibiliWbiSigningService(requestJson: _readJson);
+  static int _requestId = 0;
 
   /// 校验视频参数，请求固定播放接口，并挑选不超过目标清晰度的兼容音视频轨。
   Future<DesktopPlaybackSources> load({
@@ -106,41 +123,201 @@ class BilibiliDesktopPlaybackSourceService {
     if (quality <= 0) {
       throw const DesktopPlaybackSourceException('清晰度编号无效。');
     }
-    final String referer = 'https://www.bilibili.com/video/$normalizedBvid';
-    final String cookieHeader = await _authService.readCookieHeader();
-    final bool wbiEnabled = await _behaviorPreferences.loadWbiSigningEnabled();
-    final headers = <String, String>{
-      'Accept': 'application/json',
-      'Referer': referer,
-      'User-Agent': desktopUserAgent,
-      if (cookieHeader.isNotEmpty) 'Cookie': cookieHeader,
+    final facts = <String, Object?>{
+      'request_id': ++_requestId,
+      'requested_quality': quality,
+      'session_source': _authService.cookieStoreSource,
+      'session_read': 'not_attempted',
+      'auth_state': 'unknown',
+      'wbi_signed': false,
+      'wbi_fallback': false,
+      'playurl_attempted': false,
+      'stage': 'cookie',
+      'outcome': 'error',
     };
-    var parameters = <String, String>{
-      'bvid': normalizedBvid,
-      'cid': '$cid',
-      'qn': '$quality',
-      'fnval': '16',
-      'fourk': '1',
-    };
-    if (wbiEnabled) {
-      parameters = await _wbiSigner.signParameters({
-        ...parameters,
-        'fnver': '0',
-        'web_location': '1315873',
-      }, headers: headers);
+    try {
+      final String referer = 'https://www.bilibili.com/video/$normalizedBvid';
+      final bool wbiEnabled = await _behaviorPreferences
+          .loadWbiSigningEnabled();
+      facts['wbi_enabled'] = wbiEnabled;
+      final requestSession = await _authService.capturePlaybackSession(
+        wbiEnabled ? '/x/player/wbi/playurl' : '/x/player/playurl',
+      );
+      final String cookieHeader = requestSession.snapshot.header;
+      facts['session_read'] = 'ok';
+      bool hasCookie(String name) =>
+          RegExp(
+            '(?:^|;)\\s*$name=([^;]+)',
+          ).firstMatch(cookieHeader)?.group(1)?.trim().isNotEmpty ==
+          true;
+      facts['auth_state'] = hasCookie('SESSDATA')
+          ? 'session_present_unverified'
+          : 'anonymous';
+      if (!hasCookie('SESSDATA') &&
+          (hasCookie('bili_jct') || hasCookie('DedeUserID'))) {
+        facts['session_read'] = 'partial';
+        facts['auth_state'] = 'unknown';
+      }
+      for (final name in ['buvid3', 'buvid4', 'bili_ticket']) {
+        facts['has_$name'] = hasCookie(name);
+      }
+      final headers = <String, String>{
+        'Accept': 'application/json',
+        'Referer': referer,
+        'User-Agent': desktopUserAgent,
+        if (cookieHeader.isNotEmpty) 'Cookie': cookieHeader,
+      };
+      var parameters = <String, String>{
+        'bvid': normalizedBvid,
+        'cid': '$cid',
+        'qn': '$quality',
+        'fnval': '16',
+        'fourk': '1',
+      };
+      if (wbiEnabled) {
+        facts['stage'] = 'signing';
+        facts['endpoint_kind'] = 'nav';
+        parameters = await _wbiSigner.signParameters(
+          {...parameters, 'fnver': '0', 'web_location': '1315873'},
+          headers: headers,
+          requestJson: (uri, headers) =>
+              _readJson(uri, headers, facts, requestSession),
+        );
+        facts['wbi_signed'] = true;
+      }
+      final Uri endpoint = Uri.https(
+        'api.bilibili.com',
+        wbiEnabled ? '/x/player/wbi/playurl' : '/x/player/playurl',
+      ).replace(query: BilibiliWbiSigningService.encodeQuery(parameters));
+      facts['stage'] = 'playurl';
+      final responseText = await _readJson(
+        endpoint,
+        headers,
+        facts,
+        requestSession,
+      );
+      facts['stage'] = 'parse';
+      final sources = _parseResponse(
+        responseText,
+        requestedQuality: quality,
+        referer: referer,
+        cookieHeader: requestSession.snapshot.header,
+        wbiEnabled: wbiEnabled,
+        validateSession: requestSession.validate,
+      );
+      await requestSession.validate();
+      facts['stage'] = 'complete';
+      facts['outcome'] = sources.actualQuality < quality
+          ? 'quality_downgrade'
+          : 'success';
+      return sources;
+    } catch (error) {
+      if (facts['stage'] == 'cookie') facts['session_read'] = 'error';
+      if (error is BilibiliPlaybackSessionException) {
+        facts['session_read'] =
+            {'partial', 'conflict', 'changing'}.contains(error.state)
+            ? error.state
+            : 'error';
+        facts['auth_state'] = 'unknown';
+      }
+      if ({'partial', 'conflict', 'changing'}.contains(facts['session_read'])) {
+        throw BilibiliPlaybackSessionException(
+          facts['session_read']! as String,
+        );
+      }
+      if (error is BilibiliRequestFailure) {
+        if (error.httpStatus != null) facts['http_status'] = error.httpStatus;
+        if (error.apiCode != null) facts['api_code'] = error.apiCode;
+      }
+      rethrow;
+    } finally {
+      // Telemetry storage must never change playback results or error handling.
+      try {
+        await _diagnostics.recordPlaybackRequest(
+          PlaybackRequestDiagnostic.fromPlatformMap(facts)!,
+        );
+      } catch (_) {}
     }
-    final Uri endpoint = Uri.https(
-      'api.bilibili.com',
-      wbiEnabled ? '/x/player/wbi/playurl' : '/x/player/playurl',
-    ).replace(query: BilibiliWbiSigningService.encodeQuery(parameters));
-    final String responseText = await _requestJson(endpoint, headers);
-    return _parseResponse(
-      responseText,
-      requestedQuality: quality,
-      referer: referer,
-      cookieHeader: cookieHeader,
-      wbiEnabled: wbiEnabled,
-    );
+  }
+
+  /// 保留真实 HTTP 状态；旧字符串夹具没有状态时不凭空填 200。
+  Future<String> _readJson(
+    Uri endpoint,
+    Map<String, String> headers, [
+    Map<String, Object?>? facts,
+    BilibiliPlaybackSession? session,
+  ]) async {
+    facts?.remove('http_status');
+    facts?.remove('api_code');
+    if (facts != null) {
+      facts['endpoint_kind'] = switch (endpoint.path) {
+        '/x/web-interface/nav' => 'nav',
+        '/x/player/wbi/playurl' => 'playurl_wbi',
+        '/x/player/playurl' => 'playurl_legacy',
+        _ => 'unknown',
+      };
+    }
+    final requestHeaders = Map<String, String>.of(headers);
+    if (session != null) {
+      try {
+        final cookie = await session.headerFor(endpoint.path);
+        requestHeaders.remove('Cookie');
+        if (cookie.isNotEmpty) requestHeaders['Cookie'] = cookie;
+        for (final name in ['buvid3', 'buvid4', 'bili_ticket']) {
+          facts?['has_$name'] = RegExp(
+            '(?:^|;)\\s*$name=([^;]+)',
+          ).hasMatch(cookie);
+        }
+      } on BilibiliPlaybackSessionException catch (error) {
+        facts?['session_read'] = error.state;
+        facts?['auth_state'] = 'unknown';
+        rethrow;
+      }
+    }
+    if (endpoint.path.endsWith('/playurl')) facts?['playurl_attempted'] = true;
+    final String body;
+    if (_requestJson case final request?) {
+      body = await request(endpoint, requestHeaders);
+    } else {
+      final response = await _requestPlaybackJson(endpoint, requestHeaders);
+      facts?['http_status'] = response.statusCode;
+      body = response.body;
+      try {
+        var accepted = false;
+        try {
+          final decoded = jsonDecode(body);
+          accepted =
+              decoded is Map &&
+              (decoded['code'] == 0 ||
+                  (endpoint.path == '/x/web-interface/nav' &&
+                      decoded['code'] == -101));
+        } on FormatException {
+          /* The parser below reports malformed data. */
+        }
+        if (accepted) {
+          await session?.mergeResponse(endpoint.path, response.cookies);
+        }
+      } on BilibiliPlaybackSessionException catch (error) {
+        facts?['session_read'] = error.state;
+        facts?['auth_state'] = 'unknown';
+        rethrow;
+      }
+    }
+    try {
+      final root = jsonDecode(body);
+      if (root is Map && root['code'] is int) {
+        facts?['api_code'] = root['code'];
+      }
+      final data = root is Map ? root['data'] : null;
+      if (endpoint.path.endsWith('/playurl') &&
+          data is Map &&
+          data['quality'] is int) {
+        facts?['returned_quality'] = data['quality'];
+      }
+    } on FormatException {
+      // The existing parser owns the stable, safe format error.
+    }
+    return body;
   }
 
   /// 解析播放 JSON，拒绝错误码、缺失 DASH 和不属于 B 站媒体域名的地址。
@@ -173,7 +350,7 @@ class BilibiliDesktopPlaybackSourceService {
     try {
       await BilibiliCourseService(
         readCookies: _authService.readCookieHeader,
-        requestJson: (uri, session) => _requestJson(uri, {
+        requestJson: (uri, session) => _readJson(uri, {
           'Accept': 'application/json',
           'Referer': referer,
           'User-Agent': desktopUserAgent,
@@ -192,7 +369,7 @@ class BilibiliDesktopPlaybackSourceService {
       'fnval': '16',
       'fourk': '1',
     });
-    final response = await _requestJson(endpoint, {
+    final response = await _readJson(endpoint, {
       'Accept': 'application/json',
       'Referer': referer,
       'User-Agent': desktopUserAgent,
@@ -218,6 +395,7 @@ class BilibiliDesktopPlaybackSourceService {
     required String cookieHeader,
     required bool wbiEnabled,
     bool isCourse = false,
+    Future<void> Function()? validateSession,
   }) {
     final Object? decoded;
     try {
@@ -239,18 +417,17 @@ class BilibiliDesktopPlaybackSourceService {
           _ => '课程播放请求失败（错误码：$code），请稍后重试。',
         });
       }
-      final String serverMessage = _readText(root['message']);
       if (code == -351) {
         throw DesktopPlaybackSourceException(
           wbiEnabled
               ? '播放数据服务拒绝了本次请求（错误码：-351）。WBI 签名已启用，请稍后重试或检查账号与网络状态。'
               : '播放数据服务拒绝了本次请求（错误码：-351）。请到“我的 → 个性化设置 → 播放与专注”开启“启用 WBI 签名”后重试；不保证恢复。',
+          apiCode: code,
         );
       }
       throw DesktopPlaybackSourceException(
-        serverMessage.isEmpty || serverMessage == '0'
-            ? '播放数据服务拒绝了本次请求（错误码：$code）。'
-            : '无法取得播放数据：$serverMessage（错误码：$code）。',
+        '播放数据服务拒绝了本次请求（错误码：$code）。',
+        apiCode: code,
       );
     }
     final Object? rawData = root['data'];
@@ -296,6 +473,7 @@ class BilibiliDesktopPlaybackSourceService {
         }
         final qn = (data['quality'] as num?)?.toInt() ?? requestedQuality;
         return DesktopPlaybackSources(
+          validateSession: validateSession,
           videoUrls: urls,
           audioUrls: const [],
           referer: referer,
@@ -332,6 +510,7 @@ class BilibiliDesktopPlaybackSourceService {
         for (final String url in track.urls) url: track.codec,
     };
     return DesktopPlaybackSources(
+      validateSession: validateSession,
       videoUrls: videoTrack.urls,
       audioUrls: List<String>.unmodifiable(audioUrls),
       audioCodecByUrl: Map<String, String>.unmodifiable(audioCodecByUrl),
@@ -538,10 +717,8 @@ class BilibiliDesktopPlaybackSourceService {
   String _readText(Object? value) => value is String ? value.trim() : '';
 
   /// 使用带超时的 HttpClient 读取固定播放接口，并拒绝非成功状态或空响应。
-  static Future<String> _requestPlaybackJson(
-    Uri endpoint,
-    Map<String, String> headers,
-  ) async {
+  static Future<({int statusCode, String body, List<String> cookies})>
+  _requestPlaybackJson(Uri endpoint, Map<String, String> headers) async {
     final HttpClient client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 15);
     try {
@@ -551,16 +728,22 @@ class BilibiliDesktopPlaybackSourceService {
       final HttpClientResponse response = await request.close().timeout(
         const Duration(seconds: 20),
       );
-      final String body = await response.transform(utf8.decoder).join();
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw DesktopPlaybackSourceException(
           '播放数据服务暂时不可用（HTTP ${response.statusCode}）。',
+          httpStatus: response.statusCode,
         );
       }
+      final String body = await response.transform(utf8.decoder).join();
       if (body.trim().isEmpty) {
         throw const DesktopPlaybackSourceException('播放数据服务返回了空内容。');
       }
-      return body;
+      return (
+        statusCode: response.statusCode,
+        body: body,
+        cookies:
+            response.headers[HttpHeaders.setCookieHeader] ?? const <String>[],
+      );
     } on TimeoutException {
       throw const DesktopPlaybackSourceException('请求播放数据超时，请检查网络。');
     } on SocketException {

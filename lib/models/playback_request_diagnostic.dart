@@ -2,6 +2,8 @@
 class PlaybackRequestDiagnostic {
   PlaybackRequestDiagnostic._(this.fields);
 
+  static const maximumFields = 24;
+
   final Map<String, String> fields;
 
   /// 未知字段全部丢弃；已知字段也必须满足精确类型、枚举及范围要求。
@@ -35,6 +37,9 @@ class PlaybackRequestDiagnostic {
       'playurl_attempted',
       'guest_selected',
       'codec_fallback',
+      'has_buvid3',
+      'has_buvid4',
+      'has_bili_ticket',
     ]) {
       boolean(key);
     }
@@ -65,6 +70,18 @@ class PlaybackRequestDiagnostic {
     enumeration('outcome', {'success', 'quality_downgrade', 'error'});
     integer('api_code', -999999, 999999);
     integer('http_status', 100, 599);
+    if (raw.containsKey('endpoint_kind')) {
+      enumeration('endpoint_kind', {'nav', 'playurl_wbi', 'playurl_legacy'});
+    }
+    if (raw.containsKey('session_source')) {
+      enumeration('session_source', {
+        'apple_wkwebview',
+        'platform_webview',
+        'secure_storage',
+        'unavailable',
+        'injected',
+      });
+    }
     return PlaybackRequestDiagnostic._(Map.unmodifiable(fields));
   }
 }

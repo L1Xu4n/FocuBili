@@ -111,46 +111,37 @@ public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCen
         }
     }
 
-    private func isBilibili(_ cookie: HTTPCookie) -> Bool {
-        let domain = cookie.domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
-        return domain == "bilibili.com" || domain.hasSuffix(".bilibili.com")
-    }
+    private static let playbackCookies = BilibiliPlaybackSessionCoordinator(store: WebKitBilibiliCookieContainer())
 
     private func auth(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
-        let store = WKWebsiteDataStore.default().httpCookieStore
-        guard ["readCookies", "replaceCookies", "clearBilibiliCookies"].contains(call.method) else { result(FlutterMethodNotImplemented); return }
-        let header = (call.arguments as? [String: Any])?["cookie"] as? String ?? ""
-        if call.method == "replaceCookies" && (header.isEmpty || header.contains("\n") || header.contains("\r")) {
-            result(FlutterError(code: "invalid_cookie", message: "Cookie 格式无效", details: nil)); return
-        }
-        store.getAllCookies { cookies in
-            let owned = cookies.filter { self.isBilibili($0) }
-            if call.method == "readCookies" {
-                // Prefer the root-domain cookie when same-name subdomain cookies exist.
-                var values: [String: String] = [:]
-                for cookie in owned.sorted(by: { $0.domain.count > $1.domain.count }) {
-                    values[cookie.name] = cookie.value
-                }
-                self.complete(result, values.keys.sorted().map { "\($0)=\(values[$0]!)" }.joined(separator: "; ")); return
+        let args = call.arguments as? [String: Any] ?? [:]
+        let path = args["path"] as? String ?? "/x/web-interface/nav"
+        switch call.method {
+        case "readPlaybackSession":
+            Self.playbackCookies.read(path: path) { self.complete(result, $0.payload) }
+        case "validatePlaybackSession":
+            guard let generation = args["generation"] as? Int else {
+                result(FlutterError(code: "session_unknown", message: "无法确认播放会话", details: nil)); return
             }
-            let group = DispatchGroup()
-            for cookie in owned { group.enter(); store.delete(cookie) { group.leave() } }
-            group.notify(queue: .main) {
-                if call.method == "clearBilibiliCookies" { result(nil); return }
-                let writes = DispatchGroup()
-                for item in header.split(separator: ";") {
-                    let pair = item.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
-                    guard pair.count == 2 else { continue }
-                    let name = pair[0].trimmingCharacters(in: .whitespaces)
-                    guard !name.isEmpty, let cookie = HTTPCookie(properties: [
-                        .domain: ".bilibili.com", .path: "/", .name: name,
-                        .value: String(pair[1]).trimmingCharacters(in: .whitespaces),
-                        .secure: "TRUE", .expires: Date(timeIntervalSinceNow: 86400 * 180)
-                    ]) else { continue }
-                    writes.enter(); store.setCookie(cookie) { writes.leave() }
-                }
-                writes.notify(queue: .main) { result(nil) }
+            Self.playbackCookies.validate(generation: generation, path: path) { self.complete(result, $0) }
+        case "mergePlaybackResponseCookies":
+            guard let generation = args["generation"] as? Int,
+                  let headers = args["cookies"] as? [String] else {
+                result(FlutterError(code: "session_unknown", message: "无法确认播放会话", details: nil)); return
             }
+            Self.playbackCookies.merge(generation: generation, path: path, headers: headers) { self.complete(result, $0.payload) }
+        case "readCookies":
+            Self.playbackCookies.read(path: "/x/web-interface/nav") { snapshot in
+                self.complete(result, snapshot.usable ? snapshot.header : FlutterError(code: "session_" + snapshot.state, message: "登录会话不完整或存在冲突，请重新登录", details: nil))
+            }
+        case "replaceCookies", "clearBilibiliCookies":
+            if call.method == "replaceCookies" && args["cookie"] as? String == nil {
+                result(FlutterError(code: "invalid_cookie", message: "Cookie 格式无效", details: nil)); return
+            }
+            Self.playbackCookies.replace(header: call.method == "replaceCookies" ? args["cookie"] as? String : nil) { accepted in
+                self.complete(result, accepted ? nil : FlutterError(code: "invalid_cookie", message: "Cookie 格式无效", details: nil))
+            }
+        default: result(FlutterMethodNotImplemented)
         }
     }
 
