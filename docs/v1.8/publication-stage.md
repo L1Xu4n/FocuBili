@@ -1,5 +1,25 @@
 # 1.8 发布 PR 阶段组合回归
 
+## Latest candidate: settings import maximum
+
+PR #63 finding `discussion_r4305618955` is fixed by production commit
+`bdc9470` (original isolated fix `23e7cbd`). Both parsed files and direct imports
+reject a minimum play count above `SearchContentFilter.maximumPlayCount` before
+any preference/runtime operation. Existing loader guards remain unchanged.
+The two original failing maximum-plus-one cases now pass, with 14 boundary cases.
+
+Actual combined verification on Windows / Flutter 3.44.6:
+
+- Full `flutter test --no-pub --reporter expanded`: **1089 passed, 1 skipped,
+  0 failed, 02:39, exit 0**. The skip still requires Windows developer mode for
+  symlinks; no system setting was changed.
+- `flutter analyze --no-pub`: no issues, 13.9s, exit 0.
+- Format check of `lib test tool/native_subscription_probe.dart`: 421 files,
+  0 changes; `git diff --check`: exit 0.
+
+These results cover the local combined source, not real-device acceptance or
+the final remote CI/release. Earlier results below are retained as history.
+
 本轮仅推进到 dev PR、Codex 审查请求和现有 CI；未合并、打标签或发布安装包。1.9 开发分支保持独立。
 
 ## 来源与最小补丁
