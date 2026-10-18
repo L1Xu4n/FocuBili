@@ -1,6 +1,8 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/search_content_filter.dart';
+import 'image_resource_cache.dart';
 import 'settings_runtime_adapter.dart';
 
 /// 定义允许迁移的基础偏好类型，账号、协议和学习数据从不进入白名单。
@@ -142,6 +144,11 @@ class SettingsTransferService {
       null => false,
     };
     if (!valid) throw const FormatException('设置类型或范围不正确');
+    if (key == DeviceSettingsRuntimeAdapter.imageCapacityKey &&
+        (value as int) >
+            ImageResourceCache.capacities.reduce(math.max) * 1024 * 1024) {
+      throw const FormatException('图片缓存容量超出支持范围');
+    }
     if (key == 'appearance.theme_mode' &&
         !{'light', 'dark', 'system'}.contains(value)) {
       throw const FormatException('主题模式无效');
