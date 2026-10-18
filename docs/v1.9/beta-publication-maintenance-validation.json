@@ -1,0 +1,107 @@
+{
+  "schema": "focubili.beta-publication-maintenance.local-validation",
+  "baseDev": "2576b16a862312da0ceb6b3b29c9ff267da9e612",
+  "frozenD3": "5cc5c770bf2465aa9a2ca5b6935a5c34d3449613",
+  "scope": "Future-source local feature maintenance only; no actual draft/API/native/signing/remote write validation",
+  "host": "Windows-11-10.0.26100-SP0",
+  "python": "3.12.10",
+  "pythonTests": {
+    "command": "python -X utf8 -B -m unittest discover -s tool -p test_beta_release.py -v",
+    "passed": 43,
+    "failed": 0,
+    "exitCode": 0,
+    "synthetic": true
+  },
+  "redFixture": {
+    "command": "python -X utf8 -B -m unittest discover -s tool -p test_beta_release.py -k test_draft_is_found -v",
+    "before": {
+      "tests": 1,
+      "errors": 1,
+      "exitCode": 1,
+      "cause": "Synthetic draft tag endpoint HTTP404; list later-page and numeric-ID endpoints remain available"
+    },
+    "after": "Included unchanged assertion in 43 passing tests"
+  },
+  "flutterTests": {
+    "command": "flutter test --no-pub test/app_update_beta_channel_test.dart test/app_update_service_test.dart test/release_workflow_config_test.dart --reporter expanded",
+    "passed": 83,
+    "failed": 0,
+    "exitCode": 0,
+    "scope": "Synthetic updater/regular-workflow tests; includes four six-public-package missing-manifest Release-page fallbacks"
+  },
+  "dartAnalyze": {
+    "command": "flutter analyze --no-pub test/app_update_beta_channel_test.dart",
+    "issues": 0,
+    "exitCode": 0
+  },
+  "syntax": {
+    "pythonAstFiles": 2,
+    "yamlParsedFiles": [
+      ".github/workflows/beta-release.yml",
+      ".github/workflows/ci.yml"
+    ],
+    "unchangedVersusBase": [
+      "triggers",
+      "top-level permissions",
+      "top-level concurrency",
+      "job permissions",
+      "job concurrency",
+      "job needs",
+      "job if"
+    ],
+    "betaBashBlocksSyntaxOnly": 6,
+    "exitCode": 0
+  },
+  "consumerBlobIdentityD3AndDev": {
+    "lib/services/app_update_service.dart": "48c089aa121c54909a9d2a6d1df5895a0a119bde",
+    "lib/services/app_update_release_manifest.dart": "df5af277961346af9db31009cf7b0c1950c44961",
+    "lib/services/app_update_transport.dart": "b9f29c7d20966187a1a03dc660eba19fe911be42"
+  },
+  "publicPackages": 6,
+  "ciCandidateFiles": 9,
+  "sourceAndCallerMustBothContainMaintenance": true,
+  "frozenD3IncludesThisFix": false,
+  "frozenD3IncludesLaterMac412Fix": false,
+  "remoteReads": [
+    "Explicit git fetch origin dev in existing safe repository"
+  ],
+  "remoteWrites": false,
+  "workflowDispatch": false,
+  "actualDraftReadOrWrite": false,
+  "signingOrPackageExecution": false,
+  "outputDeliveryChanged": false,
+  "otherCheckoutChanged": false,
+  "generatedNonTaskFilesRestored": true,
+  "localLogs": {
+    "beta-draft-404-before.log": {
+      "sha256": "cc2c774cf5d77a2f4a0e61c9031db9bfaa52eb91dc912970fda59dda8778fc00",
+      "bytes": 2387,
+      "tracked": false
+    },
+    "beta-publication-after.log": {
+      "sha256": "090ffc4a76f949f96f64f3f234a8307b9ad54e8f92314d477e91eba24ba67be4",
+      "bytes": 7309,
+      "tracked": false
+    },
+    "beta-maintenance-flutter-tests-final.log": {
+      "sha256": "9fc9c88a3cb36c249e8f11f4ac52f5249fb536be79f616f56536515f65ffdcc3",
+      "bytes": 17093,
+      "tracked": false
+    },
+    "beta-maintenance-syntax.log": {
+      "sha256": "d78003faaf86f65b12b91506bfb82ca414fcf87a9d2a5eb783f3abe6de177410",
+      "bytes": 126,
+      "tracked": false
+    },
+    "beta-maintenance-analyze.log": {
+      "sha256": "2cfb59f7be5ab585952dff4ffad8a3944e1338707ce4f7293e1ac169a34a6030",
+      "bytes": 98,
+      "tracked": false
+    }
+  },
+  "remaining": [
+    "Independent review of final local commit",
+    "Root-owned feature-to-dev PR and any later scoped master capability PR",
+    "Future dispatch/native/device validation only after separate authorization"
+  ]
+}

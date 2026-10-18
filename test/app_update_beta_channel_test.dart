@@ -606,6 +606,47 @@ void main() {
     );
   }
 
+  for (final platform in [
+    AppUpdateTargetPlatform.android,
+    AppUpdateTargetPlatform.windows,
+    AppUpdateTargetPlatform.macos,
+    AppUpdateTargetPlatform.linux,
+  ]) {
+    test(
+      'six public packages without manifest offer Release on $platform',
+      () async {
+        const tag = 'v1.9.0-beta.2';
+        final release = _release(2, manifest: false);
+        release['assets'] = [
+          for (final ending in [
+            'android-preview.apk',
+            'windows-x64-setup.exe',
+            'windows-x64-portable.zip',
+            'macos.dmg',
+            'linux-amd64.deb',
+            'ios-unsigned.ipa',
+          ])
+            _asset(tag, 'FocuBili-$tag-$ending', 100),
+        ];
+        final client = _Client((uri) {
+          expect(uri.host, 'api.github.com');
+          return _Response([release]);
+        });
+        final result = await _check(
+          client,
+          platform: platform,
+          channel: 'beta',
+        );
+        expect(result.status, AppUpdateStatus.available);
+        expect(result.latestVersion, '1.9.0-beta.2');
+        expect(result.downloadUrl, isNull);
+        expect(result.downloadActionLabel, '查看 Release');
+        expect(result.releaseUrl?.path, '/L1Xu4n/FocuBili/releases/tag/$tag');
+        expect(client.requests, hasLength(1));
+      },
+    );
+  }
+
   test(
     'missing manifest and foreign release page never use stable APK as fallback',
     () async {
