@@ -75,6 +75,7 @@ class PlaybackRequestDiagnostic {
     }
     if (raw.containsKey('session_source')) {
       enumeration('session_source', {
+        'apple_wkwebview',
         'platform_webview',
         'secure_storage',
         'unavailable',
