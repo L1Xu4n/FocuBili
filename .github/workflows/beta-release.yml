@@ -191,6 +191,10 @@ jobs:
           tag="$(python3 -c 'import json; print(json.load(open("metadata/beta-plan.json"))["tag"])')"
           notes="docs/RELEASE_NOTES_${tag}.md"
           test -f "$notes"
+          # Keep tar/manifest/checksums in the nine-file CI candidate, never public assets.
+          python3 tool/beta_release.py public-files --plan metadata/beta-plan.json --folder release > public-files.txt
+          mapfile -t public_files < public-files.txt
+          test "${#public_files[@]}" -eq 6
           # Existing releases, including partial drafts, require explicit inspection.
           # Never replace assets, move a tag or silently turn an existing release stable.
           gh api --paginate --slurp repos/L1Xu4n/FocuBili/releases?per_page=100 > releases-before.json
@@ -206,7 +210,7 @@ jobs:
             git tag -a "$tag" -m "FocuBili $tag" "$SOURCE_SHA"
             git push origin "refs/tags/$tag"
           fi
-          gh release create "$tag" release/* --repo L1Xu4n/FocuBili --verify-tag --target "$SOURCE_SHA" --draft --prerelease --latest=false --title "FocuBili $tag" --notes-file "$notes"
+          gh release create "$tag" "${public_files[@]}" --repo L1Xu4n/FocuBili --verify-tag --target "$SOURCE_SHA" --draft --prerelease --latest=false --title "FocuBili $tag" --notes-file "$notes"
           python3 tool/beta_release.py verify-upload --plan metadata/beta-plan.json --folder release --draft
           gh release edit "$tag" --repo L1Xu4n/FocuBili --draft=false --prerelease --latest=false
           python3 tool/beta_release.py verify-upload --plan metadata/beta-plan.json --folder release

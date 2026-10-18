@@ -4,6 +4,7 @@ from pathlib import Path
 import plistlib
 import struct
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -317,18 +318,156 @@ class BetaReleaseTests(unittest.TestCase):
             beta.stage(self.value, source, self.root / "release")
 
     def test_uploaded_assets_must_match_server_hash_size_set_and_prerelease_state(self):
-        folder = self.root / "release"
-        folder.mkdir()
-        (folder / "artifact").write_bytes(b"synthetic")
-        record = beta.file_record(folder / "artifact")
-        remote = {"tag_name": self.value["tag"], "draft": True, "prerelease": True,
-                  "assets": [{"name": record["file"], "size": record["bytes"], "digest": "sha256:" + record["sha256"]}]}
-        with patch.object(beta, "text", return_value=json.dumps(remote)):
-            self.assertEqual(beta.verify_upload(self.value, folder, True)["verifiedAssets"], 1)
+        folder, remote = self.publication_inputs()
+        record = remote["assets"][0]
+        with patch.object(beta, "text", side_effect=self.release_responses(remote)):
+            self.assertEqual(beta.verify_upload(self.value, folder, True)["verifiedAssets"], 6)
         for mutation in [{"prerelease": False}, {"draft": False}, {"assets": []},
-                         {"assets": [{"name": record["file"], "size": record["bytes"], "digest": "sha256:" + "0" * 64}]}]:
-            with self.subTest(mutation=mutation), patch.object(beta, "text", return_value=json.dumps({**remote, **mutation})), self.assertRaises(ValueError):
+                         {"assets": [{**record, "digest": "sha256:" + "0" * 64}, *remote["assets"][1:]]}]:
+            with self.subTest(mutation=mutation), patch.object(beta, "text", side_effect=self.release_responses({**remote, **mutation})), self.assertRaises(ValueError):
                 beta.verify_upload(self.value, folder, True)
+
+    def publication_inputs(self):
+        folder = self.root / "publication"
+        folder.mkdir()
+        prefix = "FocuBili-v1.9.0-beta.1-"
+        endings = ["android-preview.apk", "windows-x64-setup.exe", "windows-x64-portable.zip",
+                   "macos.dmg", "linux-amd64.deb", "ios-unsigned.ipa"]
+        assets = []
+        for number, ending in enumerate(endings, 1):
+            path = folder / (prefix + ending)
+            path.write_bytes(b"synthetic " + ending.encode())
+            record = beta.file_record(path)
+            assets.append({"id": number, "name": record["file"], "size": record["bytes"],
+                           "digest": "sha256:" + record["sha256"], "state": "uploaded"})
+        for name in [prefix + "linux-x64.tar.gz", "SHA256SUMS.txt", "beta-release-manifest.json"]:
+            (folder / name).write_bytes(b"CI-only evidence")
+        return folder, {"id": 123, "tag_name": self.value["tag"], "target_commitish": "a" * 40,
+                        "draft": True, "prerelease": True, "assets": assets}
+
+    def release_responses(self, detail, listing=None):
+        return [json.dumps([[{"id": 123, "tag_name": self.value["tag"]}]] if listing is None else listing),
+                json.dumps(detail)]
+
+    def test_public_files_select_exactly_six_binaries_and_preserve_all_nine_ci_files(self):
+        folder, remote = self.publication_inputs()
+        before = {path.name: path.read_bytes() for path in folder.iterdir()}
+        paths = beta.public_files(self.value, folder)
+        self.assertEqual([path.name for path in paths], [asset["name"] for asset in remote["assets"]])
+        self.assertEqual(before, {path.name: path.read_bytes() for path in folder.iterdir()})
+        self.assertEqual(len(before), 9)
+
+    def test_public_files_refuse_missing_empty_or_directory_binary(self):
+        folder, remote = self.publication_inputs()
+        path = folder / remote["assets"][0]["name"]
+        path.unlink()
+        with self.assertRaises(ValueError):
+            beta.public_files(self.value, folder)
+        path.write_bytes(b"")
+        with self.assertRaises(ValueError):
+            beta.public_files(self.value, folder)
+        path.unlink()
+        path.mkdir()
+        with self.assertRaises(ValueError):
+            beta.public_files(self.value, folder)
+
+    def test_public_files_cli_emits_six_argument_safe_paths_and_nothing_else(self):
+        folder, remote = self.publication_inputs()
+        spaced = folder.with_name("candidate with spaces")
+        folder.rename(spaced)
+        plan = self.root / "plan.json"
+        beta.save(plan, self.value)
+        result = subprocess.run([sys.executable, "-X", "utf8", "-B", str(Path(beta.__file__)),
+                                 "public-files", "--plan", str(plan), "--folder", str(spaced)],
+                                check=True, capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(result.stdout.splitlines(), [(spaced / asset["name"]).as_posix() for asset in remote["assets"]])
+        self.assertEqual(result.stderr, "")
+
+    def test_draft_is_found_on_later_list_page_and_read_by_numeric_id_without_tag_endpoint(self):
+        folder, remote = self.publication_inputs()
+        pages = [[{"id": 1, "tag_name": "v1.8.0"}], [{"id": 123, "tag_name": self.value["tag"]}]]
+
+        def response(*arguments):
+            if arguments[-1] == f"repos/{beta.REPOSITORY}/releases?per_page=100":
+                return json.dumps(pages)
+            if arguments[-1] == f"repos/{beta.REPOSITORY}/releases/123":
+                return json.dumps(remote)
+            raise subprocess.CalledProcessError(1, arguments, stderr="HTTP 404 (draft tag lookup)")
+
+        with patch.object(beta, "text", side_effect=response) as command:
+            result = beta.verify_upload(self.value, folder, True)
+        self.assertEqual(result["releaseId"], 123)
+        self.assertEqual(result["verifiedAssets"], 6)
+        self.assertEqual(command.call_args_list[0].args,
+                         ("gh", "api", "--method", "GET", "--paginate", "--slurp",
+                          f"repos/{beta.REPOSITORY}/releases?per_page=100"))
+        self.assertEqual(command.call_args_list[1].args,
+                         ("gh", "api", "--method", "GET", f"repos/{beta.REPOSITORY}/releases/123"))
+
+    def test_published_release_uses_the_same_unique_numeric_id_path(self):
+        folder, remote = self.publication_inputs()
+        remote["draft"] = False
+        with patch.object(beta, "text", side_effect=self.release_responses(remote)):
+            self.assertIs(beta.verify_upload(self.value, folder, False)["draft"], False)
+
+    def test_release_list_missing_duplicate_or_malformed_never_falls_back_to_tag_lookup(self):
+        folder, _ = self.publication_inputs()
+        match = {"id": 123, "tag_name": self.value["tag"]}
+        for pages in [[], [[]], [[match, match]], {"error": "unavailable"}, [match], [[None]],
+                      [[{"id": True, "tag_name": self.value["tag"]}]],
+                      [[{"id": "123", "tag_name": self.value["tag"]}]],
+                      [[{"id": 0, "tag_name": self.value["tag"]}]]]:
+            with self.subTest(pages=pages), patch.object(beta, "text", return_value=json.dumps(pages)) as command:
+                with self.assertRaises(ValueError):
+                    beta.verify_upload(self.value, folder, True)
+                self.assertEqual(command.call_count, 1)
+
+    def test_release_detail_identity_source_and_state_must_still_match_after_lookup(self):
+        folder, remote = self.publication_inputs()
+        for mutation in [{"id": 124}, {"id": True}, {"tag_name": "v1.9.0-beta.2"},
+                         {"target_commitish": "dev"}, {"target_commitish": "b" * 40},
+                         {"draft": False}, {"draft": 1}, {"prerelease": False}, {"prerelease": 1}]:
+            with self.subTest(mutation=mutation), patch.object(beta, "text", side_effect=self.release_responses({**remote, **mutation})):
+                with self.assertRaises(ValueError):
+                    beta.verify_upload(self.value, folder, True)
+
+    def test_uploaded_six_asset_set_rejects_duplicates_metadata_tar_and_unuploaded_records(self):
+        folder, remote = self.publication_inputs()
+        first = remote["assets"][0]
+        for asset in [{**first, "id": 0}, {**first, "id": True}, {**first, "state": "starter"},
+                      {**first, "size": str(first["size"])}, {**first, "size": first["size"] + 1},
+                      {**first, "digest": None}, {**first, "digest": "sha256:" + "0" * 64},
+                      {**first, "name": "beta-release-manifest.json"}, {**first, "name": "SHA256SUMS.txt"},
+                      {**first, "name": "FocuBili-v1.9.0-beta.1-linux-x64.tar.gz"},
+                      remote["assets"][1], {**first, "id": remote["assets"][1]["id"]}]:
+            detail = {**remote, "assets": [asset, *remote["assets"][1:]]}
+            with self.subTest(asset=asset), patch.object(beta, "text", side_effect=self.release_responses(detail)):
+                with self.assertRaises(ValueError):
+                    beta.verify_upload(self.value, folder, True)
+
+    def test_release_api_errors_are_fatal_without_fallback_or_remote_writes(self):
+        folder, remote = self.publication_inputs()
+        for responses in [[subprocess.CalledProcessError(1, "gh")],
+                          [self.release_responses(remote)[0], subprocess.CalledProcessError(1, "gh")]]:
+            with self.subTest(responses=responses), patch.object(beta, "text", side_effect=responses) as command:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    beta.verify_upload(self.value, folder, True)
+                for call in command.call_args_list:
+                    self.assertNotIn("POST", call.args)
+                    self.assertNotIn("PATCH", call.args)
+                    self.assertNotIn("DELETE", call.args)
+
+    def test_workflow_publishes_explicit_public_file_array_and_checks_it_before_and_after(self):
+        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/beta-release.yml").read_text(encoding="utf-8")
+        self.assertIn('python3 tool/beta_release.py public-files --plan metadata/beta-plan.json --folder release > public-files.txt', workflow)
+        self.assertIn('mapfile -t public_files < public-files.txt', workflow)
+        self.assertIn('gh release create "$tag" "${public_files[@]}"', workflow)
+        self.assertNotIn('gh release create "$tag" release/*', workflow)
+        self.assertEqual(workflow.count('python3 tool/beta_release.py verify-upload --plan metadata/beta-plan.json --folder release'), 2)
+        self.assertIn('path: release/*', workflow)
+        self.assertLess(workflow.index('public-files --plan'), workflow.index('git tag -a'))
+        quality = (Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertIn('python3 -m unittest discover -s tool -p test_beta_release.py -v', quality)
 
     def test_ci_requires_success_for_every_exact_sha_run(self):
         run = {"headSha": "a" * 40, "databaseId": 1, "status": "completed", "conclusion": "success"}

@@ -300,23 +300,63 @@ def stage(value, source, output):
     return manifest
 
 
+def public_files(value, folder):
+    # The nine-file CI candidate is retained intact; only these six packages are public.
+    prefix = "FocuBili-v" + value["releaseVersion"] + "-"
+    paths = [Path(folder) / (prefix + ending) for ending in [
+        "android-preview.apk", "windows-x64-setup.exe", "windows-x64-portable.zip",
+        "macos.dmg", "linux-amd64.deb", "ios-unsigned.ipa",
+    ]]
+    for path in paths:
+        file_record(path)
+    return paths
+
+
+def release_by_tag(tag):
+    # Drafts can return 404 from /releases/tags/{tag}. Authenticated list + numeric
+    # ID works for both states without treating an API failure as an absent draft.
+    pages = json.loads(text("gh", "api", "--method", "GET", "--paginate", "--slurp",
+                           f"repos/{REPOSITORY}/releases?per_page=100"))
+    require(isinstance(pages, list) and all(isinstance(page, list) for page in pages),
+            "Malformed release list")
+    releases = [release for page in pages for release in page]
+    require(all(isinstance(release, dict) and isinstance(release.get("tag_name"), str) and
+                type(release.get("id")) is int and release["id"] > 0 for release in releases),
+            "Malformed release identity")
+    matches = [release for release in releases if release["tag_name"] == tag]
+    require(len(matches) == 1, "Expected exactly one release with the requested tag")
+    release_id = matches[0]["id"]
+    release = json.loads(text("gh", "api", "--method", "GET", f"repos/{REPOSITORY}/releases/{release_id}"))
+    require(isinstance(release, dict) and type(release.get("id")) is int and
+            release["id"] == release_id and release.get("tag_name") == tag,
+            "Release identity changed after lookup")
+    return release
+
+
 def verify_upload(value, folder, draft):
-    release = json.loads(text("gh", "api", f"repos/{REPOSITORY}/releases/tags/{value['tag']}"))
-    require(release["tag_name"] == value["tag"] and release["draft"] is draft and
-            release["prerelease"] is True, "Remote release is not the expected Beta state")
-    files = {path.name: file_record(path) for path in Path(folder).iterdir() if path.is_file()}
-    assets = release["assets"]
+    release = release_by_tag(value["tag"])
+    require(release.get("draft") is draft and release.get("prerelease") is True and
+            release.get("target_commitish") == value["sourceSha"],
+            "Remote release is not the expected Beta state/source")
+    files = {path.name: file_record(path) for path in public_files(value, folder)}
+    assets = release.get("assets")
+    require(isinstance(assets, list) and all(isinstance(asset, dict) and isinstance(asset.get("name"), str) and
+            type(asset.get("id")) is int and asset["id"] > 0 and asset.get("state") == "uploaded" for asset in assets),
+            "Malformed or incomplete uploaded assets")
+    require(len({asset["id"] for asset in assets}) == len(assets), "Duplicate uploaded asset identity")
     require(len(assets) == len(files) and {asset["name"] for asset in assets} == set(files), "Uploaded asset set differs")
     for asset in assets:
         expected = files[asset["name"]]
-        require(asset["size"] == expected["bytes"] and asset.get("digest") == "sha256:" + expected["sha256"],
+        require(type(asset.get("size")) is int and asset["size"] == expected["bytes"] and
+                asset.get("digest") == "sha256:" + expected["sha256"],
                 "GitHub-reported uploaded bytes/digest differ")
-    return {"tag": value["tag"], "sourceSha": value["sourceSha"], "verifiedAssets": len(files), "draft": draft}
+    return {"releaseId": release["id"], "tag": value["tag"], "sourceSha": value["sourceSha"],
+            "verifiedAssets": len(files), "draft": draft}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["plan", "build", "inventory", "wait-ci", "android", "windows", "ios", "linux", "stage", "verify-upload"])
+    parser.add_argument("command", choices=["plan", "build", "inventory", "wait-ci", "android", "windows", "ios", "linux", "stage", "public-files", "verify-upload"])
     parser.add_argument("--beta-number")
     parser.add_argument("--source-sha")
     parser.add_argument("--plan")
@@ -354,6 +394,11 @@ def main():
             result = verify_ios(value, arguments.ipa)
         elif arguments.command == "linux":
             result = verify_linux(value, arguments.folder)
+        elif arguments.command == "public-files":
+            require(not arguments.output, "public-files writes newline-separated paths to stdout only")
+            for path in public_files(value, arguments.folder):
+                print(path.as_posix())
+            return
         elif arguments.command == "verify-upload":
             result = verify_upload(value, arguments.folder, arguments.draft)
         else:
