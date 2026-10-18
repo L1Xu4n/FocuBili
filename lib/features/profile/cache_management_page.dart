@@ -329,6 +329,9 @@ class _CacheManagementPageState extends State<CacheManagementPage> {
 
   Widget _buildImageCache() {
     final usage = _images;
+    final capacities = [
+      for (final mb in ImageResourceCache.capacities) mb * 1024 * 1024,
+    ];
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -352,14 +355,25 @@ class _CacheManagementPageState extends State<CacheManagementPage> {
                   labelText: '图片磁盘缓存上限',
                   border: OutlineInputBorder(),
                 ),
-                items: ImageResourceCache.capacities
-                    .map(
-                      (mb) => DropdownMenuItem(
-                        value: mb * 1024 * 1024,
-                        child: Text('$mb MB'),
-                      ),
-                    )
-                    .toList(),
+                items:
+                    [
+                          if (!capacities.contains(usage.capacityBytes))
+                            usage.capacityBytes,
+                          ...capacities,
+                        ]
+                        .map(
+                          (bytes) => DropdownMenuItem(
+                            value: bytes,
+                            child: Text(
+                              capacities.contains(bytes)
+                                  ? '${bytes ~/ (1024 * 1024)} MB'
+                                  : '自定义 · ${formatMediaCacheBytes(bytes)}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
+                        .toList(),
                 onChanged: _mutating
                     ? null
                     : (value) {
