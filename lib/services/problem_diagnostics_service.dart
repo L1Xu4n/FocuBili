@@ -351,7 +351,7 @@ class ProblemDiagnosticEntry {
             value.isEmpty ||
             key.length > 40 ||
             value.length > 120 ||
-            additionalInfo.length >= 16) {
+            additionalInfo.length >= PlaybackRequestDiagnostic.maximumFields) {
           continue;
         }
         additionalInfo[key] = value;
@@ -530,7 +530,7 @@ class ProblemDiagnosticsService {
     }
     final info = values['additionalInfo'];
     if (info == null) return;
-    if (info is! Map || info.length > 16) {
+    if (info is! Map || info.length > PlaybackRequestDiagnostic.maximumFields) {
       throw const FormatException('Invalid diagnostic details');
     }
     final keys = <String>{};
@@ -907,7 +907,8 @@ class ProblemDiagnosticsService {
     for (final MapEntry<String, String> item in entry.additionalInfo.entries) {
       final String key = _sanitizeInfoKey(item.key);
       final String value = _sanitizeText(item.value, fallback: 'unknown');
-      if (key.isEmpty || additionalInfo.length >= 16) {
+      if (key.isEmpty ||
+          additionalInfo.length >= PlaybackRequestDiagnostic.maximumFields) {
         continue;
       }
       additionalInfo[key] = value;

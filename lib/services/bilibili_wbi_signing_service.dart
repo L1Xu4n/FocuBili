@@ -6,14 +6,29 @@ import 'package:crypto/crypto.dart';
 typedef WbiJsonRequest =
     Future<String> Function(Uri endpoint, Map<String, String> headers);
 
+/// 仅保留可安全跨请求层传递的状态码，不保留地址、正文或凭据。
+abstract interface class BilibiliRequestFailure {
+  int? get httpStatus;
+  int? get apiCode;
+}
+
 /// 表示签名材料不可用，错误消息不回显 Cookie、地址或响应正文。
-class WbiSigningException implements Exception {
+class WbiSigningException implements Exception, BilibiliRequestFailure {
   /// 创建固定、可直接展示的签名失败提示。
-  const WbiSigningException();
+  const WbiSigningException({this.httpStatus, this.apiCode});
+
+  @override
+  final int? httpStatus;
+  @override
+  final int? apiCode;
 
   /// 提示用户重试或显式恢复原请求方式，避免静默切换模式。
   @override
-  String toString() => 'WBI 签名材料暂时无法获取，请稍后重试，或在“播放与专注”中关闭“启用 WBI 签名”。';
+  String toString() => httpStatus != null
+      ? 'WBI 签名材料请求失败（HTTP $httpStatus），请稍后重试。'
+      : apiCode != null
+      ? 'WBI 签名材料请求失败（错误码：$apiCode），请稍后重试。'
+      : 'WBI 签名材料暂时无法获取，请稍后重试，或在“播放与专注”中关闭“启用 WBI 签名”。';
 }
 
 /// 获取官方 nav 签名材料并在内存缓存一小时，只为播放数据请求生成 WBI。
@@ -71,6 +86,7 @@ class BilibiliWbiSigningService {
   Future<Map<String, String>> signParameters(
     Map<String, String> parameters, {
     required Map<String, String> headers,
+    WbiJsonRequest? requestJson,
   }) async {
     final now = _clock();
     final age = _cachedAt == null ? null : now.difference(_cachedAt!);
@@ -81,9 +97,11 @@ class BilibiliWbiSigningService {
         age < const Duration(hours: 1)) {
       key = _cachedKey!;
     } else {
-      key = await (_pendingKey ??= _loadKey(headers).whenComplete(() {
-        _pendingKey = null;
-      }));
+      key = await (_pendingKey ??= _loadKey(headers, requestJson).whenComplete(
+        () {
+          _pendingKey = null;
+        },
+      ));
     }
     return sign(parameters, key, _clock().millisecondsSinceEpoch ~/ 1000);
   }
@@ -95,13 +113,20 @@ class BilibiliWbiSigningService {
   }
 
   /// 从 nav 的 wbi_img 提取材料；游客 nav 的 -101 仍可能包含有效材料。
-  Future<String> _loadKey(Map<String, String> headers) async {
+  Future<String> _loadKey(
+    Map<String, String> headers,
+    WbiJsonRequest? requestJson,
+  ) async {
     try {
-      final text = await _requestJson(
+      final text = await (requestJson ?? _requestJson)(
         Uri.https('api.bilibili.com', '/x/web-interface/nav'),
         headers,
       );
       final root = jsonDecode(text) as Map<String, dynamic>;
+      final code = root['code'];
+      if (code is int && code != 0 && code != -101) {
+        throw WbiSigningException(apiCode: code);
+      }
       final images = root['data']['wbi_img'] as Map<String, dynamic>;
       final key = deriveMixinKey(
         _keyFromUrl(images['img_url']),
@@ -110,6 +135,11 @@ class BilibiliWbiSigningService {
       _cachedKey = key;
       _cachedAt = _clock();
       return key;
+    } on BilibiliRequestFailure catch (error) {
+      throw WbiSigningException(
+        httpStatus: error.httpStatus,
+        apiCode: error.apiCode,
+      );
     } catch (_) {
       throw const WbiSigningException();
     }

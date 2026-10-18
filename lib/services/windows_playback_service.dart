@@ -25,6 +25,7 @@ import 'windows_dash_media_plan.dart';
 import 'windows_playback_recovery_policy.dart';
 import 'windows_playback_progress_store.dart';
 import 'cache_lifecycle.dart';
+import 'bilibili_wbi_signing_service.dart';
 
 /// 使用 media_kit 与 Windows 系统能力实现 FocuBili 的桌面播放接口。
 class WindowsPlaybackService
@@ -1005,6 +1006,8 @@ class WindowsPlaybackService
       _restoredPosition = Duration.zero;
       final String message = error is DesktopPlaybackSourceException
           ? error.message
+          : error is WbiSigningException
+          ? error.toString()
           : 'Windows 播放器暂时无法打开该视频，请重试。';
       _emitPlayerState(phaseOverride: PlaybackPhase.error, message: message);
       rethrow;
