@@ -129,8 +129,14 @@ final class BilibiliPlaybackSessionCoordinator {
     // shared browser container that may have switched accounts asynchronously.
     private var responseCookies: [String: HTTPCookie] = [:]
     private var responseScopes: Set<String> = []
+    private var responseBase: [String: HTTPCookie] = [:]
     private func scope(_ cookie: HTTPCookie) -> String { "\(cookie.domain.lowercased())|\(cookie.path)|\(cookie.name)" }
-    private func clearResponses() { responseCookies.removeAll(); responseScopes.removeAll() }
+    private func clearResponses() { responseCookies.removeAll(); responseScopes.removeAll(); responseBase.removeAll() }
+    private func sameCookie(_ first: HTTPCookie?, _ second: HTTPCookie?) -> Bool {
+        if first == nil && second == nil { return true }
+        guard let first = first, let second = second else { return false }
+        return first.value == second.value && first.expiresDate == second.expiresDate && first.isSecure == second.isSecure && first.isHTTPOnly == second.isHTTPOnly
+    }
     init(store: BilibiliCookieContainer) { self.store = store }
 
     private func enqueue(_ work: @escaping (@escaping () -> Void) -> Void) {
@@ -146,6 +152,15 @@ final class BilibiliPlaybackSessionCoordinator {
         let observed = BilibiliPlaybackCookiePolicy.snapshot(cookies, path: path)
         if let previous = identity, previous != observed.identity { revision += 1; clearResponses() }
         identity = observed.identity
+        for key in Array(responseScopes) {
+            let current = cookies.first { scope($0) == key }
+            let previous = responseBase[key]
+            if current == nil, let expiration = previous?.expiresDate, expiration <= Date() {
+                responseBase.removeValue(forKey: key)
+            } else if !sameCookie(current, previous) {
+                responseScopes.remove(key); responseCookies.removeValue(forKey: key); responseBase.removeValue(forKey: key)
+            }
+        }
         let merged = cookies.filter { !responseScopes.contains(scope($0)) } + Array(responseCookies.values)
         var snapshot = BilibiliPlaybackCookiePolicy.snapshot(merged, path: path)
         snapshot.generation = revision
@@ -198,6 +213,7 @@ final class BilibiliPlaybackSessionCoordinator {
                     let maxAge = (cookie.properties?[.maximumAge]).flatMap { Int(String(describing: $0)) }
                     let expired = (cookie.expiresDate.map { $0 <= Date() } ?? false) || (maxAge.map { $0 <= 0 } ?? false)
                     let key = self.scope(cookie)
+                    self.responseBase[key] = existing.first { self.scope($0) == key }
                     if expired {
                         self.responseScopes.insert(key); self.responseCookies.removeValue(forKey: key)
                     } else if BilibiliPlaybackCookiePolicy.valid(cookie, now: Date()) {

@@ -348,7 +348,9 @@ class BilibiliAuthService {
         : null;
     final BilibiliPlaybackCookieSnapshot snapshot;
     if (native != null) {
-      snapshot = await native.readPlaybackSession(path);
+      snapshot = await BilibiliPlaybackSession._nativeCall(
+        () => native.readPlaybackSession(path),
+      );
     } else {
       final header = await _cookieStore.readCookies();
       final hasSession = RegExp(r'(?:^|;)\s*SESSDATA=([^;]+)').hasMatch(header);
@@ -542,6 +544,16 @@ class BilibiliPlaybackSession {
   final int _localGeneration;
   final String _path;
 
+  static Future<T> _nativeCall<T>(Future<T> Function() action) async {
+    try {
+      return await action();
+    } on BilibiliPlaybackSessionException {
+      rethrow;
+    } catch (_) {
+      throw const BilibiliPlaybackSessionException('unknown');
+    }
+  }
+
   Future<void> _checkLocal() async {
     await BilibiliAuthService._accountWrites;
     if (_localGeneration != BilibiliAuthService._loginGeneration) {
@@ -560,7 +572,7 @@ class BilibiliPlaybackSession {
   Future<String> headerFor(String path) async {
     await _checkLocal();
     if (_native case final native?) {
-      _accept(await native.readPlaybackSession(path));
+      _accept(await _nativeCall(() => native.readPlaybackSession(path)));
     }
     await _checkLocal();
     return snapshot.header;
@@ -570,10 +582,12 @@ class BilibiliPlaybackSession {
     await _checkLocal();
     if (_native case final native? when cookies.isNotEmpty) {
       _accept(
-        await native.mergePlaybackResponseCookies(
-          snapshot.generation,
-          path,
-          cookies,
+        await _nativeCall(
+          () => native.mergePlaybackResponseCookies(
+            snapshot.generation,
+            path,
+            cookies,
+          ),
         ),
       );
     }
@@ -583,7 +597,9 @@ class BilibiliPlaybackSession {
   Future<void> validate() async {
     await _checkLocal();
     if (_native case final native?) {
-      if (!await native.validatePlaybackSession(snapshot.generation, _path)) {
+      if (!await _nativeCall(
+        () => native.validatePlaybackSession(snapshot.generation, _path),
+      )) {
         throw const BilibiliPlaybackSessionException('changing');
       }
     }

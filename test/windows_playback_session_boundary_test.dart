@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -11,6 +12,7 @@ import 'listening_playback_test.dart' show ListeningPlayer;
 class SessionSources extends BilibiliDesktopPlaybackSourceService {
   bool current = true;
   int validations = 0;
+  Future<void> Function()? validateHook;
   @override
   Future<DesktopPlaybackSources> load({
     required String bvid,
@@ -30,17 +32,28 @@ class SessionSources extends BilibiliDesktopPlaybackSourceService {
     audioCodec: 'mp4a',
     validateSession: () async {
       validations++;
+      await validateHook?.call();
       if (!current) throw const BilibiliPlaybackSessionException('changing');
     },
   );
 }
 
 class HeldPlayer extends ListeningPlayer {
-  Completer<void>? pauseGate, openGate;
+  Completer<void>? pauseGate, openGate, stopGate;
   final paused = Completer<void>();
   final opening = Completer<void>();
+  final stopping = Completer<void>();
   int pauses = 0;
   bool failFirstOpen = false;
+  @override
+  Future<void> stop() async {
+    if (stopGate != null) {
+      if (!stopping.isCompleted) stopping.complete();
+      await stopGate!.future;
+    }
+    await super.stop();
+  }
+
   @override
   Future<void> pause() async {
     pauses++;
@@ -132,6 +145,62 @@ void main() {
       );
       expect(player.plays, before);
       expect(player.state.playing, isFalse);
+      await service.dispose();
+    },
+  );
+  for (final error in [
+    TimeoutException('synthetic timeout'),
+    PlatformException(code: 'synthetic'),
+  ]) {
+    test(
+      'post-play ${error.runtimeType} stops media without fallback',
+      () async {
+        final player = HeldPlayer();
+        final sources = SessionSources()
+          ..validateHook = () async {
+            if (player.plays > 0) throw error;
+          };
+        final service = WindowsPlaybackService(
+          player: player,
+          sourceService: sources,
+        );
+        await expectLater(
+          service.openVideo(VideoPreview.placeholder()),
+          throwsA(isA<BilibiliPlaybackSessionException>()),
+        );
+        expect(player.opened, hasLength(1));
+        expect(player.plays, 1);
+        expect(player.state.playing, isFalse);
+        await service.dispose();
+      },
+    );
+  }
+  test(
+    'new media waits for revocation stop and survives its completion',
+    () async {
+      final player = HeldPlayer();
+      final sources = SessionSources()
+        ..validateHook = () async {
+          if (player.plays > 0) {
+            player.stopGate ??= Completer<void>();
+            throw TimeoutException('synthetic timeout');
+          }
+        };
+      final service = WindowsPlaybackService(
+        player: player,
+        sourceService: sources,
+      );
+      final old = service.openVideo(VideoPreview.placeholder());
+      await player.stopping.future;
+      sources.validateHook = null;
+      final replacement = service.openVideo(VideoPreview.placeholder());
+      await Future<void>.delayed(Duration.zero);
+      expect(player.opened, hasLength(1));
+      player.stopGate!.complete();
+      await old;
+      await replacement;
+      expect(player.opened, hasLength(2));
+      expect(player.state.playing, isTrue);
       await service.dispose();
     },
   );

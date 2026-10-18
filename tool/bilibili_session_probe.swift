@@ -20,8 +20,9 @@ private final class MemoryCookies: BilibiliCookieContainer {
     var holdSet = false
     var release: (() -> Void)?
     var writes = 0
+    var onRead: (() -> Void)?
     init(_ cookies: [HTTPCookie]) { self.cookies = cookies }
-    func read(_ completion: @escaping ([HTTPCookie]) -> Void) { DispatchQueue.main.async { completion(self.cookies) } }
+    func read(_ completion: @escaping ([HTTPCookie]) -> Void) { DispatchQueue.main.async { self.onRead?(); completion(self.cookies) } }
     func delete(_ cookie: HTTPCookie, completion: @escaping () -> Void) {
         cookies.removeAll { $0.name == cookie.name && $0.domain == cookie.domain && $0.path == cookie.path }
         DispatchQueue.main.async(execute: completion)
@@ -39,6 +40,10 @@ private final class MemoryCookies: BilibiliCookieContainer {
         if let phase = CommandLine.arguments.dropFirst().first {
             precondition(ProcessInfo.processInfo.environment["CI"] == "true", "Persistent probe is CI-only")
             _ = NSApplication.shared
+            let view = WKWebView(frame: .zero)
+            view.loadHTMLString("<html><body>synthetic cookie probe</body></html>", baseURL: nil)
+            RunLoop.main.run(until: Date().addingTimeInterval(1))
+            defer { withExtendedLifetime(view) {} }
             let coordinator = BilibiliPlaybackSessionCoordinator(store: WebKitBilibiliCookieContainer())
             if phase == "persistent-write" {
                 let before: BilibiliPlaybackSnapshot = wait { coordinator.read(path: path, completion: $0) }
@@ -85,12 +90,41 @@ private final class MemoryCookies: BilibiliCookieContainer {
         precondition(!refreshed.header.contains("synthetic-unwanted"), "Unapproved response cookie applied")
         let deleted: BilibiliPlaybackSnapshot = wait { coordinator.merge(generation: first.generation, path: path, headers: ["bili_ticket=; Domain=.bilibili.com; Path=/; Max-Age=0; Secure"], completion: $0) }
         precondition(!deleted.header.contains("bili_ticket="), "Expired response cookie not removed")
+        precondition(memory.writes == 0, "Response cookies must not write into shared WK storage")
+        memory.cookies.append(cookie("bili_ticket", "synthetic-web-refresh"))
+        let externalDevice: BilibiliPlaybackSnapshot = wait { coordinator.read(path: path, completion: $0) }
+        precondition(externalDevice.header.contains("bili_ticket=synthetic-web-refresh"), "Same-account WK refresh hidden by old jar")
+        let updated: BilibiliPlaybackSnapshot = wait { coordinator.merge(generation: first.generation, path: path, headers: ["bili_ticket=synthetic-jar; Domain=.bilibili.com; Path=/; Secure"], completion: $0) }
+        precondition(updated.header.contains("bili_ticket=synthetic-jar"))
+        let tombstone: BilibiliPlaybackSnapshot = wait { coordinator.merge(generation: first.generation, path: path, headers: ["bili_ticket=; Domain=.bilibili.com; Path=/; Max-Age=0; Secure"], completion: $0) }
+        precondition(!tombstone.header.contains("bili_ticket="), "Deleted jar resurrected WK cookie")
         memory.cookies = [cookie("SESSDATA", "synthetic-external")]
         let valid: Bool = wait { coordinator.validate(generation: first.generation, path: path, completion: $0) }
         precondition(!valid, "External WK change did not invalidate old request")
         let writes = memory.writes
         let stale: BilibiliPlaybackSnapshot = wait { coordinator.merge(generation: first.generation, path: path, headers: ["buvid3=synthetic-stale; Domain=.bilibili.com; Path=/; Secure"], completion: $0) }
         precondition(!stale.usable && memory.writes == writes, "Stale response wrote cookies")
+        let expiryMemory = MemoryCookies([root, cookie("bili_ticket", "synthetic-old-wk")])
+        let expiryCoordinator = BilibiliPlaybackSessionCoordinator(store: expiryMemory)
+        let expiryFirst: BilibiliPlaybackSnapshot = wait { expiryCoordinator.read(path: path, completion: $0) }
+        let expiring: BilibiliPlaybackSnapshot = wait { expiryCoordinator.merge(generation: expiryFirst.generation, path: path, headers: ["bili_ticket=synthetic-short-lived; Domain=.bilibili.com; Path=/; Max-Age=1; Secure"], completion: $0) }
+        precondition(expiring.header.contains("bili_ticket=synthetic-short-lived"))
+        RunLoop.main.run(until: Date().addingTimeInterval(1.2))
+        let expired: BilibiliPlaybackSnapshot = wait { expiryCoordinator.read(path: path, completion: $0) }
+        precondition(!expired.header.contains("bili_ticket="), "Expired jar resurrected old WK cookie")
+        let raceMemory = MemoryCookies([root])
+        let raceCoordinator = BilibiliPlaybackSessionCoordinator(store: raceMemory)
+        let raceFirst: BilibiliPlaybackSnapshot = wait { raceCoordinator.read(path: path, completion: $0) }
+        var mergeReads = 0
+        raceMemory.onRead = {
+            mergeReads += 1
+            if mergeReads == 2 { raceMemory.cookies = [cookie("SESSDATA", "synthetic-new-account")] }
+        }
+        let raced: BilibiliPlaybackSnapshot = wait { raceCoordinator.merge(generation: raceFirst.generation, path: path, headers: ["buvid3=synthetic-old-response; Domain=.bilibili.com; Path=/; Secure"], completion: $0) }
+        precondition(!raced.usable && raceMemory.writes == 0, "Merge raced with external account change")
+        raceMemory.onRead = nil
+        let afterRace: BilibiliPlaybackSnapshot = wait { raceCoordinator.read(path: path, completion: $0) }
+        precondition(afterRace.header == "SESSDATA=synthetic-new-account", "Old response contaminated new account")
         memory.holdSet = true
         var writeDone = false, readDone = false
         coordinator.replace(header: "SESSDATA=synthetic-replaced") { writeDone = $0 }
