@@ -13,10 +13,10 @@
 ## 证据与测试边界
 
 * `test/desktop_playback_412_regression_test.dart`：20 项无 socket HTTP/通道测试，覆盖 HTTP 412、200/-412、nav 拒绝、实际签名事实、无敏感正文、Apple nav 响应 Cookie 同代次传递、换账号丢弃及 fail-closed。
-* `test/windows_playback_session_boundary_test.dart`：7 项媒体替身测试，覆盖暂停/open 中换会话、恢复播放校验、post-play 超时/平台异常停流、迟到 stop 与新 open 顺序、旧 fallback 校验异常不覆盖新播放。
+* `test/windows_playback_session_boundary_test.dart`：9 项媒体替身测试，覆盖暂停/open 中换会话、恢复播放校验、post-play 超时/平台异常停流、迟到 stop 与新 open 顺序、旧 fallback 校验异常不覆盖新播放、校验中暂停及迟到 play 保持暂停。
 * `tool/bilibili_session_probe.swift`：真实 Swift/WK API 编译；合成 store 验证域/路径/冲突/半事务/删除/到期/外部刷新/merge 中换账号。单独固定 bundle 身份的 App 两进程验证 WK 登录 Cookie 写入后恢复，探针只允许干净 CI 环境，不使用用户容器。
 * macOS 原生 CI [39125019443](https://github.com/L1Xu4n/FocuBili/actions/runs/39125019443) 在 `c0b387f5cbc1eff48c4da94c39711fd89179a54b` 通过全部原生策略及跨进程持久化探针。更早无 bundle 身份的 CLI 持久化探针失败，已保留失败记录；它不构成产品容器持久化失败的证据。发布前还需最终 SHA 的完整 CI。
-* Linux Flutter 完整套件在上一修订通过 1623 项（2 skipped）；新增全部 27 项专项回归及 analyze 通过。最终提交的完整套件由 CI 重新执行。
+* Linux Flutter 完整套件在上一修订通过 1623 项（2 skipped）；新增全部 29 项专项回归及 analyze 通过。最终提交的完整套件由 CI 重新执行。
 * 独立只读审查已核对原生异常停流、迟到回调、Cookie overlay、工作流权限；最终真实 Apple 构建结果仍为发布门槛。
 
 不曾对 B 站发送真实 API 请求；所有会话和媒体 URL 均为合成测试数据。尚待真实 Mac 使用脱敏诊断确认：412 位于哪个端点、HTTP 或业务层，PiliPlus 是否使用同设备/网络/播放账号，以及实际登录会话是否稳定。仅需这些事实，不需要 Cookie、令牌、账号 ID、IP 或 HAR。

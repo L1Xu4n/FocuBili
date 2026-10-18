@@ -52,12 +52,22 @@ class HeldPlayer extends ListeningPlayer {
   PlayerStream get stream => events;
   @override
   Future<void> dispose() async => events.errors.close();
-  Completer<void>? pauseGate, openGate, stopGate;
+  Completer<void>? pauseGate, openGate, stopGate, playGate;
   final paused = Completer<void>();
   final opening = Completer<void>();
   final stopping = Completer<void>();
+  final playing = Completer<void>();
   int pauses = 0;
   bool failFirstOpen = false;
+  @override
+  Future<void> play() async {
+    if (playGate != null) {
+      if (!playing.isCompleted) playing.complete();
+      await playGate!.future;
+    }
+    await super.play();
+  }
+
   @override
   Future<void> stop() async {
     if (stopGate != null) {
@@ -250,4 +260,50 @@ void main() {
       await service.dispose();
     },
   );
+  test(
+    'pause during session validation prevents a later play command',
+    () async {
+      final player = HeldPlayer();
+      final sources = SessionSources();
+      final service = WindowsPlaybackService(
+        player: player,
+        sourceService: sources,
+      );
+      await service.openVideo(VideoPreview.placeholder());
+      await service.pause();
+      final before = player.plays;
+      final entered = Completer<void>();
+      final release = Completer<void>();
+      sources.validateHook = () async {
+        if (!entered.isCompleted) entered.complete();
+        await release.future;
+      };
+      final pending = service.play();
+      await entered.future;
+      await service.pause();
+      release.complete();
+      await pending;
+      expect(player.plays, before);
+      expect(player.state.playing, isFalse);
+      await service.dispose();
+    },
+  );
+  test('pause wins when an issued native play completes later', () async {
+    final player = HeldPlayer();
+    final sources = SessionSources();
+    final service = WindowsPlaybackService(
+      player: player,
+      sourceService: sources,
+    );
+    await service.openVideo(VideoPreview.placeholder());
+    await service.pause();
+    player.playGate = Completer<void>();
+    final pending = service.play();
+    await player.playing.future;
+    await service.pause();
+    player.playGate!.complete();
+    await pending;
+    expect(player.state.playing, isFalse);
+    await service.dispose();
+  });
 }

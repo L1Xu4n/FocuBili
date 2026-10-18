@@ -231,6 +231,7 @@ class WindowsPlaybackService
       return;
     }
     if (!await _validateActiveSession(generation)) return;
+    if (!_shouldPlayAfterFallback) return;
     final fence = Completer<void>();
     _pendingMediaOpens.add(fence.future);
     try {
