@@ -30,6 +30,6 @@
 
 本分支版本为 `1.8.0+27`，由 dev 修复逐提交回补，并适配 1.8 的普通视频播放器；不整体合并 dev。新增会话校验的 await 会扩大播放意图竞态，因此回补同时保留“校验期间暂停”和“迟到 play 后暂停”的必要边界，两个合成回归在修复前均失败、修复后通过。
 
-受控 `macos-hotfix.yml` 仅接受 master 中的精确源码 SHA 和不变的原始 v1.8.0 标签，只有读取仓库和构建 Artifact 的权限，不直接操作 Release。`macos_build_identity.py` 将与 Dart 相同的源码/UTC 构建时间写入签名前 plist；DMG 验证要求 `1.8.0+27`、双架构主程序、正常 App 与 DMG 完全相同、有效 ad-hoc 签名及沙箱网络权限。此包沿用项目现有 ad-hoc 签名，不是 Developer ID 公证包。
+受控 `macos-hotfix.yml` 仅接受 master 中的精确源码 SHA 和不变的原始 v1.8.0 标签，构建 job 只有读取仓库和生成 Artifact 的权限。云环境无法访问 Actions 存储时，可显式启用独立候选 job；该 job 同 run 读取并核验 Artifact 后只上传带 run/artifact/source/time/hash 标签的 `.dmg.candidate`，不改正式资产、正文、标签或 Beta。正式提升仍需云端未认证公开下载哈希验证及逐步状态核验。`macos_build_identity.py` 将与 Dart 相同的源码/UTC 构建时间写入签名前 plist；DMG 验证要求 `1.8.0+27`、双架构主程序、正常 App 与 DMG 完全相同、有效 ad-hoc 签名及沙箱网络权限。此包沿用项目现有 ad-hoc 签名，不是 Developer ID 公证包。
 
 原 Mac build26 包备份 SHA-256：`11fa18ee8beb04a45fd1aa2931d67b4be8d67f9120a91759ef11e5cbc8d7afc7`，原资产 ID `652740760`。替换应先上传并下载验证新候选，再将旧资产改为保留的 `FocuBili-v1.8.0-macos-universal-build26.dmg.backup`，最后让新候选使用原下载文件名；失败时恢复旧名称。候选上传时也以 `.dmg.candidate` 结尾；旧客户端按首个 `.dmg` 选择资产，因此备份/未验收候选不得以 `.dmg` 结尾。其他平台资产、v1.8.0 标签及 1.9 Beta 草稿均不得改变。
