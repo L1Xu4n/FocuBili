@@ -25,12 +25,15 @@ Future<void> subscriptionAppleBackgroundMain() async {
 }
 
 /// The bounded worker protocol is independently testable with a synthetic store.
+/// This invocation owns and disposes its notification sender, including injections.
 Future<void> runAppleSubscriptionWorker({
   required MethodChannel channel,
   required SubscriptionService Function() createService,
   SubscriptionNotificationService? notifications,
 }) async {
   SubscriptionService? service;
+  final workerNotifications =
+      notifications ?? SubscriptionNotificationService();
   Timer? deadline;
   String? token;
   var expired = false;
@@ -38,6 +41,7 @@ Future<void> runAppleSubscriptionWorker({
   channel.setMethodCallHandler((call) async {
     if (call.method == 'expire' && !expired) {
       expired = true;
+      workerNotifications.cancelPending();
       service?.cancelBackgroundCheck();
     }
   });
@@ -67,7 +71,7 @@ Future<void> runAppleSubscriptionWorker({
         preferencesLoader: () async => prefs,
       ).loadState();
       if (expired || focus.activeSession?.isActive == true) return false;
-      return (notifications ?? SubscriptionNotificationService()).showItems(
+      return workerNotifications.showItems(
         items,
         generation: worker.notificationGeneration,
         background: true,
@@ -75,6 +79,7 @@ Future<void> runAppleSubscriptionWorker({
     };
     deadline = Timer(budget, () {
       expired = true;
+      workerNotifications.cancelPending();
       worker.cancelBackgroundCheck();
     });
     await worker.runBackgroundCheck(generation, budget: budget);
@@ -86,6 +91,7 @@ Future<void> runAppleSubscriptionWorker({
     // Native status reports failure. No credentials or exception contents logged.
   } finally {
     deadline?.cancel();
+    workerNotifications.dispose();
     service?.dispose();
     channel.setMethodCallHandler(null);
     if (token != null) {

@@ -15,6 +15,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class _SendingWorker extends SubscriptionService {
   bool? notified;
+  int cancelled = 0;
+  String? interruption;
   @override
   int get notificationGeneration => 17;
   @override
@@ -31,6 +33,17 @@ class _SendingWorker extends SubscriptionService {
         discoveredAt: DateTime.utc(2026),
       ),
     ]);
+  }
+
+  @override
+  void cancelBackgroundCheck() {
+    cancelled++;
+    super.cancelBackgroundCheck();
+  }
+
+  @override
+  Future<void> recordBackgroundInterruption(String status) async {
+    interruption = status;
   }
 }
 
@@ -55,6 +68,19 @@ class _HeldNotifications extends SubscriptionNotificationService {
   }
 }
 
+class _WorkerEngine {
+  _WorkerEngine(int index, this.token, this.focusEpoch)
+    : notifications = MethodChannel('test/focus/notifications-$index'),
+      protocol = MethodChannel('test/focus/worker-$index');
+  final MethodChannel notifications;
+  final MethodChannel protocol;
+  final String token;
+  final int? focusEpoch;
+  final settings = Completer<void>();
+  final entered = Completer<void>();
+  bool cancelled = false;
+}
+
 /// Models the native engine boundary, not UserNotifications itself. The real
 /// worker and app run in Dart; the Foundation-only Swift probe covers the gate.
 class _NativeHost {
@@ -62,11 +88,49 @@ class _NativeHost {
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
     messenger.setMockMethodCallHandler(ui, _foreground);
-    messenger.setMockMethodCallHandler(worker, _worker);
-    messenger.setMockMethodCallHandler(protocol, (call) async {
+    _registerEngine('run-one');
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(ui, null);
+      for (final engine in engines) {
+        messenger.setMockMethodCallHandler(engine.notifications, null);
+        messenger.setMockMethodCallHandler(engine.protocol, null);
+      }
+    });
+  }
+  final ui = const MethodChannel('test/focus/ui-notifications');
+  final engines = <_WorkerEngine>[];
+  _WorkerEngine get engine => engines.last;
+  MethodChannel get worker => engine.notifications;
+  MethodChannel get protocol => engine.protocol;
+  Completer<void> get settings => engine.settings;
+  Completer<void> get entered => engine.entered;
+  final completions = <Map<Object?, Object?>>[];
+  final focusUpdates = <bool>[];
+  bool focusActive = false;
+  int focusEpoch = 0;
+  String? runToken;
+  final shown = <String>[];
+  int rejectedWorkerFocusWrites = 0;
+
+  void _registerEngine(String token) {
+    // Both run identity and focus epoch belong to this engine registration.
+    final engine = _WorkerEngine(
+      engines.length,
+      token,
+      focusActive ? null : focusEpoch,
+    );
+    engines.add(engine);
+    runToken = token;
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(
+      engine.notifications,
+      (call) => _worker(call, engine),
+    );
+    messenger.setMockMethodCallHandler(engine.protocol, (call) async {
       if (call.method == 'ready') {
         return {
-          'runId': registeredToken,
+          'runId': engine.token,
           'generation': 17,
           'budgetMilliseconds': 20000,
         };
@@ -77,37 +141,15 @@ class _NativeHost {
       }
       throw MissingPluginException();
     });
-    addTearDown(() {
-      messenger.setMockMethodCallHandler(ui, null);
-      messenger.setMockMethodCallHandler(worker, null);
-      messenger.setMockMethodCallHandler(protocol, null);
-    });
   }
-  final ui = const MethodChannel('test/focus/ui-notifications');
-  final worker = const MethodChannel('test/focus/worker-notifications');
-  final protocol = const MethodChannel('test/focus/worker');
-  final settings = Completer<void>();
-  final entered = Completer<void>();
-  final completions = <Map<Object?, Object?>>[];
-  final focusUpdates = <bool>[];
-  bool focusActive = false;
-  int focusEpoch = 0;
-  // Captured when the headless engine registers, before its Dart ready call.
-  int? workerFocusEpoch = 0;
-  String? runToken = 'run-one';
-  String registeredToken = 'run-one';
-  final shown = <String>[];
-  int rejectedWorkerFocusWrites = 0;
 
-  void registerNextRun() {
-    runToken = registeredToken = 'run-two';
-    workerFocusEpoch = focusActive ? null : focusEpoch;
-  }
+  void registerNextRun() => _registerEngine('run-two');
 
   Future<Object?> _foreground(MethodCall call) async {
     if (call.method == 'consumeTap' || call.method == 'cancelSummary') {
       return null;
     }
+    if (call.method == 'cancelWorkerSummary') return false;
     if (call.method == 'setFocusActive') {
       final active = (call.arguments as Map)['active'] as bool;
       focusUpdates.add(active);
@@ -121,25 +163,43 @@ class _NativeHost {
   bool permits(int? epoch) =>
       !focusActive && epoch != null && epoch == focusEpoch;
 
-  Future<Object?> _worker(MethodCall call) async {
+  Future<Object?> _worker(MethodCall call, _WorkerEngine engine) async {
     if (call.method == 'setFocusActive') {
       rejectedWorkerFocusWrites++;
       return false;
+    }
+    if (call.method == 'cancelWorkerSummary') {
+      engine.cancelled = true;
+      return null;
     }
     if (call.method != 'showSummary') throw MissingPluginException();
     final args = call.arguments as Map;
     expect(args['background'], true);
     expect(args['generation'], 17);
     expect(args.containsKey('requestId'), false);
-    final epoch = workerFocusEpoch;
-    final token = registeredToken;
-    if (!entered.isCompleted) entered.complete();
-    if (!permits(epoch)) return false;
-    await settings.future;
-    if (runToken != token || !permits(epoch)) return false;
+    final epoch = engine.focusEpoch;
+    if (!engine.entered.isCompleted) engine.entered.complete();
+    if (engine.cancelled || !permits(epoch)) return false;
+    await engine.settings.future;
+    if (engine.cancelled || runToken != engine.token || !permits(epoch)) {
+      return false;
+    }
     shown.add(args['title'] as String);
     return true;
   }
+}
+
+Future<void> _expire(MethodChannel channel) {
+  final reply = Completer<void>();
+  TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+      .handlePlatformMessage(
+        channel.name,
+        const StandardMethodCodec().encodeMethodCall(
+          const MethodCall('expire'),
+        ),
+        (_) => reply.complete(),
+      );
+  return reply.future;
 }
 
 Future<FocusTimerController> _mountApp(
@@ -231,11 +291,15 @@ void main() {
       if (change == 'start/end') {
         expect(host.focusActive, false);
         host.registerNextRun();
+        host.settings.complete();
         final fresh = _SendingWorker();
         await runAppleSubscriptionWorker(
           channel: host.protocol,
           createService: () => fresh,
-          notifications: headless,
+          notifications: SubscriptionNotificationService(
+            channel: host.worker,
+            platform: AppPlatform.ios,
+          ),
         );
         expect(
           fresh.notified,
@@ -280,4 +344,97 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
     },
   );
+
+  for (final cancellation in ['deadline', 'native expire', 'dispose']) {
+    testWidgets(
+      'headless pending settings respects cancellation $cancellation',
+      (tester) async {
+        SharedPreferences.setMockInitialValues({});
+        final host = _NativeHost();
+        final oldEngine = host.engine;
+        final headless = SubscriptionNotificationService(
+          channel: host.worker,
+          platform: AppPlatform.ios,
+        );
+        addTearDown(headless.dispose);
+        final worker = _SendingWorker();
+        final run = runAppleSubscriptionWorker(
+          channel: host.protocol,
+          createService: () => worker,
+          notifications: headless,
+        );
+        await host.entered.future;
+        switch (cancellation) {
+          case 'deadline':
+            // Fake time reaches the Dart 20s deadline, inside the native 25s
+            // watchdog grace period. The native run still owns its token.
+            await tester.pump(const Duration(seconds: 24));
+          case 'native expire':
+            await _expire(host.protocol);
+          case 'dispose':
+            headless.dispose();
+        }
+        expect(host.runToken, 'run-one');
+        host.settings.complete();
+        await run;
+        expect(worker.notified, false);
+        expect(host.shown, isEmpty);
+        expect(oldEngine.cancelled, true);
+        expect(host.completions, [
+          {'runId': 'run-one', 'success': cancellation == 'dispose'},
+        ]);
+        if (cancellation != 'dispose') {
+          expect(worker.cancelled, 1);
+          expect(worker.interruption, isNotNull);
+        }
+
+        host.registerNextRun();
+        final fresh = _SendingWorker();
+        final next = runAppleSubscriptionWorker(
+          channel: host.protocol,
+          createService: () => fresh,
+          notifications: SubscriptionNotificationService(
+            channel: host.worker,
+            platform: AppPlatform.ios,
+          ),
+        );
+        await host.entered.future;
+        // A delayed old-engine cancel and a UI call cannot revoke the new
+        // engine's notification, even though its system settings are pending.
+        await oldEngine.notifications.invokeMethod<void>('cancelWorkerSummary');
+        expect(await host.ui.invokeMethod<bool>('cancelWorkerSummary'), false);
+        expect(host.engine.cancelled, false);
+        host.settings.complete();
+        await next;
+        expect(fresh.notified, true);
+        expect(host.completions.last, {'runId': 'run-two', 'success': true});
+      },
+    );
+  }
+
+  testWidgets('worker finally disposes its notification sender', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final host = _NativeHost();
+    host.settings.complete();
+    final headless = SubscriptionNotificationService(
+      channel: host.worker,
+      platform: AppPlatform.ios,
+    );
+    addTearDown(headless.dispose);
+    final worker = _SendingWorker();
+    await runAppleSubscriptionWorker(
+      channel: host.protocol,
+      createService: () => worker,
+      notifications: headless,
+    );
+    expect(worker.notified, true);
+    expect(
+      await headless.showSummary(1, generation: 17, background: true),
+      false,
+      reason: 'A completed worker must not start another native preparation',
+    );
+    expect(host.shown, hasLength(1));
+  });
 }

@@ -59,6 +59,19 @@ import Foundation
         precondition(!focus.permits(focusedEpoch), "A worker started during focus must stay revoked")
         precondition(focus.permits(focus.capture()), "A fresh run after focus may deliver")
         precondition(gate.finish(focusRun), "Focus must preserve the worker completion protocol")
+        let workerDelivery = SubscriptionNotificationGate()
+        let nextWorkerDelivery = SubscriptionNotificationGate()
+        let cancellationRun = gate.begin()!
+        precondition(!workerDelivery.workerCancelled)
+        workerDelivery.cancelWorker()
+        precondition(workerDelivery.workerCancelled, "Dart deadline must revoke a pending native delivery")
+        workerDelivery.cancelWorker()
+        precondition(workerDelivery.workerCancelled, "A cancelled engine must never revive")
+        precondition(gate.permits(14, runToken: cancellationRun), "Dart cancellation must not finish scheduler ownership")
+        precondition(!nextWorkerDelivery.workerCancelled, "An old engine cannot cancel a newer engine")
+        precondition(delivery.begin("after-worker-cancel"), "Headless cancellation must not cancel foreground requests")
+        precondition(delivery.finish("after-worker-cancel"))
+        precondition(gate.finish(cancellationRun), "Worker completion must retain its own run token")
         print("NATIVE_SUBSCRIPTION_GATE_PASSED")
     }
 }

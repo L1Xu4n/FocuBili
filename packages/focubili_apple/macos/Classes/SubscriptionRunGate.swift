@@ -28,10 +28,12 @@ final class SubscriptionRunGate {
     }
 }
 
-/// Foreground preparations are request-owned, independent of background runs.
+/// Foreground preparations are request-owned; headless cancellation is engine-owned.
 /// The plugin serializes settings replies, guard replies and cancellation on main.
 final class SubscriptionNotificationGate {
     private var requests = Set<String>()
+    private(set) var workerCancelled = false
+    func cancelWorker() { workerCancelled = true }
     static func allows(_ reply: Any?) -> Bool {
         guard let value = reply as? NSNumber,
               CFGetTypeID(value) == CFBooleanGetTypeID() else { return false }

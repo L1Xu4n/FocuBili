@@ -170,6 +170,16 @@ public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCen
             SubscriptionFocusGate.shared.update(active: active)
             result(nil); return
         }
+        if call.method == "cancelWorkerSummary" {
+            #if os(iOS)
+            guard isSubscriptionWorker else { result(false); return }
+            subscriptionDeliveryGate.cancelWorker()
+            result(nil)
+            #else
+            result(false)
+            #endif
+            return
+        }
         if call.method == "cancelSummary" {
             if let request = args["requestId"] as? String { subscriptionDeliveryGate.finish(request) }
             result(nil); return
@@ -191,6 +201,7 @@ public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCen
             guard SubscriptionFocusGate.shared.permits(focusEpoch) else { return false }
             #if os(iOS)
             if isBackground {
+                guard !self.subscriptionDeliveryGate.workerCancelled else { return false }
                 return FocuBiliSubscriptionScheduler.shared.canNotify(generation: generation, runToken: self.subscriptionWorkerToken)
             }
             #endif

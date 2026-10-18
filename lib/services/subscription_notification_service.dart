@@ -26,6 +26,7 @@ class SubscriptionNotificationService {
   bool _disposed = false;
   _AppleSubscriptionNotificationChannel? _appleChannel;
   final _pendingRequests = <String>{};
+  int _pendingBackgroundRequests = 0;
   AppPlatform get platform => _platform ?? AppPlatformDetector.current;
   bool get _available =>
       (platform == AppPlatform.android || platform.isApple) &&
@@ -60,6 +61,8 @@ class SubscriptionNotificationService {
     String? source,
   }) async {
     if (!_available || _disposed) return false;
+    final isHeadless = platform == AppPlatform.ios && background;
+    if (isHeadless) _pendingBackgroundRequests++;
     String? requestId;
     try {
       final guard = SubscriptionNotificationDelivery.current;
@@ -68,7 +71,7 @@ class SubscriptionNotificationService {
       }
       // The iOS worker retains its native generation/run-token protocol. All
       // foreground Apple requests recheck their own guard after UN settings.
-      if (platform.isApple && !(platform == AppPlatform.ios && background)) {
+      if (platform.isApple && !isHeadless) {
         requestId = _attachAppleChannel().addRequest(
           this,
           () => !_disposed && SubscriptionNotificationDelivery.allows(guard),
@@ -89,6 +92,7 @@ class SubscriptionNotificationService {
     } on MissingPluginException {
       return false;
     } finally {
+      if (isHeadless) _pendingBackgroundRequests--;
       if (requestId != null) {
         _pendingRequests.remove(requestId);
         _appleChannel?.removeRequest(requestId);
@@ -139,14 +143,27 @@ class SubscriptionNotificationService {
     }
   }
 
-  /// Permanently cancels preparations already in flight, even if focus ends
-  /// before the system's settings reply arrives. Future requests remain usable.
+  /// Permanently cancels preparations already in flight. Foreground requests
+  /// remain independent; headless cancellation revokes only its owning engine.
   void cancelPending() {
     for (final requestId in _pendingRequests) {
       _appleChannel?.removeRequest(requestId);
       unawaited(_cancelRequest(requestId));
     }
     _pendingRequests.clear();
+    if (_pendingBackgroundRequests > 0) {
+      unawaited(_cancelWorkerRequest());
+    }
+  }
+
+  Future<void> _cancelWorkerRequest() async {
+    try {
+      await _channel.invokeMethod<void>('cancelWorkerSummary');
+    } on PlatformException {
+      // Native expiration still owns the run if its engine is already closing.
+    } on MissingPluginException {
+      // An absent engine cannot deliver its pending notification.
+    }
   }
 
   /// Publish the UI controller's current state to every Apple engine in this
