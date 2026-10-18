@@ -1,3 +1,4 @@
+import 'bilibili_auth_service.dart';
 import 'dart:async';
 import 'dart:io';
 import 'apple_playback_session.dart';
@@ -187,12 +188,32 @@ class WindowsPlaybackService
   Future<void> _accountChangeStop = Future<void>.value();
   // Includes issued play commands: logout must stop after every media activation.
   final Set<Future<void>> _pendingMediaOpens = {};
+  Future<void> Function()? _activeSessionValidator;
+
+  Future<bool> _validateActiveSession(int generation) async {
+    if (!_isCurrentSourceRequest(generation)) return false;
+    final validate = _activeSessionValidator;
+    try {
+      await validate?.call();
+    } on BilibiliPlaybackSessionException {
+      if (_isCurrentSourceRequest(generation)) {
+        _shouldPlayAfterFallback = false;
+        _mediaAttempts = const [];
+        await _player.stop();
+      }
+      rethrow;
+    }
+    return _isCurrentSourceRequest(generation);
+  }
 
   Future<void> _openPlayerMedia(Media media, {required bool play}) async {
+    final generation = _sourceGeneration;
+    if (!await _validateActiveSession(generation)) return;
     final fence = Completer<void>();
     _pendingMediaOpens.add(fence.future);
     try {
       await _player.open(media, play: play);
+      await _validateActiveSession(generation);
     } finally {
       fence.complete();
       _pendingMediaOpens.remove(fence.future);
@@ -204,10 +225,12 @@ class WindowsPlaybackService
     if (!_isCurrentSourceRequest(generation) || !_shouldPlayAfterFallback) {
       return;
     }
+    if (!await _validateActiveSession(generation)) return;
     final fence = Completer<void>();
     _pendingMediaOpens.add(fence.future);
     try {
       await _player.play();
+      await _validateActiveSession(generation);
       if (_isCurrentSourceRequest(generation) && !_shouldPlayAfterFallback) {
         await _player.pause();
       }
@@ -672,6 +695,7 @@ class WindowsPlaybackService
       _activeAudioMedia!,
       title: _activeAudioTrackToken,
     );
+    if (!await _validateActiveSession(generation)) return;
     await _player.setAudioTrack(audioTrack);
     if (_isCurrentSourceRequest(generation)) {
       _externalAudioNeedsReload = false;
@@ -968,6 +992,9 @@ class WindowsPlaybackService
       if (!_isCurrentSourceRequest(generation)) {
         return;
       }
+      _activeSessionValidator = sources.validateSession;
+      await _validateActiveSession(generation);
+      if (!_isCurrentSourceRequest(generation)) return;
       _availableQualities = sources.qualities;
       _currentQuality = sources.actualQuality;
       _currentMediaAttemptIndex = 0;
@@ -1006,6 +1033,8 @@ class WindowsPlaybackService
       _restoredPosition = Duration.zero;
       final String message = error is DesktopPlaybackSourceException
           ? error.message
+          : error is BilibiliPlaybackSessionException
+          ? error.toString()
           : error is WbiSigningException
           ? error.toString()
           : 'Windows 播放器暂时无法打开该视频，请重试。';
@@ -1028,6 +1057,8 @@ class WindowsPlaybackService
           resumePosition: resumePosition,
         );
         return;
+      } on BilibiliPlaybackSessionException {
+        rethrow;
       } catch (_) {
         if (!_isCurrentSourceRequest(generation)) {
           return;
@@ -1135,6 +1166,7 @@ class WindowsPlaybackService
         message: '正在准备音视频…',
       );
     }
+    if (!await _validateActiveSession(generation)) return;
     await _player.setAudioTrack(audioTrack);
     if (!_isCurrentSourceRequest(generation)) {
       return;
@@ -1412,6 +1444,14 @@ class WindowsPlaybackService
             clearMessage: true,
           );
           return;
+        } on BilibiliPlaybackSessionException catch (error) {
+          _opening = false;
+          _restoringPosition = false;
+          _emitPlayerState(
+            phaseOverride: PlaybackPhase.error,
+            message: error.toString(),
+          );
+          return;
         } catch (_) {
           // 当前组合同步打开失败时继续下一组，异常中可能含临时地址，因此保持静默。
         }
@@ -1432,6 +1472,7 @@ class WindowsPlaybackService
   /// 开始新的播放源请求并让先前仍在等待网络的分P或清晰度请求立即失效。
   int _beginSourceRequest() {
     _sourceGeneration += 1;
+    _activeSessionValidator = null;
     _bufferedRanges = const [];
     _restoringPosition = false;
     _restoredPosition = Duration.zero;

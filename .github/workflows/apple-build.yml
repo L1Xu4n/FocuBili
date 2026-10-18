@@ -69,6 +69,13 @@ jobs:
           flutter-version: '3.44.6'
           cache: true
       - run: flutter pub get
+      - name: Verify Apple playback cookie transactions, scope and persistence
+        if: matrix.platform == 'macos'
+        run: |
+          swiftc packages/focubili_apple/macos/Classes/BilibiliPlaybackSession.swift tool/bilibili_session_probe.swift -o "$RUNNER_TEMP/bilibili-session-probe"
+          "$RUNNER_TEMP/bilibili-session-probe"
+          "$RUNNER_TEMP/bilibili-session-probe" persistent-write
+          "$RUNNER_TEMP/bilibili-session-probe" persistent-read
       - name: Verify native subscription cancellation and generation policy
         if: matrix.platform == 'macos'
         run: |

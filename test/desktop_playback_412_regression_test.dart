@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/models/playback_request_diagnostic.dart';
 import 'package:focubili/services/bilibili_auth_service.dart';
@@ -52,6 +53,8 @@ class _Cookies implements BilibiliCookieStore {
 class _Headers implements HttpHeaders {
   final values = <String, Object>{};
   @override
+  List<String>? operator [](String name) => null;
+  @override
   void set(String name, Object value, {bool preserveHeaderCase = false}) {
     values[name.toLowerCase()] = value;
   }
@@ -76,10 +79,13 @@ class _Request implements HttpClientRequest {
 }
 
 class _Response extends Stream<List<int>> implements HttpClientResponse {
-  _Response(this.statusCode, this.body);
+  _Response(this.statusCode, this.body, [this.setCookies = const []]);
+  final List<String> setCookies;
   @override
   final int statusCode;
   final String body;
+  @override
+  HttpHeaders get headers => _ResponseHeaders(setCookies);
   @override
   List<Cookie> get cookies => [Cookie('bili_ticket', 'synthetic-response')];
   @override
@@ -96,6 +102,14 @@ class _Response extends Stream<List<int>> implements HttpClientResponse {
   );
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _ResponseHeaders extends _Headers {
+  _ResponseHeaders(this.cookies);
+  final List<String> cookies;
+  @override
+  List<String>? operator [](String name) =>
+      name.toLowerCase() == 'set-cookie' ? cookies : null;
 }
 
 class _Transport implements HttpClient {
@@ -466,6 +480,138 @@ void main() {
       expect(cookies.reads, 1);
     },
   );
+  const authChannel = MethodChannel('com.focubili.app/auth');
+  final messenger =
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+  tearDown(() => messenger.setMockMethodCallHandler(authChannel, null));
+
+  Future<T> runApple<T>(
+    _Transport transport,
+    _AppleSession native,
+    Future<T> Function(BilibiliDesktopPlaybackSourceService) action,
+  ) async {
+    SharedPreferences.setMockInitialValues({
+      'app_behavior.wbi_signing_enabled': true,
+    });
+    messenger.setMockMethodCallHandler(authChannel, native.handle);
+    return HttpOverrides.runZoned(
+      () => action(
+        BilibiliDesktopPlaybackSourceService(
+          authService: BilibiliAuthService(
+            cookieStore: const AppleBilibiliCookieStore(),
+          ),
+        ),
+      ),
+      createHttpClient: (_) => transport,
+    );
+  }
+
+  test('Apple nav response cookie reaches playurl in the same session', () async {
+    final native = _AppleSession();
+    final transport = _Transport(
+      (uri) => uri.path.endsWith('/nav')
+          ? _Response(200, _nav, [
+              'bili_ticket=synthetic-issued; Domain=.bilibili.com; Path=/; Secure',
+            ])
+          : _Response(200, _success),
+    );
+    await runApple(transport, native, (service) async {
+      final sources = await service.load(
+        bvid: 'BV1GJ411x7h7',
+        cid: 1,
+        quality: 80,
+      );
+      expect(native.merges, 1);
+      expect(
+        transport.requests.last.headers.values['cookie'],
+        contains('bili_ticket=synthetic-issued'),
+      );
+      expect(sources.mediaHeaders.containsKey('Cookie'), isFalse);
+      expect(native.validations, greaterThanOrEqualTo(1));
+      final facts = await _facts();
+      expect(facts['session_source'], 'apple_wkwebview');
+      expect(facts['has_bili_ticket'], 'true');
+      expect(jsonEncode(facts), isNot(contains('synthetic-issued')));
+      native.generation++;
+      await expectLater(
+        sources.validateSession!(),
+        throwsA(isA<BilibiliPlaybackSessionException>()),
+      );
+    });
+  });
+
+  test(
+    'Apple identity change during nav stops before sending playurl',
+    () async {
+      final native = _AppleSession();
+      final transport = _Transport((uri) {
+        if (uri.path.endsWith('/nav')) native.generation++;
+        return _Response(200, _nav);
+      });
+      await runApple(transport, native, (service) async {
+        await expectLater(
+          service.load(bvid: 'BV1GJ411x7h7', cid: 1, quality: 80),
+          throwsA(isA<BilibiliPlaybackSessionException>()),
+        );
+        expect(transport.requests, hasLength(1));
+        final facts = await _facts();
+        expect(facts['session_read'], 'changing');
+        expect(facts['playurl_attempted'], 'false');
+      });
+    },
+  );
+
+  test('Apple identity change during playurl discards response', () async {
+    final native = _AppleSession();
+    final transport = _Transport((uri) {
+      if (uri.path.endsWith('/playurl')) native.generation++;
+      return _Response(200, uri.path.endsWith('/nav') ? _nav : _success);
+    });
+    await runApple(transport, native, (service) async {
+      await expectLater(
+        service.load(bvid: 'BV1GJ411x7h7', cid: 1, quality: 80),
+        throwsA(isA<BilibiliPlaybackSessionException>()),
+      );
+      expect(transport.requests, hasLength(2));
+      expect((await _facts())['session_read'], 'changing');
+    });
+  });
+
+  for (final state in ['conflict', 'partial', 'changing', 'unknown']) {
+    test(
+      'Apple $state session fails closed without anonymous request',
+      () async {
+        final native = _AppleSession()..state = state;
+        final transport = _Transport((_) => _Response(200, _success));
+        await runApple(transport, native, (service) async {
+          await expectLater(
+            service.load(bvid: 'BV1GJ411x7h7', cid: 1, quality: 80),
+            throwsA(isA<BilibiliPlaybackSessionException>()),
+          );
+          expect(transport.requests, isEmpty);
+          expect(native.merges, 0);
+        });
+      },
+    );
+  }
+
+  test(
+    'Apple HTTP 412 stops without cookie writes or unsigned retry',
+    () async {
+      final native = _AppleSession();
+      final transport = _Transport(
+        (_) => _Response(412, '', [
+          'bili_ticket=synthetic-rejected; Domain=.bilibili.com; Path=/',
+        ]),
+      );
+      await runApple(transport, native, (service) async {
+        await _failure(service.load(bvid: 'BV1GJ411x7h7', cid: 1, quality: 80));
+        expect(transport.requests, hasLength(1));
+        expect(native.merges, 0);
+        expect((await _facts())['http_status'], '412');
+      });
+    },
+  );
 }
 
 class _BrokenDiagnostics extends ProblemDiagnosticsService {
@@ -473,4 +619,37 @@ class _BrokenDiagnostics extends ProblemDiagnosticsService {
   Future<void> recordPlaybackRequest(
     PlaybackRequestDiagnostic diagnostic,
   ) async => throw const FileSystemException('synthetic failure');
+}
+
+class _AppleSession {
+  int generation = 7;
+  String state = 'session';
+  String header = _cookie;
+  int merges = 0, validations = 0;
+  Map<String, Object> get snapshot => {
+    'generation': generation,
+    'state': state,
+    'header': header,
+  };
+  Future<Object?> handle(MethodCall call) async {
+    final args = call.arguments as Map;
+    switch (call.method) {
+      case 'readPlaybackSession':
+        return snapshot;
+      case 'validatePlaybackSession':
+        validations++;
+        return args['generation'] == generation && state == 'session';
+      case 'mergePlaybackResponseCookies':
+        expect(args['generation'], generation);
+        expect(args['path'], '/x/web-interface/nav');
+        expect(args['cookies'], [
+          'bili_ticket=synthetic-issued; Domain=.bilibili.com; Path=/; Secure',
+        ]);
+        merges++;
+        header += '; bili_ticket=synthetic-issued';
+        return snapshot;
+      default:
+        throw StateError('Unexpected synthetic channel operation');
+    }
+  }
 }

@@ -71,6 +71,7 @@ class PlatformServices {
 
   /// 创建 Android WebView、Windows 加密存储或不会落盘的不可用 Cookie 容器。
   BilibiliCookieStore createBilibiliCookieStore() {
+    if (platform.isApple) return const AppleBilibiliCookieStore();
     return switch (capabilities.cookieStoreBackend) {
       CookieStoreBackendKind.androidWebView =>
         const PlatformBilibiliCookieStore(),
