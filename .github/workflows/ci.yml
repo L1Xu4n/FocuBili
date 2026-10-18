@@ -50,6 +50,9 @@ jobs:
       - name: Run Flutter tests
         run: flutter test --no-pub
 
+      - name: Check Beta publication tools without network or signing
+        run: python3 -m unittest discover -s tool -p test_beta_release.py -v
+
   android:
     name: Android debug
     needs: quality
