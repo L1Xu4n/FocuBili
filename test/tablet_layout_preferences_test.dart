@@ -30,14 +30,14 @@ void main() {
     expect(
       DeviceOrientationPolicy.startupOrientations(
         logicalSize: const Size(1280, 800),
-        isAndroid: true,
+        isMobile: true,
       ),
       [DeviceOrientation.portraitUp],
     );
     expect(
       DeviceOrientationPolicy.playerOrientations(
         logicalSize: const Size(1280, 800),
-        isAndroid: true,
+        isMobile: true,
       ),
       contains(DeviceOrientation.portraitUp),
     );

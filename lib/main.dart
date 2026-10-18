@@ -124,7 +124,7 @@ Future<void> main(List<String> args) async {
       await SystemChrome.setPreferredOrientations(
         DeviceOrientationPolicy.startupOrientations(
           logicalSize: DeviceOrientationPolicy.logicalSizeForView(views.first),
-          isAndroid: true,
+          isMobile: true,
         ),
       );
     }
