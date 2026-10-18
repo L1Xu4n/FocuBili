@@ -7,9 +7,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:file_picker/file_picker.dart';
 
 import 'video_note_export_service.dart';
+import 'local_export_service.dart';
 import '../platform/app_platform.dart';
 import 'windows_experience_service.dart';
 
@@ -21,12 +21,14 @@ class VideoNoteShareService {
     this.shareLauncher,
     this.platform,
     this.windowsExperience = const WindowsExperienceService(),
+    this.localExportService = const LocalExportService(),
   });
 
   final Future<Directory> Function()? temporaryDirectoryLoader;
   final Future<ShareResult> Function(ShareParams params)? shareLauncher;
   final AppPlatform? platform;
   final WindowsExperienceService windowsExperience;
+  final LocalExportService localExportService;
 
   /// Windows image actions copy actual pixels; other platforms retain system sharing.
   bool get copiesToClipboard => const {
@@ -35,18 +37,18 @@ class VideoNoteShareService {
   }.contains(platform ?? AppPlatformDetector.current);
 
   /// 把批量导出包写成临时文件并分享，文件名和 MIME 类型与实际格式保持一致。
-  Future<void> shareExportPackage(
+  Future<bool> shareExportPackage(
     VideoNoteExportPackage package, {
     Rect? sharePositionOrigin,
   }) async {
     if (shareLauncher == null &&
         (platform ?? AppPlatformDetector.current) == AppPlatform.linux) {
-      await FilePicker.saveFile(
+      final path = await localExportService.save(
         dialogTitle: '保存笔记导出包',
         fileName: _safeFileName(package.fileName),
         bytes: Uint8List.fromList(package.bytes),
       );
-      return;
+      return path != null;
     }
     final File output = await writeExportPackage(package);
     await _share(
@@ -59,6 +61,7 @@ class VideoNoteShareService {
         sharePositionOrigin: sharePositionOrigin,
       ),
     );
+    return true;
   }
 
   /// 把导出包写入指定目录；公开此步骤便于验证文件内容且不必唤起系统面板。

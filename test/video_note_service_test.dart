@@ -42,6 +42,113 @@ Future<VideoNoteService> _createService() async {
 }
 
 void main() {
+  test(
+    'cancelled captures delete only unreferenced files and retain files when storage is unreadable',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'focubili-capture-cleanup-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final retained = await File(
+        '${directory.path}/retained.png',
+      ).writeAsBytes([1]);
+      final discarded = await File(
+        '${directory.path}/discarded.png',
+      ).writeAsBytes([2]);
+      final service = await _createService();
+      await service.saveNote(_createNote(framePath: retained.path));
+      await service.discardUnreferencedFrame(retained.path);
+      await service.discardUnreferencedFrame(discarded.path);
+      expect(await retained.exists(), isTrue);
+      expect(await discarded.exists(), isFalse);
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.setString(VideoNoteService.storageKey, '{broken');
+      await service.discardUnreferencedFrame(retained.path);
+      expect(await retained.exists(), isTrue);
+    },
+  );
+  test('legacy frame becomes one attachment at the note position', () {
+    final legacy = _createNote(framePath: '/legacy/frame.png').toJson()
+      ..remove('frames');
+    final parsed = VideoNote.tryParse(legacy)!;
+    expect(parsed.allFrames, [
+      VideoNoteFrame(path: '/legacy/frame.png', position: parsed.position),
+    ]);
+    expect(parsed.copyWith(body: 'edited').allFrames, parsed.allFrames);
+    expect(parsed.copyWith(clearFrame: true).allFrames, isEmpty);
+  });
+
+  test(
+    'frame order and individual positions survive saving and editing',
+    () async {
+      final service = await _createService();
+      const frames = [
+        VideoNoteFrame(
+          path: '/frame-c.png',
+          position: Duration(milliseconds: 30025),
+        ),
+        VideoNoteFrame(
+          path: '/frame-a.png',
+          position: Duration(milliseconds: 5030),
+        ),
+        VideoNoteFrame(
+          path: '/frame-b.png',
+          position: Duration(milliseconds: 30025),
+        ),
+      ];
+      await service.saveNote(_createNote().copyWith(frames: frames));
+      final loaded = (await service.loadNotes()).single;
+      expect(loaded.allFrames, frames);
+      expect(loaded.framePath, frames.first.path);
+      await service.saveNote(
+        loaded.copyWith(
+          body: 'edited',
+          frames: [frames[2], frames[0], frames[1]],
+        ),
+      );
+      expect((await service.loadNotes()).single.allFrames, [
+        frames[2],
+        frames[0],
+        frames[1],
+      ]);
+    },
+  );
+
+  test(
+    'removing frames only deletes files no remaining note references',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'focubili-frames-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final first = await File('${directory.path}/first.png').writeAsBytes([1]);
+      final shared = await File(
+        '${directory.path}/shared.png',
+      ).writeAsBytes([2]);
+      final last = await File('${directory.path}/last.png').writeAsBytes([3]);
+      final service = await _createService();
+      final note = _createNote().copyWith(
+        frames: [
+          for (final file in [first, shared, last])
+            VideoNoteFrame(path: file.path, position: Duration.zero),
+        ],
+      );
+      await service.saveNote(note);
+      await service.saveNote(
+        _createNote(id: 'shared-note', framePath: shared.path),
+      );
+      await service.saveNote(note.copyWith(frames: [note.allFrames.last]));
+      expect(await first.exists(), isFalse);
+      expect(await shared.exists(), isTrue);
+      expect(await last.exists(), isTrue);
+      await service.deleteNote(note.id);
+      expect(await last.exists(), isFalse);
+      expect(await shared.exists(), isTrue);
+      await service.deleteNote('shared-note');
+      expect(await shared.exists(), isFalse);
+    },
+  );
+
   /// 每项测试使用独立的内存偏好设置，避免笔记互相污染。
   setUp(() {
     SharedPreferences.setMockInitialValues(<String, Object>{});

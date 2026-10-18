@@ -23,15 +23,19 @@ void main() {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
   for (final platform in [AppPlatform.windows, AppPlatform.ios]) {
     test('${platform.name} 设置导入及重置同步原生代次并保留权威订阅源', () async {
-      SharedPreferences.setMockInitialValues({});
+      const rules =
+          '{"version":1,"videos":{"BV1GJ411x7h7":"Synthetic blocked"}}';
+      SharedPreferences.setMockInitialValues({'content.blocklist_v1': rules});
       final prefs = await SharedPreferences.getInstance();
       final directory = await Directory.systemTemp.createTemp(
         'focubili-native-settings-',
       );
       final channel = MethodChannel('test/settings-native-${platform.name}');
       final configurations = <Map<Object?, Object?>>[];
+      final nativeCalls = <String>[];
       var available = true;
       messenger.setMockMethodCallHandler(channel, (call) async {
+        nativeCalls.add(call.method);
         if (call.method == 'configure') {
           configurations.add(Map<Object?, Object?>.from(call.arguments as Map));
         }
@@ -83,15 +87,32 @@ void main() {
           imageCache: images,
         ),
       );
+      final initialPolicy = configurations.length;
       await transfer.importSettings({
         DeviceSettingsRuntimeAdapter.enabledKey: true,
         DeviceSettingsRuntimeAdapter.notificationsKey: true,
         DeviceSettingsRuntimeAdapter.backgroundKey: true,
+        'search.content_filter_v2': jsonEncode({
+          'learningOnly': false,
+          'minimumPlayCount': 0,
+          'titleKeywords': ['Flutter', '数学'],
+          'ownerKeywords': ['Synthetic UP'],
+        }),
       });
+      expect(
+        configurations
+            .skip(initialPolicy)
+            .where((policy) => policy['enabled'] == true),
+        hasLength(1),
+      );
       expect(configurations.last['enabled'], isTrue);
       expect(configurations.last['generation'], store.generation);
       final beforeReset = store.generation;
+      final beforeExport = store.value;
+      final nativeBeforeExport = nativeCalls.length;
       final exported = await transfer.exportSettings();
+      expect(store.value, beforeExport);
+      expect(nativeCalls.length, nativeBeforeExport);
       expect(
         transfer.parseSettings(
           exported,
@@ -100,11 +121,19 @@ void main() {
       );
       expect(exported, isNot(contains('synthetic-only')));
       expect(prefs.getString(SubscriptionService.storageKey), legacy);
+      final resetPolicy = configurations.length;
       await transfer.resetSettings();
+      expect(
+        configurations
+            .skip(resetPolicy)
+            .every((policy) => policy['enabled'] == false),
+        isTrue,
+      );
       expect(configurations.last['enabled'], isFalse);
       expect(configurations.last['generation'], store.generation);
       expect(store.generation, greaterThan(beforeReset));
       expect(subscriptions.sources.single.key, 'creator:7');
+      expect(prefs.getString('content.blocklist_v1'), rules);
       expect((jsonDecode(store.value!) as Map)['enabled'], isFalse);
       expect(
         await nativeCall(channel, 'check', {'generation': beforeReset}),
@@ -114,6 +143,7 @@ void main() {
       expect(configurations.last['enabled'], isTrue);
       expect(configurations.last['generation'], store.generation);
       expect(subscriptions.sources.single.key, 'creator:7');
+      expect(prefs.getString('content.blocklist_v1'), rules);
       // Losing system support must not prevent reset or leave a native request on.
       available = false;
       await transfer.resetSettings();

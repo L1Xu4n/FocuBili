@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'bilibili_course_link.dart';
+
 import 'app_behavior_preferences_service.dart';
 import 'problem_diagnostics_service.dart';
 import '../models/playback_request_diagnostic.dart';
@@ -94,6 +96,7 @@ class PlaybackSnapshot {
     this.phase = PlaybackPhase.idle,
     this.canContinueAsGuest = false,
     this.isPlaying = false,
+    this.playRequested,
     this.audioOnly = false,
     this.sleepTimerRemaining = Duration.zero,
     this.position = Duration.zero,
@@ -112,6 +115,9 @@ class PlaybackSnapshot {
   final PlaybackPhase phase;
   final bool canContinueAsGuest;
   final bool isPlaying;
+
+  /// Actual backend intent; null keeps older backend snapshots compatible.
+  final bool? playRequested;
   final bool audioOnly;
   final Duration sleepTimerRemaining;
   final Duration position;
@@ -150,6 +156,9 @@ class PlaybackSnapshot {
       ),
       canContinueAsGuest: values['canContinueAsGuest'] == true,
       isPlaying: values['isPlaying'] as bool? ?? false,
+      playRequested: values['playRequested'] is bool
+          ? values['playRequested'] as bool
+          : null,
       audioOnly: values['audioOnly'] == true,
       sleepTimerRemaining: Duration(
         milliseconds: (values['sleepTimerRemainingMs'] as num?)?.toInt() ?? 0,
@@ -198,6 +207,7 @@ class PlaybackSnapshot {
     PlaybackPhase? phase,
     bool? canContinueAsGuest,
     bool? isPlaying,
+    bool? playRequested,
     bool? audioOnly,
     Duration? sleepTimerRemaining,
     Duration? position,
@@ -217,6 +227,7 @@ class PlaybackSnapshot {
       phase: phase ?? this.phase,
       canContinueAsGuest: canContinueAsGuest ?? this.canContinueAsGuest,
       isPlaying: isPlaying ?? this.isPlaying,
+      playRequested: playRequested ?? this.playRequested,
       audioOnly: audioOnly ?? this.audioOnly,
       sleepTimerRemaining: sleepTimerRemaining ?? this.sleepTimerRemaining,
       position: position ?? this.position,
@@ -378,10 +389,24 @@ class NativePlaybackService
     int quality = 64,
     Duration? initialPosition,
   }) async {
-    if (!_bvidPattern.hasMatch(video.bvid.trim())) {
+    if (video.isCourse
+        ? video.bvid != 'cheese:ss${video.courseSeasonId}' ||
+              !BilibiliCourseLink.isStorageKey(video.bvid)
+        : !_bvidPattern.hasMatch(video.bvid.trim())) {
       throw ArgumentError.value(video.bvid, 'video.bvid', '需要有效的 BV 号。');
     }
     final VideoPart targetPart = part ?? video.initialPart;
+    if (video.isCourse &&
+        ((targetPart.courseEpisodeId ?? 0) <= 0 ||
+            (targetPart.courseAid ?? 0) <= 0 ||
+            !video.parts.any(
+              (p) =>
+                  p.cid == targetPart.cid &&
+                  p.courseEpisodeId == targetPart.courseEpisodeId &&
+                  p.courseAid == targetPart.courseAid,
+            ))) {
+      throw ArgumentError('课程章节缺少播放编号，请重新打开课程。');
+    }
     if (targetPart.cid <= 0) {
       throw ArgumentError.value(targetPart.cid, 'part.cid', '需要有效的分P编号。');
     }
@@ -398,6 +423,8 @@ class NativePlaybackService
     await _invokeVoid('open', <String, Object?>{
       'bvid': video.bvid.trim(),
       'cid': targetPart.cid,
+      if (video.isCourse) 'courseEpisodeId': targetPart.courseEpisodeId,
+      if (video.isCourse) 'courseAid': targetPart.courseAid,
       'pageNumber': targetPart.pageNumber,
       'quality': quality,
       'title': video.title,

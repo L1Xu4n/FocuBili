@@ -288,7 +288,9 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
         return;
       }
       final int? initialPartCid =
-          target.partCid ?? _partCidForPage(video, target.partPageNumber);
+          target.partCid ??
+          _partCidForPage(video, target.partPageNumber) ??
+          (video.requestedCourseEpisodeId == null ? null : video.cid);
       final previousPlayer = await PlayerRouteSession.suspendCurrent();
       if (!mounted || !navigator.mounted) return;
       final externalRoute = MaterialPageRoute<void>(

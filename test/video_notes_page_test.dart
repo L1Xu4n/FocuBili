@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:photo_view/photo_view.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -13,6 +14,8 @@ import 'package:focubili/models/video_note.dart';
 import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/services/bilibili_service.dart';
 import 'package:focubili/services/video_note_service.dart';
+import 'package:focubili/services/local_export_service.dart';
+import 'package:focubili/platform/app_platform.dart';
 
 /// 创建绑定到内存 SharedPreferences 的页面测试服务。
 Future<VideoNoteService> _createPageNoteService() async {
@@ -130,6 +133,56 @@ class _NoteDetailTestHost extends StatelessWidget {
 }
 
 void main() {
+  for (final cancel in [true, false]) {
+    testWidgets(cancel ? '取消笔记导出保留选择且不显示成功' : '笔记导出失败显示脱敏诊断并保留选择', (
+      tester,
+    ) async {
+      final service = await _createPageNoteService();
+      await service.saveNote(_createPageNote());
+      await tester.pumpWidget(
+        MaterialApp(
+          home: VideoNotesPage(
+            noteService: service,
+            videoService: _FakeNoteVideoService(),
+            localExportService: LocalExportService(
+              platform: AppPlatform.macos,
+              saveDialog: (_) async {
+                if (cancel) return null;
+                throw PlatformException(
+                  code: 'permission_denied',
+                  message: '/Users/private/session-cookie',
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('select-video-notes')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('managed-video-note-managed-note')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('save-selected-video-notes')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('导出为 Markdown'));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('save-selected-video-notes')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('已导出'), findsNothing);
+      if (!cancel) {
+        expect(
+          find.textContaining('macos/save/permission_denied'),
+          findsOneWidget,
+        );
+        expect(find.textContaining('session-cookie'), findsNothing);
+      }
+    });
+  }
+
   /// 每项组件测试使用全新的本机笔记存储。
   setUp(() {
     SharedPreferences.setMockInitialValues(<String, Object>{});
@@ -464,7 +517,7 @@ void main() {
     expect(find.byKey(const Key('open-test-note-detail')), findsOneWidget);
   });
 
-  /// 验证全屏编辑器突出分 P，并让截图在专用区域内铺满显示。
+  /// 验证全屏编辑器突出分 P，并完整保留截图原始比例。
   testWidgets('全屏笔记头部突出分P且截图保留原比例', (WidgetTester tester) async {
     final TextEditingController titleController = TextEditingController();
     final TextEditingController bodyController = TextEditingController();

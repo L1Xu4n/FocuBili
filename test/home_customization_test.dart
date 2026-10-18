@@ -188,6 +188,8 @@ void main() {
     expect(restored.hidden, saved.hidden);
     expect(_board(tester).items, hasLength(7));
     expect(tester.takeException(), isNull);
+    await controller.endFocusEarly();
+    await tester.pump();
   });
 
   /// 手机进入编辑后切宽屏，卡片共用两列区域；再切回手机仍保持编辑。

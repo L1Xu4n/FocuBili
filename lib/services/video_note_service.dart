@@ -24,6 +24,24 @@ class VideoNoteService {
 
   final VideoNotePreferencesLoader _preferencesLoader;
 
+  /// 清理导航撤销后的新截图；存储不可读或仍被任一笔记引用时保留文件。
+  Future<void> discardUnreferencedFrame(String path) async {
+    try {
+      final preferences = await _preferencesLoader();
+      final raw = preferences.getString(storageKey);
+      if (raw != null && jsonDecode(raw) is! List) return;
+      final notes = _decodeNotes(raw);
+      if (notes.any(
+        (note) => note.allFrames.any((frame) => frame.path == path),
+      )) {
+        return;
+      }
+      await _deleteFrameIfPresent(path);
+    } catch (_) {
+      // 无法确认引用状态时不删除。
+    }
+  }
+
   /// 读取全部合法笔记，并按最近更新时间从新到旧排列。
   Future<List<VideoNote>> loadNotes() async {
     try {
@@ -69,12 +87,10 @@ class VideoNoteService {
     final int existingIndex = notes.indexWhere(
       (VideoNote item) => item.id == normalized.id,
     );
-    String? obsoleteFramePath;
+    final Set<String> obsoleteFramePaths = <String>{};
     if (existingIndex >= 0) {
       final VideoNote previous = notes[existingIndex];
-      if (previous.framePath != normalized.framePath) {
-        obsoleteFramePath = previous.framePath;
-      }
+      obsoleteFramePaths.addAll(previous.allFrames.map((frame) => frame.path));
       notes[existingIndex] = normalized;
     } else {
       notes.add(normalized);
@@ -88,10 +104,17 @@ class VideoNoteService {
     final Set<String> retainedIds = limited
         .map((VideoNote item) => item.id)
         .toSet();
-    final List<String?> removedFrames = notes
-        .where((VideoNote item) => !retainedIds.contains(item.id))
-        .map((VideoNote item) => item.framePath)
-        .toList(growable: false);
+    obsoleteFramePaths.addAll(
+      notes
+          .where((VideoNote item) => !retainedIds.contains(item.id))
+          .expand(
+            (VideoNote item) => item.allFrames.map((frame) => frame.path),
+          ),
+    );
+    final retainedFramePaths = limited
+        .expand((item) => item.allFrames.map((frame) => frame.path))
+        .toSet();
+    obsoleteFramePaths.removeAll(retainedFramePaths);
     final saved = await preferences.setString(
       storageKey,
       jsonEncode(
@@ -100,8 +123,7 @@ class VideoNoteService {
     );
     if (!saved) throw StateError('笔记保存失败');
     _changes.add(normalized.bvid);
-    await _deleteFrameIfPresent(obsoleteFramePath);
-    for (final String? framePath in removedFrames) {
+    for (final String framePath in obsoleteFramePaths) {
       await _deleteFrameIfPresent(framePath);
     }
   }
@@ -129,7 +151,14 @@ class VideoNoteService {
     );
     if (!saved) throw StateError('笔记删除失败');
     if (removed != null) _changes.add(removed.bvid);
-    await _deleteFrameIfPresent(removed?.framePath);
+    final retainedPaths = notes
+        .expand((item) => item.allFrames.map((frame) => frame.path))
+        .toSet();
+    for (final frame in removed?.allFrames ?? const <VideoNoteFrame>[]) {
+      if (!retainedPaths.contains(frame.path)) {
+        await _deleteFrameIfPresent(frame.path);
+      }
+    }
   }
 
   /// 将本机 JSON 解码为去重后的笔记列表，损坏数据会被安全忽略。

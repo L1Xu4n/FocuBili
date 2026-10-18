@@ -322,6 +322,7 @@ class _FakePlaybackService implements PlaybackService {
     this.duration = _defaultDuration,
     this.textureId,
     this.frameCapturePath = 'C:\\fake-video-note-frame.jpg',
+    this.frameCaptureLoader,
     this.pauseGate,
   });
 
@@ -331,6 +332,7 @@ class _FakePlaybackService implements PlaybackService {
   final Duration duration;
   final int? textureId;
   final String? frameCapturePath;
+  final Future<String?> Function()? frameCaptureLoader;
   final Future<void> Function()? pauseGate;
   bool _isPlaying = false;
   bool audioOnly = false;
@@ -357,6 +359,7 @@ class _FakePlaybackService implements PlaybackService {
   int pauseRequests = 0;
   int seekByRequests = 0;
   int seekToRequests = 0;
+  final List<(String?, Duration)> seekToIdentities = [];
   int frameCaptureRequests = 0;
   final List<Duration> frameCapturePositions = <Duration>[];
   final List<int?> frameCaptureCids = <int?>[];
@@ -450,6 +453,7 @@ class _FakePlaybackService implements PlaybackService {
   @override
   Future<void> seekTo(Duration position) async {
     seekToRequests += 1;
+    seekToIdentities.add((openedBvid, position));
     if (emitLoadingDuringSeek) {
       _emit(phase: PlaybackPhase.loading);
       await Future<void>.delayed(Duration.zero);
@@ -496,7 +500,9 @@ class _FakePlaybackService implements PlaybackService {
     frameCaptureRequests += 1;
     frameCapturePositions.add(_position);
     frameCaptureCids.add(openedCid);
-    return frameCapturePath;
+    return frameCaptureLoader == null
+        ? frameCapturePath
+        : await frameCaptureLoader!();
   }
 
   /// 返回测试预先设置的最后观看分P和进度。
@@ -1043,6 +1049,18 @@ class _DelayedFlagNotes extends VideoNoteService {
   Future<List<VideoNote>> loadNotesForVideo(String bvid) {
     if (++calls == 1) return first.future;
     return super.loadNotesForVideo(bvid);
+  }
+}
+
+class _DelayedWriteNotes extends VideoNoteService {
+  Completer<void>? saveGate;
+  int saveRequests = 0;
+
+  @override
+  Future<void> saveNote(VideoNote note) async {
+    saveRequests++;
+    await saveGate?.future;
+    await super.saveNote(note);
   }
 }
 
@@ -1791,8 +1809,8 @@ void main() {
     expect(find.text('0:05 / 3:32'), findsOneWidget);
   });
 
-  /// 验证快进产生的加载快照不会切换勿扰，但用户按下暂停和播放仍会正常关闭与开启。
-  testWidgets('专注播放快进不抖动勿扰且暂停播放正常切换', (WidgetTester tester) async {
+  /// 验证快进、视频暂停和播放不会切换专注会话的勿扰状态。
+  testWidgets('专注播放快进和暂停视频都不切换勿扰', (WidgetTester tester) async {
     const MethodChannel channel = MethodChannel(
       'com.focubili.app/test_player_seek_do_not_disturb',
     );
@@ -1872,7 +1890,9 @@ void main() {
     await tester.pump();
     await tester.tap(find.byKey(const Key('play-pause-button')));
     await tester.pump();
-    expect(doNotDisturbStates, <bool>[false, true]);
+    expect(doNotDisturbStates, isEmpty);
+    await focusController.endFocusEarly();
+    await tester.pump();
   });
 
   /// 验证控制栏菜单不再参与画面双击竞争，并在第一帧建立短动画菜单路由。
@@ -2383,21 +2403,125 @@ void main() {
     expect(service.openedInitialPositions.last, isNull);
   });
 
-  /// 验证首页创建的任务只在用户确认关联且当前分P实际播放后开始计时。
-  testWidgets('播放器确认关联首页专注并跟随真实播放状态', (WidgetTester tester) async {
+  /// 全局专注无需确认绑定；分P切换和播放器路由更替都保留同一会话。
+  testWidgets('专注跨分P与播放器更替连续计时无需重新确认', (tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final FocusTimerController controller = FocusTimerController(
+    final clock = _PlayerFocusTestClock(DateTime(2026, 10, 18, 10));
+    final controller = FocusTimerController(
+      clock: clock.call,
       tickInterval: const Duration(days: 1),
     );
     addTearDown(controller.dispose);
     await controller.initialize();
     await controller.startFocus(
-      goal: '关联当前课程',
+      goal: '连续学习',
       duration: const Duration(minutes: 25),
-      startImmediately: false,
     );
-    final _FakePlaybackService service = _FakePlaybackService();
+    final id = controller.activeSession!.id;
+    final first = _FakePlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          key: const ValueKey('first'),
+          video: _createMultiPartVideo(),
+          playbackService: first,
+          focusTimerController: controller,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('confirm-focus-video-association')),
+      findsNothing,
+    );
+    expect(controller.activeSession!.sourceBvid, _createMultiPartVideo().bvid);
+    clock.advance(const Duration(seconds: 15));
+    await tester.tap(find.byKey(const Key('part-2')));
+    await tester.pumpAndSettle();
+    expect(controller.activeSession!.sourcePartCid, 137649200);
+    expect(controller.activeSession!.id, id);
+    expect(controller.elapsedDuration, const Duration(seconds: 15));
+    final second = _FakePlaybackService();
+    const nextVideo = VideoPreview(
+      bvid: 'BVnextCourse',
+      cid: 100,
+      title: '下一门课',
+      ownerName: '作者',
+      parts: [
+        VideoPart(
+          pageNumber: 1,
+          cid: 100,
+          title: '第一节',
+          duration: Duration(minutes: 5),
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          key: const ValueKey('second'),
+          video: nextVideo,
+          playbackService: second,
+          focusTimerController: controller,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    clock.advance(const Duration(seconds: 15));
+    expect(controller.activeSession!.id, id);
+    expect(controller.activeSession!.sourceBvid, 'BVnextCourse');
+    expect(controller.elapsedDuration, const Duration(seconds: 30));
+    expect(controller.history, isEmpty);
+    await controller.endFocusEarly();
+    await tester.pump();
+  });
+
+  testWidgets('播放器取帧为空仍保留书签和独立会话', (tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final controller = FocusTimerController(
+      tickInterval: const Duration(days: 1),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await controller.startFocus(
+      goal: '无截图也能专注',
+      duration: const Duration(minutes: 25),
+    );
+    final video = _createMultiPartVideo();
+    final service = _FakePlaybackService(frameCapturePath: null);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: video,
+          playbackService: service,
+          focusTimerController: controller,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('confirm-focus-video-association')),
+      findsNothing,
+    );
+    expect(controller.activeSession!.sourceBvid, video.bvid);
+    expect(controller.activeSession!.sourceFramePath, null);
+    expect(controller.activeSession!.status, FocusSessionStatus.running);
+    await controller.endFocusEarly();
+    await tester.pump();
+  });
+
+  testWidgets('播放器真实完播不会提前结束专注会话', (tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final clock = _PlayerFocusTestClock(DateTime(2026, 10, 18, 10));
+    final controller = FocusTimerController(
+      clock: clock.call,
+      tickInterval: const Duration(days: 1),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    final service = _FakePlaybackService();
     await tester.pumpWidget(
       MaterialApp(
         home: PlayerPage(
@@ -2408,210 +2532,106 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-
-    expect(find.textContaining('是否将“关联当前课程”关联'), findsOneWidget);
-    await tester.tap(find.byKey(const Key('confirm-focus-video-association')));
-    await tester.pumpAndSettle();
-    expect(controller.activeSession?.sourceBvid, _createMultiPartVideo().bvid);
-    expect(controller.activeSession?.status, FocusSessionStatus.paused);
-    expect(find.textContaining('已关联视频：'), findsOneWidget);
-
+    await controller.startFocus(
+      goal: '跨课程学习',
+      duration: const Duration(minutes: 2),
+    );
+    final id = controller.activeSession!.id;
     await service.play();
     await tester.pump();
-    expect(controller.activeSession?.status, FocusSessionStatus.running);
+    clock.advance(const Duration(seconds: 30));
+    service.emitEnded();
+    await tester.pump();
+    await tester.pump();
+    expect(controller.activeSession!.id, id);
+    expect(controller.elapsedDuration, const Duration(seconds: 30));
+    expect(controller.history, isEmpty);
+    clock.advance(const Duration(seconds: 90));
+    controller.didChangeAppLifecycleState(AppLifecycleState.resumed);
+    await tester.pump();
+    await tester.pump();
+    expect(controller.activeSession, null);
+    expect(controller.history.single.status, FocusSessionStatus.completed);
   });
 
-  /// 验证 Windows 画面暂时无法读取时，确认操作仍会保存视频关联而不会阻断任务。
-  testWidgets('播放器取帧为空时仍可确认关联专注', (WidgetTester tester) async {
+  testWidgets('视频重复完播事件不重复归档，新会话不会消费旧完播', (tester) async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
-    final FocusTimerController controller = FocusTimerController(
+    final controller = FocusTimerController(
       tickInterval: const Duration(days: 1),
     );
     addTearDown(controller.dispose);
     await controller.initialize();
-    await controller.startFocus(
-      goal: '无截图也要关联',
-      duration: const Duration(minutes: 25),
-      startImmediately: false,
-    );
-    final VideoPreview video = _createMultiPartVideo();
-    final _FakePlaybackService service = _FakePlaybackService(
-      frameCapturePath: null,
-    );
+    final service = _FakePlaybackService();
     await tester.pumpWidget(
       MaterialApp(
         home: PlayerPage(
-          video: video,
+          video: _createMultiPartVideo(),
           playbackService: service,
           focusTimerController: controller,
         ),
       ),
     );
     await tester.pumpAndSettle();
-
-    await tester.tap(find.byKey(const Key('confirm-focus-video-association')));
-    await tester.pumpAndSettle();
-
-    expect(service.frameCaptureRequests, 1);
-    expect(controller.activeSession?.sourceBvid, video.bvid);
-    expect(controller.activeSession?.sourceFramePath, isNull);
-  });
-
-  /// 验证播放器把原生 ended 快照交给专注控制器，使当前分P模式按真实完播结束。
-  testWidgets('播放器当前分P专注收到真实完播后完成', (WidgetTester tester) async {
-    SharedPreferences.setMockInitialValues(<String, Object>{});
-    final VideoPreview video = _createMultiPartVideo();
-    final FocusTimerController controller = FocusTimerController(
-      tickInterval: const Duration(days: 1),
-    );
-    addTearDown(controller.dispose);
-    await controller.initialize();
     await controller.startFocus(
-      goal: '看完第一P',
+      goal: '第一轮',
       duration: const Duration(minutes: 2),
-      startImmediately: false,
-      sourceBvid: video.bvid,
-      sourceVideoTitle: video.title,
-      sourcePartCid: video.initialPart.cid,
-      sourcePartPageNumber: video.initialPart.pageNumber,
-      sourcePartTitle: video.initialPart.title,
-      completeOnPartEnd: true,
     );
-    final _FakePlaybackService playbackService = _FakePlaybackService();
-    await tester.pumpWidget(
-      MaterialApp(
-        home: PlayerPage(
-          video: video,
-          playbackService: playbackService,
-          focusTimerController: controller,
-        ),
-      ),
+    service.emitEnded();
+    service.emitEnded();
+    await tester.pump();
+    expect(controller.history, isEmpty);
+    await controller.endFocusEarly();
+    await tester.pump();
+    await controller.startFocus(
+      goal: '第二轮',
+      duration: const Duration(minutes: 2),
     );
-    await tester.pumpAndSettle();
-
-    await playbackService.play();
+    service.emitEnded();
     await tester.pump();
-    expect(controller.activeSession?.status, FocusSessionStatus.running);
-    playbackService.emitEnded();
+    expect(controller.activeSession!.goal, '第二轮');
+    expect(controller.history, hasLength(1));
+    await controller.endFocusEarly();
     await tester.pump();
-    await tester.pump();
-
-    expect(controller.activeSession, isNull);
-    expect(controller.history.single.status, FocusSessionStatus.completed);
-    expect(find.text('专注完成，视频已暂停'), findsOneWidget);
   });
 
-  /// 验证同一分P首次专注完成后，新任务不会消费旧 ended，而会等待下一次真实完播。
-  testWidgets('播放器同一分P再次专注等待新的真实完播', (WidgetTester tester) async {
+  testWidgets('专注暂停后播放视频不会恢复，主动继续无需正在播放', (tester) async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
-    final VideoPreview video = _createMultiPartVideo();
-    final FocusTimerController controller = FocusTimerController(
-      tickInterval: const Duration(days: 1),
-    );
-    addTearDown(controller.dispose);
-    await controller.initialize();
-    final _FakePlaybackService playbackService = _FakePlaybackService();
-    await tester.pumpWidget(
-      MaterialApp(
-        home: PlayerPage(
-          video: video,
-          playbackService: playbackService,
-          focusTimerController: controller,
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    /// 创建绑定当前分P的测试专注，避免两轮测试重复组装来源字段。
-    Future<void> startPartFocus(String goal) async {
-      await controller.startFocus(
-        goal: goal,
-        duration: const Duration(minutes: 2),
-        startImmediately: false,
-        sourceBvid: video.bvid,
-        sourceVideoTitle: video.title,
-        sourcePartCid: video.initialPart.cid,
-        sourcePartPageNumber: video.initialPart.pageNumber,
-        sourcePartTitle: video.initialPart.title,
-        completeOnPartEnd: true,
-      );
-      await tester.pump();
-    }
-
-    await startPartFocus('第一轮');
-    await playbackService.play();
-    await tester.pump();
-    playbackService.emitEnded();
-    await tester.pump();
-    await tester.pump();
-    expect(controller.activeSession, isNull);
-    expect(controller.history, hasLength(1));
-
-    await startPartFocus('第二轮');
-    expect(controller.activeSession, isNotNull);
-    expect(controller.history, hasLength(1));
-    playbackService.emitEnded();
-    await tester.pump();
-    expect(controller.activeSession, isNotNull);
-
-    await playbackService.play();
-    await tester.pump();
-    expect(controller.activeSession?.status, FocusSessionStatus.running);
-    playbackService.emitEnded();
-    await tester.pump();
-    await tester.pump();
-    expect(controller.activeSession, isNull);
-    expect(controller.history, hasLength(2));
-  });
-
-  /// 验证新建固定时长专注会重新同步当前播放状态，倒计时运行且手动继续有效。
-  testWidgets('播放器固定时长专注随播放计时并可继续', (WidgetTester tester) async {
-    SharedPreferences.setMockInitialValues(<String, Object>{});
-    final _PlayerFocusTestClock clock = _PlayerFocusTestClock(
-      DateTime(2026, 8, 12, 15),
-    );
-    final FocusTimerController controller = FocusTimerController(
+    final clock = _PlayerFocusTestClock(DateTime(2026, 8, 12, 15));
+    final controller = FocusTimerController(
       clock: clock.call,
       tickInterval: const Duration(days: 1),
     );
     addTearDown(controller.dispose);
     await controller.initialize();
-    final VideoPreview video = _createMultiPartVideo();
-    final _FakePlaybackService playbackService = _FakePlaybackService();
+    final service = _FakePlaybackService();
     await tester.pumpWidget(
       MaterialApp(
         home: PlayerPage(
-          video: video,
-          playbackService: playbackService,
+          video: _createMultiPartVideo(),
+          playbackService: service,
           focusTimerController: controller,
         ),
       ),
     );
     await tester.pumpAndSettle();
-    await playbackService.play();
-    await tester.pump();
-
     await controller.startFocus(
       goal: '专注一分钟',
       duration: const Duration(minutes: 1),
-      startImmediately: false,
-      sourceBvid: video.bvid,
-      sourceVideoTitle: video.title,
-      sourcePartCid: video.initialPart.cid,
-      sourcePartPageNumber: video.initialPart.pageNumber,
-      sourcePartTitle: video.initialPart.title,
     );
-    await tester.pump();
-    expect(controller.activeSession?.status, FocusSessionStatus.running);
-
     clock.advance(const Duration(seconds: 15));
-    expect(controller.remainingDuration, const Duration(seconds: 45));
     await controller.pauseFocus();
-    expect(controller.activeSession?.status, FocusSessionStatus.paused);
+    await service.play();
+    await tester.pump();
+    clock.advance(const Duration(seconds: 10));
+    expect(controller.activeSession!.status, FocusSessionStatus.paused);
+    expect(controller.remainingDuration, const Duration(seconds: 45));
+    await service.pause();
     await controller.resumeFocus();
-    expect(controller.activeSession?.status, FocusSessionStatus.running);
+    await tester.pump();
     clock.advance(const Duration(seconds: 5));
     expect(controller.remainingDuration, const Duration(seconds: 40));
+    await controller.endFocusEarly();
+    await tester.pump();
   });
 
   /// 验证全屏底栏选集会打开右侧双列面板，并能从面板切换分P。
@@ -3340,6 +3360,163 @@ void main() {
     );
   });
 
+  for (final inFlight in [false, true]) {
+    testWidgets(inFlight ? '删除笔记等待在途自动保存后不复活记录' : '删除笔记取消尚未触发的自动保存', (
+      tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({});
+      await tester.binding.setSurfaceSize(const Size(1080, 2400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final notes = _DelayedWriteNotes();
+      await notes.saveNote(_flagNote('delete-race', 0));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PlayerPage(
+            video: _createCollectionVideo(),
+            interactionService: _FakePlayerInteractionService(),
+            playbackService: _FakePlaybackService(),
+            videoNoteService: notes,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('player-note-flag-hit-0')));
+      await tester.pumpAndSettle();
+      if (inFlight) {
+        notes.saveGate = Completer<void>();
+        addTearDown(() {
+          if (!notes.saveGate!.isCompleted) notes.saveGate!.complete();
+        });
+      }
+      await tester.enterText(
+        find.byKey(const Key('note-body-field')),
+        'edited before deletion',
+      );
+      await tester.tap(find.byKey(const Key('delete-video-note')));
+      await tester.pump(const Duration(milliseconds: 200));
+      if (inFlight) {
+        await tester.pump(const Duration(milliseconds: 900));
+        expect(notes.saveRequests, 2);
+      } else {
+        expect(notes.saveRequests, 1);
+      }
+      await tester.tap(find.widgetWithText(FilledButton, '删除'));
+      await tester.pump(const Duration(milliseconds: 100));
+      if (inFlight) {
+        expect(await notes.loadNotes(), hasLength(1));
+        notes.saveGate!.complete();
+      }
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+      expect(await notes.loadNotes(), isEmpty);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+      expect(await notes.loadNotes(), isEmpty);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  for (final navigationDuringPause in [false, true]) {
+    testWidgets(
+      navigationDuringPause ? '追加截图暂停晚返回不操作切换后的视频' : '追加截图回包晚到时合集等待并清理撤销画面',
+      (tester) async {
+        SharedPreferences.setMockInitialValues({});
+        await tester.binding.setSurfaceSize(const Size(1080, 2400));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final directory = await tester.runAsync(
+          () => Directory.systemTemp.createTemp('focubili-capture-race-'),
+        );
+        addTearDown(() => directory!.delete(recursive: true));
+        final captured = File('${directory!.path}/cancelled-frame.png');
+        await tester.runAsync(() => captured.writeAsBytes([1, 2, 3]));
+        final capture = Completer<String?>();
+        final pause = Completer<void>();
+        var pauseBlocked = false;
+        final playback = _FakePlaybackService(
+          frameCaptureLoader: () => capture.future,
+          pauseGate: () async {
+            if (navigationDuringPause && !pauseBlocked) {
+              pauseBlocked = true;
+              await pause.future;
+            }
+          },
+        );
+        final notes = VideoNoteService();
+        await notes.saveNote(_flagNote('capture-race', 0));
+        await tester.pumpWidget(
+          MaterialApp(
+            home: PlayerPage(
+              video: _createCollectionVideo(),
+              interactionService: _FakePlayerInteractionService(),
+              playbackService: playback,
+              bilibiliService: _CollectionSwitchVideoService(),
+              videoNoteService: notes,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final openNext = tester
+            .widget<InkWell>(
+              find.byKey(const Key('collection-preview-BV1Q541167Qg')),
+            )
+            .onTap!;
+        await tester.tap(find.byKey(const ValueKey('player-note-flag-hit-0')));
+        await tester.pumpAndSettle();
+        await playback.seekTo(const Duration(seconds: 75));
+        await playback.play();
+        await tester.pump();
+        tester
+            .widget<OutlinedButton>(
+              find.byKey(const Key('append-video-note-frame')),
+            )
+            .onPressed!();
+        await tester.pump();
+        if (!navigationDuringPause) {
+          await tester.pump(const Duration(milliseconds: 100));
+          expect(playback.frameCaptureRequests, 1);
+        }
+        // 使用真实合集行已接受的导航回调，模拟导航与原生取帧交错完成。
+        openNext();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(playback.openedBvid, 'BV1GJ411x7h7');
+        expect(playback.openVideoRequests, 1);
+        if (navigationDuringPause) {
+          pause.complete();
+        } else {
+          capture.complete(captured.path);
+        }
+        for (
+          int attempt = 0;
+          attempt < 30 && playback.openedBvid != 'BV1Q541167Qg';
+          attempt++
+        ) {
+          await tester.pump(const Duration(milliseconds: 20));
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 10)),
+          );
+        }
+        await tester.pumpAndSettle();
+        expect(playback.openedBvid, 'BV1Q541167Qg');
+        expect(playback.openedCid, 137649300);
+        expect(
+          playback.seekToIdentities.where(
+            (request) => request.$1 == 'BV1Q541167Qg',
+          ),
+          isEmpty,
+        );
+        expect((await notes.loadNotes()).single.allFrames, isEmpty);
+        if (!navigationDuringPause) {
+          expect(await tester.runAsync(captured.exists), isFalse);
+        }
+        if (navigationDuringPause) expect(playback.frameCaptureRequests, 0);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+  }
+
   /// 验证竖屏笔记面板固定播放器，并保存标题、正文、时间点和可选当前画面。
   testWidgets('竖屏时间点笔记固定播放器并保存到本机', (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
@@ -3449,6 +3626,36 @@ void main() {
       findsOneWidget,
     );
 
+    // 同一笔记追加另一时刻的画面，原笔记锚点和播放位置均保留。
+    tester
+        .widget<OutlinedButton>(
+          find.byKey(const Key('append-video-note-frame')),
+        )
+        .onPressed!();
+    await tester.pumpAndSettle();
+    final withTwoFrames = (await noteService.loadNotes()).single;
+    expect(withTwoFrames.position, Duration.zero);
+    expect(withTwoFrames.allFrames.map((frame) => frame.position), [
+      Duration.zero,
+      const Duration(seconds: 75),
+    ]);
+    expect(playbackService.frameCapturePositions, [
+      Duration.zero,
+      const Duration(seconds: 75),
+    ]);
+    expect(playbackService._position, const Duration(seconds: 75));
+    tester
+        .widget<IconButton>(find.byKey(const ValueKey('move-note-frame-up-1')))
+        .onPressed!();
+    await tester.pump(const Duration(milliseconds: 900));
+    await tester.pumpAndSettle();
+    expect(
+      (await noteService.loadNotes()).single.allFrames.map(
+        (frame) => frame.position,
+      ),
+      [const Duration(seconds: 75), Duration.zero],
+    );
+
     await tester.tap(find.byKey(const Key('delete-video-note')));
     await tester.pumpAndSettle();
     expect(find.text('确定删除“关键观点”吗？此操作无法撤销。'), findsOneWidget);
@@ -3494,6 +3701,23 @@ void main() {
     expect(saved.framePath, isNull);
     expect(service.frameCaptureRequests, 1);
     expect(find.textContaining('笔记文字已保存，截图未成功'), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const Key('note-body-field')),
+      'Keep edited text after append failure',
+    );
+    tester
+        .widget<OutlinedButton>(
+          find.byKey(const Key('append-video-note-frame')),
+        )
+        .onPressed!();
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 900));
+    await tester.pumpAndSettle();
+    expect(
+      (await notes.loadNotes()).single.body,
+      'Keep edited text after append failure',
+    );
+    expect(service.frameCaptureRequests, 2);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
@@ -5048,8 +5272,8 @@ void main() {
     expect(find.byKey(const Key('player-network-type')), findsNothing);
   });
 
-  /// 验证“当前分P”专注的左上角时间跟随播放器快进后的真实剩余进度，而不是旧计划倒计时。
-  testWidgets('当前分P专注左上角同步真实播放剩余时间', (WidgetTester tester) async {
+  /// 验证播放器快进只改变视频进度，不改变会话的计划倒计时。
+  testWidgets('播放器快进不改变专注会话剩余时间', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     SharedPreferences.setMockInitialValues(<String, Object>{});
@@ -5093,7 +5317,7 @@ void main() {
       tester
           .widget<Text>(find.byKey(const Key('fullscreen-focus-remaining')))
           .data,
-      '02:32',
+      '03:32',
     );
 
     await playbackService.seekTo(const Duration(minutes: 2));
@@ -5102,7 +5326,7 @@ void main() {
       tester
           .widget<Text>(find.byKey(const Key('fullscreen-focus-remaining')))
           .data,
-      '01:32',
+      '03:32',
     );
     await focusController.endFocusEarly();
     await tester.pump();
@@ -6392,6 +6616,8 @@ void main() {
     expect(find.byKey(const Key('collapsing-player-scroll')), findsNothing);
     expect(find.byKey(const Key('video-description')), findsOneWidget);
     expect(tester.takeException(), isNull);
+    await focusController.endFocusEarly();
+    await tester.pump();
   });
 
   /// 验证平板播放器的填充和拉伸选项确实改变 Texture 的 BoxFit，而不是被外层画幅抵消。

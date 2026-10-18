@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../../../models/video_note.dart';
+import '../../../models/ab_repeat_range.dart';
 import '../../../models/playback_buffer_range.dart';
 import '../../notes/video_note_composer.dart' show formatVideoNotePosition;
 
@@ -26,6 +27,71 @@ class PlayerTimelineGeometry {
     offset.dy + (size.height - thickness) / 2,
     math.max(0, size.width - trackInset * 2),
     thickness,
+  );
+}
+
+/// A/B labels and the selected span use exactly the Slider track coordinates.
+class PlayerAbRepeatMarkers extends StatelessWidget {
+  const PlayerAbRepeatMarkers({
+    super.key,
+    required this.range,
+    required this.duration,
+  });
+  final AbRepeatRange range;
+  final Duration duration;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    label:
+        '区间循环，A ${formatAbRepeatTime(range.a)}，B ${formatAbRepeatTime(range.b)}，点击修改或清除',
+    button: true,
+    child: SizedBox(
+      height: 24,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final track = PlayerTimelineGeometry.trackRect(
+            Size(constraints.maxWidth, 24),
+          );
+          final total = math.max(1, duration.inMilliseconds);
+          final left =
+              track.left +
+              track.width * (range.a.inMilliseconds / total).clamp(0, 1);
+          final right =
+              track.left +
+              track.width * (range.b.inMilliseconds / total).clamp(0, 1);
+          final closePoints = right - left < 18;
+          return Stack(
+            children: [
+              Positioned(
+                left: left,
+                width: math.max(1, right - left),
+                top: 9,
+                height: 7,
+                child: const ColoredBox(color: Color(0x9948C9B0)),
+              ),
+              for (final point in [('A', left), ('B', right)])
+                Positioned(
+                  left: (point.$2 - 7).clamp(
+                    0,
+                    math.max(0, constraints.maxWidth - 14),
+                  ),
+                  top: closePoints && point.$1 == 'B' ? 11 : 0,
+                  child: Text(
+                    point.$1,
+                    key: Key('ab-repeat-marker-${point.$1}'),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      shadows: [Shadow(color: Colors.black, blurRadius: 3)],
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
+    ),
   );
 }
 

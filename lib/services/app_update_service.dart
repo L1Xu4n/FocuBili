@@ -1,13 +1,14 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../platform/platform_capabilities.dart';
 import '../platform/platform_services.dart';
+import 'app_update_release_manifest.dart';
+import 'app_update_transport.dart';
 
 export '../platform/platform_capabilities.dart' show AppUpdateTargetPlatform;
 
@@ -65,18 +66,62 @@ abstract interface class AppVersionProvider {
   Future<String> loadVersion();
 }
 
+/// Only this application's public package metadata; never account/session data.
+class AppUpdateInstallation {
+  const AppUpdateInstallation({
+    required this.packageName,
+    this.buildNumber = '',
+    this.certificateSha256 = '',
+  });
+  final String packageName;
+  final String buildNumber;
+  final String certificateSha256;
+}
+
+abstract interface class AppUpdateInstallationProvider {
+  Future<AppUpdateInstallation> loadUpdateInstallation();
+}
+
 /// 从当前平台安装包元数据读取 pubspec 对应版本号。
-class PlatformAppVersionProvider implements AppVersionProvider {
+class PlatformAppVersionProvider
+    implements AppVersionProvider, AppUpdateInstallationProvider {
   /// 创建使用 package_info_plus 读取版本的平台实现。
-  const PlatformAppVersionProvider();
+  const PlatformAppVersionProvider({
+    this.releaseChannel = const String.fromEnvironment(
+      'FOCUBILI_RELEASE_CHANNEL',
+    ),
+    this.releaseVersion = const String.fromEnvironment(
+      'FOCUBILI_RELEASE_VERSION',
+    ),
+  });
+  final String releaseChannel;
+  final String releaseVersion;
 
   /// 从系统安装包元数据读取当前应用版本。
   @override
   Future<String> loadVersion() async {
     final PackageInfo info = await PackageInfo.fromPlatform();
-    return info.buildNumber.trim().isEmpty
-        ? info.version
-        : '${info.version}+${info.buildNumber}';
+    final useReleaseVersion =
+        releaseChannel == 'beta' &&
+        AppUpdateService.isBetaVersion(releaseVersion) &&
+        AppUpdateService.validSemVer(releaseVersion);
+    final version = useReleaseVersion ? releaseVersion : info.version;
+    if (info.buildNumber.trim().isEmpty) return version;
+    // A SemVer has one metadata suffix; prefer the installed native counter.
+    final displayVersion = useReleaseVersion
+        ? version.split('+').first
+        : version;
+    return '$displayVersion+${info.buildNumber}';
+  }
+
+  @override
+  Future<AppUpdateInstallation> loadUpdateInstallation() async {
+    final info = await PackageInfo.fromPlatform();
+    return AppUpdateInstallation(
+      packageName: info.packageName,
+      buildNumber: info.buildNumber,
+      certificateSha256: info.buildSignature,
+    );
   }
 }
 
@@ -112,15 +157,19 @@ class AppUpdatePreferencesService {
   }
 }
 
-/// 读取 GitHub 最新正式 Release，并进行纯本地语义版本比较。
+/// Stable uses latest; explicitly marked previews read bounded prerelease history.
 class AppUpdateService {
   /// 创建更新服务；测试可以注入本地 Release 数据或 HTTP 客户端。
   AppUpdateService({
     Future<Map<String, Object?>> Function()? releaseLoader,
     HttpClient? httpClient,
     AppUpdateTargetPlatform? targetPlatform,
+    String releaseChannel = const String.fromEnvironment(
+      'FOCUBILI_RELEASE_CHANNEL',
+    ),
   }) : _releaseLoader = releaseLoader,
        _httpClient = httpClient,
+       _releaseChannel = releaseChannel,
        _targetPlatform = targetPlatform ?? _currentTargetPlatform();
 
   static final Uri releasesUri = Uri.parse(
@@ -129,6 +178,11 @@ class AppUpdateService {
   static final Uri latestReleaseApiUri = Uri.parse(
     'https://api.github.com/repos/L1Xu4n/FocuBili/releases/latest',
   );
+  static final Uri releasesApiUri = Uri.parse(
+    'https://api.github.com/repos/L1Xu4n/FocuBili/releases',
+  );
+  static const int betaPageSize = 30;
+  static const int maximumBetaPages = 3;
   static const String releaseSummaryStartMarker =
       '<!-- focubili-update-summary:start -->';
   static const String releaseSummaryEndMarker =
@@ -138,24 +192,55 @@ class AppUpdateService {
   final Future<Map<String, Object?>> Function()? _releaseLoader;
   final HttpClient? _httpClient;
   final AppUpdateTargetPlatform _targetPlatform;
+  final String _releaseChannel;
 
   /// 请求最新正式 Release；网络、限流和格式错误均转换为可展示的失败状态。
-  Future<AppUpdateResult> check({required String currentVersion}) async {
+  Future<AppUpdateResult> check({
+    required String currentVersion,
+    AppUpdateInstallation? installation,
+  }) async {
     try {
-      final Map<String, Object?> release = _releaseLoader == null
+      final beta =
+          _releaseChannel == 'beta' ||
+          isBetaVersion(currentVersion) ||
+          (_targetPlatform == AppUpdateTargetPlatform.android &&
+              installation?.packageName == 'com.focubili.app.preview');
+      final Map<String, Object?>? release = beta
+          ? await _loadBetaRelease(currentVersion)
+          : _releaseLoader == null
           ? await _loadLatestRelease()
           : await _releaseLoader();
+      if (release == null) {
+        return AppUpdateResult(
+          status: AppUpdateStatus.upToDate,
+          currentVersion: currentVersion,
+          releaseUrl: releasesUri,
+          message: '近期发布中未发现更高的测试版（最多检查 90 条发布）。',
+        );
+      }
+      if (release['draft'] == true ||
+          (!beta && release['prerelease'] == true)) {
+        throw const FormatException('Unexpected release channel');
+      }
       final String latestVersion = _readVersion(
         release['tag_name'] ?? release['name'],
       );
       if (latestVersion.isEmpty) {
         throw const FormatException('Release 没有可识别的版本号。');
       }
-      final Uri releaseUrl =
-          Uri.tryParse(release['html_url']?.toString() ?? '') ??
-          AppUpdateService.releasesUri;
+      if (!beta && latestVersion.contains('-')) {
+        throw const FormatException('Unexpected stable release version');
+      }
+      final tag = release['tag_name']?.toString() ?? '';
+      final Uri releaseUrl = _safeReleasePage(release['html_url'], tag);
       final bool available = compareVersions(latestVersion, currentVersion) > 0;
-      final Uri? downloadUrl = _selectDownloadAsset(release['assets']);
+      final Uri? downloadUrl = beta
+          ? await _selectBetaDownload(release, installation)
+          : _selectDownloadAsset(
+              release['assets'],
+              tag: tag,
+              androidPackage: installation?.packageName,
+            );
       final List<String> releaseHighlights = _readReleaseHighlights(
         release['body'],
       );
@@ -177,7 +262,11 @@ class AppUpdateService {
         downloadUrl: downloadUrl,
         downloadActionLabel: _downloadActionLabel(downloadUrl),
         releaseHighlights: releaseHighlights,
-        message: available ? '发现新版本 $latestVersion' : '当前已是最新版本',
+        message: beta
+            ? '近期发布中发现更高测试版 $latestVersion（最多检查 90 条发布）。'
+            : available
+            ? '发现新版本 $latestVersion'
+            : '当前已是最新版本',
       );
     } catch (error) {
       return AppUpdateResult(
@@ -189,15 +278,153 @@ class AppUpdateService {
     }
   }
 
+  Future<Map<String, Object?>?> _loadBetaRelease(String currentVersion) async {
+    if (!validSemVer(currentVersion.replaceFirst(RegExp(r'^v'), ''))) {
+      throw const FormatException('Invalid installed preview version');
+    }
+    Map<String, Object?>? best;
+    String? bestVersion;
+    for (var page = 1; page <= maximumBetaPages; page++) {
+      final Object? raw = _releaseLoader != null
+          ? [await _releaseLoader()]
+          : await AppUpdateTransport(client: _httpClient).readJson(
+              releasesApiUri.replace(
+                queryParameters: {'per_page': '$betaPageSize', 'page': '$page'},
+              ),
+            );
+      if (raw is! List || raw.length > betaPageSize) {
+        throw const FormatException('Invalid release history');
+      }
+      for (final entry in raw) {
+        if (entry is! Map ||
+            entry.keys.any((key) => key is! String) ||
+            entry['draft'] == true ||
+            entry['prerelease'] != true) {
+          continue;
+        }
+        final tag = entry['tag_name'];
+        if (tag is! String) continue;
+        final version = tag.startsWith('v') ? tag.substring(1) : tag;
+        if (!validSemVer(version) ||
+            !version.split('+').first.contains('-') ||
+            compareVersions(version, currentVersion) <= 0 ||
+            (bestVersion != null &&
+                compareVersions(version, bestVersion) <= 0)) {
+          continue;
+        }
+        best = Map<String, Object?>.from(entry);
+        bestVersion = version;
+      }
+      if (_releaseLoader != null || raw.length < betaPageSize) break;
+    }
+    return best;
+  }
+
+  Future<Uri?> _selectBetaDownload(
+    Map<String, Object?> release,
+    AppUpdateInstallation? installation,
+  ) async {
+    if (_targetPlatform == AppUpdateTargetPlatform.other) return null;
+    if (_targetPlatform == AppUpdateTargetPlatform.android &&
+        installation?.packageName != 'com.focubili.app.preview') {
+      return null;
+    }
+    try {
+      final tag = release['tag_name'] as String;
+      final rawAssets = release['assets'];
+      if (rawAssets is! List) return null;
+      final manifests = rawAssets.whereType<Map>().where(
+        (asset) => asset['name'] == 'beta-release-manifest.json',
+      );
+      if (manifests.length != 1) return null;
+      final asset = manifests.single;
+      final uri = Uri.tryParse(asset['browser_download_url']?.toString() ?? '');
+      if (uri == null ||
+          !_isTrustedReleaseAsset(uri, tag, 'beta-release-manifest.json') ||
+          asset['size'] is! int ||
+          (asset['size'] as int) <= 0 ||
+          (asset['size'] as int) > 64 * 1024) {
+        return null;
+      }
+      final manifest = AppUpdateReleaseManifest.tryParse(
+        await AppUpdateTransport(
+          client: _httpClient,
+        ).readJson(uri, releaseAsset: true),
+        tag,
+      );
+      if (manifest == null) return null;
+      final target = release['target_commitish'];
+      if (target is String &&
+          RegExp(r'^[0-9a-fA-F]{40}$').hasMatch(target) &&
+          target.toLowerCase() != manifest.sourceSha.toLowerCase()) {
+        return null;
+      }
+      if (_targetPlatform == AppUpdateTargetPlatform.android) {
+        if (installation?.packageName != manifest.android['package']) {
+          return null;
+        }
+        final certificate = installation!.certificateSha256.trim();
+        if (!RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(certificate) ||
+            certificate.toLowerCase() !=
+                (manifest.android['certificateSha256'] as String)
+                    .toLowerCase()) {
+          return null;
+        }
+        final build = int.tryParse(installation.buildNumber);
+        if (!RegExp(r'^(0|[1-9][0-9]*)$').hasMatch(installation.buildNumber) ||
+            build == null ||
+            (manifest.android['versionCode'] as int) <= build) {
+          return null;
+        }
+      }
+      final matches = <Map>[];
+      for (final declared in manifest.assets) {
+        if (declared['platform'] != _targetPlatform.name) continue;
+        final actual = rawAssets.whereType<Map>().where(
+          (asset) => asset['name'] == declared['file'],
+        );
+        if (actual.length != 1) continue;
+        final candidate = actual.single;
+        final digest = candidate['digest'];
+        if (candidate['size'] is int &&
+            candidate['size'] == declared['bytes'] &&
+            (digest == null ||
+                digest.toString().toLowerCase() ==
+                    'sha256:${(declared['sha256'] as String).toLowerCase()}')) {
+          matches.add(candidate);
+        }
+      }
+      return _selectDownloadAsset(
+        matches,
+        tag: tag,
+        androidPackage: installation?.packageName,
+        beta: true,
+      );
+    } catch (_) {
+      // Valid release discovery may still offer its safe page, never an unverified APK.
+      return null;
+    }
+  }
+
   /// 从统一能力表读取安装包类型，未支持平台只保留 Release 页面入口。
   static AppUpdateTargetPlatform _currentTargetPlatform() {
     return PlatformServices.current.capabilities.updateTargetPlatform;
   }
 
   /// 从 Release 资产中选择当前平台安装包；Windows 不会退回选择 APK，Android 也不会选择 MSIX。
-  Uri? _selectDownloadAsset(Object? rawAssets) {
+  Uri? _selectDownloadAsset(
+    Object? rawAssets, {
+    required String tag,
+    String? androidPackage,
+    bool beta = false,
+  }) {
     if (rawAssets is! List ||
         _targetPlatform == AppUpdateTargetPlatform.other) {
+      return null;
+    }
+    if (_targetPlatform == AppUpdateTargetPlatform.android &&
+        androidPackage !=
+            (beta ? 'com.focubili.app.preview' : 'com.focubili.app')) {
       return null;
     }
     final List<String> extensions = switch (_targetPlatform) {
@@ -229,10 +456,16 @@ class AppUpdateService {
         );
         if ((_targetPlatform != AppUpdateTargetPlatform.linux ||
                 name.toLowerCase().contains('linux')) &&
+            (_targetPlatform != AppUpdateTargetPlatform.android ||
+                beta ||
+                !RegExp(
+                  r'preview|beta|debug',
+                  caseSensitive: false,
+                ).hasMatch(name)) &&
             name.toLowerCase().endsWith(extension) &&
             uri != null &&
             uri.path.toLowerCase().endsWith(extension) &&
-            _isTrustedReleaseAsset(uri)) {
+            _isTrustedReleaseAsset(uri, tag, name)) {
           return uri;
         }
       }
@@ -241,15 +474,42 @@ class AppUpdateService {
   }
 
   /// 只允许打开本项目 GitHub Release 的 HTTPS 下载地址，拒绝用户信息、自定义端口和片段。
-  static bool _isTrustedReleaseAsset(Uri uri) {
+  static bool _isTrustedReleaseAsset(Uri uri, String tag, String name) {
+    final segments = uri.pathSegments;
     return uri.scheme.toLowerCase() == 'https' &&
         uri.host.toLowerCase() == 'github.com' &&
         uri.userInfo.isEmpty &&
         (!uri.hasPort || uri.port == 443) &&
         uri.fragment.isEmpty &&
-        uri.path.toLowerCase().startsWith(
-          '/l1xu4n/focubili/releases/download/',
-        );
+        !uri.hasQuery &&
+        RegExp(r'^(?:v|release-)?[0-9][A-Za-z0-9.+-]*$').hasMatch(tag) &&
+        RegExp(r'^[A-Za-z0-9][A-Za-z0-9._+()-]{0,179}$').hasMatch(name) &&
+        segments.length == 6 &&
+        segments[0].toLowerCase() == 'l1xu4n' &&
+        segments[1].toLowerCase() == 'focubili' &&
+        segments[2] == 'releases' &&
+        segments[3] == 'download' &&
+        segments[4] == tag &&
+        segments[5] == name;
+  }
+
+  static Uri _safeReleasePage(Object? value, String tag) {
+    final uri = Uri.tryParse(value?.toString() ?? '');
+    final expected = Uri.https(
+      'github.com',
+      '/L1Xu4n/FocuBili/releases/tag/$tag',
+    );
+    return uri != null &&
+            uri.scheme == 'https' &&
+            uri.host.toLowerCase() == 'github.com' &&
+            uri.userInfo.isEmpty &&
+            (!uri.hasPort || uri.port == 443) &&
+            !uri.hasQuery &&
+            uri.fragment.isEmpty &&
+            RegExp(r'^(?:v|release-)?[0-9][A-Za-z0-9.+-]*$').hasMatch(tag) &&
+            uri.path == expected.path
+        ? uri
+        : releasesUri;
   }
 
   /// 返回与选中资产一致的按钮文案；没有安全匹配资产时引导用户查看完整 Release。
@@ -268,40 +528,35 @@ class AppUpdateService {
 
   /// 使用带超时的系统 HTTP 客户端访问 GitHub API，避免启动检查长期占用连接。
   Future<Map<String, Object?>> _loadLatestRelease() async {
-    final HttpClient client = _httpClient ?? HttpClient();
-    final bool ownsClient = _httpClient == null;
-    try {
-      client.connectionTimeout = const Duration(seconds: 8);
-      final HttpClientRequest request = await client.getUrl(
-        latestReleaseApiUri,
-      );
-      request.headers
-        ..set(HttpHeaders.acceptHeader, 'application/vnd.github+json')
-        ..set(HttpHeaders.userAgentHeader, 'FocuBili-update-checker')
-        ..set('X-GitHub-Api-Version', '2022-11-28');
-      final HttpClientResponse response = await request.close().timeout(
-        const Duration(seconds: 10),
-      );
-      final String body = await utf8.decoder
-          .bind(response)
-          .join()
-          .timeout(const Duration(seconds: 10));
-      if (response.statusCode != HttpStatus.ok) {
-        throw HttpException(
-          'GitHub update check returned ${response.statusCode}.',
-          uri: latestReleaseApiUri,
-        );
-      }
-      final Object? decoded = jsonDecode(body);
-      if (decoded is! Map<String, Object?>) {
-        throw const FormatException('GitHub Release 响应格式无效。');
-      }
-      return decoded;
-    } finally {
-      if (ownsClient) {
-        client.close(force: true);
-      }
+    final decoded = await AppUpdateTransport(
+      client: _httpClient,
+    ).readJson(latestReleaseApiUri);
+    if (decoded is! Map<String, Object?>) {
+      throw const FormatException('GitHub Release 响应格式无效。');
     }
+    return decoded;
+  }
+
+  static bool isBetaVersion(String version) =>
+      (_ParsedVersion.parse(
+        version,
+      ).preRelease?.toLowerCase().contains('beta') ??
+      false);
+
+  static bool validSemVer(String version) {
+    final match = RegExp(
+      r'^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$',
+    ).firstMatch(version);
+    return match != null &&
+        !(match[4]
+                ?.split('.')
+                .any(
+                  (part) =>
+                      RegExp(r'^\d+$').hasMatch(part) &&
+                      part.length > 1 &&
+                      part.startsWith('0'),
+                ) ??
+            false);
   }
 
   /// 去除常见的 v/release 前缀，仅保留可用于比较和展示的版本正文。
@@ -369,12 +624,12 @@ class AppUpdateService {
         ? leftVersion.numbers.length
         : rightVersion.numbers.length;
     for (int index = 0; index < length; index += 1) {
-      final int leftPart = index < leftVersion.numbers.length
+      final BigInt leftPart = index < leftVersion.numbers.length
           ? leftVersion.numbers[index]
-          : 0;
-      final int rightPart = index < rightVersion.numbers.length
+          : BigInt.zero;
+      final BigInt rightPart = index < rightVersion.numbers.length
           ? rightVersion.numbers[index]
-          : 0;
+          : BigInt.zero;
       if (leftPart != rightPart) {
         return leftPart.compareTo(rightPart);
       }
@@ -407,8 +662,8 @@ class AppUpdateService {
       if (leftPart == rightPart) {
         continue;
       }
-      final int? leftNumber = int.tryParse(leftPart);
-      final int? rightNumber = int.tryParse(rightPart);
+      final BigInt? leftNumber = BigInt.tryParse(leftPart);
+      final BigInt? rightNumber = BigInt.tryParse(rightPart);
       if (leftNumber != null && rightNumber != null) {
         return leftNumber.compareTo(rightNumber);
       }
@@ -437,17 +692,17 @@ class _ParsedVersion {
     );
     final String withoutBuild = normalized.split('+').first;
     final List<String> parts = withoutBuild.split('-');
-    final List<int> numbers = parts.first
+    final List<BigInt> numbers = parts.first
         .split('.')
-        .map((String part) => int.tryParse(part) ?? 0)
+        .map((String part) => BigInt.tryParse(part) ?? BigInt.zero)
         .toList(growable: false);
     return _ParsedVersion(
-      numbers.isEmpty ? const <int>[0] : numbers,
+      numbers.isEmpty ? <BigInt>[BigInt.zero] : numbers,
       parts.length > 1 ? parts.skip(1).join('-') : null,
     );
   }
 
-  final List<int> numbers;
+  final List<BigInt> numbers;
   final String? preRelease;
 }
 
@@ -466,6 +721,7 @@ class AppUpdateController extends ChangeNotifier {
   final AppUpdateService _updateService;
   final AppUpdatePreferencesService _preferencesService;
   final AppVersionProvider _versionProvider;
+  AppUpdateInstallation? _installation;
 
   AppUpdateResult _result = const AppUpdateResult.idle();
   AppUpdateResult? _availableUpdate;
@@ -561,6 +817,15 @@ class AppUpdateController extends ChangeNotifier {
         _ignoredUpdate = ignored;
       }
       final String currentVersion = await _versionProvider.loadVersion();
+      final provider = _versionProvider;
+      if (provider is AppUpdateInstallationProvider) {
+        try {
+          _installation = await (provider as AppUpdateInstallationProvider)
+              .loadUpdateInstallation();
+        } catch (_) {
+          // Unknown package identity can inspect releases but never select an APK.
+        }
+      }
       _result = AppUpdateResult(
         status: _enabled ? AppUpdateStatus.idle : AppUpdateStatus.disabled,
         currentVersion: currentVersion,
@@ -638,6 +903,7 @@ class AppUpdateController extends ChangeNotifier {
     _notify();
     final AppUpdateResult checkedResult = await _updateService.check(
       currentVersion: _result.currentVersion,
+      installation: _installation,
     );
     if (_disposed || requestGeneration != _requestGeneration) {
       return;

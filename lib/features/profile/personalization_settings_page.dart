@@ -19,6 +19,7 @@ import 'playback_speeds_dialog.dart';
 import 'double_tap_regions_page.dart';
 import 'player_control_size_page.dart';
 import 'settings_search_section.dart';
+import 'unified_export_page.dart';
 import 'data_transfer_page.dart';
 
 /// 可选择的主题强调色预设，供设置页以色块形式展示。
@@ -947,6 +948,16 @@ class _PersonalizationSettingsPageState
       icon: Icons.admin_panel_settings_outlined,
       title: '账号与隐私',
       children: <Widget>[
+        ListTile(
+          key: const Key('open-unified-export'),
+          leading: const Icon(Icons.inventory_2_outlined),
+          title: const Text('统一导出'),
+          subtitle: const Text('笔记、清单、专注、收藏、历史、订阅和已载入字幕'),
+          trailing: const Icon(Icons.chevron_right_rounded),
+          onTap: () => Navigator.of(context).push<void>(
+            MaterialPageRoute(builder: (_) => const UnifiedExportPage()),
+          ),
+        ),
         SwitchListTile.adaptive(
           key: const Key('enable-account-read-only'),
           value: _accountReadOnly,

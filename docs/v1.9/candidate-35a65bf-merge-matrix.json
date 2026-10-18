@@ -1,0 +1,2604 @@
+{
+  "format": "focubili.local-candidate-merge-audit",
+  "version": 1,
+  "v19Parent": "59f6906bd88032ae911315c00d312c96a8079278",
+  "v18CandidateParent": "35a65bf6e5b130f91027308a473c590e36e1ff20",
+  "mergeBase": "da0946b98994fea9020a58c870b0ddddcde72a42",
+  "isFinalV18Baseline": false,
+  "publicationAllowed": false,
+  "conflictCount": 35,
+  "originalComparedPathCount": 215,
+  "productionDeltaFromV19Parent": [],
+  "unchangedCriticalCandidateFiles": [
+    {
+      "path": "lib/services/subscription_background_service.dart",
+      "blob": "f2f741a834b3953a7c0d18580e420629b1ed57fe"
+    },
+    {
+      "path": "lib/services/subscription_notification_service.dart",
+      "blob": "1d6079172f90e7d18e78bc8229d452e9403dbef9"
+    },
+    {
+      "path": "lib/services/subscription_notification_delivery.dart",
+      "blob": "fa777e691c4cac55f312084a6af92186ec48ab5f"
+    },
+    {
+      "path": "lib/services/windows_focus_notification_service.dart",
+      "blob": "4dc7ea8f0129be027c9d7489a42925ec10cb82a8"
+    },
+    {
+      "path": "lib/services/app_theme_mode_service.dart",
+      "blob": "6ff9fe3fb7743ecf41b99c556fd8a503450606ba"
+    },
+    {
+      "path": "lib/core/layout/device_orientation_policy.dart",
+      "blob": "b2388af40d394b618a7ff418b2e089023dc04b6b"
+    },
+    {
+      "path": "lib/features/profile/fullscreen_settings_preview.dart",
+      "blob": "44d26e5a304d56d0c74ec40a095a4de5425fa93e"
+    },
+    {
+      "path": "lib/features/player/player_gesture_coordinator.dart",
+      "blob": "09a4c7b807e9b08c9848f6bf5d18f9b5e3be2bba"
+    },
+    {
+      "path": "lib/features/player/player_viewport_coordinator.dart",
+      "blob": "a2e73cb85783d09da5b55fb1665c06830b6281b3"
+    },
+    {
+      "path": "lib/services/windows_playback_recovery_policy.dart",
+      "blob": "91b4bee145c68b5c0612721f93713a4d1a17caa5"
+    },
+    {
+      "path": "lib/services/windows_playback_progress_store.dart",
+      "blob": "1d3dd0baa33e4142080d1e91e604a457f007485c"
+    },
+    {
+      "path": "lib/models/playback_buffer_range.dart",
+      "blob": "1ef16e55238fbad8bbe1c8f5e047207849265850"
+    },
+    {
+      "path": "tool/run_native_subscription_probe.py",
+      "blob": "85dd70863bc8481eee012ae7740f0aa59f955aa4"
+    },
+    {
+      "path": "tool/native_subscription_probe.dart",
+      "blob": "cdf54c6884a99c5ae422601ee3a261cb7b5e2067"
+    },
+    {
+      "path": "tool/test_native_subscription_probe.py",
+      "blob": "c964dcb2ae912f01a65f2c077faad22b85ff3a19"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "blob": "24ae7fe4eb8a979bdc5834423eddc03b42e36fac"
+    },
+    {
+      "path": ".github/workflows/publish-release.yml",
+      "blob": "dfb7cf1e7e458da3e7b499838c2945bb06991704"
+    },
+    {
+      "path": "android/app/src/main/kotlin/com/focubili/app/PlaybackPhasePolicy.kt",
+      "blob": "f84cfe1b3678088fe3fec119f158563227b80e9b"
+    },
+    {
+      "path": "packages/focubili_android/android/src/main/kotlin/com/focubili/app/FocuBiliAndroidPlugin.kt",
+      "blob": "03f005d22f426920af1d5177150e25c10602b29a"
+    },
+    {
+      "path": "packages/focubili_apple/ios/Classes/FocuBiliApplePlugin.swift",
+      "blob": "d4084ed7461cf12908c690ef0dbbfc85eb927cb7"
+    },
+    {
+      "path": "packages/focubili_apple/ios/Classes/SubscriptionRunGate.swift",
+      "blob": "487db889580ceb7ffff4f718ddee33cc208345e6"
+    },
+    {
+      "path": "packages/focubili_apple/ios/Classes/SubscriptionScheduler.swift",
+      "blob": "0b42079f73e80af32588d5f5af27caf2b7caec52"
+    },
+    {
+      "path": "packages/focubili_apple/macos/Classes/FocuBiliApplePlugin.swift",
+      "blob": "d4084ed7461cf12908c690ef0dbbfc85eb927cb7"
+    },
+    {
+      "path": "packages/focubili_apple/macos/Classes/SubscriptionRunGate.swift",
+      "blob": "487db889580ceb7ffff4f718ddee33cc208345e6"
+    },
+    {
+      "path": "packages/focubili_apple/macos/Classes/SubscriptionScheduler.swift",
+      "blob": "0b42079f73e80af32588d5f5af27caf2b7caec52"
+    }
+  ],
+  "conflicts": [
+    {
+      "path": ".github/workflows/apple-build.yml",
+      "resolution": "Keep reviewed optional Beta workflow_call inputs/secrets; existing macOS fresh-stdout probe and Apple gate/quality steps retained.",
+      "resolvedBlob": "2e3078cd72bbce6013350bd79f281583576c43a0",
+      "v19Blob": "2e3078cd72bbce6013350bd79f281583576c43a0",
+      "candidateBlob": "afa41a3f35af89a2c50330a66971eac70b7dab45"
+    },
+    {
+      "path": ".github/workflows/linux-build.yml",
+      "resolution": "Keep controlled reusable Beta source/counter/output hooks; existing default push/PR/Linux gates unchanged.",
+      "resolvedBlob": "9581f79b9216d4e51d86f076042c0cfefb081560",
+      "v19Blob": "9581f79b9216d4e51d86f076042c0cfefb081560",
+      "candidateBlob": "0fcfffe4b4e1182c7a8c33454b77fc2b0f791e94"
+    },
+    {
+      "path": ".github/workflows/release-build.yml",
+      "resolution": "Keep controlled Beta opt-in and exact-SHA artifact contract; ordinary stable/default release path unchanged.",
+      "resolvedBlob": "51d091957c0004adeabf4581be256b3d4d5cf6b7",
+      "v19Blob": "51d091957c0004adeabf4581be256b3d4d5cf6b7",
+      "candidateBlob": "83b360effbb9e066697e46f773277b0e0c4b19f7"
+    },
+    {
+      "path": "android/app/build.gradle",
+      "resolution": "Keep 1.9 debug -beta.1 and explicit release-preview opt-in/counter floor; default release applicationId/signing unchanged.",
+      "resolvedBlob": "8c5d6c29464dd7bcec4da2b8e523ad646f8615ec",
+      "v19Blob": "8c5d6c29464dd7bcec4da2b8e523ad646f8615ec",
+      "candidateBlob": "7d7edcc3ce8ec9c2348a4b8cddd2dc9997e2ecc7"
+    },
+    {
+      "path": "android/app/src/main/kotlin/com/focubili/app/NativePlaybackController.kt",
+      "resolution": "Keep course authorization, native progress export and real playWhenReady intent; latest 1.8 mainHandler validateResponse/isCurrent publication guard retained.",
+      "resolvedBlob": "83fe09d2e250f5ca30c30097137ad286c189409d",
+      "v19Blob": "83fe09d2e250f5ca30c30097137ad286c189409d",
+      "candidateBlob": "8f5516e9a10dc7d87d7145200194b6398f7823d3"
+    },
+    {
+      "path": "docs/settings-import-threshold.md",
+      "resolution": "1.9 text contains complete 1.8 candidate as prefix plus strict-search integration evidence; keep both in that existing text.",
+      "resolvedBlob": "6949830a330860c43640c3c4bd5883a2d69516e2",
+      "v19Blob": "6949830a330860c43640c3c4bd5883a2d69516e2",
+      "candidateBlob": "c626e0fd54db74b72d0a91ee0223dc9294029ba5"
+    },
+    {
+      "path": "lib/core/build_metadata.g.dart",
+      "resolution": "Keep 1.9.0+2026 placeholder; do not overwrite with 1.8 fallback metadata or generate current build metadata during merge.",
+      "resolvedBlob": "bcf33dd290e2545f3bfa26c0ef71ea49b869b7f4",
+      "v19Blob": "bcf33dd290e2545f3bfa26c0ef71ea49b869b7f4",
+      "candidateBlob": "84d703421f17c19481e09b9e40351b61bd6e8e3c"
+    },
+    {
+      "path": "lib/features/focus/focus_dashboard.dart",
+      "resolution": "Keep independent continuous focus and three-stop drawer physics; 1.8 onboarding jumpTo/inertia cancellation, editing reset and card-key replacement remain.",
+      "resolvedBlob": "5166b56de1d061204ba6031a6b71e10915f6b0cf",
+      "v19Blob": "5166b56de1d061204ba6031a6b71e10915f6b0cf",
+      "candidateBlob": "0e94c564400e77f720b6215cae853b6029c4f33e"
+    },
+    {
+      "path": "lib/features/notes/video_note_composer.dart",
+      "resolution": "Keep 1.8 contain + viewport-height .38/clamp108..280 for legacy frame and 1.9 ordered multi-frame view/editor.",
+      "resolvedBlob": "9ad799feaaecf7bce42071c49c7ce24647183ea1",
+      "v19Blob": "9ad799feaaecf7bce42071c49c7ce24647183ea1",
+      "candidateBlob": "9fede97992af917ca89d7150f727e5688fca78f9"
+    },
+    {
+      "path": "lib/features/notes/video_notes_page.dart",
+      "resolution": "Keep Beta5 AppNetworkImage and contained screenshot preview; retain cross-platform export/cancellation/error handling.",
+      "resolvedBlob": "d0c7c66a6c3d24b104863194d8adb6779395ccf6",
+      "v19Blob": "d0c7c66a6c3d24b104863194d8adb6779395ccf6",
+      "candidateBlob": "18cdb2af622453a28cceca3645d1fec44d3e9767"
+    },
+    {
+      "path": "lib/features/player/player_page.dart",
+      "resolution": "Keep AB lifecycle/drain, global focus and blocklist additions; existing 1.8 lifecycle remains.",
+      "resolvedBlob": "78b1b2a90d2620d1a99fa8ebd498648cb22b9a74",
+      "v19Blob": "78b1b2a90d2620d1a99fa8ebd498648cb22b9a74",
+      "candidateBlob": "d2676e45e189b2c61dd0a94e2d5fc84407ebcd4c"
+    },
+    {
+      "path": "lib/features/player/widgets/player_timeline.dart",
+      "resolution": "Keep additive AB marker geometry; original 1.8 buffer rail/range calculations unchanged.",
+      "resolvedBlob": "f4124d5a714261b0c7d1272bdabb75b9c321ce12",
+      "v19Blob": "f4124d5a714261b0c7d1272bdabb75b9c321ce12",
+      "candidateBlob": "e4e376f1eaee8fd193bfbf2afb890ea2c3dbef8c"
+    },
+    {
+      "path": "lib/features/profile/personalization_settings_page.dart",
+      "resolution": "Keep additive unified-export entry; existing settings and import validation remain.",
+      "resolvedBlob": "e1d896a55c735d116c6a984f1070a153e1510213",
+      "v19Blob": "e1d896a55c735d116c6a984f1070a153e1510213",
+      "candidateBlob": "519d3466ed4b9b9eb7f3a8348eca79b1a4ad797b"
+    },
+    {
+      "path": "lib/features/profile/profile_page.dart",
+      "resolution": "Keep additive purchased-course and local-blocklist entries; existing profile entries remain.",
+      "resolvedBlob": "afb2ea65155041f7f368231135283b14a520ec37",
+      "v19Blob": "afb2ea65155041f7f368231135283b14a520ec37",
+      "candidateBlob": "c4d6d033236f1795cbd503d99649d77643efccac"
+    },
+    {
+      "path": "lib/services/app_update_service.dart",
+      "resolution": "Keep reviewed Beta manifest/channel/transport logic; 1.8 storage-failure/manual-check behavior remains.",
+      "resolvedBlob": "48c089aa121c54909a9d2a6d1df5895a0a119bde",
+      "v19Blob": "48c089aa121c54909a9d2a6d1df5895a0a119bde",
+      "candidateBlob": "dc7d3f86ae4e63c9af52c1708d3631d1edb16091"
+    },
+    {
+      "path": "lib/services/cache_file_lock.dart",
+      "resolution": "Keep read-existing/shared/no-create export lock; original mutable lock behavior retained.",
+      "resolvedBlob": "f4c3048989d2bdec6ddbadaeef590067081d95cf",
+      "v19Blob": "f4c3048989d2bdec6ddbadaeef590067081d95cf",
+      "candidateBlob": "206c94542face40bceb4bcd97299a32390a76e28"
+    },
+    {
+      "path": "lib/services/cached_player_overlay_service.dart",
+      "resolution": "Keep live subtitle cues export with only public identity metadata; existing cache/expiry behavior retained.",
+      "resolvedBlob": "ca6ac88a7c3848bb2cdc41274f051c5a0037fc65",
+      "v19Blob": "ca6ac88a7c3848bb2cdc41274f051c5a0037fc65",
+      "candidateBlob": "0980683eed7b9d1e55cfcdf1a379b52f1fa3d75a"
+    },
+    {
+      "path": "lib/services/desktop_disk_cache_session.dart",
+      "resolution": "Keep course disk-cache suppression/fence; existing non-course cache behavior retained.",
+      "resolvedBlob": "a905ce0bebf00bf7fc75f1aba7e101bfd31ba8bb",
+      "v19Blob": "a905ce0bebf00bf7fc75f1aba7e101bfd31ba8bb",
+      "candidateBlob": "9f9b519118e4c927f6c6ee81dd699f9cf1ed63ba"
+    },
+    {
+      "path": "lib/services/image_resource_cache.dart",
+      "resolution": "Keep pure readCapacity export helper; existing setCapacity semantics including zero/custom and max import validation retained.",
+      "resolvedBlob": "70ace49930f85ab850889fdbf0bc1942787a0c49",
+      "v19Blob": "70ace49930f85ab850889fdbf0bc1942787a0c49",
+      "candidateBlob": "0568f6c9b21b378a929fd552fd2fb6dfd0cb9b2c"
+    },
+    {
+      "path": "lib/services/settings_runtime_adapter.dart",
+      "resolution": "Keep side-effect-free exportPreferenceFlags/readCapacity read; write transaction ordering unchanged. Real-service integration tests remain separately.",
+      "resolvedBlob": "87dcb17cff1216f6d8c9baff915bd624d468dae9",
+      "v19Blob": "87dcb17cff1216f6d8c9baff915bd624d468dae9",
+      "candidateBlob": "3b32ecc19fe7f8290c1350ffe450706d46e85e18"
+    },
+    {
+      "path": "lib/services/settings_transfer_service.dart",
+      "resolution": "Keep all 32-key/type/domain validations, image 0..512MiB, Danmaku/search maximum and deep freeze; 1.9 uses SearchContentFilter.fromJsonStrict.",
+      "resolvedBlob": "747947b04d91e1a10aa3133e2d8f73da4c30f06b",
+      "v19Blob": "747947b04d91e1a10aa3133e2d8f73da4c30f06b",
+      "candidateBlob": "a62d2ec316ae6f4f383c8afe8e0a2d0ea498441f"
+    },
+    {
+      "path": "lib/services/subscription_history_store.dart",
+      "resolution": "Keep additive strict raw export reader (readAt/collectionAdded included); existing normal read/write behavior retained.",
+      "resolvedBlob": "a20bd1178e801446579202a437da0f9553607e1a",
+      "v19Blob": "a20bd1178e801446579202a437da0f9553607e1a",
+      "candidateBlob": "fbe7597aa260f472a1d299bdf3a37d81538c3587"
+    },
+    {
+      "path": "lib/services/subscription_service.dart",
+      "resolution": "Keep additive pure export/flags/raw validation; 1.8 retention/native-generation behavior retained.",
+      "resolvedBlob": "7eb40c9e60ebb0965f25b2d97e24eefe0612d17a",
+      "v19Blob": "7eb40c9e60ebb0965f25b2d97e24eefe0612d17a",
+      "candidateBlob": "e845317bb5b2f1420fc1442d8c3d13a54a8de01b"
+    },
+    {
+      "path": "lib/services/windows_playback_service.dart",
+      "resolution": "Keep course account/pending-media fence, latest play intent, backup-buffer cleanup; original demuxer/source/attempt guards retained.",
+      "resolvedBlob": "1eea8e7e0bbd96db3bba119c3135898a6af8877d",
+      "v19Blob": "1eea8e7e0bbd96db3bba119c3135898a6af8877d",
+      "candidateBlob": "6e81cd5b8ba4b647ac4bdc4ae074790d2855c5a2"
+    },
+    {
+      "path": "pubspec.yaml",
+      "resolution": "Keep numeric 1.9.0+2026 and Windows1.9.0.2026/output names; do not downgrade to 1.8+26 or local27.",
+      "resolvedBlob": "c4f5cd6306af5f579def9a0c73e8959b41a0af9a",
+      "v19Blob": "c4f5cd6306af5f579def9a0c73e8959b41a0af9a",
+      "candidateBlob": "59b54ebd98dcef6e5ae141acfd4e634f54593868"
+    },
+    {
+      "path": "test/android_beta_version_test.dart",
+      "resolution": "Keep archived 2023/2024/2025 counter-floor, preview opt-in and 1.9 metadata/CI contract regression.",
+      "resolvedBlob": "bd0a791b31cd0ac9d4441e79158fc79d53020e0f",
+      "v19Blob": "bd0a791b31cd0ac9d4441e79158fc79d53020e0f",
+      "candidateBlob": "b0362ee8811090d86e51a480dcebaa1735da4dbe"
+    },
+    {
+      "path": "test/apple_background_focus_delivery_test.dart",
+      "resolution": "Keep all Apple foreground delivery coverage and injected continuous-focus ticker cleanup from 59f.",
+      "resolvedBlob": "fcd6ec475c881f8cc6b6d7753db0fbddf2caffd3",
+      "v19Blob": "fcd6ec475c881f8cc6b6d7753db0fbddf2caffd3",
+      "candidateBlob": "5c318a34d7c0039ee935a7287303343943102e50"
+    },
+    {
+      "path": "test/cache_file_lock_test.dart",
+      "resolution": "Keep original process-lock coverage plus read-existing/shared/no-create export cases.",
+      "resolvedBlob": "8578bafd7124591164f707a0b91e2ea4ee0fa530",
+      "v19Blob": "8578bafd7124591164f707a0b91e2ea4ee0fa530",
+      "candidateBlob": "44b6c8247fe0bdd0feef829fb2ee6c229c385cd1"
+    },
+    {
+      "path": "test/desktop_disk_cache_session_test.dart",
+      "resolution": "Keep original cache tests plus course disk suppression regression.",
+      "resolvedBlob": "3bb03cb662a6c3eba58935de12ed41f505369b59",
+      "v19Blob": "3bb03cb662a6c3eba58935de12ed41f505369b59",
+      "candidateBlob": "d8ae0cfe0e51b76bb990f53c01d7f3a3b8938ad4"
+    },
+    {
+      "path": "test/editable_card_board_test.dart",
+      "resolution": "Keep original editable-board cases plus second drag while persistence is pending.",
+      "resolvedBlob": "b67b267f207ce104603e21a9e1b3227b9ff2d9b8",
+      "v19Blob": "b67b267f207ce104603e21a9e1b3227b9ff2d9b8",
+      "candidateBlob": "60324eef0956a361ca50619804570aa3ccf2a73e"
+    },
+    {
+      "path": "test/playback_buffer_range_test.dart",
+      "resolution": "Keep original range cases plus nullable actual playRequested/copyWith compatibility.",
+      "resolvedBlob": "df465a91783a912d56ccccbfd3eeb0dc4bf57b74",
+      "v19Blob": "df465a91783a912d56ccccbfd3eeb0dc4bf57b74",
+      "candidateBlob": "f490f3bc8f2f67f3482243a5dedb1649e428f6b3"
+    },
+    {
+      "path": "test/settings_native_subscription_integration_test.dart",
+      "resolution": "Keep original native-authoritative ordering/rollback and 1.9 strict keyword/blocklist/export-no-native-call coverage.",
+      "resolvedBlob": "6289a66f917dd0a388f242d0bcd39944517dd698",
+      "v19Blob": "6289a66f917dd0a388f242d0bcd39944517dd698",
+      "candidateBlob": "a360a358f6cabf170fc93d76ac4d497dedc42903"
+    },
+    {
+      "path": "test/settings_runtime_adapter_test.dart",
+      "resolution": "Keep pure-read and transaction-order tests; real cache/subscription roundtrip coverage also in settings_runtime_service_integration_test and image-capacity tests.",
+      "resolvedBlob": "b77976ecc264543f741dccd4b112652e5353e2c2",
+      "v19Blob": "b77976ecc264543f741dccd4b112652e5353e2c2",
+      "candidateBlob": "e17242b8029ad4058d7d5cc746b5a6dfca1f9daa"
+    },
+    {
+      "path": "test/video_notes_page_test.dart",
+      "resolution": "Keep original note UI plus contain preview, cancellation and export-failure regression.",
+      "resolvedBlob": "d6f080aee07fa500fbe77cd718e49399e165e7f7",
+      "v19Blob": "d6f080aee07fa500fbe77cd718e49399e165e7f7",
+      "candidateBlob": "4c57177b4506f2cf4c6348f86fe445676f118a18"
+    },
+    {
+      "path": "work.md",
+      "resolution": "Keep complete 1.9 log and append unique 1.8 publication tail; assert complete candidate log remains an ordered subsequence.",
+      "resolvedBlob": "58640dfad797f9816a7b592cdbf27a425d2ed2a3",
+      "v19Blob": "219fbccd080fd86a5f7c77eda6e5853cb0b8bd7b",
+      "candidateBlob": "8041522ef91de7bdfb7e0020489cedb81dd0b819"
+    }
+  ],
+  "paths": [
+    {
+      "path": ".github/workflows/apple-build.yml",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "afa41a3f35af89a2c50330a66971eac70b7dab45",
+      "v19Blob": "2e3078cd72bbce6013350bd79f281583576c43a0",
+      "resolvedBlob": "2e3078cd72bbce6013350bd79f281583576c43a0",
+      "wasConflict": true,
+      "purpose": "Keep reviewed optional Beta workflow_call inputs/secrets; existing macOS fresh-stdout probe and Apple gate/quality steps retained.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": ".github/workflows/beta-release.yml",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "3ae8e48f2ca784f7892b4e599e53dee2c7d6b310",
+      "resolvedBlob": "3ae8e48f2ca784f7892b4e599e53dee2c7d6b310",
+      "wasConflict": false,
+      "purpose": "Reviewed controlled Beta producer CI/helper and corresponding fault/identity validation.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": ".github/workflows/linux-build.yml",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "0fcfffe4b4e1182c7a8c33454b77fc2b0f791e94",
+      "v19Blob": "9581f79b9216d4e51d86f076042c0cfefb081560",
+      "resolvedBlob": "9581f79b9216d4e51d86f076042c0cfefb081560",
+      "wasConflict": true,
+      "purpose": "Keep controlled reusable Beta source/counter/output hooks; existing default push/PR/Linux gates unchanged.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": ".github/workflows/release-build.yml",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "83b360effbb9e066697e46f773277b0e0c4b19f7",
+      "v19Blob": "51d091957c0004adeabf4581be256b3d4d5cf6b7",
+      "resolvedBlob": "51d091957c0004adeabf4581be256b3d4d5cf6b7",
+      "wasConflict": true,
+      "purpose": "Keep controlled Beta opt-in and exact-SHA artifact contract; ordinary stable/default release path unchanged.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "android/app/build.gradle",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "7d7edcc3ce8ec9c2348a4b8cddd2dc9997e2ecc7",
+      "v19Blob": "8c5d6c29464dd7bcec4da2b8e523ad646f8615ec",
+      "resolvedBlob": "8c5d6c29464dd7bcec4da2b8e523ad646f8615ec",
+      "wasConflict": true,
+      "purpose": "Keep 1.9 debug -beta.1 and explicit release-preview opt-in/counter floor; default release applicationId/signing unchanged.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "android/app/src/main/AndroidManifest.xml",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "be02579fe2681b7d8ddcfcd19ae08661a7b21036",
+      "v19Blob": "abc887d34a7754b2126e29ec4dc960dce10595fa",
+      "resolvedBlob": "abc887d34a7754b2126e29ec4dc960dce10595fa",
+      "wasConflict": false,
+      "purpose": "Add supported cheese/play deep-link paths only; package/signing identity unchanged here.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "android/app/src/main/kotlin/com/focubili/app/CoursePlaybackTarget.kt",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "423e3dce3e29244d77ef1df1354c36154917c888",
+      "resolvedBlob": "423e3dce3e29244d77ef1df1354c36154917c888",
+      "wasConflict": false,
+      "purpose": "Purchased-course metadata/routing/authorization and account/source race regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "android/app/src/main/kotlin/com/focubili/app/CoursePurchaseGate.kt",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "c2b5f69b2a1058c2ded25f19d06bf9128a9fb848",
+      "resolvedBlob": "c2b5f69b2a1058c2ded25f19d06bf9128a9fb848",
+      "wasConflict": false,
+      "purpose": "Purchased-course metadata/routing/authorization and account/source race regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "android/app/src/main/kotlin/com/focubili/app/NativePlaybackController.kt",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "8f5516e9a10dc7d87d7145200194b6398f7823d3",
+      "v19Blob": "83fe09d2e250f5ca30c30097137ad286c189409d",
+      "resolvedBlob": "83fe09d2e250f5ca30c30097137ad286c189409d",
+      "wasConflict": true,
+      "purpose": "Keep course authorization, native progress export and real playWhenReady intent; latest 1.8 mainHandler validateResponse/isCurrent publication guard retained.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "android/app/src/main/kotlin/com/focubili/app/NativePlaybackProgressExport.kt",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "3ab50dc0fdcd24678fc24bc18e209a8b281466c8",
+      "resolvedBlob": "3ab50dc0fdcd24678fc24bc18e209a8b281466c8",
+      "wasConflict": false,
+      "purpose": "Strict read-only native per-CID progress export including historical BV-prefix spelling and zero/tombstones.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "android/app/src/main/kotlin/com/focubili/app/NativePlaybackProgressStorage.kt",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "e60196eff0b1703f0f5a47cd7ec1d1d1bd71d05f",
+      "resolvedBlob": "e60196eff0b1703f0f5a47cd7ec1d1d1bd71d05f",
+      "wasConflict": false,
+      "purpose": "Strict read-only native per-CID progress export including historical BV-prefix spelling and zero/tombstones.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "android/app/src/test/kotlin/com/focubili/app/CoursePlaybackTargetTest.kt",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "47626b5eee38411b86ba6f129a06c8c5c6d831f5",
+      "resolvedBlob": "47626b5eee38411b86ba6f129a06c8c5c6d831f5",
+      "wasConflict": false,
+      "purpose": "Purchased-course metadata/routing/authorization and account/source race regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "android/app/src/test/kotlin/com/focubili/app/CoursePurchaseGateTest.kt",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "93fa2366d82b0fe730fc7cbdaea0e1719cac70c1",
+      "resolvedBlob": "93fa2366d82b0fe730fc7cbdaea0e1719cac70c1",
+      "wasConflict": false,
+      "purpose": "Purchased-course metadata/routing/authorization and account/source race regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "android/app/src/test/kotlin/com/focubili/app/NativePlaybackProgressExportTest.kt",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "aa38f0e3e163ad5bc3c52abb6f4dbd91e3f24d6e",
+      "resolvedBlob": "aa38f0e3e163ad5bc3c52abb6f4dbd91e3f24d6e",
+      "wasConflict": false,
+      "purpose": "Strict read-only native per-CID progress export including historical BV-prefix spelling and zero/tombstones.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "android/app/src/test/kotlin/com/focubili/app/NativePlaybackProgressStorageTest.kt",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "48197de4bdf389441e7057147e0aad15521eedbd",
+      "resolvedBlob": "48197de4bdf389441e7057147e0aad15521eedbd",
+      "wasConflict": false,
+      "purpose": "Strict read-only native per-CID progress export including historical BV-prefix spelling and zero/tombstones.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/RELEASE_NOTES_v1.9.0-beta.1.md",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "1a4f6036d46c85bd29a3492413cd0ca42d13a590",
+      "resolvedBlob": "1a4f6036d46c85bd29a3492413cd0ca42d13a590",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/notification-delivery-backport.md",
+      "statusV19RelativeToCandidate": "D",
+      "candidateBlob": "204ef369c1a88fbaf8f54801aeca88b5c6744804",
+      "v19Blob": null,
+      "resolvedBlob": "204ef369c1a88fbaf8f54801aeca88b5c6744804",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain candidate publication/backport document"
+    },
+    {
+      "path": "docs/settings-import-threshold.md",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "c626e0fd54db74b72d0a91ee0223dc9294029ba5",
+      "v19Blob": "6949830a330860c43640c3c4bd5883a2d69516e2",
+      "resolvedBlob": "6949830a330860c43640c3c4bd5883a2d69516e2",
+      "wasConflict": true,
+      "purpose": "1.9 text contains complete 1.8 candidate as prefix plus strict-search integration evidence; keep both in that existing text.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.8/apple-delivery-gates.md",
+      "statusV19RelativeToCandidate": "D",
+      "candidateBlob": "9ab47dad69efee639556de1cfbe47c179ccdfe21",
+      "v19Blob": null,
+      "resolvedBlob": "9ab47dad69efee639556de1cfbe47c179ccdfe21",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain candidate publication/backport document"
+    },
+    {
+      "path": "docs/v1.8/home-onboarding-backport.md",
+      "statusV19RelativeToCandidate": "D",
+      "candidateBlob": "b156e07b100805183dd761f3da2e716e740a1fe5",
+      "v19Blob": null,
+      "resolvedBlob": "b156e07b100805183dd761f3da2e716e740a1fe5",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain candidate publication/backport document"
+    },
+    {
+      "path": "docs/v1.8/publication-stage.md",
+      "statusV19RelativeToCandidate": "D",
+      "candidateBlob": "09e5d1040a2b8dbf59e1fc35889a99d004fb9527",
+      "v19Blob": null,
+      "resolvedBlob": "09e5d1040a2b8dbf59e1fc35889a99d004fb9527",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain candidate publication/backport document"
+    },
+    {
+      "path": "docs/v1.9/ab-repeat-evidence/ab-desktop-large-text-sheet.png",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "55fb1005371a99e322190684395a129cd729777b",
+      "resolvedBlob": "55fb1005371a99e322190684395a129cd729777b",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/ab-repeat-evidence/ab-desktop-large-text-timeline.png",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "1e35f27a53857a8f4807b2900cf61f8de1fca5b3",
+      "resolvedBlob": "1e35f27a53857a8f4807b2900cf61f8de1fca5b3",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/ab-repeat-evidence/ab-mobile-sheet.png",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "a378bb7bfc4e28d385abc490c6c0692b7b91d763",
+      "resolvedBlob": "a378bb7bfc4e28d385abc490c6c0692b7b91d763",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/ab-repeat-evidence/ab-mobile-timeline.png",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "922cada244c132da140a6626810a9f7202c928c4",
+      "resolvedBlob": "922cada244c132da140a6626810a9f7202c928c4",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/ab-repeat-evidence/validation.json",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "7900f5ddfb5e9c5d3690bf606a1d2d9e44cb8a6d",
+      "resolvedBlob": "7900f5ddfb5e9c5d3690bf606a1d2d9e44cb8a6d",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/ab-repeat.md",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "4e62471565dc210e19abc29fb0537a13ca1af979",
+      "resolvedBlob": "4e62471565dc210e19abc29fb0537a13ca1af979",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/beta-ci-review.md",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "92ba89e2e47a4734b2da7a14514978bd33100269",
+      "resolvedBlob": "92ba89e2e47a4734b2da7a14514978bd33100269",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/build-metadata-validation.json",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "e718dc75ce4355017cedec49d11d9b4a4c9ab875",
+      "resolvedBlob": "e718dc75ce4355017cedec49d11d9b4a4c9ab875",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/candidate-integration.md",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "d6aff13b43454ab915913e7917dfa66ba89df54a",
+      "resolvedBlob": "d6aff13b43454ab915913e7917dfa66ba89df54a",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/candidate-kotlin-validation.json",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "51503e3787a38c3731433ef151114ca51cd4ee89",
+      "resolvedBlob": "51503e3787a38c3731433ef151114ca51cd4ee89",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/classroom-evidence/classroom-login-mobile.png",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "9b78a51840e785ee065368c3f8e8366ad69bd572",
+      "resolvedBlob": "9b78a51840e785ee065368c3f8e8366ad69bd572",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/classroom-evidence/classroom-purchased-mobile.png",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "5927572d9a97dd33fe7e31b617a2130b69bc56ce",
+      "resolvedBlob": "5927572d9a97dd33fe7e31b617a2130b69bc56ce",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/classroom-evidence/classroom-purchased-tablet.png",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "5742978db64a422b6cbbc5f928ff23b38de6efa5",
+      "resolvedBlob": "5742978db64a422b6cbbc5f928ff23b38de6efa5",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/classroom-evidence/classroom-validation.json",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "a5ce87b10e317cebf48ca6855a58299ab56d212c",
+      "resolvedBlob": "a5ce87b10e317cebf48ca6855a58299ab56d212c",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/classroom.md",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "854f483182dfc089fe28dbdaf5828257ad37656a",
+      "resolvedBlob": "854f483182dfc089fe28dbdaf5828257ad37656a",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/drawer-export.md",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "e1c9334e0270adf578a2f948f1f5cb6d23bfb6c0",
+      "resolvedBlob": "e1c9334e0270adf578a2f948f1f5cb6d23bfb6c0",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/evidence/multi-frame-note.png",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "2c9b14fe80847820f5aa2a4e349c9c3b04d544b1",
+      "resolvedBlob": "2c9b14fe80847820f5aa2a4e349c9c3b04d544b1",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/evidence/notes-mixed-1000x700.png",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "74346618c491e488d2e3d13e8f216f52b5e2f90a",
+      "resolvedBlob": "74346618c491e488d2e3d13e8f216f52b5e2f90a",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/evidence/notes-mixed-420x1000.png",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "2bf8506cfc9e0ddd8477cbf92adb385e275c63c9",
+      "resolvedBlob": "2bf8506cfc9e0ddd8477cbf92adb385e275c63c9",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/evidence/subtitle-list.png",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "29f111c670bf1faaf5a39cd5edbcee2fe8892dc8",
+      "resolvedBlob": "29f111c670bf1faaf5a39cd5edbcee2fe8892dc8",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/filtering.md",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "9fcd23f90720050c348ccd42bd41cc2d506b7348",
+      "resolvedBlob": "9fcd23f90720050c348ccd42bd41cc2d506b7348",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/focus-learning.md",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "91f256a26b509f9cee129b65c4d9ac71bda27389",
+      "resolvedBlob": "91f256a26b509f9cee129b65c4d9ac71bda27389",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/focus-onboarding-integration.md",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "46a501a937bd0b87482bbf4bcb9f3f4ab3c31e84",
+      "resolvedBlob": "46a501a937bd0b87482bbf4bcb9f3f4ab3c31e84",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/local-apk-verification.json",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "8be7f1b78e56ff8472c4c903ed73b27022644cad",
+      "resolvedBlob": "8be7f1b78e56ff8472c4c903ed73b27022644cad",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/manual-tests.md",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "dd44dc2bed389ee96104486a6b5c35f492b07350",
+      "resolvedBlob": "dd44dc2bed389ee96104486a6b5c35f492b07350",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/native-playback-progress-export.md",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "88ab152dbbfccdcd945c9ae361e87ea4f5e33348",
+      "resolvedBlob": "88ab152dbbfccdcd945c9ae361e87ea4f5e33348",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/notes-subtitles.md",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "81bdfa88b8acd2a65a4bf8d8bf18dbc84b6fed16",
+      "resolvedBlob": "81bdfa88b8acd2a65a4bf8d8bf18dbc84b6fed16",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/player-candidate-integration.md",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "cd80c14bc9559d5490f912be03dc83a7cb636b12",
+      "resolvedBlob": "cd80c14bc9559d5490f912be03dc83a7cb636b12",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/progress.json",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "68dead90756f14a51911f5bc2fe72911cc91e3f6",
+      "resolvedBlob": "68dead90756f14a51911f5bc2fe72911cc91e3f6",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/publication-snapshot-alignment.md",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "78628c07c1716653484ebdfbfabcf49cf095fc87",
+      "resolvedBlob": "78628c07c1716653484ebdfbfabcf49cf095fc87",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/runtime-settings-export.md",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "fd5f8bf84d3c8b1dfa9372fa2da5afb78043bfef",
+      "resolvedBlob": "fd5f8bf84d3c8b1dfa9372fa2da5afb78043bfef",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/screenshots/export-desktop-dark.png",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "fa8f4340392a0de03e03c38abdc61a0cc80f0633",
+      "resolvedBlob": "fa8f4340392a0de03e03c38abdc61a0cc80f0633",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/screenshots/export-large-text.png",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "0fc8c82a2b63f490d34864f52069d6b43654aadc",
+      "resolvedBlob": "0fc8c82a2b63f490d34864f52069d6b43654aadc",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/screenshots/export-mobile.png",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "c913e635155f3f6f817436595a51174e51efa52b",
+      "resolvedBlob": "c913e635155f3f6f817436595a51174e51efa52b",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/screenshots/focus-session-phone.png",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "29aedf0f190d2dcbb1a8afe9cff874af75b38e26",
+      "resolvedBlob": "29aedf0f190d2dcbb1a8afe9cff874af75b38e26",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/screenshots/learning-folders-desktop.png",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "184703ec8290a7bffb8a706f4c868174ba24f367",
+      "resolvedBlob": "184703ec8290a7bffb8a706f4c868174ba24f367",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/screenshots/learning-folders-phone.png",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "8615fb37b1e5f5e727b9d1175c976e4025855f20",
+      "resolvedBlob": "8615fb37b1e5f5e727b9d1175c976e4025855f20",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/search-settings-validation.md",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "58e8e10cfa7c2fe2d206a7b693212a8a8e247b84",
+      "resolvedBlob": "58e8e10cfa7c2fe2d206a7b693212a8a8e247b84",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/settings-baseline-integration.md",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "f10ba7b7f171545376a5ca90992431a577c4156d",
+      "resolvedBlob": "f10ba7b7f171545376a5ca90992431a577c4156d",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/subscription-preference-flags.md",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "60bb1cf9fe6eb2fce789367e7632531cf755552b",
+      "resolvedBlob": "60bb1cf9fe6eb2fce789367e7632531cf755552b",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "docs/v1.9/update-channel.md",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "574c30d5ca3fb8ecbb188fa9a387bc2ad8b0bcc0",
+      "resolvedBlob": "574c30d5ca3fb8ecbb188fa9a387bc2ad8b0bcc0",
+      "wasConflict": false,
+      "purpose": "Retain existing reviewed 1.9 feature/evidence/history artifact.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/app.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "98dff99108a242b5899bc881f0edd906e7353e3f",
+      "v19Blob": "3a79bd0b067c8e71c0b8fb5612858299b5a94fdf",
+      "resolvedBlob": "3a79bd0b067c8e71c0b8fb5612858299b5a94fdf",
+      "wasConflict": false,
+      "purpose": "Course episode target fallback at existing external-player routing entry.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/core/build_metadata.g.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "84d703421f17c19481e09b9e40351b61bd6e8e3c",
+      "v19Blob": "bcf33dd290e2545f3bfa26c0ef71ea49b869b7f4",
+      "resolvedBlob": "bcf33dd290e2545f3bfa26c0ef71ea49b869b7f4",
+      "wasConflict": true,
+      "purpose": "Keep 1.9.0+2026 placeholder; do not overwrite with 1.8 fallback metadata or generate current build metadata during merge.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/core/router/app_router.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "e48a78ec7d8aa0fd2fa2e3eda2fe81b7144f880a",
+      "v19Blob": "337eee3b06e710d8403740a735fdf3e733fc1638",
+      "resolvedBlob": "337eee3b06e710d8403740a735fdf3e733fc1638",
+      "wasConflict": false,
+      "purpose": "Purchased-course route and requested course CID at player entry.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/classroom/course_page.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "d3e2b38bcb52856cff1e4c449e20bb64c9a7d6d5",
+      "resolvedBlob": "d3e2b38bcb52856cff1e4c449e20bb64c9a7d6d5",
+      "wasConflict": false,
+      "purpose": "Purchased-course metadata/routing/authorization and account/source race regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/classroom/purchased_courses_page.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "4c64877476456b3e26bc3ffa58b4b857d167294e",
+      "resolvedBlob": "4c64877476456b3e26bc3ffa58b4b857d167294e",
+      "wasConflict": false,
+      "purpose": "Purchased-course metadata/routing/authorization and account/source race regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/focus/focus_dashboard.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "0e94c564400e77f720b6215cae853b6029c4f33e",
+      "v19Blob": "5166b56de1d061204ba6031a6b71e10915f6b0cf",
+      "resolvedBlob": "5166b56de1d061204ba6031a6b71e10915f6b0cf",
+      "wasConflict": true,
+      "purpose": "Keep independent continuous focus and three-stop drawer physics; 1.8 onboarding jumpTo/inertia cancellation, editing reset and card-key replacement remain.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/focus/focus_timer_controller.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "ea198825fd770b5d745921e94b2f8788436b0562",
+      "v19Blob": "bbb91a710043384a1cec90cfa00bd26ea0b0f62a",
+      "resolvedBlob": "bbb91a710043384a1cec90cfa00bd26ea0b0f62a",
+      "wasConflict": false,
+      "purpose": "Independent continuous-focus persistence/lifecycle and three-stop drawer/onboarding regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/focus/focus_video_launcher.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "322619308ed3474078279acc213cdadf40f94698",
+      "v19Blob": "f99b6e87b8dc8f94404621b425dce6268d642cd5",
+      "resolvedBlob": "f99b6e87b8dc8f94404621b425dce6268d642cd5",
+      "wasConflict": false,
+      "purpose": "Independent continuous-focus persistence/lifecycle and three-stop drawer/onboarding regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/focus/home_drawer_scroll_physics.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "2ad08b8826b7dee8d313f8b4c40ddb6d19cf60e2",
+      "resolvedBlob": "2ad08b8826b7dee8d313f8b4c40ddb6d19cf60e2",
+      "wasConflict": false,
+      "purpose": "Independent continuous-focus persistence/lifecycle and three-stop drawer/onboarding regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/focus/player_focus_sheet.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "833a2549a8a89fab726f563ff691ebeffe21bcde",
+      "v19Blob": "2d09d182fab5505dfef7ff90b63cc3aefe7f2bfc",
+      "resolvedBlob": "2d09d182fab5505dfef7ff90b63cc3aefe7f2bfc",
+      "wasConflict": false,
+      "purpose": "Independent continuous-focus persistence/lifecycle and three-stop drawer/onboarding regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/learning/learning_add_sheet.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "38ef2a23bfd51935c9234b6abcb2c929d4a685ab",
+      "v19Blob": "b15c966b5648ea59beb70478adc31867263c88e3",
+      "resolvedBlob": "b15c966b5648ea59beb70478adc31867263c88e3",
+      "wasConflict": false,
+      "purpose": "Versioned subject folders, ordered entries and legacy/extra-field/atomic-write compatibility.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/learning/learning_list_page.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "f6b273b03312bf7fce59a6d082dbce1b44e984b4",
+      "v19Blob": "2fe4b009491bdf8feb4f0565da55aeffc265ba6e",
+      "resolvedBlob": "2fe4b009491bdf8feb4f0565da55aeffc265ba6e",
+      "wasConflict": false,
+      "purpose": "Versioned subject folders, ordered entries and legacy/extra-field/atomic-write compatibility.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/notes/video_note_composer.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "9fede97992af917ca89d7150f727e5688fca78f9",
+      "v19Blob": "9ad799feaaecf7bce42071c49c7ce24647183ea1",
+      "resolvedBlob": "9ad799feaaecf7bce42071c49c7ce24647183ea1",
+      "wasConflict": true,
+      "purpose": "Keep 1.8 contain + viewport-height .38/clamp108..280 for legacy frame and 1.9 ordered multi-frame view/editor.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/notes/video_note_detail_page.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "dc96885ca9d38ca14736fa354aab70bd68135ec1",
+      "v19Blob": "16e96a8b62afdadd7c69223370611dd971fe7cfe",
+      "resolvedBlob": "16e96a8b62afdadd7c69223370611dd971fe7cfe",
+      "wasConflict": false,
+      "purpose": "Ordered multi-frame/timestamp notes, contained previews, asynchronous capture/save guards and real subtitle export.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/notes/video_note_frames_view.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "a1aad2531dbeafa1ad361e7ec031af7cabf5cc25",
+      "resolvedBlob": "a1aad2531dbeafa1ad361e7ec031af7cabf5cc25",
+      "wasConflict": false,
+      "purpose": "Ordered multi-frame/timestamp notes, contained previews, asynchronous capture/save guards and real subtitle export.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/notes/video_note_share_preview.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "08406dd24c63dc0b27971d3426cbf97e933c9a74",
+      "v19Blob": "7d05526fef5296d7d4e6d7994d9ebe6077e95871",
+      "resolvedBlob": "7d05526fef5296d7d4e6d7994d9ebe6077e95871",
+      "wasConflict": false,
+      "purpose": "Ordered multi-frame/timestamp notes, contained previews, asynchronous capture/save guards and real subtitle export.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/notes/video_notes_page.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "18cdb2af622453a28cceca3645d1fec44d3e9767",
+      "v19Blob": "d0c7c66a6c3d24b104863194d8adb6779395ccf6",
+      "resolvedBlob": "d0c7c66a6c3d24b104863194d8adb6779395ccf6",
+      "wasConflict": true,
+      "purpose": "Keep Beta5 AppNetworkImage and contained screenshot preview; retain cross-platform export/cancellation/error handling.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/player/player_ab_repeat_coordinator.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "8bbe52984385076006ba3086bdfe6967516cbecc",
+      "resolvedBlob": "8bbe52984385076006ba3086bdfe6967516cbecc",
+      "wasConflict": false,
+      "purpose": "CID-bound interval repeat, manual versus internal seek intent, drain/lifecycle/route/sleep protection.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/player/player_controls_coordinator.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "d00938520dd1f79af3701d6d8511734e91685312",
+      "v19Blob": "be8423936b53890fcdff198910bbb6acf9bdb784",
+      "resolvedBlob": "be8423936b53890fcdff198910bbb6acf9bdb784",
+      "wasConflict": false,
+      "purpose": "Integrated AB/course/global-focus/notes/subtitle support and buffer/play-intent lifecycle fencing.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/player/player_controls_view.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "dc30b7f16b43daf8fa1a8101f4843111a3191f80",
+      "v19Blob": "f3037f9e7c9b3454fb4670cc55880639bbeadec8",
+      "resolvedBlob": "f3037f9e7c9b3454fb4670cc55880639bbeadec8",
+      "wasConflict": false,
+      "purpose": "Integrated AB/course/global-focus/notes/subtitle support and buffer/play-intent lifecycle fencing.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/player/player_details_view.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "6e532e6a97be8c32fdcd6c686c3ede305ebf5ffb",
+      "v19Blob": "91932dfbcbfb4be64beec25c6872478f9f08c3e0",
+      "resolvedBlob": "91932dfbcbfb4be64beec25c6872478f9f08c3e0",
+      "wasConflict": false,
+      "purpose": "Integrated AB/course/global-focus/notes/subtitle support and buffer/play-intent lifecycle fencing.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/player/player_focus_coordinator.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "bf4859af15785cfb457805c95b022563e3e7fe41",
+      "v19Blob": "395cdf3b9d473747c3494c2f60468c19ae9b75b5",
+      "resolvedBlob": "395cdf3b9d473747c3494c2f60468c19ae9b75b5",
+      "wasConflict": false,
+      "purpose": "Independent continuous-focus persistence/lifecycle and three-stop drawer/onboarding regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/player/player_listening_coordinator.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "c61154e82c6cbe5daefc3b14c139e1c0b9a63756",
+      "v19Blob": "ebc93c84620ff62e0b4fca7a52255de2859b36c8",
+      "resolvedBlob": "ebc93c84620ff62e0b4fca7a52255de2859b36c8",
+      "wasConflict": false,
+      "purpose": "Integrated AB/course/global-focus/notes/subtitle support and buffer/play-intent lifecycle fencing.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/player/player_local_library.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "1978d95eb5a86998b17e26f062997e9aaeed8761",
+      "v19Blob": "8464ba0f6316c5799f3b345b8ebf9889e73e0340",
+      "resolvedBlob": "8464ba0f6316c5799f3b345b8ebf9889e73e0340",
+      "wasConflict": false,
+      "purpose": "Integrated AB/course/global-focus/notes/subtitle support and buffer/play-intent lifecycle fencing.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/player/player_notes_workspace.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "8ab177505b2b2d5c6aec516ea89d075e241796f6",
+      "v19Blob": "670d6610fff9c4cb39ff3ee323b0ec47a4838862",
+      "resolvedBlob": "670d6610fff9c4cb39ff3ee323b0ec47a4838862",
+      "wasConflict": false,
+      "purpose": "Ordered multi-frame/timestamp notes, contained previews, asynchronous capture/save guards and real subtitle export.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/player/player_overlay_coordinator.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "c8df3fb094969c5f42f1fd7ac38791720433bcb8",
+      "v19Blob": "9085bfbed9aab7c2189011752bcbd75c0a03915a",
+      "resolvedBlob": "9085bfbed9aab7c2189011752bcbd75c0a03915a",
+      "wasConflict": false,
+      "purpose": "Integrated AB/course/global-focus/notes/subtitle support and buffer/play-intent lifecycle fencing.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/player/player_page.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "d2676e45e189b2c61dd0a94e2d5fc84407ebcd4c",
+      "v19Blob": "78b1b2a90d2620d1a99fa8ebd498648cb22b9a74",
+      "resolvedBlob": "78b1b2a90d2620d1a99fa8ebd498648cb22b9a74",
+      "wasConflict": true,
+      "purpose": "Keep AB lifecycle/drain, global focus and blocklist additions; existing 1.8 lifecycle remains.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/player/player_playback_session.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "b4b6f217ba7c26bea5127541a4b48e64d6d783b9",
+      "v19Blob": "b9c8f1259da293c3ef3dfc48d7ee0f2511f15d3e",
+      "resolvedBlob": "b9c8f1259da293c3ef3dfc48d7ee0f2511f15d3e",
+      "wasConflict": false,
+      "purpose": "Integrated AB/course/global-focus/notes/subtitle support and buffer/play-intent lifecycle fencing.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/player/player_timeline_view.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "a48425d10bf1c719769d86585e2784e965ea0c5e",
+      "v19Blob": "17fc5a9328dd8c24edc09c54da85791733605690",
+      "resolvedBlob": "17fc5a9328dd8c24edc09c54da85791733605690",
+      "wasConflict": false,
+      "purpose": "Integrated AB/course/global-focus/notes/subtitle support and buffer/play-intent lifecycle fencing.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/player/player_video_coordinator.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "737ea27ef314f76ee5fc60d51d1a2b34200b13af",
+      "v19Blob": "5a470797b1562afdc43c54287fe9aac30121a93f",
+      "resolvedBlob": "5a470797b1562afdc43c54287fe9aac30121a93f",
+      "wasConflict": false,
+      "purpose": "Integrated AB/course/global-focus/notes/subtitle support and buffer/play-intent lifecycle fencing.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/player/widgets/player_ab_repeat_sheet.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "ecfd3ed441b451e66106999eabeeda1c65160d0b",
+      "resolvedBlob": "ecfd3ed441b451e66106999eabeeda1c65160d0b",
+      "wasConflict": false,
+      "purpose": "CID-bound interval repeat, manual versus internal seek intent, drain/lifecycle/route/sleep protection.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/player/widgets/player_subtitle_sheet.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "6d0ded357a744cb18313989d4b5926dba2de5490",
+      "v19Blob": "65ec4c9aecbeeb26c2788fd2c2696e1d2bcf904b",
+      "resolvedBlob": "65ec4c9aecbeeb26c2788fd2c2696e1d2bcf904b",
+      "wasConflict": false,
+      "purpose": "Ordered multi-frame/timestamp notes, contained previews, asynchronous capture/save guards and real subtitle export.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/player/widgets/player_timeline.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "e4e376f1eaee8fd193bfbf2afb890ea2c3dbef8c",
+      "v19Blob": "f4124d5a714261b0c7d1272bdabb75b9c321ce12",
+      "resolvedBlob": "f4124d5a714261b0c7d1272bdabb75b9c321ce12",
+      "wasConflict": true,
+      "purpose": "Keep additive AB marker geometry; original 1.8 buffer rail/range calculations unchanged.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/profile/content_blocklist_page.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "dc8f7bfbe4f38a8ae17a0e99012bca424e386cdb",
+      "resolvedBlob": "dc8f7bfbe4f38a8ae17a0e99012bca424e386cdb",
+      "wasConflict": false,
+      "purpose": "Literal search exclusion/local blocklist and strict compatible filter import validation.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/profile/personalization_settings_page.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "519d3466ed4b9b9eb7f3a8348eca79b1a4ad797b",
+      "v19Blob": "e1d896a55c735d116c6a984f1070a153e1510213",
+      "resolvedBlob": "e1d896a55c735d116c6a984f1070a153e1510213",
+      "wasConflict": true,
+      "purpose": "Keep additive unified-export entry; existing settings and import validation remain.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/profile/profile_page.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "c4d6d033236f1795cbd503d99649d77643efccac",
+      "v19Blob": "afb2ea65155041f7f368231135283b14a520ec37",
+      "resolvedBlob": "afb2ea65155041f7f368231135283b14a520ec37",
+      "wasConflict": true,
+      "purpose": "Keep additive purchased-course and local-blocklist entries; existing profile entries remain.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/profile/unified_export_page.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "b174bb08ee51c59ecf28ce68e3254f25ee8499ea",
+      "resolvedBlob": "b174bb08ee51c59ecf28ce68e3254f25ee8499ea",
+      "wasConflict": false,
+      "purpose": "User-selected cross-platform sanitized/read-only export and cancellation/failure regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/search/content_block_actions.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "e6f45e5a7d8168508808bf1d43d41d24d9a5be0a",
+      "resolvedBlob": "e6f45e5a7d8168508808bf1d43d41d24d9a5be0a",
+      "wasConflict": false,
+      "purpose": "Literal search exclusion/local blocklist and strict compatible filter import validation.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/search/search_content_filter_controls.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "2f0bb9e3258cd703b23c36757a6af42062dbe079",
+      "v19Blob": "ee476b89fe6c6de99257b40d61504ceec13fd4ca",
+      "resolvedBlob": "ee476b89fe6c6de99257b40d61504ceec13fd4ca",
+      "wasConflict": false,
+      "purpose": "Literal search exclusion/local blocklist and strict compatible filter import validation.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/features/search/search_page.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "9abacd2eaaa20858ce98470b350acac1288711c3",
+      "v19Blob": "51f2a5145fce932ab5dd021b33cf16d5e1888339",
+      "resolvedBlob": "51f2a5145fce932ab5dd021b33cf16d5e1888339",
+      "wasConflict": false,
+      "purpose": "Literal search exclusion/local blocklist and strict compatible filter import validation.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/models/ab_repeat_range.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "126d74331d327d3a617effb43aeee4363d4c26f0",
+      "resolvedBlob": "126d74331d327d3a617effb43aeee4363d4c26f0",
+      "wasConflict": false,
+      "purpose": "CID-bound interval repeat, manual versus internal seek intent, drain/lifecycle/route/sleep protection.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/models/content_blocklist.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "8aa90ab955d5613ecea185fdb158c3ae5a25a0f5",
+      "resolvedBlob": "8aa90ab955d5613ecea185fdb158c3ae5a25a0f5",
+      "wasConflict": false,
+      "purpose": "Literal search exclusion/local blocklist and strict compatible filter import validation.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/models/focus_session.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "048b0d0f32facaf34eed79825a76f34d91a7a448",
+      "v19Blob": "ff0bb8f3755e9dd4dd8731a9c0819fc928b9378d",
+      "resolvedBlob": "ff0bb8f3755e9dd4dd8731a9c0819fc928b9378d",
+      "wasConflict": false,
+      "purpose": "Independent continuous-focus persistence/lifecycle and three-stop drawer/onboarding regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/models/focus_statistics.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "05469baeaa3ef19f0f53e3b06d8138be7fd2e3d9",
+      "v19Blob": "6caf451c6dfcb5067f537544ee0ea6e2f929831f",
+      "resolvedBlob": "6caf451c6dfcb5067f537544ee0ea6e2f929831f",
+      "wasConflict": false,
+      "purpose": "Independent continuous-focus persistence/lifecycle and three-stop drawer/onboarding regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/models/learning_list_entry.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "c747026398660fd898f420c4fa3694781c3e82ef",
+      "v19Blob": "7eaec77e7ed7ebb3989d66afd5eb9bb2b252c82f",
+      "resolvedBlob": "7eaec77e7ed7ebb3989d66afd5eb9bb2b252c82f",
+      "wasConflict": false,
+      "purpose": "Versioned subject folders, ordered entries and legacy/extra-field/atomic-write compatibility.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/models/learning_subject_folder.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "9617b850ec7c85bdc11608792dbba5563fee2e41",
+      "resolvedBlob": "9617b850ec7c85bdc11608792dbba5563fee2e41",
+      "wasConflict": false,
+      "purpose": "Versioned subject folders, ordered entries and legacy/extra-field/atomic-write compatibility.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/models/search_content_filter.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "6245f1e46a764fc5588b89fbbbe512d5a72ed9dd",
+      "v19Blob": "986c80030b7ccfdc26fa7c2d190ec84f3cb370a5",
+      "resolvedBlob": "986c80030b7ccfdc26fa7c2d190ec84f3cb370a5",
+      "wasConflict": false,
+      "purpose": "Literal search exclusion/local blocklist and strict compatible filter import validation.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/models/video_note.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "ad977a758599f253e8a508fce0573699085b687f",
+      "v19Blob": "2e33e8ecba022d2523765d47299916da1d1cd5c2",
+      "resolvedBlob": "2e33e8ecba022d2523765d47299916da1d1cd5c2",
+      "wasConflict": false,
+      "purpose": "Ordered multi-frame/timestamp notes, contained previews, asynchronous capture/save guards and real subtitle export.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/models/video_preview.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "a34d333e265e194f492c30dcf02e7b4bf5e83ad6",
+      "v19Blob": "fab4cc3557237db748263faf4e4530d8965b005d",
+      "resolvedBlob": "fab4cc3557237db748263faf4e4530d8965b005d",
+      "wasConflict": false,
+      "purpose": "Purchased-course metadata/routing/authorization and account/source race regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/app_update_release_manifest.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "df5af277961346af9db31009cf7b0c1950c44961",
+      "resolvedBlob": "df5af277961346af9db31009cf7b0c1950c44961",
+      "wasConflict": false,
+      "purpose": "Channel/package/manifest-safe Beta update handling while preserving stable/ignore/manual-check behavior.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/app_update_service.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "dc7d3f86ae4e63c9af52c1708d3631d1edb16091",
+      "v19Blob": "48c089aa121c54909a9d2a6d1df5895a0a119bde",
+      "resolvedBlob": "48c089aa121c54909a9d2a6d1df5895a0a119bde",
+      "wasConflict": true,
+      "purpose": "Keep reviewed Beta manifest/channel/transport logic; 1.8 storage-failure/manual-check behavior remains.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/app_update_transport.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "b9f29c7d20966187a1a03dc660eba19fe911be42",
+      "resolvedBlob": "b9f29c7d20966187a1a03dc660eba19fe911be42",
+      "wasConflict": false,
+      "purpose": "Channel/package/manifest-safe Beta update handling while preserving stable/ignore/manual-check behavior.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/bilibili_course_link.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "0e6f18a6412c130c3fecf464c3850096618ab08f",
+      "resolvedBlob": "0e6f18a6412c130c3fecf464c3850096618ab08f",
+      "wasConflict": false,
+      "purpose": "Purchased-course metadata/routing/authorization and account/source race regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/bilibili_course_service.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "383f10662902fd98cf948de55564cc70dbea2064",
+      "resolvedBlob": "383f10662902fd98cf948de55564cc70dbea2064",
+      "wasConflict": false,
+      "purpose": "Purchased-course metadata/routing/authorization and account/source race regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/bilibili_deep_link_service.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "2d733a0a10f5d5fffaa435ee06708a37280f8fee",
+      "v19Blob": "62d42b032053b5eeb167f4a4926724e53a76fa76",
+      "resolvedBlob": "62d42b032053b5eeb167f4a4926724e53a76fa76",
+      "wasConflict": false,
+      "purpose": "Parse supported course links before existing UGC parser.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/bilibili_player_enhancement_service.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "c1860c8f1bf509311aa1a90d6ee86b9679730df7",
+      "v19Blob": "8f4d45d767a40dfbc8bb9c3cb561e8a40f395ad2",
+      "resolvedBlob": "8f4d45d767a40dfbc8bb9c3cb561e8a40f395ad2",
+      "wasConflict": false,
+      "purpose": "Do not call UGC enhancement endpoint for course storage keys.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/bilibili_service.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "5e35f4ec383d690fd58665d79c89afed7c13858b",
+      "v19Blob": "6fab467042ab68581e357b6ee3c9ddb7186158d9",
+      "resolvedBlob": "6fab467042ab68581e357b6ee3c9ddb7186158d9",
+      "wasConflict": false,
+      "purpose": "Course lookup delegation plus ownerMid metadata for local blocklists; UGC/offline lookup remains.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/cache_file_lock.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "206c94542face40bceb4bcd97299a32390a76e28",
+      "v19Blob": "f4c3048989d2bdec6ddbadaeef590067081d95cf",
+      "resolvedBlob": "f4c3048989d2bdec6ddbadaeef590067081d95cf",
+      "wasConflict": true,
+      "purpose": "Keep read-existing/shared/no-create export lock; original mutable lock behavior retained.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/cached_player_overlay_service.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "0980683eed7b9d1e55cfcdf1a379b52f1fa3d75a",
+      "v19Blob": "ca6ac88a7c3848bb2cdc41274f051c5a0037fc65",
+      "resolvedBlob": "ca6ac88a7c3848bb2cdc41274f051c5a0037fc65",
+      "wasConflict": true,
+      "purpose": "Keep live subtitle cues export with only public identity metadata; existing cache/expiry behavior retained.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/content_blocklist_service.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "6f640856c5cf07becf78d04c51f727617f176d1f",
+      "resolvedBlob": "6f640856c5cf07becf78d04c51f727617f176d1f",
+      "wasConflict": false,
+      "purpose": "Literal search exclusion/local blocklist and strict compatible filter import validation.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/desktop_disk_cache_session.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "9f9b519118e4c927f6c6ee81dd699f9cf1ed63ba",
+      "v19Blob": "a905ce0bebf00bf7fc75f1aba7e101bfd31ba8bb",
+      "resolvedBlob": "a905ce0bebf00bf7fc75f1aba7e101bfd31ba8bb",
+      "wasConflict": true,
+      "purpose": "Keep course disk-cache suppression/fence; existing non-course cache behavior retained.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/desktop_playback_source_service.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "18fcaa23ec58c6a4b12203a1339febb514df20b7",
+      "v19Blob": "51ee081e6809b920244a3407c44285794deda986",
+      "resolvedBlob": "51ee081e6809b920244a3407c44285794deda986",
+      "wasConflict": false,
+      "purpose": "Purchased-course account/DRM/preview/media-domain validation and single muxed source; UGC path retained.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/focus_session_service.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "f63cefa1d41e01d220f69355d3f210641963cff7",
+      "v19Blob": "0c3a452e322a49730b431e3f6075ee2e90a8808a",
+      "resolvedBlob": "0c3a452e322a49730b431e3f6075ee2e90a8808a",
+      "wasConflict": false,
+      "purpose": "Independent continuous-focus persistence/lifecycle and three-stop drawer/onboarding regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/image_resource_cache.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "0568f6c9b21b378a929fd552fd2fb6dfd0cb9b2c",
+      "v19Blob": "70ace49930f85ab850889fdbf0bc1942787a0c49",
+      "resolvedBlob": "70ace49930f85ab850889fdbf0bc1942787a0c49",
+      "wasConflict": true,
+      "purpose": "Keep pure readCapacity export helper; existing setCapacity semantics including zero/custom and max import validation retained.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/learning_list_service.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "a081782dfaa1c2c4101a0ed4283bcb06ce1f2ca5",
+      "v19Blob": "0b8bc16b307ee825bad40e31e1e3f1663dc8205d",
+      "resolvedBlob": "0b8bc16b307ee825bad40e31e1e3f1663dc8205d",
+      "wasConflict": false,
+      "purpose": "Versioned subject folders, ordered entries and legacy/extra-field/atomic-write compatibility.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/local_export_service.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "bfaf811412f69d95ef735e81d24ccb7d5eb4a8b6",
+      "resolvedBlob": "bfaf811412f69d95ef735e81d24ccb7d5eb4a8b6",
+      "wasConflict": false,
+      "purpose": "User-selected cross-platform sanitized/read-only export and cancellation/failure regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/native_playback_progress_export.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "c6f20bb79c9a910144edab9f8ccfa88bb74f1ab3",
+      "resolvedBlob": "c6f20bb79c9a910144edab9f8ccfa88bb74f1ab3",
+      "wasConflict": false,
+      "purpose": "Strict read-only native per-CID progress export including historical BV-prefix spelling and zero/tombstones.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/native_playback_service.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "b9b05fb05cf12daab582cbdb7eb0bd36d1fc9dce",
+      "v19Blob": "46c11930aff64659fcbb5c8b81c167fb060e0a5f",
+      "resolvedBlob": "46c11930aff64659fcbb5c8b81c167fb060e0a5f",
+      "wasConflict": false,
+      "purpose": "Nullable actual playRequested compatibility and validated course identifiers; normal BV path retained.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/problem_diagnostics_service.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "6f719f2483dd1744abb7cd0ebb2a99ab889c4d68",
+      "v19Blob": "baa1a73914ed3c2af0a5eff1f458b343263a2b22",
+      "resolvedBlob": "baa1a73914ed3c2af0a5eff1f458b343263a2b22",
+      "wasConflict": false,
+      "purpose": "Strict sanitized diagnostics reader for unified export; ordinary tolerant diagnostics behavior retained.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/search_content_filter_service.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "af32d2797d672bfb83882a3dc95effa00996e6bb",
+      "v19Blob": "42620f92db5f47e67b42ca536ad4e04e3f70c959",
+      "resolvedBlob": "42620f92db5f47e67b42ca536ad4e04e3f70c959",
+      "wasConflict": false,
+      "purpose": "Literal search exclusion/local blocklist and strict compatible filter import validation.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/settings_runtime_adapter.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "3b32ecc19fe7f8290c1350ffe450706d46e85e18",
+      "v19Blob": "87dcb17cff1216f6d8c9baff915bd624d468dae9",
+      "resolvedBlob": "87dcb17cff1216f6d8c9baff915bd624d468dae9",
+      "wasConflict": true,
+      "purpose": "Keep side-effect-free exportPreferenceFlags/readCapacity read; write transaction ordering unchanged. Real-service integration tests remain separately.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/settings_transfer_service.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "a62d2ec316ae6f4f383c8afe8e0a2d0ea498441f",
+      "v19Blob": "747947b04d91e1a10aa3133e2d8f73da4c30f06b",
+      "resolvedBlob": "747947b04d91e1a10aa3133e2d8f73da4c30f06b",
+      "wasConflict": true,
+      "purpose": "Keep all 32-key/type/domain validations, image 0..512MiB, Danmaku/search maximum and deep freeze; 1.9 uses SearchContentFilter.fromJsonStrict.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/subscription_history_store.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "fbe7597aa260f472a1d299bdf3a37d81538c3587",
+      "v19Blob": "a20bd1178e801446579202a437da0f9553607e1a",
+      "resolvedBlob": "a20bd1178e801446579202a437da0f9553607e1a",
+      "wasConflict": true,
+      "purpose": "Keep additive strict raw export reader (readAt/collectionAdded included); existing normal read/write behavior retained.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/subscription_service.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "e845317bb5b2f1420fc1442d8c3d13a54a8de01b",
+      "v19Blob": "7eb40c9e60ebb0965f25b2d97e24eefe0612d17a",
+      "resolvedBlob": "7eb40c9e60ebb0965f25b2d97e24eefe0612d17a",
+      "wasConflict": true,
+      "purpose": "Keep additive pure export/flags/raw validation; 1.8 retention/native-generation behavior retained.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/subscription_snapshot_store.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "4920680b7ff0f4fe4d8962e33824f4fb1862bb64",
+      "v19Blob": "15e3b473b98767c896689997eaa373316ef2ef31",
+      "resolvedBlob": "15e3b473b98767c896689997eaa373316ef2ef31",
+      "wasConflict": false,
+      "purpose": "Add read-only existing-DB export snapshot; no create/migrate/recover/cleanup, always closes separate handle.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/subtitle_export_service.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "3bbc735fadabe0bc0fb5b58635f2c838f6eed61d",
+      "resolvedBlob": "3bbc735fadabe0bc0fb5b58635f2c838f6eed61d",
+      "wasConflict": false,
+      "purpose": "Ordered multi-frame/timestamp notes, contained previews, asynchronous capture/save guards and real subtitle export.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/unified_export_service.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "657aa44d3ef7f396f4a74df47f2e21466159e109",
+      "resolvedBlob": "657aa44d3ef7f396f4a74df47f2e21466159e109",
+      "wasConflict": false,
+      "purpose": "User-selected cross-platform sanitized/read-only export and cancellation/failure regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/video_note_export_service.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "39d39e03961ce1ee7979a545495f9e759ae444f8",
+      "v19Blob": "19614c72d8ee41a4b242deeb510744eb74c67e20",
+      "resolvedBlob": "19614c72d8ee41a4b242deeb510744eb74c67e20",
+      "wasConflict": false,
+      "purpose": "Ordered multi-frame/timestamp notes, contained previews, asynchronous capture/save guards and real subtitle export.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/video_note_service.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "159e69444b4f4263604b6df2cd8e4abaf481c5c5",
+      "v19Blob": "8c37daecdd5722e8fb85177967fc69f020b99f1d",
+      "resolvedBlob": "8c37daecdd5722e8fb85177967fc69f020b99f1d",
+      "wasConflict": false,
+      "purpose": "Ordered multi-frame/timestamp notes, contained previews, asynchronous capture/save guards and real subtitle export.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/video_note_share_service.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "11e4205aef43c4d7fba3564e4b1e6073c238ef3d",
+      "v19Blob": "0e24baa049868212d28bcf98d6a36e96b7e046fa",
+      "resolvedBlob": "0e24baa049868212d28bcf98d6a36e96b7e046fa",
+      "wasConflict": false,
+      "purpose": "Ordered multi-frame/timestamp notes, contained previews, asynchronous capture/save guards and real subtitle export.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/windows_dash_media_plan.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "580999152fe74ded66180445dc789cad349c59ad",
+      "v19Blob": "0f91be46a899a9292572a939691994700a80271b",
+      "resolvedBlob": "0f91be46a899a9292572a939691994700a80271b",
+      "wasConflict": false,
+      "purpose": "Add single muxed course-source plan; original DASH plan retained.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "lib/services/windows_playback_service.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "6e81cd5b8ba4b647ac4bdc4ae074790d2855c5a2",
+      "v19Blob": "1eea8e7e0bbd96db3bba119c3135898a6af8877d",
+      "resolvedBlob": "1eea8e7e0bbd96db3bba119c3135898a6af8877d",
+      "wasConflict": true,
+      "purpose": "Keep course account/pending-media fence, latest play intent, backup-buffer cleanup; original demuxer/source/attempt guards retained.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "pubspec.yaml",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "59b54ebd98dcef6e5ae141acfd4e634f54593868",
+      "v19Blob": "c4f5cd6306af5f579def9a0c73e8959b41a0af9a",
+      "resolvedBlob": "c4f5cd6306af5f579def9a0c73e8959b41a0af9a",
+      "wasConflict": true,
+      "purpose": "Keep numeric 1.9.0+2026 and Windows1.9.0.2026/output names; do not downgrade to 1.8+26 or local27.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/ab_repeat_capture_lifecycle_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "d9b484816dddf9314ff0cab6d872e7b02a7bcb32",
+      "resolvedBlob": "d9b484816dddf9314ff0cab6d872e7b02a7bcb32",
+      "wasConflict": false,
+      "purpose": "CID-bound interval repeat, manual versus internal seek intent, drain/lifecycle/route/sleep protection.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/ab_repeat_evidence_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "a9c1c351a752a5a0a7c54dd67083c8120e1da4f6",
+      "resolvedBlob": "a9c1c351a752a5a0a7c54dd67083c8120e1da4f6",
+      "wasConflict": false,
+      "purpose": "CID-bound interval repeat, manual versus internal seek intent, drain/lifecycle/route/sleep protection.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/ab_repeat_nested_route_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "24656eeaa59111b2a5ab916b75fb2d6fc3383e80",
+      "resolvedBlob": "24656eeaa59111b2a5ab916b75fb2d6fc3383e80",
+      "wasConflict": false,
+      "purpose": "CID-bound interval repeat, manual versus internal seek intent, drain/lifecycle/route/sleep protection.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/ab_repeat_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "fd1a009371e2161c12bb818cff569b3ea98e32df",
+      "resolvedBlob": "fd1a009371e2161c12bb818cff569b3ea98e32df",
+      "wasConflict": false,
+      "purpose": "CID-bound interval repeat, manual versus internal seek intent, drain/lifecycle/route/sleep protection.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/android_beta_version_test.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "b0362ee8811090d86e51a480dcebaa1735da4dbe",
+      "v19Blob": "bd0a791b31cd0ac9d4441e79158fc79d53020e0f",
+      "resolvedBlob": "bd0a791b31cd0ac9d4441e79158fc79d53020e0f",
+      "wasConflict": true,
+      "purpose": "Keep archived 2023/2024/2025 counter-floor, preview opt-in and 1.9 metadata/CI contract regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/app_behavior_preferences_service_test.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "f6a191667ad30d167995f9018e96e10963d7a15d",
+      "v19Blob": "f38b99460c0e098cfdfeb1c4256878361ac5a533",
+      "resolvedBlob": "f38b99460c0e098cfdfeb1c4256878361ac5a533",
+      "wasConflict": false,
+      "purpose": "Preserve 1.9 feature/metadata/root smoke regression and test-owned cleanup.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/app_update_beta_channel_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "f8d47adba327259097499bc8f5eb0684bbdfb58d",
+      "resolvedBlob": "f8d47adba327259097499bc8f5eb0684bbdfb58d",
+      "wasConflict": false,
+      "purpose": "Channel/package/manifest-safe Beta update handling while preserving stable/ignore/manual-check behavior.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/app_update_ignore_test.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "0be89fb9d23db10fbce1f274c3bb763a61619851",
+      "v19Blob": "a85de161a1d6f03e4f3743b52743f6c60b7f4a88",
+      "resolvedBlob": "a85de161a1d6f03e4f3743b52743f6c60b7f4a88",
+      "wasConflict": false,
+      "purpose": "Channel/package/manifest-safe Beta update handling while preserving stable/ignore/manual-check behavior.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/apple_background_focus_delivery_test.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "5c318a34d7c0039ee935a7287303343943102e50",
+      "v19Blob": "fcd6ec475c881f8cc6b6d7753db0fbddf2caffd3",
+      "resolvedBlob": "fcd6ec475c881f8cc6b6d7753db0fbddf2caffd3",
+      "wasConflict": true,
+      "purpose": "Keep all Apple foreground delivery coverage and injected continuous-focus ticker cleanup from 59f.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/bilibili_course_service_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "7ced1c4b6bb027cca2daacde8814fad0537042b0",
+      "resolvedBlob": "7ced1c4b6bb027cca2daacde8814fad0537042b0",
+      "wasConflict": false,
+      "purpose": "Purchased-course metadata/routing/authorization and account/source race regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/cache_file_lock_test.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "44b6c8247fe0bdd0feef829fb2ee6c229c385cd1",
+      "v19Blob": "8578bafd7124591164f707a0b91e2ea4ee0fa530",
+      "resolvedBlob": "8578bafd7124591164f707a0b91e2ea4ee0fa530",
+      "wasConflict": true,
+      "purpose": "Keep original process-lock coverage plus read-existing/shared/no-create export cases.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/classroom_access_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "120891a66e736ea6b18c52f5591ce3b818e6deec",
+      "resolvedBlob": "120891a66e736ea6b18c52f5591ce3b818e6deec",
+      "wasConflict": false,
+      "purpose": "Purchased-course metadata/routing/authorization and account/source race regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/classroom_account_race_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "0364ee9d2d47f0b6923f46d8f2d739bfb52bf6e8",
+      "resolvedBlob": "0364ee9d2d47f0b6923f46d8f2d739bfb52bf6e8",
+      "wasConflict": false,
+      "purpose": "Purchased-course metadata/routing/authorization and account/source race regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/classroom_integration_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "ef973d3ef1e6e0c7f8e466a9fe3f71eb9cf1ae8e",
+      "resolvedBlob": "ef973d3ef1e6e0c7f8e466a9fe3f71eb9cf1ae8e",
+      "wasConflict": false,
+      "purpose": "Purchased-course metadata/routing/authorization and account/source race regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/classroom_page_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "94507bf454214b31a4501545cb926de0fcd89a16",
+      "resolvedBlob": "94507bf454214b31a4501545cb926de0fcd89a16",
+      "wasConflict": false,
+      "purpose": "Purchased-course metadata/routing/authorization and account/source race regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/classroom_reopen_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "65baa675dd1947dd1b80524fa044a7bc9bd6a274",
+      "resolvedBlob": "65baa675dd1947dd1b80524fa044a7bc9bd6a274",
+      "wasConflict": false,
+      "purpose": "Purchased-course metadata/routing/authorization and account/source race regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/content_blocklist_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "8e3030013933a2cdd716423313b053173854e89e",
+      "resolvedBlob": "8e3030013933a2cdd716423313b053173854e89e",
+      "wasConflict": false,
+      "purpose": "Literal search exclusion/local blocklist and strict compatible filter import validation.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/course_learning_records_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "8bbeea9e3c669c725cf7e91ac442ef80d06a76b6",
+      "resolvedBlob": "8bbeea9e3c669c725cf7e91ac442ef80d06a76b6",
+      "wasConflict": false,
+      "purpose": "Purchased-course metadata/routing/authorization and account/source race regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/desktop_disk_cache_session_test.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "d8ae0cfe0e51b76bb990f53c01d7f3a3b8938ad4",
+      "v19Blob": "3bb03cb662a6c3eba58935de12ed41f505369b59",
+      "resolvedBlob": "3bb03cb662a6c3eba58935de12ed41f505369b59",
+      "wasConflict": true,
+      "purpose": "Keep original cache tests plus course disk suppression regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/editable_card_board_test.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "60324eef0956a361ca50619804570aa3ccf2a73e",
+      "v19Blob": "b67b267f207ce104603e21a9e1b3227b9ff2d9b8",
+      "resolvedBlob": "b67b267f207ce104603e21a9e1b3227b9ff2d9b8",
+      "wasConflict": true,
+      "purpose": "Keep original editable-board cases plus second drag while persistence is pending.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/fixtures/settings_runtime_fixture.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "188fb92f0d30dfaef08b7abcce757f793d9b55b3",
+      "resolvedBlob": "188fb92f0d30dfaef08b7abcce757f793d9b55b3",
+      "wasConflict": false,
+      "purpose": "Pure export read/retention/flags and strict settings/native rollback integration regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/focus_dashboard_test.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "26c3082ea1f54885afc94de6427179bd9065ba31",
+      "v19Blob": "4fa67668111aebf4f12698293e2fd6df5f9c5ae7",
+      "resolvedBlob": "4fa67668111aebf4f12698293e2fd6df5f9c5ae7",
+      "wasConflict": false,
+      "purpose": "Independent continuous-focus persistence/lifecycle and three-stop drawer/onboarding regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/focus_home_onboarding_integration_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "a1f2d1880e089f272cd9c6502d38b1720110d381",
+      "resolvedBlob": "a1f2d1880e089f272cd9c6502d38b1720110d381",
+      "wasConflict": false,
+      "purpose": "Independent continuous-focus persistence/lifecycle and three-stop drawer/onboarding regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/focus_session_continuity_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "b022dc8447b8dba071a9b47d88fdf04bedf1e6b2",
+      "resolvedBlob": "b022dc8447b8dba071a9b47d88fdf04bedf1e6b2",
+      "wasConflict": false,
+      "purpose": "Independent continuous-focus persistence/lifecycle and three-stop drawer/onboarding regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/focus_session_storage_failure_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "034a3dc5e0aa9ff723ed975ea16fdb71ccb29efe",
+      "resolvedBlob": "034a3dc5e0aa9ff723ed975ea16fdb71ccb29efe",
+      "wasConflict": false,
+      "purpose": "Independent continuous-focus persistence/lifecycle and three-stop drawer/onboarding regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/focus_timer_controller_test.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "5791f4d3600fe8f657848640bd450549d172852c",
+      "v19Blob": "68a49a7407a07cb141917dc45602fb51cc327072",
+      "resolvedBlob": "68a49a7407a07cb141917dc45602fb51cc327072",
+      "wasConflict": false,
+      "purpose": "Independent continuous-focus persistence/lifecycle and three-stop drawer/onboarding regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/home_customization_test.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "c0aea32541221c352f0bb1863dbddfdaa126f4c3",
+      "v19Blob": "bef6e8034cf9dbaf58b97e3f70fdcabb83a9a1e4",
+      "resolvedBlob": "bef6e8034cf9dbaf58b97e3f70fdcabb83a9a1e4",
+      "wasConflict": false,
+      "purpose": "Independent continuous-focus persistence/lifecycle and three-stop drawer/onboarding regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/home_drawer_gesture_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "a6a82349f286fa1b2d7469ed742043a60b52a3c9",
+      "resolvedBlob": "a6a82349f286fa1b2d7469ed742043a60b52a3c9",
+      "wasConflict": false,
+      "purpose": "Independent continuous-focus persistence/lifecycle and three-stop drawer/onboarding regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/home_drawer_scroll_physics_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "573c15669d110ddf1260c56ab13b75ab27448d41",
+      "resolvedBlob": "573c15669d110ddf1260c56ab13b75ab27448d41",
+      "wasConflict": false,
+      "purpose": "Independent continuous-focus persistence/lifecycle and three-stop drawer/onboarding regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/home_subscription_onboarding_backport_test.dart",
+      "statusV19RelativeToCandidate": "D",
+      "candidateBlob": "73878be39c1e038741159fd42bea05c464a5dea0",
+      "v19Blob": null,
+      "resolvedBlob": "30a22827c49e7166fe99f0401f59f181944b5b57",
+      "wasConflict": false,
+      "purpose": "Pure export read/retention/flags and strict settings/native rollback integration regression.",
+      "resolution": "retain candidate regression; adapt real touch helper from two stops to 1.9 three stops"
+    },
+    {
+      "path": "test/image_cache_capacity_read_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "118ef6a71576df07b220fbc371b56aadeb98bcd8",
+      "resolvedBlob": "118ef6a71576df07b220fbc371b56aadeb98bcd8",
+      "wasConflict": false,
+      "purpose": "Pure export read/retention/flags and strict settings/native rollback integration regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/learning_list_page_test.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "ac8e8022bada58ea13b383b48b0afa9e1a2a52aa",
+      "v19Blob": "ef64987ea6729b99589b09b7f67a97385ef9e731",
+      "resolvedBlob": "ef64987ea6729b99589b09b7f67a97385ef9e731",
+      "wasConflict": false,
+      "purpose": "Versioned subject folders, ordered entries and legacy/extra-field/atomic-write compatibility.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/learning_subject_folders_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "291337d82fa764d6145c6b6d76d83694790c7be1",
+      "resolvedBlob": "291337d82fa764d6145c6b6d76d83694790c7be1",
+      "wasConflict": false,
+      "purpose": "Versioned subject folders, ordered entries and legacy/extra-field/atomic-write compatibility.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/local_export_service_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "c497199752ce3126c92aa279ffc3bb9d7322e116",
+      "resolvedBlob": "c497199752ce3126c92aa279ffc3bb9d7322e116",
+      "wasConflict": false,
+      "purpose": "User-selected cross-platform sanitized/read-only export and cancellation/failure regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/native_playback_progress_export_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "cde4d5b28c5dfc4e08cec20c567e3470dbad72e5",
+      "resolvedBlob": "cde4d5b28c5dfc4e08cec20c567e3470dbad72e5",
+      "wasConflict": false,
+      "purpose": "Strict read-only native per-CID progress export including historical BV-prefix spelling and zero/tombstones.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/notes_subtitles_widgets_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "14e8ca483820fbf8abfdc0bed640dd9147aa3614",
+      "resolvedBlob": "14e8ca483820fbf8abfdc0bed640dd9147aa3614",
+      "wasConflict": false,
+      "purpose": "Ordered multi-frame/timestamp notes, contained previews, asynchronous capture/save guards and real subtitle export.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/playback_buffer_range_test.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "f490f3bc8f2f67f3482243a5dedb1649e428f6b3",
+      "v19Blob": "df465a91783a912d56ccccbfd3eeb0dc4bf57b74",
+      "resolvedBlob": "df465a91783a912d56ccccbfd3eeb0dc4bf57b74",
+      "wasConflict": true,
+      "purpose": "Keep original range cases plus nullable actual playRequested/copyWith compatibility.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/player_ab_repeat_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "216c2ceecac1637b04c47b782318fbf610b30080",
+      "resolvedBlob": "216c2ceecac1637b04c47b782318fbf610b30080",
+      "wasConflict": false,
+      "purpose": "CID-bound interval repeat, manual versus internal seek intent, drain/lifecycle/route/sleep protection.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/player_blocklist_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "aad6733f8fbcdfa033424f167a86533afc263452",
+      "resolvedBlob": "aad6733f8fbcdfa033424f167a86533afc263452",
+      "wasConflict": false,
+      "purpose": "Integrated AB/course/global-focus/notes/subtitle support and buffer/play-intent lifecycle fencing.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/player_merged_controls_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "d1a3a54c25e5a8119758573a63b71b706a0c1366",
+      "resolvedBlob": "d1a3a54c25e5a8119758573a63b71b706a0c1366",
+      "wasConflict": false,
+      "purpose": "Integrated AB/course/global-focus/notes/subtitle support and buffer/play-intent lifecycle fencing.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/search_content_filter_test.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "55f1b436418d36df00f890b050997c7680b3ed54",
+      "v19Blob": "401aff4900087c9a02447e3250e582d41b905d92",
+      "resolvedBlob": "401aff4900087c9a02447e3250e582d41b905d92",
+      "wasConflict": false,
+      "purpose": "Literal search exclusion/local blocklist and strict compatible filter import validation.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/search_content_filter_validation_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "cf3c369ec2ce2d7ab61551975d8c766255e90afc",
+      "resolvedBlob": "cf3c369ec2ce2d7ab61551975d8c766255e90afc",
+      "wasConflict": false,
+      "purpose": "Literal search exclusion/local blocklist and strict compatible filter import validation.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/settings_export_retention_integration_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "ed610af272a571e0b9e05b317cf9e86b1405608d",
+      "resolvedBlob": "ed610af272a571e0b9e05b317cf9e86b1405608d",
+      "wasConflict": false,
+      "purpose": "User-selected cross-platform sanitized/read-only export and cancellation/failure regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/settings_native_subscription_integration_test.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "a360a358f6cabf170fc93d76ac4d497dedc42903",
+      "v19Blob": "6289a66f917dd0a388f242d0bcd39944517dd698",
+      "resolvedBlob": "6289a66f917dd0a388f242d0bcd39944517dd698",
+      "wasConflict": true,
+      "purpose": "Keep original native-authoritative ordering/rollback and 1.9 strict keyword/blocklist/export-no-native-call coverage.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/settings_runtime_adapter_test.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "e17242b8029ad4058d7d5cc746b5a6dfca1f9daa",
+      "v19Blob": "b77976ecc264543f741dccd4b112652e5353e2c2",
+      "resolvedBlob": "b77976ecc264543f741dccd4b112652e5353e2c2",
+      "wasConflict": true,
+      "purpose": "Keep pure-read and transaction-order tests; real cache/subscription roundtrip coverage also in settings_runtime_service_integration_test and image-capacity tests.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/settings_runtime_service_integration_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "e17242b8029ad4058d7d5cc746b5a6dfca1f9daa",
+      "resolvedBlob": "e17242b8029ad4058d7d5cc746b5a6dfca1f9daa",
+      "wasConflict": false,
+      "purpose": "Pure export read/retention/flags and strict settings/native rollback integration regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/settings_transfer_search_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "733ba8cfd4b538db66f79279d796fb669ab4252e",
+      "resolvedBlob": "733ba8cfd4b538db66f79279d796fb669ab4252e",
+      "wasConflict": false,
+      "purpose": "Literal search exclusion/local blocklist and strict compatible filter import validation.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/subscription_background_test.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "c1c975f98f36a77fc8ea551d1a290255cd56f0bf",
+      "v19Blob": "6c98b2b55fcb22e96a345fe1025d6ffc6e983a98",
+      "resolvedBlob": "6c98b2b55fcb22e96a345fe1025d6ffc6e983a98",
+      "wasConflict": false,
+      "purpose": "Pure export read/retention/flags and strict settings/native rollback integration regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/subscription_preference_flags_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "3fd5dd22f94a4df86486adabe0ae09a2982e79ad",
+      "resolvedBlob": "3fd5dd22f94a4df86486adabe0ae09a2982e79ad",
+      "wasConflict": false,
+      "purpose": "Pure export read/retention/flags and strict settings/native rollback integration regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/subscription_snapshot_export_read_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "8f4a23e32d05f86b1abe6317b079cc505537c13a",
+      "resolvedBlob": "8f4a23e32d05f86b1abe6317b079cc505537c13a",
+      "wasConflict": false,
+      "purpose": "User-selected cross-platform sanitized/read-only export and cancellation/failure regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/subscription_sqlite_export_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "e1a4b6f5ac5a52b73caf203d8a95b380d418be6f",
+      "resolvedBlob": "e1a4b6f5ac5a52b73caf203d8a95b380d418be6f",
+      "wasConflict": false,
+      "purpose": "User-selected cross-platform sanitized/read-only export and cancellation/failure regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/subtitle_export_service_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "1e9946c284de798319664738bb1594595a01bd04",
+      "resolvedBlob": "1e9946c284de798319664738bb1594595a01bd04",
+      "wasConflict": false,
+      "purpose": "Ordered multi-frame/timestamp notes, contained previews, asynchronous capture/save guards and real subtitle export.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/unified_export_page_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "00cbb3ca3fbe286c2ef7cdbc946c436a42d4ca68",
+      "resolvedBlob": "00cbb3ca3fbe286c2ef7cdbc946c436a42d4ca68",
+      "wasConflict": false,
+      "purpose": "User-selected cross-platform sanitized/read-only export and cancellation/failure regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/unified_export_runtime_settings_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "5a3de494ab286964d3654f1dcbe95d082e70f530",
+      "resolvedBlob": "5a3de494ab286964d3654f1dcbe95d082e70f530",
+      "wasConflict": false,
+      "purpose": "User-selected cross-platform sanitized/read-only export and cancellation/failure regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/unified_export_service_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "dc133ad5f3030dc0fe4d32ee6f51bc5068453c41",
+      "resolvedBlob": "dc133ad5f3030dc0fe4d32ee6f51bc5068453c41",
+      "wasConflict": false,
+      "purpose": "User-selected cross-platform sanitized/read-only export and cancellation/failure regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/update_ignore_ui_test.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "a04702918665e50cf948588add3cec9ef64f97ac",
+      "v19Blob": "f8aca4267009e8b30aefb22bbc9d0290cdc1a97f",
+      "resolvedBlob": "f8aca4267009e8b30aefb22bbc9d0290cdc1a97f",
+      "wasConflict": false,
+      "purpose": "Channel/package/manifest-safe Beta update handling while preserving stable/ignore/manual-check behavior.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/v19_export_visual_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "8de95b1678001eeb1af74c23cc403eded742e366",
+      "resolvedBlob": "8de95b1678001eeb1af74c23cc403eded742e366",
+      "wasConflict": false,
+      "purpose": "User-selected cross-platform sanitized/read-only export and cancellation/failure regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/v19_focus_learning_evidence_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "547b5e16e2728cca46b2c692a8960da2e66bbbf3",
+      "resolvedBlob": "547b5e16e2728cca46b2c692a8960da2e66bbbf3",
+      "wasConflict": false,
+      "purpose": "Independent continuous-focus persistence/lifecycle and three-stop drawer/onboarding regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/video_note_export_service_test.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "8b405e779c55663fd42eae722c4042cd95340a3b",
+      "v19Blob": "5120055dc5ea1285db8355b58c0c50eb662d3556",
+      "resolvedBlob": "5120055dc5ea1285db8355b58c0c50eb662d3556",
+      "wasConflict": false,
+      "purpose": "Ordered multi-frame/timestamp notes, contained previews, asynchronous capture/save guards and real subtitle export.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/video_note_frame_preview_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "8e92c2e005dcd5cd8fa3f2868172f3887ad2e584",
+      "resolvedBlob": "8e92c2e005dcd5cd8fa3f2868172f3887ad2e584",
+      "wasConflict": false,
+      "purpose": "Ordered multi-frame/timestamp notes, contained previews, asynchronous capture/save guards and real subtitle export.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/video_note_service_test.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "e28e63d50e18da2e0c04c8f050fd1ac82f711e8d",
+      "v19Blob": "52c1c51f449e2bdf145c58ba09e1614df486f2a3",
+      "resolvedBlob": "52c1c51f449e2bdf145c58ba09e1614df486f2a3",
+      "wasConflict": false,
+      "purpose": "Ordered multi-frame/timestamp notes, contained previews, asynchronous capture/save guards and real subtitle export.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/video_notes_page_test.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "4c57177b4506f2cf4c6348f86fe445676f118a18",
+      "v19Blob": "d6f080aee07fa500fbe77cd718e49399e165e7f7",
+      "resolvedBlob": "d6f080aee07fa500fbe77cd718e49399e165e7f7",
+      "wasConflict": true,
+      "purpose": "Keep original note UI plus contain preview, cancellation and export-failure regression.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/widget_test.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "8f5e082d6fee9d98ae9f6e7724d2028d829f621a",
+      "v19Blob": "0e84cb4aabc022f9792603dae43445cf89873043",
+      "resolvedBlob": "0e84cb4aabc022f9792603dae43445cf89873043",
+      "wasConflict": false,
+      "purpose": "Preserve 1.9 feature/metadata/root smoke regression and test-owned cleanup.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/windows_buffer_identity_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "a92c2cfccd6249538e7ecdf2c90e68f49353e5a7",
+      "resolvedBlob": "a92c2cfccd6249538e7ecdf2c90e68f49353e5a7",
+      "wasConflict": false,
+      "purpose": "Preserve 1.9 feature/metadata/root smoke regression and test-owned cleanup.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/windows_playback_audio_lifecycle_test.dart",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "c51bb3398c5de73025b938b62fa11a5658fd7825",
+      "v19Blob": "03d303249d6fa3f33b34ea932b6d9ab340c6216d",
+      "resolvedBlob": "03d303249d6fa3f33b34ea932b6d9ab340c6216d",
+      "wasConflict": false,
+      "purpose": "Integrated AB/course/global-focus/notes/subtitle support and buffer/play-intent lifecycle fencing.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "test/windows_playback_intent_ordering_test.dart",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "df84f43cc10f864842aed44a2b9c1b0cff93bb16",
+      "resolvedBlob": "df84f43cc10f864842aed44a2b9c1b0cff93bb16",
+      "wasConflict": false,
+      "purpose": "Integrated AB/course/global-focus/notes/subtitle support and buffer/play-intent lifecycle fencing.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "tool/beta_release.py",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "7c99f80fd10d46ed7c84bdba571984c01ff4bc81",
+      "resolvedBlob": "7c99f80fd10d46ed7c84bdba571984c01ff4bc81",
+      "wasConflict": false,
+      "purpose": "Reviewed controlled Beta producer CI/helper and corresponding fault/identity validation.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "tool/package_linux.sh",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "33dc2b28431c2c0b8ca05328255adfb1a0229e6a",
+      "v19Blob": "640fb67e8d24926403ffdcefebd24dd7e3a3e92c",
+      "resolvedBlob": "640fb67e8d24926403ffdcefebd24dd7e3a3e92c",
+      "wasConflict": false,
+      "purpose": "Optional validated Beta release-version/package metadata; existing default Linux package path retained.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "tool/test_beta_release.py",
+      "statusV19RelativeToCandidate": "A",
+      "candidateBlob": null,
+      "v19Blob": "0a5ec5645ee5df329cf4f36bc01004d74b7005c2",
+      "resolvedBlob": "0a5ec5645ee5df329cf4f36bc01004d74b7005c2",
+      "wasConflict": false,
+      "purpose": "Reviewed controlled Beta producer CI/helper and corresponding fault/identity validation.",
+      "resolution": "retain reviewed v19 blob (all candidate fixes already present)"
+    },
+    {
+      "path": "work.md",
+      "statusV19RelativeToCandidate": "M",
+      "candidateBlob": "8041522ef91de7bdfb7e0020489cedb81dd0b819",
+      "v19Blob": "219fbccd080fd86a5f7c77eda6e5853cb0b8bd7b",
+      "resolvedBlob": "58640dfad797f9816a7b592cdbf27a425d2ed2a3",
+      "wasConflict": true,
+      "purpose": "Keep complete 1.9 log and append unique 1.8 publication tail; assert complete candidate log remains an ordered subsequence.",
+      "resolution": "retain both histories; append this merge evidence"
+    }
+  ],
+  "validation": {
+    "initialFocused": {
+      "files": 23,
+      "passed": 280,
+      "failed": 3,
+      "skipped": 0,
+      "failures": "Restored 1.8 two-stop helper assumes full-open after a slow120px gesture; existing 1.9 three-stop physics returns closed. Original onboarding assertions had already passed."
+    },
+    "finalFocused": {
+      "files": 23,
+      "passed": 283,
+      "failed": 0,
+      "skipped": 0,
+      "elapsedSeconds": 26,
+      "tests": [
+        "test/home_subscription_onboarding_backport_test.dart",
+        "test/focus_home_onboarding_integration_test.dart",
+        "test/home_drawer_scroll_physics_test.dart",
+        "test/apple_background_focus_delivery_test.dart",
+        "test/settings_transfer_image_capacity_test.dart",
+        "test/review_settings_import_schema_test.dart",
+        "test/settings_transfer_model_ranges_test.dart",
+        "test/settings_transfer_search_test.dart",
+        "test/settings_runtime_adapter_test.dart",
+        "test/settings_runtime_service_integration_test.dart",
+        "test/settings_native_subscription_integration_test.dart",
+        "test/video_note_frame_preview_test.dart",
+        "test/video_notes_page_test.dart",
+        "test/ab_repeat_capture_lifecycle_test.dart",
+        "test/ab_repeat_nested_route_test.dart",
+        "test/windows_buffer_identity_test.dart",
+        "test/windows_playback_intent_ordering_test.dart",
+        "test/cache_file_lock_test.dart",
+        "test/desktop_disk_cache_session_test.dart",
+        "test/android_beta_version_test.dart",
+        "test/release_workflow_config_test.dart",
+        "test/app_update_beta_channel_test.dart",
+        "test/native_playback_progress_export_test.dart"
+      ]
+    },
+    "homeAdjacent": {
+      "files": 4,
+      "passed": 14,
+      "failed": 0,
+      "skipped": 0,
+      "overlapsFinalFocused": true
+    },
+    "analyze": {
+      "issues": 0,
+      "elapsedSeconds": 16.5
+    },
+    "format": {
+      "files": 1,
+      "changed": 0
+    },
+    "python": {
+      "betaProducer": 33,
+      "nativeStdoutProbe": 16,
+      "failed": 0
+    },
+    "workflowSyntax": {
+      "yamlWorkflows": 4,
+      "bashBlocks": 50,
+      "powershellBlocks": 4,
+      "executedBlocks": 0,
+      "originalPushPrTriggersPreserved": true
+    },
+    "appleSources": "passed",
+    "logs": [
+      {
+        "path": ".dart_tool/merge-focused.log",
+        "sha256": "360b70d036a915d30a41c72ce392815a34c603056d210a0a406f41c805bc2181"
+      },
+      {
+        "path": ".dart_tool/merge-focused-final.log",
+        "sha256": "bc4f8817bd6cd42d88ec1fd8fd3cf4b51213d1f260a4ad8ba6b3663646fd8882"
+      },
+      {
+        "path": ".dart_tool/merge-home-adapted.log",
+        "sha256": "9ba75ecfa3f4f7ee9db3514d51a76115da32dfb5e3496350927fc52d5991a0c4"
+      },
+      {
+        "path": ".dart_tool/merge-analyze.log",
+        "sha256": "2aee1e3af363dafd1464bf6955c9bf069b7d936cde0e2ccd50a347aa10f5f2b6"
+      }
+    ],
+    "fullSuiteRun": false,
+    "platformBuildRun": false,
+    "realDeviceRun": false,
+    "remoteWrite": false
+  }
+}

@@ -7,6 +7,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:focubili/models/video_note.dart';
 import 'package:focubili/services/video_note_export_service.dart';
 import 'package:focubili/services/video_note_share_service.dart';
+import 'package:focubili/services/local_export_service.dart';
+import 'package:focubili/platform/app_platform.dart';
 import 'package:share_plus/share_plus.dart';
 
 /// 创建一条固定笔记，测试可选择是否附带本机截图。
@@ -30,6 +32,22 @@ VideoNote _note({String? framePath}) {
 
 /// 验证 Markdown、JSON 与截图打包规则。
 void main() {
+  test(
+    'Linux share fallback keeps cancellation distinct from a saved export',
+    () async {
+      final service = VideoNoteShareService(
+        platform: AppPlatform.linux,
+        localExportService: LocalExportService(
+          platform: AppPlatform.linux,
+          saveDialog: (_) async => null,
+        ),
+      );
+      final package = await const VideoNoteExportService().buildPackage([
+        _note(),
+      ], VideoNoteExportFormat.markdown);
+      expect(await service.shareExportPackage(package), isFalse);
+    },
+  );
   test('Apple 首次使用不存在的临时目录也能导出', () async {
     final root = await Directory.systemTemp.createTemp(
       'focubili_apple_export_',
@@ -78,7 +96,7 @@ void main() {
         ], VideoNoteExportFormat.json);
     final Archive archive = ZipDecoder().decodeBytes(package.bytes);
     final ArchiveFile? jsonFile = archive.find('focubili_notes.json');
-    final ArchiveFile? imageFile = archive.find('images/note-1.png');
+    final ArchiveFile? imageFile = archive.find('images/1_note-1_1.png');
 
     expect(package.extension, 'zip');
     expect(package.imageCount, 1);
@@ -87,12 +105,71 @@ void main() {
     final Map<String, dynamic> document =
         jsonDecode(utf8.decode(jsonFile!.content)) as Map<String, dynamic>;
     expect(document['format'], 'focubili.video_notes');
-    expect(document['version'], 1);
+    expect(document['version'], 2);
     expect(
       (document['notes'] as List<dynamic>).single['framePath'],
-      'images/note-1.png',
+      'images/1_note-1_1.png',
     );
   });
+
+  test(
+    'multiple exported frames retain order, millisecond times and missing entries',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'focubili-export-frames-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final first = await File('${directory.path}/a.png').writeAsBytes([1, 2]);
+      final second = await File('${directory.path}/b.jpg').writeAsBytes([3, 4]);
+      final note = _note().copyWith(
+        frames: [
+          VideoNoteFrame(
+            path: second.path,
+            position: const Duration(milliseconds: 20015),
+          ),
+          VideoNoteFrame(
+            path: '${directory.path}/missing.png',
+            position: const Duration(seconds: 3),
+          ),
+          VideoNoteFrame(
+            path: first.path,
+            position: const Duration(milliseconds: 10005),
+          ),
+        ],
+      );
+      final package = await const VideoNoteExportService().buildPackage([
+        note,
+      ], VideoNoteExportFormat.json);
+      expect(package.imageCount, 2);
+      expect(package.missingImageCount, 1);
+      final archive = ZipDecoder().decodeBytes(package.bytes);
+      final content = utf8.decode(archive.find('focubili_notes.json')!.content);
+      expect(content, isNot(contains(directory.path)));
+      final json = jsonDecode(content) as Map<String, dynamic>;
+      final frames = json['notes'][0]['frames'] as List;
+      expect(frames.map((frame) => frame['positionMs']), [20015, 3000, 10005]);
+      expect(frames[0]['path'], 'images/1_note-1_1.jpg');
+      expect(frames[1]['path'], isNull);
+      expect(frames[1]['unavailable'], isTrue);
+      expect(frames[2]['path'], 'images/1_note-1_3.png');
+      final markdownPackage = await const VideoNoteExportService().buildPackage(
+        [note],
+        VideoNoteExportFormat.markdown,
+      );
+      final markdown = utf8.decode(
+        ZipDecoder()
+            .decodeBytes(markdownPackage.bytes)
+            .find('focubili_notes.md')!
+            .content,
+      );
+      expect(
+        markdown.indexOf('00:20.015'),
+        lessThan(markdown.indexOf('00:03')),
+      );
+      expect(markdown, contains('00:10.005'));
+      expect(markdown, contains('画面文件缺失或无法读取'));
+    },
+  );
 
   /// 验证批量分享先生成真实文件，再把正确文件名与 MIME 类型交给系统面板。
   test('批量笔记导出包可写入临时目录并分享', () async {

@@ -285,6 +285,7 @@ mixin _PlayerOverlayCoordinator
 
   /// 请求一段真实弹幕并建立时间索引；临时失败最多自动重试三次且带递增退避。
   Future<void> _loadDanmakuSegment(int segmentIndex) async {
+    if (_activeVideo.isCourse) return;
     final int failureCount = _danmakuSegmentFailureCounts[segmentIndex] ?? 0;
     final DateTime? retryAfter = _danmakuSegmentRetryAfter[segmentIndex];
     if (!_danmakuEnabled ||
@@ -443,6 +444,11 @@ mixin _PlayerOverlayCoordinator
 
   /// 失败刷新保留字幕；有效的新轨道列表使旧正文和迟到请求失效。
   Future<SubtitleTrackLoadResult> _loadSubtitleTracks() async {
+    if (_activeVideo.isCourse) {
+      return const SubtitleTrackLoadResult.unavailable(
+        message: '课堂字幕暂未接入，视频内嵌字幕不受影响。',
+      );
+    }
     final String bvid = _activeVideo.bvid;
     final int cid = _currentPart.cid;
     final int requestToken = ++_subtitleTracksRequestToken;
@@ -521,6 +527,35 @@ mixin _PlayerOverlayCoordinator
                 ),
           onPreviewFontSize: _previewSubtitleFontSize,
           onCommitFontSize: _commitSubtitleFontSize,
+          loadCues: (track) async {
+            if (_activeVideo.isCourse) {
+              return const SubtitleCueLoadResult.unavailable(
+                message: '课堂暂不支持独立字幕。',
+              );
+            }
+            if (!isCurrentVideo()) {
+              return const SubtitleCueLoadResult.unavailable(
+                message: '视频已切换，请重新打开字幕设置。',
+              );
+            }
+            if (_selectedSubtitleTrack?.id == track.id &&
+                _subtitleCueIdentity == (bvid, cid) &&
+                _subtitleCues.isNotEmpty) {
+              return SubtitleCueLoadResult(
+                status: SubtitleLoadStatus.available,
+                message: '',
+                cues: List<SubtitleCue>.unmodifiable(_subtitleCues),
+              );
+            }
+            return _playerOverlayService.loadSubtitleCues(
+              bvid: bvid,
+              cid: cid,
+              trackId: track.id,
+            );
+          },
+          onSeek: (position) async {
+            if (isCurrentVideo()) await _seekNativeTo(position);
+          },
         ),
       );
     } finally {

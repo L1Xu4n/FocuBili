@@ -13,9 +13,13 @@ import 'package:focubili/features/profile/personalization_settings_page.dart';
 import 'package:focubili/services/app_update_service.dart';
 import 'package:focubili/services/bilibili_auth_service.dart';
 
-class _Version implements AppVersionProvider {
+class _Version implements AppVersionProvider, AppUpdateInstallationProvider {
   @override
   Future<String> loadVersion() async => '1.7.0';
+
+  @override
+  Future<AppUpdateInstallation> loadUpdateInstallation() async =>
+      const AppUpdateInstallation(packageName: 'com.focubili.app');
 }
 
 void main() {

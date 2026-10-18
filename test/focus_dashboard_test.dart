@@ -15,8 +15,8 @@ void main() {
     SharedPreferences.setMockInitialValues(<String, Object>{});
   });
 
-  /// 验证首页创建等待视频关联的 Pin，并仍支持续时和从继续按钮打开视频。
-  testWidgets('首页专注等待关联视频并保留任务 Pin', (WidgetTester tester) async {
+  /// 验证首页立即开始专注，并支持独立于视频的暂停、继续与续时。
+  testWidgets('首页专注立即计时并保留会话 Pin', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final FocusTimerController controller = FocusTimerController(
@@ -49,7 +49,7 @@ void main() {
     await tester.pump();
     await tester.tap(find.byKey(const Key('start-focus-button')));
     await tester.pump();
-    expect(find.text('请打开一个视频关联本次专注任务'), findsOneWidget);
+    expect(find.text('专注已开始'), findsOneWidget);
     await tester.tap(find.text('稍后'));
     await tester.pumpAndSettle();
 
@@ -57,8 +57,8 @@ void main() {
     expect(find.text('完成 Flutter 专注计时'), findsOneWidget);
     expect(find.text('45:00'), findsOneWidget);
 
-    expect(find.text('等待关联视频'), findsOneWidget);
-    expect(find.byKey(const Key('resume-focus-button')), findsOneWidget);
+    expect(find.text('正在专注'), findsOneWidget);
+    expect(find.byKey(const Key('pause-focus-button')), findsOneWidget);
 
     await tester.ensureVisible(find.byKey(const Key('extend-focus-button')));
     await tester.tap(find.byKey(const Key('extend-focus-button')));
@@ -68,8 +68,11 @@ void main() {
       const Duration(minutes: 50),
     );
 
+    await controller.pauseFocus();
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('resume-focus-button')));
-    expect(openVideoCalls, 1);
+    await tester.pump();
+    expect(openVideoCalls, 0);
     expect(find.byKey(const Key('open-video-during-focus')), findsNothing);
 
     await controller.endFocusEarly();

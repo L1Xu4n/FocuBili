@@ -73,6 +73,20 @@ void main() {
   );
 
   test(
+    'classroom suppresses disk writes even after sampler sees an empty session',
+    () async {
+      await session.configure();
+      await session.setDiskAllowed(false);
+      expect(properties['cache-on-disk'], 'no');
+      await session.sample();
+      expect(properties['cache-on-disk'], 'no');
+      await session.setDiskAllowed(true);
+      await session.sample();
+      expect(properties['cache-on-disk'], 'yes');
+    },
+  );
+
+  test(
     'mpv 0.36 legacy names preserve disk mode with verified directory and unlink policy',
     () async {
       rejectedProperties = {'demuxer-cache-dir'};

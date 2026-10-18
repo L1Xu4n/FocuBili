@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 /// 表示学习清单中一条视频分 P 任务当前所处的学习阶段。
 enum LearningListStatus {
   /// 用户已经加入清单，但还没有开始播放。
@@ -37,6 +39,8 @@ class LearningListEntry {
     required this.addedAt,
     required this.updatedAt,
     this.sortOrder = 0,
+    this.folderId,
+    this.extraFields = const {},
   });
 
   /// 视频的公开 BV 编号，不保存完整播放地址或登录凭据。
@@ -78,6 +82,29 @@ class LearningListEntry {
   /// 用户为学习顺序设置的数字；数值越小，未完成任务越靠前。
   final int sortOrder;
 
+  /// 所属一级学科分组；空值表示未分组，不参与 BV/CID 任务身份。
+  final String? folderId;
+
+  /// 前向兼容的未知 JSON 字段；移动、迁移和进度更新不丢弃其他模块的元数据。
+  final Map<String, Object?> extraFields;
+
+  static const _knownFields = {
+    'bvid',
+    'title',
+    'ownerName',
+    'thumbnailUrl',
+    'partCid',
+    'partPageNumber',
+    'partTitle',
+    'positionMs',
+    'durationMs',
+    'status',
+    'addedAt',
+    'updatedAt',
+    'sortOrder',
+    'folderId',
+  };
+
   /// 返回以 BV 与 CID 组成的稳定唯一标识，避免同一视频不同 P 相互覆盖。
   String get stableId => '$bvid:$partCid';
 
@@ -101,6 +128,9 @@ class LearningListEntry {
     DateTime? addedAt,
     DateTime? updatedAt,
     int? sortOrder,
+    String? folderId,
+    bool clearFolder = false,
+    Map<String, Object?>? extraFields,
   }) {
     return LearningListEntry(
       bvid: bvid ?? this.bvid,
@@ -116,12 +146,16 @@ class LearningListEntry {
       addedAt: addedAt ?? this.addedAt,
       updatedAt: updatedAt ?? this.updatedAt,
       sortOrder: sortOrder ?? this.sortOrder,
+      folderId: clearFolder ? null : folderId ?? this.folderId,
+      extraFields: extraFields ?? this.extraFields,
     );
   }
 
   /// 将任务转换为 SharedPreferences 可保存的最小 JSON 字典。
-  Map<String, Object> toJson() {
-    return <String, Object>{
+  Map<String, Object?> toJson() {
+    return <String, Object?>{
+      for (final field in extraFields.entries)
+        if (!_knownFields.contains(field.key)) field.key: field.value,
       'bvid': bvid,
       'title': title,
       'ownerName': ownerName,
@@ -135,6 +169,7 @@ class LearningListEntry {
       'addedAt': addedAt.toUtc().toIso8601String(),
       'updatedAt': updatedAt.toUtc().toIso8601String(),
       'sortOrder': sortOrder,
+      'folderId': ?folderId,
     };
   }
 
@@ -215,6 +250,12 @@ class LearningListEntry {
       addedAt: parsedAddedAt.toLocal(),
       updatedAt: parsedUpdatedAt.toLocal(),
       sortOrder: normalizedSortOrder,
+      folderId:
+          json['folderId'] is String &&
+              (json['folderId'] as String).trim().isNotEmpty
+          ? (json['folderId'] as String).trim()
+          : null,
+      extraFields: _readExtraFields(json),
     );
   }
 
@@ -234,7 +275,9 @@ class LearningListEntry {
         status == other.status &&
         addedAt == other.addedAt &&
         updatedAt == other.updatedAt &&
-        sortOrder == other.sortOrder;
+        sortOrder == other.sortOrder &&
+        folderId == other.folderId &&
+        _extraFieldsJson == other._extraFieldsJson;
   }
 
   /// 返回与全部字段对应的哈希值，需与相等判断保持一致。
@@ -253,5 +296,32 @@ class LearningListEntry {
     addedAt,
     updatedAt,
     sortOrder,
+    folderId,
+    _extraFieldsJson,
   );
+
+  static Map<String, Object?> _readExtraFields(Map<String, dynamic> json) {
+    final extra = <String, Object?>{};
+    for (final field in json.entries) {
+      if (_knownFields.contains(field.key)) continue;
+      try {
+        // 克隆合法 JSON 值，外部传入的非 JSON 对象不会进入持久化数据。
+        extra[field.key] = jsonDecode(jsonEncode(field.value));
+      } catch (_) {
+        // 兼容字段损坏不应使已有合法学习任务消失。
+      }
+    }
+    return Map.unmodifiable(extra);
+  }
+
+  String get _extraFieldsJson => jsonEncode(_canonicalJson(extraFields));
+
+  static Object? _canonicalJson(Object? value) {
+    if (value is Map) {
+      final keys = value.keys.cast<String>().toList()..sort();
+      return {for (final key in keys) key: _canonicalJson(value[key])};
+    }
+    if (value is List) return value.map(_canonicalJson).toList();
+    return value;
+  }
 }

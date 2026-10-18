@@ -1,0 +1,47 @@
+{
+  "source": "ef3bf68",
+  "candidateBase": "95b23239f933f38d61c05c2c6b0cd958ffb74902",
+  "platform": "Windows host; existing Android Studio JBR; Android Gradle compilation and JVM tests",
+  "command": "gradlew.bat :app:compileDebugKotlin :app:testDebugUnitTest --tests com.focubili.app.NativePlaybackProgressExportTest --tests com.focubili.app.NativePlaybackProgressStorageTest --tests com.focubili.app.CoursePlaybackTargetTest --tests com.focubili.app.CoursePurchaseGateTest --no-daemon",
+  "result": "BUILD SUCCESSFUL in1m26s;317 actionable tasks,312 executed,5 up-to-date",
+  "exitCode": 0,
+  "suites": [
+    {
+      "name": "CoursePlaybackTargetTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "name": "CoursePurchaseGateTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "name": "NativePlaybackProgressExportTest",
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "name": "NativePlaybackProgressStorageTest",
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  ],
+  "totals": {
+    "tests": 20,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "evidence": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\v19-candidate-kotlin-tests.log",
+  "boundary": "Compilation and synthetic JVM logic only; no Android device, App launch, real playback/account data, APK packaging or signing. Existing Gradle/plugin deprecation warnings remain; no SDK, JDK, license or security settings changed.",
+  "nativeUnchangedThrough": "309e039291542f404a3d5e4900f8918fb332153d"
+}

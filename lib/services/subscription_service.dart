@@ -154,6 +154,224 @@ class SubscriptionService extends ChangeNotifier {
       return date != 0 ? date : a.bvid.compareTo(b.bvid);
     }),
   );
+
+  /// Reads only persisted opt-in flags, without initialization or content access.
+  /// Missing flags default to false; malformed stored flags are never normalized.
+  Future<Map<String, bool>> exportPreferenceFlags() async {
+    final document = await _readExportSnapshot();
+    return Map<String, bool>.unmodifiable({
+      'enabled': document['enabled'] ?? false,
+      'notificationsEnabled': document['notificationsEnabled'] ?? false,
+      'backgroundRefreshEnabled': document['backgroundRefreshEnabled'] ?? false,
+    });
+  }
+
+  /// Reads the authoritative raw document before browsing can normalize it.
+  /// This path cannot initialize, migrate, recover, clean up or schedule work.
+  Future<Map<String, dynamic>> _readExportSnapshot() async {
+    await _writes;
+    if (storageError != null) throw const SubscriptionStorageException();
+    var raw = await _snapshotStore?.readForExport();
+    if (raw == null) {
+      final prefs = await _preferencesLoader();
+      await prefs.reload();
+      raw = prefs.getString(storageKey);
+    }
+    final decoded = raw == null
+        ? <String, dynamic>{
+            'version': 2,
+            'sources': <Object?>[],
+            'feed': <Object?>[],
+            'checkpoints': <String, Object?>{},
+            'historyJobs': <String, Object?>{},
+          }
+        : jsonDecode(raw);
+    if (decoded is! Map || decoded.keys.any((key) => key is! String)) {
+      throw const SubscriptionStorageException();
+    }
+    final document = Map<String, dynamic>.from(decoded);
+    if (document['version'] is! int ||
+        (document['version'] != 1 && document['version'] != 2)) {
+      throw const SubscriptionStorageException();
+    }
+    for (final key in [
+      'enabled',
+      'notificationsEnabled',
+      'backgroundRefreshEnabled',
+    ]) {
+      if (document.containsKey(key) && document[key] is! bool) {
+        throw const SubscriptionStorageException();
+      }
+    }
+    return document;
+  }
+
+  /// A portable local snapshot, without notification leases or runtime owners.
+  /// Reads already-downloaded history only; never starts a network request.
+  Future<Map<String, Object?>> exportLocalData() async {
+    // Browsing maps dedupe rows; strict export must retain and validate raw rows.
+    final document = await _readExportSnapshot();
+    final sourceSnapshot = _exportRows(
+      document['sources'],
+      SubscriptionSource.fromJson,
+      (source) => source.key,
+      booleanFields: const ['paused'],
+      allowedFields: const {
+        'kind',
+        'mid',
+        'seasonId',
+        'name',
+        'token',
+        'paused',
+        'imageUrl',
+      },
+    );
+    final feedSnapshot = _exportRows(
+      document['feed'],
+      SubscriptionFeedItem.fromJson,
+      (item) => item.bvid,
+      booleanFields: const ['collectionAdded'],
+      allowedFields: _exportFeedFields,
+    );
+    final checkpoints = Map<String, dynamic>.from(
+      document['checkpoints'] as Map,
+    );
+    if (sourceSnapshot.any((source) => !checkpoints.containsKey(source.key))) {
+      throw const SubscriptionStorageException();
+    }
+    final legacy = <String, List<SubscriptionFeedItem>>{
+      for (final entry in checkpoints.entries)
+        entry.key: _exportRows(
+          (entry.value as Map)['pending'],
+          SubscriptionFeedItem.fromJson,
+          (item) => item.bvid,
+          booleanFields: const ['collectionAdded'],
+          allowedFields: _exportFeedFields,
+        ),
+    };
+    final jobs = <String, SubscriptionHistoryJob>{};
+    for (final entry in (document['historyJobs'] as Map? ?? {}).entries) {
+      final values = Map<String, dynamic>.from(entry.value as Map);
+      final rawIds = values['ids'] as List;
+      final job = SubscriptionHistoryJob.fromJson(values);
+      if (entry.key is! String ||
+          job.sourceKey != entry.key ||
+          job.batches < 0 ||
+          rawIds.any((id) => id is! String || id.trim().isEmpty) ||
+          rawIds.length != job.ids.length) {
+        throw const SubscriptionStorageException();
+      }
+      jobs[entry.key as String] = job;
+    }
+    final history = <String, Object?>{};
+    for (final key in {
+      ...sourceSnapshot.map((source) => source.key),
+      ...legacy.keys,
+      ...jobs.keys,
+    }) {
+      final job = jobs[key];
+      final items = <String, SubscriptionFeedItem>{};
+      if (job != null) {
+        for (var index = 0; index < job.batches; index++) {
+          final batch = await _readExportHistory(job.id, index);
+          if (batch == null) throw const SubscriptionStorageException();
+          for (final item in batch.items) {
+            if (job.ids.contains(item.bvid)) {
+              items.putIfAbsent(item.bvid, () => item);
+            }
+          }
+        }
+        // Extending a previously limited import rewinds its last batch while
+        // retaining the committed ID set. Its immutable page may be reused
+        // before the cursor is committed again; only expected IDs are eligible.
+        if (!items.keys.toSet().containsAll(job.ids)) {
+          final reused = await _readExportHistory(job.id, job.batches);
+          for (final item in reused?.items ?? <SubscriptionFeedItem>[]) {
+            if (job.ids.contains(item.bvid)) {
+              items.putIfAbsent(item.bvid, () => item);
+            }
+          }
+        }
+        if (!items.keys.toSet().containsAll(job.ids)) {
+          throw const SubscriptionStorageException();
+        }
+      }
+      for (final item in legacy[key] ?? <SubscriptionFeedItem>[]) {
+        items.putIfAbsent(item.bvid, () => item);
+      }
+      history[key] = items.values.map((item) => item.toJson()).toList();
+    }
+    return {
+      'format': 'focubili.subscriptions',
+      'version': 1,
+      'enabled': document['enabled'] == true,
+      'notificationsEnabled': document['notificationsEnabled'] == true,
+      'backgroundRefreshEnabled': document['backgroundRefreshEnabled'] == true,
+      'sources': [
+        for (final source in sourceSnapshot)
+          {
+            'kind': source.kind.name,
+            'mid': source.mid,
+            'seasonId': source.seasonId,
+            'name': source.name,
+            'paused': source.paused,
+            'imageUrl': source.imageUrl,
+          },
+      ],
+      'feed': feedSnapshot.map((item) => item.toJson()).toList(),
+      'history': history,
+    };
+  }
+
+  Future<SubscriptionHistoryBatch?> _readExportHistory(String job, int batch) =>
+      switch (historyStorage) {
+        final FileSubscriptionHistoryStore store => store.readForExport(
+          job,
+          batch,
+        ),
+        _ => historyStorage.read(job, batch),
+      };
+
+  static List<T> _exportRows<T>(
+    Object? raw,
+    T Function(Map<String, dynamic>) parse,
+    String Function(T) identity, {
+    List<String> booleanFields = const [],
+    Set<String> allowedFields = const {},
+  }) {
+    if (raw is! List) throw const SubscriptionStorageException();
+    final result = <T>[];
+    final identities = <String>{};
+    for (final row in raw) {
+      if (row is! Map) throw const SubscriptionStorageException();
+      final values = Map<String, dynamic>.from(row);
+      if (values.keys.any((key) => !allowedFields.contains(key)) ||
+          booleanFields.any(
+            (key) => values[key] != null && values[key] is! bool,
+          )) {
+        throw const SubscriptionStorageException();
+      }
+      final value = parse(values);
+      final id = identity(value);
+      if (id.trim().isEmpty || !identities.add(id)) {
+        throw const SubscriptionStorageException();
+      }
+      result.add(value);
+    }
+    return result;
+  }
+
+  static const _exportFeedFields = {
+    'bvid',
+    'title',
+    'coverUrl',
+    'sources',
+    'discoveredAt',
+    'publishedAt',
+    'readAt',
+    'collectionAdded',
+  };
+
   int get unreadCount =>
       _unreadCount ??= _feed.values.where((e) => e.readAt == null).length;
   SourceCheckpoint? checkpoint(String key) => _checkpoints[key];

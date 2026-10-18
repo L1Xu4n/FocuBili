@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:photo_view/photo_view.dart';
 
 import '../../core/layout/adaptive_page_frame.dart';
@@ -13,6 +14,7 @@ import '../../services/video_note_service.dart';
 import '../../services/video_note_share_service.dart';
 import 'video_note_composer.dart';
 import 'video_note_share_preview.dart';
+import 'video_note_frames_view.dart';
 
 /// 允许测试替换播放器目标页，同时保留视频、分P和时间点三项跳转参数。
 typedef VideoNotePlayerBuilder =
@@ -51,6 +53,7 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
   late final TextEditingController _bodyController;
   late final BilibiliService _videoService;
   late VideoNote _note;
+  late List<VideoNoteFrame> _frames;
   bool _saving = false;
   bool _openingVideo = false;
   bool _allowPop = false;
@@ -60,6 +63,7 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
   void initState() {
     super.initState();
     _note = widget.note;
+    _frames = _note.allFrames;
     _titleController = TextEditingController(text: _note.title);
     _bodyController = TextEditingController(text: _note.body);
     _videoService = widget.videoService ?? BilibiliVideoInfoService();
@@ -80,7 +84,8 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
   /// 判断当前输入是否与最后一次保存内容不同，用于拦截误退出。
   bool get _hasUnsavedChanges {
     return _titleController.text.trim() != _note.title ||
-        _bodyController.text.trim() != _note.body;
+        _bodyController.text.trim() != _note.body ||
+        !listEquals(_frames, _note.allFrames);
   }
 
   /// 输入变化时刷新 PopScope，让返回按钮立即知道是否需要提醒保存。
@@ -105,6 +110,7 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
         title: title,
         body: _bodyController.text.trim(),
         updatedAt: DateTime.now(),
+        frames: _frames,
       );
       await widget.noteService.saveNote(updated);
       if (!mounted) {
@@ -206,6 +212,9 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
         return part;
       }
     }
+    if (video.isCourse) {
+      throw const BilibiliLookupException('原课程章节已失效，请从课程目录重新选择。');
+    }
     for (final VideoPart part in video.parts) {
       if (part.pageNumber == _note.partPageNumber) {
         return part;
@@ -241,14 +250,22 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
           builder: (BuildContext context) => destination,
         ),
       );
-    } catch (_) {
+    } catch (error) {
       if (!mounted) {
         return;
       }
       setState(() => _openingVideo = false);
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
-        ..showSnackBar(const SnackBar(content: Text('暂时无法打开这条笔记对应的视频。')));
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              error is BilibiliLookupException
+                  ? error.message
+                  : '暂时无法打开这条笔记对应的视频。',
+            ),
+          ),
+        );
     }
   }
 
@@ -267,6 +284,7 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
     final VideoNote draft = _note.copyWith(
       title: _titleController.text.trim(),
       body: _bodyController.text.trim(),
+      frames: _frames,
     );
     await showVideoNoteSharePreview(
       context,
@@ -308,65 +326,21 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
 
   /// 构建正文末尾的自适应截图；保持原始比例并允许点击进入全屏浏览。
   Widget _buildFrameSection() {
-    final String? framePath = _note.framePath;
-    if (framePath == null || framePath.isEmpty) {
-      return const SizedBox.shrink();
-    }
+    if (_frames.isEmpty) return const SizedBox.shrink();
     return Column(
       key: const Key('note-detail-frame-section'),
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        const SizedBox(height: 28),
-        Row(
-          children: <Widget>[
-            Text(
-              '视频截图',
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
-            ),
-            const Spacer(),
-            const Icon(Icons.open_in_full_rounded, size: 18),
-            const SizedBox(width: 6),
-            Text('点击放大', style: Theme.of(context).textTheme.bodySmall),
-          ],
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SizedBox(height: 20),
+        Text(
+          '视频截图 · ${_frames.length} 张',
+          style: Theme.of(context).textTheme.titleMedium,
         ),
-        const SizedBox(height: 12),
-        Align(
-          alignment: Alignment.center,
-          child: Material(
-            color: Colors.black,
-            borderRadius: BorderRadius.circular(16),
-            clipBehavior: Clip.antiAlias,
-            child: InkWell(
-              key: const Key('open-note-frame-fullscreen'),
-              // 截图点击函数进入支持缩放的全屏浏览页。
-              onTap: () => _openFrameFullscreen(framePath),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxWidth: MediaQuery.sizeOf(context).width - 40,
-                  maxHeight: MediaQuery.sizeOf(context).height * 0.72,
-                ),
-                child: Image.file(
-                  File(framePath),
-                  fit: BoxFit.contain,
-                  // 截图错误函数显示明确说明，仍保留笔记的文字内容。
-                  errorBuilder:
-                      (
-                        BuildContext context,
-                        Object error,
-                        StackTrace? stackTrace,
-                      ) {
-                        return const SizedBox(
-                          width: 280,
-                          height: 180,
-                          child: Center(child: Text('截图文件不存在')),
-                        );
-                      },
-                ),
-              ),
-            ),
-          ),
+        VideoNoteFramesView(
+          frames: _frames,
+          enabled: !_saving,
+          onChanged: (frames) => setState(() => _frames = frames),
+          onOpen: (frame) => _openFrameFullscreen(frame.path),
         ),
       ],
     );

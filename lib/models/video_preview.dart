@@ -6,7 +6,13 @@ class VideoPart {
     required this.cid,
     required this.title,
     required this.duration,
+    this.courseEpisodeId,
+    this.courseAid,
   });
+
+  /// 课堂独有的真实章节与稿件编号，普通视频保持为空。
+  final int? courseEpisodeId;
+  final int? courseAid;
 
   final int pageNumber;
   final int cid;
@@ -120,6 +126,7 @@ class VideoSearchResult {
     required this.playCount,
     required this.danmakuCount,
     required this.episodeCountText,
+    this.ownerMid = 0,
     this.categoryId,
     this.tags = const [],
   });
@@ -133,6 +140,7 @@ class VideoSearchResult {
   final int playCount;
   final int danmakuCount;
   final String episodeCountText;
+  final int ownerMid;
   final int? categoryId;
   final List<String> tags;
 }
@@ -255,10 +263,17 @@ class VideoPreview {
     this.collection,
     this.tags = const <String>[],
     this.fromOfflineCache = false,
+    this.courseSeasonId,
+    this.requestedCourseEpisodeId,
   });
 
   final int aid;
   final String bvid;
+
+  /// 课堂使用独立的 `cheese:ss<id>` 本地键，避免笔记和进度与 UGC 混用。
+  final int? courseSeasonId;
+  final int? requestedCourseEpisodeId;
+  bool get isCourse => courseSeasonId != null;
 
   /// 标识当前视频分P的编号，原生层用它请求对应的播放数据。
   final int cid;
@@ -298,6 +313,8 @@ class VideoPreview {
       collection: collection,
       tags: List<String>.unmodifiable(values),
       fromOfflineCache: fromOfflineCache,
+      courseSeasonId: courseSeasonId,
+      requestedCourseEpisodeId: requestedCourseEpisodeId,
       duration: duration,
       thumbnailUrl: thumbnailUrl,
       parts: parts,

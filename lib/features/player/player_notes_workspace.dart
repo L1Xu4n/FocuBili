@@ -24,9 +24,10 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
   bool _noteAutoSaving = false;
   bool _noteAutoSavePending = false;
   bool _includeCurrentFrame = false;
-  String? _noteFramePath;
+  List<VideoNoteFrame> _noteFrames = const <VideoNoteFrame>[];
   bool _fullscreenNoteListCollapsed = false;
   int _noteDraftRevision = 0;
+  int _noteFramesRevision = 0;
   int _notesRequestGeneration = 0;
   StreamSubscription<String>? _noteChangesSubscription;
   Completer<void>? _noteSaveCompletion;
@@ -46,6 +47,9 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
 
   /// 由播放器状态类提供当前平台的播放服务。
   PlaybackService get _playbackService;
+
+  /// 播放导航代次也会在用户开始切换时变化，早于新视频真正替换旧视频。
+  int get _partSwitchGeneration;
 
   /// 由播放器状态类说明视频当前是否真实播放。
   bool get _playing;
@@ -69,7 +73,16 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
   Future<void> _changePart(VideoPart part);
 
   /// 跳转到笔记记录的真实播放位置。
-  Future<void> _seekNativeTo(Duration position);
+  Future<void> _seekNativeTo(
+    Duration position, {
+    bool temporaryCapture = false,
+  });
+  Future<int> _beginAbRepeatCapture();
+  bool _isCurrentAbRepeatCapture(int serial);
+  void _prepareAbRepeatCaptureRestore(Duration position);
+  void _endAbRepeatCapture();
+  bool get _canResumeAfterNoteCapture;
+  int get _sourceGeneration;
 
   /// 使用播放器统一的短提示显示笔记操作结果。
   void _showTransientSnackBar(String message);
@@ -166,7 +179,7 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
       _notePosition = _playbackSnapshot.position;
       _notePartCid = _currentPart.cid;
       _includeCurrentFrame = false;
-      _noteFramePath = null;
+      _noteFrames = const <VideoNoteFrame>[];
     });
   }
 
@@ -218,8 +231,8 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
       _noteBodyController.text = note.body;
       _notePosition = note.position;
       _notePartCid = targetPart.cid;
-      _includeCurrentFrame = note.framePath != null;
-      _noteFramePath = note.framePath;
+      _includeCurrentFrame = note.allFrames.isNotEmpty;
+      _noteFrames = note.allFrames;
     });
   }
 
@@ -245,8 +258,87 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
 
   /// 更新“插入当前画面”选择，取消时只影响本次保存，不立即删除旧文件。
   void _setIncludeCurrentFrame(bool selected) {
-    setState(() => _includeCurrentFrame = selected);
+    setState(() {
+      _includeCurrentFrame = selected;
+      _noteFramesRevision++;
+    });
     _scheduleVideoNoteAutoSave();
+  }
+
+  void _setNoteFrames(List<VideoNoteFrame> frames) {
+    setState(() {
+      _noteFrames = List<VideoNoteFrame>.unmodifiable(frames);
+      _noteFramesRevision++;
+      _includeCurrentFrame = frames.isNotEmpty;
+    });
+    _scheduleVideoNoteAutoSave();
+  }
+
+  /// 追加当前播放分 P 的画面，不改变原笔记锚点；每次捕获都有独立时间。
+  Future<void> _appendCurrentNoteFrame() async {
+    if (_noteSaving || _noteAutoSaving) return;
+    if (_noteTitleController.text.trim().isEmpty) {
+      _showTransientSnackBar('请先填写笔记标题。');
+      return;
+    }
+    if (_currentPart.cid != _notePartCid) {
+      _showTransientSnackBar('请先回到这条笔记所属的分 P，再追加画面。');
+      return;
+    }
+    _noteAutoSaveTimer?.cancel();
+    _noteAutoSaveTimer = null;
+    final position = _playbackSnapshot.position;
+    final revision = _noteDraftRevision;
+    final bvid = _activeVideo.bvid;
+    final completion = Completer<void>();
+    _noteSaveCompletion = completion;
+    setState(() => _noteSaving = true);
+    try {
+      String? path;
+      try {
+        path = await _captureFrameAtNotePosition(position: position);
+      } catch (_) {
+        // 截图失败仍立即保存草稿；切视频已在等待同一个 completion。
+      }
+      if (!mounted ||
+          revision != _noteDraftRevision ||
+          bvid != _activeVideo.bvid) {
+        if (path != null) {
+          await _videoNoteService.discardUnreferencedFrame(path);
+        }
+        return;
+      }
+      setState(() {
+        if (path != null) {
+          _noteFrames = <VideoNoteFrame>[
+            ..._noteFrames,
+            VideoNoteFrame(path: path, position: position),
+          ];
+          _includeCurrentFrame = true;
+          _noteFramesRevision++;
+        }
+        _noteSaving = false;
+        _noteAutoSavePending = false;
+      });
+      await _saveVideoNote(automatic: path == null, operation: completion);
+      if (path == null &&
+          mounted &&
+          _noteLastSaveSucceeded &&
+          bvid == _activeVideo.bvid &&
+          revision == _noteDraftRevision) {
+        _showTransientSnackBar('当前画面未能截取，笔记文字已保存。');
+      }
+    } finally {
+      if (!completion.isCompleted) completion.complete();
+      if (identical(_noteSaveCompletion, completion)) {
+        _noteSaveCompletion = null;
+        if (mounted &&
+            revision == _noteDraftRevision &&
+            bvid == _activeVideo.bvid) {
+          setState(() => _noteSaving = false);
+        }
+      }
+    }
   }
 
   /// 在标题或正文停止输入片刻后自动保存，避免频繁写入本机偏好设置。
@@ -303,36 +395,85 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
   }
 
   /// 暂停并跳到笔记锁定的分P和时间点截图，完成后恢复用户原来的播放位置。
-  Future<String?> _captureFrameAtNotePosition() async {
+  Future<String?> _captureFrameAtNotePosition({Duration? position}) async {
+    final bvid = _activeVideo.bvid;
+    final draftRevision = _noteDraftRevision;
+    var generation = _partSwitchGeneration;
+    var sourceGeneration = _sourceGeneration;
+    int? captureSerial;
+    bool isCurrentCapture() =>
+        mounted &&
+        bvid == _activeVideo.bvid &&
+        draftRevision == _noteDraftRevision &&
+        generation == _partSwitchGeneration &&
+        sourceGeneration == _sourceGeneration &&
+        (captureSerial == null || _isCurrentAbRepeatCapture(captureSerial));
+    final targetPosition = position ?? _notePosition;
     final VideoPart returnPart = _currentPart;
     final Duration returnPosition = _playbackSnapshot.position;
     final bool shouldResume = _playing;
     final VideoPart targetPart = _findVideoNotePart(_notePartCid);
-    if (shouldResume) {
-      await _playbackService.pause();
-    }
+    captureSerial = await _beginAbRepeatCapture();
     try {
+      if (!isCurrentCapture()) return null;
+      if (shouldResume) await _playbackService.pause();
+      if (!isCurrentCapture()) return null;
       if (targetPart.cid != _currentPart.cid) {
+        generation++;
         await _changePart(targetPart);
+        if (generation == _partSwitchGeneration &&
+            _currentPart.cid == targetPart.cid) {
+          sourceGeneration = _sourceGeneration;
+        }
+        if (!isCurrentCapture() || _currentPart.cid != targetPart.cid) {
+          return null;
+        }
         await _playbackService.pause();
       }
-      await _seekNativeTo(_notePosition);
-      await _waitForNoteFramePosition(_notePosition);
-      return await _playbackService.captureCurrentFrame();
+      if (!isCurrentCapture()) return null;
+      await _seekNativeTo(targetPosition, temporaryCapture: true);
+      if (!isCurrentCapture()) return null;
+      await _waitForNoteFramePosition(targetPosition);
+      if (!isCurrentCapture()) return null;
+      final path = await _playbackService.captureCurrentFrame();
+      if (!isCurrentCapture()) {
+        if (path != null) {
+          await _videoNoteService.discardUnreferencedFrame(path);
+        }
+        return null;
+      }
+      return path;
     } finally {
-      if (returnPart.cid != _currentPart.cid) {
-        await _changePart(returnPart);
-        await _playbackService.pause();
-      }
-      await _seekNativeTo(returnPosition);
-      if (shouldResume) {
-        await _playbackService.play();
+      try {
+        if (isCurrentCapture() && returnPart.cid != _currentPart.cid) {
+          generation++;
+          await _changePart(returnPart);
+          if (generation == _partSwitchGeneration &&
+              _currentPart.cid == returnPart.cid) {
+            sourceGeneration = _sourceGeneration;
+          }
+          if (isCurrentCapture()) await _playbackService.pause();
+        }
+        if (isCurrentCapture() && returnPart.cid == _currentPart.cid) {
+          _prepareAbRepeatCaptureRestore(returnPosition);
+          await _seekNativeTo(returnPosition, temporaryCapture: true);
+          if (isCurrentCapture() &&
+              shouldResume &&
+              _canResumeAfterNoteCapture) {
+            await _playbackService.play();
+          }
+        }
+      } finally {
+        _endAbRepeatCapture();
       }
     }
   }
 
   /// 保存标题、正文、自动记录时间、视频位置和可选画面；自动保存不会反复弹出提示。
-  Future<void> _saveVideoNote({bool automatic = false}) async {
+  Future<void> _saveVideoNote({
+    bool automatic = false,
+    Completer<void>? operation,
+  }) async {
     if (automatic) {
       if (_noteSaving || _noteAutoSaving) {
         _noteAutoSavePending = true;
@@ -358,25 +499,31 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
       _noteSaving = true;
     }
     final String title = enteredTitle.isEmpty ? '未命名笔记' : enteredTitle;
-    final completion = Completer<void>();
+    final completion = operation ?? Completer<void>();
     _noteSaveCompletion = completion;
     _noteLastSaveSucceeded = false;
     final noteVideo = _activeVideo;
     final VideoNote? existing = _editingVideoNote;
     final int draftRevision = _noteDraftRevision;
+    final int framesRevision = _noteFramesRevision;
     final bool includeFrame = _includeCurrentFrame;
     final int notePartCid = _notePartCid;
     final VideoPart notePart = _findVideoNotePart(notePartCid);
     final Duration notePosition = _notePosition;
     // 自动保存只锁定保存按钮，不禁用输入框，避免输入过程中键盘失去焦点。
     setState(() {});
-    String? framePath = includeFrame ? _noteFramePath : null;
+    final frames = includeFrame
+        ? List<VideoNoteFrame>.of(_noteFrames)
+        : <VideoNoteFrame>[];
     bool frameFailed = false;
     try {
-      if (includeFrame && framePath == null && !automatic) {
+      if (includeFrame && frames.isEmpty && !automatic) {
         try {
-          framePath = await _captureFrameAtNotePosition();
+          final framePath = await _captureFrameAtNotePosition();
           frameFailed = framePath == null;
+          if (framePath != null) {
+            frames.add(VideoNoteFrame(path: framePath, position: notePosition));
+          }
         } catch (_) {
           // Optional screenshot failure must never discard a valid text note.
           frameFailed = true;
@@ -398,14 +545,14 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
               updatedAt: now,
               position: notePosition,
               videoCoverUrl: noteVideo.thumbnailUrl,
-              framePath: framePath,
+              frames: frames,
             )
           : existing.copyWith(
               title: title,
               body: body,
               updatedAt: now,
               position: notePosition,
-              framePath: framePath,
+              frames: frames,
               clearFrame: !includeFrame,
             );
       await _videoNoteService.saveNote(note);
@@ -417,7 +564,9 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
       setState(() {
         if (draftRevision == _noteDraftRevision) {
           _editingVideoNote = note;
-          _noteFramePath = note.framePath;
+          if (framesRevision == _noteFramesRevision) {
+            _noteFrames = note.allFrames;
+          }
         }
         _noteSaving = false;
         _noteAutoSaving = false;
@@ -462,7 +611,7 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
       }
       _showTransientSnackBar('保存笔记失败，请稍后再试。');
     } finally {
-      completion.complete();
+      if (!completion.isCompleted) completion.complete();
       if (identical(_noteSaveCompletion, completion)) {
         _noteSaveCompletion = null;
       }
@@ -497,6 +646,15 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
     if (confirmed != true || !mounted) {
       return;
     }
+    // 删除必须先取消未触发的草稿、排空在途写入，防止旧保存随后复活该记录。
+    _noteAutoSaveTimer?.cancel();
+    _noteAutoSaveTimer = null;
+    _noteAutoSavePending = false;
+    await _noteSaveCompletion?.future;
+    if (!mounted || _editingVideoNote?.id != note.id) return;
+    _noteAutoSaveTimer?.cancel();
+    _noteAutoSaveTimer = null;
+    _noteAutoSavePending = false;
     setState(() => _noteSaving = true);
     try {
       await _videoNoteService.deleteNote(note.id);
@@ -531,7 +689,9 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
       partPageNumber: _findVideoNotePart(_notePartCid).pageNumber,
       createdAt: _editingVideoNote?.createdAt,
       includeFrame: _includeCurrentFrame,
-      framePath: _noteFramePath,
+      frames: _noteFrames,
+      onFramesChanged: _setNoteFrames,
+      onAddFrame: () => unawaited(_appendCurrentNoteFrame()),
       saving: _noteSaving || _noteAutoSaving,
       inputEnabled: !_noteSaving,
       onIncludeFrameChanged: _setIncludeCurrentFrame,

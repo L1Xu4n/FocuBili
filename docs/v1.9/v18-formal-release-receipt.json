@@ -1,0 +1,331 @@
+{
+  "schemaVersion": 1,
+  "recordedUtc": "2026-10-18T08:36:23Z",
+  "scope": "Existing public release/API and package-verification evidence summarized read-only; no new network, build, installation or device acceptance by this documentation task.",
+  "formalMasterSha": "5a76dbba192660f652fbd09d38c78eea6a10ffb5",
+  "tagObjectSha": "b60ea6a93ea47ec8a222ccb5974f025f16104537",
+  "tagPeeledCommitSha": "5a76dbba192660f652fbd09d38c78eea6a10ffb5",
+  "release": {
+    "url": "https://github.com/L1Xu4n/FocuBili/releases/tag/v1.8.0",
+    "id": 416289257,
+    "tag": "v1.8.0",
+    "publishedAt": "2026-10-18T06:57:23Z",
+    "draft": false,
+    "prerelease": false,
+    "stableLatest": true
+  },
+  "publicReleasePlatforms": [
+    "Android",
+    "Windows",
+    "macOS",
+    "Linux",
+    "iOS (unsigned device IPA)"
+  ],
+  "publicReleaseAssetCount": 6,
+  "assets": [
+    {
+      "platform": "android",
+      "id": 652740758,
+      "name": "FocuBili-v1.8.0-android.apk",
+      "size": 34025132,
+      "digest": "sha256:27a3482d3d5733b3298f628277cf186b6a4bf1fff14f6fe10f6aff4c1c1145d5",
+      "browser_download_url": "https://github.com/L1Xu4n/FocuBili/releases/download/v1.8.0/FocuBili-v1.8.0-android.apk"
+    },
+    {
+      "platform": "windows",
+      "id": 652740757,
+      "name": "FocuBili-v1.8.0-windows-x64-setup.exe",
+      "size": 27603262,
+      "digest": "sha256:91677076d1a27430fd90c5747f4e57f7a25c4b0e21d00b1d6897ca62b716266c",
+      "browser_download_url": "https://github.com/L1Xu4n/FocuBili/releases/download/v1.8.0/FocuBili-v1.8.0-windows-x64-setup.exe"
+    },
+    {
+      "platform": "macos",
+      "id": 652740760,
+      "name": "FocuBili-v1.8.0-macos-universal.dmg",
+      "size": 51526820,
+      "digest": "sha256:11fa18ee8beb04a45fd1aa2931d67b4be8d67f9120a91759ef11e5cbc8d7afc7",
+      "browser_download_url": "https://github.com/L1Xu4n/FocuBili/releases/download/v1.8.0/FocuBili-v1.8.0-macos-universal.dmg"
+    },
+    {
+      "platform": "linux",
+      "id": 652740755,
+      "name": "FocuBili-v1.8.0-linux-amd64.deb",
+      "size": 10733736,
+      "digest": "sha256:ec5cf73cc2a7925559ed211739b8bb6824efae7d259884534e25a11fa01ba262",
+      "browser_download_url": "https://github.com/L1Xu4n/FocuBili/releases/download/v1.8.0/FocuBili-v1.8.0-linux-amd64.deb"
+    },
+    {
+      "platform": "ios",
+      "kind": "unsigned-device-ipa",
+      "id": 652840489,
+      "name": "FocuBili-v1.8.0-ios-unsigned.ipa",
+      "size": 20944557,
+      "digest": "sha256:9018ace983fa8205ea774a76c8fe9e10d45f6e81e9f55f62015da215547e2a8e",
+      "browser_download_url": "https://github.com/L1Xu4n/FocuBili/releases/download/v1.8.0/FocuBili-v1.8.0-ios-unsigned.ipa"
+    },
+    {
+      "platform": "windows",
+      "kind": "portable-zip",
+      "id": 652840490,
+      "name": "FocuBili-v1.8.0-windows-x64-portable.zip",
+      "size": 37896771,
+      "digest": "sha256:79f23345e2486abd87b7ee0f177626143f1a9a35afe7cfa7fdf71a7e1c30a45b",
+      "browser_download_url": "https://github.com/L1Xu4n/FocuBili/releases/download/v1.8.0/FocuBili-v1.8.0-windows-x64-portable.zip"
+    }
+  ],
+  "verification": {
+    "status": "pass",
+    "passed": 70,
+    "failed": 0,
+    "recordedUtc": "2026-10-18T07:06:19.166809+00:00",
+    "method": "Existing anonymous live GET plus package inspection; no install or runtime acceptance.",
+    "report": "output/v180-formal-actual/verification-online-final.json",
+    "reportSha256": "0b876b67b39da3730cd00b7a7cea54ecde3e2fcd6f9298296c7b72603a19f1c4",
+    "deliveryReport": "parent-v180-formal-delivery-report.json",
+    "deliveryReportSha256": "2ed554fd29e761b32d64a7300d25cf2e22fed78ba574dc1c252d69993e80d9f7",
+    "manualDeviceAcceptance": false,
+    "deliveryReportRecordedUtc": "2026-10-18T07:06:48.948337+00:00",
+    "scope": "Historical original-four-asset70/70 live verification before supplemental uploads. Its saved report and delivery-report hashes remain point-in-time evidence, not a70-check verification of the current six assets."
+  },
+  "ios": {
+    "publicReleaseAsset": true,
+    "exactSourceCiRun": 39104945196,
+    "job": 117608651625,
+    "ciConclusion": "success",
+    "unsignedDeviceBuild": "success",
+    "simulatorCompileAndLaunchAndNativeRuntimeChecks": "success",
+    "artifactId": 12127777929,
+    "artifactUrl": "https://github.com/L1Xu4n/FocuBili/actions/runs/39104945196/artifacts/12127777929",
+    "artifactFormat": "CI ZIP containing unsigned IPA and simulator/support evidence",
+    "payloadLocallyDownloadedOrInspected": true,
+    "signedDeviceInstallAcceptance": false,
+    "sourceSha": "5a76dbba192660f652fbd09d38c78eea6a10ffb5",
+    "ciRunUrl": "https://github.com/L1Xu4n/FocuBili/actions/runs/39104945196",
+    "scope": "Public unsigned/unprovisioned arm64 device IPA from exact-M CI, with Runner/App LC_BUILD_VERSION IOS(2), source/time checks and anonymous public-download SHA256 confirmation. Own Apple signing/provisioning is required; no signed device install, TestFlight or device-runtime acceptance.",
+    "publishedDeviceIpa": {
+      "id": 652840489,
+      "name": "FocuBili-v1.8.0-ios-unsigned.ipa",
+      "url": "https://github.com/L1Xu4n/FocuBili/releases/download/v1.8.0/FocuBili-v1.8.0-ios-unsigned.ipa",
+      "bytes": 20944557,
+      "sha256": "9018ace983fa8205ea774a76c8fe9e10d45f6e81e9f55f62015da215547e2a8e",
+      "freshPublicDownloadVerified": true,
+      "method": "anonymous browser_download_url GET"
+    },
+    "actualDeviceArchitecture": "arm64, LC_BUILD_VERSION platform2; not simulator",
+    "version": "1.8.0+26",
+    "compiledSource": "5a76dbba192660f652fbd09d38c78eea6a10ffb5",
+    "buildTimeUtc": "2026-10-18T06:43:15.350994Z"
+  },
+  "v19Integration": {
+    "sourceSha": "9c7ea4b894e3c790e0a8ecf57d104f54b663add1",
+    "parents": [
+      "080ecdf6f1229a06f2b989909a6c79a91501b01c",
+      "f868ef67d92f3504ea5b6f445864141b804e61f4"
+    ],
+    "tree": "eb0055cf574401ac3f2779a52b41aed88ace193b",
+    "formalMIsAncestor": true,
+    "maintenanceMasterBSha": "f868ef67d92f3504ea5b6f445864141b804e61f4",
+    "maintenanceDevSha": "52d947a8c1eb0ec5bdacd8ec213a68745980beba",
+    "privateDevMergeSha": "080ecdf6f1229a06f2b989909a6c79a91501b01c",
+    "postBTreeEquals080": true,
+    "scope": "Current private preparation source after verified maintenance B. Existing55 Python/3 Dart configuration results belong to080; no post-B full Flutter/native rerun or final safe-source acceptance.",
+    "safeSourceHD3": {
+      "status": "pending",
+      "H": null,
+      "D3": null
+    },
+    "releaseReady": false,
+    "published": false,
+    "history": [
+      {
+        "sourceSha": "9bcd4acf3af30fbc2928827cd3df1ff345050992",
+        "parents": [
+          "c8b123bf671a91dd9b74d4ecc0fa18a8e94926a7",
+          "5a76dbba192660f652fbd09d38c78eea6a10ffb5"
+        ],
+        "formalMIsAncestor": true,
+        "scope": "Pre-documentation source only; no new v1.9 Flutter/native candidate verification.",
+        "maintenanceMasterBSha": null,
+        "releaseReady": false,
+        "published": false
+      }
+    ]
+  },
+  "supplementalVerification": {
+    "status": "pass",
+    "recordedUtc": "2026-10-18T07:45:45.418086+00:00",
+    "sourceM": "5a76dbba192660f652fbd09d38c78eea6a10ffb5",
+    "tagObjectUnchanged": true,
+    "stableLatestUnchanged": true,
+    "originalFourAssetIdsSizesDigestsUnchanged": true,
+    "publicReleaseApi": {
+      "path": "output/v180-supplemental-M-ci/release-after-supplement-api.json",
+      "sha256": "055449c53b4270e824a49f1cc27faea81184cbcd48a8cc858199eafb2b64d24f"
+    },
+    "supplementalDeliveryReport": {
+      "path": "parent-v180-supplemental-assets-delivery.json",
+      "sha256": "cdcf0a20ea4173ee5f9feb20d70eaaf35cb236af02a3539c9ee69d8a550966a0"
+    },
+    "currentDeliveryReport": {
+      "path": "parent-v180-formal-delivery-report.json",
+      "sha256": "cbebbe841226181790d66ac6d3bf3cbcf81e08e5ffda093f3106269e7a3b0a05"
+    },
+    "windowsPortable": {
+      "path": "output/v180-supplemental-M-ci/windows-portable-verification-final.json",
+      "sha256": "9ba730ea50cfb579e04b82320247924b2ddfe1b050341020c3f3e6a44a776e73",
+      "status": "pass",
+      "passed": 23,
+      "failed": 0,
+      "runId": 39104945164,
+      "runUrl": "https://github.com/L1Xu4n/FocuBili/actions/runs/39104945164",
+      "artifactId": 12128540917,
+      "sourceSha": "5a76dbba192660f652fbd09d38c78eea6a10ffb5",
+      "version": "1.8.0+26",
+      "architecture": "x64 PE payload and runtime dependencies",
+      "buildTimeUtc": "2026-10-18T06:44:27.463208Z",
+      "scope": "Static ZIP/PE/resources/AOT/CI binding; no execution, installation or Authenticode trust acceptance."
+    },
+    "iosDevice": {
+      "path": "output/v180-supplemental-M-ci/ios-device-readonly-verification.json",
+      "sha256": "3192955657272fff814769cad26ab677dd4f434e8ea4f9d3eb3360438ea42ac7",
+      "status": "pass",
+      "sourceSha": "5a76dbba192660f652fbd09d38c78eea6a10ffb5",
+      "runId": 39104945196,
+      "artifactId": 12127777929,
+      "version": "1.8.0+26",
+      "architecture": "arm64",
+      "runnerAndAppBuildVersionPlatforms": [
+        2
+      ],
+      "aotSourceEncoding": "utf-16-le",
+      "buildTimeUtc": "2026-10-18T06:43:15.350994Z",
+      "unsigned": {
+        "runnerCodeSignatureAbsent": true,
+        "topLevelSignatureEnvelope": false,
+        "provisioningProfile": false,
+        "allFrameworksClaimedUnsigned": false,
+        "cryptographicCodesignVerified": false
+      },
+      "signedDeviceInstallAcceptance": false
+    },
+    "independentReview": {
+      "path": "output/v180-supplemental-independent-review/independent-result.json",
+      "sha256": "f7860994f705830de1dda825727c5d10061243c6fb0b87f0bab23519977f4355",
+      "status": "pass",
+      "findingsP1P2": 0,
+      "boundaryTests": {
+        "ios": 10,
+        "windows": 5,
+        "status": "pass",
+        "report": {
+          "path": "output/v180-supplemental-independent-review/authors-independent-rerun.json",
+          "sha256": "7a75f97b2eea1b5295f700db64caf8185a0feb2ad9576d2ce58fff5d27716cbd"
+        }
+      },
+      "scope": "Existing independent static inspection and separately recorded boundary tests; no execution, installation, signing or public-asset freshness claim."
+    },
+    "anonymousPublicDownloads": {
+      "path": "output/v180-supplemental-M-ci/public-supplement-verification.json",
+      "sha256": "cdcf0a20ea4173ee5f9feb20d70eaaf35cb236af02a3539c9ee69d8a550966a0",
+      "matchedAssets": 2,
+      "assetIds": [
+        652840489,
+        652840490
+      ],
+      "method": "Existing anonymous browser_download_url GET results; downloaded bytes and SHA256 matched API and original M CI assets."
+    },
+    "documentationRefresh": {
+      "baseSha": "f6d1716b8a1beed788f0e1e63dbb07af18a17eaf",
+      "recordedUtc": "2026-10-18T07:49:20Z",
+      "newNetworkQueries": false,
+      "flutterOrNativeTestsRerun": false,
+      "payloadExecutionOrInstallation": false,
+      "devicePasses": 0,
+      "remoteWrites": false
+    }
+  },
+  "maintenance": {
+    "status": "merged_verified",
+    "masterB": "f868ef67d92f3504ea5b6f445864141b804e61f4",
+    "mergedAtUtc": "2026-10-18T08:34:45Z",
+    "masterTree": "a1fc9d499ae81d75f739fbbb3e6a3da9f5149549",
+    "route": [
+      {
+        "pr": 66,
+        "url": "https://github.com/L1Xu4n/FocuBili/pull/66",
+        "state": "MERGED",
+        "devCommit": "2f41b5cd9a2f06498263a9f2cf41457fc8d6b5a6"
+      },
+      {
+        "pr": 67,
+        "url": "https://github.com/L1Xu4n/FocuBili/pull/67",
+        "state": "MERGED",
+        "reviewedCommit": "9c2e58a4f7dbd132fec3da42750ba773e0fa7792",
+        "devCommit": "52d947a8c1eb0ec5bdacd8ec213a68745980beba"
+      },
+      {
+        "pr": 68,
+        "url": "https://github.com/L1Xu4n/FocuBili/pull/68",
+        "state": "MERGED",
+        "head": "52d947a8c1eb0ec5bdacd8ec213a68745980beba",
+        "masterCommit": "f868ef67d92f3504ea5b6f445864141b804e61f4"
+      }
+    ],
+    "exactTreeEquality": {
+      "masterB": "a1fc9d499ae81d75f739fbbb3e6a3da9f5149549",
+      "dev52": "a1fc9d499ae81d75f739fbbb3e6a3da9f5149549",
+      "reviewed9c": "a1fc9d499ae81d75f739fbbb3e6a3da9f5149549"
+    },
+    "pr68PremergeGate": {
+      "head": "52d947a8c1eb0ec5bdacd8ec213a68745980beba",
+      "successfulChecks": 14,
+      "confirmedP1P2": 0,
+      "unresolvedThreads": 0,
+      "ciEvidence": {
+        "path": "output/pr68-exact-source-ci.json",
+        "sha256": "9a4bc1a09eb78e7f712de480337eb55d52c8fda3c57903767e9421d1c9bf432c"
+      },
+      "preflightEvidence": {
+        "path": "output/pr68-final-merge-preflight.json",
+        "sha256": "13ff93ada75d7ca7f7ed4f3205614590117af630afdb267184c4d943f1598df1"
+      },
+      "independentReviewEvidence": {
+        "path": "output/pr68-maintenance-independent-review.json",
+        "sha256": "1923902cdcbd01688765d7b9c268cf949d396938ca74e925747617106e5c5364"
+      }
+    },
+    "privateOrdinaryMerges": [
+      {
+        "sha": "080ecdf6f1229a06f2b989909a6c79a91501b01c",
+        "parents": [
+          "ba50b8d8ed229f882a3981af51b7b8a185428169",
+          "52d947a8c1eb0ec5bdacd8ec213a68745980beba"
+        ],
+        "tree": "eb0055cf574401ac3f2779a52b41aed88ace193b"
+      },
+      {
+        "sha": "9c7ea4b894e3c790e0a8ecf57d104f54b663add1",
+        "parents": [
+          "080ecdf6f1229a06f2b989909a6c79a91501b01c",
+          "f868ef67d92f3504ea5b6f445864141b804e61f4"
+        ],
+        "tree": "eb0055cf574401ac3f2779a52b41aed88ace193b"
+      }
+    ],
+    "postBTreeEqualsPreB080": true,
+    "localConfigurationVerification": {
+      "source": "080ecdf6f1229a06f2b989909a6c79a91501b01c",
+      "sourceTree": "eb0055cf574401ac3f2779a52b41aed88ace193b",
+      "pythonPassed": 55,
+      "dartPassed": 3,
+      "evidence": {
+        "path": "output/v19-maintenance-080ecdf-verification.json",
+        "sha256": "42478c551e3b77b258e764187ce23ce612db73b4f6f3b7240899e771bc40e6a3"
+      },
+      "fullFlutterRegressionRerun": false,
+      "nativeCompileOrDeviceAcceptance": false
+    },
+    "evidenceMethod": "Existing premerge CI/review/080 reports and local Git metadata read only. Actual PR68 merge/time confirmed by parent; private080 and9c7 are ordinary two-parent merges. No new test/build/remote action by documentation task."
+  }
+}

@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:focubili/features/common/app_network_image.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/layout/adaptive_page_frame.dart';
@@ -12,6 +11,7 @@ import '../../services/bilibili_service.dart';
 import '../../services/video_note_service.dart';
 import '../../services/video_note_export_service.dart';
 import '../../services/video_note_share_service.dart';
+import '../../services/local_export_service.dart';
 import 'video_note_composer.dart';
 import 'video_note_detail_page.dart';
 
@@ -24,12 +24,14 @@ class VideoNotesPage extends StatefulWidget {
     this.videoService,
     this.exportService = const VideoNoteExportService(),
     this.shareService = const VideoNoteShareService(),
+    this.localExportService = const LocalExportService(),
   });
 
   final VideoNoteService? noteService;
   final BilibiliService? videoService;
   final VideoNoteExportService exportService;
   final VideoNoteShareService shareService;
+  final LocalExportService localExportService;
 
   /// 创建负责读取、搜索和管理本地笔记的页面状态。
   @override
@@ -262,16 +264,20 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
     try {
       final VideoNoteExportPackage package = await widget.exportService
           .buildPackage(selectedNotes, format);
-      await widget.shareService.shareExportPackage(package);
-      if (!mounted) {
+      final shared = await widget.shareService.shareExportPackage(package);
+      if (!mounted || !shared) {
         return;
       }
       _leaveSelectionMode();
-    } catch (_) {
+    } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('笔记文件分享失败，请稍后重试。')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              error is LocalExportException ? error.message : '笔记文件分享失败，请稍后重试。',
+            ),
+          ),
+        );
       }
     } finally {
       if (mounted) {
@@ -292,11 +298,9 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
     try {
       final VideoNoteExportPackage package = await widget.exportService
           .buildPackage(selectedNotes, format);
-      final String? savedPath = await FilePicker.saveFile(
+      final String? savedPath = await widget.localExportService.save(
         dialogTitle: '保存焦点哔哩笔记',
         fileName: package.fileName,
-        type: FileType.custom,
-        allowedExtensions: <String>[package.extension],
         bytes: package.bytes,
       );
       if (!mounted || savedPath == null) {
@@ -306,17 +310,23 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            package.imageCount > 0
+            package.missingImageCount > 0
+                ? '已导出 ${package.noteCount} 条笔记和 ${package.imageCount} 张图片；${package.missingImageCount} 张画面缺失或无法读取。'
+                : package.imageCount > 0
                 ? '已导出 ${package.noteCount} 条笔记和 ${package.imageCount} 张图片。'
                 : '已导出 ${package.noteCount} 条笔记。',
           ),
         ),
       );
-    } catch (_) {
+    } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('笔记导出失败，请检查存储位置后重试。')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              error is LocalExportException ? error.message : '笔记文件生成失败，请稍后重试。',
+            ),
+          ),
+        );
       }
     } finally {
       if (mounted) {

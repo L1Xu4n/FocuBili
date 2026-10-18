@@ -109,8 +109,8 @@ class SettingsTransferService {
 
   /// 合并已验证设置；缺失项目保持原值，失败时恢复本次触及的旧值。
   Future<void> importSettings(Map<String, Object> values) {
-    // Freeze confirmed values before the queue or storage can yield. This
-    // schema's only collection payload is a list of primitive strings.
+    // Freeze the confirmed input before entering the queue or awaiting storage.
+    // The only supported collection value is a list of primitive strings.
     final snapshot = Map<String, Object>.unmodifiable({
       for (final entry in values.entries)
         entry.key: entry.value is List
@@ -244,13 +244,7 @@ class SettingsTransferService {
           }
         }
       } else if (key == 'search.content_filter_v2') {
-        if (decoded['learningOnly'] is! bool ||
-            decoded['minimumPlayCount'] is! int ||
-            (decoded['minimumPlayCount'] as int) < 0 ||
-            (decoded['minimumPlayCount'] as int) >
-                SearchContentFilter.maximumPlayCount) {
-          throw const FormatException('搜索筛选结构无效');
-        }
+        SearchContentFilter.fromJsonStrict(decoded);
       } else {
         final fields = DanmakuPreferences().toJson();
         for (final entry in decoded.entries) {

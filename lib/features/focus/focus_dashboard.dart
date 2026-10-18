@@ -8,7 +8,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show ScrollDirection, SliverConstraints;
+import 'package:flutter/rendering.dart' show SliverConstraints;
 
 import '../../core/layout/adaptive_layout.dart';
 import '../../core/router/app_router.dart';
@@ -19,6 +19,7 @@ import 'custom_focus_duration_dialog.dart';
 import 'focus_do_not_disturb.dart';
 import 'focus_interruption_dialog.dart';
 import 'focus_timer_controller.dart';
+import 'home_drawer_scroll_physics.dart';
 
 part 'focus_dashboard_home_layout.dart';
 part 'focus_dashboard_home_cards.dart';
@@ -67,9 +68,6 @@ class FocusDashboard extends StatefulWidget {
 /// 管理专注台表单输入、确认弹窗和计时操作反馈。
 class _FocusDashboardState extends State<FocusDashboard> {
   static const List<int> _presetMinutes = <int>[25, 45, 60];
-  static const double _homeSnapTriggerDistance = 48;
-  static const double _homeSnapOvershoot = 220;
-  static const double _homeReverseSnapDistance = 120;
 
   final TextEditingController _goalController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
@@ -87,16 +85,25 @@ class _FocusDashboardState extends State<FocusDashboard> {
     layoutService: _homeLayouts,
     onVisibilityChanged: (visible) {
       if (mounted && _showSubscriptionIntroduction != visible) {
-        setState(() => _showSubscriptionIntroduction = visible);
+        setState(() {
+          _showSubscriptionIntroduction = visible;
+          // 提示改变首屏高度，旧手势的起点不再对应当前抽屉范围。
+          _homeScrollStartOffset = null;
+        });
       }
     },
     onEnabled: () {
       if (mounted) {
-        // 引导会销毁旧卡片容器，先同步退出父页的编辑状态并清理旧手势。
-        _handleHomeEditingChanged(false);
-        setState(
-          () => _homeBoardKey = GlobalKey(debugLabel: 'home-card-board'),
-        );
+        // 新容器从非编辑状态读取置顶布局，父页也必须同步退出旧编辑状态。
+        // 原容器销毁不会回调 onEditingChanged；先停止它留下的滚动惯性。
+        if (_scrollController.hasClients) {
+          _scrollController.jumpTo(_scrollController.offset);
+        }
+        setState(() {
+          _editingHomeCards = false;
+          _homeScrollStartOffset = null;
+          _homeBoardKey = GlobalKey(debugLabel: 'home-card-board');
+        });
       }
     },
   );
@@ -104,9 +111,6 @@ class _FocusDashboardState extends State<FocusDashboard> {
   bool _editingHomeCards = false;
   int _selectedMinutes = 25;
   double _scrollOffset = 0;
-  bool _homeCardsSnapped = false;
-  bool _isSnappingHomeScroll = false;
-  ScrollDirection _homeScrollDirection = ScrollDirection.idle;
   double? _homeScrollStartOffset;
 
   Widget _buildSubscriptionButton() => ListenableBuilder(
@@ -156,107 +160,20 @@ class _FocusDashboardState extends State<FocusDashboard> {
     setState(() => _scrollOffset = _scrollController.offset);
   }
 
-  /// 在一次拖动结束后把首屏或卡片区吸附到完整的阅读位置。
-  void _handleHomeScrollEnd(BuildContext context) {
-    if (widget.onOpenProfile == null ||
-        _editingHomeCards ||
-        !_canAnimateHomeHero(context) ||
-        _isSnappingHomeScroll ||
-        !_scrollController.hasClients) {
-      return;
-    }
-    final double heroHeight = _homeHeroHeight(context);
-    final double currentOffset = _scrollController.offset;
-    final double maxOffset = _scrollController.position.maxScrollExtent;
-    final double startOffset = _homeScrollStartOffset ?? currentOffset;
-    final double gestureDistance = (currentOffset - startOffset).abs();
-    if (currentOffset <= 24) {
-      _homeCardsSnapped = false;
-      return;
-    }
-    final double targetOffset;
-    final double firstCardOffset = (heroHeight + 12)
-        .clamp(0.0, maxOffset)
-        .toDouble();
-    if (!_homeCardsSnapped &&
-        currentOffset > _homeSnapTriggerDistance &&
-        currentOffset <= firstCardOffset + _homeSnapOvershoot) {
-      targetOffset = firstCardOffset;
-    } else if (!_homeCardsSnapped &&
-        currentOffset > firstCardOffset + _homeSnapOvershoot) {
-      // 用户已经越过首张卡片的吸附窗口，保留其自然滚动到的深层位置。
-      _homeCardsSnapped = true;
-      return;
-    } else if (_homeCardsSnapped &&
-        currentOffset > 24 &&
-        _homeScrollDirection == ScrollDirection.forward &&
-        gestureDistance >= _homeReverseSnapDistance) {
-      targetOffset = 0;
-    } else {
-      if (currentOffset >= heroHeight) {
-        _homeCardsSnapped = true;
-      }
-      return;
-    }
-    if ((targetOffset - currentOffset).abs() < 2) {
-      _homeCardsSnapped = targetOffset > 0;
-      return;
-    }
-    _isSnappingHomeScroll = true;
-    // 等当前 ScrollEndNotification 完成后再启动驱动动画，避免手势活动取消吸附。
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _editingHomeCards || !_scrollController.hasClients) {
-        _isSnappingHomeScroll = false;
-        return;
-      }
-      unawaited(_animateHomeSnap(targetOffset));
-    });
-  }
-
-  /// 记录首页主滚动的手势方向，并在手势结束后触发一次吸附。
+  /// Only the outer scroll view participates; card lists keep their own gestures.
   bool _handleHomeScrollNotification(
     BuildContext context,
     ScrollNotification notification,
   ) {
-    if (_editingHomeCards || notification.depth != 0) {
-      return false;
-    }
-    if (notification is UserScrollNotification) {
-      _homeScrollDirection = notification.direction;
-    } else if (notification is ScrollStartNotification &&
+    if (_editingHomeCards || notification.depth != 0) return false;
+    if (notification is ScrollStartNotification &&
         notification.dragDetails != null &&
         _scrollController.hasClients) {
       _homeScrollStartOffset = _scrollController.offset;
     } else if (notification is ScrollEndNotification) {
-      // 只吸附真实手势，跳转到输入框、底部编辑入口和拖动边缘滚动均保留目标位置。
-      if (_homeScrollStartOffset != null) {
-        _handleHomeScrollEnd(context);
-      }
-      _homeScrollDirection = ScrollDirection.idle;
       _homeScrollStartOffset = null;
     }
     return false;
-  }
-
-  /// 以短暂缓动完成首屏与卡片区之间的吸附，并在结束后恢复手势监听。
-  Future<void> _animateHomeSnap(double targetOffset) async {
-    try {
-      await _scrollController.animateTo(
-        targetOffset,
-        duration: const Duration(milliseconds: 420),
-        curve: Curves.easeOutCubic,
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isSnappingHomeScroll = false;
-          _homeCardsSnapped = targetOffset > 0;
-        });
-      } else {
-        _isSnappingHomeScroll = false;
-        _homeCardsSnapped = targetOffset > 0;
-      }
-    }
   }
 
   /// 编辑时停止首页吸附，并清理旧手势，防止长按拖动被自动滚动抢走。
@@ -267,9 +184,7 @@ class _FocusDashboardState extends State<FocusDashboard> {
     }
     setState(() {
       _editingHomeCards = editing;
-      _homeScrollDirection = ScrollDirection.idle;
       _homeScrollStartOffset = null;
-      _isSnappingHomeScroll = false;
     });
   }
 
@@ -278,7 +193,7 @@ class _FocusDashboardState extends State<FocusDashboard> {
     final bool started = await widget.controller.startFocus(
       goal: _goalController.text,
       duration: Duration(minutes: _selectedMinutes),
-      startImmediately: false,
+      startImmediately: true,
     );
     if (!mounted) {
       return;
@@ -295,11 +210,13 @@ class _FocusDashboardState extends State<FocusDashboard> {
     final bool? openVideo = await showDialog<bool>(
       context: context,
       builder: (BuildContext dialogContext) => AlertDialog(
-        title: const Text('专注任务已创建'),
-        content: const Text('请打开一个视频关联本次专注任务'),
+        title: const Text('专注已开始'),
+        content: const Text(
+          '本次专注连续计时，换视频、换 P 或暂停视频都不会结束会话。应用进入后台会暂停，返回后请主动继续。',
+        ),
         actions: <Widget>[
           TextButton(
-            // 稍后打开函数保留等待关联的首页 Pin。
+            // 稍后打开函数保留正在计时的首页会话 Pin。
             onPressed: () => Navigator.of(dialogContext).pop(false),
             child: const Text('稍后'),
           ),
@@ -345,14 +262,9 @@ class _FocusDashboardState extends State<FocusDashboard> {
     );
   }
 
-  /// 继续按钮打开关联视频；未关联时进入视频搜索等待用户确认关联。
+  /// 恢复同一会话；最近观看书签仍可通过独立卡片打开。
   void _continueFocus(FocusSession session) {
-    if (session.hasVideoAssociation && widget.onOpenLinkedVideo != null) {
-      widget.onOpenLinkedVideo!(session);
-      return;
-    }
-    _showMessage('请先打开一个视频并确认关联，播放后计时会自动继续。');
-    widget.onOpenVideo();
+    unawaited(widget.controller.resumeFocus());
   }
 
   /// 根据暂停业务原因返回首页 Pin 中的明确状态文字。
@@ -361,8 +273,8 @@ class _FocusDashboardState extends State<FocusDashboard> {
       return '正在专注';
     }
     return switch (session.pauseReason) {
-      FocusPauseReason.awaitingVideo => '等待关联视频',
-      FocusPauseReason.playback => '等待视频播放',
+      FocusPauseReason.awaitingVideo => '已暂停',
+      FocusPauseReason.playback => '已暂停',
       FocusPauseReason.interruption => '专注被打断',
       FocusPauseReason.manual => '已暂停',
       null => '已暂停',
@@ -537,9 +449,7 @@ class _FocusDashboardState extends State<FocusDashboard> {
             ),
             const SizedBox(height: 18),
             Text(
-              session.completeOnPartEnd
-                  ? '等待当前分P完播 · ${_formatCountdown(widget.controller.remainingDuration)}'
-                  : _formatCountdown(widget.controller.remainingDuration),
+              _formatCountdown(widget.controller.remainingDuration),
               key: const Key('focus-countdown'),
               textAlign: TextAlign.center,
               style: theme.textTheme.displayMedium?.copyWith(
@@ -807,6 +717,14 @@ class _FocusDashboardState extends State<FocusDashboard> {
               _handleHomeScrollNotification(context, notification),
           child: CustomScrollView(
             controller: _scrollController,
+            physics: useHomeHero
+                ? HomeDrawerScrollPhysics(
+                    cardOffset: () => _homeHeroHeight(context) + 12,
+                    gestureStart: () => _homeScrollStartOffset,
+                    enabled: () =>
+                        !_editingHomeCards && _canAnimateHomeHero(context),
+                  )
+                : null,
             slivers: <Widget>[
               if (useHomeHero) _buildHomeHero(context),
               if (useHomeHero)

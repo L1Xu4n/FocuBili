@@ -96,13 +96,14 @@ extension _PlayerControlsView on _PlayerPageState {
       children: <Widget>[
         Row(
           children: <Widget>[
-            Text(
-              '选集 · 共 ${parts.length} 集',
-              style: Theme.of(
-                context,
-              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+            Expanded(
+              child: Text(
+                '选集 · 共 ${parts.length} 集',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+              ),
             ),
-            const Spacer(),
             TextButton.icon(
               key: const Key('detail-part-selector-expand'),
               onPressed: _openPartSelector,
@@ -249,9 +250,27 @@ extension _PlayerControlsView on _PlayerPageState {
     );
   }
 
-  /// 构建“更多”菜单，只保留字幕、弹幕和画面比例等次级播放器设置。
+  /// 构建“更多”菜单，包含本机屏蔽入口与字幕、弹幕、画面比例等设置。
   List<PopupMenuEntry<_PlayerMoreMenuAction>> _buildMoreSettingsMenu() {
     return <PopupMenuEntry<_PlayerMoreMenuAction>>[
+      if (!_activeVideo.isCourse)
+        const PopupMenuItem(
+          key: Key('player-block-video'),
+          value: _PlayerMoreMenuAction.blockVideo,
+          child: Text('屏蔽该视频'),
+        ),
+      PopupMenuItem(
+        key: const Key('player-block-creator'),
+        value: _PlayerMoreMenuAction.blockCreator,
+        enabled: _activeVideo.ownerMid > 0,
+        child: const Text('屏蔽该 UP 主'),
+      ),
+      const PopupMenuItem(
+        key: Key('player-manage-blocklist'),
+        value: _PlayerMoreMenuAction.manageBlocklist,
+        child: Text('管理黑名单'),
+      ),
+      const PopupMenuDivider(),
       if (_playbackService is ListeningPlaybackService)
         PopupMenuItem<_PlayerMoreMenuAction>(
           key: const Key('listening-menu-item'),
@@ -287,6 +306,11 @@ extension _PlayerControlsView on _PlayerPageState {
         value: _PlayerMoreMenuAction.playbackLoop,
         checked: _playbackLoopEnabled,
         child: Text(_playbackLoopEnabled ? '循环播放（已开启）' : '循环播放'),
+      ),
+      PopupMenuItem<_PlayerMoreMenuAction>(
+        key: const Key('ab-repeat-menu-item'),
+        value: _PlayerMoreMenuAction.abRepeat,
+        child: Text(_abRepeatRange == null ? 'A–B 区间循环' : 'A–B 区间循环（已启用）'),
       ),
       PopupMenuItem<_PlayerMoreMenuAction>(
         key: const Key('sleep-timer-menu-item'),

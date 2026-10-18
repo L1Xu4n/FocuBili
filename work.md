@@ -178,6 +178,60 @@
 - 合并 origin/dev da0946b（1.7.1认证/画质/忽略更新）与 Beta5 a6c8334（含Beta3/4及缓存修复）；仅 work.md add/add 冲突，两段历史完整保留。
 - 基线合并不代表运行验证；保留既有安全会话、轨道选择与缓存逻辑，后续执行完整回归。
 
+
+## 2026-10-18 · v1.9 Beta（进行中）
+
+- 1.9负责人独立worktree：`C:\Users\L1XU4N\Documents\Codex\2026-10-18\task-5\focubili-v19`，分支`codex/v1.9-beta-integration`。
+- 初始5a49fc6，已导入并快进到集成负责人指定的统一1.8基线`5e128bdd1952b3f619500f69aa7bc8c33a88d0b4`；最终仍需以经验证的1.8正式提交为基础。原仓库dev/master保持不动。
+- 用户授权并行任务全部指定GPT-6.1 sol / xhigh，每个任务拥有单独worktree/分支：focus-learning、notes-subtitles、classroom、filtering；本任务负责统一导出、首页抽屉和1.9整合。
+- 已读#50/#56/#58/#60/#61及全部最新评论。#61报告者尚未回复平台/版本/复现步骤，不认定Mac已复现；未联系报告者。课堂fork只能作参考，不视为可直接合并成果。
+- 未找到适用AGENTS.md或项目.agents/skills，已读CONTRIBUTING与本地memory_summary；未提交登录凭据或签名材料，不实际导出用户登录信息。
+- 默认sandbox的Flutter脚本因SDK外缓存锁写入受限无输出；停止该次调用，改为正常工具提权运行现有Flutter。没有更改ACL/用户权限，也没有升级SDK。
+- 初始离线pub get因linux媒体依赖未缓存失败；按现有lock在线pub get成功，未执行依赖升级。
+- 抽屉改为关闭/半开/全开三吸附，快速手势最多跨一档，内容列表快速返回先停在全开位置；编辑和程序滚动不吸附。
+- 统一导出按精确白名单读取设置/清单/专注/收藏/历史/离线目录，笔记复用原导出器，订阅导出排除运行租约和来源生命周期token，字幕只含仍有效的parsed cues并附SRT/TXT；不访问auth、cookie或secure storage，不联网取资料。
+- 已运行抽屉物理与主页回归12通过；后续导出/抽屉/字幕缓存20通过；新字幕格式/订阅排除测试加入后导出服务7通过。正式整合后将重跑相关与全量检查。
+- 统一导出真实Flutter夹具430px、1280px深色、320px/160%字号3项通过，截图见docs/v1.9/screenshots，已目视检查；不代表设备或保存系统对话框验收。
+- 跨线程Codex app消息/读取工具当前返回请求失败；本工作树路径与base通过任务进度记录保留，父线程最终可读取本报告。
+
+- 独立GPT-6.1 sol/xhigh只读审查发现并修复：过长拖动和iOS顶部弹性越界可绕过吸附；笔记容错读取可能导出空/部分数据并误报成功。改为严格读取笔记快照，坏数据/读取失败阻断；810px真widget手势、clamping/bouncing及损坏资料回归最新组合16项通过。
+
+- 1.9已整合filtering ab52c43、notes e0886b0、focus/learning 36798c2；解决notes page导入冲突时保留Beta5 AppNetworkImage，未回退缓存修复。首轮跨模块集成168项通过。
+- 统一导出增加缺图显式告知、真实课堂CHEESE:SS/CID进度白名单、横竖屏设置与脱敏诊断；导出12服务+2页面通过，三种尺寸截图重新生成并无overflow。
+- 独立只读审查进一步发现课堂已购证明/Windows换号窗口两P1、笔记删除autosave复活/晚到截图操作新视频两P2、专注双键部分写失败终态复活P2；各责任分支正追加修复及回归，发布保持阻塞，不能把原模块测试通过当修复后的最终通过。
+- 本机Beta构建预检：正常提权执行为L1XU4N，现有debug.keystore已存在；没有读取/显示私钥内容或生成签名材料。最终APK仍需基于经验证1.8最终提交构建并核验。
+
+- 全模块已整合：notes异步修复7816e81、课堂2b6b89e、focus故障恢复d8f5b0c。独立只读复核已关闭笔记两个P2、课堂两个P1和focus持久化P2；各模块测试计数存在重叠，不能相加。
+- 补齐课堂与其他模块边界：课堂菜单隐藏仅适用于BV的视频屏蔽项，字幕正文回调在课堂直接不可用，不调用UGC接口；实际PlayerPage集成与导出、黑名单共14测试通过。
+- 全量集成回归发现旧的“新安装默认学习过滤”断言未随新行为更新，已改为默认不限制；旧已保存过滤规则仍保留（已有迁移用例）。最终全量结果以本轮完成后的记录为准。
+- 全模块首轮全量：1008通过、2跳过、5失败，exit 1；三条旧行为断言（默认筛选、原两档抽屉）已按新规范修正，15项相关回归通过。两条诊断备用版本失败属于当前旧基线的硬编码+22与pubspec+25不一致，等待最终1.8的构建元数据实现后验证，未将全量标为通过。
+- analyze零问题；dart format全量428文件0改动。进度可视化草稿已在output/focubili-v19-progress.html，Edge验证9个选择入口、课堂测试展开、320px宽无横向溢出、无console错误；最终发布状态待准确基线及构建结果更新。
+- 父任务要求补审导出完整性：严格多帧/标识/未知字段、权威订阅快照重复/expected ID完整性/合法游标复用与孤立历史、诊断严格读取和再次脱敏、历史页raw可选字段校验已修复。六套组合53通过；最后只读复核无开放确定P1/P2。初次新增夹具误用不存在测试文件和构造参数而编译失败，已纠正，后续53通过才为有效结果。
+- 补审修复后的基线前全量（ade6099）：1018通过、2跳过、2失败，1m54s，exit 1；仅剩旧诊断fallback +22与pubspec +25的两条版本一致性失败。截图证据opt-in和Windows符号链接开发者模式各跳过1，不改变系统安全设置。最终准确1.8基线合并后须无筛选重跑。
+- Flutter doctor确认Visual Studio Community 2026 C++可用；Android SDK/NDK已存在，但cmdline-tools缺失导致许可证状态未知。没有接受许可、安装工具或更改系统权限；最终APK构建是否受影响以实际构建结果为准。
+- 用户追加#62 A–B播放：读取最新issue与0条现有评论，已按明确授权回复 https://github.com/L1Xu4n/FocuBili/issues/62#issuecomment-6240633478，告知进入1.9开发并询问场景/设点/循环操作期望，未关闭issue。独立v19-ab-repeat分支从609fc32开发，普通与听视频、课堂兼容及生命周期回归；新增第10项到进度和人工清单。其他功能保持隔离，最终1.8基线仍等待父任务转交。
+
+- 1.9 最终基线合入前，8735ba4 的 Windows 编译预检通过：flutter build windows --debug --no-pub，exit 0、97.9s，生成 build/windows/x64/runner/Debug/FocuBili.exe。media_kit CMake CMP0175 仅开发者警告；没有启动应用、读取真实账号或把此 Debug 产物作为最终 Beta 发布。最终 1.8 和 A–B 合入后仍需重建核验。
+
+- A–B 原提交21f1da7已整合为edd7a17。根全量1061通过/2跳过/2既有metadata版本失败（2m06s，exit1），analyze0问题（12.2s），格式435文件0改动。独立审查另复现两个P2：片尾迟到seek可能覆盖后台暂停、旧笔记内部临时截图误清除AB。已交作者独立分支追加修复，原40项专项通过不当作这两项的关闭依据；发布和最终基线仍受阻。
+
+- 最终合并只读预检发现订阅初始化与strict导出交叉风险，且在现有冷SQLite首次迁移已可实际复现：先容错去重再迁移会把重复feed误报导出成功。两个合成夹具先红后绿；exportLocalData不再初始化或fallback内存_json，直接校验权威raw，原prefs/DB不写回。六套55项通过，独立只读审查认可最小修复；最终base的SettingsRuntimeAdapter.readSettings还需避免抢先initialize。1.8新增诊断仅runtime环境/BuildTime，持久化七字段及订阅模型blob未变，不放宽strict白名单。
+
+- A–B 最终路由修复 df19f158 合入为 49806fc。独立只读复核 32 项全部通过：此前四项 P2 全部关闭，覆盖片尾回跳与暂停、区间外临时截图、目标/还原 seek 与手动跳转/切章竞争、嵌套路由遮挡后的迟到捕帧。扩大定向 80 项通过，各轮用例重叠不相加。根分支 analyze 无问题（7.3s，exit 0）、format 438 文件 0 改动（exit 0）、diff check 通过。
+- 本轮前 22f77ce 全量结果为 1094 通过、2 跳过、2 失败（1m52s，exit 1），失败仍是两项已有诊断 fallback 版本不匹配；该轮早于最终路由修复，不能冒充最终全量验收。等待父任务提供恢复后的最终 1.8 SHA，再整合 runtime settings / metadata 和构建回归。
+- SubscriptionService.exportPreferenceFlags 已实现并合入，73 项导出/偏好相关测试通过，纯读取不触发 initialize、迁移、清理、网络或通知。最终 1.8 DeviceSettingsRuntimeAdapter.readSettings 仍须改用该入口，再加 settings-only 与 full export 集成回归；写设置保持正常初始化。#61 最新公开评论仍无报告者平台/版本/复现证据，未认定已复现 Mac 问题，未擅自联系报告者。
+- 已将进度、人工测试和可视化更新为 9/10 项专项自动化通过，1 项原反馈待复现；真机均未做。没有导出真实账号信息、创建签名、启动真实账号应用或调整系统安全设置。
+- 最后路由修复集成后全量实际结束：1106 passed / 2 skipped / 2 failed，2m00s，exit 1；仅 problem_diagnostics_service_test.dart 的插件异常/空版本两项备用版本断言失败。没有将失败结果计为最终通过。日志 ../v19-ab-reviewed-full-tests.log。十项进度在 Edge 320px 实际预览：学科和 A–B 选择可更新步骤，10 个控件，clientWidth=scrollWidth=258，console 无错误/警告；已查看截图，恢复视口、关闭预览并停止本地服务。
+- 运行时设置接线模块707462c在独立树完成116项定向验证，但暂未合入。独立审查发现默认Android SqliteSubscriptionSnapshotStore.read仍通过可写openDatabase/CREATE TABLE，CountingSnapshots未覆盖真实store入口；已安排作者新增仅供导出的只读存储路径，并用合成sqflite通道复现及回归。此P2仍开放，不能以116项通过替代默认Android存储无写证明。既有正常业务初始化和写入行为须保留，实际用户数据未读取。
+- 运行时设置/SQLite纯读模块已独立复核关闭P2，707462c→99f5803合入为af21850→dad5d2d。作者相关16文件167通过；独立原红、SQLite边界和真实Windows跨进程锁合计22通过，4文件analyze0。实际SQLite仅Windowshost模拟Android通道，未跑Android设备。readForExport显式契约避免普通read建库，缺库回退legacy、现库独立readonly查询，finally await公开close。依赖sqflite内部吞原生close错误，未虚称能检测此故障。正常业务read/recover/transact保留。
+- 当前统一包仍缺Android原生独立存储的全部逐P进度。为完成所有可导出信息，已另起独立任务从dad5d2d添加窄只读原生导出接口与history包接线，只保留内容身份、CID和进度必要字段，禁止URL/header/凭据，不读取真实用户资料。最终1.8恢复SHA依然待父提供。
+- Android原生逐P导出23249a6/ee6138f已整合为4f89257/80863e6。唯一确定P2为历史合法bv/bV/Bv前缀被新白名单拒绝；两个regex最小修复保留原始ID/主体大小写及别名记录，不碰正常续播写入。作者最终84 Dart/15 JVM及实际Android Kotlin编译通过（1m02s）；独立43 Dart/16 JVM通过，原红例转绿，无新增确定P1/P2。独立Android Gradle在既有file_picker namespace配置前置受阻，纯JVM不冒充平台编译。Android真机未做，未读真实进度或凭据。
+- 源码80863e6完整回归1192通过、2跳过、2失败，2m01s，exit1；仅诊断fallback两项expected1.8.0+25/actual1.8.0+22，不能标完整通过。analyze零问题（10.4s），format447文件0变化，diffcheck通过。日志在../v19-complete-export-full-tests.log与../v19-complete-export-analyze.log。最终1.8准确SHA、SettingsTransfer严格筛选/保留屏蔽规则、构建元数据/版本整合、最终APK/Windows Beta构建和预发布仍未完成。
+- 原生进度只从本应用已提交XML/备份读取，不扫账号存储、不改文件、不flush；严格拒绝坏记录和外部实体，旧position0/无timestamp和timestamp-only保留。导出非全局同时快照、在途apply可失败重试；统一导出doc、简报、结构化清单和人工步骤已补边界。十项进度Edge实际点击统一导出、320px宽度clientWidth=scrollWidth=273、10控件、console0错误/警告，已看截图、恢复视口、关闭临时页并终止本任务临时HTTP服务。
+- 22:28UTC使用既有GitHub连接重读#61，仍仅负责人两条澄清，无报告者平台/版本/步骤/录屏。CLI另一次只读请求返回401，未登录或检查凭据；GitHub连接读取成功。未联系报告者。父请求1.8发布阻塞只读核查结果写../publication-readonly-check.json：task3发布副本22:12创建、145项传输22:13，干净HEAD95b2323，22:27连接搜索未找到远端同名分支/PR；未修改或接管1.8。
+
+## 合入的 1.8 候选工作记录
+
 ### 1.8 设置、诊断和迁移第一阶段
 
 - 编写条目20、21、22、24–27、29：PlaybackPreferences.longPressPlaybackSpeed及服务保存（默认3，1–5，步长0.25）；首页标题点击关于；AppLayoutPreferencesService启动布局快照与大屏协议后一次性选择；关于/诊断显示BuildTime及版本构建号；设置和登录独立导入导出、白名单重置；关于三处指定描述。
@@ -274,6 +328,30 @@
 - 本机Git CLI认证不可用且Schannel初始化失败，不读取或创建凭据，改用已有GitHub连接。原始9c4c36b提交链和bundle完整留存，服务端汇总提交使用独立SHA并校验文件树。
 - 自动审批拒绝了本机审查截图导出；24张均已逐张查看并校验Git blob且仅含合成UI/公开产品信息，但再次审批仍拒绝。停止图像上传，公开分支排除全部24张新审查PNG，图片本机另存，原恢复分支9c4c36b不改。不以其他格式/接口绕过拒绝，也不引用已拒绝图片的远端Git对象。仅发布产品源码、既有公开资源和文字证据。
 
+## 本轮候选整合最终结果
+
+源码 `309e039291542f404a3d5e4900f8918fb332153d`：完整 Flutter 回归 **1353 通过、2 跳过、0 失败，02:06，exit 0**。静态分析无问题（18.9 秒），477 个 Dart 文件格式 0 改动，diff 检查通过。播放器独立原红 5 项未改夹具转绿，加相邻 53 项共 58 项通过；最初 595 的新播放意图仍被旧暂停覆盖问题已在 c6 关闭。根合入为 e738ac2/309e039。
+
+Android 实际 Kotlin 编译及四组 JVM 共 20 项通过，1 分 26 秒；已核对 ef3 到最终源码的原生文件无差异。使用已有 JBR 和正常任务授权，没有更改 SDK、安全权限、许可或签名。此结果不代表设备后台、真实已购账号或原生解码验收。
+
+本轮禁止 Beta 发布，未产出最终 Beta 安装包。正式 1.8 最终提交若再变化仍需同步；原 #61 未取得报告者复现资料。所有真机项目保持未做。
+
+
+## v1.9 content alignment with local v1.8 publication snapshot
+
+- Independent read-only review confirms all five production-file deltas in95b2323..98e02e8 already exist in1.9: three notification files identical, service guard retained, dashboard editing/gesture cleanup retained. No new production change and no merge of restructured history.
+- Source309e039 full1353/2skipped/0failed validation remains applicable. Local98e02e8 is not a formal release; its ordinary Git push was rejected for missing OAuth workflow scope. No interface/identity/scope workaround.
+- Local Beta packaging is authorized using existing toolchain and existing debug signing only; no new signing credentials, real account use, or device acceptance. Final package facts must be recorded from actual output.
+
+
+## Actual local Android Beta package
+
+- Independent7c6dbe6 worktree: actual ARM64 debug assembleDebug succeeded145.6s/total148.73s,exit0,68172500bytes. Package com.focubili.app.preview,version1.9.0-beta.1/code27,min24,target36. Existing signing only;apksigner V2 verified. Kernel includes actualUTC2026-10-17T23:32:45.062569Z,full7c6dbe6 sourceSHA,and1.9.0+27 fallback.
+- APK SHA25633da9e0312270abbfe71bc384991750f88a92d20f2932bb6909abf7c6d29467d. Evidence docs/v1.9/local-apk-verification.json;package remains local,not GitHub-published,not device-accepted.
+- Archived publicBeta4 metadata has the same package,code2024 and certificate5bd1fc4d...,different from this existing local debug certificate65ef1fb3.../code27. This package is not an overlay upgrade for that archived artifact. Phone identity not checked;retain existing app/data;manual upgrade remains blocked pending a compatible plan. No uninstall,key retrieval,new signing or security change.
+
+
+## Retained local v1.8 publication continuation (candidate 35a65bf)
 
 ## v1.8 publication continuation: local integration and PR gate
 
@@ -282,3 +360,20 @@
 - Ordinary Git initially failed Schannel SEC_E_NO_CREDENTIALS under restricted execution; the same ordinary read-only Git command succeeded with normal network execution approval. Existing authentication only; no credentials read/generated/changed, no TLS or security change. Remote devda0946b; target publication branch absent at preflight.
 - Publication history audit found24 removed review-image paths/26 historical PNG objects still reachable from candidate ancestry. Preserve the full local history; publish an equivalent final-tree snapshot parented on remote dev, and verify none of those26 objects is reachable in the push range. This excludes rejected images rather than retrying their upload.
 - This round stops at dev PR, Codex review request and existing CI. No merge/tag/release, no final artifact or device acceptance claim. See docs/v1.8/publication-stage.md.
+
+
+## Local v1.8 candidate 35a65bf normal merge into v1.9
+
+- Scope: merge candidate `35a65bf6e5b130f91027308a473c590e36e1ff20` into `59f6906bd88032ae911315c00d312c96a8079278` in independent `codex/v19-v18-candidate-merge`; final 1.8 release baseline is still pending. Normal `git merge --no-commit --no-ff` resolves 35 individually reviewed conflicts, retaining both parents and both work-log histories.
+- Production/configuration relative to 59f is byte/blob-identical after line-ending normalization: all latest 1.8 fixes already exist in 1.9. Preserve strict search/deep freeze, continuous focus, ordered multi-frame previews/guards, AB lifecycle fences, course guards, read-only exports and the 2026 preview/Beta producer contract. Retain four candidate publication/backport documents and its three onboarding regression scenarios. Full 215-path comparison and 35-conflict decisions: `docs/v1.9/candidate-35a65bf-merge-matrix.json` and accompanying report.
+- Initial combined run: 23 files, 280 passed / 3 failed, solely the restored 1.8 helper asserting two-stop full-open after a slow 120px drag. Its original onboarding/edit-key-reset/narrow-height assertions passed before that obsolete drawer expectation. With parent approval, adapt only that helper to actual two fast touch gestures through 1.9 half-open then fully-open; no direct state setting, no production changes, no skipped tests. Final same 23 files: 283 passed / 0 failed / 0 skipped (26 seconds). Additional four home files: 14 passed / 0 failed / 0 skipped (overlaps combination).
+- Validation: Flutter analyze --no-pub: no issues (16.5 seconds); formatter: one edited Dart file, zero changes; Beta producer Python33 and fresh native-stdout Python16 all pass. Four YAML workflows parse, existing candidate push/PR triggers match, all 50 Bash and 4 PowerShell blocks parse without executing them; Apple source/metadata checker passes. Offline pub-get generated seven irrelevant plugin registrants, all restored. No full suite, platform build, application execution, real-user-data reading, or remote write in this task.
+- Publication constraint: this old 1.9 merge graph includes previously rejected image objects and must never be pushed. After actual 1.8 master/tag M is known, merge M and run final full verification, then publish only a separately audited safe snapshot with real master as parent. Candidate35 is not final; no progress.json final status or publication claims changed.
+
+
+## Local candidate64 picker continuation after candidate35 merge
+
+- First merge is `d132b648d559b6e7e1b61458cd14a6e7d0632a39`, parents exact59f+35. After parent authorization, fetched local publication child `64f1df8d412559794769d16b119b85bfd3a2f231` and performed a second normal no-ff merge, no conflicts. Retain upstream cache-page production change, all 11 widget cases and full settings-picker presentation audit without edits.
+- The only final production delta against original59f is `cache_management_page.dart` (22 additions/8 removals), resolved blob `af7bc15c769505ceff2647950c1e98c7c634af70`, matching64 exactly. It displays a unique exact current custom capacity alongside all four presets; zero/custom domain and complete strict import validation remain. No other1.9 production/CI/version behavior changed.
+- Actual final combination: custom11 + onboarding3 + image import26 =40 passed/0 failed/0 skipped (4sec); original cache-page5 passed/0failed/0skipped (1sec). Final full analyze no issues (8.9sec); format3 files0changed; diff checks clean. Exact commands and scope: `docs/v1.9/candidate-64f1df8-merge.md`. All Flutter commands have ended; no root process/SDK lock modified.
+- Root remained clean59f at read-only check. Final1.8 master/tag M still pending; no final progress.json edits/full-suite/build/publication claims. Old1.9 merge graph must not be pushed; safe actual-master-parent snapshot remains required later.

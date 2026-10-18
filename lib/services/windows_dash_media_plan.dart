@@ -35,6 +35,12 @@ class WindowsDashMediaAttempt {
 abstract final class WindowsDashMediaPlan {
   /// 先尝试主视频与兼容音频，再分别轮换视频、音频，最后补充同序号备线组合。
   static List<WindowsDashMediaAttempt> build(DesktopPlaybackSources sources) {
+    if (sources.videoCodec == 'muxed' && sources.audioUrls.isEmpty) {
+      return [
+        for (final url in sources.videoUrls)
+          WindowsDashMediaAttempt(videoUrl: url, audioUrl: '', audioCodec: ''),
+      ];
+    }
     if (sources.videoUrls.isEmpty || sources.audioUrls.isEmpty) {
       return const <WindowsDashMediaAttempt>[];
     }

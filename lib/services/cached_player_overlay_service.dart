@@ -22,7 +22,17 @@ class SubtitleMemoryCache {
   final int capacityBytes;
   final usage = ValueNotifier<int>(0);
   final _entries =
-      <Object, ({SubtitleCueLoadResult value, int size, DateTime expires})>{};
+      <
+        Object,
+        ({
+          SubtitleCueLoadResult value,
+          int size,
+          DateTime expires,
+          String? bvid,
+          int? cid,
+          String? trackId,
+        })
+      >{};
 
   SubtitleCueLoadResult? get(Object key, DateTime now) {
     final entry = _entries.remove(key);
@@ -35,7 +45,14 @@ class SubtitleMemoryCache {
     return entry.value;
   }
 
-  void put(Object key, SubtitleCueLoadResult value, DateTime now) {
+  void put(
+    Object key,
+    SubtitleCueLoadResult value,
+    DateTime now, {
+    String? bvid,
+    int? cid,
+    String? trackId,
+  }) {
     final size = value.cues.fold<int>(
       0,
       (sum, cue) => sum + utf8.encode(cue.content).length + 16,
@@ -50,9 +67,35 @@ class SubtitleMemoryCache {
       value: value,
       size: size,
       expires: now.add(const Duration(minutes: 5)),
+      bvid: bvid,
+      cid: cid,
+      trackId: trackId,
     );
     usage.value += size;
   }
+
+  /// Only parsed text/timestamps and public video identities leave this cache.
+  /// Session tokens, account revision markers and temporary URLs stay private.
+  List<Map<String, Object?>> exportCues(DateTime now) => [
+    for (final entry in _entries.values)
+      if (entry.expires.isAfter(now) &&
+          entry.bvid != null &&
+          entry.cid != null &&
+          entry.trackId != null)
+        {
+          'bvid': entry.bvid,
+          'cid': entry.cid,
+          'trackId': entry.trackId,
+          'cues': [
+            for (final cue in entry.value.cues)
+              {
+                'fromMs': cue.from.inMilliseconds,
+                'toMs': cue.to.inMilliseconds,
+                'content': cue.content,
+              },
+          ],
+        },
+  ];
 
   void removeWhere(bool Function(Object) test) {
     for (final key in _entries.keys.where(test).toList()) {
@@ -166,7 +209,14 @@ class CachedPlayerOverlayService implements PlayerOverlayService {
         );
       }
       if (result.status == SubtitleLoadStatus.available) {
-        _cache.put(key, result, _clock());
+        _cache.put(
+          key,
+          result,
+          _clock(),
+          bvid: bvid,
+          cid: cid,
+          trackId: trackId,
+        );
       }
       return result;
     });
