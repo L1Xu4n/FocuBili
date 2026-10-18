@@ -195,13 +195,18 @@ class WindowsPlaybackService
     final validate = _activeSessionValidator;
     try {
       await validate?.call();
-    } on BilibiliPlaybackSessionException {
-      if (_isCurrentSourceRequest(generation)) {
-        _shouldPlayAfterFallback = false;
-        _mediaAttempts = const [];
-        await _player.stop();
-      }
-      rethrow;
+    } catch (error) {
+      if (!_isCurrentSourceRequest(generation)) return false;
+      _shouldPlayAfterFallback = false;
+      _mediaAttempts = const [];
+      final stopped = _accountChangeStop.then((_) async {
+        if (_isCurrentSourceRequest(generation)) await _player.stop();
+      });
+      _accountChangeStop = stopped.catchError((Object _) {});
+      await stopped;
+      throw error is BilibiliPlaybackSessionException
+          ? error
+          : const BilibiliPlaybackSessionException('unknown');
     }
     return _isCurrentSourceRequest(generation);
   }
@@ -1445,6 +1450,7 @@ class WindowsPlaybackService
           );
           return;
         } on BilibiliPlaybackSessionException catch (error) {
+          if (!_isCurrentSourceRequest(generation)) return;
           _opening = false;
           _restoringPosition = false;
           _emitPlayerState(

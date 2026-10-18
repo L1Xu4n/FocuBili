@@ -446,7 +446,7 @@ void main() {
   });
 
   test(
-    'characterization: desktop session changes are not fenced at publication',
+    'opaque legacy store retains its snapshot without a native session fence',
     () async {
       SharedPreferences.setMockInitialValues({
         'app_behavior.wbi_signing_enabled': true,

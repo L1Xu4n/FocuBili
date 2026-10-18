@@ -25,7 +25,4 @@ jobs:
         run: python3 tool/check_apple_sources.py
       - name: Compile and test native Cookie boundaries
         run: |
-          swiftc packages/focubili_apple/macos/Classes/BilibiliPlaybackSession.swift tool/bilibili_session_probe.swift -o "$RUNNER_TEMP/bilibili-session-probe"
-          "$RUNNER_TEMP/bilibili-session-probe"
-          "$RUNNER_TEMP/bilibili-session-probe" persistent-write
-          "$RUNNER_TEMP/bilibili-session-probe" persistent-read
+          python3 tool/run_apple_cookie_probe.py
