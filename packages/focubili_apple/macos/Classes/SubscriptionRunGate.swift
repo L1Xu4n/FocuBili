@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 /// All accesses are serialized on the main queue by the native scheduler.
 final class SubscriptionRunGate {
@@ -24,5 +25,23 @@ final class SubscriptionRunGate {
     func permits(_ generation: Int, runToken: String? = nil) -> Bool {
         enabled && self.generation == generation && run != nil &&
             (runToken == nil || runToken == run)
+    }
+}
+
+/// Foreground preparations are request-owned, independent of background runs.
+/// The plugin serializes settings replies, guard replies and cancellation on main.
+final class SubscriptionNotificationGate {
+    private var requests = Set<String>()
+    static func allows(_ reply: Any?) -> Bool {
+        guard let value = reply as? NSNumber,
+              CFGetTypeID(value) == CFBooleanGetTypeID() else { return false }
+        return value.boolValue
+    }
+    func begin(_ request: String) -> Bool {
+        !request.isEmpty && requests.insert(request).inserted
+    }
+    func contains(_ request: String) -> Bool { requests.contains(request) }
+    @discardableResult func finish(_ request: String) -> Bool {
+        requests.remove(request) != nil
     }
 }

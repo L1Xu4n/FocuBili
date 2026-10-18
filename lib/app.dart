@@ -39,6 +39,7 @@ class FocuBiliApp extends StatefulWidget {
     this.clipboardLinkMonitor,
     this.videoService,
     this.subscriptionService,
+    this.subscriptionNotificationService,
     this.checkForUpdatesOnStart = false,
   });
 
@@ -50,6 +51,7 @@ class FocuBiliApp extends StatefulWidget {
   final ClipboardLinkMonitor? clipboardLinkMonitor;
   final BilibiliService? videoService;
   final SubscriptionService? subscriptionService;
+  final SubscriptionNotificationService? subscriptionNotificationService;
   final bool checkForUpdatesOnStart;
 
   /// 创建持有全应用专注状态的根组件状态。
@@ -74,7 +76,9 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
       GlobalKey<ScaffoldMessengerState>();
   late final _subscriptions =
       widget.subscriptionService ?? SubscriptionService.instance;
-  final _subscriptionNotifications = SubscriptionNotificationService();
+  late final _subscriptionNotifications =
+      widget.subscriptionNotificationService ??
+      SubscriptionNotificationService();
   bool _pendingSubscriptionTap = false;
   String? _handledCompletionId;
   bool _completionDialogOpen = false;
@@ -368,6 +372,9 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
 
   /// 监听正常完成记录，并在根导航器就绪后只显示一次庆祝弹窗。
   void _handleFocusTimerChanged() {
+    if (_focusTimerController.hasActiveSession) {
+      _subscriptionNotifications.cancelPending();
+    }
     final FocusSession? finished = _focusTimerController.lastFinishedSession;
     if (finished == null ||
         finished.status != FocusSessionStatus.completed ||

@@ -26,6 +26,21 @@ import Foundation
         precondition(!gate.permits(14, runToken: third), "An older engine must not notify during a newer run")
         precondition(gate.permits(14, runToken: fourth))
         precondition(gate.finish(fourth))
+        let delivery = SubscriptionNotificationGate()
+        precondition(SubscriptionNotificationGate.allows(true))
+        let denied: [Any?] = [false, nil, "true", 1, NSNumber(value: 1), NSNull()]
+        for reply in denied {
+            precondition(!SubscriptionNotificationGate.allows(reply), "Only a boolean true guard reply may deliver")
+        }
+        precondition(!delivery.begin(""))
+        precondition(delivery.begin("first") && delivery.begin("second"))
+        precondition(!delivery.begin("first"), "Duplicate preparation must be rejected")
+        precondition(delivery.finish("first"), "Cancellation owns only its request")
+        precondition(!delivery.contains("first") && delivery.contains("second"))
+        precondition(!delivery.finish("first"), "Late positive guard reply must not revive a cancelled request")
+        precondition(delivery.finish("second"))
+        precondition(!delivery.finish("second"), "Delivery is one-shot")
+        precondition(!delivery.contains("unknown") && !delivery.finish("unknown"))
         print("NATIVE_SUBSCRIPTION_GATE_PASSED")
     }
 }

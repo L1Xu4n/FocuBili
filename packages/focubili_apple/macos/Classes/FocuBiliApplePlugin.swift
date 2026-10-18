@@ -24,6 +24,7 @@ public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCen
     private var channels: [FlutterMethodChannel] = []
     private var mediaChannel: FlutterMethodChannel?
     private var subscriptionChannel: FlutterMethodChannel?
+    private let subscriptionDeliveryGate = SubscriptionNotificationGate()
     private var subscriptionTapPending = false
     private var pictureInPicture: FocuBiliAppleVideoWindow?
     private var initialLink: String?
@@ -152,32 +153,64 @@ public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCen
         if call.method == "consumeTap" {
             result(subscriptionTapPending); subscriptionTapPending = false; return
         }
-        guard call.method == "showSummary" else { result(FlutterMethodNotImplemented); return }
         let args = call.arguments as? [String: Any] ?? [:]
+        if call.method == "cancelSummary" {
+            if let request = args["requestId"] as? String { subscriptionDeliveryGate.finish(request) }
+            result(nil); return
+        }
+        guard call.method == "showSummary" else { result(FlutterMethodNotImplemented); return }
         guard let count = args["count"] as? Int, count > 0 else { result(false); return }
         let center = UNUserNotificationCenter.current()
         #if os(iOS)
         let isBackground = args["background"] as? Bool == true
         let generation = args["generation"] as? Int ?? -1
         if isBackground && !FocuBiliSubscriptionScheduler.shared.canNotify(generation: generation, runToken: self.subscriptionWorkerToken) { result(false); return }
+        #else
+        let isBackground = false
         #endif
+        let requestId = args["requestId"] as? String
+        if !isBackground {
+            guard let request = requestId, subscriptionDeliveryGate.begin(request) else { result(false); return }
+        }
+        let reject = {
+            if let request = requestId { self.subscriptionDeliveryGate.finish(request) }
+            result(false)
+        }
         center.getNotificationSettings { settings in
             DispatchQueue.main.async {
                 // Serialize delivery against native opt-out, generation changes
                 // and expiration, even if UN settings replied on another queue.
                 #if os(iOS)
-                if isBackground && !FocuBiliSubscriptionScheduler.shared.canNotify(generation: generation, runToken: self.subscriptionWorkerToken) { result(false); return }
+                if isBackground && !FocuBiliSubscriptionScheduler.shared.canNotify(generation: generation, runToken: self.subscriptionWorkerToken) { reject(); return }
                 #endif
                 guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else {
-                    result(false); return
+                    reject(); return
                 }
-                let content = UNMutableNotificationContent()
-                content.title = String((args["title"] as? String ?? "焦点订阅").prefix(240))
-                content.subtitle = String((args["source"] as? String ?? "").prefix(240))
-                content.body = count > 1 ? "另有 \(count - 1) 条更新，打开焦点订阅查看" : "点击查看订阅更新"
-                content.threadIdentifier = "focubili.subscriptions"
-                center.add(UNNotificationRequest(identifier: "focubili.subscriptions", content: content, trigger: nil)) { error in
-                    self.complete(result, error == nil)
+                let deliver = {
+                    // Cancellation may arrive while the Dart guard reply is in
+                    // flight. Consume on this same main-queue turn as center.add.
+                    if !isBackground {
+                        guard let request = requestId, self.subscriptionDeliveryGate.finish(request) else { result(false); return }
+                    }
+                    let content = UNMutableNotificationContent()
+                    content.title = String((args["title"] as? String ?? "焦点订阅").prefix(240))
+                    content.subtitle = String((args["source"] as? String ?? "").prefix(240))
+                    content.body = count > 1 ? "另有 \(count - 1) 条更新，打开焦点订阅查看" : "点击查看订阅更新"
+                    content.threadIdentifier = "focubili.subscriptions"
+                    center.add(UNNotificationRequest(identifier: "focubili.subscriptions", content: content, trigger: nil)) { error in
+                        self.complete(result, error == nil)
+                    }
+                }
+                if isBackground { deliver(); return }
+                guard let request = requestId, self.subscriptionDeliveryGate.contains(request),
+                      let channel = self.subscriptionChannel else { reject(); return }
+                // The Dart guard includes source changes, opt-out, focus and
+                // disposal, including when background refresh is disabled.
+                channel.invokeMethod("canDeliver", arguments: ["requestId": request]) { allowed in
+                    DispatchQueue.main.async {
+                        guard SubscriptionNotificationGate.allows(allowed) else { reject(); return }
+                        deliver()
+                    }
                 }
             }
         }

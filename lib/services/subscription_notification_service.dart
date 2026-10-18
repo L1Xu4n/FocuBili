@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 
 import '../platform/app_platform.dart';
@@ -21,17 +23,30 @@ class SubscriptionNotificationService {
   final AppPlatform? _platform;
   final WindowsFocusNotificationBackend? _desktopBackend;
   final bool _injectedChannel;
+  bool _disposed = false;
+  _AppleSubscriptionNotificationChannel? _appleChannel;
+  final _pendingRequests = <String>{};
   AppPlatform get platform => _platform ?? AppPlatformDetector.current;
   bool get _available =>
       (platform == AppPlatform.android || platform.isApple) &&
       (_injectedChannel || !AppPlatformDetector.isFlutterTest);
   Future<void> initialize(void Function() onTap) async {
-    if (!_available) return;
-    _channel.setMethodCallHandler((call) async {
-      if (call.method == 'subscriptionTapped') onTap();
-    });
+    if (!_available || _disposed) return;
+    if (platform.isApple) {
+      _attachAppleChannel().setTapHandler(this, onTap);
+    } else {
+      _channel.setMethodCallHandler((call) async {
+        if (call.method == 'subscriptionTapped') onTap();
+      });
+    }
     try {
-      if (await _channel.invokeMethod<bool>('consumeTap') == true) onTap();
+      if (await _channel.invokeMethod<bool>('consumeTap') == true) {
+        if (platform.isApple) {
+          _appleChannel?.handleTap();
+        } else if (!_disposed) {
+          onTap();
+        }
+      }
     } on MissingPluginException {
       /* independent UI previews have no platform backend */
     }
@@ -44,12 +59,21 @@ class SubscriptionNotificationService {
     String? title,
     String? source,
   }) async {
-    if (!_available) return false;
+    if (!_available || _disposed) return false;
+    String? requestId;
     try {
-      if (!SubscriptionNotificationDelivery.allows(
-        SubscriptionNotificationDelivery.current,
-      )) {
+      final guard = SubscriptionNotificationDelivery.current;
+      if (!SubscriptionNotificationDelivery.allows(guard)) {
         return false;
+      }
+      // The iOS worker retains its native generation/run-token protocol. All
+      // foreground Apple requests recheck their own guard after UN settings.
+      if (platform.isApple && !(platform == AppPlatform.ios && background)) {
+        requestId = _attachAppleChannel().addRequest(
+          this,
+          () => !_disposed && SubscriptionNotificationDelivery.allows(guard),
+        );
+        _pendingRequests.add(requestId);
       }
       return await _channel.invokeMethod<bool>('showSummary', {
             'count': count,
@@ -57,12 +81,18 @@ class SubscriptionNotificationService {
             'background': background,
             'title': ?title,
             'source': ?source,
+            'requestId': ?requestId,
           }) ??
           false;
     } on PlatformException {
       return false;
     } on MissingPluginException {
       return false;
+    } finally {
+      if (requestId != null) {
+        _pendingRequests.remove(requestId);
+        _appleChannel?.removeRequest(requestId);
+      }
     }
   }
 
@@ -99,6 +129,116 @@ class SubscriptionNotificationService {
   }
 
   void dispose() {
-    if (_available) _channel.setMethodCallHandler(null);
+    if (_disposed) return;
+    _disposed = true;
+    cancelPending();
+    if (_appleChannel case final channel?) {
+      channel.release(this);
+    } else if (_available && !platform.isApple) {
+      _channel.setMethodCallHandler(null);
+    }
+  }
+
+  /// Permanently cancels preparations already in flight, even if focus ends
+  /// before the system's settings reply arrives. Future requests remain usable.
+  void cancelPending() {
+    for (final requestId in _pendingRequests) {
+      _appleChannel?.removeRequest(requestId);
+      unawaited(_cancelRequest(requestId));
+    }
+    _pendingRequests.clear();
+  }
+
+  _AppleSubscriptionNotificationChannel _attachAppleChannel() {
+    return _appleChannel ??= _AppleSubscriptionNotificationChannel.attach(
+      _channel,
+      this,
+    );
+  }
+
+  Future<void> _cancelRequest(String requestId) async {
+    try {
+      await _channel.invokeMethod<void>('cancelSummary', {
+        'requestId': requestId,
+      });
+    } on PlatformException {
+      // Guard lookup also fails closed if native cancellation is unavailable.
+    } on MissingPluginException {
+      // A detached engine cannot deliver this request.
+    }
+  }
+}
+
+/// One handler per messenger/name, including when distinct service instances
+/// share a channel. Reinitializing taps or disposing an older owner must not
+/// replace another request's guard or remove the current owner's handler.
+class _AppleSubscriptionNotificationChannel {
+  _AppleSubscriptionNotificationChannel(this.channel);
+  static final _channels =
+      Expando<Map<String, _AppleSubscriptionNotificationChannel>>();
+  static final _requestPrefix = DateTime.now().microsecondsSinceEpoch;
+  static int _nextRequest = 0;
+  final MethodChannel channel;
+  final _owners = <Object>{};
+  final _requests = <String, ({Object owner, bool Function() guard})>{};
+  Object? _tapOwner;
+  void Function()? _onTap;
+
+  static _AppleSubscriptionNotificationChannel attach(
+    MethodChannel channel,
+    Object owner,
+  ) {
+    final channels = _channels[channel.binaryMessenger] ??= {};
+    final bridge = channels.putIfAbsent(
+      channel.name,
+      () => _AppleSubscriptionNotificationChannel(channel),
+    );
+    bridge._owners.add(owner);
+    channel.setMethodCallHandler(bridge._handle);
+    return bridge;
+  }
+
+  Future<Object?> _handle(MethodCall call) async {
+    if (call.method == 'subscriptionTapped') {
+      handleTap();
+      return null;
+    }
+    if (call.method == 'canDeliver') {
+      final args = call.arguments;
+      final requestId = args is Map ? args['requestId'] : null;
+      // Consume once. Unknown, completed, cancelled and replayed requests deny.
+      final request = _requests.remove(requestId);
+      return request != null &&
+          SubscriptionNotificationDelivery.allows(request.guard);
+    }
+    throw MissingPluginException();
+  }
+
+  void setTapHandler(Object owner, void Function() onTap) {
+    _tapOwner = owner;
+    _onTap = onTap;
+  }
+
+  void handleTap() => _onTap?.call();
+
+  String addRequest(Object owner, bool Function() guard) {
+    final requestId = '$_requestPrefix:${_nextRequest++}';
+    _requests[requestId] = (owner: owner, guard: guard);
+    return requestId;
+  }
+
+  void removeRequest(String requestId) => _requests.remove(requestId);
+
+  void release(Object owner) {
+    _requests.removeWhere((_, request) => identical(request.owner, owner));
+    _owners.remove(owner);
+    if (identical(_tapOwner, owner)) {
+      _tapOwner = null;
+      _onTap = null;
+    }
+    if (_owners.isEmpty) {
+      channel.setMethodCallHandler(null);
+      _channels[channel.binaryMessenger]?.remove(channel.name);
+    }
   }
 }
