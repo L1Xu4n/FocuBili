@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../models/search_content_filter.dart';
 import 'settings_runtime_adapter.dart';
 
 /// 定义允许迁移的基础偏好类型，账号、协议和学习数据从不进入白名单。
@@ -181,7 +182,9 @@ class SettingsTransferService {
       } else if (key == 'search.content_filter_v2') {
         if (decoded['learningOnly'] is! bool ||
             decoded['minimumPlayCount'] is! int ||
-            (decoded['minimumPlayCount'] as int) < 0) {
+            (decoded['minimumPlayCount'] as int) < 0 ||
+            (decoded['minimumPlayCount'] as int) >
+                SearchContentFilter.maximumPlayCount) {
           throw const FormatException('搜索筛选结构无效');
         }
       } else {
