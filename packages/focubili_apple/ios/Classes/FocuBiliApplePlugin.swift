@@ -18,6 +18,8 @@ public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCen
     #if os(iOS)
     static var registeringSubscriptionWorker = false
     private var subscriptionWorkerToken: String?
+    private var subscriptionWorkerFocusEpoch: Int?
+    private var isSubscriptionWorker = false
     #else
     private let subscriptionScheduler = FocuBiliDesktopSubscriptionScheduler()
     #endif
@@ -43,7 +45,11 @@ public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCen
         #endif
         #if os(iOS)
         let worker = registeringSubscriptionWorker
-        if worker { instance.subscriptionWorkerToken = FocuBiliSubscriptionScheduler.shared.currentRunToken }
+        instance.isSubscriptionWorker = worker
+        if worker {
+            instance.subscriptionWorkerToken = FocuBiliSubscriptionScheduler.shared.currentRunToken
+            instance.subscriptionWorkerFocusEpoch = SubscriptionFocusGate.shared.capture()
+        }
         let names = worker ? ["auth", "subscription_notifications"] : ["auth", "focus_notifications", "subscription_notifications", "device_status", "apple_media"]
         #else
         let names = ["auth", "focus_notifications", "subscription_notifications", "device_status", "apple_media"]
@@ -154,6 +160,16 @@ public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCen
             result(subscriptionTapPending); subscriptionTapPending = false; return
         }
         let args = call.arguments as? [String: Any] ?? [:]
+        if call.method == "setFocusActive" {
+            #if os(iOS)
+            guard !isSubscriptionWorker else { result(false); return }
+            #endif
+            guard let active = args["active"] as? Bool else {
+                result(FlutterError(code: "invalid_focus", message: "Invalid focus state", details: nil)); return
+            }
+            SubscriptionFocusGate.shared.update(active: active)
+            result(nil); return
+        }
         if call.method == "cancelSummary" {
             if let request = args["requestId"] as? String { subscriptionDeliveryGate.finish(request) }
             result(nil); return
@@ -164,10 +180,23 @@ public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCen
         #if os(iOS)
         let isBackground = args["background"] as? Bool == true
         let generation = args["generation"] as? Int ?? -1
-        if isBackground && !FocuBiliSubscriptionScheduler.shared.canNotify(generation: generation, runToken: self.subscriptionWorkerToken) { result(false); return }
+        // Bind background delivery to engine registration, not the later show
+        // call: focus may start and end before that queued call reaches native.
+        let focusEpoch = isBackground ? subscriptionWorkerFocusEpoch : SubscriptionFocusGate.shared.capture()
         #else
         let isBackground = false
+        let focusEpoch = SubscriptionFocusGate.shared.capture()
         #endif
+        let canDeliver = { () -> Bool in
+            guard SubscriptionFocusGate.shared.permits(focusEpoch) else { return false }
+            #if os(iOS)
+            if isBackground {
+                return FocuBiliSubscriptionScheduler.shared.canNotify(generation: generation, runToken: self.subscriptionWorkerToken)
+            }
+            #endif
+            return true
+        }
+        guard canDeliver() else { result(false); return }
         let requestId = args["requestId"] as? String
         if !isBackground {
             guard let request = requestId, subscriptionDeliveryGate.begin(request) else { result(false); return }
@@ -180,13 +209,14 @@ public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCen
             DispatchQueue.main.async {
                 // Serialize delivery against native opt-out, generation changes
                 // and expiration, even if UN settings replied on another queue.
-                #if os(iOS)
-                if isBackground && !FocuBiliSubscriptionScheduler.shared.canNotify(generation: generation, runToken: self.subscriptionWorkerToken) { reject(); return }
-                #endif
+                guard canDeliver() else { reject(); return }
                 guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else {
                     reject(); return
                 }
                 let deliver = {
+                    // Latest UI-owned focus state, serialized with center.add.
+                    // Never ask the headless Dart engine for a cached snapshot.
+                    guard canDeliver() else { reject(); return }
                     // Cancellation may arrive while the Dart guard reply is in
                     // flight. Consume on this same main-queue turn as center.add.
                     if !isBackground {

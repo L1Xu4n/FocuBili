@@ -149,6 +149,26 @@ class SubscriptionNotificationService {
     _pendingRequests.clear();
   }
 
+  /// Publish the UI controller's current state to every Apple engine in this
+  /// process. A headless engine must not overwrite it from cached preferences.
+  void updateFocusState(bool active) {
+    if (_disposed) return;
+    if (_available && platform.isApple) {
+      unawaited(_updateFocusState(active));
+    }
+    if (active) cancelPending();
+  }
+
+  Future<void> _updateFocusState(bool active) async {
+    try {
+      await _channel.invokeMethod<void>('setFocusActive', {'active': active});
+    } on PlatformException {
+      // The next controller notification retries the current state.
+    } on MissingPluginException {
+      // UI previews have no native engine; request-owned guards still apply.
+    }
+  }
+
   _AppleSubscriptionNotificationChannel _attachAppleChannel() {
     return _appleChannel ??= _AppleSubscriptionNotificationChannel.attach(
       _channel,

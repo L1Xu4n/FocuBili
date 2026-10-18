@@ -41,6 +41,24 @@ import Foundation
         precondition(delivery.finish("second"))
         precondition(!delivery.finish("second"), "Delivery is one-shot")
         precondition(!delivery.contains("unknown") && !delivery.finish("unknown"))
+        let focus = SubscriptionFocusGate()
+        let focusRun = gate.begin()!
+        let workerEpoch = focus.capture()!
+        precondition(focus.permits(workerEpoch))
+        focus.update(active: false)
+        precondition(focus.permits(workerEpoch), "An idle sync must not revoke a current run")
+        focus.update(active: true)
+        precondition(gate.permits(14, runToken: focusRun), "Focus revokes notifications without changing scheduler ownership")
+        let focusedEpoch = focus.capture()
+        precondition(!focus.permits(workerEpoch) && focusedEpoch == nil)
+        let epoch = focus.epoch
+        focus.update(active: true)
+        precondition(focus.epoch == epoch, "Routine focus ticks must be idempotent")
+        focus.update(active: false)
+        precondition(!focus.permits(workerEpoch), "An old worker must stay revoked after focus ends")
+        precondition(!focus.permits(focusedEpoch), "A worker started during focus must stay revoked")
+        precondition(focus.permits(focus.capture()), "A fresh run after focus may deliver")
+        precondition(gate.finish(focusRun), "Focus must preserve the worker completion protocol")
         print("NATIVE_SUBSCRIPTION_GATE_PASSED")
     }
 }

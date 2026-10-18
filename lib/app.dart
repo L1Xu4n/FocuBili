@@ -106,6 +106,11 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
         .showItems(items, generation: _subscriptions.notificationGeneration);
     unawaited(_subscriptionNotifications.initialize(_handleSubscriptionTap));
     _focusTimerController.addListener(_handleFocusTimerChanged);
+    if (_focusTimerController.isReady) {
+      _subscriptionNotifications.updateFocusState(
+        _focusTimerController.hasActiveSession,
+      );
+    }
     unawaited(_focusTimerController.initialize());
     _ownsAppUpdateController = widget.appUpdateController == null;
     _appUpdateController = widget.appUpdateController ?? AppUpdateController();
@@ -372,9 +377,9 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
 
   /// 监听正常完成记录，并在根导航器就绪后只显示一次庆祝弹窗。
   void _handleFocusTimerChanged() {
-    if (_focusTimerController.hasActiveSession) {
-      _subscriptionNotifications.cancelPending();
-    }
+    _subscriptionNotifications.updateFocusState(
+      _focusTimerController.hasActiveSession,
+    );
     final FocusSession? finished = _focusTimerController.lastFinishedSession;
     if (finished == null ||
         finished.status != FocusSessionStatus.completed ||

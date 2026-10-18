@@ -28,6 +28,7 @@ Future<void> subscriptionAppleBackgroundMain() async {
 Future<void> runAppleSubscriptionWorker({
   required MethodChannel channel,
   required SubscriptionService Function() createService,
+  SubscriptionNotificationService? notifications,
 }) async {
   SubscriptionService? service;
   Timer? deadline;
@@ -66,7 +67,7 @@ Future<void> runAppleSubscriptionWorker({
         preferencesLoader: () async => prefs,
       ).loadState();
       if (expired || focus.activeSession?.isActive == true) return false;
-      return SubscriptionNotificationService().showItems(
+      return (notifications ?? SubscriptionNotificationService()).showItems(
         items,
         generation: worker.notificationGeneration,
         background: true,

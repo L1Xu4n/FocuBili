@@ -45,3 +45,20 @@ final class SubscriptionNotificationGate {
         requests.remove(request) != nil
     }
 }
+
+/// Shared by UI and headless engines in this process, with main-queue access.
+/// An epoch belongs to one pre-focus preparation/run; ending focus cannot revive it.
+final class SubscriptionFocusGate {
+    static let shared = SubscriptionFocusGate()
+    private(set) var active = false
+    private(set) var epoch = 0
+    func update(active: Bool) {
+        if active && !self.active { epoch += 1 }
+        self.active = active
+    }
+    func capture() -> Int? { active ? nil : epoch }
+    func permits(_ epoch: Int?) -> Bool {
+        guard let epoch = epoch else { return false }
+        return !active && self.epoch == epoch
+    }
+}
