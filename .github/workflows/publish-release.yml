@@ -78,6 +78,7 @@ jobs:
           gh run download "$RUN_ID" --name focubili-release-android --dir staging/android
           gh run download "$RUN_ID" --name focubili-release-windows --dir staging/windows
           gh run download "$APPLE_RUN" --name "focubili-apple-macos-${GITHUB_SHA}" --dir staging/macos
+          gh run download "$APPLE_RUN" --name "focubili-apple-ios-${GITHUB_SHA}" --dir staging/ios
           gh run download "$LINUX_RUN" --name "focubili-linux-${GITHUB_SHA}" --dir staging/linux
 
       - name: Prepare public release assets
@@ -88,9 +89,11 @@ jobs:
           mkdir release
           mv staging/android/app-release.apk "release/FocuBili-v${VERSION}-android.apk"
           mv "staging/windows/FocuBili-v${VERSION}-windows-x64-setup.exe" release/
+          mv "staging/windows/FocuBili-v${VERSION}-windows-x64-portable.zip" release/
           mv staging/macos/FocuBili-macos-preview.dmg "release/FocuBili-v${VERSION}-macos-universal.dmg"
+          mv staging/ios/FocuBili-ios-unsigned.ipa "release/FocuBili-v${VERSION}-ios-unsigned.ipa"
           mv "staging/linux/FocuBili-v${VERSION}-linux-amd64.deb" release/
-          test "$(find release -maxdepth 1 -type f | wc -l)" -eq 4
+          test "$(find release -maxdepth 1 -type f | wc -l)" -eq 6
           sha256sum release/*
 
       - name: Create annotated release tag

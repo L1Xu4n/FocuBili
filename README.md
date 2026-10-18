@@ -30,10 +30,12 @@
 |---|---|---|
 | Android 7.0+ | `FocuBili-v1.8.0-android.apk` | 更新请直接覆盖安装，不要先卸载旧版 |
 | Windows 10 1809+ / x64 | `FocuBili-v1.8.0-windows-x64-setup.exe` | 使用安装器；没有商业代码签名时，系统可能显示“未知发布者” |
+| Windows 10 1809+ / x64 便携版 | [FocuBili-v1.8.0-windows-x64-portable.zip](https://github.com/L1Xu4n/FocuBili/releases/download/v1.8.0/FocuBili-v1.8.0-windows-x64-portable.zip) | 完整解压后运行 `FocuBili.exe`，保留同目录 DLL 和 `data/` |
 | macOS | `FocuBili-v1.8.0-macos-universal.dmg` | 打开后将 App 拖入 Applications；当前为 ad-hoc 签名、未公证，详见 [Apple 平台说明](docs/APPLE_PLATFORMS.md) |
+| iOS 真机 | [FocuBili-v1.8.0-ios-unsigned.ipa](https://github.com/L1Xu4n/FocuBili/releases/download/v1.8.0/FocuBili-v1.8.0-ios-unsigned.ipa) | 未签名 device IPA，需自行签名并配置适用于设备的 provisioning profile 后安装 |
 | Ubuntu 24.04 系列 / amd64 | `FocuBili-v1.8.0-linux-amd64.deb` | 通过系统软件安装器安装；其他发行版见 [Linux 平台说明](docs/LINUX_PLATFORMS.md) |
 
-iOS 目前提供源码与未签名开发构建说明，需要自行签名后安装，没有可直接安装的 App Store / TestFlight 正式包。模拟器构建不能安装到真实 iPhone，参见 [Apple 平台说明](docs/APPLE_PLATFORMS.md)。
+iOS Release 提供的是未签名真机 IPA，需自行完成签名和设备 provisioning；它不是模拟器包，也不是 App Store / TestFlight 分发包。签名与安装限制参见 [Apple 平台说明](docs/APPLE_PLATFORMS.md)。
 
 Android 正式版与 Beta / debug 预览包的包名不同，数据不会自动跨包迁移。升级前请留意自己安装的版本，保留原应用及重要资料。各平台的实际验证范围、签名和安装限制以对应 Release 说明为准。
 
@@ -122,7 +124,7 @@ flutter build windows --release
 .\windows\installer\build_windows_packages.ps1
 ```
 
-打包脚本从 `pubspec.yaml` 读取版本，安装器输出到 `build/windows/x64/installer/`。`FocuBili.exe` 依赖同目录 DLL 和 `data/`，不能单独复制。脚本也能生成便携包，但本次正式 Release 只分发安装器。Apple 和 Linux 的构建环境与运行检查分别见 [Apple 平台说明](docs/APPLE_PLATFORMS.md)、[Linux 平台说明](docs/LINUX_PLATFORMS.md)。
+打包脚本从 `pubspec.yaml` 读取版本，安装器和便携 ZIP 输出到 `build/windows/x64/installer/`，正式 Release 同时提供两种格式。`FocuBili.exe` 依赖同目录 DLL 和 `data/`，不能单独复制。Apple 和 Linux 的构建环境与运行检查分别见 [Apple 平台说明](docs/APPLE_PLATFORMS.md)、[Linux 平台说明](docs/LINUX_PLATFORMS.md)。
 
 提交修改前请阅读 [贡献指南](CONTRIBUTING.md)，PR 目标为 `dev`。目录结构和第三方依赖可从 `lib/`、`packages/`、`third_party/` 与 `tool/` 查看；首次安装展示的完整声明见 [用户须知与使用协议](docs/USER_AGREEMENT.md)。
 
