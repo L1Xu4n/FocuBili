@@ -165,6 +165,14 @@ class BilibiliAuthService {
   final BilibiliCookieStore _cookieStore;
   final BilibiliAuthApi _api;
   final Duration _requestTimeout;
+
+  /// 记录实际注入的存储种类；平台通道在 Apple 上由 WKWebView 插件处理。
+  String get cookieStoreSource => switch (_cookieStore) {
+    PlatformBilibiliCookieStore() => 'platform_webview',
+    WindowsSecureBilibiliCookieStore() => 'secure_storage',
+    UnavailableBilibiliCookieStore() => 'unavailable',
+    _ => 'injected',
+  };
   String? _checkedWebSession;
   BilibiliSessionState? _checkedWebSessionState;
 
