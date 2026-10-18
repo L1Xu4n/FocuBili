@@ -11,12 +11,29 @@ on:
       - .github/workflows/release-build.yml
       - windows/installer/build_windows_packages.ps1
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      source_sha:
+        type: string
+        default: ''
+      beta_number:
+        type: string
+        default: ''
+    secrets:
+      ANDROID_RELEASE_KEYSTORE_BASE64:
+        required: false
+      ANDROID_RELEASE_STORE_PASSWORD:
+        required: false
+      ANDROID_RELEASE_KEY_PASSWORD:
+        required: false
+      ANDROID_RELEASE_KEY_ALIAS:
+        required: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: focubili-release-build-${{ github.ref }}
+  group: focubili-release-build-${{ inputs.source_sha || github.ref }}
   cancel-in-progress: false
 
 env:
@@ -32,6 +49,24 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require trusted source before accessing signing secrets
+        env:
+          REQUESTED_SHA: ${{ inputs.source_sha || github.sha }}
+        shell: bash
+        run: |
+          test "$GITHUB_REPOSITORY" = 'L1Xu4n/FocuBili'
+          case "$GITHUB_EVENT_NAME:$GITHUB_REF" in
+            push:refs/heads/master|workflow_dispatch:refs/heads/dev|workflow_dispatch:refs/heads/master) ;;
+            *) echo 'Signed builds require a trusted branch invocation'; exit 1 ;;
+          esac
+          [[ "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$REQUESTED_SHA"
+          git merge-base --is-ancestor HEAD origin/dev || git merge-base --is-ancestor HEAD origin/master
 
       - name: Setup Java 21
         uses: actions/setup-java@v5
@@ -74,9 +109,15 @@ jobs:
       - name: Build release APK
         # Flutter 3.44 skips release plugin regeneration with --no-pub.
         # Regenerate here so dev-only integration_test stays out of the APK.
+        env:
+          BETA_NUMBER: ${{ inputs.beta_number }}
         run: |
           dart tool/write_build_metadata.dart
-          flutter build apk --release
+          if test -n "$BETA_NUMBER"; then
+            python3 tool/beta_release.py build --platform apk --beta-number "$BETA_NUMBER" --source-sha "$(git rev-parse HEAD)"
+          else
+            flutter build apk --release
+          fi
 
       - name: Verify release APK metadata
         shell: bash
@@ -98,13 +139,29 @@ jobs:
           cert_sha256="$(printf '%s\n' "$signer_output" | sed -nE 's/^(Signer #[0-9]+|V[0-9.]+ Signer):? certificate SHA-256 digest: //p' | tr '[:lower:]' '[:upper:]' | sort -u)"
           test "$cert_sha256" = "$ANDROID_RELEASE_CERT_SHA256"
 
+      - name: Verify signed Beta preview identity
+        if: inputs.beta_number != ''
+        env:
+          BETA_NUMBER: ${{ inputs.beta_number }}
+        shell: bash
+        run: |
+          build_tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          python3 tool/beta_release.py android --beta-number "$BETA_NUMBER" --source-sha "$(git rev-parse HEAD)" --apk build/app/outputs/flutter-apk/app-release.apk --aapt "$build_tools/aapt" --apksigner "$build_tools/apksigner" --output build/app/outputs/flutter-apk/android-beta-verification.json
+
       - name: Upload release APK
         uses: actions/upload-artifact@v4
         with:
           name: focubili-release-android
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: |
+            build/app/outputs/flutter-apk/app-release.apk
+            build/app/outputs/flutter-apk/android-beta-verification.json
           if-no-files-found: error
           retention-days: 7
+
+      - name: Remove temporary release signing files
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/focubili-release.keystore" android/key.properties
 
   windows:
     name: Windows release
@@ -114,6 +171,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -125,13 +185,32 @@ jobs:
         run: flutter pub get
 
       - name: Build Windows release application
+        env:
+          BETA_NUMBER: ${{ inputs.beta_number }}
         run: |
           dart tool/write_build_metadata.dart
-          flutter build windows --release --no-pub
+          if ($env:BETA_NUMBER) {
+            python tool/beta_release.py build --platform windows --beta-number $env:BETA_NUMBER --source-sha (git rev-parse HEAD)
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } else {
+            flutter build windows --release --no-pub
+          }
 
       - name: Build Windows installer and portable package
         shell: pwsh
         run: .\windows\installer\build_windows_packages.ps1
+
+      - name: Verify Beta Windows metadata and portable bytes
+        if: inputs.beta_number != ''
+        env:
+          BETA_NUMBER: ${{ inputs.beta_number }}
+        shell: pwsh
+        run: |
+          $executable = 'build/windows/x64/runner/Release/FocuBili.exe'
+          $identity = (Get-Item -LiteralPath $executable).VersionInfo
+          $numericVersion = "$($identity.FileMajorPart).$($identity.FileMinorPart).$($identity.FileBuildPart).$($identity.FilePrivatePart)"
+          python tool/beta_release.py windows --beta-number $env:BETA_NUMBER --source-sha (git rev-parse HEAD) --folder build/windows/x64/installer --executable $executable --product-version $identity.ProductVersion --file-version $numericVersion --output build/windows/x64/installer/windows-package-verification.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload Windows release packages
         uses: actions/upload-artifact@v4
@@ -140,5 +219,6 @@ jobs:
           path: |
             build/windows/x64/installer/*-setup.exe
             build/windows/x64/installer/*-portable.zip
+            build/windows/x64/installer/windows-package-verification.json
           if-no-files-found: error
           retention-days: 7

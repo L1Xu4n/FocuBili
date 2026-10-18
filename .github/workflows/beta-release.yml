@@ -1,0 +1,214 @@
+name: FocuBili verified Beta
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full reviewed commit on dev/master; pubspec must commit a build code above every published APK
+        required: true
+        type: string
+      beta_number:
+        description: Positive SemVer beta number (build code is read from source, never run_number)
+        required: true
+        default: '1'
+        type: string
+      publish:
+        description: Publish the verified candidate as a prerelease; false only uploads CI artifacts
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: focubili-beta-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Require a trusted manual invocation
+        env:
+          REQUESTED_SHA: ${{ inputs.source_sha }}
+          BETA_NUMBER: ${{ inputs.beta_number }}
+        shell: bash
+        run: |
+          test "$GITHUB_REPOSITORY" = 'L1Xu4n/FocuBili'
+          test "$GITHUB_EVENT_NAME" = 'workflow_dispatch'
+          case "$GITHUB_REF" in refs/heads/dev|refs/heads/master) ;; *) exit 1 ;; esac
+          [[ "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$BETA_NUMBER" =~ ^[1-9][0-9]*$ ]]
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify source, committed counter and published APK versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_SHA: ${{ inputs.source_sha }}
+          BETA_NUMBER: ${{ inputs.beta_number }}
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$REQUESTED_SHA"
+          git merge-base --is-ancestor HEAD origin/dev || git merge-base --is-ancestor HEAD origin/master
+          python3 -m unittest discover -s tool -p test_beta_release.py -v
+          python3 tool/beta_release.py plan --beta-number "$BETA_NUMBER" --source-sha "$REQUESTED_SHA" --output beta-plan.json
+          build_tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          python3 tool/beta_release.py inventory --plan beta-plan.json --aapt "$build_tools/aapt" --output inventory-before.json
+      - name: Wait for successful CI on the exact source SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_SHA: ${{ inputs.source_sha }}
+        run: python3 tool/beta_release.py wait-ci --source-sha "$REQUESTED_SHA" --output ci-verification.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: focubili-beta-metadata
+          path: |
+            beta-plan.json
+            ci-verification.json
+            inventory-before.json
+          if-no-files-found: error
+          retention-days: 14
+
+  android-windows:
+    needs: prepare
+    uses: ./.github/workflows/release-build.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      beta_number: ${{ inputs.beta_number }}
+    secrets:
+      ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+      ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+      ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+      ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+
+  apple:
+    needs: prepare
+    uses: ./.github/workflows/apple-build.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      beta_number: ${{ inputs.beta_number }}
+
+  linux:
+    needs: prepare
+    uses: ./.github/workflows/linux-build.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      beta_number: ${{ inputs.beta_number }}
+
+  assemble:
+    needs: [prepare, android-windows, apple, linux]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: focubili-beta-metadata
+          path: metadata
+      - uses: actions/download-artifact@v4
+        with:
+          name: focubili-release-android
+          path: staging/android
+      - uses: actions/download-artifact@v4
+        with:
+          name: focubili-release-windows
+          path: staging/windows
+      - uses: actions/download-artifact@v4
+        with:
+          name: focubili-apple-macos-${{ inputs.source_sha }}
+          path: staging/macos
+      - uses: actions/download-artifact@v4
+        with:
+          name: focubili-apple-ios-${{ inputs.source_sha }}
+          path: staging/ios
+      - uses: actions/download-artifact@v4
+        with:
+          name: focubili-linux-${{ inputs.source_sha }}
+          path: staging/linux
+      - name: Reverify downloaded APK and all platform evidence before staging
+        shell: bash
+        run: |
+          build_tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          python3 tool/beta_release.py android --plan metadata/beta-plan.json --apk staging/android/app-release.apk --aapt "$build_tools/aapt" --apksigner "$build_tools/apksigner" --output staging/android/android-beta-verification.json
+          cp metadata/ci-verification.json staging/
+          python3 tool/beta_release.py stage --plan metadata/beta-plan.json --folder staging --output release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: focubili-beta-candidate-${{ inputs.source_sha }}
+          path: release/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    if: inputs.publish
+    needs: [prepare, assemble]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+    # Share the existing master publisher's lock; do not race a stable publication.
+    concurrency:
+      group: focubili-publish-refs/heads/master
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: focubili-beta-metadata
+          path: metadata
+      - uses: actions/download-artifact@v4
+        with:
+          name: focubili-beta-candidate-${{ inputs.source_sha }}
+          path: release
+      - name: Recheck the global published counter inside the publication lock
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          build_tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          python3 tool/beta_release.py inventory --plan metadata/beta-plan.json --aapt "$build_tools/aapt" --output inventory-final.json
+          gh api repos/L1Xu4n/FocuBili/releases/latest > latest-before.json
+          (cd release && sha256sum --check SHA256SUMS.txt)
+      - name: Publish complete prerelease without moving stable latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          BETA_NUMBER: ${{ inputs.beta_number }}
+        shell: bash
+        run: |
+          tag="$(python3 -c 'import json; print(json.load(open("metadata/beta-plan.json"))["tag"])')"
+          notes="docs/RELEASE_NOTES_${tag}.md"
+          test -f "$notes"
+          # Existing releases, including partial drafts, require explicit inspection.
+          # Never replace assets, move a tag or silently turn an existing release stable.
+          gh api --paginate --slurp repos/L1Xu4n/FocuBili/releases?per_page=100 > releases-before.json
+          TAG="$tag" python3 -c 'import json,os; assert not any(r["tag_name"] == os.environ["TAG"] for page in json.load(open("releases-before.json")) for r in page), "Release already exists"'
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag"; then
+            git fetch origin "refs/tags/$tag"
+            test "$(git rev-parse 'FETCH_HEAD^{}')" = "$SOURCE_SHA"
+          else
+            lookup_status=$?
+            test "$lookup_status" -eq 2
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git tag -a "$tag" -m "FocuBili $tag" "$SOURCE_SHA"
+            git push origin "refs/tags/$tag"
+          fi
+          gh release create "$tag" release/* --repo L1Xu4n/FocuBili --verify-tag --target "$SOURCE_SHA" --draft --prerelease --latest=false --title "FocuBili $tag" --notes-file "$notes"
+          python3 tool/beta_release.py verify-upload --plan metadata/beta-plan.json --folder release --draft
+          gh release edit "$tag" --repo L1Xu4n/FocuBili --draft=false --prerelease --latest=false
+          python3 tool/beta_release.py verify-upload --plan metadata/beta-plan.json --folder release
+          gh api repos/L1Xu4n/FocuBili/releases/latest > latest-after.json
+          python3 -c 'import json; a=json.load(open("latest-before.json")); b=json.load(open("latest-after.json")); assert (a["id"],a["tag_name"]) == (b["id"],b["tag_name"]), "Stable latest changed"'

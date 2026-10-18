@@ -54,6 +54,15 @@ if (flutterVersionName == null) {
     flutterVersionName = '1.0'
 }
 
+// Opt-in only: the ordinary release task keeps its stable identity unchanged.
+def betaNumber = project.findProperty('focubili.betaNumber')
+if (betaNumber != null && !(betaNumber.toString() ==~ /[1-9][0-9]*/)) {
+    throw new GradleException('Invalid focubili.betaNumber.')
+}
+if (betaNumber != null && flutterVersionCode.toInteger() <= 2025) {
+    throw new GradleException('Signed Beta versionCode must exceed archived Beta5 code 2025.')
+}
+
 android {
     namespace "com.focubili.app"
     // 当前 Android 插件需要 API 36；仅提高编译 API，不改变用户设备的最低支持版本。
@@ -108,6 +117,11 @@ android {
             manifestPlaceholders.appLabel = "焦点哔哩 Beta"
         }
         release {
+            if (betaNumber != null) {
+                applicationIdSuffix ".preview"
+                versionNameSuffix "-beta.${betaNumber}"
+                manifestPlaceholders.appLabel = "焦点哔哩 Beta"
+            }
             if (hasReleaseSigning) {
                 signingConfig signingConfigs.release
             }
