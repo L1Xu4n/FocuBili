@@ -1,5 +1,28 @@
 # 1.8 发布 PR 阶段组合回归
 
+## Consolidated settings and Apple delivery review
+
+Production source `f8a3146d139823b79e5f98568c27814411c04c92` combines the
+bounded image-cache import, a review of all 32 settings fields against their
+actual runtime models, and Apple background focus/deadline cancellation.
+See `../settings-import-schema-review.md`, `image-capacity-import.md` and
+`apple-delivery-gates.md` for field/gate matrices and original red cases.
+
+Actual Windows / Flutter 3.44.6 combined verification:
+
+- `flutter test --no-pub --reporter expanded`: **1148 passed, 1 skipped,
+  0 failed, 04:10, exit 0**. The sole skip requires Windows developer mode for
+  a symlink test; no system setting was changed.
+- `flutter analyze --no-pub`: no issues, 15.4s, exit 0.
+- Format check: 425 files, 0 changes; whitespace check: exit 0.
+- Shared import integration subset: 73 passed, exit 0. Native probe host
+  driver: 16 passed. Apple source equality/metadata checks passed.
+
+The previous remote revision `0125080` passed its full CI, Android/Windows,
+Linux and Apple jobs, including the iOS simulator checks. That success is
+historical: the new revision still requires fresh review and exact-head CI.
+No merge, tag, release or physical-device acceptance is implied by this record.
+
 ## Latest candidate: settings import maximum
 
 PR #63 finding `discussion_r4305618955` is fixed by production commit
