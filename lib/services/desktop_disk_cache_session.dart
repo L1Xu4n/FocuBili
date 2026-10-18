@@ -158,7 +158,8 @@ class DesktopDiskCacheSession {
     await _operations;
   }
 
-  /// Must run AFTER the player has closed its files, including external audio.
+  /// Must run AFTER public player disposal succeeds, including external audio.
+  /// media_kit may still finish native cleanup; storage handles late unlinks.
   Future<void> releaseAfterPlayerClosed() async {
     await stopMonitoring();
     WindowsMediaCacheRuntime.diskMessages.remove(this);

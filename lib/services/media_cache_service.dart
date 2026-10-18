@@ -344,7 +344,7 @@ class WindowsMediaCacheService implements MediaCacheService {
         await lock.release();
         // Creation and cleanup share sessions.lock, so nobody can claim this
         // old unique directory between releasing owner.lock and unlinking it.
-        entity.deleteSync(recursive: true);
+        _deleteInactiveEntity(entity);
       } else {
         legacy.add(entity);
       }
@@ -352,7 +352,48 @@ class WindowsMediaCacheService implements MediaCacheService {
     if (live || _playbackActiveLoader()) return;
     for (final entity in legacy) {
       _ensurePlaybackIdle();
-      entity.deleteSync(recursive: true); // Links are removed, never followed.
+      _deleteInactiveEntity(entity);
+    }
+  }
+
+  /// Public player disposal can overlap mpv's final packet-file unlinks. A
+  /// recursive OS delete reports the parent path even when only a child went
+  /// missing, so handle each node separately and never follow symbolic links.
+  /// This is not a native-termination barrier or a retry of failed deletions.
+  void _deleteInactiveEntity(FileSystemEntity entity) {
+    final type = FileSystemEntity.typeSync(entity.path, followLinks: false);
+    try {
+      if (type == FileSystemEntityType.notFound) {
+        // typeSync also returns notFound for lookup failures. The deletion
+        // must itself confirm ENOENT rather than hiding a permission/I/O error.
+        entity.deleteSync();
+      } else if (type == FileSystemEntityType.directory) {
+        final directory = entity is Directory ? entity : Directory(entity.path);
+        for (final child in directory.listSync(followLinks: false)) {
+          _deleteInactiveEntity(child);
+        }
+        directory.deleteSync(); // Require an empty parent; never recurse here.
+      } else if (type == FileSystemEntityType.link) {
+        Link(entity.path).deleteSync();
+      } else {
+        final file = entity is File ? entity : File(entity.path);
+        file.deleteSync();
+      }
+    } on FileSystemException catch (error) {
+      final code = error.osError?.errorCode;
+      final missing = code == 2 || (Platform.isWindows && code == 3);
+      if (!missing ||
+          FileSystemEntity.typeSync(entity.path, followLinks: false) !=
+              FileSystemEntityType.notFound) {
+        rethrow;
+      }
+    }
+    if (FileSystemEntity.typeSync(entity.path, followLinks: false) !=
+        FileSystemEntityType.notFound) {
+      throw FileSystemException(
+        'Inactive cache entry was not removed',
+        entity.path,
+      );
     }
   }
 
@@ -393,7 +434,8 @@ class MediaCacheDirectoryLease {
   final WindowsMediaCacheService _service;
   bool _closed = false;
 
-  /// Call only after mpv has closed all handles using this directory.
+  /// Call only after public player disposal succeeds. mpv may still finish
+  /// native cleanup; maintenance tolerates its late packet-file unlinks.
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
