@@ -1,4 +1,4 @@
-import 'package:cached_network_image/cached_network_image.dart';
+import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/material.dart';
 
 /// 为账号收藏与本机收藏提供同一套自适应封面、名称和数量布局。
@@ -56,17 +56,13 @@ class FavoriteFolderCard extends StatelessWidget {
                       children: [
                         coverUrl.isEmpty
                             ? _placeholder(context)
-                            : CachedNetworkImage(
+                            : AppNetworkImage(
                                 imageUrl: coverUrl,
                                 httpHeaders: const {
                                   'Referer': 'https://www.bilibili.com/',
                                 },
                                 fit: BoxFit.cover,
                                 memCacheWidth: 256,
-                                maxWidthDiskCache: 512,
-                                fadeInDuration: const Duration(
-                                  milliseconds: 120,
-                                ),
                                 placeholder: (context, _) =>
                                     _placeholder(context),
                                 errorWidget: (context, _, error) =>

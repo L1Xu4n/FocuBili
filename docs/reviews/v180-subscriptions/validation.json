@@ -1,0 +1,89 @@
+{
+  "baseCommit": "5e128bdd1952b3f619500f69aa7bc8c33a88d0b4",
+  "branch": "codex/v1.8-subscriptions",
+  "environment": "Windows local Flutter test host, Android JVM",
+  "flutterDirectedSuite": {
+    "passed": 105,
+    "failed": 0,
+    "files": 16,
+    "logLocal": "subscription-validation-final.log"
+  },
+  "finalGuardSuite": {
+    "passed": 60,
+    "failed": 0,
+    "files": 4,
+    "logLocal": "subscription-final-guards.log"
+  },
+  "androidPluginJvm": {
+    "passed": 34,
+    "failed": 0,
+    "errors": 0,
+    "suites": 6,
+    "compile": "success",
+    "task": ":focubili_android:testDebugUnitTest",
+    "logLocal": "subscription-android-final.log"
+  },
+  "staticAnalysis": "No issues found",
+  "formatCheck": "passed",
+  "gitDiffCheck": "passed",
+  "screenshots": {
+    "count": 12,
+    "kind": "Flutter fixture renders, not device tests",
+    "sha256": {
+      "card-desktop-dark.png": "7f046ba9107b0dc6a8185d7a786d1810ee27d673bd2a2d2dd413d06274e71811",
+      "card-large-text.png": "1cb49dacd1943d4db479342d2759e8183b1684816aa5c1e031d22f63355f3dcb",
+      "card-mobile.png": "e60e4c2e0646cd654b9bb742d642707c1e87e9cce189c6d0576444e321816be9",
+      "feed-desktop-dark.png": "ec301c3a3e9c7aa151ed3fa7d74aa722fac4fade015fb09719b9049ee3189629",
+      "feed-large-text.png": "676e7f53c71d9b5cdc564432f824347ecfb39b05b86a847b27a0a80d05d168a2",
+      "feed-mobile.png": "c13e78172759bee004d78d0340aa9f634cd5fd82567d9385d71f532dc4092a9d",
+      "introduction-dialog.png": "11757c5cc1806c52e4d89d98bc9371f6fb7e8ec1df580d7039b87fc535bf27b1",
+      "introduction-first-card.png": "28d8082c0408796ed108c256f4a5c83c753e968f848c945a1d6e312d4c8998ad",
+      "introduction-home.png": "5ae8e728a602419994859dbfe1ca85e7af6e00cb1bcb87f0bebf1eae5f353314",
+      "sources-desktop-dark.png": "ac3e046fc4c60adef06aa0f5979a555beeada59256f5dfe4bfb988c68ba54d8d",
+      "sources-large-text.png": "3c17651acfafedb014a66f148396de2f753008a27ff9696750914d116c22382b",
+      "sources-mobile.png": "ef26e271985d04951981380afaf22c6a13d2e606f65b479903e2ac670dbedcf7"
+    }
+  },
+  "notVerified": [
+    "Apple Swift compilation",
+    "real Android OEM background execution",
+    "actual Bilibili collection ordering and new item delivery",
+    "real OS notification display and taps",
+    "signed release upgrade from beta4/5"
+  ],
+  "platformPolling": {
+    "android": "native WorkManager opt-in, OS may defer",
+    "windows": "foreground only",
+    "linux": "foreground only",
+    "ios": "foreground only",
+    "macos": "foreground only"
+  },
+  "collectionCoverage": "default and reverse ordering pages 1 and 2, at most 4 content HTTP requests per successful live round; arbitrary middle insertions/reordering not guaranteed",
+  "readRetention": "first readAt + 7 * 24h, inclusive boundary; feed only, dedupe/history/learning retained",
+  "sourceSha256": {
+    "lib/app.dart": "d9e7fbb492c2cf832a029e40ae8cd83515f8f3f1139dbb5e79d7187e555825c8",
+    "lib/features/focus/focus_dashboard.dart": "d113f9bd4ef10c7813b50642aff3f3acfa6232c487c1c3d422af575a24247d17",
+    "lib/features/focus/focus_dashboard_home_cards.dart": "cb4958f54c03b0b628edf01309b7ea016bc5bcb34bced353e9631cc74472e4ea",
+    "lib/features/focus/focus_dashboard_home_layout.dart": "124ffdfc653c006463229746e0e6ae50132aaa130fb7b0ebbf3923548bfd7734",
+    "lib/features/profile/profile_page.dart": "dd2202dcdf4cad52f40751e5c99c40202f294eaf7f8267e4c2c7eb6c693cedff",
+    "lib/features/subscriptions/subscription_feed_tile.dart": "c061907ef2f5f93ea8c819ca4834684a32a7f4b5dea82d31baa1537649b9a403",
+    "lib/features/subscriptions/subscription_introduction.dart": "b848636d87ee133390e966fc04ecc350706ccc2486f76c6c3514385cccaa06c6",
+    "lib/features/subscriptions/subscription_updates_page.dart": "a11e593f71feec5f6a77f9b5c51592da4b9fe2f01c56b6e2772adc2f6d2eb18f",
+    "lib/services/bilibili_public_content_service.dart": "6356ad869a9e3559bdd1c1dd5f3b37240ebd498998786132a2c1ef4f71712f3b",
+    "lib/services/subscription_background_service.dart": "6234634d747386176aefad1aa56d1f2d460cbb9d21fea58fb9d9edda6277fad5",
+    "lib/services/subscription_notification_service.dart": "22c14dd2c8066f214b1e1a5fa994818fa7ce31da8a0fc9bf102b2e42df1d81be",
+    "lib/services/subscription_onboarding_service.dart": "44721c402a5ef453bbde4b639af985cab947eadfe29909afadc6e2fc0ae7ec90",
+    "lib/services/subscription_service.dart": "07529d1c19a4495218511b01242f95ca443aee932b081966b6c35a39f577633f",
+    "lib/services/windows_focus_notification_service.dart": "d2679149a8bcb5bac6b1ae933f6a338d80f2688b85f85aede3f5c225fca9ada0",
+    "packages/focubili_android/android/src/main/kotlin/com/focubili/app/SubscriptionNotificationController.kt": "20e3dbce1797e24fced9f5d5e4d2d6a7317861a360c5a1e12350c0bc6e2f0c1d",
+    "packages/focubili_apple/ios/Classes/FocuBiliApplePlugin.swift": "86039fcd2741382783199be6d6a6569ebf4817cba4634c4f823cb6509966a890",
+    "packages/focubili_apple/macos/Classes/FocuBiliApplePlugin.swift": "86039fcd2741382783199be6d6a6569ebf4817cba4634c4f823cb6509966a890",
+    "test/subscription_compact_ui_test.dart": "5790c192350ac426ce74cc30a2bfb962258c22c0e913fa04f9a2c81ab6f1aa55",
+    "test/subscription_migration_test.dart": "ffbbf9b91f2c860461bafe12a236e889d21f6dfe7fa44bdc931a908ee14cd998",
+    "test/subscription_optimization_test.dart": "6310faf9a72bf2e3371f54d1da658c2e4927f38999344e2eeb22831ab78afc57",
+    "test/subscription_release_test.dart": "36cd08a02f55c50502fed7caf7b94450f1f542f736d72e6dac3b31da2f7abc08",
+    "test/subscription_updates_page_test.dart": "94ced3b4a8941d1f232f647647bb90647ccfb8e8e92ab3f20f7adc63bce57f2c",
+    "test/support/subscription_public_pages.dart": "777170c711141888a80710d8259f8f73f043406568ef5ac08238dc27c820e767",
+    "test/windows_focus_notification_service_test.dart": "538c22cfa89ddc0a838c899dd75bfbafe74bf123999e9ee6e4b1a4fd5d47822d"
+  }
+}

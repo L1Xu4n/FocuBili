@@ -1,3 +1,4 @@
+import 'package:focubili/features/common/app_network_image.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -346,10 +347,10 @@ class _LearningListPageState extends State<LearningListPage> {
     if (entry.thumbnailUrl.isEmpty) {
       return _buildThumbnailPlaceholder();
     }
-    return Image.network(
-      entry.thumbnailUrl,
+    return AppNetworkImage(
+      imageUrl: entry.thumbnailUrl,
       fit: BoxFit.cover,
-      errorBuilder: (BuildContext context, Object error, StackTrace? trace) =>
+      errorWidget: (BuildContext context, String url, Object error) =>
           _buildThumbnailPlaceholder(),
     );
   }

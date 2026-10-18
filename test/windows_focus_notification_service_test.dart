@@ -150,4 +150,22 @@ void main() {
     expect(client.initializeCalls, 1);
     expect(client.openSettingsCalls, 1);
   });
+  test(
+    'subscription desktop notifications use video title and source without focus diagnostic contents',
+    () async {
+      final client = _FakeWindowsNotificationClient();
+      final backend = WindowsFocusNotificationBackend(client: client);
+      expect(
+        await backend.showSubscriptionUpdate(
+          title: '新视频标题',
+          source: '来自课程合集',
+          count: 2,
+        ),
+        true,
+      );
+      expect(client.shown.single.title, '新视频标题');
+      expect(client.shown.single.body, startsWith('来自课程合集'));
+      expect(client.shown.single.body, contains('另有 1 条更新'));
+    },
+  );
 }

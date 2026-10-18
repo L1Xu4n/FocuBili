@@ -37,8 +37,8 @@ import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
+import androidx.media3.datasource.cache.CacheDataSink
 import androidx.media3.datasource.cache.CacheDataSource
-import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -431,6 +431,10 @@ class NativePlaybackController(
             }
             "clearMediaCache" -> {
                 handleMediaCacheOperation(result, ::clearMediaCache)
+            }
+            "clearSubtitleSessions" -> {
+                clearSubtitleTrackSession()
+                result.success(null)
             }
             "loadSubtitleTracks" -> {
                 val bvid = call.argument<String>("bvid")?.trim().orEmpty()
@@ -1630,8 +1634,19 @@ class NativePlaybackController(
         }
         val subtitleUrl = session.readableTrackUrls[trackId]
             ?: throw SubtitleOperationException("subtitle_locked", "此字幕当前不可用。")
+        synchronized(subtitleTrackSessions) {
+            if (subtitleTrackSessions[bvid to cid] === session) {
+                subtitleTrackSessions.remove(bvid to cid)
+                subtitleTrackSessions[bvid to cid] = session
+            }
+        }
         val root = parseSubtitleJson(requestSubtitleDocumentJson(subtitleUrl, bvid))
         checkSubtitleRequestEpoch(requestEpoch)
+        synchronized(subtitleTrackSessions) {
+            if (subtitleTrackSessions[bvid to cid] !== session) {
+                throw SubtitleOperationException("subtitle_request_cancelled", "字幕轨道已更新，请重新选择。")
+            }
+        }
         val rawCues = root.optJSONArray("body")
         val cues = mutableListOf<Map<String, Any>>()
         if (rawCues != null) {
@@ -2341,8 +2356,16 @@ class NativePlaybackController(
         if (bypassCache) {
             return networkFactory
         }
+        val cache = ensureMediaCache()
         return CacheDataSource.Factory()
-            .setCache(ensureMediaCache())
+            .setCache(cache)
+            .setCacheWriteDataSinkFactory {
+                OptionalCacheDataSink(CacheDataSink(cache, 2L * 1024 * 1024)) { spec ->
+                    spec.key?.let { key ->
+                        pinnedCacheEvictor?.releaseReservations(cache, key, spec.position, spec.length)
+                    }
+                }
+            }
             .setUpstreamDataSourceFactory(networkFactory)
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
     }
@@ -2352,14 +2375,18 @@ class NativePlaybackController(
      *
      * 该缓存只减少短期重复请求，不保存完整视频，也不构成离线下载。
      */
+    private var pinnedCacheEvictor: PinnedLruCacheEvictor? = null
+
     private fun ensureMediaCache(): SimpleCache {
         mediaCache?.let { cache -> return cache }
         val cacheDirectory = File(activity.cacheDir, MEDIA_CACHE_DIRECTORY_NAME)
+        val evictor = PinnedLruCacheEvictor(readConfiguredMediaCacheCapacity())
         val cache = SimpleCache(
             cacheDirectory,
-            LeastRecentlyUsedCacheEvictor(readConfiguredMediaCacheCapacity()),
+            evictor,
             cacheDatabaseProvider,
         )
+        pinnedCacheEvictor = evictor
         mediaCache = cache
         return cache
     }
@@ -2510,6 +2537,13 @@ class NativePlaybackController(
             .setTitle(displayTitle)
             .setArtist(currentOwnerName.ifBlank { "未知 UP 主" })
             .build()
+        if (!bypassMediaCacheForPlayback) {
+            val cache = ensureMediaCache()
+            pinnedCacheEvictor?.pin(cache, buildSet {
+                if (!audioOnly) add(playbackCacheKey(sources, video = true))
+                if (isSafeMediaUrl(audioUrl)) add(playbackCacheKey(sources, video = false))
+            })
+        }
         val sourceFactory = ProgressiveMediaSource.Factory(
             createMediaDataSourceFactory(
                 referer = sources.referer,
@@ -2624,6 +2658,13 @@ class NativePlaybackController(
         val nativePlayer = player
         val duration = nativePlayer?.duration?.takeIf { it > 0 } ?: 0L
         val position = nativePlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
+        // Media3 给出的当前连续缓冲段；跳转前未缓存的空隙不能画成已缓存。
+        val bufferedEnd = nativePlayer?.bufferedPosition?.coerceIn(0L, duration) ?: 0L
+        val bufferedRanges = if (playbackPrepared && duration > 0L) {
+            if (localSource) listOf(mapOf("startMs" to 0L, "endMs" to duration))
+            else if (bufferedEnd > position) listOf(mapOf("startMs" to position, "endMs" to bufferedEnd))
+            else emptyList()
+        } else emptyList()
         channel.invokeMethod(
             "playbackEvent",
             mapOf(
@@ -2634,6 +2675,7 @@ class NativePlaybackController(
                 "sleepTimerRemainingMs" to sleepTimer.remainingMs(),
                 "positionMs" to position,
                 "durationMs" to duration,
+                "bufferedRanges" to bufferedRanges,
                 "speed" to playbackSpeed.toDouble(),
                 "quality" to currentQuality,
                 "qualities" to availableQualities.map { quality ->
@@ -2825,6 +2867,7 @@ class NativePlaybackController(
         player?.clearMediaItems()
         player?.release()
         player = null
+        mediaCache?.let { cache -> pinnedCacheEvictor?.pin(cache, emptySet()) }
         videoSurface?.release()
         videoSurface = null
         textureEntry?.release()
@@ -2860,6 +2903,7 @@ class NativePlaybackController(
     private fun releaseMediaCache() {
         runCatching { mediaCache?.release() }
         mediaCache = null
+        pinnedCacheEvictor = null
     }
 
     /** 播放资源释放时撤销排队请求并清空字幕地址，其他切换靠 BV/CID 隔离会话。 */

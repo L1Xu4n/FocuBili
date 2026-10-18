@@ -22,6 +22,8 @@ class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         requestedOrientation = LargeScreenOrientationPolicy.preferredOrientation(
             resources.configuration.smallestScreenWidthDp,
+            getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
+                .getString("flutter.appearance.layout_orientation", "adaptive") ?: "adaptive",
         )
         deferredDeepLink = externalLinkFromIntent(intent)
         super.onCreate(savedInstanceState)

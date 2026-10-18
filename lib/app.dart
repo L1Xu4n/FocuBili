@@ -39,6 +39,7 @@ class FocuBiliApp extends StatefulWidget {
     this.clipboardLinkMonitor,
     this.videoService,
     this.subscriptionService,
+    this.subscriptionNotificationService,
     this.checkForUpdatesOnStart = false,
   });
 
@@ -50,6 +51,7 @@ class FocuBiliApp extends StatefulWidget {
   final ClipboardLinkMonitor? clipboardLinkMonitor;
   final BilibiliService? videoService;
   final SubscriptionService? subscriptionService;
+  final SubscriptionNotificationService? subscriptionNotificationService;
   final bool checkForUpdatesOnStart;
 
   /// 创建持有全应用专注状态的根组件状态。
@@ -74,7 +76,9 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
       GlobalKey<ScaffoldMessengerState>();
   late final _subscriptions =
       widget.subscriptionService ?? SubscriptionService.instance;
-  final _subscriptionNotifications = SubscriptionNotificationService();
+  late final _subscriptionNotifications =
+      widget.subscriptionNotificationService ??
+      SubscriptionNotificationService();
   bool _pendingSubscriptionTap = false;
   String? _handledCompletionId;
   bool _completionDialogOpen = false;
@@ -98,8 +102,15 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
         _focusTimerController.hasActiveSession;
     _subscriptions.notifySummary = (count) => _subscriptionNotifications
         .showSummary(count, generation: _subscriptions.notificationGeneration);
+    _subscriptions.notifyItems = (items) => _subscriptionNotifications
+        .showItems(items, generation: _subscriptions.notificationGeneration);
     unawaited(_subscriptionNotifications.initialize(_handleSubscriptionTap));
     _focusTimerController.addListener(_handleFocusTimerChanged);
+    if (_focusTimerController.isReady) {
+      _subscriptionNotifications.updateFocusState(
+        _focusTimerController.hasActiveSession,
+      );
+    }
     unawaited(_focusTimerController.initialize());
     _ownsAppUpdateController = widget.appUpdateController == null;
     _appUpdateController = widget.appUpdateController ?? AppUpdateController();
@@ -366,6 +377,9 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
 
   /// 监听正常完成记录，并在根导航器就绪后只显示一次庆祝弹窗。
   void _handleFocusTimerChanged() {
+    _subscriptionNotifications.updateFocusState(
+      _focusTimerController.hasActiveSession,
+    );
     final FocusSession? finished = _focusTimerController.lastFinishedSession;
     if (finished == null ||
         finished.status != FocusSessionStatus.completed ||
@@ -444,6 +458,7 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
     _subscriptions.setForeground(false);
     _subscriptions.suppressNotifications = null;
     _subscriptions.notifySummary = null;
+    _subscriptions.notifyItems = null;
     _subscriptionNotifications.dispose();
     _clipboardLinkMonitor.dispose();
     _focusTimerController.removeListener(_handleFocusTimerChanged);

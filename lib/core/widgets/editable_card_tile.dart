@@ -1,5 +1,88 @@
 part of 'editable_card_board.dart';
 
+/// 卡片保持真实命中位置，只对绘制位移做短过渡；滚动不参与重排动画。
+class _DashboardCardPlacement extends StatefulWidget {
+  const _DashboardCardPlacement({
+    super.key,
+    required this.boardKey,
+    required this.animate,
+    required this.child,
+  });
+  final GlobalKey boardKey;
+  final bool animate;
+  final Widget child;
+
+  @override
+  State<_DashboardCardPlacement> createState() =>
+      _DashboardCardPlacementState();
+}
+
+class _DashboardCardPlacementState extends State<_DashboardCardPlacement>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _movement = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 160),
+    value: 1,
+  );
+  Offset? _position;
+  Offset _from = Offset.zero;
+
+  void _measure() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final box = context.findRenderObject();
+      final board = widget.boardKey.currentContext?.findRenderObject();
+      if (box is! RenderBox ||
+          board is! RenderBox ||
+          !box.attached ||
+          !board.attached) {
+        return;
+      }
+      final next = box.localToGlobal(Offset.zero, ancestor: board);
+      final previous = _position;
+      _position = next;
+      if (previous == null || previous == next) return;
+      if (!widget.animate || MediaQuery.disableAnimationsOf(context)) return;
+      _from =
+          previous -
+          next +
+          _from * (1 - Curves.easeOutCubic.transform(_movement.value));
+      _movement.forward(from: 0);
+    });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _measure();
+  }
+
+  @override
+  void didUpdateWidget(covariant _DashboardCardPlacement oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _measure();
+  }
+
+  @override
+  Widget build(BuildContext context) => RepaintBoundary(
+    child: AnimatedBuilder(
+      animation: _movement,
+      child: widget.child,
+      builder: (context, child) => Transform.translate(
+        offset: _from * (1 - Curves.easeOutCubic.transform(_movement.value)),
+        transformHitTests: false,
+        child: child,
+      ),
+    ),
+  );
+
+  @override
+  void dispose() {
+    _movement.dispose();
+    super.dispose();
+  }
+}
+
 /// 承载业务内容、编辑操作和截图散片动画，业务点击在编辑时被吸收。
 class _EditableCardTile extends StatefulWidget {
   /// 接收卡片定义和仅负责布局的操作回调。

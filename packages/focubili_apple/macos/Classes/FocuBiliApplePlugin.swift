@@ -15,8 +15,19 @@ import Network
 
 /// Only app-owned data is exposed; no device identifiers or credentials are logged.
 public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCenterDelegate {
+    #if os(iOS)
+    static var registeringSubscriptionWorker = false
+    private var subscriptionWorkerToken: String?
+    private var subscriptionWorkerFocusEpoch: Int?
+    private var isSubscriptionWorker = false
+    #else
+    private let subscriptionScheduler = FocuBiliDesktopSubscriptionScheduler()
+    #endif
     private var channels: [FlutterMethodChannel] = []
     private var mediaChannel: FlutterMethodChannel?
+    private var subscriptionChannel: FlutterMethodChannel?
+    private let subscriptionDeliveryGate = SubscriptionNotificationGate()
+    private var subscriptionTapPending = false
     private var pictureInPicture: FocuBiliAppleVideoWindow?
     private var initialLink: String?
     private var networkType = "other"
@@ -28,16 +39,34 @@ public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCen
         let instance = FocuBiliApplePlugin()
         #if os(iOS)
         let messenger = registrar.messenger()
-        registrar.addApplicationDelegate(instance)
+        if !registeringSubscriptionWorker { registrar.addApplicationDelegate(instance) }
         #else
         let messenger = registrar.messenger
         #endif
-        for name in ["auth", "focus_notifications", "device_status", "apple_media"] {
+        #if os(iOS)
+        let worker = registeringSubscriptionWorker
+        instance.isSubscriptionWorker = worker
+        if worker {
+            instance.subscriptionWorkerToken = FocuBiliSubscriptionScheduler.shared.currentRunToken
+            instance.subscriptionWorkerFocusEpoch = SubscriptionFocusGate.shared.capture()
+        }
+        let names = worker ? ["auth", "subscription_notifications"] : ["auth", "focus_notifications", "subscription_notifications", "device_status", "apple_media"]
+        #else
+        let names = ["auth", "focus_notifications", "subscription_notifications", "device_status", "apple_media"]
+        #endif
+        for name in names {
             let channel = FlutterMethodChannel(name: "com.focubili.app/" + name, binaryMessenger: messenger)
             channel.setMethodCallHandler { call, result in instance.handle(name, call, result) }
             instance.channels.append(channel)
             if name == "apple_media" { instance.mediaChannel = channel }
+            if name == "subscription_notifications" { instance.subscriptionChannel = channel }
         }
+        #if os(iOS)
+        if worker { registrar.publish(instance); return }
+        instance.channels.append(FocuBiliSubscriptionScheduler.shared.attach(messenger: messenger))
+        #else
+        instance.channels.append(instance.subscriptionScheduler.attach(messenger: messenger))
+        #endif
         let deep = FlutterMethodChannel(name: "focubili/deep_links", binaryMessenger: messenger)
         deep.setMethodCallHandler { call, result in
             if call.method == "getInitialLink" {
@@ -62,6 +91,7 @@ public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCen
         switch name {
         case "auth": auth(call, result)
         case "focus_notifications": notifications(call, result)
+        case "subscription_notifications": subscriptionNotifications(call, result)
         case "apple_media": media(call, result)
         case "device_status":
             switch call.method {
@@ -120,6 +150,109 @@ public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCen
                     writes.enter(); store.setCookie(cookie) { writes.leave() }
                 }
                 writes.notify(queue: .main) { result(nil) }
+            }
+        }
+    }
+
+    // Scheduling is separate; this posts only an already checked update.
+    private func subscriptionNotifications(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
+        if call.method == "consumeTap" {
+            result(subscriptionTapPending); subscriptionTapPending = false; return
+        }
+        let args = call.arguments as? [String: Any] ?? [:]
+        if call.method == "setFocusActive" {
+            #if os(iOS)
+            guard !isSubscriptionWorker else { result(false); return }
+            #endif
+            guard let active = args["active"] as? Bool else {
+                result(FlutterError(code: "invalid_focus", message: "Invalid focus state", details: nil)); return
+            }
+            SubscriptionFocusGate.shared.update(active: active)
+            result(nil); return
+        }
+        if call.method == "cancelWorkerSummary" {
+            #if os(iOS)
+            guard isSubscriptionWorker else { result(false); return }
+            subscriptionDeliveryGate.cancelWorker()
+            result(nil)
+            #else
+            result(false)
+            #endif
+            return
+        }
+        if call.method == "cancelSummary" {
+            if let request = args["requestId"] as? String { subscriptionDeliveryGate.finish(request) }
+            result(nil); return
+        }
+        guard call.method == "showSummary" else { result(FlutterMethodNotImplemented); return }
+        guard let count = args["count"] as? Int, count > 0 else { result(false); return }
+        let center = UNUserNotificationCenter.current()
+        #if os(iOS)
+        let isBackground = args["background"] as? Bool == true
+        let generation = args["generation"] as? Int ?? -1
+        // Bind background delivery to engine registration, not the later show
+        // call: focus may start and end before that queued call reaches native.
+        let focusEpoch = isBackground ? subscriptionWorkerFocusEpoch : SubscriptionFocusGate.shared.capture()
+        #else
+        let isBackground = false
+        let focusEpoch = SubscriptionFocusGate.shared.capture()
+        #endif
+        let canDeliver = { () -> Bool in
+            guard SubscriptionFocusGate.shared.permits(focusEpoch) else { return false }
+            #if os(iOS)
+            if isBackground {
+                guard !self.subscriptionDeliveryGate.workerCancelled else { return false }
+                return FocuBiliSubscriptionScheduler.shared.canNotify(generation: generation, runToken: self.subscriptionWorkerToken)
+            }
+            #endif
+            return true
+        }
+        guard canDeliver() else { result(false); return }
+        let requestId = args["requestId"] as? String
+        if !isBackground {
+            guard let request = requestId, subscriptionDeliveryGate.begin(request) else { result(false); return }
+        }
+        let reject = {
+            if let request = requestId { self.subscriptionDeliveryGate.finish(request) }
+            result(false)
+        }
+        center.getNotificationSettings { settings in
+            DispatchQueue.main.async {
+                // Serialize delivery against native opt-out, generation changes
+                // and expiration, even if UN settings replied on another queue.
+                guard canDeliver() else { reject(); return }
+                guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else {
+                    reject(); return
+                }
+                let deliver = {
+                    // Latest UI-owned focus state, serialized with center.add.
+                    // Never ask the headless Dart engine for a cached snapshot.
+                    guard canDeliver() else { reject(); return }
+                    // Cancellation may arrive while the Dart guard reply is in
+                    // flight. Consume on this same main-queue turn as center.add.
+                    if !isBackground {
+                        guard let request = requestId, self.subscriptionDeliveryGate.finish(request) else { result(false); return }
+                    }
+                    let content = UNMutableNotificationContent()
+                    content.title = String((args["title"] as? String ?? "焦点订阅").prefix(240))
+                    content.subtitle = String((args["source"] as? String ?? "").prefix(240))
+                    content.body = count > 1 ? "另有 \(count - 1) 条更新，打开焦点订阅查看" : "点击查看订阅更新"
+                    content.threadIdentifier = "focubili.subscriptions"
+                    center.add(UNNotificationRequest(identifier: "focubili.subscriptions", content: content, trigger: nil)) { error in
+                        self.complete(result, error == nil)
+                    }
+                }
+                if isBackground { deliver(); return }
+                guard let request = requestId, self.subscriptionDeliveryGate.contains(request),
+                      let channel = self.subscriptionChannel else { reject(); return }
+                // The Dart guard includes source changes, opt-out, focus and
+                // disposal, including when background refresh is disabled.
+                channel.invokeMethod("canDeliver", arguments: ["requestId": request]) { allowed in
+                    DispatchQueue.main.async {
+                        guard SubscriptionNotificationGate.allows(allowed) else { reject(); return }
+                        deliver()
+                    }
+                }
             }
         }
     }
@@ -288,6 +421,16 @@ public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCen
         return true
     }
     #endif
+
+    public func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
+        if response.notification.request.identifier == "focubili.subscriptions" {
+            DispatchQueue.main.async {
+                self.subscriptionTapPending = true
+                self.subscriptionChannel?.invokeMethod("subscriptionTapped", arguments: nil)
+            }
+        }
+        completionHandler()
+    }
 
     public func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         completionHandler([.alert, .sound])

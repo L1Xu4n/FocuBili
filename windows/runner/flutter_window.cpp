@@ -1,5 +1,6 @@
 #include "flutter_window.h"
 
+#include <algorithm>
 #include <exception>
 #include <optional>
 #include <string>
@@ -138,6 +139,62 @@ bool FlutterWindow::OnCreate() {
   windows_experience_ = std::make_unique<WindowsExperience>(
       GetHandle(), flutter_controller_->engine()->messenger());
 
+  subscription_scheduler_channel_ = std::make_unique<
+      flutter::MethodChannel<flutter::EncodableValue>>(
+      flutter_controller_->engine()->messenger(),
+      "com.focubili.app/subscription_scheduler",
+      &flutter::StandardMethodCodec::GetInstance());
+  subscription_scheduler_channel_->SetMethodCallHandler(
+      [this](const flutter::MethodCall<flutter::EncodableValue>& call,
+             std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+        bool accepted = true;
+        if (call.method_name() == "configure") {
+          const auto* args = std::get_if<flutter::EncodableMap>(call.arguments());
+          if (!args) {
+            result->Error("invalid_schedule", "Invalid schedule");
+            return;
+          }
+          auto number = [args](const char* key, int64_t fallback) {
+            const auto found = args->find(flutter::EncodableValue(key));
+            if (found == args->end()) return fallback;
+            if (const auto* value = std::get_if<int32_t>(&found->second)) {
+              return static_cast<int64_t>(*value);
+            }
+            if (const auto* value = std::get_if<int64_t>(&found->second)) {
+              return *value;
+            }
+            return fallback;
+          };
+          const auto enabled = args->find(flutter::EncodableValue("enabled"));
+          const auto generation = number("generation", -1);
+          if (enabled == args->end() ||
+              !std::holds_alternative<bool>(enabled->second) || generation < 0) {
+            result->Error("invalid_schedule", "Invalid schedule");
+            return;
+          }
+          KillTimer(GetHandle(), kSubscriptionTimer);
+          subscription_timer_enabled_ = false;
+          subscription_generation_ = generation;
+          if (std::get<bool>(enabled->second)) {
+            const auto seconds = std::clamp<int64_t>(
+                number("intervalSeconds", 3600), 1, 86400);
+            subscription_timer_enabled_ = SetTimer(
+                GetHandle(), kSubscriptionTimer,
+                static_cast<UINT>(seconds * 1000), nullptr) != 0;
+            accepted = subscription_timer_enabled_;
+          }
+        } else if (call.method_name() != "getStatus") {
+          result->NotImplemented();
+          return;
+        }
+        result->Success(flutter::EncodableValue(flutter::EncodableMap{
+            {flutter::EncodableValue("available"), flutter::EncodableValue(true)},
+            {flutter::EncodableValue("accepted"), flutter::EncodableValue(accepted)},
+            {flutter::EncodableValue("mode"), flutter::EncodableValue("process")},
+            {flutter::EncodableValue("status"), flutter::EncodableValue(
+                subscription_timer_enabled_ ? "scheduled_process" : "stopped")}}));
+      });
+
   // 升级后先恢复旧版本可能遗留的全局通知值；之后不再用注册表模拟系统专注。
   RestoreLegacyNotificationSetting();
 
@@ -234,6 +291,9 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  KillTimer(GetHandle(), kSubscriptionTimer);
+  subscription_timer_enabled_ = false;
+  subscription_scheduler_channel_.reset();
   windows_experience_.reset();
   // 退出时再次尝试清理旧版残留；当前版本本身不会再修改系统专注状态。
   RestoreLegacyNotificationSetting();
@@ -253,6 +313,14 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
   try {
+    if (message == WM_TIMER && wparam == kSubscriptionTimer &&
+        subscription_timer_enabled_ && subscription_scheduler_channel_) {
+      subscription_scheduler_channel_->InvokeMethod(
+          "check", std::make_unique<flutter::EncodableValue>(flutter::EncodableMap{
+              {flutter::EncodableValue("generation"),
+               flutter::EncodableValue(subscription_generation_)}}));
+      return 0;
+    }
     if (windows_experience_) windows_experience_->OnWindowMessage(message, wparam);
     // Give Flutter, including plugins, an opportunity to handle window messages.
     if (flutter_controller_) {

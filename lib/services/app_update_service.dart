@@ -74,7 +74,9 @@ class PlatformAppVersionProvider implements AppVersionProvider {
   @override
   Future<String> loadVersion() async {
     final PackageInfo info = await PackageInfo.fromPlatform();
-    return info.version;
+    return info.buildNumber.trim().isEmpty
+        ? info.version
+        : '${info.version}+${info.buildNumber}';
   }
 }
 

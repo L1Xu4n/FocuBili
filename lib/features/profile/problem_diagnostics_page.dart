@@ -195,6 +195,7 @@ class _ProblemDiagnosticsPageState extends State<ProblemDiagnosticsPage> {
             ),
             const SizedBox(height: 8),
             _buildInfoRow('应用版本', snapshot.appVersion),
+            _buildInfoRow('BuildTime', snapshot.buildTime),
             _buildInfoRow('系统版本', snapshot.deviceInfo.systemLabel),
             _buildInfoRow('设备类型', snapshot.deviceInfo.model),
             _buildInfoRow(
@@ -479,6 +480,25 @@ class _ProblemDiagnosticsPageState extends State<ProblemDiagnosticsPage> {
                       _buildReminderDiagnosticsCard(
                         snapshot.reminderDiagnostics,
                         snapshot.deviceInfo,
+                      ),
+                      Card(
+                        child: ExpansionTile(
+                          key: const Key('runtime-environment-diagnostics'),
+                          title: const Text('详细运行环境'),
+                          childrenPadding: const EdgeInsets.fromLTRB(
+                            16,
+                            0,
+                            16,
+                            12,
+                          ),
+                          children: [
+                            for (final entry in {
+                              ...snapshot.environment,
+                              ...snapshot.deviceInfo.publicInfo,
+                            }.entries)
+                              _buildInfoRow(entry.key, entry.value),
+                          ],
+                        ),
                       ),
                       _buildRecentErrors(snapshot),
                     ],

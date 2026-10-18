@@ -57,6 +57,13 @@ extension _FocusDashboardHomeCards on _FocusDashboardState {
         icon: Icons.apps_rounded,
         builder: _buildHomeActionsCard,
       ),
+      DashboardCardDefinition(
+        id: 'home.focus_subscriptions',
+        title: '焦点订阅',
+        icon: Icons.rss_feed_rounded,
+        available: _subscriptions.enabled,
+        builder: (_) => SubscriptionHomeCard(service: _subscriptions),
+      ),
     ];
   }
 
@@ -71,7 +78,7 @@ extension _FocusDashboardHomeCards on _FocusDashboardState {
       key: _homeBoardKey,
       storageId: 'home',
       items: _homeCardDefinitions(activeSession, finishedSession),
-      service: widget.layoutService,
+      service: _homeLayouts,
       scrollController: _scrollController,
       onEditingChanged: _handleHomeEditingChanged,
       columnCount: columns,

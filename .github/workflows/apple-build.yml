@@ -1,9 +1,9 @@
 name: Apple builds
 on:
   push:
-    branches: [dev]
+    branches: [dev, master]
   pull_request:
-    branches: [dev, "iOS＆MacOS"]
+    branches: [dev, master, "iOS＆MacOS"]
     paths: ['ios/**', 'macos/**', 'packages/focubili_apple/**', 'lib/**', 'integration_test/**', 'assets/icon/**', 'tool/**', 'pubspec.*', '.github/workflows/apple-build.yml']
   workflow_dispatch:
 permissions:
@@ -26,6 +26,7 @@ jobs:
       - run: python3 tool/check_apple_sources.py
       - run: python3 tool/check_platform_icons.py
       - run: python3 -m unittest discover -s tool -p test_verify_macos_dmg.py -v
+      - run: python3 -m unittest discover -s tool -p test_native_subscription_probe.py -v
       - run: flutter pub get
         if: github.event_name == 'workflow_dispatch'
       - run: dart format --output=none --set-exit-if-changed lib test
@@ -56,9 +57,17 @@ jobs:
       - run: python3 tool/check_apple_sources.py
       - run: python3 tool/check_platform_icons.py
       - run: flutter pub get
+      - name: Verify native subscription cancellation and generation policy
+        run: |
+          swiftc packages/focubili_apple/ios/Classes/SubscriptionRunGate.swift tool/subscription_gate_probe.swift -o "$RUNNER_TEMP/subscription-gate-probe"
+          "$RUNNER_TEMP/subscription-gate-probe"
+      - name: Check cache locking and subtitle lifecycle on macOS
+        if: matrix.platform == 'macos'
+        run: flutter test --no-pub test/cache_file_lock_test.dart test/image_resource_cache_test.dart test/cached_player_overlay_service_test.dart test/windows_media_cache_service_test.dart test/desktop_disk_cache_session_test.dart
       - name: Build iOS device archive (unsigned)
         if: matrix.platform == 'ios'
         run: |
+          dart tool/write_build_metadata.dart
           flutter build ios --release --no-codesign
           mkdir -p build/apple/Payload
           cp -R build/ios/iphoneos/Runner.app build/apple/Payload/
@@ -86,9 +95,11 @@ jobs:
           xcrun simctl io "$device" screenshot build/apple/ios-launch.png
           xcrun simctl spawn "$device" launchctl list | grep com.focubili.app
           bash tool/check_ios_runtime.sh "$device"
+          bash tool/check_ios_subscription_scheduler.sh "$device"
       - name: Build and package macOS
         if: matrix.platform == 'macos'
         run: |
+          dart tool/write_build_metadata.dart
           flutter build macos --release
           mkdir -p build/apple/dmg
           ditto build/macos/Build/Products/Release/FocuBili.app build/apple/dmg/FocuBili.app
@@ -138,6 +149,12 @@ jobs:
           assert run.returncode == 0, f'Native probe exited {run.returncode}'
           assert 'APPLE_RUNTIME_ALL_CHECKS_PASSED' in output, 'Probe did not complete'
           PYRUN
+      - name: Verify macOS native subscription timer callback and cancellation
+        if: matrix.platform == 'macos'
+        timeout-minutes: 10
+        run: |
+          flutter build macos --release --target tool/native_subscription_probe.dart --dart-define=NATIVE_SUBSCRIPTION_PROBE=true
+          python3 tool/run_native_subscription_probe.py build/macos/Build/Products/Release/FocuBili.app/Contents/MacOS/FocuBili build/apple/native-subscription.log
       - name: Preserve native failure diagnostics
         if: failure()
         shell: bash

@@ -12,9 +12,50 @@ struct _MyApplication {
   char** dart_entrypoint_arguments;
   FlMethodChannel* link_channel;
   gchar* initial_link;
+  FlMethodChannel* subscription_channel;
+  guint subscription_timer;
+  gint64 subscription_generation;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
+
+// GLib timeout is owned by this process and keeps working while the window is inactive.
+static gboolean subscription_tick(gpointer data) {
+  auto* self = MY_APPLICATION(data);
+  if (!self->subscription_channel) return G_SOURCE_REMOVE;
+  g_autoptr(FlValue) args = fl_value_new_map();
+  fl_value_set_string_take(args, "generation", fl_value_new_int(self->subscription_generation));
+  fl_method_channel_invoke_method(self->subscription_channel, "check", args, nullptr, nullptr, nullptr);
+  return G_SOURCE_CONTINUE;
+}
+
+static void handle_subscription_schedule(FlMethodChannel*, FlMethodCall* call, gpointer data) {
+  auto* self = MY_APPLICATION(data);
+  const char* method = fl_method_call_get_name(call);
+  if (g_strcmp0(method, "configure") == 0) {
+    FlValue* args = fl_method_call_get_args(call);
+    FlValue* generation = args && fl_value_get_type(args) == FL_VALUE_TYPE_MAP ? fl_value_lookup_string(args, "generation") : nullptr;
+    FlValue* enabled = args && fl_value_get_type(args) == FL_VALUE_TYPE_MAP ? fl_value_lookup_string(args, "enabled") : nullptr;
+    FlValue* interval = args && fl_value_get_type(args) == FL_VALUE_TYPE_MAP ? fl_value_lookup_string(args, "intervalSeconds") : nullptr;
+    if (!enabled || fl_value_get_type(enabled) != FL_VALUE_TYPE_BOOL ||
+        !generation || fl_value_get_type(generation) != FL_VALUE_TYPE_INT ||
+        fl_value_get_int(generation) < 0) {
+      fl_method_call_respond_error(call, "invalid_generation", "Invalid generation", nullptr, nullptr); return;
+    }
+    if (self->subscription_timer) { g_source_remove(self->subscription_timer); self->subscription_timer = 0; }
+    self->subscription_generation = fl_value_get_int(generation);
+    if (enabled && fl_value_get_type(enabled) == FL_VALUE_TYPE_BOOL && fl_value_get_bool(enabled)) {
+      const gint64 seconds = interval && fl_value_get_type(interval) == FL_VALUE_TYPE_INT ? fl_value_get_int(interval) : 3600;
+      self->subscription_timer = g_timeout_add_seconds(static_cast<guint>(CLAMP(seconds, 1, 86400)), subscription_tick, self);
+    }
+  } else if (g_strcmp0(method, "getStatus") != 0) { fl_method_call_respond_not_implemented(call, nullptr); return; }
+  g_autoptr(FlValue) status = fl_value_new_map();
+  fl_value_set_string_take(status, "available", fl_value_new_bool(TRUE));
+  fl_value_set_string_take(status, "accepted", fl_value_new_bool(TRUE));
+  fl_value_set_string_take(status, "mode", fl_value_new_string("process"));
+  fl_value_set_string_take(status, "status", fl_value_new_string(self->subscription_timer ? "scheduled_process" : "stopped"));
+  fl_method_call_respond_success(call, status, nullptr);
+}
 
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
@@ -122,6 +163,11 @@ static void my_application_activate(GApplication* application) {
   fl_method_channel_set_method_call_handler(desktop_channel,
       handle_desktop_method, nullptr, nullptr);
 
+  self->subscription_channel = fl_method_channel_new(
+      fl_engine_get_binary_messenger(fl_view_get_engine(view)),
+      "com.focubili.app/subscription_scheduler", FL_METHOD_CODEC(codec));
+  fl_method_channel_set_method_call_handler(self->subscription_channel, handle_subscription_schedule, self, nullptr);
+
   self->link_channel = fl_method_channel_new(
       fl_engine_get_binary_messenger(fl_view_get_engine(view)),
       "focubili/deep_links", FL_METHOD_CODEC(codec));
@@ -173,6 +219,9 @@ static void my_application_startup(GApplication* application) {
 
 // Implements GApplication::shutdown.
 static void my_application_shutdown(GApplication* application) {
+  auto* self = MY_APPLICATION(application);
+  if (self->subscription_timer) { g_source_remove(self->subscription_timer); self->subscription_timer = 0; }
+  g_clear_object(&self->subscription_channel);
   // MyApplication* self = MY_APPLICATION(object);
 
   // Perform any actions required at application shutdown.
@@ -183,6 +232,8 @@ static void my_application_shutdown(GApplication* application) {
 // Implements GObject::dispose.
 static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
+  if (self->subscription_timer) { g_source_remove(self->subscription_timer); self->subscription_timer = 0; }
+  g_clear_object(&self->subscription_channel);
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
   g_clear_pointer(&self->initial_link, g_free);
   g_clear_object(&self->link_channel);

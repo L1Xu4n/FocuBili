@@ -465,7 +465,7 @@ void main() {
   });
 
   /// 验证全屏编辑器突出分 P，并让截图在专用区域内铺满显示。
-  testWidgets('全屏笔记头部突出分P且截图铺满专用区域', (WidgetTester tester) async {
+  testWidgets('全屏笔记头部突出分P且截图保留原比例', (WidgetTester tester) async {
     final TextEditingController titleController = TextEditingController();
     final TextEditingController bodyController = TextEditingController();
     addTearDown(titleController.dispose);
@@ -509,7 +509,7 @@ void main() {
     );
     expect(preview.width, isNull);
     expect(preview.height, isNull);
-    expect(preview.fit, BoxFit.cover);
+    expect(preview.fit, BoxFit.contain);
     final Text partLabel = tester.widget<Text>(
       find.descendant(
         of: find.byKey(const Key('note-part-label')),

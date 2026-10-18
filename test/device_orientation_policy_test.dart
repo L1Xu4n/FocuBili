@@ -26,7 +26,7 @@ void main() {
     expect(
       DeviceOrientationPolicy.startupOrientations(
         logicalSize: const Size(1067, 600),
-        isAndroid: true,
+        isMobile: true,
       ),
       const <DeviceOrientation>[
         DeviceOrientation.landscapeLeft,
@@ -40,32 +40,32 @@ void main() {
     expect(
       DeviceOrientationPolicy.startupOrientations(
         logicalSize: const Size(393, 852),
-        isAndroid: true,
+        isMobile: true,
       ),
       const <DeviceOrientation>[DeviceOrientation.portraitUp],
     );
     expect(
       DeviceOrientationPolicy.playerOrientations(
         logicalSize: const Size(393, 852),
-        isAndroid: true,
+        isMobile: true,
       ),
       contains(DeviceOrientation.landscapeLeft),
     );
   });
 
   /// 验证桌面端不调用移动设备的强制旋转能力。
-  test('非 Android 平台不强制屏幕方向', () {
+  test('桌面 平台不强制屏幕方向', () {
     expect(
       DeviceOrientationPolicy.startupOrientations(
         logicalSize: const Size(1280, 800),
-        isAndroid: false,
+        isMobile: false,
       ),
       isEmpty,
     );
     expect(
       DeviceOrientationPolicy.playerOrientations(
         logicalSize: const Size(1280, 800),
-        isAndroid: false,
+        isMobile: false,
       ),
       isEmpty,
     );

@@ -40,7 +40,11 @@ class SqliteSubscriptionSnapshotStore implements SubscriptionSnapshotStore {
 
   @override
   Future<String?> read() async {
-    final rows = await (await _db).query('snapshot', where: 'id = 1');
+    final rows = await (await _db).query(
+      'snapshot',
+      columns: ['value'],
+      where: 'id = 1',
+    );
     return rows.isEmpty ? null : rows.single['value'] as String;
   }
 
@@ -48,7 +52,11 @@ class SqliteSubscriptionSnapshotStore implements SubscriptionSnapshotStore {
   Future<String?> recover(bool Function(String) validate) async {
     final db = await _db;
     for (var attempt = 0; attempt < 40; attempt++) {
-      final rows = await db.query('snapshot', where: 'id = 1');
+      final rows = await db.query(
+        'snapshot',
+        columns: ['value', 'backup'],
+        where: 'id = 1',
+      );
       if (rows.isEmpty) return null;
       final current = rows.single['value'] as String;
       if (validate(current)) return current;
@@ -69,7 +77,11 @@ class SqliteSubscriptionSnapshotStore implements SubscriptionSnapshotStore {
   ) async {
     final db = await _db;
     for (var attempt = 0; attempt < 40; attempt++) {
-      final rows = await db.query('snapshot', where: 'id = 1');
+      final rows = await db.query(
+        'snapshot',
+        columns: ['value'],
+        where: 'id = 1',
+      );
       final current = rows.isEmpty ? null : rows.single['value'] as String;
       String? next;
       final result = await action(current, (value) => next = value);

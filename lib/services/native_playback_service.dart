@@ -7,6 +7,8 @@ import '../models/playback_request_diagnostic.dart';
 import 'package:flutter/services.dart';
 
 import '../models/video_preview.dart';
+import '../models/playback_buffer_range.dart';
+export '../models/playback_buffer_range.dart';
 import 'local_file_playback_service.dart';
 import 'listening_playback_service.dart';
 
@@ -96,6 +98,7 @@ class PlaybackSnapshot {
     this.sleepTimerRemaining = Duration.zero,
     this.position = Duration.zero,
     this.duration = Duration.zero,
+    this.bufferedRanges = const [],
     this.speed = 1,
     this.currentQuality = 64,
     this.availableQualities = const <PlaybackQuality>[],
@@ -113,6 +116,7 @@ class PlaybackSnapshot {
   final Duration sleepTimerRemaining;
   final Duration position;
   final Duration duration;
+  final List<PlaybackBufferRange> bufferedRanges;
   final double speed;
   final int currentQuality;
   final List<PlaybackQuality> availableQualities;
@@ -156,6 +160,26 @@ class PlaybackSnapshot {
       duration: Duration(
         milliseconds: (values['durationMs'] as num?)?.toInt() ?? 0,
       ),
+      bufferedRanges: normalizePlaybackBufferRanges(
+        [
+          if (values['bufferedRanges'] case final List ranges)
+            for (final raw in ranges)
+              if (raw is Map &&
+                  raw['startMs'] is num &&
+                  raw['endMs'] is num &&
+                  (raw['startMs'] as num).isFinite &&
+                  (raw['endMs'] as num).isFinite)
+                PlaybackBufferRange(
+                  start: Duration(
+                    milliseconds: (raw['startMs'] as num).toInt(),
+                  ),
+                  end: Duration(milliseconds: (raw['endMs'] as num).toInt()),
+                ),
+        ],
+        duration: Duration(
+          milliseconds: (values['durationMs'] as num?)?.toInt() ?? 0,
+        ),
+      ),
       speed: (values['speed'] as num?)?.toDouble() ?? 1,
       currentQuality: (values['quality'] as num?)?.toInt() ?? 64,
       availableQualities: qualities,
@@ -178,6 +202,7 @@ class PlaybackSnapshot {
     Duration? sleepTimerRemaining,
     Duration? position,
     Duration? duration,
+    List<PlaybackBufferRange>? bufferedRanges,
     double? speed,
     int? currentQuality,
     List<PlaybackQuality>? availableQualities,
@@ -196,6 +221,7 @@ class PlaybackSnapshot {
       sleepTimerRemaining: sleepTimerRemaining ?? this.sleepTimerRemaining,
       position: position ?? this.position,
       duration: duration ?? this.duration,
+      bufferedRanges: bufferedRanges ?? this.bufferedRanges,
       speed: speed ?? this.speed,
       currentQuality: currentQuality ?? this.currentQuality,
       availableQualities: availableQualities ?? this.availableQualities,

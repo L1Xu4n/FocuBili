@@ -19,7 +19,7 @@ jobs:
   publish:
     if: "${{ startsWith(github.event.head_commit.message, 'release: publish v') }}"
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 90
 
     steps:
       - name: Checkout final release metadata
@@ -35,21 +35,50 @@ jobs:
           test -n "$version"
           notes="docs/RELEASE_NOTES_v${version}.md"
           test -f "$notes"
-          run_id="$(gh run list --workflow 'FocuBili Release Build' --branch master --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
-          test -n "$run_id"
+          # Only the exact release commit may supply tests and installation packages.
+          python3 - <<'PY'
+          import json, os, subprocess, time
+          workflows = {'ci.yml': 'ci_run', 'release-build.yml': 'run_id',
+                       'apple-build.yml': 'apple_run', 'linux-build.yml': 'linux_run'}
+          deadline = time.monotonic() + 75 * 60
+          while True:
+              successful = {}
+              for workflow, output in workflows.items():
+                  runs = json.loads(subprocess.check_output([
+                      'gh', 'run', 'list', '--workflow', workflow, '--branch', 'master',
+                      '--commit', os.environ['GITHUB_SHA'], '--event', 'push', '--limit', '5',
+                      '--json', 'databaseId,headSha,status,conclusion'], text=True))
+                  run = next((run for run in runs if run['headSha'] == os.environ['GITHUB_SHA']), None)
+                  if run and run['status'] == 'completed':
+                      if run['conclusion'] != 'success':
+                          raise SystemExit(f"Exact release commit failed {workflow}: {run['conclusion']}")
+                      successful[output] = run['databaseId']
+              if len(successful) == len(workflows):
+                  with open(os.environ['GITHUB_OUTPUT'], 'a') as destination:
+                      for key, value in successful.items():
+                          destination.write(f'{key}={value}\n')
+                  break
+              if time.monotonic() >= deadline:
+                  raise SystemExit('Timed out waiting for exact release commit validation')
+              print('Waiting for exact release commit validation', flush=True)
+              time.sleep(30)
+          PY
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
           printf 'tag=v%s\n' "$version" >> "$GITHUB_OUTPUT"
           printf 'notes=%s\n' "$notes" >> "$GITHUB_OUTPUT"
-          printf 'run_id=%s\n' "$run_id" >> "$GITHUB_OUTPUT"
 
       - name: Download verified build artifacts
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ steps.release.outputs.run_id }}
+          APPLE_RUN: ${{ steps.release.outputs.apple_run }}
+          LINUX_RUN: ${{ steps.release.outputs.linux_run }}
         shell: bash
         run: |
           gh run download "$RUN_ID" --name focubili-release-android --dir staging/android
           gh run download "$RUN_ID" --name focubili-release-windows --dir staging/windows
+          gh run download "$APPLE_RUN" --name "focubili-apple-macos-${GITHUB_SHA}" --dir staging/macos
+          gh run download "$LINUX_RUN" --name "focubili-linux-${GITHUB_SHA}" --dir staging/linux
 
       - name: Prepare public release assets
         env:
@@ -59,8 +88,9 @@ jobs:
           mkdir release
           mv staging/android/app-release.apk "release/FocuBili-v${VERSION}-android.apk"
           mv "staging/windows/FocuBili-v${VERSION}-windows-x64-setup.exe" release/
-          mv "staging/windows/FocuBili-v${VERSION}-windows-x64-portable.zip" release/
-          test "$(find release -maxdepth 1 -type f | wc -l)" -eq 3
+          mv staging/macos/FocuBili-macos-preview.dmg "release/FocuBili-v${VERSION}-macos-universal.dmg"
+          mv "staging/linux/FocuBili-v${VERSION}-linux-amd64.deb" release/
+          test "$(find release -maxdepth 1 -type f | wc -l)" -eq 4
           sha256sum release/*
 
       - name: Create annotated release tag

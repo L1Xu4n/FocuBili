@@ -51,6 +51,8 @@ class SubscriptionNotificationController(
                         count = call.argument<Int>("count") ?: 0,
                         generation = generation,
                         background = call.argument<Boolean>("background") == true,
+                        title = call.argument<String>("title"),
+                        source = call.argument<String>("source"),
                     ),
                 )
             }
@@ -78,14 +80,14 @@ class SubscriptionNotificationController(
         return true
     }
 
-    private fun showSummary(count: Int, generation: Long?, background: Boolean): Boolean {
+    private fun showSummary(count: Int, generation: Long?, background: Boolean, title: String?, source: String?): Boolean {
         if (count <= 0) return false
         return try {
             if (generation == null) {
                 // 独立旧版调用保留原行为；生产刷新总会提供当前 generation。
-                postSummary(count)
+                postSummary(count, title, source)
             } else {
-                withCurrentGeneration(generation, background) { postSummary(count) }
+                withCurrentGeneration(generation, background) { postSummary(count, title, source) }
             }
         } catch (_: SQLiteException) {
             false
@@ -150,7 +152,7 @@ class SubscriptionNotificationController(
         }
     }
 
-    private fun postSummary(count: Int): Boolean {
+    private fun postSummary(count: Int, title: String?, source: String?): Boolean {
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (!manager.areNotificationsEnabled()) return false
         if (Build.VERSION.SDK_INT >= 33 &&
@@ -183,8 +185,12 @@ class SubscriptionNotificationController(
                 NOTIFICATION_ID,
                 NotificationCompat.Builder(context, CHANNEL_ID)
                     .setSmallIcon(android.R.drawable.ic_popup_reminder)
-                    .setContentTitle("焦点订阅")
-                    .setContentText("发现 $count 支新视频，点击查看本机更新列表")
+                    .setContentTitle(title?.takeIf { it.isNotBlank() }?.take(240) ?: "焦点订阅")
+                    .setContentText(source?.take(240) ?: "发现 $count 支新视频，点击查看本机更新列表")
+                    .setStyle(NotificationCompat.BigTextStyle().bigText(
+                        (source?.take(240) ?: "焦点订阅") +
+                            if (count > 1) "\n另有 ${count - 1} 条更新，点击查看" else "",
+                    ))
                     .setContentIntent(pending)
                     .setAutoCancel(true)
                     .setOnlyAlertOnce(true)

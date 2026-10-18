@@ -26,6 +26,7 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
   @override
   bool _horizontalScrubbing = false;
   double _speedBeforeLongPress = 1;
+  int _temporarySpeedRequest = 0;
   double _horizontalScrubStartProgress = 0;
   double _horizontalScrubTargetProgress = 0;
   double _horizontalScrubStartX = 0;
@@ -92,7 +93,7 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
   set _showControls(bool value);
 
   /// 切换播放器的播放或暂停状态。
-  void _togglePlayback();
+  void _togglePlayback({bool showControls = true});
 
   /// 停止控制层自动隐藏计时器。
   @override
@@ -125,6 +126,7 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
 
   /// 取消手势反馈计时器并使晚到的预览图请求失效。
   void _disposePlayerGestureCoordinator() {
+    _temporarySpeedRequest++;
     _seekFeedbackTimer?.cancel();
     _doubleTapFeedbackTimer?.cancel();
     _playbackActionTimer?.cancel();
@@ -139,7 +141,7 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
   /// 根据个性化设置执行分区快进快退，或把任意区域双击改成播放暂停。
   void _handleDoubleTap(Size playerSize) {
     if (!_playbackPreferences.enableDoubleTapSeek) {
-      _togglePlayback();
+      _togglePlayback(showControls: false);
       return;
     }
     final tap = _lastDoubleTapPosition ?? playerSize.center(Offset.zero);
@@ -152,7 +154,7 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
       case DoubleTapAction.forward:
         _seekBy(5, showFeedback: true);
       case DoubleTapAction.togglePlayback:
-        _togglePlayback();
+        _togglePlayback(showControls: false);
     }
   }
 
@@ -215,7 +217,9 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
     _speedBeforeLongPress = _playbackSpeed;
     _stopControlsAutoHideTimer();
     setState(() => _temporarySpeedActive = true);
-    unawaited(_setTemporaryPlaybackSpeed(3));
+    unawaited(
+      _setTemporaryPlaybackSpeed(_playbackPreferences.longPressPlaybackSpeed),
+    );
   }
 
   /// 松开长按手势后恢复长按前的倍速，不改变当前播放进度。
@@ -381,23 +385,30 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
   void _handlePlayerPointerCancel(PointerCancelEvent event) {
     _cancelHorizontalScrub();
     _cancelTemporaryLongPress();
-    _verticalAdjustmentMode = _VerticalAdjustmentMode.none;
+    if (_verticalAdjustmentMode != _VerticalAdjustmentMode.none) {
+      _verticalAdjustmentMode = _VerticalAdjustmentMode.none;
+      _scheduleSeekFeedbackClear();
+      _restartControlsAutoHideTimer();
+    }
   }
 
   /// 向播放器发送临时倍速，失败时恢复提示状态并显示原因。
   Future<void> _setTemporaryPlaybackSpeed(double speed) async {
+    final request = ++_temporarySpeedRequest;
     try {
       await _playbackService.setPlaybackSpeed(speed);
-      if (mounted) {
+      if (mounted && request == _temporarySpeedRequest) {
         setState(() => _playbackSpeed = speed);
         _syncDanmakuAnimation(_playbackSnapshot.copyWith(speed: speed));
       }
     } on PlatformException catch (error) {
+      if (!mounted || request != _temporarySpeedRequest) return;
       if (mounted) {
         setState(() => _temporarySpeedActive = false);
       }
       _showPlaybackError('无法临时切换倍速：${error.message ?? error.code}');
     } catch (error) {
+      if (!mounted || request != _temporarySpeedRequest) return;
       if (mounted) {
         setState(() => _temporarySpeedActive = false);
       }
@@ -447,7 +458,7 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
         ? _brightness
         : _volume;
     _verticalGestureDelta = 0;
-    _showPlayerControls();
+    _stopControlsAutoHideTimer();
   }
 
   /// 将竖向移动距离换算为亮度或音量比例，并实时发送给播放服务。

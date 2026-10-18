@@ -83,7 +83,9 @@ jobs:
           ./gradlew :app:testDebugUnitTest :focubili_android:testDebugUnitTest --no-daemon
 
       - name: Build debug APK
-        run: flutter build apk --debug --no-pub
+        run: |
+          dart tool/write_build_metadata.dart
+          flutter build apk --debug --no-pub
 
       - name: Verify debug APK metadata
         shell: bash
@@ -150,8 +152,13 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Run Windows gesture, cache and history regressions
+        run: flutter test --no-pub test/player_action_feedback_test.dart test/player_feedback_layout_test.dart test/player_tap_gesture_test.dart test/subscription_migration_test.dart test/subscription_request_scope_test.dart test/cache_file_lock_test.dart test/image_resource_cache_test.dart test/cached_player_overlay_service_test.dart test/windows_media_cache_service_test.dart test/desktop_disk_cache_session_test.dart
+
       - name: Build Windows debug application
-        run: flutter build windows --debug --no-pub
+        run: |
+          dart tool/write_build_metadata.dart
+          flutter build windows --debug --no-pub
 
       - name: Upload Windows debug build
         uses: actions/upload-artifact@v4
@@ -159,4 +166,19 @@ jobs:
           name: focubili-debug-windows
           path: build/windows/x64/runner/Debug
           if-no-files-found: error
+          retention-days: 7
+
+      # Upload the normal application before replacing its entry point.
+      - name: Compile isolated native subscription scheduler probe
+        run: flutter build windows --debug --no-pub --target tool/native_subscription_probe.dart --dart-define=NATIVE_SUBSCRIPTION_PROBE=true
+
+      - name: Verify Windows native timer callback and cancellation
+        run: python tool/run_native_subscription_probe.py build/windows/x64/runner/Debug/FocuBili.exe build/native-subscription/windows.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-subscription-windows-${{ github.sha }}
+          path: build/native-subscription/
+          if-no-files-found: ignore
           retention-days: 7

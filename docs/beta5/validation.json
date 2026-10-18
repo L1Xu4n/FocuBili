@@ -1,0 +1,39 @@
+{
+  "environment": "Linux; Flutter 3.44.6 / Dart 3.12.2; no real Windows/Android playback host",
+  "fullFlutter": {
+    "command": "flutter test --no-pub",
+    "passed": 866,
+    "skipped": 1,
+    "failed": 0
+  },
+  "targetedCache": {
+    "passed": 79,
+    "failed": 0
+  },
+  "captureAndImagePerformance": {
+    "passed": 4,
+    "screenshots": 12
+  },
+  "subscriptionPerformance": {
+    "passed": 3
+  },
+  "androidJvm": {
+    "tests": 42,
+    "suites": 10,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "analyze": "passed",
+  "apkBuild": "debug split-per-ABI passed",
+  "ci": "Final disk-preserving revision will run all platform workflows; terminal links recorded in draft PR #52.",
+  "desktopBufferDecision": "Preserve disk-backed rewind. Default 512 MiB soft threshold sampled every 500 ms; active files retained; no hard disk cap claim. Original preference key retained.",
+  "desktopSessionNewTests": 11,
+  "desktopNativeProbe": "Linux/macOS loopback fixture, separate external audio, real packet files and 256 KiB explicit padding trigger; results in final CI logs.",
+  "lifetimeLeaseRegression": {
+    "passed": 20,
+    "failed": 0,
+    "fullSuiteRerunPassed": 865
+  },
+  "mpv036Compatibility": "Old cache-dir/cache-unlink-files verified fallback; new namespace retained on newer mpv. Final native CI pending."
+}

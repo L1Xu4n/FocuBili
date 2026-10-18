@@ -13,7 +13,7 @@ Future<T?> showFullscreenSettingsPreview<T>({
 }) async {
   bool? wasFullscreen;
   bool? wasMaximized;
-  final mobile = platform == AppPlatform.android || platform == AppPlatform.ios;
+  final mobile = platform.isMobile;
   try {
     if (mobile) {
       await SystemChrome.setPreferredOrientations(const [
@@ -41,7 +41,7 @@ Future<T?> showFullscreenSettingsPreview<T>({
       await SystemChrome.setPreferredOrientations(
         DeviceOrientationPolicy.startupOrientations(
           logicalSize: DeviceOrientationPolicy.logicalSizeForView(view),
-          isAndroid: platform == AppPlatform.android,
+          isMobile: mobile,
         ),
       );
       await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);

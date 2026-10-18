@@ -88,6 +88,12 @@ class BilibiliWbiSigningService {
     return sign(parameters, key, _clock().millisecondsSinceEpoch ~/ 1000);
   }
 
+  /// The next eligible request may refresh rotated public signing material.
+  void invalidate() {
+    _cachedKey = null;
+    _cachedAt = null;
+  }
+
   /// 从 nav 的 wbi_img 提取材料；游客 nav 的 -101 仍可能包含有效材料。
   Future<String> _loadKey(Map<String, String> headers) async {
     try {

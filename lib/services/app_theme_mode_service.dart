@@ -17,6 +17,10 @@ class AppThemeModeService {
   static const String _themeColorKey = 'appearance.theme_color';
   final ThemeModePreferencesLoader? _preferencesLoader;
 
+  /// 与读取主题色共用有效域，迁移时不把损坏颜色写成看似成功的设置。
+  static bool isSupportedColorValue(int value) =>
+      value > 0 && value <= 0xFFFFFFFF;
+
   /// 读取上次选择；首次安装、旧版本或异常值统一回到“跟随系统”。
   Future<ThemeMode> load() async {
     final SharedPreferences preferences = await _loadPreferences();
@@ -39,7 +43,7 @@ class AppThemeModeService {
   Future<Color> loadColor() async {
     final SharedPreferences preferences = await _loadPreferences();
     final int? value = preferences.getInt(_themeColorKey);
-    if (value == null || value <= 0 || value > 0xFFFFFFFF) {
+    if (value == null || !isSupportedColorValue(value)) {
       return const Color(defaultThemeSeedColorValue);
     }
     return Color(value);

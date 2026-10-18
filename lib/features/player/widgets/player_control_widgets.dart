@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../models/playback_preferences.dart';
+import '../../../models/playback_buffer_range.dart';
 import 'player_timeline.dart';
 
 /// 播放器与设置预览共用的实际尺寸，文字、图标和命中区域按同一比例增长。
@@ -128,10 +129,14 @@ class PlayerProgressSlider extends StatelessWidget {
     this.onChangeEnd,
     this.scale = 1,
     this.sliderKey,
+    this.bufferedRanges = const [],
+    this.duration = Duration.zero,
   });
   final double value;
   final double scale;
   final Key? sliderKey;
+  final List<PlaybackBufferRange> bufferedRanges;
+  final Duration duration;
   final ValueChanged<double> onChanged;
   final ValueChanged<double>? onChangeStart;
   final ValueChanged<double>? onChangeEnd;
@@ -143,7 +148,10 @@ class PlayerProgressSlider extends StatelessWidget {
     return SliderTheme(
       data: SliderTheme.of(context).copyWith(
         trackHeight: size.trackHeight,
-        trackShape: const PlayerTimelineTrackShape(),
+        trackShape: PlayerTimelineTrackShape(
+          bufferedRanges: bufferedRanges,
+          duration: duration,
+        ),
         thumbShape: RoundSliderThumbShape(enabledThumbRadius: size.thumbRadius),
         overlayShape: RoundSliderOverlayShape(overlayRadius: 8 * size.scale),
       ),

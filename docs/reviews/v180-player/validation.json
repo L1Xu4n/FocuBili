@@ -1,0 +1,109 @@
+{
+  "verifiedAtUtc": "2026-10-17T20:15:47.379415+00:00",
+  "baseCommit": "0abe1ac02e62703f3dcb140bb83c437338a590d0",
+  "branch": "codex/v18-player-layout",
+  "sourceFingerprintSha256": "43142084d10520d3b0477d4ffc3781c7aa7ea3312603515dbc5c0b649fe8faea",
+  "sourceFiles": [
+    "android/app/src/main/kotlin/com/focubili/app/NativePlaybackController.kt",
+    "lib/core/widgets/editable_card_board.dart",
+    "lib/core/widgets/editable_card_tile.dart",
+    "lib/features/notes/video_note_composer.dart",
+    "lib/features/player/player_controls_coordinator.dart",
+    "lib/features/player/player_feedback_view.dart",
+    "lib/features/player/player_gesture_coordinator.dart",
+    "lib/features/player/player_page_view.dart",
+    "lib/features/player/widgets/player_control_widgets.dart",
+    "lib/features/player/widgets/player_feedback_layout.dart",
+    "lib/features/player/widgets/player_timeline.dart",
+    "lib/models/playback_buffer_range.dart",
+    "lib/services/native_playback_service.dart",
+    "lib/services/windows_playback_service.dart"
+  ],
+  "fullFlutter": {
+    "passed": 920,
+    "skipped": 1,
+    "failed": 0,
+    "skipReason": "Creating symlinks requires Windows developer mode",
+    "exitCode": 0
+  },
+  "targetedFlutter": {
+    "passed": 44,
+    "failed": 0,
+    "exitCode": 0
+  },
+  "visualFlutter": {
+    "passed": 4,
+    "failed": 0,
+    "pngCount": 5,
+    "realDecoder": false,
+    "exitCode": 0
+  },
+  "analysis": {
+    "issues": 0,
+    "fatalInfos": true,
+    "exitCode": 0
+  },
+  "nativeBuffer": {
+    "backend": "real libmpv",
+    "input": "synthetic loopback MP4",
+    "durationMs": 4023,
+    "decodedPositionMs": 490,
+    "bufferedRangesMs": [
+      [
+        0,
+        3994
+      ]
+    ],
+    "uiVerified": false
+  },
+  "nativeUi": {
+    "verified": false,
+    "windows": "Debug integration build reached existing plugin CRT link errors (_CrtDbgReport/_calloc_dbg); interrupted after errors",
+    "android": "No adb device; Kotlin compilation needs final integration CI",
+    "appleLinux": "No native UI device/runtime run in this task"
+  },
+  "longPressPreference": "PlaybackPreferences.longPressPlaybackSpeed from 0abe1ac, saved 2.5x and release restoration tested",
+  "logs": {
+    "flutter-full-player-final.log": {
+      "path": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-4\\flutter-full-player-final.log",
+      "sha256": "5add1d28eb595d32857ecf241169ed20fc29832cb22daf4869d6208e744ed173"
+    },
+    "targeted-player-final.log": {
+      "path": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-4\\targeted-player-final.log",
+      "sha256": "f3b273ddcd95f8f6bc3454b40e14e71e600d73e7282dca707ff002095c030967"
+    },
+    "player-visual-test-final.log": {
+      "path": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-4\\player-visual-test-final.log",
+      "sha256": "a03386fa135c6e5fa172c9cd47457c602127de8d14846ad253e570ac1f6d06c4"
+    },
+    "analyze-player-final.log": {
+      "path": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-4\\analyze-player-final.log",
+      "sha256": "52c52aead526c1ac0e7acd9603f4aa80a8b98c99d0009dcf85e4b4de08c2699a"
+    },
+    "native-buffer-probe.log": {
+      "path": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-4\\native-buffer-probe.log",
+      "sha256": "dddca0590229d41a7021e5afda794746382e46a117f253dc8b5a4c810a067fdb"
+    },
+    "windows-player-integration-final.log": {
+      "path": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-4\\windows-player-integration-final.log",
+      "sha256": "c5f638982b3ce64be29c35f504f3afefb97e459baad5f2761343ea63c60523d3"
+    }
+  },
+  "pngSha256": {
+    "note-landscape.png": "5493ca8de2cfa851ba3a34c37c127f4e84ea991d3776aca0758a77eef7176626",
+    "note-portrait.png": "af0c65d61a4904f0235e53f4c687cef58d663e78cf902e58bbd7b7a9e2b3f1f2",
+    "player-desktop-seek.png": "9db00649fff7502333376a230cb923f18f45d55a58a0c24f352b19bbe9d20a91",
+    "player-mobile-seek.png": "45c0f4afb0a0769412d839afd985f626c2ce8cdee3d7ff26040d145f661737e4",
+    "player-speed-and-volume.png": "ac5dab2f6d110f8b39cefb82c8454d76bf893f18facd32275466875ee9769449"
+  },
+  "firstImplementationCommit": "2e1a95813507c0cbdded690d3728654c6118a0bf",
+  "followUp": "System-canceled vertical swipes expire feedback and restore pre-existing auto-hide; 2 new regressions passed.",
+  "previousFullVerification": {
+    "commit": "2e1a95813507c0cbdded690d3728654c6118a0bf",
+    "passed": 918,
+    "skipped": 1,
+    "failed": 0,
+    "log": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-4\\flutter-full-player-918.log",
+    "sha256": "0842f2ebc9d76a6e8cdd39cf0fd0e748c9c9da9789d5af98bb293ebb70a3b897"
+  }
+}
