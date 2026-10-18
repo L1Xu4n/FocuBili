@@ -153,6 +153,48 @@ class PlayerFeedbackStack extends StatefulWidget {
 
 class _PlayerFeedbackStackState extends State<PlayerFeedbackStack> {
   bool _overflowing = false;
+  final List<({Object identity, Widget child, bool visible})> _items = [];
+
+  Object _identity(Widget child, int index) => child is PlayerNoticeCard
+      ? ValueKey('notice-${child.message}')
+      : child.key ?? ValueKey('feedback-$index');
+
+  @override
+  void initState() {
+    super.initState();
+    _syncItems();
+  }
+
+  @override
+  void didUpdateWidget(covariant PlayerFeedbackStack oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncItems();
+  }
+
+  /// 到期节点保留至淡出/收拢完成，后面的节点随高度连续移动。
+  void _syncItems() {
+    final incoming = <Object, Widget>{
+      for (var i = 0; i < widget.children.length; i++)
+        _identity(widget.children[i], i): widget.children[i],
+    };
+    final previous = [..._items];
+    _items
+      ..clear()
+      ..addAll([
+        for (final entry in incoming.entries)
+          (identity: entry.key, child: entry.value, visible: true),
+      ]);
+    for (var i = 0; i < previous.length; i++) {
+      final item = previous[i];
+      if (!incoming.containsKey(item.identity)) {
+        _items.insert(math.min(i, _items.length), (
+          identity: item.identity,
+          child: item.child,
+          visible: false,
+        ));
+      }
+    }
+  }
 
   /// 只在内容超过可用高度时开启滚动触摸，普通反馈不抢画面手势。
   bool _updateOverflow(ScrollMetricsNotification notification) {
@@ -170,9 +212,11 @@ class _PlayerFeedbackStackState extends State<PlayerFeedbackStack> {
   /// 限制在可用视口内；长提示自然换行，各条之间保留六像素空隙。
   @override
   Widget build(BuildContext context) {
-    if (widget.children.isEmpty) return const SizedBox.shrink();
+    if (_items.isEmpty) return const SizedBox.shrink();
     return Align(
       alignment: widget.alignment,
+      widthFactor: 1,
+      heightFactor: 1,
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 620),
         child: IgnorePointer(
@@ -185,10 +229,41 @@ class _PlayerFeedbackStackState extends State<PlayerFeedbackStack> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  for (var i = 0; i < widget.children.length; i++) ...[
-                    if (i > 0) const SizedBox(height: 6),
-                    widget.children[i],
-                  ],
+                  for (final item in _items)
+                    TweenAnimationBuilder<double>(
+                      key: ValueKey(item.identity),
+                      tween: Tween(begin: 1, end: item.visible ? 1 : 0),
+                      duration: MediaQuery.disableAnimationsOf(context)
+                          ? Duration.zero
+                          : const Duration(milliseconds: 160),
+                      curve: Curves.easeOutCubic,
+                      onEnd: () {
+                        if (!mounted) return;
+                        final index = _items.indexWhere(
+                          (value) => value.identity == item.identity,
+                        );
+                        if (index >= 0 && !_items[index].visible) {
+                          setState(() => _items.removeAt(index));
+                        }
+                      },
+                      builder: (context, value, child) => ClipRect(
+                        child: Align(
+                          heightFactor: value,
+                          child: Opacity(opacity: value, child: child),
+                        ),
+                      ),
+                      child: IgnorePointer(
+                        ignoring: !item.visible,
+                        child: Padding(
+                          padding: EdgeInsets.only(
+                            bottom: item.identity == _items.last.identity
+                                ? 0
+                                : 6,
+                          ),
+                          child: item.child,
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -197,6 +272,72 @@ class _PlayerFeedbackStackState extends State<PlayerFeedbackStack> {
       ),
     );
   }
+}
+
+enum _FeedbackLane { top, center, bottom }
+
+/// 固定顶部状态和底部字幕的位置，手势只占用两者之间的余量。
+class PlayerFeedbackLanes extends StatelessWidget {
+  const PlayerFeedbackLanes({
+    super.key,
+    required this.top,
+    required this.center,
+    required this.bottom,
+  });
+
+  final Widget top;
+  final Widget center;
+  final Widget bottom;
+
+  @override
+  Widget build(BuildContext context) => CustomMultiChildLayout(
+    delegate: _FeedbackLanesDelegate(),
+    children: [
+      LayoutId(id: _FeedbackLane.top, child: top),
+      LayoutId(
+        id: _FeedbackLane.center,
+        child: ClipRect(child: center),
+      ),
+      LayoutId(id: _FeedbackLane.bottom, child: bottom),
+    ],
+  );
+}
+
+class _FeedbackLanesDelegate extends MultiChildLayoutDelegate {
+  @override
+  void performLayout(Size size) {
+    final top = layoutChild(
+      _FeedbackLane.top,
+      BoxConstraints(maxWidth: size.width, maxHeight: size.height * .45),
+    );
+    final bottom = layoutChild(
+      _FeedbackLane.bottom,
+      BoxConstraints(
+        maxWidth: size.width,
+        maxHeight: math.max(0, size.height - top.height - 6),
+      ),
+    );
+    positionChild(_FeedbackLane.top, Offset((size.width - top.width) / 2, 0));
+    positionChild(
+      _FeedbackLane.bottom,
+      Offset((size.width - bottom.width) / 2, size.height - bottom.height),
+    );
+    final upper = top.height > 0 ? top.height + 6 : 0.0;
+    final lower = bottom.height > 0 ? bottom.height + 6 : 0.0;
+    layoutChild(
+      _FeedbackLane.center,
+      BoxConstraints.tight(
+        Size(size.width, math.max(0, size.height - upper - lower)),
+      ),
+    );
+    positionChild(
+      _FeedbackLane.center,
+      Offset(0, math.min(size.height, upper)),
+    );
+  }
+
+  @override
+  bool shouldRelayout(covariant _FeedbackLanesDelegate oldDelegate) => false;
 }
 
 /// 共用短提示外观，支持两行文字和辅助功能播报。

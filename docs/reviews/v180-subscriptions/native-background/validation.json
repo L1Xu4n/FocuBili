@@ -1,0 +1,81 @@
+{
+  "baseCommit": "07825790e4173ba0ca014b6e64e4af734dd29bf9",
+  "branch": "codex/v1.8-native-subscription-background",
+  "recordedUtc": "2026-10-17T20:35:16.127085+00:00",
+  "environment": "Windows local Flutter host; native Windows compile only",
+  "notificationAndNativeDirected": {
+    "passed": 79,
+    "failed": 0,
+    "files": [
+      "test/subscription_http_integration_test.dart",
+      "test/subscription_background_test.dart",
+      "test/native_subscription_background_test.dart",
+      "test/profile_collection_pages_test.dart",
+      "test/subscription_release_test.dart"
+    ]
+  },
+  "fullFlutter": {
+    "passed": 935,
+    "skipped": 1,
+    "failed": 2,
+    "result": "Some tests failed.",
+    "command": "flutter test --no-pub",
+    "unresolved": [
+      {
+        "file": "test/problem_diagnostics_service_test.dart",
+        "tests": [
+          "诊断备用版本与当前发布元数据一致：空版本",
+          "诊断备用版本与当前发布元数据一致：插件异常"
+        ],
+        "actual": "1.8.0+22",
+        "expected": "1.8.0+25",
+        "scope": "unchanged global metadata baseline; integration owner must resolve"
+      }
+    ]
+  },
+  "staticAnalysis": "No issues found",
+  "format": {
+    "files": 398,
+    "changed": 0,
+    "command": "dart format --output=none --set-exit-if-changed lib test tool/native_subscription_probe.dart"
+  },
+  "appleSourceMetadataCheck": "passed",
+  "workflowYamlParse": "all three changed workflows parsed with package:yaml",
+  "windowsNativeProbeCompile": {
+    "result": "success",
+    "executed": false,
+    "command": "flutter build windows --debug --no-pub --target tool/native_subscription_probe.dart --dart-define=NATIVE_SUBSCRIPTION_PROBE=true",
+    "note": "Isolated probe artifact, not a release or UI runtime validation"
+  },
+  "platformCiAdded": {
+    "windows_linux_macos": "real timer tick/generation replacement/raw native callback cancellation",
+    "apple": "compile/run pure Swift token and cancellation policy",
+    "iosSimulator": "BGAppRefresh registration/cancel + production headless-engine bootstrap ready/complete; no real OS scheduling claim"
+  },
+  "notVerified": [
+    "Apple Swift compilation and simulator/native execution",
+    "Linux native compilation and execution",
+    "desktop actual one-hour minimized notification delivery",
+    "iOS real device opportunistic scheduling and expiration",
+    "real OS notifications/taps and Android OEM power policy",
+    "signed release upgrade"
+  ],
+  "migration": "iOS legacy preferences retained; subscriptions_v2.db becomes authoritative with existing CAS; JSON v2 unchanged; marked-read IDs persist notification suppression in existing notificationClaims",
+  "notificationCoverage": {
+    "displayLimit": 500,
+    "singleRoundCandidates": 1000,
+    "payloadUniqueBvids": 1000,
+    "readThenEvicted": {
+      "suppressed": 1,
+      "remainingDelivered": 999
+    },
+    "sevenDayCleanupDedup": "passed",
+    "historyImportDoesNotNotify": "passed"
+  },
+  "logsLocalSha256": {
+    "native-full-verified.log": "a85392d8322ebf83c4e9b124f778588235ff7ebd4e275398c270cee95f92e481",
+    "native-notification-regression.log": "f3842c05095cd31788a8dfc34c368583470f1dfa32126bd6d7dca365bd1e35ea",
+    "native-analyze-verified.log": "f534b62530464de3a900c788d3145d93c5fb31c3df666c0bb6338dc5389a8511",
+    "native-windows-build-final.log": "a31d3ed6b897ade9c07fe22a129626f4ef6438a22f95078386650223dabc3bf7"
+  }
+}

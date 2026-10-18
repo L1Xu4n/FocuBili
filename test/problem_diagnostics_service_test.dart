@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:focubili/models/video_preview.dart';
+import 'package:focubili/core/build_metadata.g.dart';
 import 'package:focubili/services/problem_diagnostics_service.dart';
 
 /// 创建使用测试内存偏好设置、固定版本和固定设备信息的问题诊断服务。
@@ -52,8 +53,17 @@ void main() {
         reminderDiagnosticsLoader: () async =>
             ReminderDiagnosticsSnapshot.unavailable(),
       );
-      expect((await service.loadSnapshot()).appVersion, expected);
-      expect(await service.buildCopyText(), contains('应用版本：$expected'));
+      final snapshot = await service.loadSnapshot();
+      expect(snapshot.appVersion, expected);
+      expect(snapshot.buildTime, appBuildTime);
+      expect(
+        await service.buildCopyText(),
+        allOf(
+          contains('应用版本：$expected'),
+          contains('BuildTime：$appBuildTime'),
+          contains('源码提交：$appSourceRevision'),
+        ),
+      );
     });
   }
 

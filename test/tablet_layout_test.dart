@@ -10,6 +10,7 @@ import 'package:focubili/features/profile/profile_page.dart';
 import 'package:focubili/features/profile/personalization_settings_page.dart';
 import 'package:focubili/features/search/search_page.dart';
 import 'package:focubili/services/bilibili_auth_service.dart';
+import 'package:focubili/services/subscription_onboarding_service.dart';
 
 /// 平板布局验证使用确定的未登录状态，避免账号读取启动真实网络等待。
 class _SignedOutAccountFixture extends BilibiliAuthService {
@@ -180,6 +181,9 @@ void main() {
 
   /// 低于平板断点的矮屏也缩短欢迎区，避免首屏高度超过实际视口。
   testWidgets('矮手机首页缩短首屏且没有布局异常', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues({
+      SubscriptionOnboardingService.choiceKey: 'declined',
+    });
     // 首页高度读取 MediaQuery，因此这里设置测试设备视图而不只设置绘制表面。
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(599, 400);
@@ -207,8 +211,44 @@ void main() {
 
     expect(
       tester.getSize(find.byKey(const Key('focus-home-hero'))).height,
+      // The new introduction reserves measured text space. It must still fit
+      // this short viewport instead of relying on the old fixed hero height.
+      inInclusiveRange(336, 400),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  /// 新功能提示完成选择后不再给矮屏留下额外空白，也不影响搜索入口。
+  testWidgets('矮屏拒绝订阅提示后恢复原首页高度', (tester) async {
+    _configureTestWindow(tester, const Size(599, 400));
+    final controller = FocusTimerController(
+      tickInterval: const Duration(days: 1),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: FocusDashboard(
+          controller: controller,
+          onOpenVideo: () {},
+          onOpenStatistics: () {},
+          onOpenProfile: () {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('新增焦点订阅'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.text('新增焦点订阅'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('我不需要焦点订阅'));
+    await tester.pumpAndSettle();
+    expect(find.text('新增焦点订阅'), findsNothing);
+    expect(
+      tester.getSize(find.byKey(const Key('focus-home-hero'))).height,
       336,
     );
+    expect(find.text('开始搜索'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

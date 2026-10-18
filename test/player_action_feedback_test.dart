@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/features/player/player_page.dart';
@@ -201,4 +202,77 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
+  testWidgets(
+    'desktop mouse feedback stays at viewport edges across repeats, reversal and resize',
+    (tester) async {
+      tester.view.physicalSize = const Size(1600, 1000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final playback = GesturePlayback();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ThemeData(platform: TargetPlatform.windows),
+          home: PlayerPage(video: video, playbackService: playback),
+        ),
+      );
+      await tester.pumpAndSettle();
+      Future<void> tapSide(bool forward) async {
+        final surface = tester.getRect(find.byKey(const Key('player-surface')));
+        final point = Offset(
+          surface.left + surface.width * (forward ? .8 : .2),
+          surface.center.dy,
+        );
+        await tester.tapAt(point, kind: PointerDeviceKind.mouse);
+        await tester.pump(const Duration(milliseconds: 60));
+        await tester.tapAt(point, kind: PointerDeviceKind.mouse);
+        await tester.pump();
+      }
+
+      void checkSide(bool forward) {
+        final viewport = tester.getRect(
+          find.byKey(const Key('player-feedback-viewport')),
+        );
+        final background = paintedRect(
+          tester,
+          find.descendant(
+            of: find.byType(PlayerSeekFeedback),
+            matching: find.byType(DecoratedBox),
+          ),
+        );
+        fits(background, viewport);
+        expect(
+          forward ? background.right : background.left,
+          closeTo(forward ? viewport.right : viewport.left, .1),
+        );
+      }
+
+      await tapSide(true);
+      expect(find.text('快进 5 秒'), findsOneWidget);
+      checkSide(true);
+      await tester.pump(const Duration(milliseconds: 400));
+      await tapSide(true);
+      expect(find.text('快进 10 秒'), findsOneWidget);
+      await tester.pump(const Duration(milliseconds: 400));
+      await tapSide(false);
+      expect(find.text('快进 10 秒'), findsNothing);
+      expect(find.text('快退 5 秒'), findsOneWidget);
+      checkSide(false);
+      tester.view.physicalSize = const Size(900, 650);
+      await tester.pump(const Duration(milliseconds: 450));
+      checkSide(false);
+      expect(find.text('快退 5 秒'), findsOneWidget);
+      // The previous forward timer must not dismiss the newer backward feedback.
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('快退 5 秒'), findsOneWidget);
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.byType(PlayerSeekFeedback), findsNothing);
+      await tapSide(false);
+      expect(find.text('快退 5 秒'), findsOneWidget);
+      checkSide(false);
+      expect(playback.offsets.map((e) => e.inSeconds), [5, 5, -5, -5]);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
 }

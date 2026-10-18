@@ -1,0 +1,41 @@
+{
+  "100": {
+    "firstRoundHttp": 10,
+    "firstRoundPages": 5,
+    "firstRoundInitialized": true,
+    "fourRoundsHttp": 22,
+    "fourRoundsPages": 11,
+    "navCalls": 11,
+    "uniquePages": 5,
+    "highestPage": 5,
+    "initialized": true,
+    "seen": 100,
+    "liveFeed": 0
+  },
+  "1000": {
+    "firstRoundHttp": 40,
+    "firstRoundPages": 20,
+    "firstRoundInitialized": false,
+    "fourRoundsHttp": 108,
+    "fourRoundsPages": 54,
+    "navCalls": 54,
+    "uniquePages": 50,
+    "highestPage": 50,
+    "initialized": true,
+    "seen": 1000,
+    "liveFeed": 0
+  },
+  "10000": {
+    "firstRoundHttp": 40,
+    "firstRoundPages": 20,
+    "firstRoundInitialized": false,
+    "fourRoundsHttp": 166,
+    "fourRoundsPages": 83,
+    "navCalls": 83,
+    "uniquePages": 50,
+    "highestPage": 50,
+    "initialized": false,
+    "seen": 0,
+    "liveFeed": 0
+  }
+}

@@ -6,6 +6,7 @@ on:
       - master
     paths:
       - pubspec.yaml
+      - docs/RELEASE_NOTES_v*.md
       - android/app/build.gradle
       - .github/workflows/release-build.yml
       - windows/installer/build_windows_packages.ps1
@@ -73,7 +74,9 @@ jobs:
       - name: Build release APK
         # Flutter 3.44 skips release plugin regeneration with --no-pub.
         # Regenerate here so dev-only integration_test stays out of the APK.
-        run: flutter build apk --release
+        run: |
+          dart tool/write_build_metadata.dart
+          flutter build apk --release
 
       - name: Verify release APK metadata
         shell: bash
@@ -122,7 +125,9 @@ jobs:
         run: flutter pub get
 
       - name: Build Windows release application
-        run: flutter build windows --release --no-pub
+        run: |
+          dart tool/write_build_metadata.dart
+          flutter build windows --release --no-pub
 
       - name: Build Windows installer and portable package
         shell: pwsh

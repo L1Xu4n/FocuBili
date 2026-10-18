@@ -37,8 +37,8 @@ import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
+import androidx.media3.datasource.cache.CacheDataSink
 import androidx.media3.datasource.cache.CacheDataSource
-import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -164,10 +164,12 @@ class NativePlaybackController(
 
     /** 保存一组已验证的 DASH 主备地址、实际清晰度和媒体请求信息。 */
     private data class PlaybackSources(
+        val bvid: String,
+        val cid: Long,
         val videoUrls: List<String>,
         val audioUrls: List<String>,
-        val videoCodec: String,
-        val audioCodec: String,
+        val videoRepresentation: PlaybackCacheRepresentation,
+        val audioRepresentation: PlaybackCacheRepresentation,
         val referer: String,
         val actualQuality: Int,
         val qualities: List<PlaybackQualityOption>,
@@ -178,9 +180,11 @@ class NativePlaybackController(
     /** 保存一条选中媒体轨道的编码名称和主备地址，供兼容选择与缓存隔离使用。 */
     private data class SelectedMediaTrack(
         val urls: List<String>,
-        val codec: String,
-        val quality: Int = 0,
-    )
+        val representation: PlaybackCacheRepresentation = PlaybackCacheRepresentation(),
+    ) {
+        val quality: Int get() = representation.id
+        val codec: String get() = representation.codec
+    }
 
     /** 保存播放失败中可安全展示的原因类型和 HTTP 状态，不含地址、请求头或会话资料。 */
     private data class PlaybackFailureDetails(
@@ -427,6 +431,10 @@ class NativePlaybackController(
             }
             "clearMediaCache" -> {
                 handleMediaCacheOperation(result, ::clearMediaCache)
+            }
+            "clearSubtitleSessions" -> {
+                clearSubtitleTrackSession()
+                result.success(null)
             }
             "loadSubtitleTracks" -> {
                 val bvid = call.argument<String>("bvid")?.trim().orEmpty()
@@ -774,7 +782,7 @@ class NativePlaybackController(
             MimeTypes.isVideo(error.rendererFormat?.sampleMimeType) &&
             PlaybackTrackPolicy.isDecoderFailure(error.errorCode)
         if (decoderFailure && sources != null) {
-            failedVideoTracks = failedVideoTracks + (sources.actualQuality to sources.videoCodec)
+            failedVideoTracks = failedVideoTracks + (sources.actualQuality to sources.videoRepresentation.codec)
             val fallback = sources.videoAlternatives.firstOrNull()
             if (fallback == null) {
                 reportError("当前设备无法解码该视频的可用轨道，请尝试其他清晰度。")
@@ -788,7 +796,7 @@ class NativePlaybackController(
             emitPlaybackState()
             prepareMediaSources(sources.copy(
                 videoUrls = fallback.urls,
-                videoCodec = fallback.codec,
+                videoRepresentation = fallback.representation,
                 actualQuality = fallback.quality,
                 videoAlternatives = sources.videoAlternatives.drop(1),
             ))
@@ -1323,20 +1331,22 @@ class NativePlaybackController(
         diagnostic.returnedQuality = returnedQuality
         val videoTracks = selectMediaTracks(dash.optJSONArray("video"), minOf(quality, returnedQuality))
             .filterNot { (it.quality to it.codec) in failedVideoTracks }
-        val videoTrack = videoTracks.firstOrNull() ?: SelectedMediaTrack(emptyList(), "")
+        val videoTrack = videoTracks.firstOrNull() ?: SelectedMediaTrack(emptyList())
         diagnostic.selectedQuality = videoTrack.quality.takeIf { it > 0 }
         val audioTrack = selectMediaTracks(dash.optJSONArray("audio")).firstOrNull()
-            ?: SelectedMediaTrack(emptyList(), "")
+            ?: SelectedMediaTrack(emptyList())
         if (videoTrack.urls.isEmpty() && !audioOnly) {
             throw PlaybackSourceException("没有当前设备可解码的安全视频轨道，请尝试其他清晰度或听视频。")
         }
         val referer = buildVideoPageUrl(bvid)
             ?: throw PlaybackSourceException("无法生成视频页面地址。")
         return PlaybackSources(
+            bvid = bvid,
+            cid = cid,
             videoUrls = videoTrack.urls,
             audioUrls = audioTrack.urls,
-            videoCodec = videoTrack.codec,
-            audioCodec = audioTrack.codec,
+            videoRepresentation = videoTrack.representation,
+            audioRepresentation = audioTrack.representation,
             referer = referer,
             actualQuality = videoTrack.quality.takeIf { it > 0 } ?: returnedQuality,
             qualities = parseQualityOptions(data, dash, videoTrack.quality.takeIf { it > 0 } ?: returnedQuality),
@@ -1624,8 +1634,19 @@ class NativePlaybackController(
         }
         val subtitleUrl = session.readableTrackUrls[trackId]
             ?: throw SubtitleOperationException("subtitle_locked", "此字幕当前不可用。")
+        synchronized(subtitleTrackSessions) {
+            if (subtitleTrackSessions[bvid to cid] === session) {
+                subtitleTrackSessions.remove(bvid to cid)
+                subtitleTrackSessions[bvid to cid] = session
+            }
+        }
         val root = parseSubtitleJson(requestSubtitleDocumentJson(subtitleUrl, bvid))
         checkSubtitleRequestEpoch(requestEpoch)
+        synchronized(subtitleTrackSessions) {
+            if (subtitleTrackSessions[bvid to cid] !== session) {
+                throw SubtitleOperationException("subtitle_request_cancelled", "字幕轨道已更新，请重新选择。")
+            }
+        }
         val rawCues = root.optJSONArray("body")
         val cues = mutableListOf<Map<String, Any>>()
         if (rawCues != null) {
@@ -2255,7 +2276,27 @@ class NativePlaybackController(
             PlaybackTrackPolicy.playableTracks(candidates, preferredId, { it.optInt("id") }, ::score, ::isVideoTrackSupported)
         }
         return sorted.map { media ->
-            SelectedMediaTrack(readMediaUrls(media), media.optString("codecs").trim(), media.optInt("id"))
+            val urls = readMediaUrls(media)
+            val segmentBase = media.optJSONObject("segment_base") ?: media.optJSONObject("SegmentBase")
+            SelectedMediaTrack(
+                urls = urls,
+                representation = PlaybackCacheRepresentation(
+                    id = media.optInt("id"),
+                    bandwidth = media.optLong("bandwidth"),
+                    codec = media.optString("codecs").trim(),
+                    mimeType = media.optString("mime_type").ifBlank { media.optString("mimeType") },
+                    width = media.optInt("width"),
+                    height = media.optInt("height"),
+                    frameRate = media.optString("frame_rate").ifBlank { media.optString("frameRate") },
+                    initialization = segmentBase?.let {
+                        it.optString("initialization").ifBlank { it.optString("Initialization") }
+                    }.orEmpty(),
+                    indexRange = segmentBase?.let {
+                        it.optString("index_range").ifBlank { it.optString("indexRange") }
+                    }.orEmpty(),
+                    resourceUrl = urls.firstOrNull().orEmpty(),
+                ),
+            )
         }.distinctBy { it.quality to it.codec }
     }
 
@@ -2315,8 +2356,16 @@ class NativePlaybackController(
         if (bypassCache) {
             return networkFactory
         }
+        val cache = ensureMediaCache()
         return CacheDataSource.Factory()
-            .setCache(ensureMediaCache())
+            .setCache(cache)
+            .setCacheWriteDataSinkFactory {
+                OptionalCacheDataSink(CacheDataSink(cache, 2L * 1024 * 1024)) { spec ->
+                    spec.key?.let { key ->
+                        pinnedCacheEvictor?.releaseReservations(cache, key, spec.position, spec.length)
+                    }
+                }
+            }
             .setUpstreamDataSourceFactory(networkFactory)
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
     }
@@ -2326,14 +2375,18 @@ class NativePlaybackController(
      *
      * 该缓存只减少短期重复请求，不保存完整视频，也不构成离线下载。
      */
+    private var pinnedCacheEvictor: PinnedLruCacheEvictor? = null
+
     private fun ensureMediaCache(): SimpleCache {
         mediaCache?.let { cache -> return cache }
         val cacheDirectory = File(activity.cacheDir, MEDIA_CACHE_DIRECTORY_NAME)
+        val evictor = PinnedLruCacheEvictor(readConfiguredMediaCacheCapacity())
         val cache = SimpleCache(
             cacheDirectory,
-            LeastRecentlyUsedCacheEvictor(readConfiguredMediaCacheCapacity()),
+            evictor,
             cacheDatabaseProvider,
         )
+        pinnedCacheEvictor = evictor
         mediaCache = cache
         return cache
     }
@@ -2428,11 +2481,14 @@ class NativePlaybackController(
         return urls.getOrElse(index) { urls.first() }
     }
 
-    /** 生成当前视频或音频轨道的稳定缓存键，使清理和写入始终指向同一资源。 */
+    /** 由请求时固定的 BV/CID 和实际 DASH 表示生成版本化键，不读取可变播放状态。 */
     private fun playbackCacheKey(sources: PlaybackSources, video: Boolean): String {
-        val codec = if (video) sources.videoCodec else sources.audioCodec
-        return PlaybackTrackPolicy.mediaCacheKey(
-            currentBvid, currentCid, sources.actualQuality, codec, video,
+        return PlaybackCacheIdentity.key(
+            bvid = sources.bvid,
+            cid = sources.cid,
+            quality = sources.actualQuality,
+            video = video,
+            representation = if (video) sources.videoRepresentation else sources.audioRepresentation,
         )
     }
 
@@ -2451,6 +2507,7 @@ class NativePlaybackController(
 
     /** 合并当前候选线路的 DASH 音视频，并按历史位置、倍速和播放状态启动唯一播放器。 */
     private fun prepareMediaSources(sources: PlaybackSources) {
+        if (sources.bvid != currentBvid || sources.cid != currentCid) return
         if (!BilibiliSessionGate.isCurrent(sources.diagnostic.sessionGeneration)) {
             reportError("登录状态已变化，请重试播放。")
             return
@@ -2480,6 +2537,13 @@ class NativePlaybackController(
             .setTitle(displayTitle)
             .setArtist(currentOwnerName.ifBlank { "未知 UP 主" })
             .build()
+        if (!bypassMediaCacheForPlayback) {
+            val cache = ensureMediaCache()
+            pinnedCacheEvictor?.pin(cache, buildSet {
+                if (!audioOnly) add(playbackCacheKey(sources, video = true))
+                if (isSafeMediaUrl(audioUrl)) add(playbackCacheKey(sources, video = false))
+            })
+        }
         val sourceFactory = ProgressiveMediaSource.Factory(
             createMediaDataSourceFactory(
                 referer = sources.referer,
@@ -2594,6 +2658,13 @@ class NativePlaybackController(
         val nativePlayer = player
         val duration = nativePlayer?.duration?.takeIf { it > 0 } ?: 0L
         val position = nativePlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
+        // Media3 给出的当前连续缓冲段；跳转前未缓存的空隙不能画成已缓存。
+        val bufferedEnd = nativePlayer?.bufferedPosition?.coerceIn(0L, duration) ?: 0L
+        val bufferedRanges = if (playbackPrepared && duration > 0L) {
+            if (localSource) listOf(mapOf("startMs" to 0L, "endMs" to duration))
+            else if (bufferedEnd > position) listOf(mapOf("startMs" to position, "endMs" to bufferedEnd))
+            else emptyList()
+        } else emptyList()
         channel.invokeMethod(
             "playbackEvent",
             mapOf(
@@ -2604,6 +2675,7 @@ class NativePlaybackController(
                 "sleepTimerRemainingMs" to sleepTimer.remainingMs(),
                 "positionMs" to position,
                 "durationMs" to duration,
+                "bufferedRanges" to bufferedRanges,
                 "speed" to playbackSpeed.toDouble(),
                 "quality" to currentQuality,
                 "qualities" to availableQualities.map { quality ->
@@ -2795,6 +2867,7 @@ class NativePlaybackController(
         player?.clearMediaItems()
         player?.release()
         player = null
+        mediaCache?.let { cache -> pinnedCacheEvictor?.pin(cache, emptySet()) }
         videoSurface?.release()
         videoSurface = null
         textureEntry?.release()
@@ -2830,6 +2903,7 @@ class NativePlaybackController(
     private fun releaseMediaCache() {
         runCatching { mediaCache?.release() }
         mediaCache = null
+        pinnedCacheEvictor = null
     }
 
     /** 播放资源释放时撤销排队请求并清空字幕地址，其他切换靠 BV/CID 隔离会话。 */

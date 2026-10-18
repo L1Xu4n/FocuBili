@@ -1,3 +1,6 @@
+import 'services/media_cache_service.dart';
+import 'services/cache_lifecycle.dart';
+import 'services/image_resource_cache.dart';
 import 'dart:async';
 import 'dart:ui';
 
@@ -16,6 +19,9 @@ import 'services/problem_diagnostics_service.dart';
 import 'services/apple_video_capabilities.dart';
 import 'services/linux_focus_notification_service.dart';
 import 'services/linux_mini_player.dart';
+import 'services/subscription_service.dart';
+import 'services/app_layout_preferences_service.dart';
+import 'core/layout/device_orientation_policy.dart';
 
 /// 注册框架和 Dart 未捕获错误的最小诊断记录；只保存固定操作名与异常类型，绝不保存异常原文或堆栈。
 void _installProblemDiagnostics() {
@@ -106,7 +112,47 @@ Future<void> main(List<String> args) async {
     return;
   }
   _installProblemDiagnostics();
+  // 布局只在启动时载入；设置页明确提示重启，避免播放中强制旋转。
+  try {
+    await const AppLayoutPreferencesService().initialize();
+  } catch (_) {
+    // 偏好读取失败时仍使用原有自动布局，让应用可进入设置恢复。
+  }
+  if (AppPlatformDetector.current == AppPlatform.ios) {
+    final views = WidgetsBinding.instance.platformDispatcher.views;
+    if (views.isNotEmpty) {
+      await SystemChrome.setPreferredOrientations(
+        DeviceOrientationPolicy.startupOrientations(
+          logicalSize: DeviceOrientationPolicy.logicalSizeForView(views.first),
+          isMobile: true,
+        ),
+      );
+    }
+  }
+  try {
+    await CacheLifecycle.initialize();
+  } catch (_) {}
+  unawaited(ImageResourceCache.cleanLegacyCache());
+  unawaited(
+    ImageResourceCache.instance.status().catchError(
+      (Object _) => const ImageCacheUsage(0, 0, 0),
+    ),
+  );
+  if (PlatformServices.current.capabilities.mediaCacheBackend ==
+      MediaCacheBackendKind.windowsMediaKit) {
+    try {
+      await WindowsMediaCacheService().maintain();
+    } catch (_) {}
+  }
   await _prepareWindowsDesktop();
+  // Reconcile persisted opt-in after an upgrade/restart; disabled by default.
+  try {
+    await SubscriptionService.instance.initialize();
+    await SubscriptionService.instance.reconcileBackgroundSchedule();
+  } catch (_) {
+    // Subscription storage/scheduler failures must not prevent app startup.
+    // The subscriptions page exposes its persisted/error status for retry.
+  }
   // Android 启动方向由 MainActivity 在 Flutter 首帧前决定，避免未稳定的窗口尺寸把平板误判成手机。
   await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   // 首帧前先按浅色背景设置深色系统图标，后续由应用主题自动同步明暗模式。

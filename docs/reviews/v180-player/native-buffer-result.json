@@ -1,0 +1,13 @@
+{
+  "backend": "real libmpv",
+  "input": "synthetic loopback MP4",
+  "durationMs": 4023,
+  "decodedPositionMs": 490,
+  "bufferedRangesMs": [
+    [
+      0,
+      3994
+    ]
+  ],
+  "uiVerified": false
+}

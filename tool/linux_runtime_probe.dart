@@ -21,6 +21,7 @@ import 'package:focubili/services/linux_mini_player.dart';
 import 'package:focubili/services/linux_focus_notification_service.dart';
 
 import '../integration_test/media_fixture.dart';
+import 'desktop_disk_cache_probe.dart';
 
 Future<void> waitFor(bool Function() condition, String name) async {
   final deadline = DateTime.now().add(const Duration(seconds: 20));
@@ -108,6 +109,7 @@ Future<void> main(List<String> args) async {
   var success = false;
   try {
     MediaKit.ensureInitialized();
+    await verifyDesktopDiskCache();
     await windowManager.ensureInitialized();
     await windowManager.waitUntilReadyToShow(
       const WindowOptions(size: Size(900, 620), title: 'FocuBili Linux QA'),

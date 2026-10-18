@@ -1,6 +1,7 @@
 package com.focubili.app
 
 import android.app.Activity
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -89,6 +90,9 @@ class DeviceStatusController(
      * 不读取序列号、Android ID、MAC 地址、广告标识符或任何账号资料，确保复制诊断文本可安全反馈。
      */
     private fun readDiagnosticDeviceInfo(): Map<String, Any> {
+        val memory = ActivityManager.MemoryInfo()
+        (applicationContext.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager)
+            ?.getMemoryInfo(memory)
         val manufacturer = Build.MANUFACTURER?.trim().orEmpty()
         val modelName = Build.MODEL?.trim().orEmpty()
         val displayModel = when {
@@ -100,6 +104,12 @@ class DeviceStatusController(
             "androidRelease" to Build.VERSION.RELEASE?.trim().orEmpty().ifBlank { "未知" },
             "apiLevel" to Build.VERSION.SDK_INT,
             "model" to displayModel,
+            "securityPatch" to Build.VERSION.SECURITY_PATCH.orEmpty(),
+            "supportedAbis" to Build.SUPPORTED_ABIS.joinToString(", "),
+            "networkType" to readNetworkType(),
+            "batteryPercent" to (readBatteryPercent() ?: -1),
+            "totalMemoryMiB" to memory.totalMem / (1024 * 1024),
+            "availableMemoryMiB" to memory.availMem / (1024 * 1024),
         )
     }
 

@@ -12,6 +12,7 @@ class PlaybackPreferencesService {
   static const String _doubleTapSeekKey =
       'playback_preferences.enable_double_tap_seek';
   static const _speedsKey = 'playback_preferences.speeds';
+  static const longPressSpeedKey = 'playback_preferences.long_press_speed';
   static const _regionsKey = 'playback_preferences.double_tap_regions';
   static const _actionAnimationKey = 'playback_preferences.action_animation';
   static const _controlScaleKey = 'playback_preferences.control_scale';
@@ -30,6 +31,13 @@ class PlaybackPreferencesService {
   Future<PlaybackPreferences> load() async {
     final SharedPreferences preferences = await SharedPreferences.getInstance();
     return PlaybackPreferences(
+      longPressPlaybackSpeed:
+          PlaybackPreferences.normalizeLongPressPlaybackSpeed(
+            switch (preferences.get(longPressSpeedKey)) {
+              final num value => value.toDouble(),
+              _ => PlaybackPreferences.defaultLongPressPlaybackSpeed,
+            },
+          ),
       playbackSpeeds: PlaybackPreferences.normalizeSpeeds(
         preferences
                 .getStringList(_speedsKey)
@@ -157,6 +165,18 @@ class PlaybackPreferencesService {
       ).map((speed) => speed.toString()).toList(),
     )) {
       throw StateError('Playback speeds were not saved');
+    }
+  }
+
+  /// 保存长按期间使用的临时倍速；普通播放倍速与松手恢复值保持独立。
+  Future<void> saveLongPressPlaybackSpeed(double speed) async {
+    final preferences = await SharedPreferences.getInstance();
+    if (!await preferences.setDouble(
+      longPressSpeedKey,
+      PlaybackPreferences.normalizeLongPressPlaybackSpeed(speed),
+    )) {
+      await preferences.reload();
+      throw StateError('长按倍速保存失败');
     }
   }
 

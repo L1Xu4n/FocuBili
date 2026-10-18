@@ -126,7 +126,7 @@ mixin _PlayerViewportCoordinator
     final List<DeviceOrientation> orientations =
         DeviceOrientationPolicy.playerOrientations(
           logicalSize: DeviceOrientationPolicy.logicalSizeForView(views.first),
-          isAndroid: true,
+          isMobile: true,
         );
     if (orientations.isNotEmpty) {
       await SystemChrome.setPreferredOrientations(orientations);
@@ -319,7 +319,7 @@ mixin _PlayerViewportCoordinator
             logicalSize: DeviceOrientationPolicy.logicalSizeForView(
               views.first,
             ),
-            isAndroid: true,
+            isMobile: true,
           );
       if (orientations.isNotEmpty) {
         await SystemChrome.setPreferredOrientations(orientations);

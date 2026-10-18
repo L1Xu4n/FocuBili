@@ -232,18 +232,23 @@ extension _PlayerPageView on _PlayerPageState {
                   enableSurfaceGestures: enableSurfaceGestures,
                   enableVerticalAdjustment: showPlayerStatus,
                 ),
+                // 听视频信息属于画面层，不参与字幕/通知提示列的高度和对齐计算。
+                if (_playbackSnapshot.audioOnly &&
+                    !inPictureInPicture &&
+                    _playbackSnapshot.phase != PlaybackPhase.error &&
+                    _playbackSnapshot.phase != PlaybackPhase.loading)
+                  IgnorePointer(child: _buildListeningSurface()),
                 Align(
                   alignment: Alignment.bottomCenter,
                   child: IgnorePointer(
                     child: AnimatedOpacity(
                       opacity: !_showControls && !inPictureInPicture ? 1 : 0,
                       duration: const Duration(milliseconds: 180),
-                      child: LinearProgressIndicator(
+                      child: PlayerMiniProgress(
                         key: const Key('mini-progress'),
                         value: _progress,
-                        minHeight: 2,
-                        backgroundColor: Colors.white24,
-                        color: Theme.of(context).colorScheme.primary,
+                        duration: _playbackSnapshot.duration,
+                        bufferedRanges: _playbackSnapshot.bufferedRanges,
                       ),
                     ),
                   ),
@@ -327,6 +332,8 @@ extension _PlayerPageView on _PlayerPageState {
                             scale: controlSize.scale,
                             sliderKey: const Key('player-progress-slider'),
                             value: _progress,
+                            duration: _playbackSnapshot.duration,
+                            bufferedRanges: _playbackSnapshot.bufferedRanges,
                             onChangeStart: _startProgressDrag,
                             onChanged: _updateProgressDrag,
                             onChangeEnd: _finishProgressDrag,

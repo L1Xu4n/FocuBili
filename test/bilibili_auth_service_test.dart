@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:focubili/services/bilibili_auth_service.dart';
+import 'package:focubili/services/cache_lifecycle.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// 用于测试的 Cookie 容器，会记录读取、替换和仅清理 B 站 Cookie 的调用。
 class _RecordingCookieStore implements BilibiliCookieStore {
@@ -51,6 +53,15 @@ class _CallbackAuthApi implements BilibiliAuthApi {
   }
 }
 
+/// 延迟一次导出快照读取，模拟退出登录发生在文件生成之前。
+class _DelayedExportCookieStore extends _RecordingCookieStore {
+  final response = Completer<String>();
+
+  /// 等待测试放行合成 Cookie，不读取真实安全存储。
+  @override
+  Future<String> readCookies() => response.future;
+}
+
 /// 创建一份最小的、已确认登录成功的 `/nav` 响应。
 BilibiliNavResponse _activeResponse() {
   return const BilibiliNavResponse(
@@ -78,6 +89,61 @@ BilibiliNavResponse _expiredResponse() {
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+  // 账号在快照读取期间退出时，旧快照不能进入导出文件。
+  test('导出登录快照拒绝账号切换竞态与空会话', () async {
+    final store = _DelayedExportCookieStore();
+    final service = BilibiliAuthService(cookieStore: store);
+    final pending = service.readCookieForExport();
+    final rejected = expectLater(
+      pending,
+      throwsA(isA<BilibiliAuthException>()),
+    );
+    await Future<void>.delayed(Duration.zero);
+    await service.clearBilibiliSession();
+    store.response.complete('SESSDATA=synthetic-export');
+    await rejected;
+    await expectLater(
+      BilibiliAuthService(
+        cookieStore: _RecordingCookieStore(),
+      ).readCookieForExport(),
+      throwsA(isA<BilibiliAuthException>()),
+    );
+  });
+  test('older verification cannot overwrite a newer login or logout', () async {
+    for (final logout in [false, true]) {
+      final oldResponse = Completer<BilibiliNavResponse>();
+      final store = _RecordingCookieStore();
+      final older = BilibiliAuthService(
+        cookieStore: store,
+        api: _CallbackAuthApi((_) => oldResponse.future),
+      );
+      final newer = BilibiliAuthService(
+        cookieStore: store,
+        api: _CallbackAuthApi(
+          (_) async => BilibiliNavResponse(
+            statusCode: 200,
+            body: _activeResponse().body.replaceFirst('42', '43'),
+          ),
+        ),
+      );
+      final old = older.loginWithCookie('SESSDATA=old-fixture');
+      final rejected = expectLater(old, throwsA(isA<BilibiliAuthException>()));
+      if (logout) {
+        await newer.logout();
+      } else {
+        await newer.loginWithCookie('SESSDATA=new-fixture');
+      }
+      oldResponse.complete(_activeResponse());
+      await rejected;
+      expect(store.cookies, logout ? '' : 'SESSDATA=new-fixture');
+      expect(CacheLifecycle.accountScope, logout ? 'guest' : 'mid:43');
+    }
+  });
+
   /// 登录页复用未变化的过期会话，Cookie 改变或手动检测时重新验证。
   test('网页登录轮询只验证变化的会话，手动检测强制刷新', () async {
     final store = _RecordingCookieStore(cookies: 'SESSDATA=expired');

@@ -28,8 +28,8 @@ mixin _PlayerControlsCoordinator
 
   /// 根据当前真实播放状态向原生播放器发送播放或暂停命令。
   @override
-  void _togglePlayback() {
-    _showPlayerControls();
+  void _togglePlayback({bool showControls = true}) {
+    if (showControls) _showPlayerControls();
     unawaited(_setPlaybackActive(!_playing));
   }
 

@@ -1,0 +1,89 @@
+{
+  "dateUtc": "2026-10-04",
+  "flutter": "3.44.6",
+  "dart": "3.12.2",
+  "tests": {
+    "flutterPassed": 761,
+    "flutterSkipped": 1,
+    "analyze": "passed",
+    "format": "passed",
+    "androidJvm": "passed",
+    "macMetadataTests": 3,
+    "linuxPackagingTests": {
+      "passed": 1,
+      "umask": "022 (CI default)"
+    }
+  },
+  "apk": [
+    {
+      "file": "app-arm64-v8a-debug.apk",
+      "package": "com.focubili.app.preview",
+      "versionCode": 2021,
+      "versionName": "1.8.0-beta.1",
+      "label": "焦点哔哩 Beta",
+      "bytes": 96131218,
+      "sha256": "b48dcbd5ca84186f84df26d676ab6786ea731abedb06f69d135f9dc7e7dfd77e",
+      "certificateSha256": "5bd1fc4daa8a0887e213c4dc1231d0eba4f7f309a0e64c2d15fe404302bd00b0",
+      "minSdk": 24,
+      "targetSdk": 36,
+      "abi": "arm64-v8a"
+    },
+    {
+      "file": "app-armeabi-v7a-debug.apk",
+      "package": "com.focubili.app.preview",
+      "versionCode": 1021,
+      "versionName": "1.8.0-beta.1",
+      "label": "焦点哔哩 Beta",
+      "bytes": 90252672,
+      "sha256": "fa7b91944d3e94033671ab35216c67238b0c5295f82e4f17e04c0433eed63fc5",
+      "certificateSha256": "5bd1fc4daa8a0887e213c4dc1231d0eba4f7f309a0e64c2d15fe404302bd00b0",
+      "minSdk": 24,
+      "targetSdk": 36,
+      "abi": "armeabi-v7a"
+    },
+    {
+      "file": "app-x86_64-debug.apk",
+      "package": "com.focubili.app.preview",
+      "versionCode": 4021,
+      "versionName": "1.8.0-beta.1",
+      "label": "焦点哔哩 Beta",
+      "bytes": 91956313,
+      "sha256": "f30353283532e48e2b6d44eb2b6bc64f04ab9b91742b5713a7a2ddedc525789f",
+      "certificateSha256": "5bd1fc4daa8a0887e213c4dc1231d0eba4f7f309a0e64c2d15fe404302bd00b0",
+      "minSdk": 24,
+      "targetSdk": 36,
+      "abi": "x86_64"
+    }
+  ],
+  "emulator": {
+    "android": 10,
+    "api": 29,
+    "abi": "x86_64",
+    "hardware": "software emulator (no KVM)",
+    "realDevice": false,
+    "status": "Actual app home badge, learning list status/progress and subscription settings viewed; source preview started but real Android network success not verified.",
+    "fixtures": true,
+    "upgrade": {
+      "allPreferencesUnchanged": true,
+      "learningTasks": 3,
+      "learningProgressSeconds": 93.0,
+      "source": "isolated emulator fixtures, not real video playback"
+    },
+    "readAction": {
+      "nativeUiUnreadCount": 1,
+      "nativeUiReadCount": 1,
+      "learningDataUnchanged": true,
+      "fixtures": true
+    },
+    "fontScaleChecked": 1.4
+  },
+  "limits": [
+    "Anonymous UP WBI real API blocked (-352), fallback 412",
+    "No exited-app push",
+    "Physical Android playback, login and Android 13+ notification permission not verified"
+  ],
+  "artifactScope": "Local split APK evidence. Delivered GitHub CI universal APK has its own recorded metadata and signature.",
+  "library": "Materialize failed; prescribed upload helper tools/list HTTP 401. No Library file was saved.",
+  "sharedVersion": "1.8.0+21",
+  "androidPreviewVersionSuffix": "-beta.1"
+}

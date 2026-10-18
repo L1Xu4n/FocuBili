@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'dart:io';
+import 'package:flutter/foundation.dart';
 
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -6,6 +8,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/playback_request_diagnostic.dart';
 import '../platform/app_platform.dart';
+import '../platform/platform_services.dart';
+import '../core/build_metadata.g.dart';
+import 'app_layout_preferences_service.dart';
 import 'focus_notification_service.dart';
 import 'webview_environment_service.dart';
 
@@ -35,6 +40,7 @@ class DiagnosticDeviceInfo {
     required this.systemVersion,
     required this.apiLevel,
     required this.model,
+    this.publicInfo = const {},
   });
 
   /// 当前操作系统的公开名称，例如“Android”或“Windows”。
@@ -48,6 +54,7 @@ class DiagnosticDeviceInfo {
 
   /// Android 厂商型号或“Windows PC”；不读取主机名、序列号、Android ID、MAC 地址或广告标识符。
   final String model;
+  final Map<String, String> publicInfo;
 
   /// 从 Android 方法通道返回的字典中读取并校验环境信息。
   factory DiagnosticDeviceInfo.fromPlatformMap(Map<Object?, Object?> values) {
@@ -59,6 +66,21 @@ class DiagnosticDeviceInfo {
       systemVersion: release.isEmpty ? '未知' : release,
       apiLevel: apiLevel != null && apiLevel > 0 ? apiLevel : null,
       model: model.isEmpty ? '未知设备' : model,
+      publicInfo: {
+        for (final key in [
+          'securityPatch',
+          'supportedAbis',
+          'networkType',
+          'batteryPercent',
+          'totalMemoryMiB',
+          'availableMemoryMiB',
+        ])
+          if (values[key] is String || values[key] is num)
+            key: values[key]
+                .toString()
+                .replaceAll(RegExp(r'[\r\n]'), ' ')
+                .substring(0, values[key].toString().length.clamp(0, 120)),
+      },
     );
   }
 
@@ -356,10 +378,14 @@ class ProblemDiagnosticsSnapshot {
     required this.recentErrors,
     required this.reminderDiagnostics,
     this.webViewInfo,
+    this.buildTime = appBuildTime,
+    this.environment = const {},
   });
 
   /// 当前已安装应用的语义版本与构建号。
   final String appVersion;
+  final String buildTime;
+  final Map<String, String> environment;
 
   /// 当前设备的公开、脱敏跨平台环境信息。
   final DiagnosticDeviceInfo deviceInfo;
@@ -627,6 +653,7 @@ class ProblemDiagnosticsService {
       recentErrors: values[2] as List<ProblemDiagnosticEntry>,
       reminderDiagnostics: values[3] as ReminderDiagnosticsSnapshot,
       webViewInfo: _webViewInfo,
+      environment: await _loadEnvironmentInfo(),
     );
   }
 
@@ -637,12 +664,20 @@ class ProblemDiagnosticsService {
       ..writeln('FocuBili 问题诊断')
       ..writeln()
       ..writeln('应用版本：${snapshot.appVersion}')
+      ..writeln('BuildTime：${snapshot.buildTime}')
+      ..writeln('源码提交：$appSourceRevision')
       ..writeln('系统：${snapshot.deviceInfo.systemLabel}')
       ..writeln('设备类型：${snapshot.deviceInfo.model}')
       ..writeln('生成时间：${formatDiagnosticDateTime(snapshot.generatedAt)}')
       ..writeln()
       ..writeln('提醒诊断：')
       ..writeln('待触发提醒：${snapshot.reminderDiagnostics.pendingCount}');
+    for (final entry in {
+      ...snapshot.environment,
+      ...snapshot.deviceInfo.publicInfo,
+    }.entries) {
+      text.writeln('${entry.key}：${entry.value}');
+    }
     if (snapshot.deviceInfo.isWindows) {
       text
         ..writeln('提醒方式：Windows Toast')
@@ -718,13 +753,13 @@ class ProblemDiagnosticsService {
     return text.toString().trimRight();
   }
 
-  /// 安全读取安装版本；插件不可用时回退到当前源码的 v1.7.1 版本标识。
+  /// 安全读取安装版本；插件不可用时回退到当前源码的 v1.8.0 版本标识。
   Future<String> _loadVersionSafely() async {
     try {
       final String version = (await _appVersionLoader()).trim();
-      return version.isEmpty ? '1.7.1+21' : version;
+      return version.isEmpty ? appFallbackVersion : version;
     } catch (_) {
-      return '1.7.1+21';
+      return appFallbackVersion;
     }
   }
 
@@ -735,6 +770,47 @@ class ProblemDiagnosticsService {
     } catch (_) {
       return _fallbackDeviceInfo();
     }
+  }
+
+  /// 读取有限运行环境与功能开关，不访问账号、请求地址、文件路径或用户内容。
+  Future<Map<String, String>> _loadEnvironmentInfo() async {
+    final capabilities = PlatformServices.current.capabilities;
+    final views = PlatformDispatcher.instance.views;
+    final result = <String, String>{
+      '运行模式': kReleaseMode
+          ? 'release'
+          : kProfileMode
+          ? 'profile'
+          : 'debug',
+      'Dart': Platform.version.split(' (').first,
+      '播放后端': capabilities.playbackBackend.name,
+      '字幕后端': capabilities.playerOverlayBackend.name,
+      '媒体缓存后端': capabilities.mediaCacheBackend.name,
+      '会话存储': capabilities.cookieStoreBackend.name,
+      '本次启动布局': AppLayoutPreferencesService.activeMode.name,
+      'CPU逻辑核心': '${Platform.numberOfProcessors}',
+      '进程内存MiB': '${ProcessInfo.currentRss ~/ (1024 * 1024)}',
+    };
+    if (views.isNotEmpty) {
+      final view = views.first;
+      result['屏幕物理像素'] =
+          '${view.physicalSize.width.round()}×${view.physicalSize.height.round()}';
+      result['屏幕像素密度'] = view.devicePixelRatio.toStringAsFixed(2);
+    }
+    try {
+      final preferences = await _preferencesLoader();
+      result['WBI签名'] =
+          preferences.getBool('app_behavior.wbi_signing_enabled') == true
+          ? '开启'
+          : '关闭';
+      result['账号只读'] =
+          preferences.getBool('app_behavior.account_read_only') != false
+          ? '开启'
+          : '关闭';
+    } catch (_) {
+      result['偏好读取'] = '不可用';
+    }
+    return Map.unmodifiable(result);
   }
 
   /// 安全读取原生闹钟诊断；通道不可用时返回空快照而不影响错误记录。

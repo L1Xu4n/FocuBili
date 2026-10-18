@@ -2,10 +2,10 @@ name: Linux builds
 on:
   push:
     branches: [dev, master]
-    paths: ['linux/**', 'lib/**', 'test/**', 'integration_test/**', 'third_party/**', 'pubspec.*', 'tool/**', '.github/workflows/linux-build.yml']
+    paths: ['linux/**', 'lib/**', 'test/**', 'integration_test/**', 'third_party/**', 'pubspec.*', 'docs/RELEASE_NOTES_v*.md', 'tool/**', '.github/workflows/linux-build.yml']
   pull_request:
     branches: [dev, master]
-    paths: ['linux/**', 'lib/**', 'test/**', 'integration_test/**', 'third_party/**', 'pubspec.*', 'tool/**', '.github/workflows/linux-build.yml']
+    paths: ['linux/**', 'lib/**', 'test/**', 'integration_test/**', 'third_party/**', 'pubspec.*', 'docs/RELEASE_NOTES_v*.md', 'tool/**', '.github/workflows/linux-build.yml']
 permissions:
   contents: read
 concurrency:
@@ -35,7 +35,9 @@ jobs:
           python3 tool/test_linux_packaging.py
           python3 tool/test_linux_runtime_runner.py
       - name: Build normal release application
-        run: flutter build linux --release
+        run: |
+          dart tool/write_build_metadata.dart
+          flutter build linux --release
       - name: Package installable application
         run: |
           bash tool/package_linux.sh
@@ -50,6 +52,11 @@ jobs:
       - name: Test real Linux desktop services and media
         timeout-minutes: 8
         run: dbus-run-session -- xvfb-run -a -s '-screen 0 1280x900x24' bash tool/check_linux_runtime.sh
+      - name: Compile isolated native subscription scheduler probe
+        run: flutter build linux --release --target tool/native_subscription_probe.dart --dart-define=NATIVE_SUBSCRIPTION_PROBE=true
+      - name: Verify GLib native timer callback and cancellation
+        timeout-minutes: 2
+        run: dbus-run-session -- xvfb-run -a python3 tool/run_native_subscription_probe.py build/linux/x64/release/bundle/focubili build/linux-packages/native-subscription.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -60,5 +67,6 @@ jobs:
             build/linux-packages/*.txt
             build/linux-packages/*.log
             build/linux-packages/*.png
+            build/linux-packages/native-subscription.json
           if-no-files-found: warn
           retention-days: 30

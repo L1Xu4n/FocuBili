@@ -441,7 +441,7 @@ mixin _PlayerOverlayCoordinator
     });
   }
 
-  /// 单独管理轨道请求代次，刷新列表不再取消正在读取的字幕正文。
+  /// 失败刷新保留字幕；有效的新轨道列表使旧正文和迟到请求失效。
   Future<SubtitleTrackLoadResult> _loadSubtitleTracks() async {
     final String bvid = _activeVideo.bvid;
     final int cid = _currentPart.cid;
@@ -462,6 +462,9 @@ mixin _PlayerOverlayCoordinator
       return const SubtitleTrackLoadResult.unavailable(
         message: '视频已切换，请重新打开字幕设置。',
       );
+    }
+    if (result.status != SubtitleLoadStatus.unavailable) {
+      _disableSubtitles();
     }
     setState(() {
       // 临时失败保留同一视频成功读取过的列表，面板仍明确显示刷新失败。

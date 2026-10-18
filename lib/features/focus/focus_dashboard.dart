@@ -1,3 +1,8 @@
+import 'package:focubili/features/common/app_network_image.dart';
+import '../../services/subscription_service.dart';
+import '../subscriptions/subscription_updates_page.dart';
+import '../subscriptions/subscription_home_card.dart';
+import '../subscriptions/subscription_introduction.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -6,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection, SliverConstraints;
 
 import '../../core/layout/adaptive_layout.dart';
+import '../../core/router/app_router.dart';
 import '../../core/widgets/editable_card_board.dart';
 import '../../services/dashboard_layout_service.dart';
 import '../../models/focus_session.dart';
@@ -31,6 +37,7 @@ class FocusDashboard extends StatefulWidget {
     this.continueLearningCard,
     this.onOpenLearningList,
     this.layoutService,
+    this.subscriptionService,
   });
 
   final FocusTimerController controller;
@@ -50,6 +57,7 @@ class FocusDashboard extends StatefulWidget {
 
   /// 可注入的首页布局存储，业务服务和专注计时不受布局编辑影响。
   final DashboardLayoutService? layoutService;
+  final SubscriptionService? subscriptionService;
 
   /// 创建保存目标输入和预设时长选择的页面状态。
   @override
@@ -65,7 +73,34 @@ class _FocusDashboardState extends State<FocusDashboard> {
 
   final TextEditingController _goalController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
-  final GlobalKey _homeBoardKey = GlobalKey(debugLabel: 'home-card-board');
+  GlobalKey _homeBoardKey = GlobalKey(debugLabel: 'home-card-board');
+  late final DashboardLayoutService _homeLayouts =
+      widget.layoutService ?? DashboardLayoutService();
+  late final SubscriptionService _subscriptions =
+      widget.subscriptionService ?? SubscriptionService.instance;
+  void _subscriptionChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Widget _buildSubscriptionIntroduction() => SubscriptionIntroduction(
+    service: _subscriptions,
+    layoutService: _homeLayouts,
+    onVisibilityChanged: (visible) {
+      if (mounted && _showSubscriptionIntroduction != visible) {
+        setState(() => _showSubscriptionIntroduction = visible);
+      }
+    },
+    onEnabled: () {
+      if (mounted) {
+        // 引导会销毁旧卡片容器，先同步退出父页的编辑状态并清理旧手势。
+        _handleHomeEditingChanged(false);
+        setState(
+          () => _homeBoardKey = GlobalKey(debugLabel: 'home-card-board'),
+        );
+      }
+    },
+  );
+  bool _showSubscriptionIntroduction = false;
   bool _editingHomeCards = false;
   int _selectedMinutes = 25;
   double _scrollOffset = 0;
@@ -74,10 +109,34 @@ class _FocusDashboardState extends State<FocusDashboard> {
   ScrollDirection _homeScrollDirection = ScrollDirection.idle;
   double? _homeScrollStartOffset;
 
+  Widget _buildSubscriptionButton() => ListenableBuilder(
+    listenable: _subscriptions,
+    builder: (context, _) {
+      final service = _subscriptions;
+      if (!service.enabled) return const SizedBox.shrink();
+      return IconButton(
+        key: const Key('home-subscription-button'),
+        tooltip: '焦点订阅',
+        icon: Badge(
+          label: Text('${service.unreadCount}'),
+          isLabelVisible: service.unreadCount > 0,
+          child: const Icon(Icons.rss_feed),
+        ),
+        onPressed: () => Navigator.of(context).push<void>(
+          MaterialPageRoute(
+            builder: (_) => SubscriptionUpdatesPage(service: _subscriptions),
+          ),
+        ),
+      );
+    },
+  );
+
   /// 监听目标文字变化，使开始按钮能立即更新可用状态。
   @override
   void initState() {
     super.initState();
+    _subscriptions.addListener(_subscriptionChanged);
+    unawaited(_subscriptions.initialize());
     _goalController.addListener(_handleGoalChanged);
     _scrollController.addListener(_handleScrollChanged);
   }
@@ -756,6 +815,7 @@ class _FocusDashboardState extends State<FocusDashboard> {
                 SliverAppBar.large(
                   title: const Text('焦点哔哩'),
                   actions: <Widget>[
+                    _buildSubscriptionButton(),
                     if (widget.onOpenLearningList != null)
                       IconButton(
                         key: const Key('open-learning-list'),
@@ -791,6 +851,7 @@ class _FocusDashboardState extends State<FocusDashboard> {
   /// 释放目标输入控制器，离开应用后不再保留文本监听。
   @override
   void dispose() {
+    _subscriptions.removeListener(_subscriptionChanged);
     _goalController
       ..removeListener(_handleGoalChanged)
       ..dispose();

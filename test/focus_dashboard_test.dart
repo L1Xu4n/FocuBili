@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:focubili/features/focus/focus_dashboard.dart';
 import 'package:focubili/features/focus/focus_timer_controller.dart';
+import 'package:focubili/services/subscription_service.dart';
 
 /// 注册首页专注台的第一版用户流程组件测试。
 void main() {
@@ -138,5 +139,36 @@ void main() {
 
     expect(tester.takeException(), isNull);
     expect(find.byKey(const Key('focus-ready-card')), findsOneWidget);
+  });
+  testWidgets('订阅启用后在欢迎首页和专注布局都显示入口，关闭后隐藏', (tester) async {
+    final subscriptions = SubscriptionService.instance;
+    await subscriptions.initialize();
+    await subscriptions.setEnabled(false);
+    final controller = FocusTimerController(
+      tickInterval: const Duration(days: 1),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    for (final hero in [true, false]) {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: FocusDashboard(
+            key: ValueKey(hero),
+            controller: controller,
+            onOpenVideo: () {},
+            onOpenStatistics: () {},
+            onOpenProfile: hero ? () {} : null,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('home-subscription-button')), findsNothing);
+      await subscriptions.setEnabled(true);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('home-subscription-button')), findsOneWidget);
+      await subscriptions.setEnabled(false);
+      await tester.pumpAndSettle();
+    }
+    expect(tester.takeException(), isNull);
   });
 }

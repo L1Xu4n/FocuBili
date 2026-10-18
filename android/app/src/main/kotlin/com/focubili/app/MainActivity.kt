@@ -12,7 +12,6 @@ import io.flutter.embedding.android.FlutterActivity
 /** 承载 Flutter 界面并管理 Android 原生播放桥的 Activity 入口。 */
 class MainActivity : FlutterActivity() {
     private var nativePlaybackController: NativePlaybackController? = null
-    private var bilibiliCookieController: BilibiliCookieController? = null
     private var deviceStatusController: DeviceStatusController? = null
     private var focusNotificationController: FocusNotificationController? = null
     private var downloadProgressController: DownloadProgressController? = null
@@ -23,6 +22,8 @@ class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         requestedOrientation = LargeScreenOrientationPolicy.preferredOrientation(
             resources.configuration.smallestScreenWidthDp,
+            getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
+                .getString("flutter.appearance.layout_orientation", "adaptive") ?: "adaptive",
         )
         deferredDeepLink = externalLinkFromIntent(intent)
         super.onCreate(savedInstanceState)
@@ -44,9 +45,6 @@ class MainActivity : FlutterActivity() {
             activity = this,
             messenger = flutterEngine.dartExecutor.binaryMessenger,
             renderer = flutterEngine.renderer,
-        )
-        bilibiliCookieController = BilibiliCookieController(
-            messenger = flutterEngine.dartExecutor.binaryMessenger,
         )
         deviceStatusController = DeviceStatusController(
             activity = this,
@@ -130,8 +128,6 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         nativePlaybackController?.onHostDestroy()
         nativePlaybackController = null
-        bilibiliCookieController?.dispose()
-        bilibiliCookieController = null
         deviceStatusController?.dispose()
         deviceStatusController = null
         focusNotificationController?.dispose()

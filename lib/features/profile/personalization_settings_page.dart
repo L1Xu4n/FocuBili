@@ -8,6 +8,7 @@ import '../../core/theme/app_theme.dart';
 import '../../models/playback_preferences.dart';
 import '../../services/app_behavior_preferences_service.dart';
 import '../../services/playback_preferences_service.dart';
+import '../../services/app_layout_preferences_service.dart';
 import '../../services/app_update_service.dart';
 import '../../services/focus_notification_service.dart';
 import '../../services/focus_preferences_service.dart';
@@ -18,6 +19,7 @@ import 'playback_speeds_dialog.dart';
 import 'double_tap_regions_page.dart';
 import 'player_control_size_page.dart';
 import 'settings_search_section.dart';
+import 'data_transfer_page.dart';
 
 /// 可选择的主题强调色预设，供设置页以色块形式展示。
 const List<(String, int)> _themeColorOptions = <(String, int)>[
@@ -50,6 +52,7 @@ class PersonalizationSettingsPage extends StatefulWidget {
     this.windowsClipboardPreferencesService,
     this.behaviorPreferencesService,
     this.appPlatform,
+    this.showLayoutSettings = false,
   });
 
   final PlaybackPreferencesService preferencesService;
@@ -59,6 +62,7 @@ class PersonalizationSettingsPage extends StatefulWidget {
   windowsClipboardPreferencesService;
   final AppBehaviorPreferencesService? behaviorPreferencesService;
   final AppPlatform? appPlatform;
+  final bool showLayoutSettings;
 
   /// 创建负责加载和保存设置的页面状态。
   @override
@@ -73,6 +77,8 @@ class _PersonalizationSettingsPageState
   PlaybackPreferences _preferences = const PlaybackPreferences();
   FocusPreferences _focusPreferences = const FocusPreferences();
   bool _loading = true;
+  AppLayoutMode _layoutMode = AppLayoutMode.adaptive;
+  final _layoutService = const AppLayoutPreferencesService();
   bool _saving = false;
   bool _savingDoNotDisturb = false;
   bool _hasDoNotDisturbAccess = false;
@@ -109,6 +115,9 @@ class _PersonalizationSettingsPageState
   @override
   void initState() {
     super.initState();
+    if (widget.showLayoutSettings) {
+      _settingsLevel = _SettingsLevel.appearanceAndApplication;
+    }
     WidgetsBinding.instance.addObserver(this);
     _focusPreferencesService =
         widget.focusPreferencesService ?? FocusPreferencesService();
@@ -142,6 +151,7 @@ class _PersonalizationSettingsPageState
   /// 从本地读取配置；读取失败时保留安全默认值，设置页仍可继续使用。
   Future<void> _loadPreferences() async {
     try {
+      final layoutMode = await _layoutService.load();
       final PlaybackPreferences preferences = await widget.preferencesService
           .load();
       final FocusPreferences focusPreferences = await _focusPreferencesService
@@ -165,6 +175,7 @@ class _PersonalizationSettingsPageState
       }
       setState(() {
         _preferences = preferences;
+        _layoutMode = layoutMode;
         _focusPreferences = focusPreferences;
         _windowsClipboardDetectionEnabled = windowsClipboardDetectionEnabled;
         _accountReadOnly = accountReadOnly;
@@ -525,6 +536,96 @@ class _PersonalizationSettingsPageState
       ),
     );
   }
+
+  /// 选择长按倍速，保存失败保留旧配置并提示，松手后的播放速度不受影响。
+  Future<void> _editLongPressPlaybackSpeed() async {
+    final speed = await showDialog<double>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('自定义长按倍速'),
+        children: [
+          for (var quarter = 4; quarter <= 20; quarter++)
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(context).pop(quarter / 4),
+              child: Text(PlaybackPreferences.speedLabel(quarter / 4)),
+            ),
+        ],
+      ),
+    );
+    if (speed == null || !mounted) return;
+    setState(() => _saving = true);
+    try {
+      await widget.preferencesService.saveLongPressPlaybackSpeed(speed);
+      if (mounted) {
+        setState(
+          () => _preferences = _preferences.copyWith(
+            longPressPlaybackSpeed: speed,
+          ),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('长按倍速保存失败，请重试。')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// 保存下次启动布局，明确提示重启，并在写入失败时保留原选择。
+  Future<void> _setLayoutMode(AppLayoutMode mode) async {
+    if (_saving || mode == _layoutMode) return;
+    setState(() => _saving = true);
+    try {
+      await _layoutService.save(mode);
+      if (!mounted) return;
+      setState(() => _layoutMode = mode);
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('重启后应用布局'),
+          content: const Text('设置已保存，请重启 APP 以应用设置。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('好的'),
+            ),
+          ],
+        ),
+      );
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('布局设置保存失败，请重试。')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// 显示横竖屏布局选择；自动布局继续遵循设备尺寸，不强制桌面窗口旋转。
+  Widget _buildLayoutModeTile() => ListTile(
+    key: const Key('app-layout-preference'),
+    leading: const Icon(Icons.screen_rotation_rounded),
+    title: const Text('横屏 / 竖屏布局'),
+    subtitle: const Text('更改后重启 APP 生效'),
+    trailing: DropdownButton<AppLayoutMode>(
+      value: _layoutMode,
+      items: const [
+        DropdownMenuItem(value: AppLayoutMode.adaptive, child: Text('自动')),
+        DropdownMenuItem(value: AppLayoutMode.landscape, child: Text('横屏')),
+        DropdownMenuItem(value: AppLayoutMode.portrait, child: Text('竖屏')),
+      ],
+      onChanged: _saving
+          ? null
+          : (mode) {
+              if (mode != null) unawaited(_setLayoutMode(mode));
+            },
+    ),
+  );
 
   /// Saves two-finger picture gestures immediately and restores the old switch on failure.
   Future<void> _setTwoFingerVideoTransformEnabled(bool enabled) async {
@@ -945,6 +1046,16 @@ class _PersonalizationSettingsPageState
           trailing: const Icon(Icons.chevron_right),
           onTap: _saving ? null : _editPlaybackSpeeds,
         ),
+        ListTile(
+          key: const Key('long-press-speed-preference'),
+          leading: const Icon(Icons.fast_forward_rounded),
+          title: const Text('自定义长按倍速'),
+          subtitle: Text(
+            '${PlaybackPreferences.speedLabel(_preferences.longPressPlaybackSpeed)} · 松手恢复原倍速',
+          ),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: _saving ? null : _editLongPressPlaybackSpeed,
+        ),
         SwitchListTile.adaptive(
           key: const Key('enable-double-tap-seek'),
           value: _preferences.enableDoubleTapSeek,
@@ -1023,6 +1134,8 @@ class _PersonalizationSettingsPageState
       icon: Icons.tune_rounded,
       title: '外观与应用',
       children: <Widget>[
+        if ((widget.appPlatform ?? AppPlatformDetector.current).isMobile)
+          _buildLayoutModeTile(),
         _buildThemeModeTile(themeModeController),
         _buildThemeColorTile(themeModeController),
         ListTile(
@@ -1065,12 +1178,22 @@ class _PersonalizationSettingsPageState
         ListTile(
           key: const Key('open-cache-management'),
           leading: const Icon(Icons.storage_outlined),
-          title: const Text('视频缓存管理'),
-          subtitle: const Text('查看和清理边播边缓存的数据'),
+          title: const Text('缓存管理'),
+          subtitle: const Text('图片、视频和字幕 · 上限与自动清理'),
           trailing: const Icon(Icons.chevron_right_rounded),
           // 缓存入口函数进入已有缓存管理页面，不把两种设置混在一个开关中。
           onTap: () =>
               Navigator.of(context).pushNamed(AppRoutes.cacheManagement),
+        ),
+        ListTile(
+          key: const Key('open-data-transfer'),
+          leading: const Icon(Icons.import_export_rounded),
+          title: const Text('数据导入与导出'),
+          subtitle: const Text('登录信息、设置迁移与恢复默认设置'),
+          trailing: const Icon(Icons.chevron_right_rounded),
+          onTap: () => Navigator.of(context).push<void>(
+            MaterialPageRoute(builder: (_) => const DataTransferPage()),
+          ),
         ),
         ListTile(
           key: const Key('open-about-page'),

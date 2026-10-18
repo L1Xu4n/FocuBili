@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:cached_network_image/cached_network_image.dart';
+import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/layout/adaptive_page_frame.dart';
@@ -185,7 +185,7 @@ class _SubscribedCollectionsPageState extends State<SubscribedCollectionsPage> {
     if (item.coverUrl.isEmpty) {
       return _buildCoverPlaceholder();
     }
-    return CachedNetworkImage(
+    return AppNetworkImage(
       imageUrl: item.coverUrl,
       httpHeaders: const <String, String>{
         'Referer': 'https://www.bilibili.com/',
@@ -194,7 +194,6 @@ class _SubscribedCollectionsPageState extends State<SubscribedCollectionsPage> {
       height: 94,
       fit: BoxFit.cover,
       memCacheWidth: 480,
-      maxWidthDiskCache: 720,
       placeholder: (BuildContext context, String value) =>
           _buildCoverPlaceholder(),
       errorWidget: (BuildContext context, String value, Object error) =>

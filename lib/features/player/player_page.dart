@@ -1,6 +1,8 @@
+import '../../services/cache_lifecycle.dart';
+import '../learning/learning_add_sheet.dart';
 import 'dart:async';
 
-import 'package:cached_network_image/cached_network_image.dart';
+import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -404,6 +406,7 @@ class _PlayerPageState extends State<PlayerPage>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _initializePlayerOverlayCoordinator(vsync: this);
+    CacheLifecycle.subtitles.addListener(_clearSubtitlesForPart);
     _activeVideo = widget.video;
     _currentPart = _activeVideo.initialPart;
     _notePartCid = _currentPart.cid;
@@ -507,6 +510,7 @@ class _PlayerPageState extends State<PlayerPage>
   /// 离开页面前取消重试状态、订阅和计时器，释放原生资源并恢复竖屏与系统栏。
   @override
   void dispose() {
+    CacheLifecycle.subtitles.removeListener(_clearSubtitlesForPart);
     OfflineVideoService.revision.removeListener(_refreshOfflinePartState);
     unawaited(_downloadCompletionSubscription?.cancel());
     _routeSession.detach();

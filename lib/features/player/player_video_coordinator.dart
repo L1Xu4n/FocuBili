@@ -448,6 +448,24 @@ mixin _PlayerVideoCoordinator
     LearningListEntry? learningEntry,
   }) async {
     final generation = _beginVideoNavigation();
+    final LearningListEntry? requestedLearningEntry =
+        learningEntry != null && learningEntry.bvid == video.bvid
+        ? learningEntry
+        : null;
+    int? requestedPartCid;
+    if (requestedLearningEntry != null) {
+      for (final VideoPart part in video.parts) {
+        if (part.cid == requestedLearningEntry.partCid) {
+          requestedPartCid = part.cid;
+          break;
+        }
+      }
+    }
+    if (requestedLearningEntry != null && requestedPartCid == null) {
+      _showPlayerNotice('原学习分 P 已失效，请重新选择；旧进度保留。');
+      return;
+    }
+    // Reject a known invalid target before pausing or changing the current UI.
     await _deactivateFocusPlaybackForCurrentPart();
     if (!_isCurrentVideoNavigation(generation)) return;
     _notesPanelAnimationTimer?.cancel();
@@ -461,22 +479,6 @@ mixin _PlayerVideoCoordinator
     final SavedPlaybackState? savedState = await _playbackService
         .loadSavedPlaybackState(video.bvid);
     if (!_isCurrentVideoNavigation(generation)) return;
-    final LearningListEntry? requestedLearningEntry =
-        learningEntry != null && learningEntry.bvid == video.bvid
-        ? learningEntry
-        : null;
-    int? requestedPartCid;
-    if (requestedLearningEntry != null) {
-      for (final VideoPart part in video.parts) {
-        if (part.cid == requestedLearningEntry.partCid) {
-          requestedPartCid = part.cid;
-          break;
-        }
-        if (part.pageNumber == requestedLearningEntry.partPageNumber) {
-          requestedPartCid = part.cid;
-        }
-      }
-    }
     final WatchHistoryEntry? historyEntry = requestedLearningEntry == null
         ? await _loadWatchHistoryResumeEntry(video.bvid)
         : null;

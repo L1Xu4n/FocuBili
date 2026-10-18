@@ -345,16 +345,21 @@ class VideoNoteComposer extends StatelessWidget {
         padding: const EdgeInsets.only(top: 12),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(12),
-          child: SizedBox(
-            width: double.infinity,
-            child: AspectRatio(
-              aspectRatio: 16 / 9,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: MediaQuery.sizeOf(context).width,
+              maxHeight: (MediaQuery.sizeOf(context).height * .38).clamp(
+                108,
+                280,
+              ),
+            ),
+            child: SizedBox(
               child: ColoredBox(
                 color: Colors.black,
                 child: Image.file(
                   File(path),
                   key: const Key('note-frame-preview'),
-                  fit: BoxFit.cover,
+                  fit: BoxFit.contain,
                   // 全屏画面文件读取失败函数仍填满预览区域并保留明确提示。
                   errorBuilder:
                       (
