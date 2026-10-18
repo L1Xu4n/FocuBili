@@ -1,8 +1,12 @@
 import 'dart:convert';
 import 'dart:math' as math;
 import 'package:shared_preferences/shared_preferences.dart';
+import '../models/danmaku_preferences.dart';
+import '../models/playback_preferences.dart';
 import '../models/search_content_filter.dart';
+import 'app_theme_mode_service.dart';
 import 'image_resource_cache.dart';
+import 'media_cache_service.dart';
 import 'settings_runtime_adapter.dart';
 
 /// 定义允许迁移的基础偏好类型，账号、协议和学习数据从不进入白名单。
@@ -104,12 +108,22 @@ class SettingsTransferService {
   }
 
   /// 合并已验证设置；缺失项目保持原值，失败时恢复本次触及的旧值。
-  Future<void> importSettings(Map<String, Object> values) => _enqueue(() async {
-    for (final entry in values.entries) {
-      _validateValue(entry.key, entry.value);
-    }
-    await _apply(values);
-  });
+  Future<void> importSettings(Map<String, Object> values) {
+    // Freeze confirmed values before the queue or storage can yield. This
+    // schema's only collection payload is a list of primitive strings.
+    final snapshot = Map<String, Object>.unmodifiable({
+      for (final entry in values.entries)
+        entry.key: entry.value is List
+            ? List<Object?>.unmodifiable(entry.value as List)
+            : entry.value,
+    });
+    return _enqueue(() async {
+      for (final entry in snapshot.entries) {
+        _validateValue(entry.key, entry.value);
+      }
+      await _apply(snapshot);
+    });
+  }
 
   /// 只移除设置白名单，保留账号、协议状态、订阅源、笔记、清单和历史记录。
   Future<void> resetSettings() =>
@@ -149,6 +163,44 @@ class SettingsTransferService {
             ImageResourceCache.capacities.reduce(math.max) * 1024 * 1024) {
       throw const FormatException('图片缓存容量超出支持范围');
     }
+    if (key == 'appearance.theme_color' &&
+        !AppThemeModeService.isSupportedColorValue(value as int)) {
+      throw const FormatException('主题颜色无效');
+    }
+    if (key == 'windows_media_cache_capacity_bytes' &&
+        !supportedMediaCacheBytes.contains(value)) {
+      throw const FormatException('视频缓存容量无效');
+    }
+    if (key == 'playback_preferences.speeds') {
+      final speeds = (value as List)
+          .map((item) => double.parse(item as String))
+          .toList();
+      final normalized = PlaybackPreferences.normalizeSpeeds(speeds);
+      if (speeds.any((speed) => !normalized.contains(speed))) {
+        throw const FormatException('播放速度无效');
+      }
+    }
+    final normalizedPlaybackNumber = switch (key) {
+      'playback_preferences.long_press_speed' =>
+        PlaybackPreferences.normalizeLongPressPlaybackSpeed(
+          (value as num).toDouble(),
+        ),
+      'playback_preferences.control_scale' =>
+        PlaybackPreferences.normalizeControlScale((value as num).toDouble()),
+      'playback_preferences.subtitle_font_size' =>
+        PlaybackPreferences.normalizeSubtitleFontSize(
+          (value as num).toDouble(),
+        ),
+      _ => null,
+    };
+    if (normalizedPlaybackNumber != null && normalizedPlaybackNumber != value) {
+      throw const FormatException('播放器设置数值无效');
+    }
+    if ((key == 'playback_preferences.wifi_default_quality' ||
+            key == 'playback_preferences.mobile_default_quality') &&
+        PreferredPlaybackQuality.fromId(value as int).id != value) {
+      throw const FormatException('默认清晰度无效');
+    }
     if (key == 'appearance.theme_mode' &&
         !{'light', 'dark', 'system'}.contains(value)) {
       throw const FormatException('主题模式无效');
@@ -186,6 +238,11 @@ class SettingsTransferService {
         )) {
           throw const FormatException('双击区域结构无效');
         }
+        for (final entry in DoubleTapRegions.fromMap(decoded).toMap().entries) {
+          if (decoded[entry.key] != entry.value) {
+            throw const FormatException('双击区域范围无效');
+          }
+        }
       } else if (key == 'search.content_filter_v2') {
         if (decoded['learningOnly'] is! bool ||
             decoded['minimumPlayCount'] is! int ||
@@ -195,11 +252,32 @@ class SettingsTransferService {
           throw const FormatException('搜索筛选结构无效');
         }
       } else {
+        final fields = DanmakuPreferences().toJson();
         for (final entry in decoded.entries) {
-          if (entry.value is! bool &&
-              entry.value is! num &&
-              entry.value is! List) {
+          final item = entry.value;
+          final valid = switch (fields[entry.key]) {
+            bool() => item is bool,
+            num() => item is num && item.isFinite,
+            List() => item is List && item.every((value) => value is String),
+            // Preserve the existing extension-field policy and optional fields.
+            _ => item is bool || item is num || item is List,
+          };
+          if (!valid) {
             throw const FormatException('弹幕设置结构无效');
+          }
+        }
+        final normalized = DanmakuPreferences.fromJson(decoded).toJson();
+        for (final entry in decoded.entries) {
+          final field = fields[entry.key];
+          if (field is num) {
+            // Preserve the model's documented finite-number -> integer policy
+            // for laneCount; reject range clamping, not that conversion.
+            final actual = field is int
+                ? (entry.value as num).toInt()
+                : entry.value;
+            if (normalized[entry.key] != actual) {
+              throw const FormatException('弹幕设置数值无效');
+            }
           }
         }
       }
