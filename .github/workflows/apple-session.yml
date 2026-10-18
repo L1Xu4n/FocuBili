@@ -2,10 +2,10 @@ name: Apple playback sessions
 on:
   pull_request:
     branches: [dev, master]
-    paths: ['packages/focubili_apple/**', 'lib/services/bilibili*', 'lib/services/desktop_playback_source_service.dart', 'tool/bilibili_session_probe.swift', '.github/workflows/apple-session.yml']
+    paths: ['packages/focubili_apple/**', 'lib/services/bilibili*', 'lib/services/desktop_playback_source_service.dart', 'tool/bilibili_session_probe.swift', 'tool/run_apple_cookie_probe.py', '.github/workflows/apple-session.yml']
   push:
     branches: [dev, master]
-    paths: ['packages/focubili_apple/**', 'lib/services/bilibili*', 'lib/services/desktop_playback_source_service.dart', 'tool/bilibili_session_probe.swift', '.github/workflows/apple-session.yml']
+    paths: ['packages/focubili_apple/**', 'lib/services/bilibili*', 'lib/services/desktop_playback_source_service.dart', 'tool/bilibili_session_probe.swift', 'tool/run_apple_cookie_probe.py', '.github/workflows/apple-session.yml']
   workflow_dispatch:
 permissions:
   contents: read

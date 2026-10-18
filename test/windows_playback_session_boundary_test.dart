@@ -6,8 +6,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/services/bilibili_cookie_store.dart';
 import 'package:focubili/services/desktop_playback_source_service.dart';
+import 'package:focubili/services/native_playback_service.dart';
 import 'package:focubili/services/windows_playback_service.dart';
 import 'listening_playback_test.dart' show ListeningPlayer;
+import 'windows_local_source_resume_test.dart' show QuietLocalStreams;
+
+class ErrorStreams extends QuietLocalStreams {
+  final errors = StreamController<String>.broadcast();
+  @override
+  Stream<String> get error => errors.stream;
+}
 
 class SessionSources extends BilibiliDesktopPlaybackSourceService {
   bool current = true;
@@ -39,6 +47,11 @@ class SessionSources extends BilibiliDesktopPlaybackSourceService {
 }
 
 class HeldPlayer extends ListeningPlayer {
+  final events = ErrorStreams();
+  @override
+  PlayerStream get stream => events;
+  @override
+  Future<void> dispose() async => events.errors.close();
   Completer<void>? pauseGate, openGate, stopGate;
   final paused = Completer<void>();
   final opening = Completer<void>();
@@ -201,6 +214,39 @@ void main() {
       await replacement;
       expect(player.opened, hasLength(2));
       expect(player.state.playing, isTrue);
+      await service.dispose();
+    },
+  );
+  test(
+    'late fallback rejection cannot overwrite the replacement video',
+    () async {
+      final player = HeldPlayer();
+      final sources = SessionSources();
+      final service = WindowsPlaybackService(
+        player: player,
+        sourceService: sources,
+      );
+      await service.openVideo(VideoPreview.placeholder());
+      final entered = Completer<void>();
+      final release = Completer<void>();
+      final states = <PlaybackSnapshot>[];
+      final subscription = service.states.listen(states.add);
+      sources.validateHook = () async {
+        if (!entered.isCompleted) entered.complete();
+        await release.future;
+        throw const BilibiliPlaybackSessionException('changing');
+      };
+      player.current = const PlayerState(buffering: true);
+      player.events.errors.add('synthetic');
+      await entered.future.timeout(const Duration(seconds: 5));
+      sources.validateHook = null;
+      await service.openVideo(VideoPreview.placeholder());
+      release.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(player.opened, hasLength(2));
+      expect(player.state.playing, isTrue);
+      expect(states.last.phase, PlaybackPhase.ready);
+      await subscription.cancel();
       await service.dispose();
     },
   );
