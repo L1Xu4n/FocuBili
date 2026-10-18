@@ -178,9 +178,7 @@ class WindowsPlaybackService
   bool _restoringPosition = false;
   bool _handlingMediaError = false;
   bool _cacheConfigured = false;
-  Future<void> _accountChangeStop = Future<void>.value();
-  // Includes issued play commands: logout must stop after every media activation.
-  final Set<Future<void>> _pendingMediaOpens = {};
+  Future<void> _sessionStop = Future<void>.value();
   Future<void> Function()? _activeSessionValidator;
 
   Future<bool> _validateActiveSession(int generation) async {
@@ -192,10 +190,10 @@ class WindowsPlaybackService
       if (!_isCurrentSourceRequest(generation)) return false;
       _shouldPlayAfterFallback = false;
       _mediaAttempts = const [];
-      final stopped = _accountChangeStop.then((_) async {
+      final stopped = _sessionStop.then((_) async {
         if (_isCurrentSourceRequest(generation)) await _player.stop();
       });
-      _accountChangeStop = stopped.catchError((Object _) {});
+      _sessionStop = stopped.catchError((Object _) {});
       await stopped;
       throw error is BilibiliPlaybackSessionException
           ? error
@@ -206,35 +204,22 @@ class WindowsPlaybackService
 
   Future<void> _openPlayerMedia(Media media, {required bool play}) async {
     final generation = _sourceGeneration;
+    await _sessionStop;
     if (!await _validateActiveSession(generation)) return;
-    final fence = Completer<void>();
-    _pendingMediaOpens.add(fence.future);
-    try {
-      await _player.open(media, play: play);
-      await _validateActiveSession(generation);
-    } finally {
-      fence.complete();
-      _pendingMediaOpens.remove(fence.future);
-    }
+    await _player.open(media, play: play);
+    await _validateActiveSession(generation);
   }
 
-  /// A later explicit pause wins even if an already-issued play finishes last.
   Future<void> _playPlayerMedia(int generation) async {
     if (!_isCurrentSourceRequest(generation) || !_shouldPlayAfterFallback) {
       return;
     }
     if (!await _validateActiveSession(generation)) return;
-    final fence = Completer<void>();
-    _pendingMediaOpens.add(fence.future);
-    try {
-      await _player.play();
-      await _validateActiveSession(generation);
-      if (_isCurrentSourceRequest(generation) && !_shouldPlayAfterFallback) {
-        await _player.pause();
-      }
-    } finally {
-      fence.complete();
-      _pendingMediaOpens.remove(fence.future);
+    if (!_shouldPlayAfterFallback) return;
+    await _player.play();
+    await _validateActiveSession(generation);
+    if (_isCurrentSourceRequest(generation) && !_shouldPlayAfterFallback) {
+      await _player.pause();
     }
   }
 
@@ -407,6 +392,8 @@ class WindowsPlaybackService
       throw ArgumentError('本地音频路径无效');
     }
     final generation = sourceGeneration ?? _beginSourceRequest();
+    await _sessionStop;
+    if (!_isCurrentSourceRequest(generation)) return;
     final file = File(filePath);
     if (!await file.exists()) throw StateError('离线文件不存在');
     final audioFile = audioFilePath == null ? null : File(audioFilePath);
@@ -455,7 +442,7 @@ class WindowsPlaybackService
     try {
       await _player.stop();
       if (!_isCurrentSourceRequest(generation)) return;
-      await _player.open(
+      await _openPlayerMedia(
         Media(
           (_audioOnly ? audioFile ?? file : file).absolute.path,
           start: resumePosition,
@@ -491,7 +478,7 @@ class WindowsPlaybackService
       )) {
         throw StateError('本地媒体未能恢复当前位置');
       }
-      if (_shouldPlayAfterFallback) await _player.play();
+      if (_shouldPlayAfterFallback) await _playPlayerMedia(generation);
       if (!_isCurrentSourceRequest(generation)) return;
       if (localAttempt != null && _shouldPlayAfterFallback) {
         if (!await _waitForDecodedAudio(generation)) {
@@ -543,7 +530,7 @@ class WindowsPlaybackService
     if (!_isCurrentSourceRequest(generation)) {
       return;
     }
-    await _player.play();
+    await _playPlayerMedia(generation);
     if (_activeAudioMedia != null && _isCurrentSourceRequest(generation)) {
       if (!await _waitForDecodedAudio(generation)) {
         await _handleMediaError();
@@ -808,6 +795,7 @@ class WindowsPlaybackService
     if (_disposed) {
       return;
     }
+    await _sessionStop;
     try {
       try {
         await _saveCurrentProgress(force: true);
@@ -909,6 +897,8 @@ class WindowsPlaybackService
     if (!_isCurrentSourceRequest(generation)) {
       return;
     }
+    await _sessionStop;
+    if (!_isCurrentSourceRequest(generation)) return;
     _opening = true;
     // 必须在网络等待前保存播放意图；等待期间的定时暂停不能被旧 shouldPlay 覆盖。
     _shouldPlayAfterFallback = shouldPlay;
@@ -1029,7 +1019,7 @@ class WindowsPlaybackService
       _activeAudioMedia = media;
       await _player.stop();
       if (!_isCurrentSourceRequest(generation)) return;
-      await _player.open(media, play: false);
+      await _openPlayerMedia(media, play: false);
       if (!_isCurrentSourceRequest(generation)) return;
       // open/seek 的 Future 只表示命令已接收。先等本次音轨元数据，
       // 再定位；首次真正解码也可能重置时间轴，因此仍保留一次解码后复核。
@@ -1050,7 +1040,7 @@ class WindowsPlaybackService
         throw const DesktopPlaybackSourceException('独立音轨未能恢复当前位置。');
       }
       if (_shouldPlayAfterFallback) {
-        await _player.play();
+        await _playPlayerMedia(generation);
         if (!await _waitForDecodedAudio(generation)) {
           if (!_isCurrentSourceRequest(generation)) return;
           throw const DesktopPlaybackSourceException('独立音轨未能完成加载。');
@@ -1078,7 +1068,7 @@ class WindowsPlaybackService
     await _player.pause();
     // 原生命令完成可能晚于换视频；每次继续修改播放器前都复核来源代次。
     if (!_isCurrentSourceRequest(generation)) return;
-    await _player.open(
+    await _openPlayerMedia(
       attempt.createVideoMedia(_activeMediaHeaders),
       play: false,
     );
@@ -1114,7 +1104,7 @@ class WindowsPlaybackService
       return;
     }
     if (shouldPlay && _shouldPlayAfterFallback) {
-      await _player.play();
+      await _playPlayerMedia(generation);
     } else {
       await _player.pause();
     }
@@ -1178,7 +1168,7 @@ class WindowsPlaybackService
     }
     if (!restorePlayback) return;
     if (_shouldPlayAfterFallback) {
-      await _player.play();
+      await _playPlayerMedia(generation);
     } else {
       await _player.pause();
     }

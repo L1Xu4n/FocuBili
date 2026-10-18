@@ -1,0 +1,79 @@
+name: Verified macOS 1.8 hotfix package
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact reviewed master commit (40 hex characters)
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: macos-1.8-hotfix-package
+  cancel-in-progress: false
+jobs:
+  package:
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require reviewed master source and unchanged release tag
+        run: |
+          python3 - <<'PY'
+          import os, re, subprocess
+          from pathlib import Path
+          revision = os.environ['SOURCE_SHA']
+          assert re.fullmatch('[0-9a-f]{40}', revision)
+          assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == revision
+          subprocess.run(['git', 'merge-base', '--is-ancestor', revision, 'origin/master'], check=True)
+          assert subprocess.check_output(['git', 'rev-parse', 'v1.8.0^{}'], text=True).strip() == '5a76dbba192660f652fbd09d38c78eea6a10ffb5'
+          assert re.search(r'^version: 1\.8\.0\+27\s*$', Path('pubspec.yaml').read_text(), re.M)
+          PY
+      - run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.6'
+          cache: true
+      - run: flutter pub get
+      - name: Verify package identity and Apple session regressions
+        run: |
+          python3 -m unittest discover -s tool -p 'test*macos*.py' -v
+          python3 tool/check_apple_sources.py
+          python3 tool/run_apple_cookie_probe.py
+          flutter test --no-pub test/desktop_playback_412_regression_test.dart test/windows_playback_session_boundary_test.dart
+      - name: Build normal application with signed provenance
+        run: |
+          dart tool/write_build_metadata.dart
+          python3 tool/macos_build_identity.py
+          flutter build macos --release --no-pub
+          mkdir -p build/apple/dmg
+          ditto build/macos/Build/Products/Release/FocuBili.app build/apple/dmg/FocuBili.app
+          codesign --verify --deep --strict build/apple/dmg/FocuBili.app
+          ln -s /Applications build/apple/dmg/Applications
+          printf '%s\n' 'Developer build, ad-hoc signed, not notarized. macOS may restrict launch. Use a Developer ID signed/notarized build for trusted distribution; do not disable system security globally.' > build/apple/dmg/README.txt
+          hdiutil create -volname FocuBili -srcfolder build/apple/dmg -ov -format UDZO build/apple/FocuBili-macos-preview.dmg
+          rm -rf build/apple/dmg
+          shasum -a 256 build/apple/FocuBili-macos-preview.dmg > build/apple/SHA256SUMS.txt
+      - name: Verify exact DMG bytes, version, source, time, architecture and signature
+        env:
+          REQUIRE_MACOS_HOTFIX_IDENTITY: 'true'
+        run: python3 tool/verify_macos_dmg.py
+      - name: Smoke-test normal application launch
+        run: |
+          open -n "$PWD/build/macos/Build/Products/Release/FocuBili.app"
+          sleep 15
+          pgrep -f '/FocuBili.app/Contents/MacOS/FocuBili'
+          screencapture -x build/apple/macos-launch.png
+          pkill -f '/FocuBili.app/Contents/MacOS/FocuBili' || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: focubili-macos-1.8.0-build27-${{ inputs.source_sha }}
+          path: build/apple/
+          if-no-files-found: error
+          retention-days: 90
