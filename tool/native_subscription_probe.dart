@@ -59,6 +59,9 @@ Future<void> main() async {
     'success': false,
     'platform': platform.name,
     'runId': const String.fromEnvironment('NATIVE_SUBSCRIPTION_PROBE_RUN_ID'),
+    if (platform.isDesktop)
+      'requestId':
+          Platform.environment['FOCUBILI_NATIVE_SUBSCRIPTION_REQUEST_ID'],
     'checks': <String>[],
   };
   final checks = report['checks']! as List<String>;
@@ -131,10 +134,14 @@ Future<void> main() async {
       await temporary.writeAsString(jsonEncode(report), flush: true);
       await temporary.rename(destination.path);
     } else {
-      final reportPath =
-          Platform.environment['FOCUBILI_NATIVE_SUBSCRIPTION_REPORT'];
-      if (reportPath != null && reportPath.isNotEmpty) {
-        await File(reportPath).writeAsString(jsonEncode(report), flush: true);
+      // The macOS app keeps its production sandbox. Only the host runner may
+      // write a report into the CI workspace; return this run's result on stdout.
+      if (platform != AppPlatform.macos) {
+        final reportPath =
+            Platform.environment['FOCUBILI_NATIVE_SUBSCRIPTION_REPORT'];
+        if (reportPath != null && reportPath.isNotEmpty) {
+          await File(reportPath).writeAsString(jsonEncode(report), flush: true);
+        }
       }
       stdout.writeln('NATIVE_SUBSCRIPTION_RESULT ${jsonEncode(report)}');
       await stdout.flush();

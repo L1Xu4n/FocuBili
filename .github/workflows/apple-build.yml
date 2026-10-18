@@ -26,6 +26,7 @@ jobs:
       - run: python3 tool/check_apple_sources.py
       - run: python3 tool/check_platform_icons.py
       - run: python3 -m unittest discover -s tool -p test_verify_macos_dmg.py -v
+      - run: python3 -m unittest discover -s tool -p test_native_subscription_probe.py -v
       - run: flutter pub get
         if: github.event_name == 'workflow_dispatch'
       - run: dart format --output=none --set-exit-if-changed lib test
