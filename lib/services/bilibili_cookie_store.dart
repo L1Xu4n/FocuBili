@@ -89,3 +89,104 @@ class UnavailableBilibiliCookieStore implements BilibiliCookieStore {
   @override
   Future<void> clearBilibiliCookies() async {}
 }
+
+/// An endpoint-scoped, in-memory native snapshot. Never stringify its header.
+class BilibiliPlaybackCookieSnapshot {
+  const BilibiliPlaybackCookieSnapshot({
+    required this.header,
+    required this.state,
+    required this.generation,
+  });
+  final String header;
+  final String state;
+  final int generation;
+  bool get usable => state == 'session' || state == 'anonymous';
+
+  factory BilibiliPlaybackCookieSnapshot.fromMap(Map<String, dynamic>? map) {
+    final state = map?['state'];
+    final generation = map?['generation'];
+    final header = map?['header'];
+    if (generation is! int ||
+        generation < 0 ||
+        header is! String ||
+        !{
+          'session',
+          'anonymous',
+          'partial',
+          'conflict',
+          'changing',
+          'unknown',
+        }.contains(state)) {
+      throw const BilibiliPlaybackSessionException('unknown');
+    }
+    return BilibiliPlaybackCookieSnapshot(
+      header: header,
+      state: state as String,
+      generation: generation,
+    );
+  }
+}
+
+class BilibiliPlaybackSessionException implements Exception {
+  const BilibiliPlaybackSessionException(this.state);
+  final String state;
+  @override
+  String toString() => switch (state) {
+    'conflict' => '登录会话存在冲突，请到“我的”重新登录。',
+    'partial' => '登录会话不完整，请到“我的”重新登录。',
+    'changing' => '登录状态已变化，请重新打开视频。',
+    _ => '暂时无法读取播放会话，请稍后重试。',
+  };
+}
+
+abstract interface class BilibiliPlaybackSessionStore {
+  Future<BilibiliPlaybackCookieSnapshot> readPlaybackSession(String path);
+  Future<bool> validatePlaybackSession(int generation, String path);
+  Future<BilibiliPlaybackCookieSnapshot> mergePlaybackResponseCookies(
+    int generation,
+    String path,
+    List<String> cookies,
+  );
+}
+
+/// Apple uses its WK container's scoped transaction protocol. Android retains
+/// the existing native 1.7.1 playback/session implementation unchanged.
+class AppleBilibiliCookieStore extends PlatformBilibiliCookieStore
+    implements BilibiliPlaybackSessionStore {
+  const AppleBilibiliCookieStore();
+  static const _timeout = Duration(seconds: 12);
+  @override
+  Future<BilibiliPlaybackCookieSnapshot> readPlaybackSession(
+    String path,
+  ) async {
+    final map = await PlatformBilibiliCookieStore._channel
+        .invokeMapMethod<String, dynamic>('readPlaybackSession', {'path': path})
+        .timeout(_timeout);
+    return BilibiliPlaybackCookieSnapshot.fromMap(map);
+  }
+
+  @override
+  Future<bool> validatePlaybackSession(int generation, String path) async =>
+      await PlatformBilibiliCookieStore._channel
+          .invokeMethod<bool>('validatePlaybackSession', {
+            'generation': generation,
+            'path': path,
+          })
+          .timeout(_timeout) ==
+      true;
+  @override
+  Future<BilibiliPlaybackCookieSnapshot> mergePlaybackResponseCookies(
+    int generation,
+    String path,
+    List<String> cookies,
+  ) async {
+    final map = await PlatformBilibiliCookieStore._channel
+        .invokeMapMethod<String, dynamic>('mergePlaybackResponseCookies', {
+          'generation': generation,
+          'path': path,
+          'cookies': cookies,
+        })
+        .timeout(_timeout);
+    return BilibiliPlaybackCookieSnapshot.fromMap(map);
+  }
+}

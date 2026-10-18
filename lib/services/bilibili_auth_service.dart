@@ -165,6 +165,15 @@ class BilibiliAuthService {
   final BilibiliCookieStore _cookieStore;
   final BilibiliAuthApi _api;
   final Duration _requestTimeout;
+
+  /// 记录实际注入的存储种类；平台通道在 Apple 上由 WKWebView 插件处理。
+  String get cookieStoreSource => switch (_cookieStore) {
+    AppleBilibiliCookieStore() => 'apple_wkwebview',
+    PlatformBilibiliCookieStore() => 'platform_webview',
+    WindowsSecureBilibiliCookieStore() => 'secure_storage',
+    UnavailableBilibiliCookieStore() => 'unavailable',
+    _ => 'injected',
+  };
   String? _checkedWebSession;
   BilibiliSessionState? _checkedWebSessionState;
 
@@ -329,6 +338,37 @@ class BilibiliAuthService {
   /// 从当前平台的安全会话容器读取 Cookie 请求头，不创建额外明文副本。
   Future<String> readCookieHeader() => _cookieStore.readCookies();
 
+  /// Capture only after local account writes finish; Apple additionally fences
+  /// mutations performed by WKWebView itself, independent of Dart login state.
+  Future<BilibiliPlaybackSession> capturePlaybackSession(String path) async {
+    await _accountWrites;
+    final generation = _loginGeneration;
+    final native = _cookieStore is BilibiliPlaybackSessionStore
+        ? _cookieStore as BilibiliPlaybackSessionStore
+        : null;
+    final BilibiliPlaybackCookieSnapshot snapshot;
+    if (native != null) {
+      snapshot = await BilibiliPlaybackSession._nativeCall(
+        () => native.readPlaybackSession(path),
+      );
+    } else {
+      final header = await _cookieStore.readCookies();
+      final hasSession = RegExp(r'(?:^|;)\s*SESSDATA=([^;]+)').hasMatch(header);
+      snapshot = BilibiliPlaybackCookieSnapshot(
+        header: header,
+        state: hasSession ? 'session' : 'anonymous',
+        generation: generation,
+      );
+    }
+    if (generation != _loginGeneration) {
+      throw const BilibiliPlaybackSessionException('changing');
+    }
+    if (!snapshot.usable) {
+      throw BilibiliPlaybackSessionException(snapshot.state);
+    }
+    return BilibiliPlaybackSession._(snapshot, native, generation, path);
+  }
+
   /// 仅供用户明确确认的本地导出读取稳定快照，账号变更期间拒绝导出。
   Future<String> readCookieForExport() async {
     final generation = _loginGeneration;
@@ -488,5 +528,81 @@ class BilibiliAuthService {
       return 'https:$value';
     }
     return value.startsWith('https://') ? value : '';
+  }
+}
+
+/// Request-scoped session guard. Headers and native revision stay in memory.
+class BilibiliPlaybackSession {
+  BilibiliPlaybackSession._(
+    this.snapshot,
+    this._native,
+    this._localGeneration,
+    this._path,
+  );
+  BilibiliPlaybackCookieSnapshot snapshot;
+  final BilibiliPlaybackSessionStore? _native;
+  final int _localGeneration;
+  final String _path;
+
+  static Future<T> _nativeCall<T>(Future<T> Function() action) async {
+    try {
+      return await action();
+    } on BilibiliPlaybackSessionException {
+      rethrow;
+    } catch (_) {
+      throw const BilibiliPlaybackSessionException('unknown');
+    }
+  }
+
+  Future<void> _checkLocal() async {
+    await BilibiliAuthService._accountWrites;
+    if (_localGeneration != BilibiliAuthService._loginGeneration) {
+      throw const BilibiliPlaybackSessionException('changing');
+    }
+  }
+
+  void _accept(BilibiliPlaybackCookieSnapshot next) {
+    if (!next.usable) throw BilibiliPlaybackSessionException(next.state);
+    if (next.generation != snapshot.generation) {
+      throw const BilibiliPlaybackSessionException('changing');
+    }
+    snapshot = next;
+  }
+
+  Future<String> headerFor(String path) async {
+    await _checkLocal();
+    if (_native case final native?) {
+      _accept(await _nativeCall(() => native.readPlaybackSession(path)));
+    }
+    await _checkLocal();
+    return snapshot.header;
+  }
+
+  Future<void> mergeResponse(String path, List<String> cookies) async {
+    await _checkLocal();
+    if (_native case final native? when cookies.isNotEmpty) {
+      _accept(
+        await _nativeCall(
+          () => native.mergePlaybackResponseCookies(
+            snapshot.generation,
+            path,
+            cookies,
+          ),
+        ),
+      );
+    }
+    await _checkLocal();
+  }
+
+  Future<void> validate() async {
+    await _checkLocal();
+    if (_native case final native?) {
+      if (!await _nativeCall(
+        () => native.validatePlaybackSession(snapshot.generation, _path),
+      )) {
+        throw const BilibiliPlaybackSessionException('changing');
+      }
+    }
+    await _checkLocal();
   }
 }

@@ -166,6 +166,9 @@ void main() {
           'wbi_signed': secret,
           'requested_quality': secret,
           'stage': secret,
+          'endpoint_kind': secret,
+          'session_source': secret,
+          'has_buvid3': secret,
         });
       final diagnostics = await service();
       final player = NativePlaybackService(diagnosticsService: diagnostics);

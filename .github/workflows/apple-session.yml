@@ -1,0 +1,28 @@
+name: Apple playback sessions
+on:
+  pull_request:
+    branches: [dev, master]
+    paths: ['packages/focubili_apple/**', 'lib/services/bilibili*', 'lib/services/desktop_playback_source_service.dart', 'tool/bilibili_session_probe.swift', 'tool/run_apple_cookie_probe.py', '.github/workflows/apple-session.yml']
+  push:
+    branches: [dev, master]
+    paths: ['packages/focubili_apple/**', 'lib/services/bilibili*', 'lib/services/desktop_playback_source_service.dart', 'tool/bilibili_session_probe.swift', 'tool/run_apple_cookie_probe.py', '.github/workflows/apple-session.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: apple-session-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  native-session:
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify matching Apple sources
+        run: python3 tool/check_apple_sources.py
+      - name: Compile and test native Cookie boundaries
+        run: |
+          python3 tool/run_apple_cookie_probe.py
