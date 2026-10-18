@@ -7,6 +7,9 @@ import 'app_behavior_preferences_service.dart';
 import 'bilibili_wbi_signing_service.dart';
 import 'native_playback_service.dart';
 import 'media_url_policy.dart';
+import '../models/video_preview.dart';
+import 'bilibili_course_link.dart';
+import 'bilibili_course_service.dart';
 
 /// 定义桌面播放数据请求函数，测试可直接返回固定 JSON 而不访问网络。
 typedef DesktopPlaybackJsonRequest =
@@ -141,12 +144,80 @@ class BilibiliDesktopPlaybackSourceService {
   }
 
   /// 解析播放 JSON，拒绝错误码、缺失 DASH 和不属于 B 站媒体域名的地址。
+  Future<DesktopPlaybackSources> loadCourse({
+    required VideoPreview video,
+    required VideoPart part,
+    required int quality,
+  }) async {
+    if (!video.isCourse ||
+        video.bvid != 'cheese:ss${video.courseSeasonId}' ||
+        !BilibiliCourseLink.isStorageKey(video.bvid) ||
+        (part.courseEpisodeId ?? 0) <= 0 ||
+        (part.courseAid ?? 0) <= 0 ||
+        part.cid <= 0 ||
+        quality <= 0 ||
+        !video.parts.any(
+          (p) =>
+              p.cid == part.cid &&
+              p.courseEpisodeId == part.courseEpisodeId &&
+              p.courseAid == part.courseAid,
+        )) {
+      throw const DesktopPlaybackSourceException('课程章节编号不完整，请重新打开课程。');
+    }
+    final cookie = await _authService.readCookieHeader();
+    if (cookie.trim().isEmpty) {
+      throw const DesktopPlaybackSourceException('请先登录购买课程的 B 站账号。');
+    }
+    final referer =
+        'https://www.bilibili.com/cheese/play/ep${part.courseEpisodeId}';
+    try {
+      await BilibiliCourseService(
+        readCookies: _authService.readCookieHeader,
+        requestJson: (uri, session) => _requestJson(uri, {
+          'Accept': 'application/json',
+          'Referer': referer,
+          'User-Agent': desktopUserAgent,
+          'Cookie': session,
+        }),
+      ).requirePurchasedCourse(video.courseSeasonId!, cookie);
+    } on CourseLookupException catch (error) {
+      throw DesktopPlaybackSourceException(error.message);
+    }
+    final endpoint = Uri.https('api.bilibili.com', '/pugv/player/web/playurl', {
+      'avid': '${part.courseAid}',
+      'ep_id': '${part.courseEpisodeId}',
+      'cid': '${part.cid}',
+      'qn': '$quality',
+      'fnver': '0',
+      'fnval': '16',
+      'fourk': '1',
+    });
+    final response = await _requestJson(endpoint, {
+      'Accept': 'application/json',
+      'Referer': referer,
+      'User-Agent': desktopUserAgent,
+      'Cookie': cookie,
+    });
+    if (cookie != await _authService.readCookieHeader()) {
+      throw const DesktopPlaybackSourceException('登录状态已变化，请重新打开课程。');
+    }
+    return _parseResponse(
+      response,
+      requestedQuality: quality,
+      referer: referer,
+      cookieHeader: cookie,
+      wbiEnabled: false,
+      isCourse: true,
+    );
+  }
+
   DesktopPlaybackSources _parseResponse(
     String responseText, {
     required int requestedQuality,
     required String referer,
     required String cookieHeader,
     required bool wbiEnabled,
+    bool isCourse = false,
   }) {
     final Object? decoded;
     try {
@@ -160,6 +231,14 @@ class BilibiliDesktopPlaybackSourceService {
     final Map<Object?, Object?> root = Map<Object?, Object?>.from(decoded);
     final int code = (root['code'] as num?)?.toInt() ?? -1;
     if (code != 0) {
+      if (isCourse) {
+        throw DesktopPlaybackSourceException(switch (code) {
+          -101 || -401 => '登录已失效，请重新登录购买课程的账号。',
+          -403 => '当前账号没有本节课的播放权限，请确认已购买且课程未过期。',
+          -404 => '课程不存在或已下架。',
+          _ => '课程播放请求失败（错误码：$code），请稍后重试。',
+        });
+      }
       final String serverMessage = _readText(root['message']);
       if (code == -351) {
         throw DesktopPlaybackSourceException(
@@ -179,8 +258,54 @@ class BilibiliDesktopPlaybackSourceService {
       throw const DesktopPlaybackSourceException('播放数据服务没有返回视频信息。');
     }
     final Map<Object?, Object?> data = Map<Object?, Object?>.from(rawData);
+    if (isCourse) {
+      bool flagged(Object? value) =>
+          value == true || (num.tryParse('$value') ?? 0) != 0;
+      if (flagged(data['code'])) {
+        throw const DesktopPlaybackSourceException('课程播放请求未获授权，请确认购买账号。');
+      }
+      if (data.containsKey('paid_access') &&
+          data['paid_access'] != true &&
+          int.tryParse('${data['paid_access']}') != 1) {
+        throw const DesktopPlaybackSourceException('本节课未获得已购播放权限，请确认购买账号。');
+      }
+      if (flagged(data['is_drm']) || flagged(data['drm_tech_type'])) {
+        throw const DesktopPlaybackSourceException(
+          '本节课需要受保护的官方播放能力，请使用 B 站官方课堂。',
+        );
+      }
+      if (flagged(data['is_preview'])) {
+        throw const DesktopPlaybackSourceException('服务器仅提供试看内容，请确认购买账号和课程有效期。');
+      }
+    }
     final Object? rawDash = data['dash'];
     if (rawDash is! Map) {
+      if (isCourse) {
+        final segments = data['durl'];
+        if (segments is! List ||
+            segments.length != 1 ||
+            segments.single is! Map) {
+          throw const DesktopPlaybackSourceException(
+            '课程未返回支持的单段媒体或 DASH 数据，请使用官方课堂。',
+          );
+        }
+        final segment = Map<Object?, Object?>.from(segments.single as Map);
+        final urls = _readMediaUrls({...segment, 'base_url': segment['url']});
+        if (urls.isEmpty) {
+          throw const DesktopPlaybackSourceException('课程没有返回安全的 HTTPS 媒体地址。');
+        }
+        final qn = (data['quality'] as num?)?.toInt() ?? requestedQuality;
+        return DesktopPlaybackSources(
+          videoUrls: urls,
+          audioUrls: const [],
+          referer: referer,
+          cookieHeader: cookieHeader,
+          actualQuality: qn,
+          qualities: _parseQualities(data, const {}, qn),
+          videoCodec: 'muxed',
+          audioCodec: '',
+        );
+      }
       throw const DesktopPlaybackSourceException('该视频没有可用的 DASH 播放数据。');
     }
     final Map<Object?, Object?> dash = Map<Object?, Object?>.from(rawDash);

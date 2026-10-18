@@ -225,8 +225,8 @@ void main() {
     expect(find.text('首页继续学习测试'), findsOneWidget);
   });
 
-  /// 验证首页一次上滑会把首屏吸附到卡片区，而不是停在半屏位置。
-  testWidgets('首页首屏上滑后吸附到卡片区', (WidgetTester tester) async {
+  /// 首页使用关闭、半开、全开停靠点，快速手势每次只移动一档。
+  testWidgets('首页上滑依次吸附到半开和卡片区', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(420, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final LearningListService service = await _learningListService();
@@ -253,21 +253,25 @@ void main() {
     await tester.drag(scrollView, const Offset(0, -260));
     await tester.pumpAndSettle();
 
+    final Rect halfOpenRect = tester.getRect(
+      find.byKey(const Key('continue-learning-empty')),
+    );
+    expect(halfOpenRect.top, inInclusiveRange(180, 450));
+
+    await tester.fling(scrollView, const Offset(0, -120), 2500);
+    await tester.pumpAndSettle();
     final Rect cardRect = tester.getRect(
       find.byKey(const Key('continue-learning-empty')),
     );
     expect(cardRect.top, lessThan(110));
 
-    // 轻微下滑只保留自然位移，不应立即把所有卡片推回屏幕底部。
-    await tester.drag(scrollView, const Offset(0, 40));
+    await tester.fling(scrollView, const Offset(0, 120), 2500);
     await tester.pumpAndSettle();
-    final Rect slightDownRect = tester.getRect(
-      find.byKey(const Key('continue-learning-empty')),
+    expect(
+      tester.getRect(find.byKey(const Key('continue-learning-empty'))).top,
+      closeTo(halfOpenRect.top, 2),
     );
-    expect(slightDownRect.top, lessThan(180));
-
-    // 验证反向手势会播放回到首屏的完整吸附动画，而不是停在半屏位置。
-    await tester.drag(scrollView, const Offset(0, 180));
+    await tester.fling(scrollView, const Offset(0, 120), 2500);
     await tester.pumpAndSettle();
     final Rect returnedCardRect = tester.getRect(
       find.byKey(const Key('continue-learning-empty')),
@@ -304,6 +308,10 @@ void main() {
 
     final Finder scrollView = find.byType(CustomScrollView);
     // 越过欢迎区及 220 像素吸附窗口，模拟明确进入深层卡片的大幅手势。
+    await tester.fling(scrollView, const Offset(0, -120), 2500);
+    await tester.pumpAndSettle();
+    await tester.fling(scrollView, const Offset(0, -120), 2500);
+    await tester.pumpAndSettle();
     await tester.drag(scrollView, const Offset(0, -1300));
     await tester.pumpAndSettle();
 

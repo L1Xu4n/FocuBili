@@ -20,9 +20,9 @@ enum FocusDoNotDisturbResult {
   failed,
 }
 
-/// 管理全应用唯一的专注任务、视频播放联动、打断记录和本机持久化。
+/// 管理全应用唯一的专注会话、最近观看书签、打断记录和本机持久化。
 class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
-  /// 创建计时控制器；界面每秒刷新，但真实时长只累计视频实际播放区间。
+  /// 创建计时控制器；界面每秒刷新，会话时间独立于视频播放状态累计。
   FocusTimerController({
     FocusSessionService? service,
     FocusClock? clock,
@@ -59,9 +59,7 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
   bool? _desiredDoNotDisturbState;
   bool? _appliedDoNotDisturbState;
   Future<void>? _doNotDisturbDrain;
-  String? _playingBvid;
-  int? _playingPartCid;
-  bool _videoPlaying = false;
+  DateTime? _lastCheckpointAt;
 
   /// 表示本机状态是否已经读取完成。
   bool get isReady => _ready;
@@ -94,14 +92,14 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
     return _initialization ??= _loadInitialState();
   }
 
-  /// 加载本机记录，并确保没有正在播放的视频时计时保持暂停。
+  /// 加载本机记录；进程中断后的活动会话安全暂停，等待用户主动继续。
   Future<void> _loadInitialState() async {
     if (!_observingLifecycle) {
       WidgetsBinding.instance.addObserver(this);
       _observingLifecycle = true;
     }
     final FocusStoredState storedState = await _service.loadState();
-    _activeSession = storedState.activeSession;
+    _activeSession = storedState.activeSession?.asContinuousSession();
     _history = storedState.history;
     _ready = true;
     final FocusSession? active = _activeSession;
@@ -126,7 +124,7 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
-  /// 创建新专注；首页任务默认等待视频，播放器任务只有画面正在播放时才立即计时。
+  /// 创建新专注；默认立即计时，视频信息只用于恢复最近观看位置。
   Future<bool> startFocus({
     required String goal,
     required Duration duration,
@@ -150,14 +148,12 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
       return false;
     }
     final DateTime now = _clock();
-    final bool hasSource =
-        sourceBvid?.trim().isNotEmpty == true && sourcePartCid != null;
     _activeSession = FocusSession.start(
-      id: '${now.microsecondsSinceEpoch}',
+      id: _newSessionId(now),
       goal: normalizedGoal,
       plannedDuration: duration,
       now: now,
-      startImmediately: startImmediately && hasSource,
+      startImmediately: startImmediately,
       sourceBvid: sourceBvid,
       sourceVideoTitle: sourceVideoTitle,
       sourcePartCid: sourcePartCid,
@@ -165,9 +161,10 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
       sourcePartTitle: sourcePartTitle,
       sourceFramePath: sourceFramePath,
       sourcePosition: sourcePosition,
-      completeOnPartEnd: completeOnPartEnd && hasSource,
+      completeOnPartEnd: false,
     );
     _lastFinishedSession = null;
+    _lastCheckpointAt = now;
     _syncTicker();
     notifyListeners();
     await _persist();
@@ -248,21 +245,10 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
     await _persist();
   }
 
-  /// 用户选择继续后，仅在关联视频分P正在播放时恢复计时。
+  /// 用户选择继续后恢复同一会话，不要求视频正在播放。
   Future<void> resumeFocus() async {
     final FocusSession? session = _activeSession;
     if (session == null || session.status != FocusSessionStatus.paused) {
-      return;
-    }
-    if (!_matchesCurrentPlayingVideo(session)) {
-      _activeSession = session.pauseAt(
-        _clock(),
-        reason: session.hasVideoAssociation
-            ? FocusPauseReason.playback
-            : FocusPauseReason.awaitingVideo,
-      );
-      notifyListeners();
-      await _persist();
       return;
     }
     _activeSession = session.resumeAt(_clock());
@@ -274,71 +260,42 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  /// 接收播放器真实状态；匹配分P播放时恢复，暂停或切走时停止累计。
+  /// 播放状态只更新最近观看书签，不改变专注会话的计时或暂停状态。
   Future<void> updatePlaybackState({
     required String bvid,
     required int partCid,
     required bool isPlaying,
-  }) async {
-    _playingBvid = bvid;
-    _playingPartCid = partCid;
-    _videoPlaying = isPlaying;
-    final FocusSession? session = _activeSession;
-    if (session == null || !session.hasVideoAssociation) {
-      return;
-    }
-    final bool matches =
-        session.sourceBvid == bvid && session.sourcePartCid == partCid;
-    if (session.status == FocusSessionStatus.running &&
-        (!matches || !isPlaying)) {
-      _activeSession = session.pauseAt(
-        _clock(),
-        reason: FocusPauseReason.playback,
-      );
-    } else if (session.status == FocusSessionStatus.paused &&
-        session.pauseReason == FocusPauseReason.playback &&
-        matches &&
-        isPlaying) {
-      _activeSession = session.resumeAt(_clock());
-    } else {
-      return;
-    }
-    _syncTicker();
-    notifyListeners();
-    await _persist();
-    if (_activeSession?.status == FocusSessionStatus.running) {
-      unawaited(_notificationService.cancelReminder(session.id));
-    }
-  }
-
-  /// 只在选择“当前分 P”的任务收到同一 BV 与 CID 的真实完播时完成专注。
-  Future<bool> completeForPlaybackPart({
-    required String bvid,
-    required int partCid,
+    String? videoTitle,
+    int? partPageNumber,
+    String? partTitle,
+    Duration position = Duration.zero,
   }) async {
     final FocusSession? session = _activeSession;
     if (session == null ||
-        !session.isActive ||
-        !session.completeOnPartEnd ||
-        session.sourceBvid != bvid ||
-        session.sourcePartCid != partCid) {
-      return false;
+        videoTitle == null ||
+        partPageNumber == null ||
+        partTitle == null ||
+        (session.sourceBvid == bvid && session.sourcePartCid == partCid)) {
+      return;
     }
-    final FocusSession finished = session.finishAtPartEnd(_clock());
-    _finalizeSession(finished);
-    await _persist();
-    unawaited(_notificationService.cancelReminder(session.id));
-    unawaited(
-      _notificationService.showFocusCompleted(
-        sessionId: finished.id,
-        goal: finished.goal,
-        focusedMinutes: finished.accumulatedFocusDuration.inMinutes,
-      ),
+    await associateVideo(
+      bvid: bvid,
+      videoTitle: videoTitle,
+      partCid: partCid,
+      partPageNumber: partPageNumber,
+      partTitle: partTitle,
+      isPlaying: isPlaying,
+      position: position,
     );
-    return true;
   }
 
-  /// 把活动任务关联到用户刚确认的视频分P，并按真实播放状态决定是否计时。
+  /// 兼容旧播放器调用；分 P 完播不会结束整个专注会话。
+  Future<bool> completeForPlaybackPart({
+    required String bvid,
+    required int partCid,
+  }) async => false;
+
+  /// 更新活动会话的最近观看书签，保持当前计时和暂停状态。
   Future<void> associateVideo({
     required String bvid,
     required String videoTitle,
@@ -353,9 +310,6 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
     if (session == null || !session.isActive) {
       return;
     }
-    _playingBvid = bvid;
-    _playingPartCid = partCid;
-    _videoPlaying = isPlaying;
     _activeSession = session.associateVideo(
       now: _clock(),
       bvid: bvid,
@@ -580,13 +534,16 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
       _syncTicker();
       return;
     }
-    if (session.completeOnPartEnd) {
-      notifyListeners();
-      return;
-    }
     if (session.remainingAt(_clock()) <= Duration.zero) {
       unawaited(_completeExpiredSession());
       return;
+    }
+    final DateTime now = _clock();
+    if (_lastCheckpointAt == null ||
+        now.difference(_lastCheckpointAt!) >= const Duration(seconds: 15)) {
+      _activeSession = session.checkpointAt(now);
+      _lastCheckpointAt = now;
+      unawaited(_persist());
     }
     notifyListeners();
   }
@@ -597,9 +554,7 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
       return;
     }
     final FocusSession? session = _activeSession;
-    if (session == null ||
-        session.status != FocusSessionStatus.running ||
-        session.completeOnPartEnd) {
+    if (session == null || session.status != FocusSessionStatus.running) {
       return;
     }
     _finishingExpiredSession = true;
@@ -628,13 +583,6 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
     ].take(FocusSessionService.maximumHistoryEntries).toList(growable: false);
     _syncTicker();
     notifyListeners();
-  }
-
-  /// 判断活动任务是否正对应当前正在播放的视频分P。
-  bool _matchesCurrentPlayingVideo(FocusSession session) {
-    return _videoPlaying &&
-        session.sourceBvid == _playingBvid &&
-        session.sourcePartCid == _playingPartCid;
   }
 
   /// 只在任务真实运行时保留一个周期刷新器。
@@ -718,13 +666,22 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   /// 把当前活动任务和历史列表保存到设备。
-  Future<void> _persist() {
-    return _service.saveState(activeSession: _activeSession, history: _history);
+  Future<void> _persist() async {
+    await _service.saveState(activeSession: _activeSession, history: _history);
   }
 
   /// 截取目标的前 60 个 Unicode 码点，避免切断代理对。
   String _limitGoal(String goal) {
     return String.fromCharCodes(goal.runes.take(maximumGoalCharacters));
+  }
+
+  String _newSessionId(DateTime now) {
+    final used = _history.map((session) => session.id).toSet();
+    var id = '${now.microsecondsSinceEpoch}';
+    while (used.contains(id)) {
+      id = '${id}_';
+    }
+    return id;
   }
 
   /// 判断可空时间是否与参照时间处于同一个本地自然日。

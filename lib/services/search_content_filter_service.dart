@@ -24,11 +24,17 @@ class SearchContentFilterService {
       return SearchContentFilter(
         learningOnly: data['learningOnly'] as bool,
         minimumPlayCount: minimum,
+        titleKeywords: _keywords(data['titleKeywords']),
+        ownerKeywords: _keywords(data['ownerKeywords']),
       );
     } catch (_) {
       return const SearchContentFilter();
     }
   }
+
+  static List<String> _keywords(Object? raw) => raw is List
+      ? SearchContentFilter.parseKeywords(raw.whereType<String>().join('\n'))
+      : const [];
 
   /// Reports failed storage rather than silently applying non-persistent settings.
   Future<void> save(SearchContentFilter filter) async {
@@ -41,6 +47,8 @@ class SearchContentFilterService {
       jsonEncode({
         'learningOnly': filter.learningOnly,
         'minimumPlayCount': filter.minimumPlayCount,
+        'titleKeywords': _keywords(filter.titleKeywords),
+        'ownerKeywords': _keywords(filter.ownerKeywords),
       }),
     );
     if (!saved) throw StateError('Search filter was not saved');

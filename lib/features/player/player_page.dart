@@ -1,6 +1,8 @@
 import '../../services/cache_lifecycle.dart';
 import '../learning/learning_add_sheet.dart';
 import 'dart:async';
+import '../../models/ab_repeat_range.dart';
+import 'widgets/player_ab_repeat_sheet.dart';
 
 import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/foundation.dart';
@@ -17,11 +19,12 @@ import '../../core/layout/device_orientation_policy.dart';
 import '../../features/common/watch_history_badge.dart';
 import '../../features/focus/focus_timer_controller.dart';
 import '../../features/focus/focus_timer_scope.dart';
-import '../../features/focus/focus_interruption_dialog.dart';
 import '../../features/focus/player_focus_sheet.dart';
 import '../../features/focus/player_focus_onboarding.dart';
 import '../../features/notes/video_note_composer.dart';
 import '../../features/profile/user_profile_page.dart';
+import '../../features/profile/content_blocklist_page.dart';
+import '../../features/search/content_block_actions.dart';
 import '../../models/video_note.dart';
 import '../../platform/app_platform.dart';
 import '../../models/video_preview.dart';
@@ -85,6 +88,7 @@ part 'player_collection_sheet.dart';
 part 'player_layout_widgets.dart';
 part 'player_danmaku_rendering.dart';
 part 'player_playback_session.dart';
+part 'player_ab_repeat_coordinator.dart';
 part 'player_learning_coordinator.dart';
 part 'player_focus_coordinator.dart';
 part 'player_gesture_coordinator.dart';
@@ -109,10 +113,14 @@ enum _VideoFitMode { contain, cover, stretch }
 
 /// 标识播放器右上角“更多”菜单中可执行的本地播放器设置。
 enum _PlayerMoreMenuAction {
+  blockVideo,
+  blockCreator,
+  manageBlocklist,
   listening,
   subtitles,
   danmakuSettings,
   playbackLoop,
+  abRepeat,
   sleepTimer,
   fitContain,
   fitCover,
@@ -196,6 +204,7 @@ class _PlayerPageState extends State<PlayerPage>
         _PlayerFocusCoordinator,
         _PlayerGestureCoordinator,
         _PlayerNotesWorkspace,
+        _PlayerAbRepeatCoordinator,
         _PlayerNoteFlagsCoordinator,
         _PlayerViewportCoordinator,
         _PlayerOverlayCoordinator,
@@ -478,6 +487,7 @@ class _PlayerPageState extends State<PlayerPage>
   /// 返回应用时刷新本机笔记，兼容从外部笔记页面返回后的标记更新。
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _handleAbRepeatLifecycle(state);
     if (state == AppLifecycleState.resumed) {
       unawaited(_loadCurrentVideoNotes());
     }
@@ -510,6 +520,7 @@ class _PlayerPageState extends State<PlayerPage>
   /// 离开页面前取消重试状态、订阅和计时器，释放原生资源并恢复竖屏与系统栏。
   @override
   void dispose() {
+    final abRepeatDrain = _disposeAbRepeat();
     CacheLifecycle.subtitles.removeListener(_clearSubtitlesForPart);
     OfflineVideoService.revision.removeListener(_refreshOfflinePartState);
     unawaited(_downloadCompletionSubscription?.cancel());
@@ -525,7 +536,7 @@ class _PlayerPageState extends State<PlayerPage>
     _disposePlayerNotesWorkspace();
     _disposePlayerOverlayCoordinator();
     _disposeDescriptionRecognizers();
-    unawaited(_playbackService.dispose());
+    unawaited(abRepeatDrain.whenComplete(_playbackService.dispose));
     unawaited(_restoreSystemUi());
     super.dispose();
   }

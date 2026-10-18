@@ -1,6 +1,8 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import '../../models/video_note.dart';
+import 'video_note_frames_view.dart';
 
 /// 将视频时间点格式化为 mm:ss 或 h:mm:ss。
 String formatVideoNotePosition(Duration position) {
@@ -43,6 +45,9 @@ class VideoNoteComposer extends StatelessWidget {
     this.onJumpToPosition,
     this.createdAt,
     this.framePath,
+    this.frames = const <VideoNoteFrame>[],
+    this.onFramesChanged,
+    this.onAddFrame,
     this.onDelete,
     this.compact = false,
     this.borderless = false,
@@ -58,6 +63,9 @@ class VideoNoteComposer extends StatelessWidget {
   final DateTime? createdAt;
   final bool includeFrame;
   final String? framePath;
+  final List<VideoNoteFrame> frames;
+  final ValueChanged<List<VideoNoteFrame>>? onFramesChanged;
+  final VoidCallback? onAddFrame;
   final bool saving;
   final ValueChanged<bool> onIncludeFrameChanged;
   final VoidCallback onSave;
@@ -334,8 +342,19 @@ class VideoNoteComposer extends StatelessWidget {
     );
   }
 
-  /// 创建按图片原比例自适应宽高的画面预览，避免横屏截图两侧出现大块黑边。
+  /// 按原始比例显示截图，并限制紧凑工作区中每张预览的高度。
   Widget _buildFramePreview(BuildContext context) {
+    final compactFrameHeight = (MediaQuery.sizeOf(context).height * .38)
+        .clamp(108, 280)
+        .toDouble();
+    if (includeFrame && frames.isNotEmpty) {
+      return VideoNoteFramesView(
+        frames: frames,
+        onChanged: onFramesChanged,
+        enabled: inputEnabled ?? !saving,
+        maxFrameHeight: compact && borderless ? compactFrameHeight : 240,
+      );
+    }
     final String? path = framePath;
     if (!includeFrame || path == null || path.isEmpty) {
       return const SizedBox.shrink();
@@ -348,10 +367,7 @@ class VideoNoteComposer extends StatelessWidget {
           child: ConstrainedBox(
             constraints: BoxConstraints(
               maxWidth: MediaQuery.sizeOf(context).width,
-              maxHeight: (MediaQuery.sizeOf(context).height * .38).clamp(
-                108,
-                280,
-              ),
+              maxHeight: compactFrameHeight,
             ),
             child: SizedBox(
               child: ColoredBox(
@@ -360,7 +376,7 @@ class VideoNoteComposer extends StatelessWidget {
                   File(path),
                   key: const Key('note-frame-preview'),
                   fit: BoxFit.contain,
-                  // 全屏画面文件读取失败函数仍填满预览区域并保留明确提示。
+                  // 文件读取失败仍保留明确提示，文字笔记可继续编辑。
                   errorBuilder:
                       (
                         BuildContext context,
@@ -426,6 +442,13 @@ class VideoNoteComposer extends StatelessWidget {
           // 画面选择函数只记录用户选择，真正截图会在保存时执行。
           onSelected: (inputEnabled ?? !saving) ? onIncludeFrameChanged : null,
         ),
+        if (onAddFrame != null)
+          OutlinedButton.icon(
+            key: const Key('append-video-note-frame'),
+            onPressed: saving ? null : onAddFrame,
+            icon: const Icon(Icons.add_photo_alternate_outlined, size: 18),
+            label: const Text('追加当前画面'),
+          ),
         if (onJumpToPosition != null)
           OutlinedButton.icon(
             key: const Key('jump-to-video-note-position'),

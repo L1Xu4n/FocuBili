@@ -1,0 +1,15 @@
+{
+  "scope": "Real build metadata generator invoked in isolated synthetic directory; no App, credentials or final artifact",
+  "candidateBase": "95b23239f933f38d61c05c2c6b0cd958ffb74902",
+  "referenceRevision": "3e112c620bba76e6edcc83bca1e3f363deba750a",
+  "fixtureVersion": "1.9.0+27",
+  "observedProbeBuildTime": "2026-10-17T22:42:39.231112Z",
+  "checksPassed": 3,
+  "checks": [
+    "UTC timestamp within actual invocation and exact Git/version identity",
+    "Missing version fails before overwriting metadata",
+    "Missing Git revision fails before overwriting metadata"
+  ],
+  "rootMetadataUnchanged": true,
+  "rootBuildTime": "development placeholder; final artifact not built"
+}

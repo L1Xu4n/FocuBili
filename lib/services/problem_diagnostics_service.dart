@@ -457,29 +457,38 @@ class ProblemDiagnosticsService {
   }
 
   /// 读取当前设备已保存的最近错误，损坏记录会被自动忽略。
-  Future<List<ProblemDiagnosticEntry>> loadRecentErrors() async {
+  Future<List<ProblemDiagnosticEntry>> loadRecentErrors({
+    bool strict = false,
+  }) async {
     try {
       final SharedPreferences preferences = await _preferencesLoader();
       final String? rawJson = preferences.getString(_storageKey);
-      if (rawJson == null || rawJson.trim().isEmpty) {
+      if (rawJson == null) {
         return const <ProblemDiagnosticEntry>[];
       }
+      if (rawJson.trim().isEmpty && !strict) return const [];
       final Object? decoded = jsonDecode(rawJson);
       if (decoded is! List<Object?>) {
+        if (strict) throw const FormatException('Invalid diagnostics document');
         return const <ProblemDiagnosticEntry>[];
       }
       final List<ProblemDiagnosticEntry> records = <ProblemDiagnosticEntry>[];
       for (final Object? item in decoded) {
         if (item is! Map) {
+          if (strict) throw const FormatException('Invalid diagnostic record');
           continue;
         }
+        if (strict) _validateExportEntry(item);
         final ProblemDiagnosticEntry? record = ProblemDiagnosticEntry.tryParse(
           Map<String, dynamic>.from(item),
         );
-        if (record != null) {
-          records.add(record);
+        if (record == null && strict) {
+          throw const FormatException('Unsupported diagnostic record');
         }
-        if (records.length >= maximumRecentErrors) {
+        if (record != null && records.length < maximumRecentErrors) {
+          records.add(strict ? _sanitizeEntry(record) : record);
+        }
+        if (!strict && records.length >= maximumRecentErrors) {
           break;
         }
       }
@@ -489,8 +498,55 @@ class ProblemDiagnosticsService {
       );
       return List<ProblemDiagnosticEntry>.unmodifiable(records);
     } catch (_) {
+      if (strict) throw const FormatException('Unreadable diagnostics storage');
       // 诊断存储本身不可用时保持空列表，绝不影响正常播放、搜索和笔记功能。
       return const <ProblemDiagnosticEntry>[];
+    }
+  }
+
+  static void _validateExportEntry(Map values) {
+    const fields = {
+      'occurredAt',
+      'category',
+      'operation',
+      'description',
+      'hasErrorCode',
+      'errorCode',
+      'additionalInfo',
+    };
+    final hasCode = values['hasErrorCode'];
+    final code = values['errorCode'];
+    if (values.keys.any((key) => !fields.contains(key)) ||
+        (hasCode != null && hasCode is! bool) ||
+        (hasCode == true && code == null) ||
+        (code != null &&
+            (code is! num ||
+                !code.isFinite ||
+                code != code.toInt() ||
+                code < -999999 ||
+                code > 999999)) ||
+        (hasCode != true && code != null && code != 0)) {
+      throw const FormatException('Invalid diagnostic fields');
+    }
+    final info = values['additionalInfo'];
+    if (info == null) return;
+    if (info is! Map || info.length > 16) {
+      throw const FormatException('Invalid diagnostic details');
+    }
+    final keys = <String>{};
+    for (final entry in info.entries) {
+      if (entry.key is! String || entry.value is! String) {
+        throw const FormatException('Invalid diagnostic details');
+      }
+      final key = (entry.key as String).trim();
+      final value = (entry.value as String).trim();
+      if (key.isEmpty ||
+          key.length > 40 ||
+          value.isEmpty ||
+          value.length > 120 ||
+          !keys.add(key)) {
+        throw const FormatException('Invalid diagnostic details');
+      }
     }
   }
 
@@ -634,11 +690,12 @@ class ProblemDiagnosticsService {
   /// 读取诊断快照；页面进入和刷新时可同时更新 Android WebView 信息。
   Future<ProblemDiagnosticsSnapshot> loadSnapshot({
     bool refreshWebViewInfo = false,
+    bool strictStorage = false,
   }) async {
     final List<Object> values = await Future.wait<Object>(<Future<Object>>[
       _loadVersionSafely(),
       _loadDeviceInfoSafely(),
-      loadRecentErrors(),
+      loadRecentErrors(strict: strictStorage),
       _loadReminderDiagnosticsSafely(),
     ]);
     final DiagnosticDeviceInfo deviceInfo = values[1] as DiagnosticDeviceInfo;
@@ -658,8 +715,10 @@ class ProblemDiagnosticsService {
   }
 
   /// 按用户要求的固定格式生成可复制诊断文本，并在末尾明确写出隐私范围。
-  Future<String> buildCopyText() async {
-    final ProblemDiagnosticsSnapshot snapshot = await loadSnapshot();
+  Future<String> buildCopyText({bool strictStorage = false}) async {
+    final ProblemDiagnosticsSnapshot snapshot = await loadSnapshot(
+      strictStorage: strictStorage,
+    );
     final StringBuffer text = StringBuffer()
       ..writeln('FocuBili 问题诊断')
       ..writeln()

@@ -51,9 +51,14 @@ extension _PlayerDetailsView on _PlayerPageState {
 
   /// 把当前 BV 号复制到系统剪贴板，并用轻量提示确认操作成功。
   Future<void> _copyBvid() async {
-    await Clipboard.setData(ClipboardData(text: _activeVideo.bvid));
+    final text = _activeVideo.isCourse
+        ? 'https://www.bilibili.com/cheese/play/ss${_activeVideo.courseSeasonId}'
+        : _activeVideo.bvid;
+    await Clipboard.setData(ClipboardData(text: text));
     if (mounted) {
-      _showTransientSnackBar('已复制 ${_activeVideo.bvid}');
+      _showTransientSnackBar(
+        _activeVideo.isCourse ? '已复制课程链接' : '已复制 ${_activeVideo.bvid}',
+      );
     }
   }
 
@@ -102,7 +107,7 @@ extension _PlayerDetailsView on _PlayerPageState {
 
   /// 读取当前视频的关注、点赞、投币和收藏状态，失败时保留默认未操作状态。
   Future<void> _loadVideoInteractionState() async {
-    if (_activeVideo.aid <= 0) {
+    if (_activeVideo.isCourse || _activeVideo.aid <= 0) {
       return;
     }
     final String bvid = _activeVideo.bvid;
@@ -654,7 +659,7 @@ extension _PlayerDetailsView on _PlayerPageState {
         ),
         const SizedBox(height: 8),
         Tooltip(
-          message: '长按复制 BV 号',
+          message: _activeVideo.isCourse ? '长按复制课程链接' : '长按复制 BV 号',
           child: InkWell(
             key: const Key('copy-bvid'),
             // BV 文字长按函数只复制 BV 号，旁边显示的 AV 号不会混入剪贴板。
@@ -663,7 +668,9 @@ extension _PlayerDetailsView on _PlayerPageState {
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: Text(
-                _activeVideo.aid > 0
+                _activeVideo.isCourse
+                    ? 'B站课堂 · SS${_activeVideo.courseSeasonId}'
+                    : _activeVideo.aid > 0
                     ? '${_activeVideo.bvid}  AV${_activeVideo.aid}'
                     : _activeVideo.bvid,
                 style: Theme.of(context).textTheme.bodySmall,
@@ -691,56 +698,59 @@ extension _PlayerDetailsView on _PlayerPageState {
                 .toList(growable: false),
           ),
         ],
-        const SizedBox(height: 18),
-        Row(
-          children: <Widget>[
-            _buildInteractionStat(
-              key: const Key('video-like-button'),
-              icon: _interactionState.isLiked
-                  ? Icons.thumb_up_alt
-                  : Icons.thumb_up_alt_outlined,
-              label: _interactionState.isLiked ? '已点赞' : '点赞',
-              value: _adjustedInteractionCount(
-                stats.likeCount,
-                _likeCountDelta,
+        if (!_activeVideo.isCourse) ...<Widget>[
+          const SizedBox(height: 18),
+          Row(
+            children: <Widget>[
+              _buildInteractionStat(
+                key: const Key('video-like-button'),
+                icon: _interactionState.isLiked
+                    ? Icons.thumb_up_alt
+                    : Icons.thumb_up_alt_outlined,
+                label: _interactionState.isLiked ? '已点赞' : '点赞',
+                value: _adjustedInteractionCount(
+                  stats.likeCount,
+                  _likeCountDelta,
+                ),
+                action: 'like',
+                selected: _interactionState.isLiked,
+                onPressed: _activeVideo.aid > 0 ? _toggleVideoLike : null,
               ),
-              action: 'like',
-              selected: _interactionState.isLiked,
-              onPressed: _activeVideo.aid > 0 ? _toggleVideoLike : null,
-            ),
-            _buildInteractionStat(
-              key: const Key('video-coin-button'),
-              icon: _interactionState.isCoined
-                  ? Icons.paid
-                  : Icons.paid_outlined,
-              label: _interactionState.isCoined ? '已投币' : '投币',
-              value: _adjustedInteractionCount(
-                stats.coinCount,
-                _coinCountDelta,
+              _buildInteractionStat(
+                key: const Key('video-coin-button'),
+                icon: _interactionState.isCoined
+                    ? Icons.paid
+                    : Icons.paid_outlined,
+                label: _interactionState.isCoined ? '已投币' : '投币',
+                value: _adjustedInteractionCount(
+                  stats.coinCount,
+                  _coinCountDelta,
+                ),
+                action: 'coin',
+                selected: _interactionState.isCoined,
+                onPressed:
+                    _activeVideo.aid > 0 && _interactionState.coinCount < 2
+                    ? _addVideoCoin
+                    : null,
               ),
-              action: 'coin',
-              selected: _interactionState.isCoined,
-              onPressed: _activeVideo.aid > 0 && _interactionState.coinCount < 2
-                  ? _addVideoCoin
-                  : null,
-            ),
-            _buildInteractionStat(
-              key: const Key('video-favorite-button'),
-              icon: _interactionState.isFavorited
-                  ? Icons.star
-                  : Icons.star_border_rounded,
-              label: _interactionState.isFavorited ? '已收藏' : '收藏',
-              value: _adjustedInteractionCount(
-                stats.favoriteCount,
-                _favoriteCountDelta,
+              _buildInteractionStat(
+                key: const Key('video-favorite-button'),
+                icon: _interactionState.isFavorited
+                    ? Icons.star
+                    : Icons.star_border_rounded,
+                label: _interactionState.isFavorited ? '已收藏' : '收藏',
+                value: _adjustedInteractionCount(
+                  stats.favoriteCount,
+                  _favoriteCountDelta,
+                ),
+                action: 'favorite',
+                selected: _interactionState.isFavorited,
+                onPressed: _activeVideo.aid > 0 ? _toggleVideoFavorite : null,
               ),
-              action: 'favorite',
-              selected: _interactionState.isFavorited,
-              onPressed: _activeVideo.aid > 0 ? _toggleVideoFavorite : null,
-            ),
-            _buildReadOnlyStat(Icons.share_outlined, '分享', stats.shareCount),
-          ],
-        ),
+              _buildReadOnlyStat(Icons.share_outlined, '分享', stats.shareCount),
+            ],
+          ),
+        ],
       ],
     );
   }
@@ -896,6 +906,10 @@ extension _PlayerDetailsView on _PlayerPageState {
       return;
     }
     final bool shouldResume = _playing;
+    _cancelNoteCaptureForExternalNavigation();
+    _clearAbRepeatForNavigation();
+    await _drainAbRepeatSeek();
+    if (!mounted) return;
     if (shouldResume) {
       await _playbackService.pause();
     }

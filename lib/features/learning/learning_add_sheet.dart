@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../models/video_preview.dart';
+import '../../models/learning_subject_folder.dart';
 import '../../models/public_profile.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/bilibili_public_content_service.dart';
@@ -87,7 +88,8 @@ abstract final class LearningAddSheet {
     VideoPart? currentPart,
     Duration position = Duration.zero,
   }) async {
-    final entries = await service.loadEntries();
+    final state = await service.loadState();
+    final entries = state.entries;
     if (!context.mounted) return null;
     return showModalBottomSheet<LearningBatchResult>(
       context: context,
@@ -98,6 +100,7 @@ abstract final class LearningAddSheet {
         service: service,
         existingIds: entries.map((e) => e.stableId).toSet(),
         count: entries.length,
+        folders: state.folders,
         currentPart: currentPart,
         position: position,
       ),
@@ -174,6 +177,7 @@ class _PartSelection extends StatefulWidget {
     required this.service,
     required this.existingIds,
     required this.count,
+    required this.folders,
     this.currentPart,
     required this.position,
   });
@@ -181,6 +185,7 @@ class _PartSelection extends StatefulWidget {
   final LearningListService service;
   final Set<String> existingIds;
   final int count;
+  final List<LearningSubjectFolder> folders;
   final VideoPart? currentPart;
   final Duration position;
   @override
@@ -190,6 +195,7 @@ class _PartSelection extends StatefulWidget {
 class _PartSelectionState extends State<_PartSelection> {
   final Set<String> _selected = {};
   bool _saving = false;
+  String? _folderId;
   String? _error;
   String _id(VideoPreview video, VideoPart part) => '${video.bvid}:${part.cid}';
   @override
@@ -216,7 +222,7 @@ class _PartSelectionState extends State<_PartSelection> {
                   ? widget.position
                   : Duration.zero,
             ),
-    ]);
+    ], folderId: _folderId);
     if (!mounted) return;
     if (!result.persisted ||
         result.capacityExceeded ||
@@ -255,6 +261,25 @@ class _PartSelectionState extends State<_PartSelection> {
                   Text(
                     '新增 $added · 已存在 $duplicate · 剩余容量 $remaining\n已存在任务保留进度、状态和顺序。',
                   ),
+                  if (widget.folders.isNotEmpty)
+                    DropdownButtonFormField<String>(
+                      key: const Key('add-learning-folder'),
+                      initialValue: '',
+                      decoration: const InputDecoration(labelText: '新增任务的学科分组'),
+                      items: [
+                        const DropdownMenuItem(value: '', child: Text('未分组')),
+                        for (final folder in widget.folders)
+                          DropdownMenuItem(
+                            value: folder.id,
+                            child: Text(folder.name),
+                          ),
+                      ],
+                      onChanged: _saving
+                          ? null
+                          : (value) => setState(
+                              () => _folderId = value == '' ? null : value,
+                            ),
+                    ),
                   Wrap(
                     spacing: 8,
                     children: [

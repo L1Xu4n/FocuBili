@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../../models/video_note.dart';
 import '../../services/video_note_share_service.dart';
 import 'video_note_composer.dart';
+import 'video_note_frames_view.dart';
 
 /// 打开笔记长图预览；截图会在预览中加载，缺失时仍分享完整文字。
 Future<void> showVideoNoteSharePreview(
@@ -167,7 +168,6 @@ class VideoNoteShareCard extends StatelessWidget {
   /// 绘制固定宽度、动态高度的长图内容。
   @override
   Widget build(BuildContext context) {
-    final File? frame = _existingFrame(note.framePath);
     final String body = note.body.trim();
     return Container(
       key: const Key('video-note-share-card'),
@@ -276,13 +276,24 @@ class VideoNoteShareCard extends StatelessWidget {
                     height: 1.68,
                   ),
                 ),
-                if (frame != null) ...<Widget>[
+                for (
+                  int frameIndex = 0;
+                  frameIndex < note.allFrames.length;
+                  frameIndex++
+                ) ...<Widget>[
                   const SizedBox(height: 28),
+                  Text(
+                    '画面 ${frameIndex + 1} · ${formatVideoNoteFramePosition(note.allFrames[frameIndex].position)}',
+                    style: const TextStyle(color: Colors.white70),
+                  ),
+                  const SizedBox(height: 8),
                   ClipRRect(
                     borderRadius: BorderRadius.circular(18),
                     child: Image.file(
-                      frame,
-                      key: const Key('video-note-share-frame'),
+                      File(note.allFrames[frameIndex].path),
+                      key: frameIndex == 0
+                          ? const Key('video-note-share-frame')
+                          : ValueKey('video-note-share-frame-$frameIndex'),
                       width: double.infinity,
                       fit: BoxFit.fitWidth,
                       // 单张旧截图损坏时显示稳定占位，不影响文字长图继续分享。
@@ -341,15 +352,6 @@ int videoNoteCharacterCount(String value) {
     final String character = String.fromCharCode(rune);
     return character.trim().isNotEmpty;
   }).length;
-}
-
-/// 截图路径存在且可读取时返回文件，否则让分享卡只展示文字。
-File? _existingFrame(String? path) {
-  if (path == null || path.isEmpty) {
-    return null;
-  }
-  final File file = File(path);
-  return file.existsSync() ? file : null;
 }
 
 /// 分享卡左上角的应用图标、名称与类型标记。

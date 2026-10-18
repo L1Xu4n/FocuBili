@@ -1,0 +1,76 @@
+{
+  "file": "FocuBili-1.9.0-beta.1+27-arm64-debug.apk",
+  "path": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\output\\v1.9-beta.1-local-7c6dbe6\\FocuBili-1.9.0-beta.1+27-arm64-debug.apk",
+  "bytes": 68172500,
+  "sha256": "33da9e0312270abbfe71bc384991750f88a92d20f2932bb6909abf7c6d29467d",
+  "package": "com.focubili.app.preview",
+  "versionCode": 27,
+  "versionName": "1.9.0-beta.1",
+  "label": "焦点哔哩 Beta",
+  "debuggable": true,
+  "minSdk": 24,
+  "targetSdk": 36,
+  "buildTimeUtc": "2026-10-17T23:32:45.062569Z",
+  "sourceRevision": "7c6dbe6fc2877cad42ec8ee621b249666b5282d6",
+  "buildExitCode": 0,
+  "buildStartedUtc": "2026-10-17T23:32:45.1125656Z",
+  "buildFinishedUtc": "2026-10-17T23:35:13.8521318Z",
+  "buildElapsedSeconds": 148.7301244,
+  "targetPlatform": "android-arm64",
+  "nativeCodeReportedByAapt": [
+    "arm64-v8a",
+    "armeabi-v7a",
+    "x86_64"
+  ],
+  "flutterEngineAbis": [
+    "arm64-v8a"
+  ],
+  "scope": "Local ARM64 debug APK; other plugin ABI directories do not establish runnable Flutter support",
+  "certificateDn": "C=US, O=Android, CN=Android Debug",
+  "certificateSha256": "65ef1fb301fb1121c1803e752f5b1eb24e55846502d8b5478f0fc11f58e9a8a9",
+  "publicKeySha256": "45aa9df3439d8974820a5d964c91c8b414fa493f5362bfe7b430bdd0b07893ea",
+  "signatureVerification": "passed",
+  "signatureSchemeV2": true,
+  "signingMaterial": "Existing default debug.keystore; assistant checked existence only",
+  "privateKeyContentReadByAssistant": false,
+  "newSigningMaterialCreated": false,
+  "previousPublicRecord": {
+    "path": "docs/beta4/apk-verification.json",
+    "file": "FocuBili-1.8.0-beta.4-preview-arm64.apk",
+    "versionCode": 2024,
+    "certificateSha256": "5bd1fc4daa8a0887e213c4dc1231d0eba4f7f309a0e64c2d15fe404302bd00b0",
+    "matchesCurrentCertificate": false,
+    "scope": "Comparison with repository public JSON only; no installed-device certificate inference"
+  },
+  "embeddedKernel": {
+    "entry": "assets/flutter_assets/kernel_blob.bin",
+    "bytes": 90592376,
+    "buildTimeFound": true,
+    "sourceRevisionFound": true,
+    "fallbackVersionFound": true
+  },
+  "toolchain": {
+    "flutter": "3.44.6",
+    "dart": "3.12.2",
+    "jbr": "21.0.6",
+    "androidBuildTools": "36.0.0",
+    "compileSdk": 36,
+    "ndk": "28.2.13676358",
+    "gradle": "8.14.3",
+    "agp": "8.11.1"
+  },
+  "command": "flutter --suppress-analytics build apk --debug --no-pub --target-platform android-arm64 --build-name=1.9.0 --build-number=27 --android-project-arg=android.builder.sdkDownload=false",
+  "sdkInstalled": false,
+  "licenseAccepted": false,
+  "appStarted": false,
+  "deviceValidation": "not performed",
+  "githubWrites": false,
+  "logs": [
+    "build.log",
+    "build-result.json",
+    "build-metadata.txt",
+    "pub-get.log",
+    "aapt-badging.txt",
+    "apksigner-verify.txt"
+  ]
+}

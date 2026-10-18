@@ -4,6 +4,8 @@ import 'dart:io';
 import '../models/video_preview.dart';
 import '../models/user_search.dart';
 import 'bilibili_request_policy.dart';
+import 'bilibili_course_link.dart';
+import 'bilibili_course_service.dart';
 import 'offline_video_service.dart';
 
 /// 定义可替换的 JSON 请求函数，方便测试时不用真的访问网络。
@@ -54,8 +56,10 @@ class BilibiliVideoInfoService
   BilibiliVideoInfoService({
     JsonRequest? requestJson,
     OfflineVideoService? offlineVideoService,
+    BilibiliCourseService? courseService,
   }) : _requestJson = requestJson ?? _requestPublicJson,
-       _offlineVideoService = offlineVideoService;
+       _offlineVideoService = offlineVideoService,
+       _courseService = courseService;
 
   static const String _apiHost = 'api.bilibili.com';
   static const String _suggestHost = 's.search.bilibili.com';
@@ -73,6 +77,7 @@ class BilibiliVideoInfoService
   );
 
   final JsonRequest _requestJson;
+  final BilibiliCourseService? _courseService;
   final OfflineVideoService? _offlineVideoService;
 
   /// Provides cached metadata to every lookup-based entry, including offline cold starts.
@@ -92,6 +97,14 @@ class BilibiliVideoInfoService
   /// 从 BV 号或包含 BV 号的视频链接中提取编号，查询后返回可直接进入播放页的数据。
   @override
   Future<VideoPreview> lookupVideo(String input) async {
+    final course = BilibiliCourseLink.fromInput(input);
+    if (course != null) {
+      try {
+        return await (_courseService ?? BilibiliCourseService()).lookup(course);
+      } on CourseLookupException catch (error) {
+        throw BilibiliLookupException(error.message);
+      }
+    }
     final String? bvid = _extractBvid(input);
     if (bvid == null) {
       throw const BilibiliLookupException(
@@ -735,6 +748,7 @@ class BilibiliVideoInfoService
           bvid: bvid,
           title: _stripHtml(_readText(item['title'], '未命名视频')),
           ownerName: _stripHtml(_readText(item['author'], '未知 UP 主')),
+          ownerMid: _readIdentifier(item['mid']),
           duration: _parseSearchDuration(_readText(item['duration'], '0:00')),
           thumbnailUrl: _normalizeThumbnailUrl(_readText(item['pic'], '')),
           publishedAt: _parseUnixTime(item['pubdate']),

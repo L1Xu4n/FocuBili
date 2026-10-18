@@ -26,22 +26,44 @@ class CacheFileLock {
   static Future<CacheFileLock> acquire(
     String path, {
     Duration timeout = const Duration(seconds: 10),
+  }) => _acquire(path, timeout: timeout, readOnly: false);
+
+  /// Waits for an existing writer without creating or modifying a lock file.
+  /// An absent lock is safe for readers of atomically replaced metadata.
+  static Future<CacheFileLock?> acquireExisting(
+    String path, {
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    final type = await FileSystemEntity.type(path, followLinks: false);
+    if (type == FileSystemEntityType.notFound) return null;
+    if (type != FileSystemEntityType.file) {
+      throw const FileSystemException('Unsafe cache lock');
+    }
+    return _acquire(path, timeout: timeout, readOnly: true);
+  }
+
+  static Future<CacheFileLock> _acquire(
+    String path, {
+    required Duration timeout,
+    required bool readOnly,
   }) async {
     int? descriptor;
     RandomAccessFile? file;
     try {
       if (Platform.isWindows) {
-        file = await File(path).open(mode: FileMode.append);
+        file = await File(
+          path,
+        ).open(mode: readOnly ? FileMode.read : FileMode.append);
       } else {
         // Creating through dart:io avoids open's variadic mode argument ABI
         // (notably different on Apple arm64). Existing lock files are retained.
-        await File(path).create();
+        if (!readOnly) await File(path).create();
         final name = path.toNativeUtf8();
         try {
           final noFollow = Platform.isMacOS || Platform.isIOS
               ? 0x0100
               : 0x20000;
-          descriptor = _open(name, 2 | noFollow);
+          descriptor = _open(name, (readOnly ? 0 : 2) | noFollow);
         } finally {
           calloc.free(name);
         }
@@ -52,12 +74,12 @@ class CacheFileLock {
       final watch = Stopwatch()..start();
       while (true) {
         if (descriptor != null) {
-          if (_flock(descriptor, 2 | 4) == 0) {
-            return CacheFileLock._(descriptor, null); // LOCK_EX | LOCK_NB
+          if (_flock(descriptor, (readOnly ? 1 : 2) | 4) == 0) {
+            return CacheFileLock._(descriptor, null); // LOCK_SH/EX | LOCK_NB
           }
         } else {
           try {
-            await file!.lock(FileLock.exclusive);
+            await file!.lock(readOnly ? FileLock.shared : FileLock.exclusive);
             return CacheFileLock._(null, file);
           } on FileSystemException {
             /* Retry a held Windows handle lock. */

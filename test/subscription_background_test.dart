@@ -24,6 +24,9 @@ class AtomicSnapshots implements SubscriptionSnapshotStore {
   }
 
   @override
+  Future<String?> readForExport() => read();
+
+  @override
   Future<String?> recover(bool Function(String) validate) async {
     await queue;
     if (value != null && validate(value!)) return value;

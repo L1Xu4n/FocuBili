@@ -10,13 +10,23 @@ extension _PlayerTimelineView on _PlayerPageState {
     final showFlags =
         _playbackPreferences.showNoteTimeMarkers &&
         _currentVideoNotes.any((note) => note.partCid == _currentPart.cid);
-    if (!showChapters && !showFlags) {
+    final range = _abRepeatRange;
+    if (!showChapters && !showFlags && range == null) {
       return const SizedBox.shrink();
     }
     return Column(
       key: const Key('player-timeline-annotations'),
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (range != null)
+          InkWell(
+            key: const Key('ab-repeat-timeline'),
+            onTap: () => unawaited(_showAbRepeatSheet()),
+            child: PlayerAbRepeatMarkers(
+              range: range,
+              duration: _displayDuration,
+            ),
+          ),
         if (showFlags)
           PlayerNoteFlags(
             notes: _currentVideoNotes,

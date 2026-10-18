@@ -12,6 +12,7 @@ import '../../features/profile/personalization_settings_page.dart';
 import '../../features/profile/watch_history_page.dart';
 import '../../features/shell/main_shell.dart';
 import '../../models/video_preview.dart';
+import '../../features/classroom/purchased_courses_page.dart';
 
 /// 保存应用所有路由名称，减少页面之间手写字符串造成的错误。
 abstract final class AppRoutes {
@@ -27,6 +28,7 @@ abstract final class AppRoutes {
   static const String watchHistory = '/history';
   static const String videoNotes = '/notes';
   static const String focusStatistics = '/focus/statistics';
+  static const String purchasedCourses = '/classroom/purchased';
 }
 
 /// 根据路由名称创建页面，是整个应用唯一的页面导航入口。
@@ -34,6 +36,11 @@ abstract final class AppRouter {
   /// 把路由请求转换为对应页面，并处理缺少播放器参数的情况。
   static Route<dynamic> onGenerateRoute(RouteSettings settings) {
     switch (settings.name) {
+      case AppRoutes.purchasedCourses:
+        return MaterialPageRoute<void>(
+          builder: (_) => const PurchasedCoursesPage(),
+          settings: settings,
+        );
       case AppRoutes.home:
         return MaterialPageRoute<void>(
           // 主页构建函数创建带底部导航的主框架。
@@ -47,7 +54,12 @@ abstract final class AppRouter {
             : VideoPreview.placeholder();
         return MaterialPageRoute<void>(
           // 播放页构建函数把选中的视频信息交给原生播放器占位页。
-          builder: (BuildContext context) => PlayerPage(video: video),
+          builder: (BuildContext context) => PlayerPage(
+            video: video,
+            initialPartCid: video.requestedCourseEpisodeId == null
+                ? null
+                : video.cid,
+          ),
           settings: settings,
         );
       case AppRoutes.login:

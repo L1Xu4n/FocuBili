@@ -1,0 +1,2139 @@
+{
+  "schemaVersion": 1,
+  "version": "1.9.0-beta.1",
+  "interim": true,
+  "releaseReady": false,
+  "published": false,
+  "worktree": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\focubili-v19",
+  "branch": "codex/v1.9-beta-integration",
+  "sharedBase": "5e128bdd1952b3f619500f69aa7bc8c33a88d0b4",
+  "validatedV18Final": "5a76dbba192660f652fbd09d38c78eea6a10ffb5",
+  "latestIntegratedCommit": "9c7ea4b894e3c790e0a8ecf57d104f54b663add1",
+  "statusVocabulary": [
+    "未做",
+    "实现",
+    "自动化通过",
+    "真机通过",
+    "阻塞"
+  ],
+  "verificationBoundary": "当前前置源码9c7已普通合并实际维护B=f868ef67d92f3504ea5b6f445864141b804e61f4，其树与080完全相同；080此前已普通合并dev52，B树精确等dev52/已审9c。正式1.8 M=5a76dbba192660f652fbd09d38c78eea6a10ffb5；v1.8.0已公开且为stable latest，原四资产历史匿名live70/70通过；从M原CI补传Windows portable ZIP和iOS unsigned device IPA后，现为6个公开资产、5平台。原四资产ID/大小/digest、M/标签/latest均不变。新增Windows静态23/23、iOS arm64/LC_BUILD_VERSION平台2/source/time严格验证及独审通过；两份新增资产匿名下载SHA256匹配。iOS现为公开未签名device IPA，需自己的签名/provisioning，真机签名安装仍为0。1600通过/2跳过/0失败、analyze0/25.5s及format492/0仍只对应历史d605961，本次未运行Flutter/native/构建；checks和items内保存的验证source不得当成9bc或最终安全source已重跑。PR66/67/68维护流程已完成，PR68于08:34:45Z合并B，14checks成功、独审P1/P2为0、未解决threads为0。既有080发布配置55Python+3Dart通过，未重跑P/B全Flutter或native；最终安全source H+D3、精确source CI/native候选和1.9实包/预发布仍pending。45项人工未做、设备0及旧Beta证书不兼容是待验证/安装风险，不是硬发布门槛；06:52 UTC的#61记录仍未确认Mac导出故障。",
+  "releaseBlockers": [
+    "Reviewed publication-safe v1.9 source H plus final documentation D3 remain pending; private9c7 already contains verified maintenance B but is not approved for publication.",
+    "Actual exact-safe-source required CI and all native publish=false candidate builds remain pending. PR68/dev52 CI and local08055Python/3Dart configuration evidence do not establish final v1.9 source CI/native acceptance.",
+    "Actual Beta package identity/signature, monotonic counter2026 above archive2025 and fresh live inventory, ABI/non-debuggable metadata, BuildTime/source, manifest and downloaded SHA256/bytes remain to verify; only then publish as prerelease with exact tag/source/assets, preserving formal v1.8.0 stable latest."
+  ],
+  "checks": [
+    {
+      "id": "candidate-d605961-integration",
+      "label": "当前d605961缓存清理整合候选全量回归",
+      "source": "d6059619bdc3caa4ab1554a91018cd52d7038bd9",
+      "platform": "Windows host / Flutter synthetic fixtures",
+      "command": "flutter test --no-pub --reporter expanded",
+      "result": "1600 passed,2 skipped,0 failed,03:28,exit0; ordinary fff cleanup merge included.",
+      "evidence": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\v19-candidate-cleanup-full-tests.log",
+      "evidenceSha256": "54054de52102a94af44dfd8d1b9181c267c01cf991fdcf02621f0903cc028e2a",
+      "skipRefs": "skippedTests",
+      "finalAcceptance": false,
+      "executedByDocumentationTask": false
+    },
+    {
+      "id": "candidate-d605961-analysis",
+      "label": "d605961根任务实际静态检查",
+      "source": "d6059619bdc3caa4ab1554a91018cd52d7038bd9",
+      "platform": "Windows host / Flutter analyzer",
+      "command": "flutter analyze --no-pub",
+      "result": "No issues found;25.5s.",
+      "evidence": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\v19-candidate-cleanup-analyze.log",
+      "evidenceSha256": "2ae8bb6f56d3a67003d35c63f837d6ab8ab1a24dc111cee171f1cdf1382deee6",
+      "finalAcceptance": false,
+      "executedByDocumentationTask": false
+    },
+    {
+      "id": "candidate-d605961-format",
+      "label": "d605961根任务格式核验",
+      "source": "d6059619bdc3caa4ab1554a91018cd52d7038bd9",
+      "platform": "Windows host / Dart formatter",
+      "command": "Dart format (exact invocation not attached in consolidated record)",
+      "result": "492 files,0 changes,per root consolidated JSON; no independent rerun by docs task.",
+      "evidence": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\output\\current-consolidated-test-evidence.json",
+      "evidenceSha256": "091fcd1eab26c078da2a91be5daeec19dca75a92637475bfbe9eff144d6a2252",
+      "evidenceUpdatedUtc": "2026-10-18T05:32:46.112887+00:00",
+      "finalAcceptance": false,
+      "executedByDocumentationTask": false
+    },
+    {
+      "id": "candidate-599d5eb-integration",
+      "label": "当前599d5eb候选完整Flutter合成回归",
+      "source": "599d5eb5d7b83294d32a8cfe0181a0be9c9377d2",
+      "platform": "Windows host / Flutter synthetic fixtures",
+      "command": "flutter test --no-pub --reporter expanded",
+      "result": "1585 passed,2 skipped,0 failed,01:59,exit0; includes strict identity gatee04e783 and normal candidate35/64 merges.",
+      "evidence": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\v19-candidate-64f-full-tests.log",
+      "evidenceSha256": "5a49e96cb5a86c45f0376fb119c726d37b7846e6741d142843d4af26defcdde8",
+      "skipRefs": "skippedTests",
+      "finalAcceptance": false,
+      "executedByDocumentationTask": false
+    },
+    {
+      "id": "candidate-599d5eb-analysis",
+      "label": "599d5eb准确合并树静态检查",
+      "source": "599d5eb5d7b83294d32a8cfe0181a0be9c9377d2",
+      "platform": "Windows host / Flutter analyzer",
+      "command": "flutter analyze --no-pub",
+      "result": "No issues;8.9s. Final-tree report from independent candidate integration.",
+      "evidence": "docs/v1.9/candidate-64f1df8-merge.md",
+      "finalAcceptance": false,
+      "executedByDocumentationTask": false
+    },
+    {
+      "id": "candidate-599d5eb-format",
+      "label": "599d5eb根任务格式及空白核验",
+      "source": "599d5eb5d7b83294d32a8cfe0181a0be9c9377d2",
+      "platform": "Windows host / Dart formatter and Git",
+      "command": "Dart format (exact full-tree invocation not attached); git diff --check",
+      "result": "Parent/root reports489 files,0 changes;diff0. The linked merge report separately preserves its3-file format0 result.",
+      "evidence": "Parent/root current-candidate task report; docs/v1.9/candidate-64f1df8-merge.md for the separate3-file check",
+      "finalAcceptance": false,
+      "executedByDocumentationTask": false
+    },
+    {
+      "id": "issue-refresh-20261018-0449",
+      "label": "五项公开issue正文及全部评论只读刷新",
+      "platform": "GitHub public REST via existing gh CLI identity",
+      "command": "gh api repos/L1Xu4n/FocuBili/issues/{61,56,60,58,50}; paginated comments GET",
+      "result": "Comments2/0/1/2/1 read completely;#61 no reporter followup; no newly identified explicit scope constraint.",
+      "evidence": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\output\\v19-final-issue-evidence.json",
+      "evidenceSha256": "deb68eb2ad2d1a481a4cf53e791c9479299dca5b6c6a498964833990190cc739",
+      "queryCompletedUtc": "2026-10-18T04:49:47Z",
+      "finalAcceptance": false,
+      "executedByDocumentationTask": false
+    },
+    {
+      "id": "beta-android-identity-failclosed",
+      "label": "Android Beta完整安装身份门P2修复定向验证",
+      "source": "b07db359c5000efac6aab6ee0ed1276c7f163ac9",
+      "parentSource": "d7ae21b97ca31b346f0e80f3bde5e2643bc96d7b",
+      "status": "自动化通过",
+      "platform": "Windows host / synthetic HTTP and MethodChannel native response; actual package_info_plus source inspected, no device",
+      "command": "flutter test --no-pub --reporter compact test/app_update_beta_channel_test.dart test/app_update_service_test.dart test/app_update_ignore_test.dart test/update_ignore_ui_test.dart",
+      "result": "90 passed,0 failed (previous80+10 strict-gate cases). Omitted-signature MethodChannel case red-to-green;6 missing/invalid code cases, archived5BD1/code2024-2025 versus65EF/code2026 fallback, matching65EF/lower-code positive case. Six-item analyze0, six-file format0 changes, diffcheck passed. Stable/latest and SemVer assembly unchanged.",
+      "evidence": "docs/v1.9/update-channel.md",
+      "evidenceSourceSha": "b07db359c5000efac6aab6ee0ed1276c7f163ac9",
+      "evidenceGitObject": "b07db359c5000efac6aab6ee0ed1276c7f163ac9:docs/v1.9/update-channel.md",
+      "integrationStatus": "integrated",
+      "integratedSourceSha": "e04e783870b5c6d0c4b110a0675baace6a675eae",
+      "fullRegressionAfterFix": "candidate-599d5eb-integration",
+      "finalAcceptance": false,
+      "executedByDocumentationTask": false,
+      "includedInCandidateSha": "599d5eb5d7b83294d32a8cfe0181a0be9c9377d2"
+    },
+    {
+      "id": "beta2026-integration",
+      "label": "历史候选3f763f0的Beta producer/consumer与2026计数完整回归",
+      "platform": "Windows host / Flutter synthetic fixtures",
+      "command": "flutter test --no-pub --reporter expanded",
+      "result": "source3f763f02b300db6df2fba9e5219c3e82558f83ac:1488 passed,2 skipped,0 failed,02:49,exit0. Current local candidate only; no final source/native CI/package/device claim.",
+      "evidence": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\v19-beta2026-integration-full-tests-rerun.log",
+      "evidenceSha256": "961c0a9f82f0e085a8b14d24d0ddb065003b39809a00024af35e9a6780086f08",
+      "finalAcceptance": false,
+      "executedByDocumentationTask": false,
+      "scope": "Predates b07db359 strict identity fix; retain1488 result as earlier integration evidence, not post-fix full regression.",
+      "historical": true,
+      "supersededForCurrentCandidateBy": "candidate-599d5eb-integration"
+    },
+    {
+      "id": "beta2026-initial-failure",
+      "label": "保留旧计数断言失败历史",
+      "platform": "Windows host / Flutter synthetic fixtures",
+      "command": "flutter test --no-pub --reporter expanded",
+      "result": "source7ed89ddea52cadb14c394af2abaf657ee4d2f754:1487 passed,2 skipped,1 failed,02:52,exit1; expected27/actual2026 in android_beta_version_test. Test-only metadata-consistency/floor repair3f763f0; subsequent current run passed.",
+      "evidence": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\v19-beta2026-integration-full-tests.log",
+      "evidenceSha256": "675b7729ca4c9b2297a97b4becc85dd23a56375c998a87a998a3edbff606dde8",
+      "finalAcceptance": false,
+      "retainAsFailureHistory": true
+    },
+    {
+      "id": "beta-producer-local",
+      "label": "Beta producer本地离线工具与工作流语法验证",
+      "platform": "Windows host / synthetic HTTP-artifact fixtures and shell/YAML parsers",
+      "command": "python -X utf8 -B -m unittest discover -s tool -p test_beta_release.py -v; flutter test --no-pub test/android_beta_version_test.dart test/release_workflow_config_test.dart test/app_update_service_test.dart --reporter expanded",
+      "result": "Author source36b4bdc after d998eb8:33 Python fault tests passed (initial30);11 Flutter passed on audited producer baseline. Four workflow YAML structures and49 Bash/4 PowerShell blocks parsed without execution. Flutter launcher --version probe succeeded. No workflow dispatch, native candidate build or published artifact. Current2026 source is a later combined candidate.",
+      "evidence": "docs/v1.9/beta-ci-review.md",
+      "finalAcceptance": false,
+      "executedByDocumentationTask": false
+    },
+    {
+      "id": "beta-consumer-local",
+      "label": "Beta consumer与SemVer元数据修复验证",
+      "platform": "Windows host / mocked HTTP, PackageInfo and SharedPreferences",
+      "command": "flutter test --no-pub --reporter compact test/app_update_beta_channel_test.dart test/app_update_service_test.dart test/app_update_ignore_test.dart test/update_ignore_ui_test.dart",
+      "result": "Author d7ae21b after6cc7a11:80 passed,0 failed; six Dart files analyze/format0. Independent original metadata-double-plus red retained; unchanged reviewer fixture plus3 added cases passed (4). No real network/package installation.",
+      "evidence": "docs/v1.9/update-channel.md",
+      "independentReview": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\output\\review-v19-update-channel-6cc7a11\\fix-review-d7ae21b.json",
+      "independentCommand": "flutter test --no-pub --reporter expanded test/review_update_version_metadata_test.dart test/app_update_beta_channel_test.dart --name 'accepted release SemVer metadata|compiled beta metadata stays valid'",
+      "finalAcceptance": false,
+      "executedByDocumentationTask": false,
+      "scope": "Historical80-case consumer/SemVer evidence before strict Android identity gate; superseded for this boundary by beta-android-identity-failclosed",
+      "supersededForAndroidIdentityBy": "beta-android-identity-failclosed"
+    },
+    {
+      "id": "beta-counter-policy",
+      "label": "共享计数与Android身份边界",
+      "platform": "Source metadata / archived public records / Windows Flutter synthetic checks",
+      "command": "flutter test --no-pub --reporter expanded (includes test/android_beta_version_test.dart)",
+      "result": "Current source pubspec1.9.0+2026, fallback matches shared value, msix1.9.0.2026; test enforces build>archivedBeta5 code2025 and<=65535. Controlled release preview targets existing CI65EF certificate; actual new APK and live global inventory remain pending. Observed public historical max21 does not erase archived floor2025.",
+      "evidence": [
+        "test/android_beta_version_test.dart",
+        "docs/beta4/apk-verification.json",
+        "docs/beta5/apk-verification.json",
+        "docs/v1.9/beta-ci-review.md",
+        "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\output\\review-v171-upgrade-continuity-20261018\\verification.json"
+      ],
+      "finalAcceptance": false
+    },
+    {
+      "label": "Local Android ARM64 debug artifact build and verification",
+      "platform": "Windows existing Flutter/JBR/Android SDK, no device",
+      "command": "flutter --suppress-analytics build apk --debug --no-pub --target-platform android-arm64 --build-name=1.9.0 --build-number=27 --android-project-arg=android.builder.sdkDownload=false",
+      "result": "Actual assembleDebug145.6s / total148.73s exit0;68172500bytes;signatureV2 passed;package/version27 verified;APK kernel contains exactUTC/source7c6dbe6/fallback1.9.0+27. No new signing material, SDK install, license, app launch or GitHub write.",
+      "evidence": "docs/v1.9/local-apk-verification.json",
+      "finalAcceptance": false
+    },
+    {
+      "label": "1.8 publication snapshot content alignment",
+      "platform": "Windows / independent read-only Git tree inspection",
+      "command": "Compare95b2323..98e02e8 production delta and1.9 ae1f1f8 file content",
+      "result": "Five production files verified: three byte-identical; service guard complete with1.9 export additions; dashboard editing/gesture cleanup complete. No omission; no code changes or restructured-history merge.",
+      "evidence": "docs/v1.9/publication-snapshot-alignment.md",
+      "finalAcceptance": false
+    },
+    {
+      "label": "候选交叉修复后的最终完整回归",
+      "platform": "Windows / Flutter synthetic fixtures",
+      "command": "flutter test --no-pub --reporter expanded",
+      "result": "309e039291542f404a3d5e4900f8918fb332153d: 1353 passed,2 skipped,0 failed,02:06,exit0. Post-fix candidate integration only; no final-release/device claim.",
+      "evidence": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\v19-candidate-final-full-tests.log",
+      "finalAcceptance": false
+    },
+    {
+      "label": "最终静态与格式检查",
+      "platform": "Windows Flutter / Dart",
+      "command": "flutter analyze --no-pub; dart format --output=none --set-exit-if-changed lib test; git diff --check",
+      "result": "source309e039: analyze No issues found,18.9s,exit0;477 files,0 changed,exit0;diffcheck passed",
+      "evidence": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\v19-candidate-final-analyze.log",
+      "finalAcceptance": false
+    },
+    {
+      "label": "播放器候选最终独立复核",
+      "platform": "Windows host / synthetic FIFO matching local media_kit1.2.6 command ordering",
+      "command": "flutter test --no-pub test/review_player_intent_ordering_test.dart; flutter test --no-pub test/windows_playback_intent_ordering_test.dart test/windows_buffer_identity_test.dart test/ab_repeat_capture_lifecycle_test.dart test/ab_repeat_nested_route_test.dart",
+      "result": "c6a382d: unchanged original5 passed plus53 adjacent passed=58 executed. Original captured-paused intent P2 closed;ended/audio/internal seek/account/BV/CID and original AB protections covered. Three-file analyze0/format0. No real playback/account/device run.",
+      "finalAcceptance": false
+    },
+    {
+      "label": "候选Android实际Kotlin编译与JVM",
+      "platform": "Windows host / existing Android Studio JBR and Android Gradle",
+      "command": "gradlew.bat :app:compileDebugKotlin :app:testDebugUnitTest --tests com.focubili.app.NativePlaybackProgressExportTest --tests com.focubili.app.NativePlaybackProgressStorageTest --tests com.focubili.app.CoursePlaybackTargetTest --tests com.focubili.app.CoursePurchaseGateTest --no-daemon",
+      "result": "sourceef3bf68: BUILD SUCCESSFUL1m26s,exit0;four suites20 passed/0fail/0skip. Native source unchanged through309e039. Normal approved task execution, no SDK/permission/license/signing changes;no APK or device acceptance.",
+      "evidence": "docs/v1.9/candidate-kotlin-validation.json",
+      "finalAcceptance": false
+    },
+    {
+      "label": "候选合并后的初步完整回归",
+      "platform": "Windows / Flutter synthetic fixtures",
+      "command": "flutter test --no-pub --reporter expanded",
+      "result": "source3e112c6: 1277 passed,2 skipped,0 failed,3m26s,exit0. Predates subsequent independently found/fixed integration cases; not final post-fix acceptance.",
+      "evidence": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\v19-candidate-initial-full-tests.log",
+      "finalAcceptance": false
+    },
+    {
+      "label": "设置/通知候选整合最终独立复核",
+      "platform": "Windows synthetic notification/native bridges; real Windows process locks",
+      "command": "flutter test --no-pub test/review_subscription_notification_generation_test.dart test/subscription_notification_delivery_test.dart test/windows_focus_notification_service_test.dart test/settings_transfer_search_test.dart test/settings_export_retention_integration_test.dart test/settings_native_subscription_integration_test.dart test/settings_runtime_adapter_test.dart test/review_runtime_sqlite_read_test.dart test/review_cache_cross_process_test.dart",
+      "result": "080d505:50 passed,exit0; unchanged original red now records only opt-out-committed. Stable import Map/List, strict search fields, blacklist retention, nine cold export combinations, SQLite and Windows locks passed; five product files analyze0. Integratedef3bf68. No Android/Apple/Linux device proof.",
+      "finalAcceptance": false
+    },
+    {
+      "label": "版本与BuildTime候选整合",
+      "platform": "Windows Flutter/Dart; isolated synthetic generator fixture",
+      "command": "flutter test --no-pub test/problem_diagnostics_service_test.dart test/android_beta_version_test.dart test/app_update_service_test.dart; isolated real tool/write_build_metadata.dart probe",
+      "result": "17 passed,exit0; both old fallback-version cases green. Generator3 checks passed; root metadata remains development placeholder. Initial analyze0 (11.6s). No final build time claimed.",
+      "evidence": "docs/v1.9/build-metadata-validation.json",
+      "finalAcceptance": false
+    },
+    {
+      "label": "全部模块与原生逐 P 导出整合后的完整回归",
+      "platform": "Windows / Flutter synthetic fixtures",
+      "command": "flutter test --no-pub --reporter expanded",
+      "result": "source80863e6: 1192 passed, 2 skipped, 2 failed, 2m01s, exit1. Only two existing diagnostics fallback-version tests expected1.8.0+25/actual1.8.0+22; no claim of full pass. Final validated1.8 base and metadata/Beta version integration still pending.",
+      "evidence": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\v19-complete-export-full-tests.log",
+      "finalAcceptance": false
+    },
+    {
+      "label": "新增原生逐 P 人工测试步骤交互预览",
+      "platform": "Edge / local synthetic progress",
+      "command": "Select unified export; inspect DOM and console; 320px viewport full-page screenshot",
+      "result": "10 controls, unified-export native-progress steps visible; root clientWidth=scrollWidth=273; no console error/warning; screenshot visually inspected. Temporary viewport reset, tab closed, task-owned local HTTP server terminated after normal interrupt failed.",
+      "finalAcceptance": false
+    },
+    {
+      "label": "Android 原生逐 P 导出最终独立复核",
+      "platform": "Windows Flutter mocked Android channel / actual Kotlin helpers in pure JVM fixture",
+      "command": "flutter test --no-pub test/native_playback_progress_export_test.dart --reporter expanded; review-jvm: ..\\android\\gradlew.bat --project-dir . test --no-daemon --offline with existing Android Studio JBR",
+      "result": "ee6138f: 43 Dart passed; 16 JVM passed, BUILD SUCCESSFUL (12s), including original independent BV-prefix red case now green. Sole P2 closed; no new definite P1/P2. Root integrated 4f89257/80863e6. Independent Android Gradle blocked before tests by existing file_picker namespace configuration; pure JVM is not Android platform compilation",
+      "finalAcceptance": false
+    },
+    {
+      "label": "Android 原生逐 P 导出作者扩大验证",
+      "platform": "Windows Flutter / Android Gradle Kotlin compilation and JVM",
+      "command": "flutter test --no-pub test/native_playback_progress_export_test.dart test/unified_export_service_test.dart test/unified_export_page_test.dart test/settings_runtime_adapter_test.dart test/classroom_integration_test.dart test/classroom_account_race_test.dart test/windows_playback_progress_store_test.dart; android: gradlew.bat :app:compileDebugKotlin :app:testDebugUnitTest --tests com.focubili.app.NativePlaybackProgressExportTest --tests com.focubili.app.NativePlaybackProgressStorageTest --no-daemon",
+      "result": "ee6138f: 84 Dart passed (43 module tests); Kotlin compile actually executed, Gradle successful in 1m02s; JVM helper8/XML7=15 passed, zero fail/skip. No APK build, actual application launch, real progress read or Android device acceptance",
+      "finalAcceptance": false
+    },
+    {
+      "label": "完整导出整合后的静态与格式检查",
+      "platform": "Windows Flutter / Dart",
+      "command": "flutter analyze --no-pub; dart format --output=none --set-exit-if-changed lib test; git diff --check",
+      "result": "source 80863e6: analyze No issues found (10.4s), exit0; 447 Dart files formatted, zero changed, exit0; diff check passed",
+      "evidence": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\v19-complete-export-analyze.log",
+      "finalAcceptance": false
+    },
+    {
+      "label": "原笔记导出反馈最新评论核对",
+      "platform": "Existing GitHub Primary connector / read only",
+      "command": "github_fetch_issue_comments repo=L1Xu4n/FocuBili issue61",
+      "result": "2026-10-17 22:28 UTC: still only two owner clarification comments; no reporter platform/version/reproduction/recording. No outbound message or assumption of reproduced macOS defect",
+      "evidence": "https://github.com/L1Xu4n/FocuBili/issues/61#issuecomment-6231343140",
+      "finalAcceptance": false
+    },
+    {
+      "label": "运行时设置与 SQLite 只读入口最终独立复核",
+      "platform": "Windows host / mocked Android sqflite channel; real Windows child processes",
+      "command": "flutter test --no-pub test/review_runtime_sqlite_read_test.dart test/subscription_sqlite_export_test.dart test/subscription_snapshot_export_read_test.dart test/review_cache_cross_process_test.dart",
+      "result": "22 passed, exit 0 at 99f5803; original two SQL red cases green, no DB open when absent, readOnly query when present, error/pending-write fences and three actual Windows process-lock cases passed; P2 closed, integrated af21850/dad5d2d; no Android device run",
+      "finalAcceptance": false
+    },
+    {
+      "label": "运行时设置与 SQLite 相关扩大回归",
+      "platform": "Windows host / Flutter and mocked Android sqflite",
+      "command": "flutter test --no-pub test/unified_export_service_test.dart test/unified_export_page_test.dart test/video_note_export_service_test.dart test/subtitle_export_service_test.dart test/local_export_service_test.dart test/search_content_filter_validation_test.dart test/subscription_preference_flags_test.dart test/image_resource_cache_test.dart test/cache_file_lock_test.dart test/image_cache_capacity_read_test.dart test/settings_runtime_adapter_test.dart test/unified_export_runtime_settings_test.dart test/subscription_sqlite_export_test.dart test/subscription_snapshot_export_read_test.dart test/subscription_background_test.dart test/subscription_service_test.dart",
+      "result": "167 passed, exit 0; author 99f5803, integrated dad5d2d. CountingSnapshots-only blind spot corrected with actual Dart SqliteStore/native-channel fixtures. sqflite public close internally swallows native close failures; no unsupported claim of detecting them",
+      "finalAcceptance": false
+    },
+    {
+      "label": "运行时设置模块的 Android SQLite 冷读取独立复现",
+      "platform": "Windows Flutter host / mocked Android sqflite MethodChannel",
+      "command": "flutter test --no-pub test/review_runtime_sqlite_read_test.dart",
+      "result": "2 failed as expected, exit 1 on module 707462c; settings-only and full export called actual store writable openDatabase/CREATE TABLE. No real DB opened. Subsequently fixed at 99f5803 and original two cases independently passed; earlier 116 targeted passes did not cover this path",
+      "finalAcceptance": false
+    },
+    {
+      "label": "A–B 完整交互修复后的最新全量回归，最终 1.8 基线前",
+      "platform": "Windows / Flutter",
+      "command": "flutter test --no-pub --reporter expanded",
+      "result": "1106 passed, 2 skipped, 2 failed, exit 1 (2m00s); source 49806fc / documentation d8aa8c5; only two existing diagnostics fallback-version mismatches remain; no claim of final regression pass",
+      "evidence": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\v19-ab-reviewed-full-tests.log",
+      "finalAcceptance": false
+    },
+    {
+      "label": "十项进度与人工测试交互预览",
+      "platform": "Edge / synthetic local HTML",
+      "command": "local HTML preview, select subject folders then AB, 320px viewport, inspect DOM widths and console",
+      "result": "10 selectable controls; manual steps updated; root clientWidth=scrollWidth=258; no console errors/warnings; full-page screenshot visually inspected; viewport reset, tab closed and local server stopped",
+      "finalAcceptance": false
+    },
+    {
+      "label": "A–B 最终路由和截图交互独立复核",
+      "platform": "Windows / Flutter synthetic player",
+      "command": "flutter test --no-pub test/review_ab_races_test.dart test/ab_repeat_capture_lifecycle_test.dart test/ab_repeat_nested_route_test.dart --reporter expanded",
+      "result": "32 passed, exit 0; independent detached review at df19f158; all four reported P2 closed; production commit integrated as 49806fc; review-only fixture was not added to production",
+      "finalAcceptance": false
+    },
+    {
+      "label": "A–B 最终扩大定向兼容",
+      "platform": "Windows / Flutter synthetic player",
+      "command": "flutter test --no-pub test/ab_repeat_test.dart test/player_ab_repeat_test.dart test/ab_repeat_capture_lifecycle_test.dart test/ab_repeat_nested_route_test.dart test/notes_subtitles_widgets_test.dart test/classroom_integration_test.dart test/classroom_account_race_test.dart test/listening_playback_test.dart test/windows_source_identity_race_test.dart test/windows_playback_audio_lifecycle_test.dart test/focus_session_continuity_test.dart test/clipboard_player_return_test.dart",
+      "result": "80 passed, exit 0; author worktree df19f158; includes 14 capture/lifecycle and 12 nested-route tests; overlaps earlier runs, counts must not be added",
+      "finalAcceptance": false
+    },
+    {
+      "label": "订阅偏好纯读取与导出验证",
+      "platform": "Windows / Flutter synthetic preferences and snapshot store",
+      "command": "flutter test --no-pub test/unified_export_service_test.dart test/unified_export_page_test.dart test/video_note_export_service_test.dart test/subtitle_export_service_test.dart test/local_export_service_test.dart test/search_content_filter_validation_test.dart test/subscription_preference_flags_test.dart",
+      "result": "73 passed, exit 0; 16 new pure-flags tests; legacy v1/v2, DB priority, write barriers, immutable map, invalid rows and no migration/network/cleanup writes; 1.8 adapter not yet integrated",
+      "finalAcceptance": false
+    },
+    {
+      "label": "截图串行修复后的全量回归，最终 1.8 基线前",
+      "platform": "Windows / Flutter",
+      "command": "flutter test --no-pub --reporter expanded",
+      "result": "1094 passed, 2 skipped, 2 failed, exit 1 (1m52s); source 22f77ce; only existing diagnostics fallback-version failures remain; predates final nested-route fix 49806fc",
+      "evidence": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\v19-reviewed-pre-base-full-tests.log",
+      "finalAcceptance": false
+    },
+    {
+      "label": "A–B 最终集成代码静态与格式检查",
+      "platform": "Windows / Flutter and Dart",
+      "command": "flutter analyze --no-pub; dart format --output=none --set-exit-if-changed lib test; git diff --check",
+      "result": "source 49806fc; analyze No issues found (7.3s), exit 0; format 438 files, 0 changed, exit 0; diff check passed",
+      "finalAcceptance": false
+    },
+    {
+      "label": "首轮跨模块集成",
+      "platform": "Windows / Flutter",
+      "command": "flutter test --no-pub test/widget_test.dart test/focus_session_continuity_test.dart test/learning_subject_folders_test.dart test/content_blocklist_test.dart test/player_blocklist_test.dart test/unified_export_service_test.dart test/unified_export_page_test.dart test/home_drawer_scroll_physics_test.dart test/home_drawer_gesture_test.dart --reporter expanded",
+      "result": "168 passed, exit 0",
+      "finalAcceptance": false
+    },
+    {
+      "label": "导出完整性与页面",
+      "platform": "Windows / Flutter",
+      "command": "flutter test --no-pub test/unified_export_service_test.dart test/unified_export_page_test.dart --reporter expanded",
+      "result": "14 passed, exit 0",
+      "finalAcceptance": false
+    },
+    {
+      "label": "导出界面真实组件渲染",
+      "platform": "Windows / Flutter synthetic UI",
+      "command": "flutter test --no-pub --dart-define=V19_CAPTURE_DIR=docs/v1.9/screenshots test/v19_export_visual_test.dart --reporter expanded",
+      "result": "3 passed, exit 0; 430px / 1280px dark / 320px 160% text; visually inspected",
+      "finalAcceptance": false
+    },
+    {
+      "label": "全模块集成首轮全量",
+      "platform": "Windows / Flutter",
+      "command": "flutter test --no-pub --reporter expanded",
+      "result": "1008 passed, 2 skipped, 5 failed, exit 1; 3 stale behavior assertions subsequently corrected and 15 related tests passed; 2 existing diagnostics fallback version failures awaiting v1.8 metadata integration",
+      "finalAcceptance": false
+    },
+    {
+      "label": "静态检查",
+      "platform": "Windows / Flutter",
+      "command": "flutter analyze --no-pub",
+      "result": "No issues found (36.8s)",
+      "finalAcceptance": false
+    },
+    {
+      "label": "全量格式",
+      "platform": "Windows / Dart",
+      "command": "dart format --output=none --set-exit-if-changed lib test",
+      "result": "428 files, 0 changed, exit 0",
+      "finalAcceptance": false
+    },
+    {
+      "label": "进度交互预览",
+      "platform": "Edge / synthetic progress",
+      "command": "local HTML preview, select classroom, 320px viewport, read DOM width and console",
+      "result": "9 controls; selected steps updated; width=scrollWidth=273; no console error/warning",
+      "finalAcceptance": false
+    },
+    {
+      "label": "导出完整性最终专项",
+      "platform": "Windows / Flutter synthetic data",
+      "command": "flutter test --no-pub test/unified_export_service_test.dart test/unified_export_page_test.dart test/playback_request_diagnostics_test.dart test/subscription_service_test.dart test/subscription_history_page_test.dart test/problem_diagnostics_page_test.dart --reporter expanded",
+      "result": "53 passed, exit 0; independent read-only review closed all reported export P2",
+      "finalAcceptance": false
+    },
+    {
+      "label": "补审后全量，最终1.8基线前",
+      "platform": "Windows / Flutter",
+      "command": "flutter test --no-pub --reporter expanded",
+      "result": "1018 passed, 2 skipped, 2 failed, exit 1 (1m54s); only the two existing diagnostics fallback version mismatches remain",
+      "finalAcceptance": false
+    },
+    {
+      "label": "Windows 编译预检，最终 1.8 基线及 A–B 合入前",
+      "platform": "Windows 11 / Visual Studio Community 2026 / Flutter",
+      "command": "flutter build windows --debug --no-pub",
+      "result": "exit 0, 97.9s; build/windows/x64/runner/Debug/FocuBili.exe; source 8735ba4; CMake media_kit CMP0175 developer warnings only; application not launched",
+      "finalAcceptance": false
+    },
+    {
+      "label": "A–B 合入后的完整回归，最终 1.8 基线合入前",
+      "platform": "Windows / Flutter",
+      "command": "flutter test --no-pub --reporter expanded",
+      "result": "1061 passed, 2 skipped, 2 failed, exit 1 (2m06s); only existing diagnostics fallback version mismatches; source edd7a17; independent review subsequently reproduced two untested AB interactions",
+      "finalAcceptance": false
+    },
+    {
+      "label": "A–B 合入后的静态分析",
+      "platform": "Windows / Flutter",
+      "command": "flutter analyze --no-pub",
+      "result": "No issues found (12.2s), exit 0; source edd7a17",
+      "finalAcceptance": false
+    },
+    {
+      "label": "订阅冷服务只读导出修复",
+      "platform": "Windows / Flutter synthetic preferences and snapshot store",
+      "command": "flutter test --no-pub test/unified_export_service_test.dart test/unified_export_page_test.dart test/playback_request_diagnostics_test.dart test/subscription_service_test.dart test/subscription_history_page_test.dart test/problem_diagnostics_page_test.dart --reporter expanded",
+      "result": "55 passed, exit 0; two new cold export fixtures failed before fix and passed after; no migration/cleanup writes during export; final v1.8 runtime adapter integration still pending",
+      "finalAcceptance": false
+    },
+    {
+      "id": "maintenance-080ecdf-release-configuration",
+      "label": "080维护普通合并后的既有发布配置定向验证",
+      "source": "080ecdf6f1229a06f2b989909a6c79a91501b01c",
+      "sourceTree": "eb0055cf574401ac3f2779a52b41aed88ace193b",
+      "platform": "Windows host / Python synthetic fixtures and Dart release-configuration tests",
+      "commands": [
+        "PYTHONPATH=tool python -X utf8 -B -m unittest tool/test_publish_release_assets.py tool/test_beta_release.py tool/test_native_subscription_probe.py tool/test_verify_macos_dmg.py -v",
+        "flutter test --no-pub test/release_workflow_config_test.dart test/android_beta_version_test.dart --reporter expanded"
+      ],
+      "result": "Existing parent run:55 Python passed/0 failed/exit0;3 Dart passed/0 failed/0 skipped/exit0. No full Flutter regression or native compile/device acceptance.",
+      "evidence": "output/v19-maintenance-080ecdf-verification.json",
+      "evidenceSha256": "42478c551e3b77b258e764187ce23ce612db73b4f6f3b7240899e771bc40e6a3",
+      "evidenceRecordedUtc": "2026-10-18T08:16:25.417886+00:00",
+      "logEvidence": [
+        {
+          "path": "output/v19-maintenance-080ecdf-python.log",
+          "bytes": 9027,
+          "sha256": "14ca0079c3400b542606b47babd44a3624d85f66798c648c2ed1c51ebd34fa23"
+        },
+        {
+          "path": "output/v19-maintenance-080ecdf-flutter-config.log",
+          "bytes": 720,
+          "sha256": "7f0704b3519c03bb52c98116cd440c0b31548b20d36d5292176bc5a6795e9004"
+        }
+      ],
+      "postBIntegration": {
+        "sha": "9c7ea4b894e3c790e0a8ecf57d104f54b663add1",
+        "tree": "eb0055cf574401ac3f2779a52b41aed88ace193b",
+        "sameTreeAs080": true,
+        "testsRerunAfterB": false
+      },
+      "scope": "The saved080 report predates actual B; B/PR68 merge and CI facts are separately recorded in the receipt maintenance section. Counts are not added to historical d6051600/2/0.",
+      "finalAcceptance": false,
+      "executedByDocumentationTask": false
+    }
+  ],
+  "items": [
+    {
+      "id": "note-export-investigation",
+      "title": "笔记导出反馈排查",
+      "issues": [
+        61
+      ],
+      "status": "阻塞",
+      "implementation": "导出取消、文件验证、缺图提示和脱敏诊断已实现",
+      "automated": "自动化通过",
+      "device": "未做",
+      "evidence": [
+        "docs/v1.9/notes-subtitles.md",
+        "docs/v1.9/drawer-export.md",
+        "test/local_export_service_test.dart",
+        "test/video_note_export_service_test.dart",
+        "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\output\\v19-final-issue-evidence.json"
+      ],
+      "manualTests": [
+        {
+          "platform": "macOS",
+          "steps": "记录准确系统、App版本/构建号、格式、截图有无、存储位置和对话框行为",
+          "expected": "拿到可复现步骤与脱敏诊断码；未收到证据前不认定Mac已复现"
+        },
+        {
+          "platform": "Android / Windows",
+          "steps": "保存与取消有多张截图的Markdown/JSON，解压核对",
+          "expected": "成功与取消准确，图片和时间完整，失败不误报成功"
+        }
+      ],
+      "blockers": [
+        "报告者尚未回复平台、版本、步骤和录屏；未擅自联系报告者"
+      ],
+      "risks": [
+        "模拟macOS I/O不能替代真实系统保存对话框验收",
+        "原#61平台未获报告者确认；macOS只是调查/人工补测平台，不是已复现结论。"
+      ],
+      "validation": {
+        "implementationStatus": "实现",
+        "automatedStatus": "自动化通过",
+        "deviceStatus": "未做",
+        "devicePassed": 0,
+        "platform": "Windows host / Flutter synthetic fixtures; earlier native/JVM evidence retains its original source/scope in checks",
+        "commandRef": "candidate-d605961-integration",
+        "relevantEvidence": [
+          "test/local_export_service_test.dart",
+          "test/video_note_export_service_test.dart"
+        ],
+        "manualPlatforms": [
+          "macOS",
+          "Android / Windows"
+        ],
+        "finalAcceptanceStatus": "阻塞",
+        "finalGateRefs": [
+          "source",
+          "finalCI",
+          "release",
+          "newApk"
+        ],
+        "reportedPlatform": "unknown; reporter has not replied",
+        "macOSReproduced": false,
+        "currentCandidateSource": "d6059619bdc3caa4ab1554a91018cd52d7038bd9",
+        "devicePassesRequiredForBetaPrerelease": false,
+        "issueEvidenceRef": "issue-refresh-20261018-0449"
+      },
+      "releaseBlocking": false,
+      "blockerScope": "Investigation/reproduction only; no requirement to wait for reporter before Beta prerelease."
+    },
+    {
+      "id": "continuous-focus",
+      "title": "跨视频与分P连续专注会话",
+      "issues": [
+        56
+      ],
+      "status": "自动化通过",
+      "implementation": "独立前台会话、显式暂停/后台暂停、去重归档、旧任务迁移已实现",
+      "automated": "自动化通过",
+      "device": "未做",
+      "evidence": [
+        "docs/v1.9/focus-learning.md",
+        "test/focus_session_continuity_test.dart",
+        "test/focus_timer_controller_test.dart",
+        "docs/v1.9/focus-onboarding-integration.md",
+        "test/focus_home_onboarding_integration_test.dart"
+      ],
+      "manualTests": [
+        {
+          "platform": "Android / Windows",
+          "steps": "开始1分钟任务，暂停视频、换P、回搜索换视频，再手动暂停/后台返回",
+          "expected": "同一前台会话连续计时，显式暂停和后台不累计，主动继续，完成只归档一次"
+        },
+        {
+          "platform": "Android / Windows",
+          "steps": "提前结束并重启，再查看统计",
+          "expected": "终态不复活，不重复归档，旧记录保留"
+        }
+      ],
+      "blockers": [],
+      "risks": [
+        "异常退出最多只能恢复最近持久化检查点，不能把进程离线时间算作专注"
+      ],
+      "validation": {
+        "implementationStatus": "实现",
+        "automatedStatus": "自动化通过",
+        "deviceStatus": "未做",
+        "devicePassed": 0,
+        "platform": "Windows host / Flutter synthetic fixtures; earlier native/JVM evidence retains its original source/scope in checks",
+        "commandRef": "candidate-d605961-integration",
+        "relevantEvidence": [
+          "test/focus_session_continuity_test.dart",
+          "test/focus_timer_controller_test.dart",
+          "test/focus_home_onboarding_integration_test.dart"
+        ],
+        "manualPlatforms": [
+          "Android / Windows"
+        ],
+        "finalAcceptanceStatus": "阻塞",
+        "finalGateRefs": [
+          "source",
+          "finalCI",
+          "release",
+          "newApk"
+        ],
+        "currentCandidateSource": "d6059619bdc3caa4ab1554a91018cd52d7038bd9",
+        "devicePassesRequiredForBetaPrerelease": false
+      }
+    },
+    {
+      "id": "subject-folders",
+      "title": "学科文件夹与清单迁移",
+      "issues": [
+        61
+      ],
+      "status": "自动化通过",
+      "implementation": "一级学科、新建/重命名/单项及批量移动、删除组保留条目、v3原子快照及旧数据备份",
+      "automated": "自动化通过",
+      "device": "未做",
+      "evidence": [
+        "docs/v1.9/focus-learning.md",
+        "test/learning_subject_folders_test.dart",
+        "docs/v1.9/screenshots/learning-folders-phone.png",
+        "docs/v1.9/screenshots/learning-folders-desktop.png"
+      ],
+      "manualTests": [
+        {
+          "platform": "Android / Windows",
+          "steps": "旧清单升级，新建数学组、移动两项、重命名、改进度、删除组，再重启",
+          "expected": "视频/分P/进度/笔记不丢，删除组后条目回未分组，课程扩展字段保留"
+        }
+      ],
+      "blockers": [],
+      "risks": [
+        "保留原v2键但值为schemaVersion3 envelope；不要用旧App写回新清单"
+      ],
+      "validation": {
+        "implementationStatus": "实现",
+        "automatedStatus": "自动化通过",
+        "deviceStatus": "未做",
+        "devicePassed": 0,
+        "platform": "Windows host / Flutter synthetic fixtures; earlier native/JVM evidence retains its original source/scope in checks",
+        "commandRef": "candidate-d605961-integration",
+        "relevantEvidence": [
+          "test/learning_subject_folders_test.dart"
+        ],
+        "manualPlatforms": [
+          "Android / Windows"
+        ],
+        "finalAcceptanceStatus": "阻塞",
+        "finalGateRefs": [
+          "source",
+          "finalCI",
+          "release",
+          "newApk"
+        ],
+        "currentCandidateSource": "d6059619bdc3caa4ab1554a91018cd52d7038bd9",
+        "devicePassesRequiredForBetaPrerelease": false
+      }
+    },
+    {
+      "id": "subtitle-browser",
+      "title": "已有字幕列表、检索与导出",
+      "issues": [
+        61
+      ],
+      "status": "自动化通过",
+      "implementation": "轨道列表、搜索、点击跳转、SRT/带起止时间文本导出及异步隔离",
+      "automated": "自动化通过",
+      "device": "未做",
+      "evidence": [
+        "docs/v1.9/notes-subtitles.md",
+        "test/notes_subtitles_widgets_test.dart",
+        "test/subtitle_export_service_test.dart",
+        "docs/v1.9/evidence/subtitle-list.png"
+      ],
+      "manualTests": [
+        {
+          "platform": "Android / Windows",
+          "steps": "打开有字幕的视频，搜索一句并点击，导出SRT和TXT",
+          "expected": "跳到对应时间点，中文及完整时间轴正确；无字幕/需登录/失败状态真实，不凭空生成字幕"
+        }
+      ],
+      "blockers": [],
+      "risks": [
+        "只读取服务已提供的字幕；课堂独立字幕不在本版范围"
+      ],
+      "validation": {
+        "implementationStatus": "实现",
+        "automatedStatus": "自动化通过",
+        "deviceStatus": "未做",
+        "devicePassed": 0,
+        "platform": "Windows host / Flutter synthetic fixtures; earlier native/JVM evidence retains its original source/scope in checks",
+        "commandRef": "candidate-d605961-integration",
+        "relevantEvidence": [
+          "test/notes_subtitles_widgets_test.dart",
+          "test/subtitle_export_service_test.dart"
+        ],
+        "manualPlatforms": [
+          "Android / Windows"
+        ],
+        "finalAcceptanceStatus": "阻塞",
+        "finalGateRefs": [
+          "source",
+          "finalCI",
+          "release",
+          "newApk"
+        ],
+        "currentCandidateSource": "d6059619bdc3caa4ab1554a91018cd52d7038bd9",
+        "devicePassesRequiredForBetaPrerelease": false
+      }
+    },
+    {
+      "id": "blocklist-search",
+      "title": "黑名单、关键词与分区筛选",
+      "issues": [
+        60,
+        61
+      ],
+      "status": "自动化通过",
+      "implementation": "视频/UP菜单屏蔽、UID匹配、管理取消、标题和UP排除词、分区选择、默认不误过滤",
+      "automated": "自动化通过",
+      "device": "未做",
+      "evidence": [
+        "docs/v1.9/filtering.md",
+        "test/content_blocklist_test.dart",
+        "test/player_blocklist_test.dart",
+        "test/search_content_filter_test.dart"
+      ],
+      "manualTests": [
+        {
+          "platform": "Android / Windows",
+          "steps": "搜索及播放器屏蔽视频/UP，再到管理页取消；分别测大小写、C++、分区重置",
+          "expected": "结果及时更新，同名不同UID不误伤，收藏/清单/历史/笔记不删除"
+        }
+      ],
+      "blockers": [],
+      "risks": [
+        "学习倾向仍为可关闭的启发式规则，未知元数据不推断为非学习内容"
+      ],
+      "validation": {
+        "implementationStatus": "实现",
+        "automatedStatus": "自动化通过",
+        "deviceStatus": "未做",
+        "devicePassed": 0,
+        "platform": "Windows host / Flutter synthetic fixtures; earlier native/JVM evidence retains its original source/scope in checks",
+        "commandRef": "candidate-d605961-integration",
+        "relevantEvidence": [
+          "test/content_blocklist_test.dart",
+          "test/player_blocklist_test.dart",
+          "test/search_content_filter_test.dart"
+        ],
+        "manualPlatforms": [
+          "Android / Windows"
+        ],
+        "finalAcceptanceStatus": "阻塞",
+        "finalGateRefs": [
+          "source",
+          "finalCI",
+          "release",
+          "newApk"
+        ],
+        "currentCandidateSource": "d6059619bdc3caa4ab1554a91018cd52d7038bd9",
+        "devicePassesRequiredForBetaPrerelease": false
+      }
+    },
+    {
+      "id": "multi-frame-notes",
+      "title": "同一笔记多个视频帧",
+      "issues": [
+        61
+      ],
+      "status": "自动化通过",
+      "implementation": "帧顺序和独立时间、追加/重排/删除、预览、旧单图兼容、完整导出已实现",
+      "automated": "自动化通过",
+      "device": "未做",
+      "evidence": [
+        "docs/v1.9/notes-subtitles.md",
+        "test/video_note_service_test.dart",
+        "test/video_note_export_service_test.dart",
+        "docs/v1.9/evidence/multi-frame-note.png",
+        "test/video_note_frame_preview_test.dart",
+        "docs/v1.9/evidence/notes-mixed-420x1000.png",
+        "docs/v1.9/evidence/notes-mixed-1000x700.png"
+      ],
+      "manualTests": [
+        {
+          "platform": "Android / Windows",
+          "steps": "同一笔记插三帧并重排删除，快速编辑后删除，捕获时快速切换合集视频",
+          "expected": "锚点不变，顺序/时间重开和导出一致，删除不复活，晚到截图不操作新视频且不遗留孤立文件"
+        }
+      ],
+      "blockers": [],
+      "risks": [
+        "真实平台取帧/竖屏预览与系统分享仍需设备验收"
+      ],
+      "validation": {
+        "implementationStatus": "实现",
+        "automatedStatus": "自动化通过",
+        "deviceStatus": "未做",
+        "devicePassed": 0,
+        "platform": "Windows host / Flutter synthetic fixtures; earlier native/JVM evidence retains its original source/scope in checks",
+        "commandRef": "candidate-d605961-integration",
+        "relevantEvidence": [
+          "test/video_note_service_test.dart",
+          "test/video_note_export_service_test.dart",
+          "test/video_note_frame_preview_test.dart"
+        ],
+        "manualPlatforms": [
+          "Android / Windows"
+        ],
+        "finalAcceptanceStatus": "阻塞",
+        "finalGateRefs": [
+          "source",
+          "finalCI",
+          "release",
+          "newApk"
+        ],
+        "currentCandidateSource": "d6059619bdc3caa4ab1554a91018cd52d7038bd9",
+        "devicePassesRequiredForBetaPrerelease": false
+      }
+    },
+    {
+      "id": "purchased-classroom",
+      "title": "账号已购B站课堂",
+      "issues": [
+        58
+      ],
+      "status": "自动化通过",
+      "implementation": "已购入口、ss/ep/短链、章节、进度、笔记；同会话购买证明和账号切换栅栏已独立复核",
+      "automated": "自动化通过",
+      "device": "未做",
+      "evidence": [
+        "docs/v1.9/classroom.md",
+        "test/bilibili_course_service_test.dart",
+        "test/classroom_access_test.dart",
+        "test/course_learning_records_test.dart",
+        "test/classroom_reopen_test.dart",
+        "docs/v1.9/player-candidate-integration.md",
+        "test/windows_playback_intent_ordering_test.dart",
+        "test/player_merged_controls_test.dart"
+      ],
+      "manualTests": [
+        {
+          "platform": "Android tablet / Windows; requires own purchased content",
+          "steps": "已购列表进入第二章播放47秒，笔记/清单/历史恢复，切章；退出/换无权限账号后重试",
+          "expected": "同一账号购买证明有效，正确章节和时间恢复；无权限拒绝，旧账号流和候选URL停止复用"
+        }
+      ],
+      "blockers": [],
+      "risks": [
+        "真实已购响应兼容与解码未验收",
+        "DRM、多段拼接、课堂独立字幕/弹幕、付费离线缓存不支持"
+      ],
+      "validation": {
+        "implementationStatus": "实现",
+        "automatedStatus": "自动化通过",
+        "deviceStatus": "未做",
+        "devicePassed": 0,
+        "platform": "Windows host / Flutter synthetic fixtures; earlier native/JVM evidence retains its original source/scope in checks",
+        "commandRef": "candidate-d605961-integration",
+        "relevantEvidence": [
+          "test/bilibili_course_service_test.dart",
+          "test/classroom_access_test.dart",
+          "test/course_learning_records_test.dart",
+          "test/classroom_reopen_test.dart",
+          "test/windows_playback_intent_ordering_test.dart",
+          "test/player_merged_controls_test.dart"
+        ],
+        "manualPlatforms": [
+          "Android tablet / Windows; requires own purchased content"
+        ],
+        "finalAcceptanceStatus": "阻塞",
+        "finalGateRefs": [
+          "source",
+          "finalCI",
+          "release",
+          "newApk"
+        ],
+        "currentCandidateSource": "d6059619bdc3caa4ab1554a91018cd52d7038bd9",
+        "devicePassesRequiredForBetaPrerelease": false
+      }
+    },
+    {
+      "id": "home-drawer",
+      "title": "首页抽屉滑动与三档吸附",
+      "issues": [
+        50
+      ],
+      "status": "自动化通过",
+      "implementation": "关闭/半开/全开、长快速拖动限档、内容区边界、iOS弹性越界保护",
+      "automated": "自动化通过",
+      "device": "未做",
+      "evidence": [
+        "docs/v1.9/drawer-export.md",
+        "test/home_drawer_scroll_physics_test.dart",
+        "test/home_drawer_gesture_test.dart"
+      ],
+      "manualTests": [
+        {
+          "platform": "Android / iOS",
+          "steps": "短快和长快上滑/下滑、深层卡片返回、卡片内部滚动与拖动编辑",
+          "expected": "依次半开/全开，深层返回先停展开边界，内部滚动与编辑不抢手势"
+        }
+      ],
+      "blockers": [],
+      "risks": [
+        "触摸惯性与iOS真实回弹仍需设备体验验证"
+      ],
+      "validation": {
+        "implementationStatus": "实现",
+        "automatedStatus": "自动化通过",
+        "deviceStatus": "未做",
+        "devicePassed": 0,
+        "platform": "Windows host / Flutter synthetic fixtures; earlier native/JVM evidence retains its original source/scope in checks",
+        "commandRef": "candidate-d605961-integration",
+        "relevantEvidence": [
+          "test/home_drawer_scroll_physics_test.dart",
+          "test/home_drawer_gesture_test.dart"
+        ],
+        "manualPlatforms": [
+          "Android / iOS"
+        ],
+        "finalAcceptanceStatus": "阻塞",
+        "finalGateRefs": [
+          "source",
+          "finalCI",
+          "release",
+          "newApk"
+        ],
+        "currentCandidateSource": "d6059619bdc3caa4ab1554a91018cd52d7038bd9",
+        "devicePassesRequiredForBetaPrerelease": false
+      }
+    },
+    {
+      "id": "unified-export",
+      "title": "设置统一导出",
+      "issues": [],
+      "status": "自动化通过",
+      "implementation": "精确白名单、选类ZIP、笔记/截图/清单/专注/收藏/历史/订阅/有效字幕/离线目录/脱敏诊断，不含登录凭据；四项运行时设置走权威纯读和 SQLite 只读入口；Android 历史附带已提交原生逐 P 快照，严格白名单兼容旧记录及 BV 前缀",
+      "automated": "自动化通过",
+      "device": "未做",
+      "evidence": [
+        "docs/v1.9/drawer-export.md",
+        "test/unified_export_service_test.dart",
+        "test/unified_export_page_test.dart",
+        "docs/v1.9/runtime-settings-export.md",
+        "test/subscription_snapshot_export_read_test.dart",
+        "test/unified_export_runtime_settings_test.dart",
+        "docs/v1.9/screenshots/export-mobile.png",
+        "docs/v1.9/screenshots/export-desktop-dark.png",
+        "docs/v1.9/native-playback-progress-export.md",
+        "test/native_playback_progress_export_test.dart",
+        "android/app/src/test/kotlin/com/focubili/app/NativePlaybackProgressExportTest.kt",
+        "android/app/src/test/kotlin/com/focubili/app/NativePlaybackProgressStorageTest.kt",
+        "docs/v1.9/settings-baseline-integration.md",
+        "test/settings_export_retention_integration_test.dart",
+        "test/settings_transfer_search_test.dart"
+      ],
+      "manualTests": [
+        {
+          "platform": "Android / Windows / macOS / iOS / Linux",
+          "steps": "单选与全选导出，取消、不可写位置、解压和核对真实资料；不要上传个人资料包",
+          "expected": "范围准确，截图/时间/课程逐章进度完整，缺图及无缓存字幕明确，保存取消/失败不报成功，无登录凭据"
+        },
+        {
+          "platform": "Android API24+ / current Android",
+          "steps": "用测试资料播放两P并等待落盘，勾选历史解压核对native_playback_progress.json，再取消历史；仅有权限的课堂重复章节核对",
+          "expected": "各CID独立、最后P准确，无流地址/凭据；只包含已提交快照，写入竞争可失败重试，不改原存储，未选历史不调用原生导出"
+        }
+      ],
+      "blockers": [],
+      "risks": [
+        "本次有效缓存外字幕不会联网补抓",
+        "不打包视频媒体，不承诺一键恢复全部状态",
+        "Android 原生逐 P 仅已提交文件快照，不含异步未落盘位置；各服务非全局原子快照，实际 API24+ SAX/文件系统待真机验收"
+      ],
+      "validation": {
+        "implementationStatus": "实现",
+        "automatedStatus": "自动化通过",
+        "deviceStatus": "未做",
+        "devicePassed": 0,
+        "platform": "Windows host / Flutter synthetic fixtures; earlier native/JVM evidence retains its original source/scope in checks",
+        "commandRef": "candidate-d605961-integration",
+        "relevantEvidence": [
+          "test/unified_export_service_test.dart",
+          "test/unified_export_page_test.dart",
+          "test/subscription_snapshot_export_read_test.dart",
+          "test/unified_export_runtime_settings_test.dart",
+          "test/native_playback_progress_export_test.dart",
+          "android/app/src/test/kotlin/com/focubili/app/NativePlaybackProgressExportTest.kt",
+          "android/app/src/test/kotlin/com/focubili/app/NativePlaybackProgressStorageTest.kt",
+          "test/settings_export_retention_integration_test.dart",
+          "test/settings_transfer_search_test.dart"
+        ],
+        "manualPlatforms": [
+          "Android / Windows / macOS / iOS / Linux",
+          "Android API24+ / current Android"
+        ],
+        "finalAcceptanceStatus": "阻塞",
+        "finalGateRefs": [
+          "source",
+          "finalCI",
+          "release",
+          "newApk"
+        ],
+        "currentCandidateSource": "d6059619bdc3caa4ab1554a91018cd52d7038bd9",
+        "devicePassesRequiredForBetaPrerelease": false
+      }
+    },
+    {
+      "id": "ab-repeat",
+      "title": "A–B 区间循环",
+      "issues": [
+        62
+      ],
+      "status": "自动化通过",
+      "implementation": "当前视频/分P区间循环、当前点/时间输入、时间轴选区、听视频与课堂兼容；四项已报交互P2均修复并通过独立复核",
+      "automated": "自动化通过",
+      "automatedScope": "最终扩大定向80项通过；独立复核32项通过，包括各原失败复现。均为合成后端，不能替代真机验收；各轮测试有重叠，不相加",
+      "device": "未做",
+      "evidence": [
+        "https://github.com/L1Xu4n/FocuBili/issues/62#issuecomment-6240633478",
+        "docs/v1.9/ab-repeat.md",
+        "docs/v1.9/ab-repeat-evidence/validation.json",
+        "test/ab_repeat_test.dart",
+        "test/player_ab_repeat_test.dart",
+        "test/ab_repeat_capture_lifecycle_test.dart",
+        "test/ab_repeat_nested_route_test.dart",
+        "docs/v1.9/player-candidate-integration.md",
+        "test/windows_playback_intent_ordering_test.dart",
+        "test/player_merged_controls_test.dart"
+      ],
+      "manualTests": [
+        {
+          "platform": "Android / Windows",
+          "steps": "设置A/B、循环、暂停恢复、调速、听视频、片尾、清除、切视频/分P及字幕跳出区间；截图期间手动拖动、切章和打开UP/提及/下载/屏蔽页；后台、耳机和睡眠暂停",
+          "expected": "区间正确循环、身份隔离、清除恢复普通播放、专注不重复计时；旧截图不覆盖新位置或在遮挡页面后恢复播放，正常内部截图可恢复原位置"
+        }
+      ],
+      "blockers": [],
+      "risks": [
+        "Native seek precision and audio-mode timing require manual device verification"
+      ],
+      "validation": {
+        "implementationStatus": "实现",
+        "automatedStatus": "自动化通过",
+        "deviceStatus": "未做",
+        "devicePassed": 0,
+        "platform": "Windows host / Flutter synthetic fixtures; earlier native/JVM evidence retains its original source/scope in checks",
+        "commandRef": "candidate-d605961-integration",
+        "relevantEvidence": [
+          "test/ab_repeat_test.dart",
+          "test/player_ab_repeat_test.dart",
+          "test/ab_repeat_capture_lifecycle_test.dart",
+          "test/ab_repeat_nested_route_test.dart",
+          "test/windows_playback_intent_ordering_test.dart",
+          "test/player_merged_controls_test.dart"
+        ],
+        "manualPlatforms": [
+          "Android / Windows"
+        ],
+        "finalAcceptanceStatus": "阻塞",
+        "finalGateRefs": [
+          "source",
+          "finalCI",
+          "release",
+          "newApk"
+        ],
+        "currentCandidateSource": "d6059619bdc3caa4ab1554a91018cd52d7038bd9",
+        "devicePassesRequiredForBetaPrerelease": false
+      }
+    },
+    {
+      "id": "beta-update-consumer",
+      "title": "稳定/Beta更新通道与身份回退",
+      "issues": [],
+      "status": "自动化通过",
+      "implementation": "稳定latest与Beta有界prerelease分离；同tag manifest/资产校验；b07db359已在e04e783整合，补齐Android preview安装身份门，缺失/非法/不匹配证书或缺失/非法/未递增code一律回Release页；SemVer显示元数据与原生计数分离",
+      "automated": "自动化通过",
+      "device": "未做",
+      "evidence": [
+        "docs/v1.9/update-channel.md",
+        "test/app_update_beta_channel_test.dart",
+        "test/app_update_service_test.dart",
+        "test/app_update_ignore_test.dart",
+        "test/update_ignore_ui_test.dart",
+        "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\output\\review-v19-update-channel-6cc7a11\\fix-review-d7ae21b.json"
+      ],
+      "validation": {
+        "implementationStatus": "实现",
+        "automatedStatus": "自动化通过",
+        "deviceStatus": "未做",
+        "devicePassed": 0,
+        "platform": "Windows host / mock HTTP,PackageInfo,preferences; no actual network or installed identity",
+        "commandRefs": [
+          "beta-consumer-local",
+          "beta-android-identity-failclosed",
+          "candidate-d605961-integration"
+        ],
+        "finalAcceptanceStatus": "阻塞",
+        "finalGateRefs": [
+          "source",
+          "finalCI",
+          "release",
+          "newApk"
+        ],
+        "implementationSources": {
+          "original": [
+            "6cc7a119a67df68a3b3a043f39ce4866e3ea9310",
+            "d7ae21b97ca31b346f0e80f3bde5e2643bc96d7b",
+            "b07db359c5000efac6aab6ee0ed1276c7f163ac9"
+          ],
+          "integrated": [
+            "91962e24d18a61f3105aac2d531d5cd032f0daa3",
+            "804d2e77983e1435fe17680093711e95faf7bfcb",
+            "e04e783870b5c6d0c4b110a0675baace6a675eae"
+          ]
+        },
+        "strictAndroidGate": {
+          "status": "自动化通过",
+          "sourceSha": "b07db359c5000efac6aab6ee0ed1276c7f163ac9",
+          "integrationStatus": "integrated",
+          "integratedSourceSha": "e04e783870b5c6d0c4b110a0675baace6a675eae",
+          "passed": 90,
+          "failed": 0,
+          "newCases": 10,
+          "fullRegressionAfterFix": "candidate-d605961-integration",
+          "scope": "Original90-case strict-gate evidence retained; integratede04e783 is included in d605961 full regression1600/2/0. No real device or new APK.",
+          "includedInCandidateSha": "d6059619bdc3caa4ab1554a91018cd52d7038bd9"
+        },
+        "currentCandidateSource": "d6059619bdc3caa4ab1554a91018cd52d7038bd9",
+        "devicePassesRequiredForBetaPrerelease": false
+      },
+      "manualTests": [
+        {
+          "platform": "Android / Windows / macOS / Linux",
+          "steps": "分别用稳定/Beta受控构建检查版本和更新；缺包名、缺manifest、跨tag、证书已知不符或code已知不递增",
+          "expected": "稳定不收Beta；Beta不回退稳定APK；未知包名/无效元数据回Release页；证书缺失/非法、不匹配，或原生code缺失/非法/未递增均回Release页；仅完整64hex同证书且canonical十进制非负native code严格低于候选时才提供APK直链，仍不等于OS覆盖升级验收"
+        }
+      ],
+      "blockers": [
+        "最终1.8基线和最终source待确认",
+        "精确source的实际CI/新资产待验证"
+      ],
+      "risks": [
+        "消费者只核选择元数据，不下载APK验签；直链不是升级验收。",
+        "Beta只查询最多3页×30条；后页错误不使用部分结果；旧Beta4/5的旧更新器不会被追溯更新。",
+        "完整身份门只决定直链选择；真实安装身份、实包验签、OS覆盖升级和资料保留仍未验收。",
+        "严格证书/code门只避免不兼容APK直链；回到Release页不会把旧Beta同证书变成发布条件。此策略更新未修改consumer生产代码。",
+        "设备验收0，安装与资料保留仍待人工验证；不能将自动化视为真机通过，但不单独阻塞Beta预发布。"
+      ]
+    },
+    {
+      "id": "beta-release-producer",
+      "title": "受控Beta候选流水线、身份与跨平台证据",
+      "issues": [],
+      "status": "自动化通过",
+      "implementation": "手动精确source入口、全局APK计数与归档floor、对应source CI门、既有签名的受控.preview release、七二进制manifest/hash及publish=false候选路径已实现",
+      "automated": "自动化通过",
+      "device": "未做",
+      "evidence": [
+        "docs/v1.9/beta-ci-review.md",
+        "tool/test_beta_release.py",
+        "test/android_beta_version_test.dart",
+        "test/release_workflow_config_test.dart",
+        "docs/beta4/apk-verification.json",
+        "docs/beta5/apk-verification.json"
+      ],
+      "validation": {
+        "implementationStatus": "实现",
+        "automatedStatus": "自动化通过",
+        "deviceStatus": "未做",
+        "devicePassed": 0,
+        "platform": "Windows host / offline Python and YAML/shell fixtures; Flutter synthetic integration",
+        "commandRefs": [
+          "beta-producer-local",
+          "beta-counter-policy",
+          "candidate-d605961-integration"
+        ],
+        "nativeCIStatus": "未做",
+        "finalAcceptanceStatus": "阻塞",
+        "finalGateRefs": [
+          "source",
+          "finalCI",
+          "release",
+          "newApk"
+        ],
+        "implementationSources": {
+          "original": [
+            "d998eb843046d8694f268e07b27b11c1985c12db",
+            "36b4bdc703b2615df09f6d12c10e737e6c58b342"
+          ],
+          "integrated": [
+            "43ea6fdb515bbb71380ba25146dce044bc552b95",
+            "30ee502327bc1d56963eeb9ee2b8e958eb82133e"
+          ]
+        },
+        "oldBetaCertificateContinuityRequiredForRelease": false,
+        "currentCandidateSource": "d6059619bdc3caa4ab1554a91018cd52d7038bd9",
+        "devicePassesRequiredForBetaPrerelease": false
+      },
+      "manualTests": [
+        {
+          "platform": "CI / Android / Windows / macOS / Linux / iOS",
+          "steps": "在最终1.8/source确认后先检查publish=false精确source run、全部平台实包元数据、manifest和bytes/hash，再由唯一发布者处理后续发布",
+          "expected": "来源和计数一致，受控preview/65EF实包验签；macOS实际架构/adhoc/正常应用一致性有CI证明；unsignedIPA不称为TestFlight，桌面不称为隔离数据沙箱"
+        }
+      ],
+      "blockers": [
+        "最终1.8基线和最终source待确认",
+        "精确source的实际CI/新资产待验证",
+        "默认分支工作流能力与必要签名secret可用性尚无实际run证据；本次不检查私钥或发起调度"
+      ],
+      "risks": [
+        "归档Beta3/4/5为5BD1签名，现有CI65EF不能覆盖；这是安装兼容风险，非本Beta发布必需。保留旧应用资料，可在空白测试环境验证。",
+        "实际公开历史max21只是已有观察；新run必须重新读取全部公开APK字节并大于live最大code与归档2025。",
+        "Windows/macOS/Linux/iOS部分身份和资料路径与稳定共享，版本和文件名不能证明数据隔离或运行兼容。",
+        "设备验收0，安装与资料保留仍待人工验证；不能将自动化视为真机通过，但不单独阻塞Beta预发布。"
+      ]
+    }
+  ],
+  "visualizationPath": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\output\\focubili-v19-progress.html",
+  "skippedTests": [
+    {
+      "test": "test/windows_media_cache_service_test.dart:159",
+      "reason": "Creating symlinks requires Windows developer mode",
+      "evidence": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\v19-candidate-cleanup-full-tests.log",
+      "explicitEvent": {
+        "line": 1425,
+        "text": "  Skip: Creating symlinks requires Windows developer mode"
+      },
+      "source": "d6059619bdc3caa4ab1554a91018cd52d7038bd9",
+      "requiresSystemChange": false,
+      "note": "Existing Windows skip; no system or permission changes."
+    },
+    {
+      "test": "test/v19_focus_learning_evidence_test.dart:18,129",
+      "reason": "Optional synthetic screenshot generation requires --dart-define=V19_EVIDENCE=true; normal full-suite command omits it.",
+      "source": "d6059619bdc3caa4ab1554a91018cd52d7038bd9",
+      "sourceBasedAttribution": true,
+      "expandedReporterNamedEvent": false,
+      "defaultDefineEnabled": false,
+      "requiresSystemChange": false,
+      "note": "Concurrent expanded reporter does not identify this skip distinctly. Source has only three skip conditions; required Windows font exists, so the font-dependent widget test is not the skipped case. Do not attribute the skip to the neighboring reporter test."
+    }
+  ],
+  "buildEnvironmentWarnings": [
+    "Final1.9 APK/native CI not executed for this source; previous local7c6dbe6 debug build remains historical. No SDK/license/security/signing changes made here.",
+    "Existing native Kotlin/JVM evidence keeps its older source/scope; current completeFlutter pass does not establish current native compilation or device acceptance.",
+    "Desktop Beta shares some stable application/data identities; no isolated data sandbox or rollback restoration is claimed."
+  ],
+  "latestFullRegression": {
+    "source": "d6059619bdc3caa4ab1554a91018cd52d7038bd9",
+    "passed": 1600,
+    "skipped": 2,
+    "failed": 0,
+    "exitCode": 0,
+    "duration": "03:28",
+    "command": "flutter test --no-pub --reporter expanded",
+    "platform": "Windows host / Flutter synthetic fixtures",
+    "evidence": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\v19-candidate-cleanup-full-tests.log",
+    "evidenceSha256": "54054de52102a94af44dfd8d1b9181c267c01cf991fdcf02621f0903cc028e2a",
+    "scope": "Historical exact local candidated605961; includes ordinary fff cleanup merge and strict identity gate. This1600/2/0 result does not verify post-M source9bc, future maintenance B or final safe publication source. Actual formal1.8 M/publication is separately recorded in v18FormalRelease; v1.9 exact-source CI/native candidate/package/device evidence remains pending.",
+    "executedByDocumentationTask": false,
+    "reportedBy": "parent/root; existing log read and SHA256 verified by documentation task"
+  },
+  "candidateV18Base": {
+    "commit": "5a76dbba192660f652fbd09d38c78eea6a10ffb5",
+    "status": "actual formal M published; original-four70/70 and supplemental six-asset evidence retained. Verified maintenance B is now ordinary-merged into private9c7; final safe H+D3 and v1.9 CI/native/package verification pending.",
+    "mergeCommit": "9bcd4acf3af30fbc2928827cd3df1ff345050992",
+    "previousCandidateCommit": "fff5fe1474d375f26b6b24922716dcacaf2724de",
+    "previousMergeCommit": "d6059619bdc3caa4ab1554a91018cd52d7038bd9",
+    "alignmentEvidence": [
+      "docs/v1.9/candidate-35a65bf-merge.md",
+      "docs/v1.9/candidate-64f1df8-merge.md",
+      "docs/media-cache-cleanup-race.md",
+      "docs/v1.9/v18-formal-release-receipt.json"
+    ],
+    "finalConfirmation": "public_release_verified_70_of_70",
+    "finalCommit": "5a76dbba192660f652fbd09d38c78eea6a10ffb5",
+    "finalMRequired": true,
+    "history": [
+      {
+        "commit": "fff5fe1474d375f26b6b24922716dcacaf2724de",
+        "status": "ordinary candidate35/64/fff merges complete; formal M/publication pending",
+        "mergeCommit": "d6059619bdc3caa4ab1554a91018cd52d7038bd9",
+        "previousCandidateCommit": "64f1df8d412559794769d16b119b85bfd3a2f231",
+        "previousMergeCommit": "599d5eb5d7b83294d32a8cfe0181a0be9c9377d2",
+        "alignmentEvidence": [
+          "docs/v1.9/candidate-35a65bf-merge.md",
+          "docs/v1.9/candidate-64f1df8-merge.md",
+          "docs/media-cache-cleanup-race.md"
+        ],
+        "finalConfirmation": "pending",
+        "finalCommit": null,
+        "finalMRequired": true
+      },
+      {
+        "commit": "64f1df8d412559794769d16b119b85bfd3a2f231",
+        "status": "ordinary candidate35/64 merges complete; actual formal final M pending",
+        "mergeCommit": "599d5eb5d7b83294d32a8cfe0181a0be9c9377d2",
+        "previousCandidateCommit": "35a65bf6e5b130f91027308a473c590e36e1ff20",
+        "previousMergeCommit": "d132b648d559b6e7e1b61458cd14a6e7d0632a39",
+        "alignmentEvidence": [
+          "docs/v1.9/candidate-35a65bf-merge.md",
+          "docs/v1.9/candidate-64f1df8-merge.md"
+        ],
+        "finalConfirmation": "pending",
+        "finalCommit": null,
+        "finalMRequired": true,
+        "history": [
+          {
+            "commit": "95b23239f933f38d61c05c2c6b0cd958ffb74902",
+            "status": "validated candidate, not confirmed formal final",
+            "mergeCommit": "af282f5",
+            "publicationSnapshot": "98e02e8a7dd4ac59d23b94f29813f40df52fab48",
+            "snapshotParent": "da0946b98994fea9020a58c870b0ddddcde72a42",
+            "contentAligned": true,
+            "alignmentMethod": "Independent five-production-file tree review; all fixes already present; no merge/cherry-pick of restructured history",
+            "alignmentEvidence": "docs/v1.9/publication-snapshot-alignment.md",
+            "finalConfirmation": "pending",
+            "finalCommit": null
+          }
+        ]
+      }
+    ]
+  },
+  "candidateReview": {
+    "onboardingEditing": {
+      "status": "closed",
+      "source": "608d439",
+      "integrated": "5db0288",
+      "checks": "89 targeted passed;4 strengthened tests rerun passed"
+    },
+    "multiFrameViewport": {
+      "status": "closed",
+      "source": "a20f018",
+      "integrated": "838fdb6",
+      "checks": "81 targeted passed; real decoded mixed portrait/landscape PNG red-to-green"
+    },
+    "settingsAndLateNotification": {
+      "status": "closed",
+      "source": "080d505",
+      "integrated": "ef3bf68",
+      "checks": "author252+3 selected passed; independent50 passed; original late-notification red case unchanged and green"
+    },
+    "playerBufferedIntent": {
+      "status": "closed",
+      "source": [
+        "59538629fa4e8df538e9d7255686173cb59b6086",
+        "c6a382d6ce48a1e84f16ac32a592b23096c3dcdc"
+      ],
+      "integrated": [
+        "e738ac2",
+        "309e039"
+      ],
+      "checks": "Independent58 passed; unchanged original5-case fixture red-to-green. No new definite P1/P2 in final review"
+    }
+  },
+  "v18Backports": {
+    "base": "95b23239f933f38d61c05c2c6b0cd958ffb74902",
+    "notification": "f845a65adbf569b5840de3e42126e595700b4d82",
+    "home": "61f11c06e8a558a8a85221b349ea7511e9ae4ffd",
+    "status": "Both fixes included in local1.8 snapshot98e02e8 and independently confirmed already present in1.9; no extra production change needed"
+  },
+  "visualizationPreview": {
+    "path": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\output\\focubili-v19-progress.html",
+    "artifact": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\output\\focubili-v19-progress.html",
+    "latestRegressionDisplayed": {
+      "passed": 1353,
+      "skipped": 2,
+      "failed": 0
+    },
+    "interaction": "All 10 feature controls present; A-B detail selected and latest 58-test independent review plus manual intent checks visible",
+    "responsiveCheck": {
+      "viewportWidth": 320,
+      "contentClientWidth": 273,
+      "contentScrollWidth": 273,
+      "horizontalOverflow": false
+    },
+    "consoleWarningsOrErrors": 0,
+    "screenshotVisuallyInspected": true,
+    "cleanup": {
+      "viewportOverrideReset": true,
+      "previewTabClosed": true,
+      "localPreviewServer": "Agent foreground session stopped with Ctrl+C; exit1 expected for interruption"
+    },
+    "delivery": "Parent will deliver final visualization separately; no publication or device acceptance implied",
+    "status": "pending final refresh",
+    "scope": "Historical preview and counts retained as evidence; HTML not updated during this task. Refresh only after final source/release evidence.",
+    "awaits": [
+      "source",
+      "finalCI",
+      "release",
+      "newApk"
+    ]
+  },
+  "localBuild": {
+    "state": "historical intermediate debug artifact; not current delivery",
+    "sourceCommit": "7c6dbe6fc2877cad42ec8ee621b249666b5282d6",
+    "productionCommit": "309e039291542f404a3d5e4900f8918fb332153d",
+    "file": "FocuBili-1.9.0-beta.1+27-arm64-debug.apk",
+    "path": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\output\\v1.9-beta.1-local-7c6dbe6\\FocuBili-1.9.0-beta.1+27-arm64-debug.apk",
+    "bytes": 68172500,
+    "sha256": "33da9e0312270abbfe71bc384991750f88a92d20f2932bb6909abf7c6d29467d",
+    "package": "com.focubili.app.preview",
+    "versionName": "1.9.0-beta.1",
+    "versionCode": 27,
+    "buildTimeUtc": "2026-10-17T23:32:45.062569Z",
+    "platform": "Android ARM64 debug;minSdk24",
+    "certificateSha256": "65ef1fb301fb1121c1803e752f5b1eb24e55846502d8b5478f0fc11f58e9a8a9",
+    "signatureVerification": "passed",
+    "embeddedMetadataVerification": "all three true",
+    "evidence": "docs/v1.9/local-apk-verification.json",
+    "published": false,
+    "deviceAccepted": false,
+    "upgradeFromArchivedBeta4": "Not compatible: same package but certificate differs and versionCode27 is below2024. No installed-device identity inferred; keep existing app/data.",
+    "formalPackage": "com.focubili.app",
+    "formalOverlayUpgradeValidated": false,
+    "formalDataMigrationValidated": false,
+    "currentCandidate": false,
+    "containsBetaProducerConsumer": false,
+    "matchesCurrentCounter": false,
+    "eligibleForFinalDelivery": false,
+    "scope": "Only the previously built7c6dbe6/local+27 APK was verified; preserve bytes/hash history. No new candidate APK built during documentation preparation.",
+    "upgradeFromArchivedBeta4Beta5": "Not compatible: .preview certificate65EF differs from archived5BD1 and code27 is below2024/2025; installed-device identity remains unknown."
+  },
+  "sourceProductionUnchangedSince": "080ecdf6f1229a06f2b989909a6c79a91501b01c",
+  "historicalReleaseBlockers": {
+    "asOfSource": "309e039291542f404a3d5e4900f8918fb332153d",
+    "entries": [
+      "GitHub publication remains paused; current OAuth App cannot push1.8 workflow changes. A local Beta package may be prepared without claiming a release.",
+      "Local98e02e8 snapshot production content is aligned; formal1.8 final remains unconfirmed and any further production changes need resync.",
+      "Device/owned-account acceptance remain unperformed; original issue61 still lacks reproduction details.",
+      "Local debug APK is not an upgrade to archivedBeta4: certificate differs and versionCode27<2024. Real phone identity not checked; existing app/data must be retained."
+    ],
+    "policyNote": "Historical wording only; per user2026-10-18T04:21Z, archived-Beta certificate continuity and overlay acceptance are not Beta release prerequisites."
+  },
+  "fullRegressionHistory": [
+    {
+      "source": "309e039291542f404a3d5e4900f8918fb332153d",
+      "passed": 1353,
+      "skipped": 2,
+      "failed": 0,
+      "exitCode": 0,
+      "duration": "02:06",
+      "evidence": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\v19-candidate-final-full-tests.log",
+      "scope": "Post-fix candidate integration; no device or publication acceptance"
+    },
+    {
+      "source": "7ed89ddea52cadb14c394af2abaf657ee4d2f754",
+      "passed": 1487,
+      "skipped": 2,
+      "failed": 1,
+      "exitCode": 1,
+      "duration": "02:52",
+      "command": "flutter test --no-pub --reporter expanded",
+      "platform": "Windows host / Flutter synthetic fixtures",
+      "evidence": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\v19-beta2026-integration-full-tests.log",
+      "evidenceSha256": "675b7729ca4c9b2297a97b4becc85dd23a56375c998a87a998a3edbff606dde8",
+      "failure": "android_beta_version_test expected hardcoded27 but actual shared source counter was2026; fixed in3f763f0 to check numeric shared metadata, greater than archivedBeta5 floor2025 and <=65535",
+      "supersededBy": "3f763f02b300db6df2fba9e5219c3e82558f83ac",
+      "retainAsFailureHistory": true
+    },
+    {
+      "source": "3f763f02b300db6df2fba9e5219c3e82558f83ac",
+      "passed": 1488,
+      "skipped": 2,
+      "failed": 0,
+      "exitCode": 0,
+      "duration": "02:49",
+      "command": "flutter test --no-pub --reporter expanded",
+      "platform": "Windows host / Flutter synthetic fixtures",
+      "evidence": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\v19-beta2026-integration-full-tests-rerun.log",
+      "evidenceSha256": "961c0a9f82f0e085a8b14d24d0ddb065003b39809a00024af35e9a6780086f08",
+      "scope": "Pre-strict-identity integration baseline3f763f0 only; predates independentb07db359. No post-fix full-suite, final source/CI/release/new APK/device acceptance claim.",
+      "executedByDocumentationTask": false
+    },
+    {
+      "source": "599d5eb5d7b83294d32a8cfe0181a0be9c9377d2",
+      "passed": 1585,
+      "skipped": 2,
+      "failed": 0,
+      "exitCode": 0,
+      "duration": "01:59",
+      "command": "flutter test --no-pub --reporter expanded",
+      "platform": "Windows host / Flutter synthetic fixtures",
+      "evidence": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\v19-candidate-64f-full-tests.log",
+      "evidenceSha256": "5a49e96cb5a86c45f0376fb119c726d37b7846e6741d142843d4af26defcdde8",
+      "scope": "Exact local candidate599d5eb; includes integrated strict Android identity gatee04e783 and normal candidate35/64 merges. Not final M/safe publication source, actual platform CI, package or device acceptance.",
+      "executedByDocumentationTask": false,
+      "reportedBy": "parent/root; existing log read and SHA256 verified by documentation task"
+    }
+  ],
+  "source": {
+    "status": "pending",
+    "finalSourceSha": null,
+    "currentCandidateSha": "9c7ea4b894e3c790e0a8ecf57d104f54b663add1",
+    "documentationBaseSha": "9c7ea4b894e3c790e0a8ecf57d104f54b663add1",
+    "note": "PR66/67/68维护已完成，实际B=f868ef67d92f3504ea5b6f445864141b804e61f4。080普通合并dev52后已有55Python+3Dart发布配置验证；9c7再普通合并B，树精确等080，无内容变化。1600/2/0仍仅d605历史；本次未运行测试或native构建。最终安全source H+D3、实际精确CI/native候选和Beta实包发布仍pending。",
+    "followupCandidates": [
+      {
+        "sha": "b07db359c5000efac6aab6ee0ed1276c7f163ac9",
+        "status": "自动化通过",
+        "integrationStatus": "integrated",
+        "role": "Android Beta strict certificate/code direct-download gate",
+        "fullRegressionAfterFix": {
+          "checkRef": "candidate-d605961-integration",
+          "source": "d6059619bdc3caa4ab1554a91018cd52d7038bd9",
+          "passed": 1600,
+          "skipped": 2,
+          "failed": 0
+        },
+        "integratedSourceSha": "e04e783870b5c6d0c4b110a0675baace6a675eae",
+        "includedInCandidateSha": "d6059619bdc3caa4ab1554a91018cd52d7038bd9"
+      }
+    ],
+    "publicationSafeSourceStatus": "pending",
+    "currentHistoricalGraphApprovedForPublication": false,
+    "maintenanceMasterBSha": "f868ef67d92f3504ea5b6f445864141b804e61f4",
+    "maintenancePR": {
+      "url": "https://github.com/L1Xu4n/FocuBili/pull/66",
+      "state": "MERGED",
+      "devCommit": "2f41b5cd9a2f06498263a9f2cf41457fc8d6b5a6"
+    },
+    "formalM": "5a76dbba192660f652fbd09d38c78eea6a10ffb5",
+    "maintenanceFollowup": {
+      "commit": "9c2e58a4f7dbd132fec3da42750ba773e0fa7792",
+      "route": "PR67 -> dev -> master PR68",
+      "status": "merged_verified",
+      "devCommit": "52d947a8c1eb0ec5bdacd8ec213a68745980beba",
+      "finalMasterBSha": "f868ef67d92f3504ea5b6f445864141b804e61f4"
+    },
+    "maintenanceDevSha": "52d947a8c1eb0ec5bdacd8ec213a68745980beba",
+    "privateOrdinaryMerges": [
+      {
+        "sha": "080ecdf6f1229a06f2b989909a6c79a91501b01c",
+        "merged": "52d947a8c1eb0ec5bdacd8ec213a68745980beba",
+        "parents": [
+          "ba50b8d8ed229f882a3981af51b7b8a185428169",
+          "52d947a8c1eb0ec5bdacd8ec213a68745980beba"
+        ]
+      },
+      {
+        "sha": "9c7ea4b894e3c790e0a8ecf57d104f54b663add1",
+        "merged": "f868ef67d92f3504ea5b6f445864141b804e61f4",
+        "parents": [
+          "080ecdf6f1229a06f2b989909a6c79a91501b01c",
+          "f868ef67d92f3504ea5b6f445864141b804e61f4"
+        ],
+        "treeUnchangedFrom080": true
+      }
+    ],
+    "safeSourceHD3": {
+      "status": "pending",
+      "H": null,
+      "D3": null
+    }
+  },
+  "finalCI": {
+    "status": "pending",
+    "sourceSha": null,
+    "runs": [],
+    "nativeCandidateVerified": false,
+    "note": "1.9最终安全source H+D3的必要/native候选CI仍pending。PR68精确head dev52已有14成功checks且维护B已合并；080既有55Python+3Dart仅发布配置定向验证。历史d6051600/2/0、正式M验包与维护CI均不替代最终1.9 source/native候选或实包验证。本次没有P/B源码全Flutter或native重跑。"
+  },
+  "release": {
+    "status": "pending",
+    "tag": null,
+    "url": null,
+    "sourceSha": null,
+    "published": false,
+    "note": "不把预留v1.9.0-beta.1名称或本地计划当成已发布；由唯一发布者处理",
+    "expectedPrerelease": true,
+    "mustPreserveFormalV18Latest": true
+  },
+  "newApk": {
+    "status": "pending",
+    "path": null,
+    "sha256": null,
+    "sourceSha": null,
+    "actualIdentityVerified": false,
+    "plannedIdentity": {
+      "package": "com.focubili.app.preview",
+      "versionName": "1.9.0-beta.1",
+      "versionCode": 2026,
+      "certificateSha256": "65EF1FB301FB1121C1803E752F5B1EB24E55846502D8B5478F0FC11F58E9A8A9",
+      "scope": "controlled release build; existing CI signing identity, not a newly verified APK"
+    },
+    "upgradeFromArchivedBeta4Beta5": {
+      "status": "未做",
+      "compatible": false,
+      "reason": "Archived5BD1 differs from existing CI65EF; code2026 does not establish overlay compatibility. User does not require old-Beta certificate continuity; retain existing app/data and use a blank test environment.",
+      "mandatoryForRelease": false,
+      "scope": "Optional installation-compatibility acceptance; not a Beta release gate"
+    },
+    "installedDeviceIdentity": "unknown",
+    "devicePassed": 0,
+    "upgradeFromArchivedBeta3": {
+      "compatible": false,
+      "mandatoryForRelease": false,
+      "archiveCode": 2023,
+      "scope": "Same archived5BD1 identity; installation compatibility only"
+    }
+  },
+  "androidUpgradeEvidence": {
+    "observedPublicHistory": {
+      "highestCode": 21,
+      "tag": "v1.7.1",
+      "package": "com.focubili.app",
+      "certificateSha256": "65EF1FB301FB1121C1803E752F5B1EB24E55846502D8B5478F0FC11F58E9A8A9",
+      "evidence": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\output\\review-v171-upgrade-continuity-20261018\\verification.json",
+      "scope": "existing public observation only; not a fresh all-release inventory"
+    },
+    "archiveFloor": {
+      "versionCode": 2025,
+      "package": "com.focubili.app.preview",
+      "certificateSha256": "5bd1fc4daa8a0887e213c4dc1231d0eba4f7f309a0e64c2d15fe404302bd00b0",
+      "beta4Code": 2024,
+      "evidence": [
+        "docs/beta3/apk-verification.json",
+        "docs/beta4/apk-verification.json",
+        "docs/beta5/apk-verification.json"
+      ],
+      "beta3Code": 2023
+    },
+    "liveInventory": {
+      "status": "pending",
+      "sourceSha": null,
+      "evidence": null
+    },
+    "noUninstallOrDataClearForAcceptance": true,
+    "oldBetaOverlayRequiredForRelease": false,
+    "observedFormalV18": {
+      "tag": "v1.8.0",
+      "sourceSha": "5a76dbba192660f652fbd09d38c78eea6a10ffb5",
+      "package": "com.focubili.app",
+      "versionCode": 26,
+      "certificateSha256": "65EF1FB301FB1121C1803E752F5B1EB24E55846502D8B5478F0FC11F58E9A8A9",
+      "evidence": "docs/v1.9/v18-formal-release-receipt.json",
+      "scope": "Verified formal1.8 public APK; not the final fresh all-release inventory for future1.9 preview."
+    }
+  },
+  "manualChecklist": {
+    "path": "docs/v1.9/manual-tests.md",
+    "originalItems": 31,
+    "originalUnchecked": 31,
+    "appendedBetaItems": 14,
+    "totalUnchecked": 45,
+    "checked": 0,
+    "devicePassed": 0,
+    "status": "未做",
+    "platforms": [
+      "Android",
+      "Android tablet",
+      "Windows",
+      "macOS",
+      "Linux",
+      "iOS"
+    ],
+    "sourceStatus": "pending",
+    "finalCIStatus": "pending",
+    "releaseStatus": "pending",
+    "newApkStatus": "pending",
+    "mandatoryDevicePassesForBetaRelease": 0,
+    "candidateEvidenceSource": "d6059619bdc3caa4ab1554a91018cd52d7038bd9",
+    "checkboxComparisonBase": "bfdc80f6133ddfc39b3ce36490dabe940cbb79e7",
+    "original31AndAppended14Unchanged": true,
+    "postformalComparisonBase": "9bcd4acf3af30fbc2928827cd3df1ff345050992",
+    "postMaintenanceComparisonBase": "9c7ea4b894e3c790e0a8ecf57d104f54b663add1",
+    "maintenanceConfigurationEvidenceSource": "080ecdf6f1229a06f2b989909a6c79a91501b01c"
+  },
+  "documentationPreparation": {
+    "status": "实现",
+    "recordedUtc": "2026-10-18T08:36:23Z",
+    "baseSha": "9c7ea4b894e3c790e0a8ecf57d104f54b663add1",
+    "branch": "codex/v19-final-maintenance-docs",
+    "sourceFilesChanged": false,
+    "apkBuilt": false,
+    "deviceChecksExecuted": 0,
+    "remoteWrites": false,
+    "realUserDataRead": false,
+    "finalVisualizationChanged": false,
+    "evidenceMethod": "Read existing08055Python/3Dart report/log hashes, PR68 premerge CI/review records and local Git parents/trees. Parent confirmed actual B merge/time. Documentation only; no tests, builds, device or remote operations executed.",
+    "validation": {
+      "status": "自动化通过",
+      "platform": "Read-only Git metadata, existing JSON/log evidence and document structure inspection",
+      "commands": [
+        "read existing verification/CI/review JSON and log hashes; inspect Git parents/trees",
+        "git diff --check"
+      ],
+      "result": "Original51 check objects retained verbatim; one existing080 evidence check appended(total52).45 checkbox lines unchanged/unchecked; device0. d6051600/2/0 unchanged; current9c7 tree equals080; B verified; safe H+D3/actual v1.9 CI/packages pending.",
+      "flutterOrNativeTestsRerun": false
+    },
+    "strictGateFollowup": {
+      "sourceSha": "b07db359c5000efac6aab6ee0ed1276c7f163ac9",
+      "integratedSourceSha": "e04e783870b5c6d0c4b110a0675baace6a675eae",
+      "rootIntegrationStatus": "integrated",
+      "includedInCandidateSha": "d6059619bdc3caa4ab1554a91018cd52d7038bd9",
+      "fullRegressionAfterFix": "candidate-d605961-integration",
+      "deviceChecksExecuted": 0
+    },
+    "signingPolicy": "ExistingCI65EF unchanged; old5BD1 continuity and device acceptance are manual/installation risks, not Beta prerelease gates.",
+    "evidenceSourceSha": "9c7ea4b894e3c790e0a8ecf57d104f54b663add1",
+    "formalReleaseReceipt": "docs/v1.9/v18-formal-release-receipt.json"
+  },
+  "installationCompatibilityRisks": [
+    {
+      "scope": "Android preview overlay compatibility only",
+      "mandatoryForBetaRelease": false,
+      "archivedBetas": [
+        3,
+        4,
+        5
+      ],
+      "archivedCodes": [
+        2023,
+        2024,
+        2025
+      ],
+      "archivedCertificateSha256": "5bd1fc4daa8a0887e213c4dc1231d0eba4f7f309a0e64c2d15fe404302bd00b0",
+      "plannedCertificateSha256": "65EF1FB301FB1121C1803E752F5B1EB24E55846502D8B5478F0FC11F58E9A8A9",
+      "compatibleWithArchivedCertificate": false,
+      "installedDeviceIdentity": "unknown",
+      "condition": "Do not overlay an incompatible/unknown preview installation; keep existing app/data. Blank dedicated test environments are allowed; same-identity overlay checks are optional."
+    }
+  ],
+  "betaSigningPolicy": {
+    "instructionUtc": "2026-10-18T04:21:00Z",
+    "authority": "Explicit user instruction relayed by parent: 测试版不追求证书一致",
+    "requiresArchivedBetaCertificateContinuity": false,
+    "reuseExistingCICertificateSha256": "65EF1FB301FB1121C1803E752F5B1EB24E55846502D8B5478F0FC11F58E9A8A9",
+    "newKeyOrResigningRequested": false,
+    "stableV18SigningChanged": false,
+    "consumerStrictDirectLinkGateChanged": false,
+    "oldBetaOverlayRequiredForRelease": false,
+    "requiredReleaseEvidence": [
+      "valid APK signature and existing CI identity",
+      "monotonic source build counter2026 above archive floor2025 and refreshed live inventory",
+      "actual package/version/ABI and non-debuggable release metadata",
+      "BuildTime/source and asset SHA256/bytes",
+      "actual exact-source required/native candidate CI"
+    ],
+    "optionalManualAcceptance": "Old-Beta overlay/data retention only for matching installed identity and increasing code; no uninstall/data clearing; blank test environment may be used."
+  },
+  "skippedTestsHistory": [
+    {
+      "asOfSource": "3f763f02b300db6df2fba9e5219c3e82558f83ac",
+      "records": [
+        "v19_focus_learning_evidence_test: opt-in V19_EVIDENCE capture already run separately",
+        "windows_media_cache_service_test: symlink creation requires Windows developer mode; no security/system setting changed"
+      ]
+    },
+    {
+      "asOfSource": "599d5eb5d7b83294d32a8cfe0181a0be9c9377d2",
+      "records": [
+        {
+          "test": "test/v19_focus_learning_evidence_test.dart",
+          "reason": "Optional synthetic screenshot generation defaults off without V19_EVIDENCE=true.",
+          "source": "599d5eb5d7b83294d32a8cfe0181a0be9c9377d2",
+          "sourceLine": 129,
+          "defaultDefineEnabled": false,
+          "requiresSystemChange": false
+        },
+        {
+          "test": "test/windows_media_cache_service_test.dart: linked cache root is rejected without touching its target",
+          "reason": "Skip: Creating symlinks requires Windows developer mode",
+          "evidence": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\v19-candidate-64f-full-tests.log",
+          "requiresSystemChange": false,
+          "note": "Skip retained; no developer mode, permission or security setting enabled."
+        }
+      ]
+    }
+  ],
+  "sourceProductionHistory": [
+    {
+      "asOfSource": "3f763f02b300db6df2fba9e5219c3e82558f83ac",
+      "unchangedSince": "7ed89ddea52cadb14c394af2abaf657ee4d2f754",
+      "scope": "Prior candidate statement; superseded by subsequent production changes and candidate merges."
+    },
+    {
+      "asOfSource": "599d5eb5d7b83294d32a8cfe0181a0be9c9377d2",
+      "unchangedSince": "599d5eb5d7b83294d32a8cfe0181a0be9c9377d2",
+      "scope": "Prior599 candidate statement; superseded by fff cleanup merge in d605961."
+    },
+    {
+      "asOfSource": "d6059619bdc3caa4ab1554a91018cd52d7038bd9",
+      "unchangedSince": "d6059619bdc3caa4ab1554a91018cd52d7038bd9",
+      "scope": "Prior d605 production baseline; superseded by the ordinary formal-M merge in9bc. No post-M test rerun asserted."
+    },
+    {
+      "asOfSource": "9bcd4acf3af30fbc2928827cd3df1ff345050992",
+      "unchangedSince": "9bcd4acf3af30fbc2928827cd3df1ff345050992",
+      "scope": "Prior pre-maintenance preparation baseline; superseded by ordinary dev52 merge in080. The subsequent B merge9c7 is tree-identical to080."
+    }
+  ],
+  "issueEvidence": {
+    "path": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\output\\v19-final-issue-evidence.json",
+    "sha256": "deb68eb2ad2d1a481a4cf53e791c9479299dca5b6c6a498964833990190cc739",
+    "queryStartedUtc": "2026-10-18T04:49:46Z",
+    "queryCompletedUtc": "2026-10-18T04:49:47Z",
+    "issueNumbers": [
+      61,
+      56,
+      60,
+      58,
+      50
+    ],
+    "allBodiesAndCommentsRead": true,
+    "remoteWrites": false,
+    "issue61": {
+      "url": "https://github.com/L1Xu4n/FocuBili/issues/61",
+      "updatedAt": "2026-10-17T07:43:53Z",
+      "latestCommentId": 6231343140,
+      "latestCommentUrl": "https://github.com/L1Xu4n/FocuBili/issues/61#issuecomment-6231343140",
+      "reporterReplied": false,
+      "exportFailurePlatformConfirmed": false,
+      "macOSReproduced": false,
+      "missing": [
+        "actual export-failure platform/system",
+        "app version/build",
+        "reproduction steps and actual failure",
+        "screenshot/recording for this export failure"
+      ]
+    },
+    "newExplicitScopeConstraintsIdentified": false,
+    "scope": "Public issue snapshot at04:49 UTC; reporter fork success on#58 is not current candidate device acceptance.",
+    "latestIssue61Refresh": {
+      "path": "output/v19-issue61-final-refresh.json",
+      "sha256": "6d1a10a45d7e711ad7b0c4aef2675197d53c9fe81f385717ff576e1a93c1dbd0",
+      "checkedAtUtc": "2026-10-18T06:52:46.862538+00:00",
+      "reporterReplied": false,
+      "exportFailurePlatformConfirmed": false,
+      "macOSReproduced": false,
+      "scope": "Existing public read-only snapshot, inspected by documentation task; no new remote query or reporter contact."
+    }
+  },
+  "pendingManualValidation": {
+    "status": "未做",
+    "unchecked": 45,
+    "devicePassed": 0,
+    "mandatoryForBetaPrerelease": false,
+    "issue61Investigation": "Reporter has not confirmed export-failure platform/version/steps; no Mac reproduction claim. This investigation remains open, not a requirement to wait for a reply before prerelease.",
+    "scope": "Device behavior, owned-course playback, dialogs and same-identity overlay remain unverified. Keep existing app/data; no uninstall or data clearing; blank dedicated test environments allowed.",
+    "oldBetaCertificateContinuityRequired": false
+  },
+  "engineeringReleaseGates": {
+    "actualFormalV18MAligned": true,
+    "reviewedSafePublicationSource": "pending",
+    "exactSourceRequiredAndNativeCI": "pending",
+    "actualAssetIdentityAndValidSignature": "pending",
+    "plannedSharedCounter": 2026,
+    "archiveFloor": 2025,
+    "freshLiveInventory": "pending",
+    "requiredMetadata": [
+      "package/version",
+      "ABI",
+      "non-debuggable",
+      "BuildTime/source",
+      "SHA256/bytes"
+    ],
+    "prereleaseOnly": true,
+    "formalV18LatestMustRemain": true,
+    "manualDevicePassOrOldBetaCertContinuityRequired": false,
+    "formalM": "5a76dbba192660f652fbd09d38c78eea6a10ffb5",
+    "maintenanceMasterB": "f868ef67d92f3504ea5b6f445864141b804e61f4",
+    "maintenanceComplete": true,
+    "privateCurrentSource": "9c7ea4b894e3c790e0a8ecf57d104f54b663add1",
+    "safeSourceHD3": "pending"
+  },
+  "documentationPreparationHistory": [
+    {
+      "status": "实现",
+      "recordedUtc": "2026-10-18T04:25:17.030144+00:00",
+      "baseSha": "3f763f02b300db6df2fba9e5219c3e82558f83ac",
+      "branch": "codex/v19-final-delivery-docs",
+      "sourceFilesChanged": false,
+      "apkBuilt": false,
+      "deviceChecksExecuted": 0,
+      "remoteWrites": false,
+      "realUserDataRead": false,
+      "finalVisualizationChanged": false,
+      "evidenceMethod": "Read existing committed reports and integration log summaries/SHA256; no Flutter/CI/package build rerun for this docs-only change.",
+      "validation": {
+        "status": "自动化通过",
+        "platform": "Windows host / Python JSON and document invariants; read-only Git/log inspection",
+        "commands": [
+          "python -B (json load, original31-line equality/unchecked counts, pending state and evidence SHA256 assertions)",
+          "git diff --check"
+        ],
+        "result": "45 unchecked/0 checked/0 device; optional overlay wording updated per explicit signing policy; signature/counter/ABI/BuildTime/SHA/actualCI gates retained. Earlier original31 preservation evidence remains historical to2aa52fa.",
+        "flutterOrNativeTestsRerun": false
+      },
+      "strictGateFollowup": {
+        "sourceSha": "b07db359c5000efac6aab6ee0ed1276c7f163ac9",
+        "evidenceMethod": "Read exact committed update-channel report and five-line product delta; author/parent supplied actual90/0 targeted results. Documentation task did not rerun Flutter or integrate code.",
+        "status": "自动化通过",
+        "deviceChecksExecuted": 0,
+        "rootIntegrationStatus": "pending"
+      },
+      "signingPolicyFollowup": {
+        "scope": "docs only",
+        "authorityUtc": "2026-10-18T04:21:00Z",
+        "removedReleaseBlockers": [
+          "Archived preview Beta4/5 use5BD1 at codes2024/2025; a new65EF candidate cannot overlay them despite a higher counter. Actual installed-device identity is unknown; keep existing app/data."
+        ],
+        "movedTo": "installationCompatibilityRisks / optional manual checks",
+        "productionConsumerChanged": false,
+        "stableV18SigningChanged": false,
+        "visualizationChanged": false,
+        "releaseNotes": "Time-stable version/identity/evidence instructions; no perpetual pending placeholder or success prediction.",
+        "validation": {
+          "command": "python -B (JSON parse, 45 unchecked items, policy/pending assertions, unchanged summary/function/strict gate prose, archived Beta3/4/5 metadata assertions); git diff --check",
+          "result": "passed; docs-only three-file diff; 45 unchecked/0 checked/0 device; source/finalCI/release/newApk remain pending",
+          "flutterOrNativeTestsRerun": false
+        }
+      }
+    },
+    {
+      "status": "实现",
+      "recordedUtc": "2026-10-18T05:06:50Z",
+      "baseSha": "599d5eb5d7b83294d32a8cfe0181a0be9c9377d2",
+      "branch": "codex/v19-current-candidate-docs",
+      "sourceFilesChanged": false,
+      "apkBuilt": false,
+      "deviceChecksExecuted": 0,
+      "remoteWrites": false,
+      "realUserDataRead": false,
+      "finalVisualizationChanged": false,
+      "evidenceMethod": "Read existing root full-suite log and committed599 final-tree analysis report, check Git ancestry/strict-service blob equality, read04:49 issue JSON, and verify SHA256. No Flutter/native/build rerun.",
+      "validation": {
+        "status": "自动化通过",
+        "platform": "Windows host / Python JSON and document invariants; read-only Git/log inspection",
+        "commands": [
+          "python -B (JSON load, original31+appended14 checkbox equality against599 and prior e394 docs, counts/pending/current-source/status/gate assertions, log/issue SHA256)",
+          "git diff --check"
+        ],
+        "result": "45 checkbox lines unchanged;45 unchecked/0 checked/0 device; current5991585/2/0; b07 integratede04; historical failures/records retained; finalM/safe source/exactCI/actualassets pending.",
+        "flutterOrNativeTestsRerun": false
+      },
+      "strictGateFollowup": {
+        "sourceSha": "b07db359c5000efac6aab6ee0ed1276c7f163ac9",
+        "integratedSourceSha": "e04e783870b5c6d0c4b110a0675baace6a675eae",
+        "rootIntegrationStatus": "integrated",
+        "includedInCandidateSha": "599d5eb5d7b83294d32a8cfe0181a0be9c9377d2",
+        "fullRegressionAfterFix": "candidate-599d5eb-integration",
+        "deviceChecksExecuted": 0
+      },
+      "signingPolicy": "ExistingCI65EF unchanged; old5BD1 continuity and device acceptance are manual/installation risks, not Beta prerelease gates."
+    },
+    {
+      "status": "实现",
+      "recordedUtc": "2026-10-18T05:52:22Z",
+      "baseSha": "bfdc80f6133ddfc39b3ce36490dabe940cbb79e7",
+      "branch": "codex/v19-current-candidate-docs",
+      "sourceFilesChanged": false,
+      "apkBuilt": false,
+      "deviceChecksExecuted": 0,
+      "remoteWrites": false,
+      "realUserDataRead": false,
+      "finalVisualizationChanged": false,
+      "evidenceMethod": "Read existing1600/2/0 full-suite log,25.5s analysis log and consolidated JSON; verify hashes, d605/fff ancestry and source skip conditions. Documentation-only; no Flutter/native/build rerun.",
+      "validation": {
+        "status": "自动化通过",
+        "platform": "Windows host / Python JSON/document invariants and read-only Git/log inspection",
+        "commands": [
+          "python -B (45 checkbox UTF-8 byte equality againstbfdc, full historical-check retention,1600/2/0 and null/pending assertions, SHA256 and source-based skip checks)",
+          "git diff --check"
+        ],
+        "result": "45 checkbox lines unchanged;45 unchecked/0 checked/0 device; currentd6051600/2/0,analyze0/25.5s,format492/0; old records retained; formalM/source/CI/release/newApk pending.",
+        "flutterOrNativeTestsRerun": false
+      },
+      "strictGateFollowup": {
+        "sourceSha": "b07db359c5000efac6aab6ee0ed1276c7f163ac9",
+        "integratedSourceSha": "e04e783870b5c6d0c4b110a0675baace6a675eae",
+        "rootIntegrationStatus": "integrated",
+        "includedInCandidateSha": "d6059619bdc3caa4ab1554a91018cd52d7038bd9",
+        "fullRegressionAfterFix": "candidate-d605961-integration",
+        "deviceChecksExecuted": 0
+      },
+      "signingPolicy": "ExistingCI65EF unchanged; old5BD1 continuity and device acceptance are manual/installation risks, not Beta prerelease gates.",
+      "evidenceSourceSha": "d6059619bdc3caa4ab1554a91018cd52d7038bd9"
+    },
+    {
+      "status": "实现",
+      "recordedUtc": "2026-10-18T07:11:35Z",
+      "baseSha": "9bcd4acf3af30fbc2928827cd3df1ff345050992",
+      "branch": "codex/v19-postformal-docs-refresh",
+      "sourceFilesChanged": false,
+      "apkBuilt": false,
+      "deviceChecksExecuted": 0,
+      "remoteWrites": false,
+      "realUserDataRead": false,
+      "finalVisualizationChanged": false,
+      "evidenceMethod": "Read existing actual-M70/70 live verification, parent delivery report and06:52 issue61 refresh; verify report hashes and two-parent M ancestry. Documentation-only: no new remote query, Flutter/native/build/device rerun.",
+      "validation": {
+        "status": "自动化通过",
+        "platform": "Windows host / Python JSON/document invariants and read-only Git evidence",
+        "commands": [
+          "python -X utf8 -B .postformal_refresh.py (documentation/evidence invariants only)",
+          "git diff --check"
+        ],
+        "result": "All51 historical checks and45 checkbox lines retained byte-for-byte;45 unchecked/0 checked/0 device. Actual formal M verified from existing70/70 report and ordinary9bc ancestry. Historical1600/2/0 remains d605-only;1.9 source/CI/release/newApk pending.",
+        "flutterOrNativeTestsRerun": false
+      },
+      "strictGateFollowup": {
+        "sourceSha": "b07db359c5000efac6aab6ee0ed1276c7f163ac9",
+        "integratedSourceSha": "e04e783870b5c6d0c4b110a0675baace6a675eae",
+        "rootIntegrationStatus": "integrated",
+        "includedInCandidateSha": "d6059619bdc3caa4ab1554a91018cd52d7038bd9",
+        "fullRegressionAfterFix": "candidate-d605961-integration",
+        "deviceChecksExecuted": 0
+      },
+      "signingPolicy": "ExistingCI65EF unchanged; old5BD1 continuity and device acceptance are manual/installation risks, not Beta prerelease gates.",
+      "evidenceSourceSha": "9bcd4acf3af30fbc2928827cd3df1ff345050992",
+      "formalReleaseReceipt": "docs/v1.9/v18-formal-release-receipt.json"
+    }
+  ],
+  "v18FormalRelease": {
+    "status": "published_verified",
+    "formalM": "5a76dbba192660f652fbd09d38c78eea6a10ffb5",
+    "published": true,
+    "developmentPR63": {
+      "url": "https://github.com/L1Xu4n/FocuBili/pull/63",
+      "state": "merged to dev",
+      "devCommitPrefix": "0dec1d5",
+      "fullDevSha": null
+    },
+    "formalPR64": {
+      "url": "https://github.com/L1Xu4n/FocuBili/pull/64",
+      "state": "merged",
+      "mergeCommit": "5a76dbba192660f652fbd09d38c78eea6a10ffb5"
+    },
+    "evidenceMethod": "Existing original-four70/70 plus supplemental exact-M Windows23/23, strict iOS device platform/source/time, independent static review and2 anonymous public-download SHA256 confirmations; receipt records current six API assets. Documentation task only reads and checks evidence, without new network/build/native/device actions.",
+    "note": "Formal release M and six public assets/latest remain verified and unchanged. Maintenance B is confirmed and ordinary-merged into private9c7; final safe1.9 H+D3, exact-source CI/native candidate and prerelease remain pending.",
+    "tag": "v1.8.0",
+    "tagObjectSha": "b60ea6a93ea47ec8a222ccb5974f025f16104537",
+    "tagPeeledCommitSha": "5a76dbba192660f652fbd09d38c78eea6a10ffb5",
+    "stableLatest": true,
+    "releaseUrl": "https://github.com/L1Xu4n/FocuBili/releases/tag/v1.8.0",
+    "publicReleasePlatforms": [
+      "Android",
+      "Windows",
+      "macOS",
+      "Linux",
+      "iOS (unsigned device IPA)"
+    ],
+    "publicReleaseAssetCount": 6,
+    "verification": {
+      "passed": 70,
+      "failed": 0,
+      "receipt": "docs/v1.9/v18-formal-release-receipt.json",
+      "scope": "Historical original-four70/70 retained; supplemental verification is separate.",
+      "supplementalWindowsPassed": 23,
+      "supplementalIosStrictDeviceValidation": "pass",
+      "supplementalAnonymousPublicDownloadsMatched": 2
+    },
+    "ios": {
+      "publicReleaseAsset": true,
+      "sourceSha": "5a76dbba192660f652fbd09d38c78eea6a10ffb5",
+      "ciRunUrl": "https://github.com/L1Xu4n/FocuBili/actions/runs/39104945196",
+      "ciConclusion": "success",
+      "signedDeviceInstallAcceptance": false,
+      "assetId": 652840489,
+      "kind": "unsigned device IPA",
+      "architecture": "arm64",
+      "runnerAndAppBuildVersionPlatforms": [
+        2
+      ],
+      "buildTimeUtc": "2026-10-18T06:43:15.350994Z"
+    },
+    "history": [
+      {
+        "status": "pending",
+        "formalM": null,
+        "published": false,
+        "developmentPR63": {
+          "url": "https://github.com/L1Xu4n/FocuBili/pull/63",
+          "state": "merged to dev",
+          "devCommitPrefix": "0dec1d5",
+          "fullDevSha": null
+        },
+        "formalPR64": {
+          "url": "https://github.com/L1Xu4n/FocuBili/pull/64",
+          "state": "CI pending at parent report",
+          "headCommitPrefix": "61ad8a6",
+          "fullHeadSha": null,
+          "headIsFormalM": false
+        },
+        "evidenceMethod": "Parent/root task report; no fresh remote query or actual merge/publication evidence. Prefixes are not resolvable in this local shared object store; no full SHA invented.",
+        "note": "After actual formal M exists, replace null and align/revalidate safe1.9 source. Candidate/dev/PR-head success is not formal release."
+      }
+    ],
+    "supplementalDocumentationRefresh": {
+      "baseSha": "f6d1716b8a1beed788f0e1e63dbb07af18a17eaf",
+      "recordedUtc": "2026-10-18T07:49:20Z",
+      "receipt": "docs/v1.9/v18-formal-release-receipt.json",
+      "checksPreserved": 51,
+      "manualUncheckedPreserved": 45,
+      "devicePasses": 0,
+      "flutterOrNativeTestsRerun": false,
+      "remoteWrites": false
+    },
+    "maintenanceMasterB": "f868ef67d92f3504ea5b6f445864141b804e61f4"
+  },
+  "consolidatedEvidence": {
+    "path": "C:\\Users\\L1XU4N\\Documents\\Codex\\2026-10-18\\task-5\\output\\current-consolidated-test-evidence.json",
+    "sha256": "091fcd1eab26c078da2a91be5daeec19dca75a92637475bfbe9eff144d6a2252",
+    "observedUpdatedAt": "2026-10-18T05:32:46.112887+00:00",
+    "scope": "Snapshot read for current root evidence; output record is mutable and future updates need a newly recorded hash."
+  }
+}

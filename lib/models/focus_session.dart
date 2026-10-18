@@ -72,7 +72,7 @@ class FocusInterruption {
   }
 }
 
-/// 保存一次仅存在本机的专注任务、视频关联和打断记录。
+/// 保存一次仅存在本机的专注会话、最近观看书签和打断记录。
 class FocusSession {
   /// 创建一条专注记录；运行状态必须提供当前计时片段的开始时间。
   const FocusSession({
@@ -98,7 +98,7 @@ class FocusSession {
     this.dailyFocusMilliseconds = const <String, int>{},
   });
 
-  /// 创建一条新专注；未关联视频或视频未播放时从暂停状态开始。
+  /// 创建一次专注会话；视频信息仅作为最近观看书签，不限制计时。
   factory FocusSession.start({
     required String id,
     required String goal,
@@ -124,11 +124,7 @@ class FocusSession {
       status: startImmediately
           ? FocusSessionStatus.running
           : FocusSessionStatus.paused,
-      pauseReason: startImmediately
-          ? null
-          : sourceBvid == null
-          ? FocusPauseReason.awaitingVideo
-          : FocusPauseReason.playback,
+      pauseReason: startImmediately ? null : FocusPauseReason.manual,
       sourceBvid: sourceBvid,
       sourceVideoTitle: sourceVideoTitle,
       sourcePartCid: sourcePartCid,
@@ -157,13 +153,13 @@ class FocusSession {
   final String? sourceFramePath;
   final Duration sourcePosition;
 
-  /// 为 true 时忽略估算倒计时到零，只有关联 CID 收到真实完播事件才正常完成。
+  /// 兼容旧版按分P完播的历史字段；新会话恒为 false，恢复旧活动任务时清除。
   final bool completeOnPartEnd;
 
   final List<FocusInterruption> interruptions;
   final String? terminationReason;
 
-  /// 按设备本地自然日保存已结算的播放专注毫秒数，键格式为 YYYY-MM-DD。
+  /// 按设备本地自然日保存已结算的会话专注毫秒数，键格式为 YYYY-MM-DD。
   final Map<String, int> dailyFocusMilliseconds;
 
   /// 判断这条记录是否仍可继续、暂停、关联视频或主动终止。
@@ -257,7 +253,7 @@ class FocusSession {
     return _copy(plannedDuration: plannedDuration + extension);
   }
 
-  /// 把任务关联到用户确认的当前视频分P，并保存上次看到的画面与进度。
+  /// 更新会话的最近观看书签，保持同一计时片段和暂停状态。
   FocusSession associateVideo({
     required DateTime now,
     required String bvid,
@@ -272,22 +268,38 @@ class FocusSession {
     if (!isActive) {
       return this;
     }
-    final FocusSession paused = status == FocusSessionStatus.running
-        ? pauseAt(now, reason: FocusPauseReason.playback)
-        : _copy(
-            pauseReason: FocusPauseReason.playback,
-            replacePauseReason: true,
-          );
-    final FocusSession associated = paused._copy(
+    return _copy(
       sourceBvid: bvid,
       sourceVideoTitle: videoTitle,
       sourcePartCid: partCid,
       sourcePartPageNumber: partPageNumber,
       sourcePartTitle: partTitle,
       sourceFramePath: framePath,
+      clearSourceFrame:
+          framePath == null && (sourceBvid != bvid || sourcePartCid != partCid),
       sourcePosition: position,
     );
-    return isPlaying ? associated.resumeAt(now) : associated;
+  }
+
+  /// 迁移旧活动任务的按视频计时选项；历史记录不调用此方法。
+  FocusSession asContinuousSession() => _copy(
+    completeOnPartEnd: false,
+    pauseReason:
+        pauseReason == FocusPauseReason.awaitingVideo ||
+            pauseReason == FocusPauseReason.playback
+        ? FocusPauseReason.manual
+        : pauseReason,
+    replacePauseReason: true,
+  );
+
+  /// 保存运行检查点，结算旧片段后从当前时刻继续，避免重启重复累计。
+  FocusSession checkpointAt(DateTime now) {
+    if (status != FocusSessionStatus.running) return this;
+    return _copy(
+      accumulatedFocusDuration: elapsedAt(now),
+      dailyFocusMilliseconds: _recordCurrentRunUntil(now),
+      currentRunStartedAt: now,
+    );
   }
 
   /// 更新首页 Pin 使用的最后视频画面和播放位置，不改变关联对象。
@@ -376,7 +388,7 @@ class FocusSession {
     );
   }
 
-  /// 把刚完成的任务重新打开并增加时长，等待关联视频再次播放。
+  /// 把刚完成的任务重新打开并增加时长，等待用户主动继续。
   FocusSession reopenAt(DateTime now, Duration extension) {
     if (status != FocusSessionStatus.completed || extension <= Duration.zero) {
       return this;
@@ -386,9 +398,7 @@ class FocusSession {
       accumulatedFocusDuration: plannedDuration,
       status: FocusSessionStatus.paused,
       clearFinishedAt: true,
-      pauseReason: hasVideoAssociation
-          ? FocusPauseReason.playback
-          : FocusPauseReason.awaitingVideo,
+      pauseReason: FocusPauseReason.manual,
       replacePauseReason: true,
       completeOnPartEnd: false,
       clearTerminationReason: true,
@@ -419,6 +429,7 @@ class FocusSession {
     bool clearPauseReason = false,
     bool replacePauseReason = false,
     bool clearTerminationReason = false,
+    bool clearSourceFrame = false,
   }) {
     return FocusSession(
       id: id,
@@ -442,7 +453,9 @@ class FocusSession {
       sourcePartCid: sourcePartCid ?? this.sourcePartCid,
       sourcePartPageNumber: sourcePartPageNumber ?? this.sourcePartPageNumber,
       sourcePartTitle: sourcePartTitle ?? this.sourcePartTitle,
-      sourceFramePath: sourceFramePath ?? this.sourceFramePath,
+      sourceFramePath: clearSourceFrame
+          ? null
+          : sourceFramePath ?? this.sourceFramePath,
       sourcePosition: sourcePosition ?? this.sourcePosition,
       completeOnPartEnd: completeOnPartEnd ?? this.completeOnPartEnd,
       interruptions: interruptions ?? this.interruptions,

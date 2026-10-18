@@ -5,6 +5,7 @@ mixin _PlayerControlsCoordinator
     on
         State<PlayerPage>,
         _PlayerPlaybackSession,
+        _PlayerAbRepeatCoordinator,
         _PlayerFocusCoordinator,
         _PlayerGestureCoordinator,
         _PlayerNotesWorkspace,
@@ -36,6 +37,7 @@ mixin _PlayerControlsCoordinator
   /// 执行原生播放或暂停命令，并把平台异常转换为页面可读的错误。
   @override
   Future<void> _setPlaybackActive(bool shouldPlay) async {
+    _abRepeatPlaybackIntent(shouldPlay);
     _finishFocusSeekTransition(syncCurrentSnapshot: false);
     try {
       if (shouldPlay) {
@@ -125,12 +127,18 @@ mixin _PlayerControlsCoordinator
     final int targetMilliseconds = (_playbackSnapshot.position + offset)
         .inMilliseconds
         .clamp(0, _displayDuration.inMilliseconds);
-    _beginFocusSeekTransition();
     try {
-      await _playbackService.seekBy(offset);
-      _restartDanmakuPresentationFrom(
-        Duration(milliseconds: targetMilliseconds),
-      );
+      if (_abRepeatActive ||
+          _abRepeatSeek != null ||
+          _abRepeatCaptureDepth > 0) {
+        await _seekNativeTo(Duration(milliseconds: targetMilliseconds));
+      } else {
+        _beginFocusSeekTransition();
+        await _playbackService.seekBy(offset);
+        _restartDanmakuPresentationFrom(
+          Duration(milliseconds: targetMilliseconds),
+        );
+      }
     } on PlatformException catch (error) {
       _showPlaybackError('无法跳转进度：${error.message ?? error.code}');
     } catch (error) {
@@ -140,9 +148,43 @@ mixin _PlayerControlsCoordinator
 
   /// 执行绝对跳转并从目标时间重新生成弹幕，确保跳转前的历史弹幕不会出现在屏幕中段。
   @override
-  Future<void> _seekNativeTo(Duration position) async {
+  Future<void> _seekNativeTo(
+    Duration position, {
+    bool temporaryCapture = false,
+  }) async {
+    final bvid = _activeVideo.bvid;
+    final cid = _currentPart.cid;
+    final generation = _sourceGeneration;
+    final navigationGeneration = _partSwitchGeneration;
+    final captureSerial = temporaryCapture ? _abRepeatCaptureSerial : null;
+    if (temporaryCapture) {
+      await _drainAbRepeatSeek();
+    } else {
+      await _prepareAbRepeatManualSeek(position);
+    }
+    if (!mounted ||
+        bvid != _activeVideo.bvid ||
+        cid != _currentPart.cid ||
+        generation != _sourceGeneration ||
+        navigationGeneration != _partSwitchGeneration ||
+        (captureSerial != null && captureSerial != _abRepeatCaptureSerial) ||
+        _externalNavigationSuspended) {
+      return;
+    }
     _beginFocusSeekTransition();
-    await _playbackService.seekTo(position);
+    if (temporaryCapture) {
+      await _runTemporaryCaptureSeek(() => _playbackService.seekTo(position));
+    } else {
+      await _playbackService.seekTo(position);
+    }
+    if (!mounted ||
+        bvid != _activeVideo.bvid ||
+        cid != _currentPart.cid ||
+        generation != _sourceGeneration ||
+        navigationGeneration != _partSwitchGeneration ||
+        (captureSerial != null && captureSerial != _abRepeatCaptureSerial)) {
+      return;
+    }
     _restartDanmakuPresentationFrom(position);
   }
 
@@ -197,6 +239,8 @@ mixin _PlayerControlsCoordinator
       _qualitySelectionSawLoading = false;
     });
     try {
+      await _suspendAbRepeatForSource();
+      if (!mounted) return;
       await _playbackService.selectQuality(quality);
     } on PlatformException catch (error) {
       if (mounted) {
@@ -208,6 +252,8 @@ mixin _PlayerControlsCoordinator
         setState(() => _pendingQualitySelection = null);
       }
       _showMembershipQualityNotice(error.toString());
+    } finally {
+      if (mounted) _resumeAbRepeatAfterSource();
     }
   }
 
@@ -555,6 +601,27 @@ mixin _PlayerControlsCoordinator
   /// 根据菜单操作打开字幕或弹幕设置，或切换播放器画面比例。
   void _handleMoreSettingsSelection(_PlayerMoreMenuAction action) {
     switch (action) {
+      case _PlayerMoreMenuAction.blockVideo:
+        unawaited(
+          ContentBlockActions.video(
+            context,
+            bvid: _activeVideo.bvid,
+            title: _activeVideo.title,
+          ),
+        );
+        return;
+      case _PlayerMoreMenuAction.blockCreator:
+        unawaited(
+          ContentBlockActions.creator(
+            context,
+            mid: _activeVideo.ownerMid,
+            name: _activeVideo.ownerName,
+          ),
+        );
+        return;
+      case _PlayerMoreMenuAction.manageBlocklist:
+        unawaited(_openContentBlocklist());
+        return;
       case _PlayerMoreMenuAction.listening:
         unawaited(_toggleAudioOnly());
         return;
@@ -566,6 +633,9 @@ mixin _PlayerControlsCoordinator
         return;
       case _PlayerMoreMenuAction.playbackLoop:
         _togglePlaybackLoop();
+        return;
+      case _PlayerMoreMenuAction.abRepeat:
+        unawaited(_showAbRepeatSheet());
         return;
       case _PlayerMoreMenuAction.sleepTimer:
         unawaited(_showSleepTimerDialog());
@@ -582,8 +652,30 @@ mixin _PlayerControlsCoordinator
     }
   }
 
+  Future<void> _openContentBlocklist() async {
+    final shouldResume = _playing;
+    _cancelNoteCaptureForExternalNavigation();
+    _clearAbRepeatForNavigation();
+    await _drainAbRepeatSeek();
+    if (!mounted) return;
+    await _playbackService.pause();
+    if (!mounted) return;
+    await _showStandardSystemUiForNestedRoute();
+    if (!mounted) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(builder: (_) => const ContentBlocklistPage()),
+    );
+    if (!mounted) return;
+    _resumePlayerSystemUiAfterNestedRoute();
+    await _restorePlaybackAfterNestedPlayer(shouldResume: shouldResume);
+    if (mounted && shouldResume && !_playing) {
+      await _playbackService.play();
+    }
+  }
+
   /// 切换当前播放页的无限循环，不写入全局偏好设置。
   void _togglePlaybackLoop() {
+    _clearAbRepeatForNavigation();
     setState(() {
       _playbackLoopEnabled = !_playbackLoopEnabled;
       if (_playbackLoopEnabled) {

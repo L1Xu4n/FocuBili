@@ -109,6 +109,7 @@ class NativePlaybackController(
     private var textureEntry: TextureRegistry.SurfaceTextureEntry? = null
     private var videoSurface: Surface? = null
     private var currentBvid = ""
+    private var currentCourse: CoursePlaybackTarget? = null
     private var localSource = false
     private var audioOnly = false
     private var localVideoPath: String? = null
@@ -265,10 +266,16 @@ class NativePlaybackController(
             "open" -> {
                 val bvid = call.argument<String>("bvid")?.trim().orEmpty()
                 val cid = call.argument<Number>("cid")?.toLong()
+                val courseEpisodeId = call.argument<Number>("courseEpisodeId")?.toLong()
+                val courseAid = call.argument<Number>("courseAid")?.toLong()
+                val course = CoursePlaybackTarget.create(bvid, courseEpisodeId, courseAid)
                 val pageNumber = call.argument<Number>("pageNumber")?.toInt() ?: 1
                 val quality = call.argument<Number>("quality")?.toInt() ?: DEFAULT_QUALITY
                 val initialPositionMs = call.argument<Number>("initialPositionMs")?.toLong()
-                if (buildVideoPageUrl(bvid) == null) {
+                if ((CoursePlaybackTarget.isCourseKey(bvid) && course == null) ||
+                    (!CoursePlaybackTarget.isCourseKey(bvid) && (courseEpisodeId != null || courseAid != null))) {
+                    result.error("invalid_course", "课程章节编号不完整，请重新打开课程。", null)
+                } else if (buildVideoPageUrl(bvid) == null) {
                     result.error("invalid_bvid", "请输入有效的 BV 号。", null)
                 } else if (cid == null || cid <= 0L) {
                     result.error("invalid_cid", "该视频没有可播放的分P编号。", null)
@@ -289,6 +296,7 @@ class NativePlaybackController(
                         partTitle = call.argument<String>("partTitle").orEmpty(),
                         ownerName = call.argument<String>("ownerName").orEmpty(),
                         initialPositionMs = initialPositionMs,
+                        course = course,
                     )
                     result.success(null)
                 }
@@ -390,6 +398,17 @@ class NativePlaybackController(
             "getSavedPlaybackState" -> {
                 val bvid = call.argument<String>("bvid")?.trim().orEmpty()
                 result.success(loadSavedVideoState(bvid))
+            }
+            "exportSavedPlaybackProgress" -> {
+                try {
+                    // Do not call resume loaders: those may clear stale positions.
+                    result.success(NativePlaybackProgressStorage.read(File(
+                        activity.applicationInfo.dataDir,
+                        "shared_prefs/$PROGRESS_PREFERENCES_NAME.xml",
+                    )))
+                } catch (_: Exception) {
+                    result.error("progress_export_failed", "Android playback progress is unavailable.", null)
+                }
             }
             "getSystemPlaybackLevels" -> {
                 result.success(readSystemPlaybackLevels())
@@ -672,6 +691,10 @@ class NativePlaybackController(
         nativePlayer.setWakeMode(C.WAKE_MODE_LOCAL)
         nativePlayer.playbackParameters = PlaybackParameters(playbackSpeed)
         nativePlayer.addListener(object : Player.Listener {
+            /** Intent changes also matter while buffering/ended, when isPlaying stays false. */
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                emitPlaybackState()
+            }
             /** 播放或暂停变化时把最新状态同步给 Flutter。 */
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 if (
@@ -1050,6 +1073,7 @@ class NativePlaybackController(
         partTitle: String,
         ownerName: String,
         initialPositionMs: Long?,
+        course: CoursePlaybackTarget?,
     ) {
         ensurePlayer()
         ensureTexture()
@@ -1058,6 +1082,7 @@ class NativePlaybackController(
         player?.stop()
         player?.clearMediaItems()
         currentBvid = bvid
+        currentCourse = course
         canContinueAsGuest = false
         guestConsentGeneration = null
         failedVideoTracks = emptySet()
@@ -1108,6 +1133,7 @@ class NativePlaybackController(
         invalidatePlaybackRequests()
         player?.stop()
         player?.clearMediaItems()
+        currentCourse = null
         currentBvid = bvid
         currentCid = cid
         currentPageNumber = pageNumber
@@ -1258,14 +1284,15 @@ class NativePlaybackController(
     /** 在单线程后台请求播放数据，并只让最新请求更新当前视频。 */
     private fun requestPlaybackSources(bvid: String, cid: Long, quality: Int) {
         val requestToken = createPlaybackRequestToken()
-        val diagnostic = PlaybackRequestDiagnostic(requestToken, wbiSigningEnabled, quality)
+        val course = currentCourse
+        val diagnostic = PlaybackRequestDiagnostic(requestToken, course == null && wbiSigningEnabled, quality)
         val explicitGuest = guestConsentGeneration?.takeIf(BilibiliSessionGate::isCurrent)
         diagnostic.guestSelected = explicitGuest != null
         diagnostic.sessionGeneration = explicitGuest ?: BilibiliSessionGate.generation()
         canContinueAsGuest = false
         playbackRequestExecutor.execute {
             val sourceResult = runCatching {
-                loadPlaybackSources(bvid, cid, quality, diagnostic)
+                loadPlaybackSources(bvid, cid, quality, diagnostic, course)
             }
             mainHandler.post {
                 if (!isCurrentPlaybackRequest(requestToken, bvid, cid, quality)) {
@@ -1282,7 +1309,7 @@ class NativePlaybackController(
                 }
                 channel.invokeMethod("playbackRequestDiagnostic", diagnostic.toMap(sourceResult.isSuccess))
                 sourceResult.onSuccess(::prepareMediaSources).onFailure { error ->
-                    canContinueAsGuest = error is BilibiliCookiePolicy.Unavailable &&
+                    canContinueAsGuest = course == null && error is BilibiliCookiePolicy.Unavailable &&
                         error.state == BilibiliCookiePolicy.State.UNKNOWN
                     guestOfferGeneration = diagnostic.sessionGeneration.takeIf { canContinueAsGuest }
                     reportError(describePlaybackFetchFailure(error))
@@ -1297,15 +1324,24 @@ class NativePlaybackController(
         cid: Long,
         quality: Int,
         diagnostic: PlaybackRequestDiagnostic,
+        course: CoursePlaybackTarget?,
     ): PlaybackSources {
         val useWbi = diagnostic.wbiEnabled
-        val responseText = requestPlaybackInfoJson(bvid, cid, quality, diagnostic)
+        val responseText = requestPlaybackInfoJson(bvid, cid, quality, diagnostic, course)
         diagnostic.stage = "parse"
         val root = JSONObject(responseText)
         val code = root.optInt("code", -1)
         diagnostic.apiCode = code
         if (code == -101) diagnostic.observeNavigation(code, false)
         if (code != 0) {
+            if (course != null) {
+                throw PlaybackSourceException(when (code) {
+                    -101, -401 -> "登录已失效，请在“我的”重新登录购买课程的账号。"
+                    -403 -> "当前账号没有本节课的播放权限，请确认已购买且课程未过期。"
+                    -404 -> "课程不存在或已下架。"
+                    else -> "课程播放请求失败（错误码：$code），请稍后重试。"
+                })
+            }
             if (code == -351) {
                 throw PlaybackSourceException(
                     if (useWbi) {
@@ -1325,8 +1361,24 @@ class NativePlaybackController(
         }
         val data = root.optJSONObject("data")
             ?: throw PlaybackSourceException("播放数据服务没有返回视频信息。")
+        val innerCode = data.optInt("code", 0)
+        if (course != null && data.has("paid_access") && !data.optBoolean("paid_access", false) && data.optInt("paid_access", 0) != 1) {
+            throw PlaybackSourceException("本节课未获得已购播放权限，请确认购买账号。")
+        }
+        if (course != null && innerCode != 0) {
+            throw PlaybackSourceException("课程播放请求未获授权（错误码：$innerCode），请确认购买账号。")
+        }
+        if (course != null && (data.optBoolean("is_drm", false) || data.optInt("is_drm", 0) != 0 || data.optInt("drm_tech_type", 0) != 0)) {
+            throw PlaybackSourceException("本节课需要受保护的官方播放能力，暂不能在原生播放器中打开。")
+        }
+        if (course != null && (data.optInt("is_preview", 0) != 0 || data.optBoolean("is_preview", false))) {
+            throw PlaybackSourceException("服务器仅提供试看内容，请确认已登录购买课程的账号。")
+        }
         val dash = data.optJSONObject("dash")
-            ?: throw PlaybackSourceException("该视频没有可用的 DASH 播放数据。")
+        if (dash == null) {
+            if (course != null) return loadCourseProgressiveSource(bvid, cid, data, course, quality, diagnostic)
+            throw PlaybackSourceException("该视频没有可用的 DASH 播放数据。")
+        }
         val returnedQuality = data.optInt("quality", quality).takeIf { it > 0 } ?: quality
         diagnostic.returnedQuality = returnedQuality
         val videoTracks = selectMediaTracks(dash.optJSONArray("video"), minOf(quality, returnedQuality))
@@ -1338,7 +1390,7 @@ class NativePlaybackController(
         if (videoTrack.urls.isEmpty() && !audioOnly) {
             throw PlaybackSourceException("没有当前设备可解码的安全视频轨道，请尝试其他清晰度或听视频。")
         }
-        val referer = buildVideoPageUrl(bvid)
+        val referer = course?.referer ?: buildVideoPageUrl(bvid)
             ?: throw PlaybackSourceException("无法生成视频页面地址。")
         return PlaybackSources(
             bvid = bvid,
@@ -1355,12 +1407,51 @@ class NativePlaybackController(
         )
     }
 
+    /** Some classroom episodes return a single muxed MP4/FLV instead of DASH. */
+    private fun loadCourseProgressiveSource(
+        bvid: String,
+        cid: Long,
+        data: JSONObject,
+        course: CoursePlaybackTarget,
+        quality: Int,
+        diagnostic: PlaybackRequestDiagnostic,
+    ): PlaybackSources {
+        val segments = data.optJSONArray("durl")
+            ?: throw PlaybackSourceException("课程没有返回可支持的播放数据，请稍后重试。")
+        if (segments.length() != 1) {
+            throw PlaybackSourceException("本节课返回多段媒体，当前版本暂不支持，未截取播放其中一段。")
+        }
+        val segment = segments.optJSONObject(0)
+            ?: throw PlaybackSourceException("课程播放数据不完整。")
+        val urls = linkedSetOf<String>()
+        segment.optString("url").takeIf(::isSafeMediaUrl)?.let(urls::add)
+        segment.optJSONArray("backup_url")?.let { backups ->
+            for (index in 0 until backups.length()) {
+                backups.optString(index).takeIf(::isSafeMediaUrl)?.let(urls::add)
+            }
+        }
+        if (urls.isEmpty()) throw PlaybackSourceException("课程没有可用的 HTTPS 媒体地址。")
+        val returnedQuality = data.optInt("quality", quality).takeIf { it > 0 } ?: quality
+        diagnostic.returnedQuality = returnedQuality
+        diagnostic.selectedQuality = returnedQuality
+        return PlaybackSources(
+            videoUrls = urls.toList(), audioUrls = emptyList(),
+            bvid = bvid, cid = cid,
+            videoRepresentation = PlaybackCacheRepresentation(id = returnedQuality, codec = "muxed"),
+            audioRepresentation = PlaybackCacheRepresentation(), referer = course.referer,
+            actualQuality = returnedQuality,
+            qualities = parseQualityOptions(data, JSONObject(), returnedQuality),
+            videoAlternatives = emptyList(), diagnostic = diagnostic,
+        )
+    }
+
     /** 按本次请求固定的开关选择旧接口或 WBI 接口，nav 与播放共用同一会话。 */
     private fun requestPlaybackInfoJson(
         bvid: String,
         cid: Long,
         quality: Int,
         diagnostic: PlaybackRequestDiagnostic,
+        course: CoursePlaybackTarget?,
     ): String {
         val useWbi = diagnostic.wbiEnabled
         val snapshot = if (diagnostic.guestSelected) {
@@ -1386,7 +1477,44 @@ class NativePlaybackController(
             throw BilibiliCookiePolicy.Unavailable(snapshot.state)
         }
         val cookie = snapshot.header
-        val referer = buildVideoPageUrl(bvid).orEmpty()
+        if (course != null && snapshot.state != BilibiliCookiePolicy.State.SESSION) {
+            throw PlaybackSourceException("请先登录购买课程的 B 站账号。")
+        }
+        val referer = course?.referer ?: buildVideoPageUrl(bvid).orEmpty()
+        if (course != null) {
+            try {
+                CoursePurchaseGate.verify(course.seasonId,
+                    ensureCurrent = { BilibiliSessionGate.isCurrent(diagnostic.sessionGeneration) },
+                    loadPage = { page ->
+                        diagnostic.stage = "purchase"
+                        val paid = JSONObject(requestPlaybackApiJson(
+                            Uri.parse("https://$PLAYBACK_API_HOST/pugv/pay/web/my/paid?pn=$page&ps=10"),
+                            referer, cookie, diagnostic,
+                        ))
+                        if (paid.optInt("code", -1) != 0) throw CoursePurchaseException("无法确认课程购买状态，请重新登录或重试。")
+                        val data = paid.optJSONObject("data") ?: throw CoursePurchaseException("课程购买状态数据不完整。")
+                        val total = data.optInt("total", -1)
+                        val raw = data.optJSONArray("data")
+                        if (raw == null && total != 0) throw CoursePurchaseException("课程购买状态数据不完整。")
+                        val items = (0 until (raw?.length() ?: 0)).map { index ->
+                            val item = raw?.optJSONObject(index) ?: throw CoursePurchaseException("课程购买状态数据不完整。")
+                            CoursePurchaseItem(item.optLong("id", 0L),
+                                item.optBoolean("is_expired", false) || item.optInt("is_expired", 0) == 1,
+                                item.optInt("status", 0) == -3)
+                        }
+                        CoursePurchasePage(total, items)
+                    })
+            } catch (error: CoursePurchaseException) {
+                throw PlaybackSourceException(error.message ?: "无法确认课程购买状态，请重试。")
+            }
+            val parameters = course.parameters(cid, quality, DASH_FEATURE_FLAG)
+            val endpoint = Uri.parse("https://$PLAYBACK_API_HOST/pugv/player/web/playurl?${WbiSigningPolicy.encodeQuery(parameters)}")
+            diagnostic.stage = "playurl"
+            diagnostic.wbiSigned = false
+            diagnostic.playurlAttempted = true
+            diagnostic.httpStatus = null
+            return requestPlaybackApiJson(endpoint, referer, cookie, diagnostic)
+        }
         val parameters = mapOf(
             "bvid" to bvid, "cid" to cid.toString(), "qn" to quality.toString(),
             "fnval" to DASH_FEATURE_FLAG.toString(), "fourk" to "1",
@@ -2537,7 +2665,7 @@ class NativePlaybackController(
             .setTitle(displayTitle)
             .setArtist(currentOwnerName.ifBlank { "未知 UP 主" })
             .build()
-        if (!bypassMediaCacheForPlayback) {
+        if (!bypassMediaCacheForPlayback && currentCourse == null) {
             val cache = ensureMediaCache()
             pinnedCacheEvictor?.pin(cache, buildSet {
                 if (!audioOnly) add(playbackCacheKey(sources, video = true))
@@ -2547,7 +2675,7 @@ class NativePlaybackController(
         val sourceFactory = ProgressiveMediaSource.Factory(
             createMediaDataSourceFactory(
                 referer = sources.referer,
-                bypassCache = bypassMediaCacheForPlayback,
+                bypassCache = bypassMediaCacheForPlayback || currentCourse != null,
             ),
         ).setLoadErrorHandlingPolicy(
             DefaultLoadErrorHandlingPolicy(MEDIA_MINIMUM_RETRY_COUNT),
@@ -2671,6 +2799,7 @@ class NativePlaybackController(
                 "phase" to playbackPhase,
                 "canContinueAsGuest" to canContinueAsGuest,
                 "isPlaying" to (nativePlayer?.isPlaying == true),
+                "playRequested" to nativePlayer?.playWhenReady,
                 "audioOnly" to audioOnly,
                 "sleepTimerRemainingMs" to sleepTimer.remainingMs(),
                 "positionMs" to position,
@@ -2873,6 +3002,7 @@ class NativePlaybackController(
         textureEntry?.release()
         textureEntry = null
         currentBvid = ""
+        currentCourse = null
         currentCid = 0L
         currentPageNumber = 1
         currentTitle = ""
@@ -2946,6 +3076,7 @@ class NativePlaybackController(
     /** 将 Flutter 传入的 BV 号转换为视频页 Referer，并验证格式。 */
     private fun buildVideoPageUrl(bvid: String?): String? {
         val normalized = bvid?.trim() ?: return null
+        CoursePlaybackTarget.seasonPage(normalized)?.let { return it }
         if (!BVID_PATTERN.matches(normalized)) {
             return null
         }

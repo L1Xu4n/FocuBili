@@ -32,6 +32,19 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
   int _sourceGeneration = 0;
   bool _externalNavigationSuspended = false;
 
+  bool _observeAbRepeatSnapshot(
+    PlaybackSnapshot previous,
+    PlaybackSnapshot snapshot, {
+    required bool positionEvent,
+  });
+  void _clearAbRepeatForNavigation();
+  void _cancelNoteCaptureForExternalNavigation();
+  Future<void> _suspendAbRepeatForSource();
+  void _resumeAbRepeatAfterSource();
+  Future<void> _prepareAbRepeatManualSeek(Duration target);
+  Future<void> _drainAbRepeatSeek();
+  bool get _abRepeatActive;
+
   /// 由手势协调器为真实播放暂停切换提供短暂动画。
   void _showPlaybackActionFeedback(bool playing);
 
@@ -40,8 +53,11 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
 
   /// Invalidates pending source selection and awaits a pause before external routing.
   Future<void> _pauseForExternalNavigation() async {
+    _cancelNoteCaptureForExternalNavigation();
+    _clearAbRepeatForNavigation();
     _externalNavigationSuspended = true;
     _sourceGeneration++;
+    await _suspendAbRepeatForSource();
     final service = _playbackService;
     if (service is! NativePlaybackService || service.ownsPlatformChannel) {
       await service.pause();
@@ -92,59 +108,69 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     bool? useLocal,
   }) async {
     final generation = ++_sourceGeneration;
-    final identity = '${video.bvid}:${part.cid}';
-    final wantsLocal = _wantsLocalSource(video, part, useLocal: useLocal);
-    final local = await PlaybackSourceResolver(_offlineVideoService).resolve(
-      video.bvid,
-      part.cid,
-      preferLocal: wantsLocal,
-      requireLocal: wantsLocal,
-    );
+    await _suspendAbRepeatForSource();
     if (!mounted ||
         generation != _sourceGeneration ||
         _externalNavigationSuspended) {
       return;
     }
-    final service = _playbackService;
-    if (_sourceChoicePart != identity) _sourceChoiceLocal = null;
-    _sourceChoicePart = identity;
-    if (useLocal != null) _sourceChoiceLocal = useLocal;
-    _playingOffline = local != null;
-    _offlineQuality = local?.qualityId;
-    if (local != null) {
-      if (service is! LocalFilePlaybackService) {
-        throw const OfflineVideoException('当前平台不支持本地播放。');
-      }
-      _defaultQualityPending = false;
-      // Keep online menu options and the complete VideoPreview when only media changes.
-      if (local.audioFilePath != null) {
-        if (service is! LocalTrackPlaybackService) {
-          throw const OfflineVideoException('当前平台不支持分离音视频缓存。');
-        }
-        await (service as LocalTrackPlaybackService).openLocalTracks(
-          videoFilePath: local.filePath,
-          audioFilePath: local.audioFilePath!,
-          title: local.title,
-          initialPosition: initialPosition,
-          video: video,
-          part: part,
-        );
-      } else {
-        await (service as LocalFilePlaybackService).openLocalFile(
-          filePath: local.filePath,
-          title: local.title,
-          initialPosition: initialPosition,
-          video: video,
-          part: part,
-        );
-      }
-    } else {
-      await service.openVideo(
-        video,
-        part: part,
-        quality: quality,
-        initialPosition: initialPosition,
+    try {
+      final identity = '${video.bvid}:${part.cid}';
+      final wantsLocal = _wantsLocalSource(video, part, useLocal: useLocal);
+      final local = await PlaybackSourceResolver(_offlineVideoService).resolve(
+        video.bvid,
+        part.cid,
+        preferLocal: wantsLocal,
+        requireLocal: wantsLocal,
       );
+      if (!mounted ||
+          generation != _sourceGeneration ||
+          _externalNavigationSuspended) {
+        return;
+      }
+      final service = _playbackService;
+      if (_sourceChoicePart != identity) _sourceChoiceLocal = null;
+      _sourceChoicePart = identity;
+      if (useLocal != null) _sourceChoiceLocal = useLocal;
+      _playingOffline = local != null;
+      _offlineQuality = local?.qualityId;
+      if (local != null) {
+        if (service is! LocalFilePlaybackService) {
+          throw const OfflineVideoException('当前平台不支持本地播放。');
+        }
+        _defaultQualityPending = false;
+        // Keep online menu options and the complete VideoPreview when only media changes.
+        if (local.audioFilePath != null) {
+          if (service is! LocalTrackPlaybackService) {
+            throw const OfflineVideoException('当前平台不支持分离音视频缓存。');
+          }
+          await (service as LocalTrackPlaybackService).openLocalTracks(
+            videoFilePath: local.filePath,
+            audioFilePath: local.audioFilePath!,
+            title: local.title,
+            initialPosition: initialPosition,
+            video: video,
+            part: part,
+          );
+        } else {
+          await (service as LocalFilePlaybackService).openLocalFile(
+            filePath: local.filePath,
+            title: local.title,
+            initialPosition: initialPosition,
+            video: video,
+            part: part,
+          );
+        }
+      } else {
+        await service.openVideo(
+          video,
+          part: part,
+          quality: quality,
+          initialPosition: initialPosition,
+        );
+      }
+    } finally {
+      if (generation == _sourceGeneration) _resumeAbRepeatAfterSource();
     }
   }
 
@@ -287,9 +313,6 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     PlaybackSnapshot snapshot, {
     bool playbackJustEnded = false,
   });
-
-  /// 在播放就绪后按需询问是否关联当前专注任务。
-  Future<void> _maybePromptFocusAssociation();
 
   /// 请求播放器跳转到指定真实位置。
   Future<void> _seekNativeTo(Duration position);
@@ -473,6 +496,11 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
       snapshot = snapshot.copyWith(currentQuality: _offlineQuality);
     }
     final PlaybackSnapshot previousSnapshot = _playbackSnapshot;
+    final bool abRepeatConsumesEnd = _observeAbRepeatSnapshot(
+      previousSnapshot,
+      snapshot,
+      positionEvent: true,
+    );
     if (previousSnapshot.phase == PlaybackPhase.ready &&
         snapshot.phase == PlaybackPhase.ready &&
         previousSnapshot.isPlaying != snapshot.isPlaying &&
@@ -482,6 +510,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     final bool shouldRestartDanmakuPresentation =
         _shouldRestartDanmakuPresentation(previousSnapshot, snapshot);
     final bool justEnded =
+        !abRepeatConsumesEnd &&
         previousSnapshot.phase != PlaybackPhase.ended &&
         snapshot.phase == PlaybackPhase.ended;
     final bool leftEnded =
@@ -645,11 +674,6 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
       _restartControlsAutoHideTimer();
     }
     _syncFocusPlaybackState(snapshot, playbackJustEnded: justEnded);
-    if (snapshot.phase == PlaybackPhase.ready) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        unawaited(_maybePromptFocusAssociation());
-      });
-    }
   }
 
   /// 从零开始下一轮播放，并用保护标记避免同一完播状态重复执行。

@@ -13,10 +13,12 @@ mixin _PlayerVideoCoordinator
         _PlayerViewportCoordinator,
         _PlayerOverlayCoordinator,
         _PlayerControlsCoordinator {
+  @override
   int _partSwitchGeneration = 0;
 
   /// 所有切视频、切分 P 与剧情跳转共用代次，新操作撤销仍在等待的旧操作。
   int _beginVideoNavigation() {
+    _clearAbRepeatForNavigation();
     final generation = ++_partSwitchGeneration;
     if (mounted && _interactiveChoiceOpening) {
       setState(() => _interactiveChoiceOpening = false);
@@ -54,6 +56,7 @@ mixin _PlayerVideoCoordinator
     final PlaybackSnapshot snapshot = _playbackSnapshot;
     setState(() {
       if (snapshot.phase == PlaybackPhase.ended &&
+          !_abRepeatActive &&
           !_interactiveChoiceOpening &&
           _playerEnhancementController.handlesPlaybackCompletion) {
         _interactivePromptVisible = true;
@@ -69,7 +72,8 @@ mixin _PlayerVideoCoordinator
   void _scheduleInteractiveChoicePrompt(PlaybackSnapshot snapshot) {
     _interactivePromptTimer?.cancel();
     _interactivePromptTimer = null;
-    if (!mounted ||
+    if (_abRepeatActive ||
+        !mounted ||
         snapshot.phase != PlaybackPhase.ready ||
         !snapshot.isPlaying ||
         snapshot.isInPictureInPicture ||
@@ -96,7 +100,8 @@ mixin _PlayerVideoCoordinator
 
   /// 显示已经到时的互动选项，并按接口要求暂停当前节点而不替用户选择分支。
   Future<void> _presentInteractiveChoice(PlaybackSnapshot snapshot) async {
-    if (!mounted ||
+    if (_abRepeatActive ||
+        !mounted ||
         snapshot.phase != PlaybackPhase.ready ||
         !snapshot.isPlaying ||
         _interactivePromptVisible ||
@@ -143,13 +148,13 @@ mixin _PlayerVideoCoordinator
       _showPlayerNotice('视频已变化，请重新选择当前视频的分 P。');
       return;
     }
-    final generation = _beginVideoNavigation();
     if (part.cid == _currentPart.cid) {
       if (_partSelectorExpanded) {
         _closePartSelector();
       }
       return;
     }
+    final generation = _beginVideoNavigation();
     try {
       await _checkPlaybackPart(video, part);
     } catch (_) {
@@ -158,6 +163,8 @@ mixin _PlayerVideoCoordinator
       }
       return;
     }
+    if (!_isCurrentVideoNavigation(generation, bvid: video.bvid)) return;
+    await _drainAbRepeatSeek();
     if (!_isCurrentVideoNavigation(generation, bvid: video.bvid)) return;
     await _deactivateFocusPlaybackForCurrentPart();
     if (!_isCurrentVideoNavigation(generation, bvid: video.bvid)) return;
@@ -210,6 +217,8 @@ mixin _PlayerVideoCoordinator
       _interactivePromptVisible = false;
       _completionPromptVisible = false;
     });
+    await _drainAbRepeatSeek();
+    if (!_isCurrentVideoNavigation(generation, bvid: video.bvid)) return;
     await _deactivateFocusPlaybackForCurrentPart();
     if (!_isCurrentVideoNavigation(generation, bvid: video.bvid)) return;
     _flushCurrentWatchHistoryProgress();
@@ -381,6 +390,10 @@ mixin _PlayerVideoCoordinator
       return;
     }
     final bool shouldResume = _playing;
+    _cancelNoteCaptureForExternalNavigation();
+    _clearAbRepeatForNavigation();
+    await _drainAbRepeatSeek();
+    if (!mounted) return;
     if (shouldResume) {
       await _playbackService.pause();
     }
@@ -466,6 +479,8 @@ mixin _PlayerVideoCoordinator
       return;
     }
     // Reject a known invalid target before pausing or changing the current UI.
+    await _drainAbRepeatSeek();
+    if (!_isCurrentVideoNavigation(generation)) return;
     await _deactivateFocusPlaybackForCurrentPart();
     if (!_isCurrentVideoNavigation(generation)) return;
     _notesPanelAnimationTimer?.cancel();
@@ -532,7 +547,7 @@ mixin _PlayerVideoCoordinator
       _noteBodyController.clear();
       _notePartCid = targetPart.cid;
       _includeCurrentFrame = false;
-      _noteFramePath = null;
+      _noteFrames = const <VideoNoteFrame>[];
       _fullscreenNoteListCollapsed = false;
       _notesOverlayMounted = false;
       _locatedCollectionPreviewBvid = null;
@@ -610,6 +625,7 @@ mixin _PlayerVideoCoordinator
   BilibiliPublicContentService get _publicContentService;
 
   /// 由页面状态类提供互动选项提示计时器。
+  @override
   Timer? get _interactivePromptTimer;
   set _interactivePromptTimer(Timer? value);
 

@@ -78,7 +78,7 @@ void main() {
     expect(videoBranchStart, greaterThan(methodStart));
     final String methodBody = service.substring(videoBranchStart, methodEnd);
     final int pauseIndex = methodBody.indexOf('await _player.pause();');
-    final int openIndex = methodBody.indexOf('await _player.open(');
+    final int openIndex = methodBody.indexOf('await _openPlayerMedia(');
     final int seekIndex = methodBody.indexOf(
       'await _player.seek(resumePosition);',
     );

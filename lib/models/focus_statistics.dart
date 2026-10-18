@@ -72,8 +72,10 @@ abstract final class FocusStatisticsCalculator {
       ),
       FocusStatisticsRange.all => null,
     };
+    final Set<String> seenSessionIds = <String>{};
     final List<FocusSession> filteredHistory = history
         .where((FocusSession session) {
+          if (session.isActive || !seenSessionIds.add(session.id)) return false;
           final DateTime? finishedAt = session.finishedAt?.toLocal();
           if (finishedAt == null) {
             return false;
@@ -120,7 +122,14 @@ abstract final class FocusStatisticsCalculator {
     final int finishedTotalMilliseconds = totalMilliseconds;
 
     final FocusSession? active = activeSession;
-    if (active != null) {
+    if (active != null &&
+        active.isActive &&
+        !history.any(
+          (session) =>
+              session.id == active.id &&
+              !session.isActive &&
+              session.finishedAt != null,
+        )) {
       final int activeMillisecondsInRange = _addFocusBuckets(
         daily: daily,
         values: active.focusedMillisecondsByLocalDayAt(localNow),

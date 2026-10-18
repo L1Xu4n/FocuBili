@@ -8,62 +8,6 @@ import 'focus_do_not_disturb.dart';
 import 'focus_interruption_dialog.dart';
 import 'focus_timer_controller.dart';
 
-/// 显示首页任务与当前视频的关联确认面板，并返回用户是否确认。
-Future<bool?> showFocusVideoAssociationSheet(
-  BuildContext context, {
-  required String goal,
-  required String videoTitle,
-  required int partPageNumber,
-  required String partTitle,
-}) {
-  return showModalBottomSheet<bool>(
-    context: context,
-    useSafeArea: true,
-    showDragHandle: true,
-    builder: (BuildContext sheetContext) => Padding(
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          Text(
-            '是否将“$goal”关联到当前播放的视频？',
-            style: Theme.of(sheetContext).textTheme.titleLarge,
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '$videoTitle · P$partPageNumber $partTitle',
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
-          ),
-          const SizedBox(height: 18),
-          Row(
-            children: <Widget>[
-              Expanded(
-                child: OutlinedButton(
-                  key: const Key('cancel-focus-video-association'),
-                  // 取消关联函数仅忽略当前候选，切换视频后仍可再次询问。
-                  onPressed: () => Navigator.of(sheetContext).pop(false),
-                  child: const Text('取消'),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: FilledButton(
-                  key: const Key('confirm-focus-video-association'),
-                  // 确认关联函数只返回选择，播放器随后采集点击时的真实画面。
-                  onPressed: () => Navigator.of(sheetContext).pop(true),
-                  child: const Text('确认关联'),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    ),
-  );
-}
-
 /// 定义从播放器开始专注时可选择的计划方式。
 enum _PlayerFocusDurationChoice {
   twentyFiveMinutes,
@@ -169,8 +113,7 @@ class _PlayerFocusSheetState extends State<PlayerFocusSheet> {
       sourcePartTitle: widget.partTitle,
       sourceFramePath: widget.sourceFramePath,
       sourcePosition: widget.sourcePosition,
-      startImmediately: widget.videoIsPlaying,
-      completeOnPartEnd: _choice == _PlayerFocusDurationChoice.part,
+      startImmediately: true,
     );
     if (!mounted) {
       return;
@@ -242,7 +185,7 @@ class _PlayerFocusSheetState extends State<PlayerFocusSheet> {
     final int minutes = (widget.partRemainingDuration.inSeconds / 60)
         .ceil()
         .clamp(1, 180);
-    return '当前分P（完播结束，约 $minutes 分）';
+    return '参考当前 P（$minutes 分钟）';
   }
 
   /// 创建没有活动专注时的目标和时长选择表单。
@@ -300,13 +243,15 @@ class _PlayerFocusSheetState extends State<PlayerFocusSheet> {
               key: const Key('player-focus-current-part'),
               label: Text(_formatPartDuration()),
               selected: _choice == _PlayerFocusDurationChoice.part,
-              // 当前分P选择函数只用剩余时长显示估算，最终完成必须等待当前 CID 真实完播。
+              // 参考当前 P 仅用剩余时长设置会话计划，不再按完播结束。
               onSelected: (_) =>
                   setState(() => _choice = _PlayerFocusDurationChoice.part),
             ),
           ],
         ),
-        const SizedBox(height: 18),
+        const SizedBox(height: 12),
+        const Text('专注独立计时；视频暂停、换 P 和完播不会结束会话。应用进入后台会暂停。'),
+        const SizedBox(height: 12),
         FilledButton.icon(
           key: const Key('start-player-focus'),
           // 开始函数把目标、时长和当前视频来源一起保存。
@@ -321,10 +266,6 @@ class _PlayerFocusSheetState extends State<PlayerFocusSheet> {
   /// 创建活动专注的倒计时、暂停继续、续时和结束控制区。
   Widget _buildActiveContent(FocusSession session) {
     final bool paused = session.status == FocusSessionStatus.paused;
-    final bool matches =
-        !session.hasVideoAssociation ||
-        (session.sourceBvid == widget.bvid &&
-            session.sourcePartCid == widget.partCid);
     return Column(
       key: const Key('player-focus-active'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -335,46 +276,11 @@ class _PlayerFocusSheetState extends State<PlayerFocusSheet> {
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
         ),
-        if (!matches) ...[
-          const SizedBox(height: 12),
-          const Text('计时已暂停：当前视频或分 P 与专注任务关联不一致。'),
-          TextButton(
-            onPressed: () async {
-              final confirmed = await showFocusVideoAssociationSheet(
-                context,
-                goal: session.goal,
-                videoTitle: widget.videoTitle,
-                partPageNumber: widget.partPageNumber,
-                partTitle: widget.partTitle,
-              );
-              if (confirmed == true && mounted) {
-                await widget.controller.associateVideo(
-                  bvid: widget.bvid,
-                  videoTitle: widget.videoTitle,
-                  partCid: widget.partCid,
-                  partPageNumber: widget.partPageNumber,
-                  partTitle: widget.partTitle,
-                  isPlaying: widget.videoIsPlaying,
-                  framePath: widget.sourceFramePath,
-                  position: widget.sourcePosition,
-                );
-              }
-            },
-            child: const Text('重新关联当前 P'),
-          ),
-        ] else if (paused) ...[
-          const SizedBox(height: 8),
-          Text(
-            session.pauseReason == FocusPauseReason.playback
-                ? '计时已暂停：当前视频尚未播放。'
-                : '计时已暂停，请继续专注。',
-          ),
-        ],
+        const SizedBox(height: 8),
+        Text(paused ? '会话已暂停，请主动继续。' : '会话连续计时，换视频或换 P 无需重新开始。'),
         const SizedBox(height: 12),
         Text(
-          session.completeOnPartEnd
-              ? '等待当前分P完播 · ${_formatCountdown(widget.controller.remainingDuration)}'
-              : _formatCountdown(widget.controller.remainingDuration),
+          _formatCountdown(widget.controller.remainingDuration),
           key: const Key('player-focus-countdown'),
           textAlign: TextAlign.center,
           style: const TextStyle(fontSize: 38, fontWeight: FontWeight.w800),
@@ -394,13 +300,11 @@ class _PlayerFocusSheetState extends State<PlayerFocusSheet> {
             FilledButton.icon(
               key: Key(paused ? 'resume-player-focus' : 'pause-player-focus'),
               // 暂停继续函数根据当前状态调用唯一合法的控制器操作。
-              onPressed: !matches
-                  ? null
-                  : () => unawaited(
-                      paused
-                          ? widget.controller.resumeFocus()
-                          : _pauseWithEncouragement(),
-                    ),
+              onPressed: () => unawaited(
+                paused
+                    ? widget.controller.resumeFocus()
+                    : _pauseWithEncouragement(),
+              ),
               icon: Icon(
                 paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
               ),

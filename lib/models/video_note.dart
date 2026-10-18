@@ -1,3 +1,34 @@
+/// 一张笔记画面及其真实视频位置；列表顺序就是用户的展示顺序。
+class VideoNoteFrame {
+  const VideoNoteFrame({required this.path, required this.position});
+
+  final String path;
+  final Duration position;
+
+  @override
+  bool operator ==(Object other) =>
+      other is VideoNoteFrame &&
+      other.path == path &&
+      other.position == position;
+  @override
+  int get hashCode => Object.hash(path, position);
+
+  Map<String, Object?> toJson() => <String, Object?>{
+    'path': path,
+    'positionMs': position.inMilliseconds,
+  };
+
+  static VideoNoteFrame? tryParse(Map<Object?, Object?> json) {
+    final path = json['path'];
+    final position = json['positionMs'];
+    if (path is! String || path.trim().isEmpty || position is! num) return null;
+    return VideoNoteFrame(
+      path: path.trim(),
+      position: Duration(milliseconds: position.toInt().clamp(0, 604800000)),
+    );
+  }
+}
+
 /// 表示一条仅保存在本机的视频时间点笔记。
 class VideoNote {
   /// 创建包含视频来源、自动记录时间、播放位置和可选画面的笔记。
@@ -15,8 +46,9 @@ class VideoNote {
     required this.updatedAt,
     required this.position,
     this.videoCoverUrl = '',
-    this.framePath,
-  });
+    String? framePath,
+    this.frames = const <VideoNoteFrame>[],
+  }) : _legacyFramePath = framePath;
 
   final String id;
   final String bvid;
@@ -31,7 +63,21 @@ class VideoNote {
   final DateTime updatedAt;
   final Duration position;
   final String videoCoverUrl;
-  final String? framePath;
+  final String? _legacyFramePath;
+  final List<VideoNoteFrame> frames;
+
+  /// 旧单图调用方仍可读取第一张画面；旧记录按笔记时间点迁移。
+  String? get framePath =>
+      frames.isNotEmpty ? frames.first.path : _legacyFramePath;
+  List<VideoNoteFrame> get allFrames => List<VideoNoteFrame>.unmodifiable(
+    frames.isNotEmpty
+        ? frames
+        : _legacyFramePath == null || _legacyFramePath.trim().isEmpty
+        ? const <VideoNoteFrame>[]
+        : <VideoNoteFrame>[
+            VideoNoteFrame(path: _legacyFramePath, position: position),
+          ],
+  );
 
   /// 复制笔记并替换用户编辑过的字段，更新时间由调用方明确写入。
   VideoNote copyWith({
@@ -41,6 +87,7 @@ class VideoNote {
     Duration? position,
     String? videoCoverUrl,
     String? framePath,
+    List<VideoNoteFrame>? frames,
     bool clearFrame = false,
   }) {
     return VideoNote(
@@ -57,7 +104,17 @@ class VideoNote {
       updatedAt: updatedAt ?? this.updatedAt,
       position: position ?? this.position,
       videoCoverUrl: videoCoverUrl ?? this.videoCoverUrl,
-      framePath: clearFrame ? null : (framePath ?? this.framePath),
+      frames: clearFrame
+          ? const <VideoNoteFrame>[]
+          : frames ??
+                (framePath == null
+                    ? allFrames
+                    : <VideoNoteFrame>[
+                        VideoNoteFrame(
+                          path: framePath,
+                          position: position ?? this.position,
+                        ),
+                      ]),
     );
   }
 
@@ -78,6 +135,9 @@ class VideoNote {
       'positionMs': position.inMilliseconds,
       'videoCoverUrl': videoCoverUrl,
       'framePath': framePath,
+      'frames': allFrames
+          .map((frame) => frame.toJson())
+          .toList(growable: false),
     };
   }
 
@@ -97,6 +157,17 @@ class VideoNote {
     final Object? positionMs = json['positionMs'];
     final Object? videoCoverUrl = json['videoCoverUrl'];
     final Object? framePath = json['framePath'];
+    final Object? rawFrames = json['frames'];
+    final List<VideoNoteFrame> frames = <VideoNoteFrame>[];
+    if (rawFrames is List) {
+      for (final rawFrame in rawFrames) {
+        if (rawFrame is! Map) continue;
+        final frame = VideoNoteFrame.tryParse(
+          Map<Object?, Object?>.from(rawFrame),
+        );
+        if (frame != null) frames.add(frame);
+      }
+    }
     if (id is! String ||
         bvid is! String ||
         videoTitle is! String ||
@@ -146,6 +217,7 @@ class VideoNote {
       framePath: framePath is String && framePath.trim().isNotEmpty
           ? framePath.trim()
           : null,
+      frames: List<VideoNoteFrame>.unmodifiable(frames),
     );
   }
 }

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -75,12 +76,20 @@ class FilterPages implements BilibiliService {
 /// Covers semantics, saved custom inputs, finite auto-pagination, retries and mouse drag.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  setUp(() => SharedPreferences.setMockInitialValues({}));
+  // Exercise existing opt-in users as well as new unrestricted defaults below.
+  setUp(
+    () => SharedPreferences.setMockInitialValues({
+      SearchContentFilterService.storageKey: jsonEncode({
+        'learningOnly': true,
+        'minimumPlayCount': 0,
+      }),
+    }),
+  );
 
   test(
     'learning rules preserve tutorials and unknown metadata, but remove probable entertainment',
     () {
-      const filter = SearchContentFilter();
+      const filter = SearchContentFilter(learningOnly: true);
       expect(filter.includes(result('游戏开发教程', category: 4)), isTrue);
       expect(filter.includes(result('钢琴乐理教学', category: 3)), isTrue);
       expect(filter.includes(result('课程资料没有分类')), isTrue);

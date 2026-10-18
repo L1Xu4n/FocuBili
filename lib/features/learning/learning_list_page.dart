@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/layout/adaptive_page_frame.dart';
 import '../../models/learning_list_entry.dart';
+import '../../models/learning_subject_folder.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/learning_list_service.dart';
 import 'learning_video_launcher.dart';
@@ -32,12 +33,16 @@ class _LearningListPageState extends State<LearningListPage> {
   late final BilibiliService _videoService;
   late final TextEditingController _searchController;
   List<LearningListEntry> _entries = const <LearningListEntry>[];
+  List<LearningSubjectFolder> _folders = const [];
+  bool _allFolders = true;
+  String? _folderId;
+  bool _folderBusy = false;
   String _query = '';
   LearningListStatus? _statusFilter;
   bool _selecting = false;
   final Set<String> _selected = {};
   bool get _canReorder =>
-      _query.isEmpty && _statusFilter == null && !_selecting;
+      _query.isEmpty && _statusFilter == null && !_selecting && !_folderBusy;
   bool _searching = false;
   bool _loading = true;
   bool _reordering = false;
@@ -66,13 +71,12 @@ class _LearningListPageState extends State<LearningListPage> {
     if (mounted) {
       setState(() => _loading = true);
     }
-    final List<LearningListEntry> entries = await _learningListService
-        .loadEntries();
+    final state = await _learningListService.loadState();
     if (!mounted) {
       return;
     }
     setState(() {
-      if (!_learningListService.readFailed) _entries = entries;
+      if (!_learningListService.readFailed) _applyState(state);
       _loading = false;
     });
   }
@@ -98,6 +102,7 @@ class _LearningListPageState extends State<LearningListPage> {
 
   /// 判断一条任务是否匹配标题、UP 主、分 P 标题或 P 序号的本机搜索词。
   bool _matchesQuery(LearningListEntry entry) {
+    if (!_allFolders && entry.folderId != _folderId) return false;
     if (_statusFilter != null && entry.status != _statusFilter) return false;
     if (_query.isEmpty) {
       return true;
@@ -106,6 +111,7 @@ class _LearningListPageState extends State<LearningListPage> {
       entry.title,
       entry.ownerName,
       entry.partTitle,
+      _folderName(entry.folderId),
       'p${entry.partPageNumber}',
     ].join('\n').toLowerCase();
     return haystack.contains(_query);
@@ -251,6 +257,8 @@ class _LearningListPageState extends State<LearningListPage> {
             reordered
                 .map((LearningListEntry entry) => entry.stableId)
                 .toList(growable: false),
+            folderId: _folderId,
+            withinFolder: !_allFolders,
           );
       if (mounted) {
         setState(() => _entries = updated);
@@ -312,6 +320,261 @@ class _LearningListPageState extends State<LearningListPage> {
       _showSaveError();
     }
   }
+
+  void _applyState(LearningListState state) {
+    _entries = state.entries;
+    _folders = state.folders;
+    if (_folderId != null &&
+        !_folders.any((folder) => folder.id == _folderId)) {
+      _folderId = null;
+      _allFolders = false;
+    }
+  }
+
+  String _folderName(String? id) {
+    for (final folder in _folders) {
+      if (folder.id == id) return folder.name;
+    }
+    return '未分组';
+  }
+
+  Future<void> _editFolder([LearningSubjectFolder? folder]) async {
+    if (_folderBusy) return;
+    var name = folder?.name ?? '';
+    String? error;
+    var saving = false;
+    final result = await showDialog<LearningListState>(
+      context: context,
+      builder: (dialog) => StatefulBuilder(
+        builder: (dialog, updateDialog) {
+          Future<void> save() async {
+            if (saving) return;
+            updateDialog(() {
+              saving = true;
+              error = null;
+            });
+            try {
+              final result = folder == null
+                  ? await _learningListService.createFolder(name)
+                  : await _learningListService.renameFolder(folder.id, name);
+              if (dialog.mounted) Navigator.pop(dialog, result);
+            } catch (exception) {
+              if (dialog.mounted) {
+                updateDialog(() {
+                  saving = false;
+                  error = exception is ArgumentError
+                      ? exception.message.toString()
+                      : '未保存，请重试';
+                });
+              }
+            }
+          }
+
+          return PopScope(
+            canPop: !saving,
+            child: AlertDialog(
+              title: Text(folder == null ? '新建学科分组' : '重命名学科分组'),
+              content: TextFormField(
+                key: const Key('learning-folder-name'),
+                initialValue: name,
+                autofocus: true,
+                maxLength: LearningSubjectFolder.maximumNameCharacters,
+                enabled: !saving,
+                decoration: InputDecoration(
+                  labelText: '学科名称',
+                  hintText: '例如：数学、英语',
+                  errorText: error,
+                ),
+                onChanged: (value) => name = value,
+                onFieldSubmitted: (_) => save(),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: saving ? null : () => Navigator.pop(dialog),
+                  child: const Text('取消'),
+                ),
+                FilledButton(
+                  key: const Key('save-learning-folder'),
+                  onPressed: saving ? null : save,
+                  child: Text(saving ? '保存中' : '保存'),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+    if (result != null && mounted) setState(() => _applyState(result));
+  }
+
+  Future<void> _deleteFolder(LearningSubjectFolder folder) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: const Text('删除学科分组'),
+        content: Text('删除“${folder.name}”？组内学习任务会移到“未分组”，学习进度、观看记录和笔记保留。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialog, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const Key('confirm-delete-learning-folder'),
+            onPressed: () => Navigator.pop(dialog, true),
+            child: const Text('删除分组'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted || _folderBusy) return;
+    await _changeFolders(() => _learningListService.deleteFolder(folder.id));
+  }
+
+  Future<void> _changeFolders(
+    Future<LearningListState> Function() action,
+  ) async {
+    if (_folderBusy) return;
+    setState(() => _folderBusy = true);
+    try {
+      final state = await action();
+      if (mounted) {
+        setState(() {
+          _applyState(state);
+          _selected.clear();
+        });
+      }
+    } catch (_) {
+      _showSaveError();
+    } finally {
+      if (mounted) setState(() => _folderBusy = false);
+    }
+  }
+
+  Future<void> _moveToFolder(Set<String> ids) async {
+    if (_folderBusy || ids.isEmpty) return;
+    final destination = await showDialog<String>(
+      context: context,
+      builder: (dialog) => SimpleDialog(
+        title: const Text('移动到学科分组'),
+        children: [
+          SimpleDialogOption(
+            key: const Key('move-folder-ungrouped'),
+            onPressed: () => Navigator.pop(dialog, ''),
+            child: const Text('未分组'),
+          ),
+          for (final folder in _folders)
+            SimpleDialogOption(
+              key: Key('move-folder-${folder.id}'),
+              onPressed: () => Navigator.pop(dialog, folder.id),
+              child: Text(folder.name),
+            ),
+          if (_folders.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('可先在清单顶部新建学科分组。'),
+            ),
+        ],
+      ),
+    );
+    if (destination == null || !mounted) return;
+    await _changeFolders(
+      () => _learningListService.moveEntries(
+        ids,
+        destination.isEmpty ? null : destination,
+      ),
+    );
+  }
+
+  Widget _buildFolderHeader() => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Row(
+        children: [
+          const Expanded(
+            child: Text('学科分组', style: TextStyle(fontWeight: FontWeight.w700)),
+          ),
+          IconButton(
+            key: const Key('create-learning-folder'),
+            tooltip: '新建学科分组',
+            onPressed: _folderBusy ? null : () => _editFolder(),
+            icon: const Icon(Icons.create_new_folder_outlined),
+          ),
+          if (!_allFolders && _folderId != null)
+            PopupMenuButton<String>(
+              key: const Key('manage-learning-folder'),
+              tooltip: '管理当前分组',
+              enabled: !_folderBusy,
+              onSelected: (action) {
+                final folder = _folders.firstWhere(
+                  (folder) => folder.id == _folderId,
+                );
+                if (action == 'rename') {
+                  unawaited(_editFolder(folder));
+                } else {
+                  unawaited(_deleteFolder(folder));
+                }
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 'rename', child: Text('重命名分组')),
+                PopupMenuItem(value: 'delete', child: Text('删除分组')),
+              ],
+            ),
+        ],
+      ),
+      SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ChoiceChip(
+                key: const Key('learning-folder-all'),
+                label: Text('全部学科（${_entries.length}）'),
+                selected: _allFolders,
+                onSelected: (_) => setState(() {
+                  _allFolders = true;
+                  _selected.clear();
+                }),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ChoiceChip(
+                key: const Key('learning-folder-ungrouped'),
+                label: Text(
+                  '未分组（${_entries.where((entry) => entry.folderId == null).length}）',
+                ),
+                selected: !_allFolders && _folderId == null,
+                onSelected: (_) => setState(() {
+                  _allFolders = false;
+                  _folderId = null;
+                  _selected.clear();
+                }),
+              ),
+            ),
+            for (final folder in _folders)
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: ChoiceChip(
+                  key: Key('learning-folder-${folder.id}'),
+                  label: Text(
+                    '${folder.name}（${_entries.where((entry) => entry.folderId == folder.id).length}）',
+                  ),
+                  selected: !_allFolders && _folderId == folder.id,
+                  onSelected: (_) => setState(() {
+                    _allFolders = false;
+                    _folderId = folder.id;
+                    _selected.clear();
+                  }),
+                ),
+              ),
+          ],
+        ),
+      ),
+      if (_folderBusy) const LinearProgressIndicator(),
+      const SizedBox(height: 8),
+    ],
+  );
 
   void _showSaveError() {
     if (mounted) {
@@ -498,11 +761,14 @@ class _LearningListPageState extends State<LearningListPage> {
                   color: _statusColor(context, entry.status),
                 ),
                 const SizedBox(width: 5),
-                Text(
-                  entry.status.label,
-                  style: Theme.of(context).textTheme.labelMedium,
+                Expanded(
+                  child: Text(
+                    '${entry.status.label} · ${_folderName(entry.folderId)}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
                 ),
-                const Spacer(),
                 TextButton.icon(
                   key: Key('continue-learning-${entry.stableId}'),
                   // 继续按钮只为未完成项目打开播放器；已完成项目仍可点击卡片回看，但不参与顺序继续学习。
@@ -521,6 +787,14 @@ class _LearningListPageState extends State<LearningListPage> {
                           size: 18,
                         ),
                   label: Text(completed ? '已完成' : '继续学习'),
+                ),
+                IconButton(
+                  key: Key('move-learning-${entry.stableId}'),
+                  onPressed: _folderBusy || opening || updating || _reordering
+                      ? null
+                      : () => _moveToFolder({entry.stableId}),
+                  icon: const Icon(Icons.drive_file_move_outline),
+                  tooltip: '移动到学科分组',
                 ),
                 IconButton(
                   key: Key('remove-learning-${entry.stableId}'),
@@ -548,6 +822,7 @@ class _LearningListPageState extends State<LearningListPage> {
         children: <Widget>[
           if (_learningListService.readFailed)
             const Text('学习清单读取失败，原数据保留。请重试。'),
+          _buildFolderHeader(),
           Wrap(
             spacing: 8,
             children: [
@@ -582,6 +857,13 @@ class _LearningListPageState extends State<LearningListPage> {
                 TextButton(
                   onPressed: _selected.isEmpty ? null : _removeSelected,
                   child: Text('移除所选（${_selected.length}）'),
+                ),
+                TextButton(
+                  key: const Key('move-selected-learning'),
+                  onPressed: _selected.isEmpty || _folderBusy
+                      ? null
+                      : () => _moveToFolder(Set.of(_selected)),
+                  child: const Text('移动所选'),
                 ),
                 for (final status in LearningListStatus.values)
                   TextButton(

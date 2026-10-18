@@ -39,10 +39,10 @@ void main() {
     expect(await service.loadWatchHistoryEnabled(), isFalse);
   });
 
-  /// New search rules default to learning content without a popularity threshold.
-  test('搜索过滤默认开启学习内容而不限制播放量', () async {
+  /// New installs preserve all results until the user chooses a filter.
+  test('搜索过滤默认保留所有内容而不限制播放量', () async {
     final filter = await const SearchContentFilterService().load();
-    expect(filter.learningOnly, isTrue);
+    expect(filter.learningOnly, isFalse);
     expect(filter.minimumPlayCount, 0);
   });
 
