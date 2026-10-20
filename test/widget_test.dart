@@ -5600,7 +5600,10 @@ void main() {
       );
       await tester.pumpAndSettle();
       await openSubtitleMenu(tester);
-      await tester.tap(find.text('测试中文字幕'));
+      final trackOption = find.text('测试中文字幕');
+      await tester.ensureVisible(trackOption);
+      await tester.pumpAndSettle();
+      await tester.tap(trackOption.hitTestable());
       await tester.pumpAndSettle();
       final toggle = find.byTooltip(layout.full ? '进入全屏' : '退出全屏');
       if (toggle.evaluate().isNotEmpty) {
