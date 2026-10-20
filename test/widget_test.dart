@@ -5304,7 +5304,8 @@ void main() {
           'C:/Users/L1XU4N/flutter/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf',
         ),
       ]) {
-        if (File(font.$2).existsSync()) {
+        if (Platform.environment['FOCUBILI_LAYOUT_CAPTURE'] == '1' &&
+            File(font.$2).existsSync()) {
           final loader = FontLoader(font.$1)
             ..addFont(
               Future.value(

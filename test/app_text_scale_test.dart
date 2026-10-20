@@ -221,7 +221,8 @@ void main() {
       await tester.binding.setSurfaceSize(const Size(360, 900));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final font = FontLoader('UiTextTest');
-      if (File('C:/Windows/Fonts/msyh.ttc').existsSync()) {
+      if (Platform.environment['FOCUBILI_LAYOUT_CAPTURE'] == '1' &&
+          File('C:/Windows/Fonts/msyh.ttc').existsSync()) {
         font.addFont(
           Future.value(
             ByteData.sublistView(

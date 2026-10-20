@@ -753,7 +753,7 @@ class ProblemDiagnosticsService {
     return text.toString().trimRight();
   }
 
-  /// 安全读取安装版本；插件不可用时回退到当前源码的 v1.8.0 版本标识。
+  /// 安全读取安装版本；插件不可用时回退到当前源码的版本标识。
   Future<String> _loadVersionSafely() async {
     try {
       final String version = (await _appVersionLoader()).trim();

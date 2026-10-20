@@ -96,13 +96,14 @@ extension _PlayerControlsView on _PlayerPageState {
       children: <Widget>[
         Row(
           children: <Widget>[
-            Text(
-              '选集 · 共 ${parts.length} 集',
-              style: Theme.of(
-                context,
-              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+            Expanded(
+              child: Text(
+                '选集 · 共 ${parts.length} 集',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+              ),
             ),
-            const Spacer(),
             TextButton.icon(
               key: const Key('detail-part-selector-expand'),
               onPressed: _openPartSelector,
