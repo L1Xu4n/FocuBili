@@ -556,6 +556,8 @@ mixin _PlayerOverlayCoordinator
           onSeek: (position) async {
             if (isCurrentVideo()) await _seekNativeTo(position);
           },
+          diagnosticReport: () =>
+              SubtitleDiagnosticLog.instance.report(bvid: bvid, cid: cid),
         ),
       );
     } finally {
@@ -633,6 +635,17 @@ mixin _PlayerOverlayCoordinator
     final int requestToken = ++_subtitleCuesRequestToken;
     final String bvid = _activeVideo.bvid;
     final int cid = _currentPart.cid;
+    SubtitleDiagnosticLog.instance.record(
+      bvid: bvid,
+      cid: cid,
+      stage: 'select-request',
+      source: 'player-ui',
+      facts: {
+        'trackId': track.id,
+        'documentId': track.documentId,
+        'selectionGeneration': requestToken,
+      },
+    );
     if (_selectedSubtitleTrack?.id == track.id &&
         _subtitleCueIdentity == (bvid, cid) &&
         _subtitleCues.isNotEmpty) {
@@ -665,6 +678,31 @@ mixin _PlayerOverlayCoordinator
       _showTransientSnackBar(result.message);
       return;
     }
+    final duration = _playbackSnapshot.duration > Duration.zero
+        ? _playbackSnapshot.duration
+        : _currentPart.duration;
+    final maxEnd = result.cues.fold<Duration>(
+      Duration.zero,
+      (value, cue) => cue.to > value ? cue.to : value,
+    );
+    if (duration > Duration.zero &&
+        maxEnd > duration + const Duration(seconds: 5)) {
+      SubtitleDiagnosticLog.instance.record(
+        bvid: bvid,
+        cid: cid,
+        stage: 'duration-warning',
+        source: 'player-ui',
+        facts: {
+          'trackId': track.id,
+          'durationMs': duration.inMilliseconds,
+          'maxCueEndMs': maxEnd.inMilliseconds,
+          'cuesHash': SubtitleDiagnosticLog.cueHash(result.cues),
+        },
+      );
+      // Duration is a clue, never proof that a document belongs to another video.
+      // Imprecise metadata and legitimate trailing cues must remain usable.
+      _showTransientSnackBar('字幕时间超过当前分P时长，可能不匹配；可复制字幕诊断。');
+    }
     setState(() {
       _selectedSubtitleTrack = track;
       _subtitleCueIdentity = (bvid, cid);
@@ -675,6 +713,18 @@ mixin _PlayerOverlayCoordinator
         );
     });
     _showAdjustmentFeedback('字幕：${track.label}');
+    SubtitleDiagnosticLog.instance.record(
+      bvid: bvid,
+      cid: cid,
+      stage: 'present',
+      source: 'player-ui',
+      facts: {
+        'trackId': track.id,
+        'documentId': track.documentId,
+        'cuesHash': SubtitleDiagnosticLog.cueHash(result.cues),
+        'cueCount': result.cues.length,
+      },
+    );
     _scheduleSeekFeedbackClear();
   }
 
@@ -748,6 +798,7 @@ mixin _PlayerOverlayCoordinator
               child: Text(
                 cue.content,
                 key: const Key('active-subtitle'),
+                textScaler: AppTextScaleScope.subtitleScalerOf(context),
                 maxLines: 3,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.center,

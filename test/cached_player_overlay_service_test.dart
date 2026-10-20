@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+
+import 'fixtures/subtitle_wbi_navigation.dart';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -52,7 +54,10 @@ void main() {
       final service = DesktopPlayerOverlayService(
         authService: BilibiliAuthService(cookieStore: _Cookies()),
         request: (uri, headers, max) async {
-          if (uri.path == '/x/player/v2') return _tracks(++trackReads);
+          if (uri.path == '/x/web-interface/nav') {
+            return subtitleWbiNavigation();
+          }
+          if (uri.path == '/x/player/wbi/v2') return _tracks(++trackReads);
           cueReads++;
           return DesktopOverlayHttpResponse(
             statusCode: 403,
@@ -81,7 +86,10 @@ void main() {
       final service = DesktopPlayerOverlayService(
         authService: BilibiliAuthService(cookieStore: _Cookies()),
         request: (uri, headers, max) async {
-          if (uri.path == '/x/player/v2') return _tracks(version);
+          if (uri.path == '/x/web-interface/nav') {
+            return subtitleWbiNavigation();
+          }
+          if (uri.path == '/x/player/wbi/v2') return _tracks(version);
           if (uri.path == '/1.json') {
             started.complete();
             await release.future;
@@ -119,7 +127,10 @@ void main() {
       final delegate = DesktopPlayerOverlayService(
         authService: BilibiliAuthService(cookieStore: _Cookies()),
         request: (uri, headers, max) async {
-          if (uri.path == '/x/player/v2') {
+          if (uri.path == '/x/web-interface/nav') {
+            return subtitleWbiNavigation();
+          }
+          if (uri.path == '/x/player/wbi/v2') {
             return _tracks(
               version,
               cid: int.parse(uri.queryParameters['cid']!),
@@ -172,7 +183,10 @@ void main() {
         DesktopPlayerOverlayService(
           authService: BilibiliAuthService(cookieStore: _Cookies()),
           request: (uri, headers, max) async {
-            if (uri.path == '/x/player/v2') return _tracks(1);
+            if (uri.path == '/x/web-interface/nav') {
+              return subtitleWbiNavigation();
+            }
+            if (uri.path == '/x/player/wbi/v2') return _tracks(1);
             requests++;
             return _cues('same');
           },

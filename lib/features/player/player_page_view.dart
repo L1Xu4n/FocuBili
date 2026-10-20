@@ -286,6 +286,9 @@ extension _PlayerPageView on _PlayerPageState {
                       ? 16 + 48 * controlSize.scale
                       : 16,
                   feedback: _buildPlayerFeedback(),
+                  bottomOverlay: _buildChapterProgressOverlay(
+                    inPictureInPicture: inPictureInPicture,
+                  ),
                   topControls: _buildFadingControls(
                     SafeArea(
                       key: const Key('top-player-bar'),
@@ -491,9 +494,6 @@ extension _PlayerPageView on _PlayerPageState {
                       ),
                     ),
                   ),
-                ),
-                _buildChapterProgressOverlay(
-                  inPictureInPicture: inPictureInPicture,
                 ),
                 if (_partSelectorExpanded && _fullscreen)
                   Positioned(

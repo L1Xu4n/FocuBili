@@ -5,6 +5,7 @@ import '../models/danmaku_preferences.dart';
 import '../models/playback_preferences.dart';
 import '../models/search_content_filter.dart';
 import 'app_theme_mode_service.dart';
+import 'app_text_scale_service.dart';
 import 'image_resource_cache.dart';
 import 'media_cache_service.dart';
 import 'settings_runtime_adapter.dart';
@@ -30,6 +31,7 @@ class SettingsTransferService {
     'app_behavior.wbi_signing_enabled': _SettingType.boolean,
     'appearance.theme_mode': _SettingType.text,
     'appearance.theme_color': _SettingType.integer,
+    'appearance.text_scale': _SettingType.decimal,
     'appearance.layout_orientation': _SettingType.text,
     'app_update.check_on_start': _SettingType.boolean,
     'app_update.ignored_release': _SettingType.text,
@@ -181,6 +183,9 @@ class SettingsTransferService {
       }
     }
     final normalizedPlaybackNumber = switch (key) {
+      'appearance.text_scale' => AppTextScaleService.normalize(
+        (value as num).toDouble(),
+      ),
       'playback_preferences.long_press_speed' =>
         PlaybackPreferences.normalizeLongPressPlaybackSpeed(
           (value as num).toDouble(),

@@ -2,6 +2,7 @@ import 'cached_player_overlay_service.dart';
 import 'package:flutter/services.dart';
 
 import '../models/player_overlay_data.dart';
+import 'subtitle_diagnostic_log.dart';
 
 /// 抽象 Flutter 到原生叠加数据通道，方便测试替换而不触及真实 Android 会话。
 abstract interface class PlayerOverlayPlatformChannel {
@@ -92,6 +93,12 @@ class NativePlayerOverlayService
       return const SubtitleTrackLoadResult.unavailable(message: '字幕请求参数无效。');
     }
     try {
+      SubtitleDiagnosticLog.instance.record(
+        bvid: bvid,
+        cid: cid,
+        stage: 'metadata-request',
+        source: 'native-bridge',
+      );
       final Object? result = await _platformChannel.invokeMethod(
         'loadSubtitleTracks',
         arguments,
@@ -105,6 +112,21 @@ class NativePlayerOverlayService
       final parsed = SubtitleTrackLoadResult.fromPlatformMap(
         Map<Object?, Object?>.from(result),
       );
+      SubtitleDiagnosticLog.instance.record(
+        bvid: bvid,
+        cid: cid,
+        stage: 'metadata-response',
+        source: 'android-http',
+        facts: {
+          if (result['diagnostic'] is Map)
+            ...Map<Object?, Object?>.from(result['diagnostic'] as Map),
+          'trackSetHash': SubtitleDiagnosticLog.digest(
+            parsed.tracks
+                .map((t) => '${t.id}:${t.language}:${t.documentId}')
+                .join('|'),
+          ),
+        },
+      );
       if (parsed.status != SubtitleLoadStatus.unavailable) {
         _knownTracks.remove((bvid, cid));
         _knownTracks[(bvid, cid)] = parsed.tracks;
@@ -114,6 +136,17 @@ class NativePlayerOverlayService
       }
       return parsed;
     } on PlatformException catch (error) {
+      SubtitleDiagnosticLog.instance.record(
+        bvid: bvid,
+        cid: cid,
+        stage: 'request-error',
+        source: 'native-bridge',
+        facts: {
+          if (error.details is Map)
+            ...Map<Object?, Object?>.from(error.details as Map),
+          'errorCode': error.code,
+        },
+      );
       return _trackResultFromPlatformError(error);
     } on MissingPluginException {
       return const SubtitleTrackLoadResult.unavailable(
@@ -141,23 +174,57 @@ class NativePlayerOverlayService
     final expected = _knownTracks[(bvid, cid)]
         ?.where((track) => track.id == normalizedTrackId)
         .firstOrNull;
+    // A refresh of the same BV/CID must also invalidate an older completion.
+    var expectedSession = _knownTracks[(bvid, cid)];
     while (true) {
       try {
-        final Object? result = await _platformChannel.invokeMethod(
-          'loadSubtitleCues',
-          <String, Object?>{...arguments, 'trackId': normalizedTrackId},
-        );
-        if (revision != _subtitleRevision) {
+        final Object? result = await _platformChannel
+            .invokeMethod('loadSubtitleCues', <String, Object?>{
+              ...arguments,
+              'trackId': normalizedTrackId,
+              if (expected != null && expected.documentId.isNotEmpty)
+                'documentId': expected.documentId,
+            });
+        if (revision != _subtitleRevision ||
+            !identical(_knownTracks[(bvid, cid)], expectedSession)) {
           return const SubtitleCueLoadResult.unavailable();
         }
         if (result is! Map) {
           return const SubtitleCueLoadResult.unavailable();
         }
-        return SubtitleCueLoadResult.fromPlatformMap(
+        final parsed = SubtitleCueLoadResult.fromPlatformMap(
           Map<Object?, Object?>.from(result),
         );
+        SubtitleDiagnosticLog.instance.record(
+          bvid: bvid,
+          cid: cid,
+          stage: 'document-response',
+          source: 'android-http',
+          facts: {
+            if (result['diagnostic'] is Map)
+              ...Map<Object?, Object?>.from(result['diagnostic'] as Map),
+            'trackId': normalizedTrackId,
+            'documentId': expected?.documentId,
+            'cueCount': parsed.cues.length,
+            'cuesHash': SubtitleDiagnosticLog.cueHash(parsed.cues),
+          },
+        );
+        return parsed;
       } on PlatformException catch (error) {
-        if (revision != _subtitleRevision) {
+        SubtitleDiagnosticLog.instance.record(
+          bvid: bvid,
+          cid: cid,
+          stage: 'request-error',
+          source: 'native-bridge',
+          facts: {
+            if (error.details is Map)
+              ...Map<Object?, Object?>.from(error.details as Map),
+            'trackId': normalizedTrackId,
+            'errorCode': error.code,
+          },
+        );
+        if (revision != _subtitleRevision ||
+            !identical(_knownTracks[(bvid, cid)], expectedSession)) {
           return const SubtitleCueLoadResult.unavailable();
         }
         if ((error.code == 'subtitle_track_not_loaded' ||
@@ -179,10 +246,15 @@ class NativePlayerOverlayService
             (SubtitleTrack track) =>
                 track.id == normalizedTrackId &&
                 !track.isLocked &&
-                (expected == null || track.language == expected.language),
+                (expected == null ||
+                    (track.language == expected.language &&
+                        track.documentId == expected.documentId)),
           )) {
-            return const SubtitleCueLoadResult.locked();
+            return const SubtitleCueLoadResult.locked(
+              message: '字幕正文或语言已变化，请刷新后重新选择轨道。',
+            );
           }
+          expectedSession = _knownTracks[(bvid, cid)];
           continue;
         }
         return _cueResultFromPlatformError(error);

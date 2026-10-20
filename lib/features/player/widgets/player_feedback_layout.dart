@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
-enum _FeedbackSlot { top, bottom, feedback }
+enum _FeedbackSlot { top, bottom, bottomOverlay, feedback }
 
 /// 先测量真实上下播放栏，再把反馈限制在两栏之间。
 class PlayerFeedbackViewport extends StatefulWidget {
@@ -15,10 +15,14 @@ class PlayerFeedbackViewport extends StatefulWidget {
     required this.controlsVisible,
     this.edgeInsets = EdgeInsets.zero,
     this.sideInset = 16,
+    this.bottomOverlay = const SizedBox.shrink(),
   });
 
   final Widget topControls;
   final Widget bottomControls;
+
+  /// Bottom annotations that remain visible while the main controls are hidden.
+  final Widget bottomOverlay;
   final Widget feedback;
   final bool controlsVisible;
   final EdgeInsets edgeInsets;
@@ -66,6 +70,7 @@ class _PlayerFeedbackViewportState extends State<PlayerFeedbackViewport> {
     children: [
       LayoutId(id: _FeedbackSlot.top, child: widget.topControls),
       LayoutId(id: _FeedbackSlot.bottom, child: widget.bottomControls),
+      LayoutId(id: _FeedbackSlot.bottomOverlay, child: widget.bottomOverlay),
       LayoutId(
         id: _FeedbackSlot.feedback,
         child: ClipRect(
@@ -107,10 +112,18 @@ class _FeedbackLayoutDelegate extends MultiChildLayoutDelegate {
     );
     final top = layoutChild(_FeedbackSlot.top, barConstraints);
     final bottom = layoutChild(_FeedbackSlot.bottom, barConstraints);
+    final overlay = layoutChild(_FeedbackSlot.bottomOverlay, barConstraints);
     positionChild(_FeedbackSlot.top, Offset.zero);
     positionChild(_FeedbackSlot.bottom, Offset(0, size.height - bottom.height));
+    positionChild(
+      _FeedbackSlot.bottomOverlay,
+      Offset(0, size.height - overlay.height),
+    );
     final upper = controlsVisible ? top.height : edgeInsets.top;
-    final lower = controlsVisible ? bottom.height : edgeInsets.bottom + 2;
+    final lower = math.max(
+      controlsVisible ? bottom.height : edgeInsets.bottom + 2,
+      overlay.height,
+    );
     final topEdge = math.min(size.height, upper + 8);
     final height = math.max(0.0, size.height - lower - 8 - topEdge);
     final left = math.min(size.width / 2, edgeInsets.left + sideInset);

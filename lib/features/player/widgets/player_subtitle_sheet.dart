@@ -1,9 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../../models/playback_preferences.dart';
 import '../../../models/player_overlay_data.dart';
+import '../../../core/theme/app_text_scale.dart';
 import '../../../services/local_export_service.dart';
 import '../../../services/subtitle_export_service.dart';
 
@@ -20,6 +22,7 @@ class PlayerSubtitleSheet extends StatefulWidget {
     required this.onPreviewFontSize,
     required this.onCommitFontSize,
     this.initialResult,
+    this.diagnosticReport,
     this.selectedTrackId,
     this.loadCues,
     this.onSeek,
@@ -38,6 +41,7 @@ class PlayerSubtitleSheet extends StatefulWidget {
   final Future<SubtitleCueLoadResult> Function(SubtitleTrack)? loadCues;
   final Future<void> Function(Duration)? onSeek;
   final LocalExportService exportService;
+  final String Function()? diagnosticReport;
 
   /// 创建管理面板读取状态和实时字号预览的状态对象。
   @override
@@ -278,6 +282,27 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
     );
   }
 
+  Widget _buildDiagnostics() => ExpansionTile(
+    title: const Text('字幕来源诊断'),
+    subtitle: const Text('仅标识与哈希，不含正文或登录信息'),
+    children: [
+      Padding(
+        padding: const EdgeInsets.all(16),
+        child: SelectableText(
+          widget.diagnosticReport!(),
+          style: const TextStyle(fontSize: 11),
+        ),
+      ),
+      TextButton.icon(
+        key: const Key('copy-subtitle-diagnostics'),
+        icon: const Icon(Icons.copy_rounded),
+        label: const Text('复制字幕诊断'),
+        onPressed: () =>
+            Clipboard.setData(ClipboardData(text: widget.diagnosticReport!())),
+      ),
+    ],
+  );
+
   /// 优先显示当前分 P 已成功获取的列表，没有有效缓存时才开始读取。
   @override
   void initState() {
@@ -478,6 +503,9 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
                               ),
                               child: Text(
                                 '这是字幕预览',
+                                textScaler: AppTextScaleScope.subtitleScalerOf(
+                                  context,
+                                ),
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
                                   color: Colors.white,
@@ -507,6 +535,8 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
                               // 关闭只撤销当前视频的字幕显示。
                               onTap: () => _chooseTrack(widget.offValue),
                             ),
+                            if (widget.diagnosticReport != null)
+                              _buildDiagnostics(),
                             for (final track
                                 in result?.tracks ?? const <SubtitleTrack>[])
                               ListTile(
@@ -516,7 +546,46 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
                                       ? Icons.lock_outline_rounded
                                       : Icons.subtitles_rounded,
                                 ),
-                                title: Text(track.label),
+                                title: Wrap(
+                                  spacing: 8,
+                                  runSpacing: 4,
+                                  crossAxisAlignment: WrapCrossAlignment.center,
+                                  children: [
+                                    Text(track.label),
+                                    if (track.isAi)
+                                      Semantics(
+                                        label: 'AI 自动字幕',
+                                        excludeSemantics: true,
+                                        child: Container(
+                                          key: ValueKey(
+                                            'subtitle-ai-${track.id}',
+                                          ),
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 6,
+                                            vertical: 2,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: Theme.of(
+                                              context,
+                                            ).colorScheme.secondaryContainer,
+                                            borderRadius: BorderRadius.circular(
+                                              5,
+                                            ),
+                                          ),
+                                          child: Text(
+                                            'AI',
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w600,
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .onSecondaryContainer,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
                                 subtitle: track.language.isEmpty
                                     ? null
                                     : Text(track.language),

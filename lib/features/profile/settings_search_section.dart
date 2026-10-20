@@ -20,6 +20,7 @@ final _settingsAliases = <Key, String>{
   Key('enable-two-finger-video-transform'): '启用双指缩放画面 全屏 拖动 双指双击恢复画面 播放器手势',
   Key('enable-focus-do-not-disturb'): '专注 勿扰 通知 Windows 系统专注',
   Key('theme-mode-setting'): '主题模式 浅色 深色 跟随系统 外观',
+  Key('ui-text-size-preference'): '界面文字大小 字体 字号 缩放 大屏 放大 text font scale',
   Key('theme-color-setting'): '主题强调色 蓝色 B站粉 玫红 珊瑚橙 翠绿 湖蓝 薰衣草紫 外观',
   Key('open-android-permissions'): '权限管理 系统能力 通知 后台运行',
   Key('enable-startup-update-check'): '启动时检查更新 GitHub Release',
