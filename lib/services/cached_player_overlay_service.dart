@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../models/player_overlay_data.dart';
 import 'cache_lifecycle.dart';
 import 'player_overlay_service.dart';
+import 'subtitle_diagnostic_log.dart';
 
 /// Optional lifecycle for implementations which hold temporary subtitle URLs.
 abstract interface class SubtitleSessionInvalidator {
@@ -194,7 +195,19 @@ class CachedPlayerOverlayService implements PlayerOverlayService {
     _sessions[identity] = session;
     final key = (session, trackId);
     final cached = _cache.get(key, _clock());
-    if (cached != null) return cached;
+    if (cached != null) {
+      SubtitleDiagnosticLog.instance.record(
+        bvid: bvid,
+        cid: cid,
+        stage: 'cache-hit',
+        source: 'memory-cache',
+        facts: {
+          'trackId': trackId,
+          'cuesHash': SubtitleDiagnosticLog.cueHash(cached.cues),
+        },
+      );
+      return cached;
+    }
     final operation = _pending.putIfAbsent(key, () async {
       final revision = CacheLifecycle.subtitles.value;
       final result = await delegate.loadSubtitleCues(
@@ -216,6 +229,16 @@ class CachedPlayerOverlayService implements PlayerOverlayService {
           bvid: bvid,
           cid: cid,
           trackId: trackId,
+        );
+        SubtitleDiagnosticLog.instance.record(
+          bvid: bvid,
+          cid: cid,
+          stage: 'cache-write',
+          source: 'memory-cache',
+          facts: {
+            'trackId': trackId,
+            'cuesHash': SubtitleDiagnosticLog.cueHash(result.cues),
+          },
         );
       }
       return result;

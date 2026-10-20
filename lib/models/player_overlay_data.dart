@@ -24,6 +24,8 @@ class SubtitleTrack {
     required this.language,
     required this.label,
     required this.isLocked,
+    this.documentId = '',
+    this.sourceType,
   });
 
   /// 单条轨道允许展示的最长名称，避免异常服务数据撑坏菜单布局。
@@ -33,6 +35,13 @@ class SubtitleTrack {
   final String language;
   final String label;
   final bool isLocked;
+
+  /// Opaque identity of the subtitle resource; excludes temporary URL signatures.
+  final String documentId;
+
+  /// API source type: 1 is AI; other or absent values are never guessed.
+  final int? sourceType;
+  bool get isAi => sourceType == 1;
 
   /// 从原生方法通道的安全字典解析轨道；无编号的异常条目会被忽略。
   static SubtitleTrack? tryParse(Map<Object?, Object?> values) {
@@ -51,6 +60,10 @@ class SubtitleTrack {
       language: language,
       label: label,
       isLocked: values['isLocked'] == true,
+      documentId: values['documentId']?.toString() ?? '',
+      sourceType: values['sourceType'] is int
+          ? values['sourceType'] as int
+          : null,
     );
   }
 }

@@ -133,6 +133,7 @@ class NativePlaybackController(
     private var guestOfferGeneration: Long? = null
     private var guestConsentGeneration: Long? = null
     private val wbiSigner = PlaybackWbiSigner()
+    private val subtitleWbiSigner = PlaybackWbiSigner()
     private var currentQuality = DEFAULT_QUALITY
     private var availableQualities = listOf(
         PlaybackQualityOption(DEFAULT_QUALITY, "高清 720P"),
@@ -155,6 +156,7 @@ class NativePlaybackController(
     private var isInPictureInPicture = false
     @Volatile
     private var subtitleSessionEpoch = 0L
+    private var subtitleRequestSequence = 0L
     private val subtitleTrackSessions = linkedMapOf<Pair<String, Long>, SubtitleTrackSession>()
 
     /** 保存一档可供 Flutter 选择的清晰度编号与名称。 */
@@ -199,6 +201,7 @@ class NativePlaybackController(
         val bvid: String,
         val cid: Long,
         val readableTrackUrls: Map<String, String>,
+        val documentIds: Map<String, String>,
     )
 
     /** 保存一条可展示但不含临时资源地址的字幕轨道元数据。 */
@@ -207,6 +210,8 @@ class NativePlaybackController(
         val language: String,
         val label: String,
         val isLocked: Boolean,
+        val documentId: String = "",
+        val sourceType: Int? = null,
     )
 
     /** 保存已从一段 Protobuf 数据安全解析出的普通弹幕展示字段。 */
@@ -468,10 +473,11 @@ class NativePlaybackController(
                 val bvid = call.argument<String>("bvid")?.trim().orEmpty()
                 val cid = call.argument<Number>("cid")?.toLong()
                 val trackId = call.argument<String>("trackId")?.trim().orEmpty()
+                val documentId = call.argument<String>("documentId")?.trim().orEmpty()
                 if (buildVideoPageUrl(bvid) == null || cid == null || cid <= 0L || trackId.isEmpty()) {
                     result.error("invalid_subtitle_request", "字幕请求参数无效。", null)
                 } else {
-                    requestSubtitleCues(bvid, cid, trackId, result)
+                    requestSubtitleCues(bvid, cid, trackId, documentId, result)
                 }
             }
             "loadDanmakuSegment" -> {
@@ -1595,12 +1601,19 @@ class NativePlaybackController(
         result: MethodChannel.Result,
     ) {
         val requestEpoch = subtitleSessionEpoch
+        val diagnostic = linkedMapOf<String, Any>(
+            "requestId" to ++subtitleRequestSequence, "aid" to 0L,
+            "endpoint" to "/x/player/wbi/v2", "signed" to false,
+        )
         runCatching {
             overlayDataRequestExecutor.execute {
-                val trackResult = runCatching { loadSubtitleTracks(bvid, cid, requestEpoch) }
+                val trackResult = runCatching {
+                    loadSubtitleTracks(bvid, cid, requestEpoch, diagnostic) +
+                        ("diagnostic" to diagnostic.toMap())
+                }
                 mainHandler.post {
                     trackResult.onSuccess(result::success).onFailure { error ->
-                        reportSubtitleOperationFailure(result, error)
+                        reportSubtitleOperationFailure(result, error, diagnostic)
                     }
                 }
             }
@@ -1614,15 +1627,23 @@ class NativePlaybackController(
         bvid: String,
         cid: Long,
         trackId: String,
+        documentId: String,
         result: MethodChannel.Result,
     ) {
         val requestEpoch = subtitleSessionEpoch
+        val diagnostic = linkedMapOf<String, Any>(
+            "requestId" to ++subtitleRequestSequence, "trackId" to trackId,
+            "endpoint" to "document",
+        )
         runCatching {
             overlayDataRequestExecutor.execute {
-                val cueResult = runCatching { loadSubtitleCues(bvid, cid, trackId, requestEpoch) }
+                val cueResult = runCatching {
+                    loadSubtitleCues(bvid, cid, trackId, documentId, requestEpoch, diagnostic) +
+                        ("diagnostic" to diagnostic.toMap())
+                }
                 mainHandler.post {
                     cueResult.onSuccess(result::success).onFailure { error ->
-                        reportSubtitleOperationFailure(result, error)
+                        reportSubtitleOperationFailure(result, error, diagnostic)
                     }
                 }
             }
@@ -1636,11 +1657,14 @@ class NativePlaybackController(
      *
      * `is_lock=true` 的轨道只作为锁定状态回传，绝不会尝试读取内容或绕过权限。
      */
-    private fun loadSubtitleTracks(bvid: String, cid: Long, requestEpoch: Long): Map<String, Any> {
+    private fun loadSubtitleTracks(bvid: String, cid: Long, requestEpoch: Long, diagnostic: MutableMap<String, Any>): Map<String, Any> {
         checkSubtitleRequestEpoch(requestEpoch)
-        val root = parseSubtitleJson(requestSubtitleMetadataJson(bvid, cid))
+        val text = requestSubtitleMetadataJson(bvid, cid, diagnostic)
+        diagnostic["metadataHash"] = SubtitleDocumentIdentity.hash(text)
+        val root = parseSubtitleJson(text)
         checkSubtitleRequestEpoch(requestEpoch)
         val code = root.optInt("code", -1)
+        diagnostic["apiCode"] = code
         if (code == SUBTITLE_LOGIN_REQUIRED_CODE) {
             synchronized(subtitleTrackSessions) { subtitleTrackSessions.remove(bvid to cid) }
             return subtitleTrackResult(
@@ -1658,6 +1682,9 @@ class NativePlaybackController(
             ?: throw SubtitleOperationException("subtitle_invalid_data", "字幕数据格式不正确。")
         // 核对接口返回的视频和分 P，拒绝把其他视频的地址绑定到当前请求。
         val responseBvid = data.optString("bvid").trim()
+        diagnostic["responseBvid"] = responseBvid
+        diagnostic["responseCid"] = data.optLong("cid", -1L)
+        diagnostic["responseAid"] = data.optLong("aid", -1L)
         if (responseBvid != bvid || data.optLong("cid", -1L) != cid) {
             throw SubtitleOperationException("subtitle_identity_mismatch", "字幕信息与当前视频不匹配。")
         }
@@ -1665,6 +1692,7 @@ class NativePlaybackController(
         val rawTracks = subtitle?.optJSONArray("subtitles")
         val tracks = mutableListOf<SubtitleTrackOption>()
         val readableTrackUrls = linkedMapOf<String, String>()
+        val documentIds = linkedMapOf<String, String>()
         if (rawTracks != null) {
             for (index in 0 until rawTracks.length()) {
                 if (tracks.size >= MAX_SUBTITLE_TRACKS) {
@@ -1689,16 +1717,20 @@ class NativePlaybackController(
                     normalizeSafeSubtitleUrl(rawTrack.optString("subtitle_url"))
                 }
                 val isLocked = serviceLocked || subtitleUrl == null
+                val documentId = subtitleUrl?.let { SubtitleDocumentIdentity.key(it, language) }.orEmpty()
                 tracks.add(
                     SubtitleTrackOption(
                         id = trackId,
                         language = language,
                         label = label,
                         isLocked = isLocked,
+                        documentId = documentId,
+                        sourceType = rawTrack.opt("type") as? Int,
                     ),
                 )
                 if (subtitleUrl != null) {
                     readableTrackUrls[trackId] = subtitleUrl
+                    documentIds[trackId] = documentId
                 }
             }
         }
@@ -1711,6 +1743,7 @@ class NativePlaybackController(
                 bvid = bvid,
                 cid = cid,
                 readableTrackUrls = readableTrackUrls.toMap(),
+                documentIds = documentIds.toMap(),
             )
             while (subtitleTrackSessions.size > MAX_SUBTITLE_SESSIONS) {
                 subtitleTrackSessions.remove(subtitleTrackSessions.keys.first())
@@ -1750,7 +1783,9 @@ class NativePlaybackController(
         bvid: String,
         cid: Long,
         trackId: String,
+        documentId: String,
         requestEpoch: Long,
+        diagnostic: MutableMap<String, Any>,
     ): Map<String, Any> {
         checkSubtitleRequestEpoch(requestEpoch)
         val session = synchronized(subtitleTrackSessions) { subtitleTrackSessions[bvid to cid] }
@@ -1762,13 +1797,19 @@ class NativePlaybackController(
         }
         val subtitleUrl = session.readableTrackUrls[trackId]
             ?: throw SubtitleOperationException("subtitle_locked", "此字幕当前不可用。")
+        if (documentId.isNotEmpty() && session.documentIds[trackId] != documentId) {
+            throw SubtitleOperationException("subtitle_track_not_loaded", "字幕正文已更新，请刷新后重新选择。")
+        }
+        diagnostic["documentId"] = session.documentIds[trackId].orEmpty()
         synchronized(subtitleTrackSessions) {
             if (subtitleTrackSessions[bvid to cid] === session) {
                 subtitleTrackSessions.remove(bvid to cid)
                 subtitleTrackSessions[bvid to cid] = session
             }
         }
-        val root = parseSubtitleJson(requestSubtitleDocumentJson(subtitleUrl, bvid))
+        val text = requestSubtitleDocumentJson(subtitleUrl, bvid, diagnostic)
+        diagnostic["bodyHash"] = SubtitleDocumentIdentity.hash(text)
+        val root = parseSubtitleJson(text)
         checkSubtitleRequestEpoch(requestEpoch)
         synchronized(subtitleTrackSessions) {
             if (subtitleTrackSessions[bvid to cid] !== session) {
@@ -1812,31 +1853,41 @@ class NativePlaybackController(
     }
 
     /** 使用固定的播放器元数据地址请求当前分P字幕信息，不允许调用方提供任意主机。 */
-    private fun requestSubtitleMetadataJson(bvid: String, cid: Long): String {
-        val endpoint = Uri.Builder()
-            .scheme("https")
-            .authority(PLAYBACK_API_HOST)
-            .appendPath("x")
-            .appendPath("player")
-            .appendPath("v2")
-            .appendQueryParameter("bvid", bvid)
-            .appendQueryParameter("cid", cid.toString())
-            .build()
+    private fun requestSubtitleMetadataJson(bvid: String, cid: Long, diagnostic: MutableMap<String, Any>): String {
+        val parameters = try {
+            subtitleWbiSigner.sign(mapOf("bvid" to bvid, "cid" to cid.toString())) {
+                diagnostic["endpoint"] = "/x/web-interface/nav"
+                requestLimitedSubtitleJson(
+                    endpoint = "https://$PLAYBACK_API_HOST/x/web-interface/nav",
+                    referer = buildVideoPageUrl(bvid).orEmpty(),
+                    maximumBytes = MAX_SUBTITLE_METADATA_BYTES,
+                    includeSessionCookie = true,
+                    diagnostic = diagnostic,
+                )
+            }
+        } catch (_: Exception) {
+            throw SubtitleOperationException("subtitle_signing_unavailable", "字幕签名暂时不可用，请稍后刷新。")
+        }
+        diagnostic["signed"] = parameters.containsKey("w_rid") && parameters.containsKey("wts")
+        diagnostic["endpoint"] = "/x/player/wbi/v2"
+        val endpoint = "https://$PLAYBACK_API_HOST/x/player/wbi/v2?${WbiSigningPolicy.encodeQuery(parameters)}"
         return requestLimitedSubtitleJson(
-            endpoint = endpoint.toString(),
+            endpoint = endpoint,
             referer = buildVideoPageUrl(bvid).orEmpty(),
             maximumBytes = MAX_SUBTITLE_METADATA_BYTES,
             includeSessionCookie = true,
+            diagnostic = diagnostic,
         )
     }
 
     /** 请求已通过固定 CDN 主机校验的临时字幕 JSON，临时地址不会离开原生层。 */
-    private fun requestSubtitleDocumentJson(subtitleUrl: String, bvid: String): String {
+    private fun requestSubtitleDocumentJson(subtitleUrl: String, bvid: String, diagnostic: MutableMap<String, Any>): String {
         return requestLimitedSubtitleJson(
             endpoint = subtitleUrl,
             referer = buildVideoPageUrl(bvid).orEmpty(),
             maximumBytes = MAX_SUBTITLE_DOCUMENT_BYTES,
             includeSessionCookie = false,
+            diagnostic = diagnostic,
         )
     }
 
@@ -1850,6 +1901,7 @@ class NativePlaybackController(
         referer: String,
         maximumBytes: Int,
         includeSessionCookie: Boolean,
+        diagnostic: MutableMap<String, Any>? = null,
     ): String {
         val connection = URL(endpoint).openConnection() as? HttpsURLConnection
             ?: throw SubtitleOperationException("subtitle_invalid_url", "字幕地址无效。")
@@ -1863,17 +1915,21 @@ class NativePlaybackController(
         }, 30_000L)
         try {
             connection.requestMethod = "GET"
+            connection.instanceFollowRedirects = false
+            connection.useCaches = false
             connection.connectTimeout = NETWORK_TIMEOUT_MS
             connection.readTimeout = NETWORK_TIMEOUT_MS
             connection.setRequestProperty("Accept", "application/json")
             connection.setRequestProperty("Referer", referer)
             connection.setRequestProperty("User-Agent", DESKTOP_USER_AGENT)
+            connection.setRequestProperty("Cache-Control", "no-cache")
             if (includeSessionCookie) {
                 readBilibiliCookieHeader().takeIf { cookie -> cookie.isNotBlank() }?.let { cookie ->
                     connection.setRequestProperty("Cookie", cookie)
                 }
             }
             val statusCode = connection.responseCode
+            diagnostic?.set("httpStatus", statusCode)
             if (statusCode !in 200..299) {
                 throw SubtitleOperationException(
                     if (!includeSessionCookie && statusCode in listOf(401, 403, 410)) {
@@ -1887,6 +1943,7 @@ class NativePlaybackController(
             val responseBody = connection.inputStream.use { stream ->
                 readLimitedUtf8Text(stream.readBytesWithLimit(maximumBytes, connection, deadlineMs))
             }
+            diagnostic?.set("bytes", responseBody.toByteArray(Charsets.UTF_8).size)
             if (responseBody.isBlank()) {
                 throw SubtitleOperationException("subtitle_invalid_data", "字幕数据为空。")
             }
@@ -2005,6 +2062,8 @@ class NativePlaybackController(
                     "language" to track.language,
                     "label" to track.label,
                     "isLocked" to track.isLocked,
+                    "documentId" to track.documentId,
+                    "sourceType" to track.sourceType,
                 )
             },
         )
@@ -2024,11 +2083,11 @@ class NativePlaybackController(
     }
 
     /** 将字幕请求异常转换成稳定错误码和中文说明，避免 Throwable 原文泄露网络资料。 */
-    private fun reportSubtitleOperationFailure(result: MethodChannel.Result, error: Throwable) {
+    private fun reportSubtitleOperationFailure(result: MethodChannel.Result, error: Throwable, diagnostic: Map<String, Any>? = null) {
         if (error is SubtitleOperationException) {
-            result.error(error.errorCode, error.message, null)
+            result.error(error.errorCode, error.message, diagnostic)
         } else {
-            result.error("subtitle_unavailable", "字幕暂时无法读取，请稍后重试。", null)
+            result.error("subtitle_unavailable", "字幕暂时无法读取，请稍后重试。", diagnostic)
         }
     }
 
