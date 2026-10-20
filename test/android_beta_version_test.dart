@@ -11,8 +11,8 @@ void main() {
         multiLine: true,
       ).firstMatch(pubspec);
       expect(numeric, isNotNull);
-      expect(numeric!.group(1), '1.8.0');
-      expect(numeric.group(2), '27');
+      expect(numeric!.group(1), '1.8.1');
+      expect(numeric.group(2), '31');
       final gradle = File('android/app/build.gradle').readAsStringSync();
       final debug = RegExp(
         r'debug\s*\{([^}]+)\}',

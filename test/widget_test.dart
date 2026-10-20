@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart' show TapGestureRecognizer;
 import 'package:flutter/services.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -32,6 +34,9 @@ import 'package:focubili/services/danmaku_preferences_service.dart';
 import 'package:focubili/services/native_playback_service.dart';
 import 'package:focubili/services/listening_playback_service.dart';
 import 'package:focubili/services/player_overlay_service.dart';
+import 'package:focubili/services/subtitle_diagnostic_log.dart';
+import 'package:focubili/core/theme/app_text_scale.dart';
+import 'package:focubili/features/profile/app_text_scale_controller.dart';
 import 'package:focubili/services/playback_preferences_service.dart';
 import 'package:focubili/services/playback_video_surface.dart';
 import 'package:focubili/services/search_history_service.dart';
@@ -5213,6 +5218,279 @@ void main() {
     ],
   );
 
+  Future<void> captureSubtitleLayout(WidgetTester tester, String name) async {
+    if (Platform.environment['FOCUBILI_LAYOUT_CAPTURE'] != '1') return;
+    await tester.runAsync(() async {
+      final boundary = tester.renderObject<RenderRepaintBoundary>(
+        find.byKey(const Key('subtitle-layout-capture')),
+      );
+      final image = await boundary.toImage(pixelRatio: 1);
+      final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+      final file = File('evidence/subtitle-layout/$name.png');
+      await file.parent.create(recursive: true);
+      await file.writeAsBytes(bytes!.buffer.asUint8List());
+      image.dispose();
+    });
+  }
+
+  for (final layout in [
+    (
+      name: '横屏',
+      size: const Size(960, 540),
+      full: false,
+      chapters: true,
+      flags: false,
+      font: 16.0,
+      scale: 1.0,
+      safe: 0.0,
+      text: '第一 P 的字幕',
+    ),
+    (
+      name: '竖屏',
+      size: const Size(390, 844),
+      full: false,
+      chapters: true,
+      flags: false,
+      font: 16.0,
+      scale: 1.0,
+      safe: 0.0,
+      text: '第一 P 的字幕',
+    ),
+    (
+      name: '横屏全屏大字安全区',
+      size: const Size(960, 540),
+      full: true,
+      chapters: true,
+      flags: false,
+      font: 24.0,
+      scale: 1.4,
+      safe: 24.0,
+      text: '第一行字幕\n第二行字幕\n第三行字幕',
+    ),
+    (
+      name: '竖屏全屏旗标安全区',
+      size: const Size(540, 960),
+      full: true,
+      chapters: true,
+      flags: true,
+      font: 32.0,
+      scale: 1.3,
+      safe: 34.0,
+      text: '第一行字幕\n第二行字幕\n第三行字幕',
+    ),
+    (
+      name: '普通进度条',
+      size: const Size(720, 440),
+      full: true,
+      chapters: false,
+      flags: false,
+      font: 22.0,
+      scale: 1.2,
+      safe: 20.0,
+      text: '第一行字幕\n第二行字幕',
+    ),
+  ]) {
+    testWidgets('字幕避让隐藏控制栏的分段进度条-${layout.name}', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      await const PlaybackPreferencesService().saveSubtitleFontSize(
+        layout.font,
+      );
+      await tester.binding.setSurfaceSize(layout.size);
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      for (final font in [
+        ('SubtitleLayout', 'C:/Windows/Fonts/msyh.ttc'),
+        (
+          'MaterialIcons',
+          'C:/Users/L1XU4N/flutter/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf',
+        ),
+      ]) {
+        if (Platform.environment['FOCUBILI_LAYOUT_CAPTURE'] == '1' &&
+            File(font.$2).existsSync()) {
+          final loader = FontLoader(font.$1)
+            ..addFont(
+              Future.value(
+                ByteData.sublistView(File(font.$2).readAsBytesSync()),
+              ),
+            );
+          await loader.load();
+        }
+      }
+      final uiScale = AppTextScaleController();
+      await uiScale.initialize();
+      addTearDown(uiScale.dispose);
+      final notes = VideoNoteService();
+      if (layout.flags) await notes.saveNote(_flagNote('布局测试', 42));
+      final playback = _FakePlaybackService();
+      await tester.pumpWidget(
+        RepaintBoundary(
+          key: const Key('subtitle-layout-capture'),
+          child: MaterialApp(
+            theme: ThemeData(fontFamily: 'SubtitleLayout'),
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(context).copyWith(
+                textScaler: TextScaler.linear(layout.scale),
+                padding: EdgeInsets.only(bottom: layout.safe),
+                viewPadding: EdgeInsets.only(bottom: layout.safe),
+              ),
+              child: AppTextScale(controller: uiScale, child: child!),
+            ),
+            home: PlayerPage(
+              video: _createMultiPartVideo(),
+              playbackService: playback,
+              videoNoteService: notes,
+              interactionService: _FakePlayerInteractionService(),
+              playerOverlayService: _FakePlayerOverlayService(
+                tracksResult: subtitleTracks,
+                cuesResult: SubtitleCueLoadResult(
+                  status: SubtitleLoadStatus.available,
+                  message: '',
+                  cues: [
+                    SubtitleCue(
+                      from: Duration.zero,
+                      to: const Duration(minutes: 1),
+                      content: layout.text.replaceAll(r'\n', '\n'),
+                    ),
+                  ],
+                ),
+              ),
+              playerEnhancementService: _FakePlayerEnhancementService(
+                metadata: PlayerEnhancementMetadata(
+                  chapters: layout.chapters
+                      ? const [
+                          VideoChapter(
+                            title: '第一段',
+                            start: Duration.zero,
+                            end: Duration(minutes: 1),
+                          ),
+                          VideoChapter(
+                            title: '第二段',
+                            start: Duration(minutes: 1),
+                            end: Duration(minutes: 2),
+                          ),
+                        ]
+                      : const [],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await openSubtitleMenu(tester);
+      final trackOption = find.text('测试中文字幕');
+      await tester.ensureVisible(trackOption);
+      await tester.pumpAndSettle();
+      await tester.tap(trackOption.hitTestable());
+      await tester.pumpAndSettle();
+      final toggle = find.byTooltip(layout.full ? '进入全屏' : '退出全屏');
+      if (toggle.evaluate().isNotEmpty) {
+        await tester.tap(toggle);
+        await tester.pumpAndSettle();
+      }
+      void expectClear() {
+        final viewport = tester.getRect(
+          find.byKey(const Key('player-feedback-viewport')),
+        );
+        final subtitle = tester.getRect(
+          find.byKey(const Key('active-subtitle')),
+        );
+        expect(subtitle.top - 5, greaterThanOrEqualTo(viewport.top - .01));
+        expect(subtitle.bottom + 5, lessThanOrEqualTo(viewport.bottom + .01));
+        final annotations = find.byKey(
+          const Key('player-timeline-annotations'),
+        );
+        if (annotations.evaluate().isNotEmpty) {
+          expect(
+            subtitle.bottom + 5,
+            lessThanOrEqualTo(tester.getRect(annotations).top - 8 + .01),
+          );
+        }
+      }
+
+      expectClear();
+      await captureSubtitleLayout(tester, '${layout.name}-controls');
+      await tester.tapAt(
+        tester.getCenter(find.byKey(const Key('player-surface'))),
+      );
+      await tester.pump(const Duration(milliseconds: 400));
+      // During the fade both control regions remain reserved.
+      expectClear();
+      await tester.pump(const Duration(milliseconds: 240));
+      expect(
+        tester
+            .widget<AnimatedOpacity>(find.byKey(const Key('player-controls')))
+            .opacity,
+        0,
+      );
+      expectClear();
+      expect(
+        find.byKey(const Key('collapsed-timeline-overlay')),
+        layout.chapters ? findsOneWidget : findsNothing,
+      );
+      await captureSubtitleLayout(tester, '${layout.name}-hidden');
+      final captionHeight = tester
+          .getSize(find.byKey(const Key('active-subtitle')))
+          .height;
+      uiScale.preview(2.0);
+      await tester.pumpAndSettle();
+      expectClear();
+      expect(
+        tester.getSize(find.byKey(const Key('active-subtitle'))).height,
+        closeTo(captionHeight, .01),
+        reason: 'UI scale must not alter playback subtitle size',
+      );
+      await captureSubtitleLayout(tester, '${layout.name}-ui200-hidden');
+
+      // The collapsed chapter strip remains tappable after moving into the viewport.
+      if (layout.chapters) {
+        await tester.tap(
+          find.byKey(const ValueKey<String>('video-chapter-strip-1')),
+        );
+        await tester.pump();
+        expect(playback._position, const Duration(minutes: 1));
+        playback.emitPosition(Duration.zero);
+        await tester.pump();
+      }
+      if (tester
+              .widget<AnimatedOpacity>(find.byKey(const Key('player-controls')))
+              .opacity ==
+          0) {
+        await tester.tapAt(
+          tester.getCenter(find.byKey(const Key('player-surface'))),
+        );
+        await tester.pump(const Duration(milliseconds: 400));
+        await tester.pump(const Duration(milliseconds: 240));
+      }
+      expect(
+        tester
+            .widget<AnimatedOpacity>(find.byKey(const Key('player-controls')))
+            .opacity,
+        1,
+      );
+      expectClear();
+      if (layout.full) {
+        await tester.tap(find.byTooltip('锁定播放器'));
+        await tester.pump(const Duration(milliseconds: 400));
+        await tester.pump(const Duration(milliseconds: 240));
+        expectClear();
+        final lock = tester.getRect(find.byTooltip('解锁播放器'));
+        expect(
+          tester
+              .getRect(find.byKey(const Key('active-subtitle')))
+              .inflate(5)
+              .overlaps(lock),
+          false,
+        );
+        await captureSubtitleLayout(tester, '${layout.name}-locked');
+        await tester.tap(find.byTooltip('解锁播放器'));
+        await tester.pump(const Duration(milliseconds: 400));
+        await tester.pump(const Duration(milliseconds: 240));
+      }
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
   /// 旧分 P 暂停回包晚于换视频时，字幕参数也必须保持新视频的正确配对。
   testWidgets('跨视频切换会撤销旧分P避免字幕BV与CID串台', (tester) async {
     SharedPreferences.setMockInitialValues({});
@@ -5548,6 +5826,152 @@ void main() {
     expect(find.byType(PlayerActionFeedback), findsNothing);
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  testWidgets('同视频连续刷新字幕始终请求同一BV和CID', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final overlays = _FakePlayerOverlayService(
+      tracksResult: subtitleTracks,
+      cuesResult: subtitleCues,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _createMultiPartVideo(),
+          playbackService: _FakePlaybackService(),
+          playerOverlayService: overlays,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await openSubtitleMenu(tester);
+    for (var i = 0; i < 4; i++) {
+      await tester.tap(find.byKey(const Key('refresh-subtitle-tracks')));
+      await tester.pumpAndSettle();
+    }
+    expect(
+      overlays.subtitleTrackIdentities,
+      List.filled(5, ('BV1GJ411x7h7', 137649199)),
+    );
+    expect(overlays.subtitleCueRequests, isEmpty);
+    await tester.tap(find.text('测试中文字幕'));
+    await tester.pumpAndSettle();
+    expect(find.text('第一 P 的字幕'), findsOneWidget);
+    expect(overlays.subtitleCueIdentities, [('BV1GJ411x7h7', 137649199)]);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('字幕超出当前分P时长仅提示诊断并保留显示', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final overlays = _FakePlayerOverlayService(
+      tracksResult: subtitleTracks,
+      cuesResult: const SubtitleCueLoadResult(
+        status: SubtitleLoadStatus.available,
+        message: '',
+        cues: [
+          SubtitleCue(
+            from: Duration.zero,
+            to: Duration(minutes: 12),
+            content: '超长测试正文仍可显示',
+          ),
+        ],
+      ),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _createMultiPartVideo(),
+          playbackService: _FakePlaybackService(
+            duration: const Duration(minutes: 2),
+          ),
+          playerOverlayService: overlays,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await openSubtitleMenu(tester);
+    await tester.tap(find.text('测试中文字幕'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('active-subtitle')), findsOneWidget);
+    expect(find.text('超长测试正文仍可显示'), findsOneWidget);
+    expect(find.text('字幕时间超过当前分P时长，可能不匹配；可复制字幕诊断。'), findsOneWidget);
+    final report = SubtitleDiagnosticLog.instance.report(
+      bvid: 'BV1GJ411x7h7',
+      cid: 137649199,
+    );
+    expect(report, contains('"stage":"duration-warning"'));
+    expect(report, contains('"maxCueEndMs":720000'));
+    expect(report, isNot(contains('超长测试正文仍可显示')));
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  for (final unknown in [false, true]) {
+    testWidgets(unknown ? '字幕时长未就绪时不拦截或警告' : '字幕合法尾帧超出少量秒数仍正常显示', (
+      tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({});
+      await tester.binding.setSurfaceSize(const Size(1080, 2400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      const testBvid = 'BV17x411w7KC';
+      final cid = unknown ? 279786 : 279787;
+      final overlays = _FakePlayerOverlayService(
+        tracksResult: subtitleTracks,
+        cuesResult: SubtitleCueLoadResult(
+          status: SubtitleLoadStatus.available,
+          message: '',
+          cues: [
+            SubtitleCue(
+              from: Duration.zero,
+              to: unknown
+                  ? const Duration(minutes: 12)
+                  : const Duration(milliseconds: 124999),
+              content: '合法尾帧测试字幕',
+            ),
+          ],
+        ),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PlayerPage(
+            video: VideoPreview(
+              bvid: testBvid,
+              cid: cid,
+              title: '字幕时长边界',
+              ownerName: 'fixture',
+              duration: unknown ? Duration.zero : const Duration(minutes: 2),
+              parts: [
+                VideoPart(
+                  pageNumber: 1,
+                  cid: cid,
+                  title: 'fixture',
+                  duration: unknown
+                      ? Duration.zero
+                      : const Duration(minutes: 2),
+                ),
+              ],
+            ),
+            playbackService: _FakePlaybackService(
+              duration: unknown ? Duration.zero : const Duration(minutes: 2),
+            ),
+            playerOverlayService: overlays,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await openSubtitleMenu(tester);
+      await tester.tap(find.text('测试中文字幕'));
+      await tester.pumpAndSettle();
+      expect(find.text('合法尾帧测试字幕'), findsOneWidget);
+      expect(
+        SubtitleDiagnosticLog.instance.report(bvid: testBvid, cid: cid),
+        isNot(contains('duration-warning')),
+      );
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
 
   /// 一次网络失败可以在当前面板直接重试，不必反复退出更多菜单。
   testWidgets('字幕失败后可以在面板内重试', (tester) async {

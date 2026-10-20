@@ -2,14 +2,18 @@ part of 'player_page.dart';
 
 /// 组合共享轨道边界上的章节和笔记标记。
 extension _PlayerTimelineView on _PlayerPageState {
+  bool get _showTimelineChapters =>
+      _playerEnhancementController.chapters.isNotEmpty &&
+      _playerEnhancementController.chapterProgressVisible;
+
+  bool get _showTimelineFlags =>
+      _playbackPreferences.showNoteTimeMarkers &&
+      _currentVideoNotes.any((note) => note.partCid == _currentPart.cid);
+
   /// 展开时对齐 Slider，收起时让章节条与全宽微型进度条使用同一左右边界。
   Widget _buildTimelineAnnotations({bool collapsed = false}) {
-    final showChapters =
-        _playerEnhancementController.chapters.isNotEmpty &&
-        _playerEnhancementController.chapterProgressVisible;
-    final showFlags =
-        _playbackPreferences.showNoteTimeMarkers &&
-        _currentVideoNotes.any((note) => note.partCid == _currentPart.cid);
+    final showChapters = _showTimelineChapters;
+    final showFlags = _showTimelineFlags;
     if (!showChapters && !showFlags) {
       return const SizedBox.shrink();
     }
@@ -48,16 +52,17 @@ extension _PlayerTimelineView on _PlayerPageState {
 
   /// 控制栏隐藏或锁定后，仍在视频底部显示可操作的章节和旗标。
   Widget _buildChapterProgressOverlay({required bool inPictureInPicture}) {
-    if (inPictureInPicture || (_showControls && !_controlsLocked)) {
+    if (inPictureInPicture ||
+        (_showControls && !_controlsLocked) ||
+        (!_showTimelineChapters && !_showTimelineFlags)) {
       return const SizedBox.shrink();
     }
     final double fullscreenSafeBottom = _fullscreen
         ? MediaQuery.paddingOf(context).bottom
         : 0;
-    return Positioned(
-      left: 0,
-      right: 0,
-      bottom: 4 + fullscreenSafeBottom,
+    return Padding(
+      key: const Key('collapsed-timeline-overlay'),
+      padding: EdgeInsets.only(bottom: 4 + fullscreenSafeBottom),
       child: _buildTimelineAnnotations(collapsed: true),
     );
   }

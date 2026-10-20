@@ -7,6 +7,8 @@ import 'dart:typed_data';
 import '../models/player_overlay_data.dart';
 import 'bilibili_auth_service.dart';
 import 'player_overlay_service.dart';
+import 'bilibili_wbi_signing_service.dart';
+import 'subtitle_diagnostic_log.dart';
 
 /// 保存一次受限桌面网络请求的状态码与响应字节，便于测试替换真实网络。
 class DesktopOverlayHttpResponse {
@@ -65,6 +67,20 @@ class DesktopPlayerOverlayService
 
   final BilibiliAuthService _authService;
   final DesktopOverlayRequest _request;
+  static int _requestSequence = 0;
+  late final _wbiSigner = BilibiliWbiSigningService(
+    requestJson: (uri, headers) async {
+      final response = await _request(
+        uri,
+        headers,
+        _maximumSubtitleMetadataBytes,
+      );
+      if (response.statusCode != 200) {
+        throw WbiSigningException(httpStatus: response.statusCode);
+      }
+      return utf8.decode(response.bodyBytes);
+    },
+  );
   final Map<(String, int), _DesktopSubtitleSession> _subtitleSessions =
       <(String, int), _DesktopSubtitleSession>{};
   final Map<(String, int), Object> _subtitleRequests = {};
@@ -88,32 +104,75 @@ class DesktopPlayerOverlayService
     final (String, int) key = (normalizedBvid, cid);
     final _DesktopSubtitleSession session = _DesktopSubtitleSession();
     final requestToken = Object();
+    final requestId = ++_requestSequence;
     _subtitleRequests[key] = requestToken;
+    SubtitleDiagnosticLog.instance.record(
+      bvid: normalizedBvid,
+      cid: cid,
+      stage: 'metadata-request',
+      source: 'dart-http',
+      facts: {'requestId': requestId, 'aid': 0, 'endpoint': '/x/player/wbi/v2'},
+    );
     try {
+      final headers = await _buildHeaders(
+        bvid: normalizedBvid,
+        accept: 'application/json',
+        includeCookie: true,
+      );
+      final parameters = await _wbiSigner.signParameters({
+        'bvid': normalizedBvid,
+        'cid': cid.toString(),
+      }, headers: headers);
       final Uri endpoint = Uri.https(
         'api.bilibili.com',
-        '/x/player/v2',
-        <String, String>{'bvid': normalizedBvid, 'cid': cid.toString()},
-      );
+        '/x/player/wbi/v2',
+      ).replace(query: BilibiliWbiSigningService.encodeQuery(parameters));
       final DesktopOverlayHttpResponse response = await _request(
         endpoint,
-        await _buildHeaders(
-          bvid: normalizedBvid,
-          accept: 'application/json',
-          includeCookie: true,
-        ),
+        headers,
         _maximumSubtitleMetadataBytes,
       );
       if (!identical(_subtitleRequests[key], requestToken)) {
         return const SubtitleTrackLoadResult.unavailable();
       }
       if (response.statusCode < 200 || response.statusCode > 299) {
+        SubtitleDiagnosticLog.instance.record(
+          bvid: normalizedBvid,
+          cid: cid,
+          stage: 'request-error',
+          source: 'dart-http',
+          facts: {
+            'requestId': requestId,
+            'endpoint': endpoint.path,
+            'signed': true,
+            'httpStatus': response.statusCode,
+            'errorCode': 'subtitle_network',
+          },
+        );
         return SubtitleTrackLoadResult.unavailable(
           message: '字幕列表获取失败（HTTP ${response.statusCode}），可点击刷新重试。',
         );
       }
       final Map<String, Object?> root = _decodeJsonObject(response.bodyBytes);
       final int code = _readInt(root['code'], fallback: -1);
+      final data = root['data'];
+      SubtitleDiagnosticLog.instance.record(
+        bvid: normalizedBvid,
+        cid: cid,
+        stage: 'metadata-response',
+        source: 'dart-http',
+        facts: {
+          'requestId': requestId,
+          'endpoint': endpoint.path,
+          'signed': true,
+          'httpStatus': response.statusCode,
+          'apiCode': code,
+          'responseBvid': data is Map ? data['bvid'] : null,
+          'responseCid': data is Map ? data['cid'] : null,
+          'responseAid': data is Map ? data['aid'] : null,
+          'metadataHash': SubtitleDiagnosticLog.digestBytes(response.bodyBytes),
+        },
+      );
       if (code == -101) {
         _subtitleSessions.remove(key);
         return const SubtitleTrackLoadResult.loginRequired();
@@ -129,6 +188,20 @@ class DesktopPlayerOverlayService
         session: session,
         rawData: Map<Object?, Object?>.from(root['data']! as Map),
       );
+      SubtitleDiagnosticLog.instance.record(
+        bvid: normalizedBvid,
+        cid: cid,
+        stage: 'metadata-response',
+        source: 'dart-http',
+        facts: {
+          'requestId': requestId,
+          'trackSetHash': SubtitleDiagnosticLog.digest(
+            parsed.tracks
+                .map((t) => '${t.id}:${t.language}:${t.documentId}')
+                .join('|'),
+          ),
+        },
+      );
       // 只有有效响应才替换已成功的地址表，刷新失败不能破坏正在使用的字幕。
       if (parsed.status != SubtitleLoadStatus.unavailable) {
         _subtitleSessions.remove(key);
@@ -138,6 +211,24 @@ class DesktopPlayerOverlayService
         }
       }
       return parsed;
+    } on WbiSigningException catch (error) {
+      SubtitleDiagnosticLog.instance.record(
+        bvid: normalizedBvid,
+        cid: cid,
+        stage: 'request-error',
+        source: 'dart-http',
+        facts: {
+          'requestId': requestId,
+          'endpoint': '/x/web-interface/nav',
+          'signed': false,
+          'httpStatus': error.httpStatus,
+          'apiCode': error.apiCode,
+          'errorCode': 'subtitle_signing_unavailable',
+        },
+      );
+      return const SubtitleTrackLoadResult.unavailable(
+        message: '字幕签名暂时不可用，请稍后刷新。',
+      );
     } on TimeoutException {
       return const SubtitleTrackLoadResult.unavailable(
         message: '字幕列表读取超时，可点击刷新重试。',
@@ -166,13 +257,21 @@ class DesktopPlayerOverlayService
     }
     final expectedLanguage =
         _subtitleSessions[(normalizedBvid, cid)]?.languages[normalizedTrackId];
+    // Signed query parameters may renew; a different document needs a new selection.
+    final expectedDocument = _subtitleSessions[(normalizedBvid, cid)]
+        ?.readableUrls[normalizedTrackId]
+        ?.path;
     for (var attempt = 0; attempt < 2; attempt++) {
+      final requestId = ++_requestSequence;
       final session = _subtitleSessions[(normalizedBvid, cid)];
       if (session == null) {
         return const SubtitleCueLoadResult.locked(message: '请先读取当前视频的字幕轨道。');
       }
-      if (session.languages[normalizedTrackId] != expectedLanguage) {
-        return const SubtitleCueLoadResult.locked(message: '字幕语言已变化，请重新选择轨道。');
+      if (session.languages[normalizedTrackId] != expectedLanguage ||
+          session.readableUrls[normalizedTrackId]?.path != expectedDocument) {
+        return const SubtitleCueLoadResult.locked(
+          message: '字幕正文或语言已变化，请刷新后重新选择轨道。',
+        );
       }
       _subtitleSessions.remove((normalizedBvid, cid));
       _subtitleSessions[(normalizedBvid, cid)] = session;
@@ -192,13 +291,46 @@ class DesktopPlayerOverlayService
           ),
           _maximumSubtitleDocumentBytes,
         );
+        final resourceId = SubtitleDiagnosticLog.resourceId(
+          endpoint,
+          session.languages[normalizedTrackId] ?? '',
+        );
+        SubtitleDiagnosticLog.instance.record(
+          bvid: normalizedBvid,
+          cid: cid,
+          stage: 'document-response',
+          source: 'dart-http',
+          facts: {
+            'requestId': requestId,
+            'trackId': normalizedTrackId,
+            'documentId': resourceId,
+            'httpStatus': response.statusCode,
+            'bodyHash': SubtitleDiagnosticLog.digestBytes(response.bodyBytes),
+          },
+        );
         if (!identical(_subtitleSessions[(normalizedBvid, cid)], session)) {
           return const SubtitleCueLoadResult.unavailable(
             message: '字幕轨道已更新，请重新选择。',
           );
         }
         if (response.statusCode >= 200 && response.statusCode <= 299) {
-          return _parseSubtitleCues(_decodeJsonObject(response.bodyBytes));
+          final parsed = _parseSubtitleCues(
+            _decodeJsonObject(response.bodyBytes),
+          );
+          SubtitleDiagnosticLog.instance.record(
+            bvid: normalizedBvid,
+            cid: cid,
+            stage: 'document-response',
+            source: 'dart-http',
+            facts: {
+              'requestId': requestId,
+              'trackId': normalizedTrackId,
+              'documentId': resourceId,
+              'cueCount': parsed.cues.length,
+              'cuesHash': SubtitleDiagnosticLog.cueHash(parsed.cues),
+            },
+          );
+          return parsed;
         }
         if (attempt == 0 &&
             const [401, 403, 410].contains(response.statusCode)) {
@@ -331,6 +463,7 @@ class DesktopPlayerOverlayService
       HttpHeaders.acceptEncodingHeader: 'identity',
       HttpHeaders.refererHeader: 'https://www.bilibili.com/video/$bvid',
       HttpHeaders.userAgentHeader: BilibiliHttpAuthApi.desktopUserAgent,
+      HttpHeaders.cacheControlHeader: 'no-cache',
     };
     if (includeCookie) {
       final String cookie = (await _authService.readCookieHeader().timeout(
@@ -390,10 +523,14 @@ class DesktopPlayerOverlayService
         tracks.add(<String, Object?>{
           'id': trackId,
           'language': language,
+          'sourceType': values['type'] is int ? values['type'] : null,
           'label': rawLabel.isEmpty
               ? (language.isEmpty ? '未知语言' : language)
               : rawLabel,
           'isLocked': serviceLocked || safeUrl == null,
+          'documentId': safeUrl == null
+              ? ''
+              : SubtitleDiagnosticLog.resourceId(safeUrl, language),
         });
         if (safeUrl != null) {
           readableUrls[trackId] = safeUrl;

@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+
+import 'fixtures/subtitle_wbi_navigation.dart';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -57,6 +59,7 @@ class _FakeOverlayServer {
     Map<String, String> headers,
     int maximumBytes,
   ) async {
+    if (endpoint.path == '/x/web-interface/nav') return subtitleWbiNavigation();
     requests.add(
       _RecordedRequest(
         endpoint: endpoint,
@@ -163,7 +166,10 @@ void main() {
     final service = DesktopPlayerOverlayService(
       authService: BilibiliAuthService(cookieStore: _MemoryCookieStore('')),
       request: (endpoint, headers, maximumBytes) async {
-        if (endpoint.path == '/x/player/v2') {
+        if (endpoint.path == '/x/web-interface/nav') {
+          return subtitleWbiNavigation();
+        }
+        if (endpoint.path == '/x/player/wbi/v2') {
           requests++;
           if (requests == 2) requestsStarted.complete();
           return endpoint.queryParameters['cid'] == '123'
@@ -212,7 +218,10 @@ void main() {
     final service = DesktopPlayerOverlayService(
       authService: BilibiliAuthService(cookieStore: _MemoryCookieStore('')),
       request: (endpoint, headers, maximumBytes) async {
-        if (endpoint.path == '/x/player/v2') {
+        if (endpoint.path == '/x/web-interface/nav') {
+          return subtitleWbiNavigation();
+        }
+        if (endpoint.path == '/x/player/wbi/v2') {
           if (++reads == 1) {
             started.complete();
             return stale.future;
@@ -247,7 +256,7 @@ void main() {
       metadata('BV1GJ411x7h7', 123, 'wrong.json'),
       metadata('BV1xx411c7mD', 456, 'wrong.json'),
     ]) {
-      server.responses['/x/player/v2'] = response;
+      server.responses['/x/player/wbi/v2'] = response;
       expect(
         (await service.loadSubtitleTracks(
           bvid: 'BV1xx411c7mD',
@@ -271,7 +280,7 @@ void main() {
   test('字幕列表刷新失败仍可使用之前成功的轨道', () async {
     final server = _FakeOverlayServer();
     final service = _createService(server);
-    server.responses['/x/player/v2'] = metadata(
+    server.responses['/x/player/wbi/v2'] = metadata(
       'BV1xx411c7mD',
       123,
       'kept.json',
@@ -282,7 +291,7 @@ void main() {
       ],
     });
     await service.loadSubtitleTracks(bvid: 'BV1xx411c7mD', cid: 123);
-    server.responses['/x/player/v2'] = DesktopOverlayHttpResponse(
+    server.responses['/x/player/wbi/v2'] = DesktopOverlayHttpResponse(
       statusCode: 503,
       bodyBytes: Uint8List(0),
     );
@@ -307,17 +316,20 @@ void main() {
         cookieStore: _MemoryCookieStore('SESSDATA=test'),
       ),
       request: (endpoint, headers, maximumBytes) async {
-        if (endpoint.path == '/x/player/v2') {
+        if (endpoint.path == '/x/web-interface/nav') {
+          return subtitleWbiNavigation();
+        }
+        if (endpoint.path == '/x/player/wbi/v2') {
           expect(endpoint.queryParameters['cid'], '123');
           return metadata(
             'BV1xx411c7mD',
             123,
-            ++metadataReads == 1 ? 'expired.json' : 'fresh.json',
+            'document.json?signature=${++metadataReads}',
           );
         }
         expect(headers.containsKey('cookie'), isFalse);
-        documents.add(endpoint.path);
-        if (endpoint.path == '/expired.json') {
+        documents.add(endpoint.toString());
+        if (endpoint.queryParameters['signature'] == '1') {
           return DesktopOverlayHttpResponse(
             statusCode: 403,
             bodyBytes: Uint8List(0),
@@ -338,13 +350,16 @@ void main() {
     );
     expect(cues.cues.single.content, '当前视频的新地址');
     expect(metadataReads, 2);
-    expect(documents, ['/expired.json', '/fresh.json']);
+    expect(documents, [
+      'https://aisubtitle.hdslb.com/document.json?signature=1',
+      'https://aisubtitle.hdslb.com/document.json?signature=2',
+    ]);
   });
 
   /// 没有归属字段的响应不能被默认当作当前视频。
   test('字幕元数据缺少视频身份时拒绝使用', () async {
     final server = _FakeOverlayServer();
-    server.responses['/x/player/v2'] = _jsonResponse({
+    server.responses['/x/player/wbi/v2'] = _jsonResponse({
       'code': 0,
       'data': {
         'subtitle': {
@@ -376,7 +391,7 @@ void main() {
 
   test('字幕轨道临时地址留在服务内存且字幕条目按时间排序', () async {
     final _FakeOverlayServer server = _FakeOverlayServer();
-    server.responses['/x/player/v2'] = _jsonResponse(<String, Object?>{
+    server.responses['/x/player/wbi/v2'] = _jsonResponse(<String, Object?>{
       'code': 0,
       'data': <String, Object?>{
         'bvid': 'BV1xx411c7mD',
@@ -431,7 +446,7 @@ void main() {
       '第二句',
     ]);
     expect(server.requests.first.endpoint.host, 'api.bilibili.com');
-    expect(server.requests.first.endpoint.path, '/x/player/v2');
+    expect(server.requests.first.endpoint.path, '/x/player/wbi/v2');
     expect(server.requests.first.headers['cookie'], 'SESSDATA=test-session');
     expect(server.requests.last.endpoint.host, 'aisubtitle.hdslb.com');
     expect(server.requests.last.headers.containsKey('cookie'), isFalse);
@@ -440,7 +455,7 @@ void main() {
 
   test('没有安全 CDN 地址的字幕被标记为锁定且不会发起第二次请求', () async {
     final _FakeOverlayServer server = _FakeOverlayServer();
-    server.responses['/x/player/v2'] = _jsonResponse(<String, Object?>{
+    server.responses['/x/player/wbi/v2'] = _jsonResponse(<String, Object?>{
       'code': 0,
       'data': <String, Object?>{
         'bvid': 'BV1xx411c7mD',

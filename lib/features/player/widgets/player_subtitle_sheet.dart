@@ -1,9 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../../models/playback_preferences.dart';
 import '../../../models/player_overlay_data.dart';
+import '../../../core/theme/app_text_scale.dart';
 
 /// 在同一个面板选择字幕、刷新失败请求与预览字号，不把网络失败藏在短提示里。
 class PlayerSubtitleSheet extends StatefulWidget {
@@ -17,6 +19,7 @@ class PlayerSubtitleSheet extends StatefulWidget {
     required this.reloadTracks,
     required this.onPreviewFontSize,
     required this.onCommitFontSize,
+    this.diagnosticReport,
     this.initialResult,
     this.selectedTrackId,
   });
@@ -30,6 +33,7 @@ class PlayerSubtitleSheet extends StatefulWidget {
   final Future<SubtitleTrackLoadResult> Function() reloadTracks;
   final ValueChanged<double> onPreviewFontSize;
   final Future<double> Function(double) onCommitFontSize;
+  final String Function()? diagnosticReport;
 
   /// 创建管理面板读取状态和实时字号预览的状态对象。
   @override
@@ -215,6 +219,7 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
                       ),
                       child: Text(
                         '这是字幕预览',
+                        textScaler: AppTextScaleScope.subtitleScalerOf(context),
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           color: Colors.white,
@@ -252,7 +257,42 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
                               ? Icons.lock_outline_rounded
                               : Icons.subtitles_rounded,
                         ),
-                        title: Text(track.label),
+                        title: Wrap(
+                          spacing: 8,
+                          runSpacing: 4,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            Text(track.label),
+                            if (track.isAi)
+                              Semantics(
+                                label: 'AI 自动字幕',
+                                excludeSemantics: true,
+                                child: Container(
+                                  key: ValueKey('subtitle-ai-${track.id}'),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 2,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.secondaryContainer,
+                                    borderRadius: BorderRadius.circular(5),
+                                  ),
+                                  child: Text(
+                                    'AI',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                      color: Theme.of(
+                                        context,
+                                      ).colorScheme.onSecondaryContainer,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
                         subtitle: track.language.isEmpty
                             ? null
                             : Text(track.language),
@@ -263,6 +303,28 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
                         onTap: track.isLocked
                             ? null
                             : () => _chooseTrack(track.id),
+                      ),
+                    if (widget.diagnosticReport != null)
+                      ExpansionTile(
+                        title: const Text('字幕来源诊断'),
+                        subtitle: const Text('仅标识与哈希，不含正文或登录信息'),
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: SelectableText(
+                              widget.diagnosticReport!(),
+                              style: const TextStyle(fontSize: 11),
+                            ),
+                          ),
+                          TextButton.icon(
+                            key: const Key('copy-subtitle-diagnostics'),
+                            icon: const Icon(Icons.copy_rounded),
+                            label: const Text('复制字幕诊断'),
+                            onPressed: () => Clipboard.setData(
+                              ClipboardData(text: widget.diagnosticReport!()),
+                            ),
+                          ),
+                        ],
                       ),
                   ],
                 ),
