@@ -126,9 +126,11 @@ class VideoChapterStrip extends StatelessWidget {
     }
     final ColorScheme colors = Theme.of(context).colorScheme;
     final int activeIndex = _activeChapterIndex();
+    final labelSize = compact ? 10.0 : 12.0;
+    final labelHeight = MediaQuery.textScalerOf(context).scale(labelSize) * 1.2;
     return SizedBox(
       key: const Key('video-chapter-strip'),
-      height: compact ? 24 : 40,
+      height: math.max(compact ? 24 : 40, labelHeight + 8),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
@@ -159,7 +161,8 @@ class VideoChapterStrip extends StatelessWidget {
                                 : index == activeIndex
                                 ? colors.primary
                                 : colors.onSurfaceVariant,
-                            fontSize: compact ? 10 : 12,
+                            fontSize: labelSize,
+                            height: 1.2,
                             fontWeight: index == activeIndex
                                 ? FontWeight.w700
                                 : FontWeight.w500,
@@ -217,6 +220,17 @@ class _ChapterMarqueeLabel extends StatefulWidget {
 class _ChapterMarqueeLabelState extends State<_ChapterMarqueeLabel> {
   final ScrollController _scrollController = ScrollController();
   int _scrollCycleToken = 0;
+  TextScaler? _textScaler;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final scaler = MediaQuery.textScalerOf(context);
+    if (scaler != _textScaler) {
+      _textScaler = scaler;
+      _scheduleScrollCycle();
+    }
+  }
 
   /// 首次布局完成后测量文字是否溢出，只有溢出时才开始滚动。
   @override

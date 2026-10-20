@@ -15,6 +15,7 @@ import '../../services/focus_preferences_service.dart';
 import '../../services/windows_clipboard_link_service.dart';
 import '../../platform/app_platform.dart';
 import 'app_theme_mode_controller.dart';
+import 'app_text_size_page.dart';
 import 'playback_speeds_dialog.dart';
 import 'double_tap_regions_page.dart';
 import 'player_control_size_page.dart';
@@ -1137,6 +1138,16 @@ class _PersonalizationSettingsPageState
         if ((widget.appPlatform ?? AppPlatformDetector.current).isMobile)
           _buildLayoutModeTile(),
         _buildThemeModeTile(themeModeController),
+        ListTile(
+          key: const Key('ui-text-size-preference'),
+          leading: const Icon(Icons.text_fields),
+          title: const Text('界面文字大小'),
+          subtitle: const Text('独立调整界面文字，保留系统字号；字幕字号单独设置'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.of(context).push<void>(
+            MaterialPageRoute(builder: (_) => const AppTextSizePage()),
+          ),
+        ),
         _buildThemeColorTile(themeModeController),
         ListTile(
           key: const Key('open-android-permissions'),

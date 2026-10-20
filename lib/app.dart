@@ -18,6 +18,8 @@ import 'features/focus/focus_completion_dialog.dart';
 import 'features/onboarding/first_launch_gate.dart';
 import 'features/player/player_page.dart';
 import 'features/profile/app_theme_mode_controller.dart';
+import 'features/profile/app_text_scale_controller.dart';
+import 'core/theme/app_text_scale.dart';
 import 'features/shell/main_shell.dart';
 import 'models/focus_session.dart';
 import 'models/video_preview.dart';
@@ -34,6 +36,7 @@ class FocuBiliApp extends StatefulWidget {
     this.focusTimerController,
     this.appUpdateController,
     this.appThemeModeController,
+    this.appTextScaleController,
     this.deepLinkService,
     this.incomingLinkResolver,
     this.clipboardLinkMonitor,
@@ -46,6 +49,7 @@ class FocuBiliApp extends StatefulWidget {
   final FocusTimerController? focusTimerController;
   final AppUpdateController? appUpdateController;
   final AppThemeModeController? appThemeModeController;
+  final AppTextScaleController? appTextScaleController;
   final IncomingDeepLinkService? deepLinkService;
   final BilibiliIncomingLinkResolver? incomingLinkResolver;
   final ClipboardLinkMonitor? clipboardLinkMonitor;
@@ -67,6 +71,8 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
   late final bool _ownsAppUpdateController;
   late final AppThemeModeController _appThemeModeController;
   late final bool _ownsAppThemeModeController;
+  late final AppTextScaleController _appTextScaleController;
+  late final bool _ownsAppTextScaleController;
   late final IncomingDeepLinkService _deepLinkService;
   late final BilibiliIncomingLinkResolver _incomingLinkResolver;
   late final ClipboardLinkMonitor _clipboardLinkMonitor;
@@ -119,6 +125,10 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
         widget.appThemeModeController ?? AppThemeModeController();
     _appThemeModeController.addListener(_handleThemeModeChanged);
     unawaited(_appThemeModeController.initialize());
+    _ownsAppTextScaleController = widget.appTextScaleController == null;
+    _appTextScaleController =
+        widget.appTextScaleController ?? AppTextScaleController();
+    unawaited(_appTextScaleController.initialize());
     _deepLinkService = widget.deepLinkService ?? BilibiliDeepLinkService();
     _incomingLinkResolver =
         widget.incomingLinkResolver ?? BilibiliIncomingLinkResolver();
@@ -431,17 +441,20 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
       onGenerateRoute: AppRouter.onGenerateRoute,
       // 根据实际主题在整棵页面树外层设置系统栏图标颜色，覆盖无 AppBar 的页面。
       builder: (BuildContext context, Widget? child) {
-        return AppThemeModeScope(
-          controller: _appThemeModeController,
-          child: AppUpdateScope(
-            controller: _appUpdateController,
-            child: FocusTimerScope(
-              controller: _focusTimerController,
-              child: AnnotatedRegion<SystemUiOverlayStyle>(
-                value: AppTheme.systemOverlayStyle(
-                  Theme.of(context).brightness,
+        return AppTextScale(
+          controller: _appTextScaleController,
+          child: AppThemeModeScope(
+            controller: _appThemeModeController,
+            child: AppUpdateScope(
+              controller: _appUpdateController,
+              child: FocusTimerScope(
+                controller: _focusTimerController,
+                child: AnnotatedRegion<SystemUiOverlayStyle>(
+                  value: AppTheme.systemOverlayStyle(
+                    Theme.of(context).brightness,
+                  ),
+                  child: child ?? const SizedBox.shrink(),
                 ),
-                child: child ?? const SizedBox.shrink(),
               ),
             ),
           ),
@@ -473,6 +486,7 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
       _appThemeModeController.dispose();
     }
     _deepLinkService.dispose();
+    if (_ownsAppTextScaleController) _appTextScaleController.dispose();
     super.dispose();
   }
 }
