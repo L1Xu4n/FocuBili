@@ -1,6 +1,7 @@
 import unittest
+import struct
 
-from verify_ios_preview import require_aot_source, require_device_platform, require_unsigned_or_adhoc
+from verify_ios_preview import arm64_macho_slice, require_aot_source, require_device_platform, require_unsigned_or_adhoc
 
 
 class VerifyIosPreviewTests(unittest.TestCase):
@@ -22,12 +23,30 @@ class VerifyIosPreviewTests(unittest.TestCase):
         values = [revision, 'playback_preferences.ios_decode_mode',
                   'playback_preferences.ios_video_codec', 'hwdec-current']
         for encoding in ('utf-8', 'utf-16le'):
-            binary = b'\xcf\xfa\xed\xfe' + b'\x00'.join(v.encode(encoding) for v in values)
+            header = struct.pack('<IIIIIIII', 0xFEEDFACF, 0x0100000C, 0, 6, 0, 0, 0, 0)
+            binary = header + b'\x00'.join(v.encode(encoding) for v in values)
             require_aot_source(binary, revision)
             with self.assertRaises(AssertionError):
                 require_aot_source(binary, 'b' * 40)
             with self.assertRaises(AssertionError):
-                require_aot_source(binary[:4] + revision.encode(encoding), revision)
+                require_aot_source(header + revision.encode(encoding), revision)
+
+    def test_single_arm64_fat_containers_preserve_slice_validation(self):
+        thin = struct.pack('<IIIIIIII', 0xFEEDFACF, 0x0100000C, 0, 6, 0, 0, 0, 0) + b'AOT'
+        for endian in ['>', '<']:
+            for wide in [False, True]:
+                magic = 0xCAFEBABF if wide else 0xCAFEBABE
+                header = struct.pack(endian + 'II', magic, 1)
+                arch = struct.pack(endian + ('IIQQII' if wide else 'IIIII'),
+                                   0x0100000C, 0, 4096, len(thin), 12, *([0] if wide else []))
+                fat = (header + arch).ljust(4096, b'\x00') + thin
+                self.assertEqual(arm64_macho_slice(fat), thin)
+                with self.assertRaises(AssertionError):
+                    arm64_macho_slice(fat[:-1])
+        with self.assertRaises(AssertionError):
+            arm64_macho_slice(struct.pack('>II', 0xCAFEBABE, 2))
+        with self.assertRaises(AssertionError):
+            arm64_macho_slice(struct.pack('<IIIIIIII', 0xFEEDFACF, 0x01000007, 0, 6, 0, 0, 0, 0))
 
     def test_unsigned_and_adhoc_are_distinguished_from_provisioned_signing(self):
         self.assertIn('unsigned', require_unsigned_or_adhoc(1, 'code object is not signed at all'))

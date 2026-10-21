@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import plistlib
 import re
+import struct
 import subprocess
 import zipfile
 
@@ -20,9 +21,37 @@ def require_device_platform(info, build_info):
     assert platforms == ['IOS'], f'Expected device Mach-O, got {platforms}'
 
 
+def arm64_macho_slice(binary):
+    """Flutter can wrap a single arm64 Mach-O in a fat container."""
+    magic = binary[:4]
+    fat = {b'\xca\xfe\xba\xbe': ('>', False), b'\xbe\xba\xfe\xca': ('<', False),
+           b'\xca\xfe\xba\xbf': ('>', True), b'\xbf\xba\xfe\xca': ('<', True)}
+    if magic in fat:
+        endian, wide = fat[magic]
+        assert len(binary) >= 8
+        count, = struct.unpack_from(endian + 'I', binary, 4)
+        assert count == 1, 'Expected only one device arm64 slice'
+        header_size = 8 + (32 if wide else 20)
+        assert len(binary) >= header_size
+        if wide:
+            cpu, subtype, offset, size, alignment, reserved = struct.unpack_from(endian + 'IIQQII', binary, 8)
+        else:
+            cpu, subtype, offset, size, alignment = struct.unpack_from(endian + 'IIIII', binary, 8)
+        assert cpu == 0x0100000C, 'Expected arm64 CPU type'
+        assert offset >= header_size and size >= 32 and offset + size <= len(binary)
+        binary = binary[offset:offset + size]
+        magic = binary[:4]
+    assert magic in (b'\xcf\xfa\xed\xfe', b'\xfe\xed\xfa\xcf'), 'Expected Mach-O 64'
+    assert len(binary) >= 32
+    endian = '<' if magic == b'\xcf\xfa\xed\xfe' else '>'
+    cpu, = struct.unpack_from(endian + 'I', binary, 4)
+    assert cpu == 0x0100000C, 'Expected arm64 CPU type'
+    return binary
+
+
 def require_aot_source(binary, revision):
     assert re.fullmatch(r'[0-9a-f]{40}', revision)
-    assert binary[:4] in (b'\xcf\xfa\xed\xfe', b'\xfe\xed\xfa\xcf'), 'Expected Mach-O 64'
+    binary = arm64_macho_slice(binary)
     for value in (revision, 'playback_preferences.ios_decode_mode',
                   'playback_preferences.ios_video_codec', 'hwdec-current'):
         assert any(value.encode(encoding) in binary for encoding in ('utf-8', 'utf-16le')), value
