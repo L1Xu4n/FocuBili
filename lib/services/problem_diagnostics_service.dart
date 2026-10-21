@@ -7,6 +7,8 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/playback_request_diagnostic.dart';
+import '../models/video_metadata_request_diagnostic.dart';
+import '../models/media_runtime_diagnostic.dart';
 import '../platform/app_platform.dart';
 import '../platform/platform_services.dart';
 import '../core/build_metadata.g.dart';
@@ -286,6 +288,7 @@ class ProblemDiagnosticEntry {
     'network' => '网络错误',
     'playback' => '播放错误',
     'playbackRequest' => '播放请求',
+    'videoMetadataRequest' => '视频资料请求',
     'app' => '应用错误',
     _ => '其他错误',
   };
@@ -295,6 +298,7 @@ class ProblemDiagnosticEntry {
     'load_play_url' => '获取视频播放地址',
     'search_video' => '搜索视频',
     'open_video_detail' => '获取视频详情',
+    'resolve_video_parts' => '解析视频分 P',
     'flutter_framework' => 'Flutter 界面运行',
     'dart_runtime' => 'Dart 运行时',
     _ => operation,
@@ -380,12 +384,14 @@ class ProblemDiagnosticsSnapshot {
     this.webViewInfo,
     this.buildTime = appBuildTime,
     this.environment = const {},
+    this.mediaRuntime = const [],
   });
 
   /// 当前已安装应用的语义版本与构建号。
   final String appVersion;
   final String buildTime;
   final Map<String, String> environment;
+  final List<MediaRuntimeDiagnostic> mediaRuntime;
 
   /// 当前设备的公开、脱敏跨平台环境信息。
   final DiagnosticDeviceInfo deviceInfo;
@@ -410,6 +416,8 @@ class ProblemDiagnosticsService {
     ReminderDiagnosticsClearer? reminderDiagnosticsClearer,
     Future<WebViewEnvironment> Function()? webViewInfoLoader,
     DateTime Function()? clock,
+    Future<Object?> Function()? mediaRuntimeLoader,
+    Future<void> Function()? mediaRuntimeClearer,
   }) : _preferencesLoader = preferencesLoader ?? SharedPreferences.getInstance,
        _appVersionLoader = appVersionLoader ?? _loadInstalledAppVersion,
        _deviceInfoLoader = deviceInfoLoader ?? _loadNativeDeviceInfo,
@@ -419,7 +427,9 @@ class ProblemDiagnosticsService {
            reminderDiagnosticsClearer ?? _clearNativeReminderDiagnostics,
        _webViewInfoLoader =
            webViewInfoLoader ?? const WebViewEnvironmentService().load,
-       _clock = clock ?? DateTime.now;
+       _clock = clock ?? DateTime.now,
+       _mediaRuntimeLoader = mediaRuntimeLoader ?? _readNativeMediaRuntime,
+       _mediaRuntimeClearer = mediaRuntimeClearer ?? _clearNativeMediaRuntime;
 
   static const String _storageKey = 'focubili_problem_diagnostics_v1';
 
@@ -439,6 +449,8 @@ class ProblemDiagnosticsService {
   final ReminderDiagnosticsLoader _reminderDiagnosticsLoader;
   final ReminderDiagnosticsClearer _reminderDiagnosticsClearer;
   final DateTime Function() _clock;
+  final Future<Object?> Function() _mediaRuntimeLoader;
+  final Future<void> Function() _mediaRuntimeClearer;
   final Future<WebViewEnvironment> Function() _webViewInfoLoader;
   WebViewEnvironment? _webViewInfo;
 
@@ -492,6 +504,26 @@ class ProblemDiagnosticsService {
       // 诊断存储本身不可用时保持空列表，绝不影响正常播放、搜索和笔记功能。
       return const <ProblemDiagnosticEntry>[];
     }
+  }
+
+  Future<void> recordVideoMetadataRequest(
+    VideoMetadataRequestDiagnostic diagnostic, {
+    required bool details,
+  }) {
+    return record(
+      ProblemDiagnosticEntry(
+        occurredAt: _clock(),
+        category: 'videoMetadataRequest',
+        operation: details ? 'open_video_detail' : 'resolve_video_parts',
+        errorCode: int.tryParse(diagnostic.fields['api_code'] ?? '') == 0
+            ? null
+            : int.tryParse(diagnostic.fields['api_code'] ?? ''),
+        description: diagnostic.fields['outcome'] == 'success'
+            ? '视频资料请求成功。'
+            : '视频资料请求未完成，请结合阶段和状态码检查。',
+        additionalInfo: diagnostic.fields,
+      ),
+    );
   }
 
   /// 保存本次请求的安全执行事实，成功返回低画质也会留下诊断证据。
@@ -629,6 +661,33 @@ class ProblemDiagnosticsService {
     } catch (_) {
       // 存储暂不可用时页面仍会在重新加载后显示实际可读取的数据。
     }
+    try {
+      await _mediaRuntimeClearer().timeout(const Duration(seconds: 2));
+    } catch (_) {
+      // Unsupported backends do not prevent clearing the persisted records.
+    }
+  }
+
+  static const _playbackChannel = MethodChannel('com.focubili.app/playback');
+
+  static Future<Object?> _readNativeMediaRuntime() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return null;
+    return _playbackChannel.invokeMethod<Object?>('getMediaRuntimeDiagnostics');
+  }
+
+  static Future<void> _clearNativeMediaRuntime() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    await _playbackChannel.invokeMethod<void>('clearMediaRuntimeDiagnostics');
+  }
+
+  Future<List<MediaRuntimeDiagnostic>> _loadMediaRuntimeSafely() async {
+    try {
+      return MediaRuntimeDiagnostic.parse(
+        await _mediaRuntimeLoader().timeout(const Duration(seconds: 2)),
+      );
+    } catch (_) {
+      return const [];
+    }
   }
 
   /// 读取诊断快照；页面进入和刷新时可同时更新 Android WebView 信息。
@@ -640,6 +699,7 @@ class ProblemDiagnosticsService {
       _loadDeviceInfoSafely(),
       loadRecentErrors(),
       _loadReminderDiagnosticsSafely(),
+      _loadMediaRuntimeSafely(),
     ]);
     final DiagnosticDeviceInfo deviceInfo = values[1] as DiagnosticDeviceInfo;
     if (refreshWebViewInfo &&
@@ -652,6 +712,7 @@ class ProblemDiagnosticsService {
       generatedAt: _clock(),
       recentErrors: values[2] as List<ProblemDiagnosticEntry>,
       reminderDiagnostics: values[3] as ReminderDiagnosticsSnapshot,
+      mediaRuntime: values[4] as List<MediaRuntimeDiagnostic>,
       webViewInfo: _webViewInfo,
       environment: await _loadEnvironmentInfo(),
     );
@@ -744,6 +805,20 @@ class ProblemDiagnosticsService {
             text.writeln('- ${item.key}: ${item.value}');
           }
         }
+      }
+    }
+    text
+      ..writeln()
+      ..writeln('媒体运行诊断（当前进程内存，最多 64 条；不代表 API 成功即播放成功）：');
+    if (snapshot.mediaRuntime.isEmpty) {
+      text.writeln('（暂无记录或此平台不支持）');
+    } else {
+      for (final entry in snapshot.mediaRuntime) {
+        text.writeln(
+          entry.fields.entries
+              .map((field) => '${field.key}: ${field.value}')
+              .join(', '),
+        );
       }
     }
     text
@@ -936,6 +1011,7 @@ class ProblemDiagnosticsService {
       'network' => 'network',
       'playback' => 'playback',
       'playbackRequest' => 'playbackRequest',
+      'videoMetadataRequest' => 'videoMetadataRequest',
       'app' => 'app',
       _ => 'other',
     };

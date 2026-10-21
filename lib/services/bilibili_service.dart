@@ -4,22 +4,15 @@ import 'dart:io';
 import '../models/video_preview.dart';
 import '../models/user_search.dart';
 import 'bilibili_request_policy.dart';
+import 'bilibili_lookup_exception.dart';
+import 'bilibili_video_metadata_client.dart';
+
 import 'offline_video_service.dart';
+
+export 'bilibili_lookup_exception.dart';
 
 /// 定义可替换的 JSON 请求函数，方便测试时不用真的访问网络。
 typedef JsonRequest = Future<String> Function(Uri uri);
-
-/// 表示公开视频信息查询失败，并向页面提供适合直接展示给用户的说明。
-class BilibiliLookupException implements Exception {
-  /// 创建一条用户能理解的查询失败说明。
-  const BilibiliLookupException(this.message);
-
-  final String message;
-
-  /// 把异常转换为简短文字，便于调试日志和页面统一展示。
-  @override
-  String toString() => message;
-}
 
 /// 定义 FocuBili 目前需要的视频查询能力：由 BV 号或视频链接取得一支视频的信息。
 abstract interface class BilibiliService {
@@ -47,19 +40,31 @@ abstract interface class BilibiliUserSearchService {
   });
 }
 
-/// 使用公开视频详情接口查询标题、UP 主和时长，不读取或保存用户 Cookie。
+/// Search playback can resolve real part identifiers without loading full details.
+abstract interface class BilibiliSearchPlaybackService {
+  Future<VideoPreview> resolveSearchVideo(VideoSearchResult result);
+}
+
+/// 详情复用当前会话并独立签名；搜索和标签继续使用公开请求。
 class BilibiliVideoInfoService
-    implements BilibiliService, BilibiliUserSearchService {
+    implements
+        BilibiliService,
+        BilibiliUserSearchService,
+        BilibiliSearchPlaybackService {
   /// 创建服务；测试可传入自定义请求函数，正式 App 默认使用 HTTPS 请求。
   BilibiliVideoInfoService({
     JsonRequest? requestJson,
     OfflineVideoService? offlineVideoService,
-  }) : _requestJson = requestJson ?? _requestPublicJson,
+    BilibiliVideoMetadataClient? metadataClient,
+  }) : _metadataClient =
+           metadataClient ??
+           (requestJson == null ? BilibiliVideoMetadataClient() : null),
+       _requestJson = requestJson ?? _requestPublicJson,
        _offlineVideoService = offlineVideoService;
 
   static const String _apiHost = 'api.bilibili.com';
   static const String _suggestHost = 's.search.bilibili.com';
-  static const String _videoInfoPath = '/x/web-interface/view';
+  static const String _videoInfoPath = BilibiliVideoMetadataClient.viewPath;
   static const String _videoTagsPath = '/x/tag/archive/tags';
   static const String _videoSearchPath = '/x/web-interface/wbi/search/type';
   static const String _searchSuggestPath = '/main/suggest';
@@ -73,6 +78,8 @@ class BilibiliVideoInfoService
   );
 
   final JsonRequest _requestJson;
+  // requestJson is a legacy parser fixture seam; production always uses the guarded client.
+  final BilibiliVideoMetadataClient? _metadataClient;
   final OfflineVideoService? _offlineVideoService;
 
   /// Provides cached metadata to every lookup-based entry, including offline cold starts.
@@ -101,27 +108,87 @@ class BilibiliVideoInfoService
     final Uri endpoint = Uri.https(_apiHost, _videoInfoPath, <String, String>{
       'bvid': bvid,
     });
-    late VideoPreview video;
+    Future<VideoPreview> parse(String text) async {
+      final video = _parseVideoInfo(text, bvid);
+      try {
+        final tags = _parseVideoTags(
+          await _requestJson(
+            Uri.https(_apiHost, _videoTagsPath, {'bvid': video.bvid}),
+          ),
+        );
+        return tags.isEmpty ? video : video.withTags(tags);
+      } catch (_) {
+        return video;
+      }
+    }
+
+    final client = _metadataClient;
+    if (client != null) {
+      return client.load(
+        bvid: bvid,
+        details: true,
+        parse: parse,
+        offlineFallback: () => _cachedVideo(bvid),
+      );
+    }
     try {
-      final String responseText = await _requestJson(endpoint);
-      video = _parseVideoInfo(responseText, bvid);
+      return await parse(await _requestJson(endpoint));
     } catch (_) {
       final cached = await _cachedVideo(bvid);
       if (cached != null) return cached;
       rethrow;
     }
-    try {
-      final String tagResponse = await _requestJson(
-        Uri.https(_apiHost, _videoTagsPath, <String, String>{
-          'bvid': video.bvid,
-        }),
-      );
-      final List<String> tags = _parseVideoTags(tagResponse);
-      return tags.isEmpty ? video : video.withTags(tags);
-    } catch (_) {
-      // 标签属于附加资料，读取失败时仍然返回已经可播放的完整视频信息。
-      return video;
+  }
+
+  /// Existing CID comes from the search response; absent CID requires pagelist.
+  @override
+  Future<VideoPreview> resolveSearchVideo(VideoSearchResult result) async {
+    if (!_bvidPattern.hasMatch(result.bvid) || result.bvid.length != 12) {
+      throw const BilibiliLookupException('搜索结果没有有效的视频编号。');
     }
+    if (result.cid > 0) return result.toPlaybackPreview();
+    List<VideoPart> parse(String body) {
+      final root = jsonDecode(body);
+      if (root is! Map || root['code'] != 0 || root['data'] is! List) {
+        final code = root is Map && root['code'] is int
+            ? root['code'] as int
+            : null;
+        throw BilibiliLookupException('无法解析视频分 P，请稍后重试。', apiCode: code);
+      }
+      final parts = <VideoPart>[];
+      final seen = <int>{};
+      for (final raw in root['data'] as List) {
+        if (raw is! Map) continue;
+        final cid = _playbackIdentifier(raw['cid']);
+        final page = _playbackIdentifier(raw['page']);
+        if (cid <= 0 || page <= 0 || !seen.add(page)) continue;
+        parts.add(
+          VideoPart(
+            pageNumber: page,
+            cid: cid,
+            title: _readText(raw['part'], 'P$page'),
+            duration: Duration(seconds: _readIdentifier(raw['duration'])),
+          ),
+        );
+      }
+      parts.sort((a, b) => a.pageNumber.compareTo(b.pageNumber));
+      if (parts.isEmpty || parts.first.pageNumber != 1) {
+        throw const BilibiliLookupException('接口没有返回可播放的首个分 P 编号。');
+      }
+      return List.unmodifiable(parts);
+    }
+
+    final client = _metadataClient;
+    final parts = client == null
+        ? parse(
+            await _requestJson(
+              Uri.https(_apiHost, BilibiliVideoMetadataClient.partsPath, {
+                'bvid': result.bvid,
+              }),
+            ),
+          )
+        : await client.load(bvid: result.bvid, details: false, parse: parse);
+    return result.toPlaybackPreview(parts: parts);
   }
 
   /// 解析视频标签接口并去重，损坏、空白或过长标签不会进入详情页。
@@ -315,12 +382,7 @@ class BilibiliVideoInfoService
     final Map<Object?, Object?> root = Map<Object?, Object?>.from(decoded);
     final int code = (root['code'] as num?)?.toInt() ?? -1;
     if (code != 0) {
-      final String serverMessage = root['message'] as String? ?? '';
-      throw BilibiliLookupException(
-        serverMessage.isEmpty || serverMessage == '0'
-            ? '无法查询这支公开视频（错误码：$code）。'
-            : '无法查询这支公开视频：$serverMessage（错误码：$code）。',
-      );
+      throw BilibiliLookupException('无法查询这支公开视频（错误码：$code）。', apiCode: code);
     }
     final Object? rawData = root['data'];
     if (rawData is! Map) {
@@ -329,7 +391,7 @@ class BilibiliVideoInfoService
     final Map<Object?, Object?> data = Map<Object?, Object?>.from(rawData);
     final Map<Object?, Object?> owner = _readObject(data['owner']);
     final int durationSeconds = (data['duration'] as num?)?.toInt() ?? 0;
-    final int cid = (data['cid'] as num?)?.toInt() ?? 0;
+    final int cid = _playbackIdentifier(data['cid']);
     if (cid <= 0) {
       throw const BilibiliLookupException('接口没有返回可播放的分P编号。');
     }
@@ -345,6 +407,9 @@ class BilibiliVideoInfoService
       orElse: () => parts.first,
     );
     final String resolvedBvid = data['bvid'] as String? ?? requestedBvid;
+    if (resolvedBvid != requestedBvid) {
+      throw const BilibiliLookupException('视频资料编号与请求不一致，请重新打开视频。');
+    }
     final String rawDescription = _readText(data['desc'], '');
     final List<VideoDescriptionSegment> descriptionSegments =
         _parseDescriptionSegments(data['desc_v2'], rawDescription);
@@ -733,6 +798,7 @@ class BilibiliVideoInfoService
       results.add(
         VideoSearchResult(
           bvid: bvid,
+          cid: _playbackIdentifier(item['cid']),
           title: _stripHtml(_readText(item['title'], '未命名视频')),
           ownerName: _stripHtml(_readText(item['author'], '未知 UP 主')),
           duration: _parseSearchDuration(_readText(item['duration'], '0:00')),
@@ -860,6 +926,19 @@ class BilibiliVideoInfoService
         0;
   }
 
+  /// Never truncate fractional or non-finite values into a playable identifier.
+  int _playbackIdentifier(Object? value) {
+    if (value is int) return value > 0 ? value : 0;
+    if (value is double &&
+        value.isFinite &&
+        value == value.truncateToDouble()) {
+      return value > 0 ? value.toInt() : 0;
+    }
+    return value is String && RegExp(r'^[0-9]+$').hasMatch(value)
+        ? int.tryParse(value) ?? 0
+        : 0;
+  }
+
   /// 将 aid、cid、mid 等可能超过 32 位的编号完整转换为非负整数，避免错误截断成 2147483648。
   int _readIdentifier(Object? value) {
     final int? number = value is num
@@ -950,7 +1029,7 @@ class BilibiliVideoInfoService
           continue;
         }
         final Map<Object?, Object?> part = Map<Object?, Object?>.from(rawPart);
-        final int cid = (part['cid'] as num?)?.toInt() ?? 0;
+        final int cid = _playbackIdentifier(part['cid']);
         if (cid <= 0) {
           continue;
         }
@@ -1015,6 +1094,7 @@ class BilibiliVideoInfoService
       if (response.statusCode != HttpStatus.ok) {
         throw BilibiliLookupException(
           '视频详情接口暂时不可用（HTTP ${response.statusCode}）。',
+          httpStatus: response.statusCode,
         );
       }
       return responseText;

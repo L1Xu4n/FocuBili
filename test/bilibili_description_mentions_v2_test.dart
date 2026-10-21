@@ -9,7 +9,7 @@ import 'package:focubili/services/bilibili_service.dart';
 class _Bv1mDescriptionJsonRequest {
   /// 根据接口路径返回视频详情或空标签列表，其余请求会明确失败以暴露意外调用。
   Future<String> call(Uri uri) async {
-    if (uri.path == '/x/web-interface/view') {
+    if (uri.path == '/x/web-interface/wbi/view') {
       const String description =
           '中轴线申遗办、@新华社  、腾讯ssv、@腾讯游戏  ，共创。'
           '资料：https://example.com/course。';
@@ -57,7 +57,7 @@ class _Bv1mDescriptionJsonRequest {
 class _CooperativeVideoJsonRequest {
   /// 根据接口路径返回合作视频详情或空标签列表。
   Future<String> call(Uri uri) async {
-    if (uri.path == '/x/web-interface/view') {
+    if (uri.path == '/x/web-interface/wbi/view') {
       return jsonEncode(<String, Object?>{
         'code': 0,
         'data': <String, Object?>{

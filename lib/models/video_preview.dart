@@ -120,11 +120,15 @@ class VideoSearchResult {
     required this.playCount,
     required this.danmakuCount,
     required this.episodeCountText,
+    this.cid = 0,
     this.categoryId,
     this.tags = const [],
   });
 
   final String bvid;
+
+  /// Actual CID from the server, or zero when it must be resolved.
+  final int cid;
   final String title;
   final String ownerName;
   final Duration duration;
@@ -135,6 +139,30 @@ class VideoSearchResult {
   final String episodeCountText;
   final int? categoryId;
   final List<String> tags;
+
+  VideoPreview toPlaybackPreview({List<VideoPart>? parts}) {
+    if (parts == null && cid <= 0) {
+      throw StateError('A real CID or resolved parts is required');
+    }
+    final resolved =
+        parts ??
+        [VideoPart(pageNumber: 1, cid: cid, title: title, duration: duration)];
+    if (resolved.isEmpty || resolved.first.cid <= 0) {
+      throw StateError('No playable part');
+    }
+    return VideoPreview(
+      bvid: bvid,
+      cid: resolved.first.cid,
+      title: title,
+      ownerName: ownerName,
+      duration: duration,
+      thumbnailUrl: thumbnailUrl,
+      publishedAt: publishedAt,
+      tags: tags,
+      parts: resolved,
+      detailsComplete: false,
+    );
+  }
 }
 
 /// 定义关键词视频搜索的排序方式。
@@ -255,6 +283,7 @@ class VideoPreview {
     this.collection,
     this.tags = const <String>[],
     this.fromOfflineCache = false,
+    this.detailsComplete = true,
   });
 
   final int aid;
@@ -275,6 +304,7 @@ class VideoPreview {
   final List<String> tags;
   final Duration duration;
   final bool fromOfflineCache;
+  final bool detailsComplete;
 
   /// 视频封面地址，仅用于低流量缩略图展示；为空时页面显示本地占位图。
   final String thumbnailUrl;
@@ -298,6 +328,7 @@ class VideoPreview {
       collection: collection,
       tags: List<String>.unmodifiable(values),
       fromOfflineCache: fromOfflineCache,
+      detailsComplete: detailsComplete,
       duration: duration,
       thumbnailUrl: thumbnailUrl,
       parts: parts,

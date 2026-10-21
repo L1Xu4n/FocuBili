@@ -452,12 +452,36 @@ class _PlayerPageState extends State<PlayerPage>
               : const EmptyPlayerEnhancementService()),
     )..addListener(_handlePlayerEnhancementChanged);
     _startPlayerPlaybackSession(widget.initialPosition);
+    unawaited(_loadIncompleteVideoDetails());
     unawaited(_loadWatchHistoryBadges());
     unawaited(_loadCurrentLearningListEntry());
     _startVideoInteractionStateLoad();
     unawaited(_loadDanmakuPreferences());
     if (widget.playbackService == null) {
       unawaited(_allowPlayerOrientations());
+    }
+  }
+
+  /// Publish optional details only for the same video and navigation generation.
+  /// Playback has already started and is never restarted or replaced by this load.
+  Future<void> _loadIncompleteVideoDetails() async {
+    if (_activeVideo.detailsComplete) return;
+    final bvid = _activeVideo.bvid;
+    final generation = _partSwitchGeneration;
+    try {
+      final details = await _bilibiliService.lookupVideo(bvid);
+      if (!mounted ||
+          _activeVideo.bvid != bvid ||
+          generation != _partSwitchGeneration ||
+          details.bvid != bvid) {
+        return;
+      }
+      // Keep the selected CID and its timeline. A mismatched response cannot replace it.
+      if (!details.parts.any((part) => part.cid == _currentPart.cid)) return;
+      setState(() => _activeVideo = details);
+      _startVideoInteractionStateLoad();
+    } catch (_) {
+      // Metadata diagnostics are recorded by the request layer. Playback continues.
     }
   }
 

@@ -16,7 +16,7 @@ struct BilibiliPlaybackSnapshot {
 enum BilibiliPlaybackCookiePolicy {
     static let identityNames: Set<String> = ["SESSDATA", "bili_jct", "DedeUserID", "DedeUserID__ckMd5"]
     static let responseNames: Set<String> = ["buvid3", "buvid4", "buvid_fp", "b_nut", "bili_ticket", "bili_ticket_expires"]
-    static let paths: Set<String> = ["/x/web-interface/nav", "/x/player/playurl", "/x/player/wbi/playurl", "/pugv/player/web/playurl"]
+    static let paths: Set<String> = ["/x/web-interface/nav", "/x/web-interface/wbi/view", "/x/player/pagelist", "/x/player/playurl", "/x/player/wbi/playurl", "/pugv/player/web/playurl"]
 
     static func owned(_ cookie: HTTPCookie) -> Bool {
         let domain = cookie.domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))

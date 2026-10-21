@@ -1,0 +1,18 @@
+// Opt-in build configuration for the reviewed preview branch only.
+// Signing remains supplied through the existing, ignored key.properties contract.
+gradle.beforeProject { project ->
+    if (project.path == ':app') {
+        project.pluginManager.withPlugin('com.android.application') {
+            def android = project.extensions.getByName('android')
+            android.defaultConfig.ndk.abiFilters.clear()
+            android.defaultConfig.ndk.abiFilters.add('arm64-v8a')
+            def release = android.buildTypes.getByName('release')
+            release.applicationIdSuffix = '.preview'
+            release.versionNameSuffix = '-preview'
+            release.manifestPlaceholders.appLabel = '焦点哔哩 预览'
+            release.minifyEnabled = true
+            release.shrinkResources = true
+            release.proguardFiles(android.getDefaultProguardFile('proguard-android-optimize.txt'))
+        }
+    }
+}

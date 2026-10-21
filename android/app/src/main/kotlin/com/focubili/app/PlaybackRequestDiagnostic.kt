@@ -18,6 +18,8 @@ internal class PlaybackRequestDiagnostic(
     var selectedQuality: Int? = null
     var apiCode: Int? = null
     var httpStatus: Int? = null
+    // Monotonic aggregate API I/O time; runtime diagnostics only, never headers or URLs.
+    var apiElapsedMs = 0L
 
     /** nav 实际执行且明确验证时才标记认证；WBI 材料缓存命中不会伪造验证结果。 */
     fun observeNavigation(code: Int, isLogin: Boolean?) {

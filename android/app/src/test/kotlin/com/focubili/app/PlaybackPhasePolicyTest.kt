@@ -6,12 +6,21 @@ import org.junit.Test
 
 /** 验证播放和暂停回调不会覆盖播放器已经进入的结束或错误阶段。 */
 class PlaybackPhasePolicyTest {
+    @Test fun bufferingThenIsPlayingFalseNeverOverwritesLoading() {
+        var phase = "loading"
+        if (PlaybackPhasePolicy.shouldReturnToReady(true, false, false, false)) phase = "ready"
+        assertTrue(phase == "loading")
+        // Same rule covers a seek rebuffer, paused buffering and STOP/IDLE callbacks.
+        assertFalse(PlaybackPhasePolicy.shouldReturnToReady(false, false, false, true))
+        assertTrue(PlaybackPhasePolicy.shouldReturnToReady(true, false, false, true))
+    }
     /** 普通播放或暂停变化仍应把已经准备好的播放器保持在就绪阶段。 */
     @Test
     fun preparedPlaybackCanReturnToReady() {
         assertTrue(
             PlaybackPhasePolicy.shouldReturnToReady(
                 playbackPrepared = true,
+                playbackReady = true,
                 playbackEnded = false,
                 playbackFailed = false,
             ),
@@ -24,6 +33,7 @@ class PlaybackPhasePolicyTest {
         assertFalse(
             PlaybackPhasePolicy.shouldReturnToReady(
                 playbackPrepared = true,
+                playbackReady = true,
                 playbackEnded = true,
                 playbackFailed = false,
             ),
@@ -36,6 +46,7 @@ class PlaybackPhasePolicyTest {
         assertFalse(
             PlaybackPhasePolicy.shouldReturnToReady(
                 playbackPrepared = true,
+                playbackReady = true,
                 playbackEnded = false,
                 playbackFailed = true,
             ),

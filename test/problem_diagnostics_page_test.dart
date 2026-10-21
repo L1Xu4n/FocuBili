@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -69,6 +70,21 @@ void main() {
   /// 每项测试前清空 SharedPreferences，避免诊断记录影响其他组件测试。
   setUp(() {
     SharedPreferences.setMockInitialValues(<String, Object>{});
+    // Widget tests use a fake clock; native channel replies must also be mocked.
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          const MethodChannel('com.focubili.app/playback'),
+          (call) async =>
+              call.method == 'getMediaRuntimeDiagnostics' ? [] : null,
+        );
+  });
+
+  tearDown(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          const MethodChannel('com.focubili.app/playback'),
+          null,
+        );
   });
 
   testWidgets('问题诊断页面展示环境、最近错误和两个操作按钮', (WidgetTester tester) async {

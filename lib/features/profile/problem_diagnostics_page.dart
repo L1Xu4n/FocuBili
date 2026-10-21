@@ -361,6 +361,13 @@ class _ProblemDiagnosticsPageState extends State<ProblemDiagnosticsPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
+        if (snapshot.mediaRuntime.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.all(4),
+            child: Text(
+              '已捕获 ${snapshot.mediaRuntime.length} 条媒体运行记录，复制诊断时一并包含。请在重启应用前复制反馈。',
+            ),
+          ),
         Padding(
           padding: const EdgeInsets.fromLTRB(4, 14, 4, 6),
           child: Text(

@@ -78,6 +78,29 @@ private final class MemoryCookies: BilibiliCookieContainer {
         precondition(policy.imported("SESSDATA=one; SESSDATA=two") == nil)
         precondition(policy.imported("SESSDATA=one\r\nInjected: secret") == nil)
         precondition(policy.snapshot([root], path: "/untrusted").state == "unknown")
+        // Metadata shares the existing endpoint-scoped session policy, with no
+        // general-purpose web-interface or player path wildcard.
+        let metadataPaths = ["/x/web-interface/wbi/view", "/x/player/pagelist"]
+        for metadataPath in metadataPaths {
+            precondition(policy.snapshot([root], path: metadataPath).state == "session")
+            precondition(policy.snapshot([], path: metadataPath).state == "anonymous")
+            precondition(policy.snapshot([root, cookie("buvid3", "wrong-path", path: "/x/play")], path: metadataPath).header == "SESSDATA=synthetic-one")
+            precondition(policy.snapshot([root, cookie("buvid3", "wrong-host", domain: "www.bilibili.com")], path: metadataPath).header == "SESSDATA=synthetic-one")
+            precondition(policy.snapshot([root, cookie("buvid3", "expired", expires: Date().addingTimeInterval(-1))], path: metadataPath).header == "SESSDATA=synthetic-one")
+            precondition(policy.snapshot([root, cookie("SESSDATA", "conflict", domain: "www.bilibili.com")], path: metadataPath).state == "conflict")
+            let scoped = MemoryCookies([root])
+            let guarder = BilibiliPlaybackSessionCoordinator(store: scoped)
+            let captured: BilibiliPlaybackSnapshot = wait { guarder.read(path: metadataPath, completion: $0) }
+            let cleared: Bool = wait { guarder.replace(header: nil, completion: $0) }
+            precondition(cleared)
+            let valid: Bool = wait { guarder.validate(generation: captured.generation, path: metadataPath, completion: $0) }
+            precondition(!valid, "Old metadata generation survived logout")
+            let late: BilibiliPlaybackSnapshot = wait { guarder.merge(generation: captured.generation, path: metadataPath, headers: ["bili_ticket=late; Domain=.bilibili.com; Path=/; Secure"], completion: $0) }
+            precondition(!late.usable && scoped.cookies.isEmpty, "Late metadata response changed the new session")
+        }
+        for deniedPath in ["/x/web-interface/view", "/x/web-interface/wbi/search/type", "/x/tag/archive/tags", "/x/player/pagelist/extra"] {
+            precondition(policy.snapshot([root], path: deniedPath).state == "unknown")
+        }
         let memory = MemoryCookies([root])
         let coordinator = BilibiliPlaybackSessionCoordinator(store: memory)
         let first: BilibiliPlaybackSnapshot = wait { coordinator.read(path: path, completion: $0) }

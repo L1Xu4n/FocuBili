@@ -1,224 +1,256 @@
 import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
+import 'package:focubili/features/player/player_page.dart';
 import 'package:focubili/features/search/search_page.dart';
 import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/services/bilibili_service.dart';
+import 'refactor_r3_feedback_test.dart' show FeedbackPlayback;
 
-/// 创建一个固定的关键词搜索结果，减少各个搜索组件测试中的重复数据。
-VideoSearchResult _searchResult({
-  required String bvid,
-  required String title,
-  String episodeCountText = '',
-}) {
-  return VideoSearchResult(
-    bvid: bvid,
-    title: title,
-    ownerName: '测试 UP 主',
-    duration: const Duration(minutes: 3),
-    thumbnailUrl: '',
-    publishedAt: DateTime(2026, 7, 14),
-    playCount: 1,
-    danmakuCount: 1,
-    episodeCountText: episodeCountText,
-  );
-}
+const _bvid = 'BV1GJ411x7h7';
+VideoSearchResult _result({int cid = 0, String badge = ''}) =>
+    VideoSearchResult(
+      bvid: _bvid,
+      cid: cid,
+      title: 'search title',
+      ownerName: 'author',
+      duration: const Duration(seconds: 12),
+      thumbnailUrl: '',
+      publishedAt: null,
+      playCount: 1,
+      danmakuCount: 1,
+      episodeCountText: badge,
+    );
+VideoPreview _details({int cid = 101, String title = 'complete title'}) =>
+    VideoPreview(
+      bvid: _bvid,
+      cid: cid,
+      title: title,
+      ownerName: 'author',
+      parts: [
+        VideoPart(
+          pageNumber: 1,
+          cid: cid,
+          title: 'one',
+          duration: const Duration(seconds: 12),
+        ),
+        const VideoPart(
+          pageNumber: 2,
+          cid: 102,
+          title: 'two',
+          duration: Duration(seconds: 20),
+        ),
+      ],
+    );
 
-/// 创建具有指定分P数量的视频详情，用于验证搜索页从详情补充分集角标。
-VideoPreview _videoPreview(String bvid, int partCount) {
-  final List<VideoPart> parts = List<VideoPart>.generate(
-    partCount,
-    (int index) => VideoPart(
-      pageNumber: index + 1,
-      cid: 1000 + index,
-      title: '第${index + 1}P',
-      duration: const Duration(minutes: 3),
-    ),
-  );
-  return VideoPreview(
-    bvid: bvid,
-    cid: parts.first.cid,
-    title: '测试视频',
-    ownerName: '测试 UP 主',
-    duration: parts.first.duration,
-    parts: parts,
-  );
-}
+class _SearchService implements BilibiliService, BilibiliSearchPlaybackService {
+  _SearchService(this.result);
+  final VideoSearchResult result;
+  int details = 0, resolutions = 0;
+  final detailGate = Completer<VideoPreview>();
+  final partGate = Completer<VideoPreview>();
+  @override
+  Future<VideoPreview> lookupVideo(String input) {
+    details++;
+    return detailGate.future;
+  }
 
-/// 向搜索框输入关键词并模拟键盘的“搜索”确认操作。
-Future<void> _submitKeywordSearch(WidgetTester tester, String keyword) async {
-  await tester.enterText(find.byType(TextField), keyword);
-  await tester.testTextInput.receiveAction(TextInputAction.search);
-  await tester.pump();
-  await tester.pump();
-}
+  @override
+  Future<VideoPreview> resolveSearchVideo(VideoSearchResult result) {
+    resolutions++;
+    return partGate.future;
+  }
 
-/// 为搜索页提供可记录详情请求、失败和延迟响应的本地服务替身。
-class _SearchFallbackService implements BilibiliService {
-  /// 创建一组固定搜索结果，并可为各 BV 号配置详情、失败或手动完成的请求。
-  _SearchFallbackService({
-    required this.results,
-    Map<String, VideoPreview>? previews,
-    Set<String>? failingBvids,
-    Map<String, Completer<VideoPreview>>? pendingLookups,
-  }) : _previews = previews ?? <String, VideoPreview>{},
-       _failingBvids = failingBvids ?? <String>{},
-       _pendingLookups = pendingLookups ?? <String, Completer<VideoPreview>>{};
-
-  final List<VideoSearchResult> results;
-  final Map<String, VideoPreview> _previews;
-  final Set<String> _failingBvids;
-  final Map<String, Completer<VideoPreview>> _pendingLookups;
-  final List<String> lookupRequests = <String>[];
-  int activeLookups = 0;
-  int maximumConcurrentLookups = 0;
-
-  /// 返回固定的一页搜索结果，让测试只关注页面的分集补查行为。
   @override
   Future<VideoSearchPage> searchVideos(
     String keyword, {
     int page = 1,
     VideoSearchFilter filter = const VideoSearchFilter(),
-  }) async {
-    return VideoSearchPage(results: results, page: page, totalPages: page);
-  }
-
-  /// 记录详情请求，并按配置返回成功、失败或等待测试手动完成的 Future。
+  }) async => VideoSearchPage(results: [result], page: 1, totalPages: 1);
   @override
-  Future<VideoPreview> lookupVideo(String input) {
-    lookupRequests.add(input);
-    activeLookups += 1;
-    if (activeLookups > maximumConcurrentLookups) {
-      maximumConcurrentLookups = activeLookups;
-    }
-    final Completer<VideoPreview>? pending = _pendingLookups[input];
-    final Future<VideoPreview> response;
-    if (pending != null) {
-      response = pending.future;
-    } else if (_failingBvids.contains(input)) {
-      response = Future<VideoPreview>.error(
-        const BilibiliLookupException('测试用的详情补查失败。'),
-      );
-    } else {
-      final VideoPreview? preview = _previews[input];
-      response = preview == null
-          ? Future<VideoPreview>.error(
-              const BilibiliLookupException('测试没有配置该视频详情。'),
-            )
-          : Future<VideoPreview>.value(preview);
-    }
-    return response.whenComplete(() => activeLookups -= 1);
-  }
-
-  /// 测试不关心候选词，因此始终返回空列表以避免额外异步干扰。
-  @override
-  Future<List<String>> suggestKeywords(String input) async {
-    return const <String>[];
-  }
+  Future<List<String>> suggestKeywords(String input) async => [];
 }
 
-/// 验证搜索卡片的分P文字能在不影响原始搜索结果的前提下安全补全。
+Future<void> _submit(WidgetTester tester, [String keyword = 'keyword']) async {
+  await tester.enterText(find.byType(TextField), keyword);
+  await tester.testTextInput.receiveAction(TextInputAction.search);
+  await tester.pumpAndSettle();
+}
+
 void main() {
-  /// 验证服务端角标优先、详情补查、单P隐藏与失败去重都符合预期。
-  testWidgets('搜索结果只为缺失分集文字的卡片补查一次详情', (WidgetTester tester) async {
-    SharedPreferences.setMockInitialValues(<String, Object>{});
-    await tester.binding.setSurfaceSize(const Size(420, 1200));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    const String serverBvid = 'BV1GJ411x7h7';
-    const String multiPartBvid = 'BV1GJ411x7h8';
-    const String singlePartBvid = 'BV1GJ411x7h9';
-    const String failureBvid = 'BV1GJ411x7hA';
-    final _SearchFallbackService service = _SearchFallbackService(
-      results: <VideoSearchResult>[
-        _searchResult(
-          bvid: serverBvid,
-          title: '服务端已有分集文字',
-          episodeCountText: '全12集',
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+  testWidgets(
+    'render, rebuild and repeated search do not request details for badges',
+    (tester) async {
+      final service = _SearchService(_result(badge: '全12集'));
+      await tester.pumpWidget(MaterialApp(home: SearchPage(service: service)));
+      await _submit(tester);
+      expect(find.text('全12集'), findsOneWidget);
+      await _submit(tester, 'again');
+      expect(service.details, 0);
+      expect(service.resolutions, 0);
+      await tester.pumpWidget(const SizedBox.shrink());
+      final missing = _SearchService(_result());
+      await tester.pumpWidget(MaterialApp(home: SearchPage(service: missing)));
+      await _submit(tester);
+      expect(missing.details, 0);
+      expect(missing.resolutions, 0);
+      expect(find.text('共 2 P'), findsNothing);
+    },
+  );
+  testWidgets(
+    'known CID enters actual player before details; detail failure does not stop playback',
+    (tester) async {
+      final service = _SearchService(_result(cid: 101));
+      final playback = FeedbackPlayback();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SearchPage(service: service),
+          onGenerateRoute: (settings) => MaterialPageRoute<void>(
+            builder: (_) => PlayerPage(
+              video: settings.arguments! as VideoPreview,
+              playbackService: playback,
+              bilibiliService: service,
+            ),
+          ),
         ),
-        _searchResult(bvid: multiPartBvid, title: '需要补查的多P视频'),
-        _searchResult(bvid: singlePartBvid, title: '单P视频'),
-        _searchResult(bvid: failureBvid, title: '详情失败的视频'),
-      ],
-      previews: <String, VideoPreview>{
-        multiPartBvid: _videoPreview(multiPartBvid, 3),
-        singlePartBvid: _videoPreview(singlePartBvid, 1),
-      },
-      failingBvids: <String>{failureBvid},
-    );
-
+      );
+      await _submit(tester);
+      await tester.tap(find.byKey(const ValueKey('search-$_bvid')));
+      await tester.pumpAndSettle();
+      expect(find.byType(PlayerPage), findsOneWidget);
+      expect(playback.onlineOpens, 1);
+      expect(service.resolutions, 0);
+      expect(service.details, 1);
+      service.detailGate.completeError(
+        const BilibiliLookupException('HTTP 412'),
+      );
+      await tester.pumpAndSettle();
+      expect(playback.onlineOpens, 1);
+      expect(find.byType(PlayerPage), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+  testWidgets(
+    'missing CID waits for explicit parts only, then routes a real CID',
+    (tester) async {
+      final service = _SearchService(_result());
+      VideoPreview? routed;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SearchPage(service: service),
+          onGenerateRoute: (settings) {
+            routed = settings.arguments! as VideoPreview;
+            return MaterialPageRoute<void>(
+              builder: (_) => const Scaffold(body: Text('player destination')),
+            );
+          },
+        ),
+      );
+      await _submit(tester);
+      await tester.tap(find.byKey(const ValueKey('search-$_bvid')));
+      await tester.pump();
+      expect(service.resolutions, 1);
+      expect(service.details, 0);
+      expect(routed, isNull);
+      service.partGate.complete(
+        _result().toPlaybackPreview(parts: _details().parts),
+      );
+      await tester.pumpAndSettle();
+      expect(routed!.cid, 101);
+      expect(routed!.parts.length, 2);
+      expect(routed!.detailsComplete, isFalse);
+    },
+  );
+  testWidgets('failed part resolution leaves search result and never routes', (
+    tester,
+  ) async {
+    final service = _SearchService(_result());
     await tester.pumpWidget(MaterialApp(home: SearchPage(service: service)));
-    await _submitKeywordSearch(tester, '测试关键词');
+    await _submit(tester);
+    await tester.tap(find.byKey(const ValueKey('search-$_bvid')));
+    await tester.pump();
+    service.partGate.completeError(
+      const BilibiliLookupException('没有真实的分 P 编号。'),
+    );
     await tester.pumpAndSettle();
-
-    expect(find.text('全12集'), findsOneWidget);
-    expect(find.text('共 3 P'), findsOneWidget);
-    expect(find.text('共 1 P'), findsNothing);
-    expect(
-      service.lookupRequests,
-      containsAllInOrder(<String>[multiPartBvid, singlePartBvid, failureBvid]),
-    );
-    expect(service.lookupRequests, isNot(contains(serverBvid)));
-    expect(
-      service.lookupRequests.where((String bvid) => bvid == failureBvid),
-      hasLength(1),
-    );
-    expect(find.byKey(const Key('search-BV1GJ411x7hA')), findsOneWidget);
-    expect(tester.takeException(), isNull);
-
-    await _submitKeywordSearch(tester, '再次搜索');
-    await tester.pumpAndSettle();
-    expect(
-      service.lookupRequests.where((String bvid) => bvid == multiPartBvid),
-      hasLength(1),
-    );
-    expect(
-      service.lookupRequests.where((String bvid) => bvid == failureBvid),
-      hasLength(1),
-    );
+    expect(find.text('没有真实的分 P 编号。'), findsOneWidget);
+    expect(find.byKey(const ValueKey('search-$_bvid')), findsOneWidget);
+    expect(service.details, 0);
   });
-
-  /// 验证多个可见卡片的详情补查最多同时运行两条请求。
-  testWidgets('搜索分集补查最多同时发起两条详情请求', (WidgetTester tester) async {
-    SharedPreferences.setMockInitialValues(<String, Object>{});
-    await tester.binding.setSurfaceSize(const Size(420, 1200));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    const String firstBvid = 'BV1GJ411x7hB';
-    const String secondBvid = 'BV1GJ411x7hC';
-    const String thirdBvid = 'BV1GJ411x7hD';
-    final Map<String, Completer<VideoPreview>> pendingLookups =
-        <String, Completer<VideoPreview>>{
-          firstBvid: Completer<VideoPreview>(),
-          secondBvid: Completer<VideoPreview>(),
-          thirdBvid: Completer<VideoPreview>(),
-        };
-    final _SearchFallbackService service = _SearchFallbackService(
-      results: <VideoSearchResult>[
-        _searchResult(bvid: firstBvid, title: '第一条多P视频'),
-        _searchResult(bvid: secondBvid, title: '第二条多P视频'),
-        _searchResult(bvid: thirdBvid, title: '第三条多P视频'),
-      ],
-      pendingLookups: pendingLookups,
+  testWidgets('old part result after a new query never routes', (tester) async {
+    final service = _SearchService(_result());
+    var routes = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SearchPage(service: service),
+        onGenerateRoute: (_) {
+          routes++;
+          return null;
+        },
+      ),
     );
-
-    await tester.pumpWidget(MaterialApp(home: SearchPage(service: service)));
-    await _submitKeywordSearch(tester, '并发测试');
+    await _submit(tester);
+    await tester.tap(find.byKey(const ValueKey('search-$_bvid')));
     await tester.pump();
-
-    expect(service.lookupRequests, hasLength(2));
-    expect(service.maximumConcurrentLookups, 2);
-
-    pendingLookups[firstBvid]!.complete(_videoPreview(firstBvid, 2));
+    await tester.enterText(find.byType(TextField), 'next keyword');
+    await tester.testTextInput.receiveAction(TextInputAction.search);
     await tester.pump();
-    await tester.pump();
-    expect(service.lookupRequests, hasLength(3));
-    expect(service.maximumConcurrentLookups, 2);
-
-    pendingLookups[secondBvid]!.complete(_videoPreview(secondBvid, 2));
-    pendingLookups[thirdBvid]!.complete(_videoPreview(thirdBvid, 2));
+    service.partGate.complete(
+      _result().toPlaybackPreview(parts: _details().parts),
+    );
+    await tester.pumpAndSettle();
+    expect(routes, 0);
+    expect(tester.takeException(), isNull);
+  });
+  for (final sameCid in [true, false]) {
+    testWidgets(
+      'optional details ${sameCid ? 'update same video' : 'reject mismatched CID'} without reopening',
+      (tester) async {
+        final service = _SearchService(_result(cid: 101));
+        final playback = FeedbackPlayback();
+        await tester.pumpWidget(
+          MaterialApp(
+            home: PlayerPage(
+              video: _result(cid: 101).toPlaybackPreview(),
+              bilibiliService: service,
+              playbackService: playback,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(playback.onlineOpens, 1);
+        service.detailGate.complete(_details(cid: sameCid ? 101 : 999));
+        await tester.pumpAndSettle();
+        expect(playback.onlineOpens, 1);
+        expect(
+          find.text('complete title'),
+          sameCid ? findsWidgets : findsNothing,
+        );
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+  }
+  testWidgets('disposed player cannot publish late details', (tester) async {
+    final service = _SearchService(_result(cid: 101));
+    final playback = FeedbackPlayback();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _result(cid: 101).toPlaybackPreview(),
+          bilibiliService: service,
+          playbackService: playback,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox.shrink());
+    service.detailGate.complete(_details());
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
+    expect(playback.onlineOpens, 1);
   });
 }

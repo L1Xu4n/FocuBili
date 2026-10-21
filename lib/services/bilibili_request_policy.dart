@@ -46,12 +46,14 @@ abstract final class BilibiliRequestPolicy {
     return host == 'geetest.com' || host.endsWith('.geetest.com');
   }
 
-  /// 根据公开接口地址生成对应网页来源，详情和标签请求使用精确视频页防止 HTTP 412。
+  /// 根据公开接口地址生成对应网页来源，详情和标签请求使用精确视频页保持来源一致。
   static String publicJsonReferer(Uri endpoint) {
     if (endpoint.path == '/x/web-interface/wbi/search/type') {
       return _searchReferer;
     }
     if (endpoint.path == '/x/web-interface/view' ||
+        endpoint.path == '/x/web-interface/wbi/view' ||
+        endpoint.path == '/x/player/pagelist' ||
         endpoint.path == '/x/tag/archive/tags') {
       final String bvid = endpoint.queryParameters['bvid']?.trim() ?? '';
       if (_bvidPattern.hasMatch(bvid)) {

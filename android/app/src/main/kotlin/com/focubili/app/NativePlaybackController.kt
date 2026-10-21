@@ -91,7 +91,8 @@ class NativePlaybackController(
 ) : MethodChannel.MethodCallHandler {
     private val channel = MethodChannel(messenger, CHANNEL_NAME)
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val playbackRequestExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    private val playbackRequests = LatestPlaybackRequestQueue()
+    private val frameCaptureExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val overlayDataRequestExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val progressPreferences = activity.getSharedPreferences(
         PROGRESS_PREFERENCES_NAME,
@@ -105,6 +106,9 @@ class NativePlaybackController(
     private val cacheDatabaseProvider = StandaloneDatabaseProvider(activity)
     private var mediaCache: SimpleCache? = null
     private var player: ExoPlayer? = null
+    private var destroyed = false
+    private val runtimeDiagnostics = MediaRuntimeDiagnostics(SystemClock::elapsedRealtime)
+    private val runtimeAnalytics = MediaRuntimeAnalytics(runtimeDiagnostics)
     private var mediaSession: MediaSession? = null
     private var textureEntry: TextureRegistry.SurfaceTextureEntry? = null
     private var videoSurface: Surface? = null
@@ -263,6 +267,14 @@ class NativePlaybackController(
     /** 接收 Flutter 的打开视频、播放控制、倍速、清晰度和资源释放命令。 */
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
+            "getMediaRuntimeDiagnostics" -> {
+                sampleRuntimeDiagnostics()
+                result.success(runtimeDiagnostics.snapshot())
+            }
+            "clearMediaRuntimeDiagnostics" -> {
+                runtimeDiagnostics.clear()
+                result.success(null)
+            }
             "initialize" -> {
                 ensurePlayer()
                 result.success(mapOf("textureId" to ensureTexture()))
@@ -506,9 +518,11 @@ class NativePlaybackController(
 
     /** 宿主 Activity 销毁时释放媒体会话、播放器、纹理和后台网络任务。 */
     fun onHostDestroy() {
+        destroyed = true
         releasePlaybackResources()
         releaseMediaCache()
-        playbackRequestExecutor.shutdownNow()
+        playbackRequests.close()
+        frameCaptureExecutor.shutdown()
         overlayDataRequestExecutor.shutdownNow()
         channel.setMethodCallHandler(null)
     }
@@ -667,6 +681,7 @@ class NativePlaybackController(
             return
         }
         val nativePlayer = createNativePlayer()
+        nativePlayer.addAnalyticsListener(runtimeAnalytics)
         nativePlayer.setAudioAttributes(
             AudioAttributes.Builder()
                 .setUsage(C.USAGE_MEDIA)
@@ -678,6 +693,9 @@ class NativePlaybackController(
         nativePlayer.setWakeMode(C.WAKE_MODE_LOCAL)
         nativePlayer.playbackParameters = PlaybackParameters(playbackSpeed)
         nativePlayer.addListener(object : Player.Listener {
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                sampleRuntimeDiagnostics()
+            }
             /** 播放或暂停变化时把最新状态同步给 Flutter。 */
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 if (
@@ -685,6 +703,7 @@ class NativePlaybackController(
                         playbackPrepared = playbackPrepared,
                         playbackEnded = nativePlayer.playbackState == Player.STATE_ENDED,
                         playbackFailed = playbackPhase == PHASE_ERROR,
+                        playbackReady = nativePlayer.playbackState == Player.STATE_READY,
                     )
                 ) {
                     playbackPhase = PHASE_READY
@@ -697,6 +716,17 @@ class NativePlaybackController(
 
             /** 缓冲、就绪和播完状态变化时更新提示与播放记忆。 */
             override fun onPlaybackStateChanged(playbackState: Int) {
+                sampleRuntimeDiagnostics()
+                val runtimeAttempt = nativePlayer.currentMediaItem?.localConfiguration?.tag
+                    as? MediaRuntimeDiagnostics.Attempt
+                if (runtimeAttempt != null && runtimeDiagnostics.accepts(runtimeAttempt)) {
+                    runtimeDiagnostics.state(when (playbackState) {
+                        Player.STATE_BUFFERING -> "buffering"
+                        Player.STATE_READY -> "ready"
+                        Player.STATE_ENDED -> "ended"
+                        else -> "idle"
+                    })
+                }
                 when (playbackState) {
                     Player.STATE_BUFFERING -> {
                         playbackPhase = PHASE_LOADING
@@ -740,6 +770,7 @@ class NativePlaybackController(
 
             /** 网络或播放地址失败时保留进度，依次尝试备用线路和有限次数的数据刷新。 */
             override fun onPlayerError(error: PlaybackException) {
+                runtimeDiagnostics.record("player_error", MediaRuntimeAnalytics.failureFields(error) + ("error_code" to error.errorCode))
                 retryPlaybackAfterError(nativePlayer, error)
             }
         })
@@ -754,7 +785,7 @@ class NativePlaybackController(
         mainHandler.post(stateTicker)
     }
 
-    /** 为 ARM 真机保留默认异步解码；x86 模拟器改用同步适配器，避免竖屏高分辨率视频帧严重积压。 */
+    /** 保留 Media3 按系统版本选择的默认解码适配器；x86 模拟器显式使用同步适配器。 */
     private fun createNativePlayer(): ExoPlayer {
         val renderersFactory = DefaultRenderersFactory(activity).setEnableDecoderFallback(true)
         if (PlaybackTrackPolicy.shouldUseSynchronousCodec(Build.SUPPORTED_ABIS.toList())) {
@@ -1003,7 +1034,7 @@ class NativePlaybackController(
             surface,
             bitmap,
             { copyResult ->
-                if (copyResult != PixelCopy.SUCCESS) {
+                if (destroyed || copyResult != PixelCopy.SUCCESS) {
                     bitmap.recycle()
                     result.error(
                         "frame_capture_failed",
@@ -1012,7 +1043,7 @@ class NativePlaybackController(
                     )
                     return@request
                 }
-                playbackRequestExecutor.execute {
+                frameCaptureExecutor.execute {
                     try {
                         val directory = File(activity.filesDir, "video_note_frames")
                         if (!directory.exists() && !directory.mkdirs()) {
@@ -1063,6 +1094,7 @@ class NativePlaybackController(
         invalidatePlaybackRequests()
         player?.stop()
         player?.clearMediaItems()
+        runtimeDiagnostics.begin(local = false)
         currentBvid = bvid
         canContinueAsGuest = false
         guestConsentGeneration = null
@@ -1114,6 +1146,7 @@ class NativePlaybackController(
         invalidatePlaybackRequests()
         player?.stop()
         player?.clearMediaItems()
+        runtimeDiagnostics.begin(local = true)
         currentBvid = bvid
         currentCid = cid
         currentPageNumber = pageNumber
@@ -1153,10 +1186,12 @@ class NativePlaybackController(
             return
         }
         val nativePlayer = player ?: return
+        val runtimeAttempt = runtimeDiagnostics.prepare()
         val uri = Uri.fromFile(if (audioOnly) audioFile ?: localFile else localFile)
         val mediaItem = MediaItem.Builder()
             .setMediaId("offline:${localFile.absolutePath}")
             .setUri(uri)
+            .setTag(runtimeAttempt)
             .setMediaMetadata(
                 MediaMetadata.Builder()
                     .setTitle(currentTitle.ifBlank { "离线视频" })
@@ -1169,10 +1204,10 @@ class NativePlaybackController(
         ).setLoadErrorHandlingPolicy(
             DefaultLoadErrorHandlingPolicy(MEDIA_MINIMUM_RETRY_COUNT),
         )
-        val videoSource = sourceFactory.createMediaSource(mediaItem)
+        val videoSource = runtimeAnalytics.observe(sourceFactory.createMediaSource(mediaItem), mainHandler, runtimeAttempt, if (audioOnly) "audio" else if (audioFile == null) "muxed" else "video")
         val mediaSource = if (audioOnly || audioFile == null) videoSource else MergingMediaSource(
             videoSource,
-            sourceFactory.createMediaSource(MediaItem.fromUri(Uri.fromFile(audioFile))),
+            runtimeAnalytics.observe(sourceFactory.createMediaSource(MediaItem.Builder().setUri(Uri.fromFile(audioFile)).setTag(runtimeAttempt).build()), mainHandler, runtimeAttempt, "audio"),
         )
         // 音视频采用同一时间轴和初始位置，避免分离音轨丢失或续播后不同步。
         nativePlayer.setMediaSource(
@@ -1250,6 +1285,7 @@ class NativePlaybackController(
         latestPlaybackSources = null
         playbackPhase = PHASE_LOADING
         playbackMessage = "正在切换清晰度…"
+        runtimeDiagnostics.begin(local = false)
         emitPlaybackState()
         requestPlaybackSources(currentBvid, currentCid, quality)
     }
@@ -1263,18 +1299,21 @@ class NativePlaybackController(
 
     /** 在单线程后台请求播放数据，并只让最新请求更新当前视频。 */
     private fun requestPlaybackSources(bvid: String, cid: Long, quality: Int) {
+        val queuedAt = SystemClock.elapsedRealtime()
         val requestToken = createPlaybackRequestToken()
         val diagnostic = PlaybackRequestDiagnostic(requestToken, wbiSigningEnabled, quality)
         val explicitGuest = guestConsentGeneration?.takeIf(BilibiliSessionGate::isCurrent)
         diagnostic.guestSelected = explicitGuest != null
         diagnostic.sessionGeneration = explicitGuest ?: BilibiliSessionGate.generation()
         canContinueAsGuest = false
-        playbackRequestExecutor.execute {
+        playbackRequests.submit { request ->
+            val apiStartedAt = SystemClock.elapsedRealtime()
             val sourceResult = runCatching {
-                loadPlaybackSources(bvid, cid, quality, diagnostic)
+                loadPlaybackSources(bvid, cid, quality, diagnostic, request)
             }
+            val sourceElapsedMs = SystemClock.elapsedRealtime() - apiStartedAt
             mainHandler.post {
-                if (!isCurrentPlaybackRequest(requestToken, bvid, cid, quality)) {
+                if (!request.isActive || !isCurrentPlaybackRequest(requestToken, bvid, cid, quality)) {
                     return@post
                 }
                 // 在主线程实际发布结果时复查，覆盖后台完成到主线程执行间的网页登录/切换。
@@ -1286,6 +1325,10 @@ class NativePlaybackController(
                     reportError("登录状态已变化，请重试播放。")
                     return@post
                 }
+                runtimeDiagnostics.record("request", mapOf(
+                    "request_id" to requestToken, "queue_ms" to apiStartedAt - queuedAt,
+                    "source_ms" to sourceElapsedMs, "api_ms" to diagnostic.apiElapsedMs, "outcome" to if (sourceResult.isSuccess) "success" else "error",
+                ))
                 channel.invokeMethod("playbackRequestDiagnostic", diagnostic.toMap(sourceResult.isSuccess))
                 sourceResult.onSuccess(::prepareMediaSources).onFailure { error ->
                     canContinueAsGuest = error is BilibiliCookiePolicy.Unavailable &&
@@ -1303,9 +1346,12 @@ class NativePlaybackController(
         cid: Long,
         quality: Int,
         diagnostic: PlaybackRequestDiagnostic,
+        request: LatestPlaybackRequestQueue.Request,
     ): PlaybackSources {
+        request.checkActive()
         val useWbi = diagnostic.wbiEnabled
-        val responseText = requestPlaybackInfoJson(bvid, cid, quality, diagnostic)
+        val responseText = requestPlaybackInfoJson(bvid, cid, quality, diagnostic, request)
+        request.checkActive()
         diagnostic.stage = "parse"
         val root = JSONObject(responseText)
         val code = root.optInt("code", -1)
@@ -1367,7 +1413,9 @@ class NativePlaybackController(
         cid: Long,
         quality: Int,
         diagnostic: PlaybackRequestDiagnostic,
+        request: LatestPlaybackRequestQueue.Request,
     ): String {
+        request.checkActive()
         val useWbi = diagnostic.wbiEnabled
         val snapshot = if (diagnostic.guestSelected) {
             if (!BilibiliSessionGate.isCurrent(diagnostic.sessionGeneration)) {
@@ -1402,7 +1450,7 @@ class NativePlaybackController(
             try {
                 wbiSigner.sign(parameters + mapOf("fnver" to "0", "web_location" to "1315873")) {
                     requestPlaybackApiJson(
-                        Uri.parse("https://$PLAYBACK_API_HOST/x/web-interface/nav"), referer, cookie, diagnostic,
+                        Uri.parse("https://$PLAYBACK_API_HOST/x/web-interface/nav"), referer, cookie, diagnostic, request,
                     ).also { response ->
                         val nav = JSONObject(response)
                         val data = nav.optJSONObject("data")
@@ -1421,7 +1469,7 @@ class NativePlaybackController(
         diagnostic.wbiSigned = useWbi && query.containsKey("w_rid") && query.containsKey("wts")
         diagnostic.playurlAttempted = true
         diagnostic.httpStatus = null
-        return requestPlaybackApiJson(endpoint, referer, cookie, diagnostic)
+        return requestPlaybackApiJson(endpoint, referer, cookie, diagnostic, request)
     }
 
     /** 读取固定官方 HTTPS API，禁止重定向携带会话，错误不回显响应正文。 */
@@ -1430,9 +1478,14 @@ class NativePlaybackController(
         referer: String,
         cookie: String,
         diagnostic: PlaybackRequestDiagnostic,
+        request: LatestPlaybackRequestQueue.Request,
     ): String {
+        request.checkActive()
         val connection = URL(endpoint.toString()).openConnection() as HttpsURLConnection
+        val lease = request.own { connection.disconnect() }
+        val apiStartedAt = SystemClock.elapsedRealtime()
         try {
+            request.checkActive()
             connection.requestMethod = "GET"
             connection.instanceFollowRedirects = false
             connection.connectTimeout = NETWORK_TIMEOUT_MS
@@ -1458,7 +1511,8 @@ class NativePlaybackController(
             }
             return responseBody
         } finally {
-            connection.disconnect()
+            diagnostic.apiElapsedMs += SystemClock.elapsedRealtime() - apiStartedAt
+            lease.close()
         }
     }
 
@@ -2591,6 +2645,10 @@ class NativePlaybackController(
             reportError("当前视频没有可用的独立音轨，暂不能省流收听。")
             return
         }
+        val runtimeAttempt = runtimeDiagnostics.prepare()
+        runtimeDiagnostics.record("format", mapOf("quality" to sources.actualQuality,
+            "video_candidate" to selection.videoIndex, "audio_candidate" to selection.audioIndex,
+            "cache_bypass" to bypassMediaCacheForPlayback))
         val displayTitle = buildMediaDisplayTitle()
         val mediaMetadata = MediaMetadata.Builder()
             .setTitle(displayTitle)
@@ -2611,23 +2669,21 @@ class NativePlaybackController(
         ).setLoadErrorHandlingPolicy(
             DefaultLoadErrorHandlingPolicy(MEDIA_MINIMUM_RETRY_COUNT),
         )
+        fun observed(item: MediaItem, track: String): MediaSource = runtimeAnalytics.observe(
+            sourceFactory.createMediaSource(item), mainHandler, runtimeAttempt, track,
+        )
         val finalSource: MediaSource = if (audioOnly) {
-            sourceFactory.createMediaSource(
-                MediaItem.Builder().setMediaId("$currentBvid:$currentCid:audio")
-                    .setUri(audioUrl).setMediaMetadata(mediaMetadata)
-                    .setCustomCacheKey(playbackCacheKey(sources, video = false)).build(),
-            )
+            observed(MediaItem.Builder().setMediaId("$currentBvid:$currentCid:audio")
+                .setUri(audioUrl).setTag(runtimeAttempt).setMediaMetadata(mediaMetadata)
+                .setCustomCacheKey(playbackCacheKey(sources, video = false)).build(), "audio")
         } else {
-            val videoSource = sourceFactory.createMediaSource(
-                MediaItem.Builder().setMediaId("$currentBvid:$currentCid:$currentQuality")
-                    .setUri(videoUrl).setMediaMetadata(mediaMetadata)
-                    .setCustomCacheKey(playbackCacheKey(sources, video = true)).build(),
-            )
-            if (isSafeMediaUrl(audioUrl)) {
-                val audioSource = sourceFactory.createMediaSource(
-                    MediaItem.Builder().setUri(audioUrl)
-                        .setCustomCacheKey(playbackCacheKey(sources, video = false)).build(),
-                )
+            val hasSeparateAudio = isSafeMediaUrl(audioUrl)
+            val videoSource = observed(MediaItem.Builder().setMediaId("$currentBvid:$currentCid:$currentQuality")
+                .setUri(videoUrl).setTag(runtimeAttempt).setMediaMetadata(mediaMetadata)
+                .setCustomCacheKey(playbackCacheKey(sources, video = true)).build(), if (hasSeparateAudio) "video" else "muxed")
+            if (hasSeparateAudio) {
+                val audioSource = observed(MediaItem.Builder().setUri(audioUrl).setTag(runtimeAttempt)
+                    .setCustomCacheKey(playbackCacheKey(sources, video = false)).build(), "audio")
                 MergingMediaSource(videoSource, audioSource)
             } else videoSource
         }
@@ -2676,6 +2732,7 @@ class NativePlaybackController(
 
     /** 使正在执行的播放数据请求失效，防止释放或切换后继续改动播放器。 */
     private fun invalidatePlaybackRequests() {
+        playbackRequests.cancel()
         playbackRequestToken += 1L
     }
 
@@ -2695,9 +2752,11 @@ class NativePlaybackController(
     /** 按给定毫秒数前进或后退，并把位置限制在视频有效范围内。 */
     private fun seekBy(offsetMs: Long) {
         val nativePlayer = player ?: return
+        runtimeDiagnostics.seek()
         val duration = nativePlayer.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
         val target = (nativePlayer.currentPosition + offsetMs).coerceIn(0L, duration)
         nativePlayer.seekTo(target)
+        runtimeDiagnostics.seekReturned(nativePlayer.playbackState == Player.STATE_READY)
         saveCurrentPlaybackProgress(force = true, positionOverrideMs = target)
         emitPlaybackState()
     }
@@ -2705,15 +2764,23 @@ class NativePlaybackController(
     /** 跳转到指定绝对位置，并立即保存拖动进度条得到的新位置。 */
     private fun seekToPosition(positionMs: Long) {
         val nativePlayer = player ?: return
+        runtimeDiagnostics.seek()
         val duration = nativePlayer.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
         val target = positionMs.coerceIn(0L, duration)
         nativePlayer.seekTo(target)
+        runtimeDiagnostics.seekReturned(nativePlayer.playbackState == Player.STATE_READY)
         saveCurrentPlaybackProgress(force = true, positionOverrideMs = target)
         emitPlaybackState()
     }
 
-    /** 将播放器状态、倍速和清晰度列表发送给 Flutter。 */
+    /** 采样当前原生状态；暂停期间不累计等待播放的重缓冲时长。 */
+    private fun sampleRuntimeDiagnostics() {
+        player?.let { runtimeDiagnostics.sample(it.currentPosition, it.totalBufferedDuration, it.playWhenReady, it.playbackParameters.speed) }
+    }
+
+    /** 原生运行摘要仅更新内存，不发送心跳诊断或写入偏好设置。 */
     private fun emitPlaybackState() {
+        sampleRuntimeDiagnostics()
         val nativePlayer = player
         val duration = nativePlayer?.duration?.takeIf { it > 0 } ?: 0L
         val position = nativePlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
@@ -2910,6 +2977,8 @@ class NativePlaybackController(
 
     /** 清理播放器、系统媒体会话、纹理和未完成播放数据请求。 */
     private fun releasePlaybackResources() {
+        sampleRuntimeDiagnostics()
+        runtimeDiagnostics.finish("released")
         sleepTimer.configure(0L)
         ListeningMediaService.stop(activity.applicationContext)
         audioOnly = false

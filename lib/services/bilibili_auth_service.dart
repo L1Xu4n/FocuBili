@@ -569,6 +569,9 @@ class BilibiliPlaybackSession {
     snapshot = next;
   }
 
+  /// Opaque in-memory identity for concurrent request sharing; never exported.
+  Object get scopeKey => (_localGeneration, snapshot.generation);
+
   Future<String> headerFor(String path) async {
     await _checkLocal();
     if (_native case final native?) {
