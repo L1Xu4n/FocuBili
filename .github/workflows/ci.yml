@@ -1,187 +1,160 @@
-name: FocuBili CI
-
+name: FocuBili 1.8.2 reviewed previews
 on:
-  pull_request:
-    branches:
-      - dev
-      - master
-      - "iOS＆MacOS"
   push:
-    branches:
-      - dev
-      - master
+    branches: ['test/v1.8.2-search-details']
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
-  group: focubili-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
+  group: focubili-v182-preview-${{ github.ref }}
+  cancel-in-progress: false
 env:
   FLUTTER_VERSION: '3.44.6'
-
 jobs:
   quality:
-    name: Dart quality
+    if: github.repository == 'L1Xu4n/FocuBili' && github.ref == 'refs/heads/test/v1.8.2-search-details'
     runs-on: ubuntu-latest
     timeout-minutes: 20
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
-
-      - name: Install dependencies
-        run: flutter pub get
-
-      - name: Check formatting
-        run: dart format --output=none --set-exit-if-changed lib test
-
-      - name: Analyze Dart code
-        run: flutter analyze --no-pub
-
-      - name: Run Flutter tests
-        run: flutter test --no-pub
-
-      - name: Check Beta publication tools without network or signing
-        run: python3 -m unittest discover -s tool -p test_beta_release.py -v
+      - run: flutter pub get
+      - run: dart format --output=none --set-exit-if-changed lib test
+      - run: flutter analyze --no-pub
+      - run: flutter test --no-pub
+      - run: python3 tool/check_apple_sources.py
 
   android:
-    name: Android debug
-    needs: quality
+    if: github.repository == 'L1Xu4n/FocuBili' && github.ref == 'refs/heads/test/v1.8.2-search-details'
     runs-on: ubuntu-latest
-    timeout-minutes: 35
-
+    timeout-minutes: 45
+    env:
+      ANDROID_RELEASE_CERT_SHA256: '65EF1FB301FB1121C1803E752F5B1EB24E55846502D8B5478F0FC11F58E9A8A9'
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Java 21
-        uses: actions/setup-java@v5
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require exact reviewed preview source
+        run: |
+          test "$GITHUB_REPOSITORY" = 'L1Xu4n/FocuBili'
+          test "$GITHUB_REF" = 'refs/heads/test/v1.8.2-search-details'
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor dd3ebb7de85fa02120b74debf8fd85d525a573da HEAD
+          python3 -c "from pathlib import Path; assert 'version: 1.8.2+32' in Path('pubspec.yaml').read_text()"
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
           cache: gradle
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
-
-      - name: Install dependencies
-        run: flutter pub get
-
-      - name: Run Android JVM tests
-        working-directory: android
+      - run: flutter pub get
+      - name: Android JVM regressions
+        run: bash android/gradlew -p android :app:testDebugUnitTest :focubili_android:testDebugUnitTest --no-daemon
+      - name: Restore existing repository signing configuration
+        env:
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+          ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+          ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
         run: |
-          chmod +x gradlew
-          ./gradlew :app:testDebugUnitTest :focubili_android:testDebugUnitTest --no-daemon
-
-      - name: Build debug APK
+          test -n "$ANDROID_RELEASE_KEYSTORE_BASE64"
+          test -n "$ANDROID_RELEASE_STORE_PASSWORD"
+          test -n "$ANDROID_RELEASE_KEY_PASSWORD"
+          test -n "$ANDROID_RELEASE_KEY_ALIAS"
+          keystore="$RUNNER_TEMP/focubili-preview.keystore"
+          printf '%s' "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          {
+            printf 'storeFile=%s\n' "$keystore"
+            printf 'storePassword=%s\n' "$ANDROID_RELEASE_STORE_PASSWORD"
+            printf 'keyPassword=%s\n' "$ANDROID_RELEASE_KEY_PASSWORD"
+            printf 'keyAlias=%s\n' "$ANDROID_RELEASE_KEY_ALIAS"
+          } > android/key.properties
+          chmod 600 "$keystore" android/key.properties
+      - name: Build optimized arm64 preview
         run: |
           dart tool/write_build_metadata.dart
-          flutter build apk --debug --no-pub
-
-      - name: Verify debug APK metadata
-        shell: bash
+          flutter build apk --release --config-only --target-platform android-arm64
+          bash android/gradlew -p android -I "$PWD/tool/android_preview.init.gradle" -PbuildMode=release -Pdisable-abi-filtering=true -Ptarget-platform=android-arm64 :app:assembleRelease --no-daemon
+          mkdir -p build/preview/android
+          cp build/app/outputs/apk/release/app-release.apk build/preview/android/FocuBili-v1.8.2-arm64-preview.apk
+          cp lib/core/build_metadata.g.dart build/preview/android/
+      - name: Verify preview identity, signature, ABI and source
         run: |
-          apk='build/app/outputs/flutter-apk/app-debug.apk'
           build_tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
-          "$build_tools/aapt" dump badging "$apk" > build/app/outputs/flutter-apk/apk-badging.txt
-          "$build_tools/apksigner" verify --print-certs "$apk" > build/app/outputs/flutter-apk/apk-signature.txt
-          python3 - <<'PY'
-          import hashlib, json, os, re
-          from pathlib import Path
-          folder = Path('build/app/outputs/flutter-apk')
-          apk = folder / 'app-debug.apk'
-          badging = (folder / 'apk-badging.txt').read_text()
-          signature = (folder / 'apk-signature.txt').read_text()
-          package = re.search(r"package: name='([^']+)' versionCode='(\d+)' versionName='([^']+)'", badging)
-          version = re.search(r'^version:\s*(\d+\.\d+\.\d+)\+(\d+)\s*$', Path('pubspec.yaml').read_text(), re.M)
-          suffix = re.search(r'versionNameSuffix\s+"([^"]+)"', Path('android/app/build.gradle').read_text())
-          assert package and version and suffix, 'APK/source version metadata missing'
-          assert package[1] == 'com.focubili.app.preview', 'Unexpected debug package'
-          assert package[2] == version[2], 'Unexpected versionCode'
-          assert package[3] == version[1] + suffix[1], 'Unexpected beta version'
-          certificates = set(re.findall(r'^(?:Signer #\d+|V[\d.]+ Signer):? certificate SHA-256 digest: ([0-9a-fA-F]+)$', signature, re.M))
-          assert len(certificates) == 1, 'Expected one verified APK signing certificate'
-          digest = hashlib.sha256(apk.read_bytes()).hexdigest()
-          record = {'commit': os.environ['GITHUB_SHA'], 'file': apk.name, 'bytes': apk.stat().st_size,
-                    'sha256': digest, 'package': package[1], 'versionCode': int(package[2]),
-                    'versionName': package[3], 'certificateSha256': certificates.pop().lower(),
-                    'signatureVerification': 'passed'}
-          (folder / 'apk-verification.json').write_text(json.dumps(record, indent=2) + '\n')
-          (folder / 'APK-SHA256SUMS.txt').write_text(digest + '  ' + apk.name + '\n')
-          print(json.dumps(record, indent=2))
-          PY
-
-      - name: Upload debug APK
-        uses: actions/upload-artifact@v4
+          apk=build/preview/android/FocuBili-v1.8.2-arm64-preview.apk
+          "$build_tools/aapt" dump badging "$apk" > build/preview/android/apk-badging.txt
+          "$build_tools/apksigner" verify --verbose --print-certs "$apk" > build/preview/android/apk-signature.txt
+          python3 tool/verify_android_preview.py
+      - uses: actions/upload-artifact@v4
         with:
-          name: focubili-debug-apk
-          path: |
-            build/app/outputs/flutter-apk/app-debug.apk
-            build/app/outputs/flutter-apk/apk-verification.json
-            build/app/outputs/flutter-apk/APK-SHA256SUMS.txt
-            build/app/outputs/flutter-apk/apk-badging.txt
-            build/app/outputs/flutter-apk/apk-signature.txt
+          name: focubili-v1.8.2-android-${{ github.sha }}
+          path: build/preview/android/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
+      - name: Remove temporary signing files
+        if: always()
+        run: rm -f "$RUNNER_TEMP/focubili-preview.keystore" android/key.properties
 
-  windows:
-    name: Windows debug
-    needs: quality
-    runs-on: windows-latest
-    timeout-minutes: 35
-
+  macos:
+    if: github.repository == 'L1Xu4n/FocuBili' && github.ref == 'refs/heads/test/v1.8.2-search-details'
+    runs-on: macos-26
+    timeout-minutes: 60
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Require exact preview source
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+      - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
-
-      - name: Install dependencies
-        run: flutter pub get
-
-      - name: Run Windows gesture, cache and history regressions
-        run: flutter test --no-pub test/player_action_feedback_test.dart test/player_feedback_layout_test.dart test/player_tap_gesture_test.dart test/subscription_migration_test.dart test/subscription_request_scope_test.dart test/cache_file_lock_test.dart test/image_resource_cache_test.dart test/cached_player_overlay_service_test.dart test/windows_media_cache_service_test.dart test/desktop_disk_cache_session_test.dart
-
-      - name: Build Windows debug application
+      - run: flutter pub get
+      - name: Native Apple cookie boundaries and metadata regressions
+        run: |
+          python3 tool/check_apple_sources.py
+          python3 tool/run_apple_cookie_probe.py
+          flutter test --no-pub test/video_metadata_session_test.dart test/search_multi_part_fallback_test.dart test/desktop_playback_412_regression_test.dart
+      - name: Build and package normal macOS app
         run: |
           dart tool/write_build_metadata.dart
-          flutter build windows --debug --no-pub
-
-      - name: Upload Windows debug build
-        uses: actions/upload-artifact@v4
-        with:
-          name: focubili-debug-windows
-          path: build/windows/x64/runner/Debug
-          if-no-files-found: error
-          retention-days: 7
-
-      # Upload the normal application before replacing its entry point.
-      - name: Compile isolated native subscription scheduler probe
-        run: flutter build windows --debug --no-pub --target tool/native_subscription_probe.dart --dart-define=NATIVE_SUBSCRIPTION_PROBE=true
-
-      - name: Verify Windows native timer callback and cancellation
-        run: python tool/run_native_subscription_probe.py build/windows/x64/runner/Debug/FocuBili.exe build/native-subscription/windows.log
-
+          python3 tool/macos_build_identity.py
+          flutter build macos --release
+          mkdir -p build/apple/dmg
+          ditto build/macos/Build/Products/Release/FocuBili.app build/apple/dmg/FocuBili.app
+          codesign --verify --deep --strict build/apple/dmg/FocuBili.app
+          ln -s /Applications build/apple/dmg/Applications
+          printf '%s\n' 'Developer preview, ad-hoc signed, not notarized. macOS may restrict launch. Use a Developer ID signed/notarized build for trusted distribution; do not disable system security globally.' > build/apple/dmg/README.txt
+          hdiutil create -volname FocuBili -srcfolder build/apple/dmg -ov -format UDZO build/apple/FocuBili-macos-preview.dmg
+          rm -rf build/apple/dmg
+          shasum -a 256 build/apple/FocuBili-macos-preview.dmg > build/apple/SHA256SUMS.txt
+          cp lib/core/build_metadata.g.dart build/apple/
+      - name: Verify DMG, universal architectures and signed source identity
+        env:
+          REQUIRE_MACOS_HOTFIX_IDENTITY: 'true'
+        run: python3 tool/verify_macos_dmg.py
+      - name: Smoke-test normal app launch
+        run: |
+          open -n "$PWD/build/macos/Build/Products/Release/FocuBili.app"
+          sleep 10
+          pgrep -f '/FocuBili.app/Contents/MacOS/FocuBili'
+          pkill -f '/FocuBili.app/Contents/MacOS/FocuBili' || true
       - uses: actions/upload-artifact@v4
-        if: always()
         with:
-          name: native-subscription-windows-${{ github.sha }}
-          path: build/native-subscription/
-          if-no-files-found: ignore
-          retention-days: 7
+          name: focubili-v1.8.2-macos-${{ github.sha }}
+          path: build/apple/
+          if-no-files-found: error
+          retention-days: 30

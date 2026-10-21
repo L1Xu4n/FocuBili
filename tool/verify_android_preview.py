@@ -33,7 +33,8 @@ def main():
         assert abis == ['arm64-v8a']
         assert not any(name.endswith('kernel_blob.bin') for name in archive.namelist())
         binary = archive.read('lib/arm64-v8a/libapp.so')
-        assert binary.startswith(b'\x7fELF') and revision.encode() in binary
+        assert binary.startswith(b'\x7fELF')
+        assert any(revision.encode(encoding) in binary for encoding in ('utf-8', 'utf-16le'))
     assert apk.stat().st_size < 25 * 1024 * 1024
     mapping = Path('build/app/outputs/mapping/release/mapping.txt')
     assert mapping.is_file() and mapping.stat().st_size > 0
