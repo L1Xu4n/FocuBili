@@ -1,3 +1,5 @@
+import 'ios_decode_preferences.dart';
+
 /// 定义设置页可以选择的常用 B 站视频清晰度。
 enum PreferredPlaybackQuality {
   p360(16, '流畅 360P'),
@@ -157,6 +159,8 @@ class PlaybackPreferences {
     this.preferOfflineCache = false,
     this.playbackSpeeds = defaultSpeeds,
     this.longPressPlaybackSpeed = defaultLongPressPlaybackSpeed,
+    this.iosDecodeMode = IosDecodeMode.automatic,
+    this.iosVideoCodec = IosVideoCodecPreference.avc,
   });
 
   final bool enableDoubleTapSeek;
@@ -171,6 +175,8 @@ class PlaybackPreferences {
   final bool preferOfflineCache;
   final List<double> playbackSpeeds;
   final double longPressPlaybackSpeed;
+  final IosDecodeMode iosDecodeMode;
+  final IosVideoCodecPreference iosVideoCodec;
 
   /// 返回只替换指定字段的新配置，避免页面直接修改旧对象。
   PlaybackPreferences copyWith({
@@ -186,8 +192,12 @@ class PlaybackPreferences {
     bool? preferOfflineCache,
     List<double>? playbackSpeeds,
     double? longPressPlaybackSpeed,
+    IosDecodeMode? iosDecodeMode,
+    IosVideoCodecPreference? iosVideoCodec,
   }) {
     return PlaybackPreferences(
+      iosDecodeMode: iosDecodeMode ?? this.iosDecodeMode,
+      iosVideoCodec: iosVideoCodec ?? this.iosVideoCodec,
       enableDoubleTapSeek: enableDoubleTapSeek ?? this.enableDoubleTapSeek,
       doubleTapRegions: doubleTapRegions?.copyWith() ?? this.doubleTapRegions,
       showPlaybackActionAnimation:

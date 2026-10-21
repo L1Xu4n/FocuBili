@@ -1,4 +1,4 @@
-/// A second allowlist at the platform boundary. Runtime data stays in native memory.
+/// A second allowlist at the platform boundary. Runtime data stays in process memory.
 class MediaRuntimeDiagnostic {
   const MediaRuntimeDiagnostic._(this.fields);
 
@@ -53,6 +53,44 @@ class MediaRuntimeDiagnostic {
     'init_ms',
   };
   static const _enums = {
+    'backend': {'mpv_ios'},
+    'render_path': {'cpu_bgr0'},
+    'decode_preference': {'automatic', 'videoToolbox', 'software'},
+    'decode_option_status': {
+      'not_applied',
+      'accepted',
+      'fallback_auto',
+      'unavailable',
+    },
+    'hwdec_configured': {'auto-copy', 'videotoolbox-copy', 'no'},
+    'hwdec_current': {'no', 'videotoolbox', 'videotoolbox-copy'},
+    'codec_family': {
+      'h264',
+      'hevc',
+      'av1',
+      'vp9',
+      'vp8',
+      'mpeg4',
+      'mpeg2video',
+    },
+    'transfer': {
+      'bt.1886',
+      'srgb',
+      'linear',
+      'gamma1.8',
+      'gamma2.0',
+      'gamma2.2',
+      'gamma2.4',
+      'gamma2.6',
+      'gamma2.8',
+      'prophoto',
+      'pq',
+      'hlg',
+      'v-log',
+      's-log1',
+      's-log2',
+      'auto',
+    },
     'track': {'video', 'audio', 'muxed'},
     'state': {'idle', 'buffering', 'ready', 'ended'},
     'buffer_reason': {'initial', 'rebuffer', 'seek', 'recovery'},
@@ -122,6 +160,26 @@ class MediaRuntimeDiagnostic {
             value.length <= 96 &&
             entry.value.matchAsPrefix(value)?.end == value.length) {
           fields[entry.key] = value;
+        }
+      }
+      if (item['backend'] == 'mpv_ios') {
+        if (const {
+          'h264',
+          'hevc',
+          'av1',
+          'vp9',
+          'vp8',
+          'libdav1d',
+          'libaom-av1',
+        }.contains(item['decoder'])) {
+          fields['decoder'] = item['decoder'] as String;
+        }
+        final version = item['mpv_version'];
+        if (version is String &&
+            RegExp(
+              r'^mpv [0-9]{1,2}\.[0-9]{1,3}\.[0-9]{1,3}$',
+            ).hasMatch(version)) {
+          fields['mpv_version'] = version;
         }
       }
       records.add(MediaRuntimeDiagnostic._(Map.unmodifiable(fields)));

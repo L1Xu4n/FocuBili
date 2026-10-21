@@ -6,6 +6,7 @@ import '../../core/layout/adaptive_page_frame.dart';
 import '../../core/router/app_router.dart';
 import '../../core/theme/app_theme.dart';
 import '../../models/playback_preferences.dart';
+import '../../models/ios_decode_preferences.dart';
 import '../../services/app_behavior_preferences_service.dart';
 import '../../services/playback_preferences_service.dart';
 import '../../services/app_layout_preferences_service.dart';
@@ -654,6 +655,101 @@ class _PersonalizationSettingsPageState
     }
   }
 
+  Future<void> _editIosDecodeMode() async {
+    final mode = await showDialog<IosDecodeMode>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('iOS 解码方式'),
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(24, 0, 24, 12),
+            child: Text('下次加载视频、切分P或清晰度时生效。硬件优先仍可能回退软件；实际结果可在问题诊断查看。'),
+          ),
+          for (final mode in IosDecodeMode.values)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, mode),
+              child: ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(mode.label),
+                subtitle: Text(switch (mode) {
+                  IosDecodeMode.automatic => '自动选择兼容的硬件解码，失败时回退软件',
+                  IosDecodeMode.videoToolbox =>
+                    '尝试 Apple VideoToolbox 回拷解码，不保证硬解或降低温度',
+                  IosDecodeMode.software => '可能明显增加耗电和发热，仅用于兼容性排查',
+                }),
+                trailing: mode == _preferences.iosDecodeMode
+                    ? const Icon(Icons.check)
+                    : null,
+              ),
+            ),
+        ],
+      ),
+    );
+    if (!mounted || mode == null || mode == _preferences.iosDecodeMode) return;
+    await _saveIosDecodePreference(mode: mode);
+  }
+
+  Future<void> _editIosVideoCodec() async {
+    final codec = await showDialog<IosVideoCodecPreference>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('iOS 视频编码偏好'),
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(24, 0, 24, 12),
+            child: Text(
+              '选择在线播放的流编码，与解码方式独立。下次在线加载生效，不转换已下载文件。同清晰度缺少首选编码时自动选择可用编码；HEVC 无法播放时尝试同档 AVC（如有）。HEVC 是否节能取决于设备和视频。',
+            ),
+          ),
+          for (final codec in IosVideoCodecPreference.values)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, codec),
+              child: Text(
+                '${codec == _preferences.iosVideoCodec ? '✓ ' : ''}${codec.label}',
+              ),
+            ),
+        ],
+      ),
+    );
+    if (!mounted || codec == null || codec == _preferences.iosVideoCodec) {
+      return;
+    }
+    await _saveIosDecodePreference(codec: codec);
+  }
+
+  Future<void> _saveIosDecodePreference({
+    IosDecodeMode? mode,
+    IosVideoCodecPreference? codec,
+  }) async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      if (mode != null) await widget.preferencesService.saveIosDecodeMode(mode);
+      if (codec != null) {
+        await widget.preferencesService.saveIosVideoCodec(codec);
+      }
+      if (mounted) {
+        setState(
+          () => _preferences = _preferences.copyWith(
+            iosDecodeMode: mode,
+            iosVideoCodec: codec,
+          ),
+        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('已保存，下次加载视频时生效。')));
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('解码偏好保存失败，请重试。')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   /// 保存 Wi-Fi 或移动网络默认清晰度；失败时恢复进入选择前的配置。
   Future<void> _setDefaultQuality({
     required bool forWifi,
@@ -1005,6 +1101,28 @@ class _PersonalizationSettingsPageState
       children: <Widget>[
         _buildDefaultQualityTile(forWifi: true),
         _buildDefaultQualityTile(forWifi: false),
+        if (supportsIosDecodePreferences(platform)) ...[
+          ListTile(
+            key: const Key('ios-decode-mode-preference'),
+            leading: const Icon(Icons.memory_outlined),
+            title: const Text('iOS 解码方式'),
+            subtitle: Text(
+              '${_preferences.iosDecodeMode.label} · 下次加载生效；软件解码可能更热',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _saving ? null : _editIosDecodeMode,
+          ),
+          ListTile(
+            key: const Key('ios-video-codec-preference'),
+            leading: const Icon(Icons.video_settings_outlined),
+            title: const Text('iOS 视频编码偏好'),
+            subtitle: Text(
+              '${_preferences.iosVideoCodec.label} · 仅在线播放，不改变本地解码方式',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _saving ? null : _editIosVideoCodec,
+          ),
+        ],
         SwitchListTile.adaptive(
           key: const Key('enable-wbi-signing'),
           value: _wbiSigningEnabled,

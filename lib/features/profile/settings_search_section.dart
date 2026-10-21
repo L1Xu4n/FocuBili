@@ -8,6 +8,8 @@ final _settingsAliases = <Key, String>{
   Key('enable-windows-clipboard-link-detection'): '检测剪贴板中的 B站链接 粘贴',
   Key('wifi-default-quality-tile'): 'Wi-Fi 有线 默认清晰度 画质',
   Key('mobile-default-quality-tile'): '移动网络 默认清晰度 画质 流量',
+  Key('ios-decode-mode-preference'): 'iPad 硬解 软解 编解码 VideoToolbox 发热 耗电',
+  Key('ios-video-codec-preference'): 'iPad AVC HEVC H264 H265 编解码 流编码',
   Key('playback-speeds-preference'): '自定义播放倍速 快进速度 5x',
   Key('player-control-size-preference'):
       '播放栏 控制栏 大小 播放器 按钮 图标 文字 字号 缩放 点击 预览 size playback bar',

@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/playback_request_diagnostic.dart';
 import '../models/video_metadata_request_diagnostic.dart';
 import '../models/media_runtime_diagnostic.dart';
+import 'ios_decode_session.dart';
 import '../platform/app_platform.dart';
 import '../platform/platform_services.dart';
 import '../core/build_metadata.g.dart';
@@ -671,11 +672,18 @@ class ProblemDiagnosticsService {
   static const _playbackChannel = MethodChannel('com.focubili.app/playback');
 
   static Future<Object?> _readNativeMediaRuntime() async {
+    if (!kIsWeb && AppPlatformDetector.current == AppPlatform.ios) {
+      return IosDecodeSession.readDiagnostics();
+    }
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return null;
     return _playbackChannel.invokeMethod<Object?>('getMediaRuntimeDiagnostics');
   }
 
   static Future<void> _clearNativeMediaRuntime() async {
+    if (!kIsWeb && AppPlatformDetector.current == AppPlatform.ios) {
+      IosDecodeSession.clearDiagnostics();
+      return;
+    }
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
     await _playbackChannel.invokeMethod<void>('clearMediaRuntimeDiagnostics');
   }
@@ -818,6 +826,13 @@ class ProblemDiagnosticsService {
           entry.fields.entries
               .map((field) => '${field.key}: ${field.value}')
               .join(', '),
+        );
+      }
+      if (snapshot.mediaRuntime.any(
+        (entry) => entry.fields['backend'] == 'mpv_ios',
+      )) {
+        text.writeln(
+          'iOS 解码说明：hwdec_configured 是偏好，hwdec_current 是实际后端（no 为软件）；字段缺失代表未知。cpu_bgr0 表示 CPU 渲染，不代表软件解码。未采集温度或系统热状态。',
         );
       }
     }

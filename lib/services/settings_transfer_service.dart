@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/danmaku_preferences.dart';
 import '../models/playback_preferences.dart';
+import '../models/ios_decode_preferences.dart';
 import '../models/search_content_filter.dart';
 import 'app_theme_mode_service.dart';
 import 'app_text_scale_service.dart';
@@ -39,6 +40,8 @@ class SettingsTransferService {
     'focus_preferences.enable_do_not_disturb': _SettingType.boolean,
     'playback_preferences.enable_double_tap_seek': _SettingType.boolean,
     'playback_preferences.speeds': _SettingType.stringList,
+    'playback_preferences.ios_decode_mode': _SettingType.text,
+    'playback_preferences.ios_video_codec': _SettingType.text,
     'playback_preferences.long_press_speed': _SettingType.decimal,
     'playback_preferences.double_tap_regions': _SettingType.json,
     'playback_preferences.action_animation': _SettingType.boolean,
@@ -160,6 +163,14 @@ class SettingsTransferService {
       null => false,
     };
     if (!valid) throw const FormatException('设置类型或范围不正确');
+    if (key == 'playback_preferences.ios_decode_mode' &&
+        !IosDecodeMode.values.any((mode) => mode.name == value)) {
+      throw const FormatException('iOS 解码偏好无效');
+    }
+    if (key == 'playback_preferences.ios_video_codec' &&
+        !IosVideoCodecPreference.values.any((codec) => codec.name == value)) {
+      throw const FormatException('iOS 视频编码偏好无效');
+    }
     if (key == DeviceSettingsRuntimeAdapter.imageCapacityKey &&
         (value as int) >
             ImageResourceCache.capacities.reduce(math.max) * 1024 * 1024) {

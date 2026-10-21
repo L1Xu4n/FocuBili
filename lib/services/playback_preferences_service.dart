@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/playback_preferences.dart';
+import '../models/ios_decode_preferences.dart';
 
 /// 在设备本地读取和保存播放器个性化配置，不会上传任何用户偏好。
 class PlaybackPreferencesService {
@@ -11,6 +12,8 @@ class PlaybackPreferencesService {
 
   static const String _doubleTapSeekKey =
       'playback_preferences.enable_double_tap_seek';
+  static const iosDecodeModeKey = 'playback_preferences.ios_decode_mode';
+  static const iosVideoCodecKey = 'playback_preferences.ios_video_codec';
   static const _speedsKey = 'playback_preferences.speeds';
   static const longPressSpeedKey = 'playback_preferences.long_press_speed';
   static const _regionsKey = 'playback_preferences.double_tap_regions';
@@ -31,6 +34,12 @@ class PlaybackPreferencesService {
   Future<PlaybackPreferences> load() async {
     final SharedPreferences preferences = await SharedPreferences.getInstance();
     return PlaybackPreferences(
+      iosDecodeMode: IosDecodeMode.fromStored(
+        preferences.get(iosDecodeModeKey),
+      ),
+      iosVideoCodec: IosVideoCodecPreference.fromStored(
+        preferences.get(iosVideoCodecKey),
+      ),
       longPressPlaybackSpeed:
           PlaybackPreferences.normalizeLongPressPlaybackSpeed(
             switch (preferences.get(longPressSpeedKey)) {
@@ -73,6 +82,25 @@ class PlaybackPreferencesService {
         preferences.getInt(_mobileDefaultQualityKey),
       ),
     );
+  }
+
+  Future<void> saveIosDecodeMode(IosDecodeMode mode) =>
+      _saveDecodePreference(iosDecodeModeKey, mode.name);
+
+  Future<void> saveIosVideoCodec(IosVideoCodecPreference codec) =>
+      _saveDecodePreference(iosVideoCodecKey, codec.name);
+
+  Future<void> _saveDecodePreference(String key, String value) async {
+    final preferences = await SharedPreferences.getInstance();
+    try {
+      if (await preferences.setString(key, value)) return;
+    } catch (_) {
+      // Reload below so an unsuccessful in-memory value cannot look persisted.
+    }
+    try {
+      await preferences.reload();
+    } catch (_) {}
+    throw StateError('解码偏好保存失败');
   }
 
   /// 安全读取区域 JSON；旧版本和损坏配置均恢复默认范围。

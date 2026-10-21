@@ -9,6 +9,9 @@ import 'native_playback_service.dart';
 import 'media_url_policy.dart';
 import '../models/playback_request_diagnostic.dart';
 import 'problem_diagnostics_service.dart';
+import 'playback_preferences_service.dart';
+import '../models/ios_decode_preferences.dart';
+import '../platform/app_platform.dart';
 
 /// 定义桌面播放数据请求函数，测试可直接返回固定 JSON 而不访问网络。
 typedef DesktopPlaybackJsonRequest =
@@ -82,7 +85,12 @@ class BilibiliDesktopPlaybackSourceService {
     DesktopPlaybackJsonRequest? requestJson,
     AppBehaviorPreferencesService? behaviorPreferences,
     ProblemDiagnosticsService? diagnosticsService,
-  }) : _authService = authService ?? BilibiliAuthService(),
+    PlaybackPreferencesService? playbackPreferences,
+    AppPlatform? platform,
+  }) : _platform = platform ?? AppPlatformDetector.current,
+       _playbackPreferences =
+           playbackPreferences ?? const PlaybackPreferencesService(),
+       _authService = authService ?? BilibiliAuthService(),
        _requestJson = requestJson,
        _diagnostics = diagnosticsService ?? ProblemDiagnosticsService(),
        _behaviorPreferences =
@@ -98,6 +106,8 @@ class BilibiliDesktopPlaybackSourceService {
   );
 
   final BilibiliAuthService _authService;
+  final AppPlatform _platform;
+  final PlaybackPreferencesService _playbackPreferences;
   final DesktopPlaybackJsonRequest? _requestJson;
   final ProblemDiagnosticsService _diagnostics;
   final AppBehaviorPreferencesService _behaviorPreferences;
@@ -194,6 +204,14 @@ class BilibiliDesktopPlaybackSourceService {
         requestSession,
       );
       facts['stage'] = 'parse';
+      IosVideoCodecPreference? codecPreference;
+      if (supportsIosDecodePreferences(_platform)) {
+        try {
+          codecPreference = (await _playbackPreferences.load()).iosVideoCodec;
+        } catch (_) {
+          codecPreference = IosVideoCodecPreference.avc;
+        }
+      }
       final sources = _parseResponse(
         responseText,
         requestedQuality: quality,
@@ -201,6 +219,7 @@ class BilibiliDesktopPlaybackSourceService {
         cookieHeader: requestSession.snapshot.header,
         wbiEnabled: wbiEnabled,
         validateSession: requestSession.validate,
+        codecPreference: codecPreference,
       );
       await requestSession.validate();
       facts['stage'] = 'complete';
@@ -325,6 +344,7 @@ class BilibiliDesktopPlaybackSourceService {
     required String cookieHeader,
     required bool wbiEnabled,
     Future<void> Function()? validateSession,
+    IosVideoCodecPreference? codecPreference,
   }) {
     final Object? decoded;
     try {
@@ -366,7 +386,26 @@ class BilibiliDesktopPlaybackSourceService {
     final _DesktopMediaTrack videoTrack = _selectTrack(
       dash['video'],
       preferredQuality: actualQuality,
+      codecPreference: codecPreference,
     );
+    final videoUrls = <String>[...videoTrack.urls];
+    if (codecPreference == IosVideoCodecPreference.hevc &&
+        (videoTrack.codec.startsWith('hev1') ||
+            videoTrack.codec.startsWith('hvc1'))) {
+      final compatible = _selectTrack(
+        dash['video'],
+        preferredQuality: videoTrack.quality,
+        codecPreference: IosVideoCodecPreference.avc,
+      );
+      if (compatible.quality == videoTrack.quality &&
+          IosVideoCodecPreference.avc.rank(compatible.codec) == 2) {
+        // Reuse the existing finite media-attempt recovery, including session
+        // checks. Exhaust HEVC CDNs before trying same-quality AVC.
+        videoUrls.addAll(
+          compatible.urls.where((url) => !videoUrls.contains(url)),
+        );
+      }
+    }
     final List<_DesktopMediaTrack> audioTracks = _selectAudioTracks(
       dash['audio'],
     );
@@ -385,7 +424,7 @@ class BilibiliDesktopPlaybackSourceService {
     };
     return DesktopPlaybackSources(
       validateSession: validateSession,
-      videoUrls: videoTrack.urls,
+      videoUrls: List.unmodifiable(videoUrls),
       audioUrls: List<String>.unmodifiable(audioUrls),
       audioCodecByUrl: Map<String, String>.unmodifiable(audioCodecByUrl),
       referer: referer,
@@ -460,12 +499,18 @@ class BilibiliDesktopPlaybackSourceService {
   }
 
   /// 从视频或音频数组选择最合适轨道；视频优先目标质量与 AVC，音频优先高码率。
-  _DesktopMediaTrack _selectTrack(Object? rawTracks, {int? preferredQuality}) {
+  _DesktopMediaTrack _selectTrack(
+    Object? rawTracks, {
+    int? preferredQuality,
+    IosVideoCodecPreference? codecPreference,
+  }) {
     if (rawTracks is! List) {
       return const _DesktopMediaTrack();
     }
     Map<Object?, Object?>? selected;
     int bestScore = -1;
+    int bestQuality = -1;
+    int bestCodecRank = -1;
     for (final Object? rawTrack in rawTracks) {
       if (rawTrack is! Map) {
         continue;
@@ -489,9 +534,20 @@ class BilibiliDesktopPlaybackSourceService {
       final int bandwidth = (track['bandwidth'] as num?)?.toInt() ?? 0;
       final int score =
           exactQualityBonus + compatibilityBonus + height * 100000 + bandwidth;
-      if (score > bestScore) {
+      final codecRank = codecPreference?.rank(codec) ?? 0;
+      // For iOS, quality and codec are separate ordered choices; a large
+      // bandwidth must not overwhelm the chosen codec or select a lower tier.
+      final better = codecPreference == null
+          ? score > bestScore
+          : candidateQuality > bestQuality ||
+                (candidateQuality == bestQuality &&
+                    (codecRank > bestCodecRank ||
+                        (codecRank == bestCodecRank && score > bestScore)));
+      if (better) {
         selected = track;
         bestScore = score;
+        bestQuality = candidateQuality;
+        bestCodecRank = codecRank;
       }
     }
     if (selected == null) {
@@ -500,6 +556,7 @@ class BilibiliDesktopPlaybackSourceService {
     return _DesktopMediaTrack(
       urls: _readMediaUrls(selected),
       codec: _readText(selected['codecs']),
+      quality: (selected['id'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -631,8 +688,13 @@ class BilibiliDesktopPlaybackSourceService {
 /// 保存一次内部轨道挑选结果，不向界面暴露临时地址解析细节。
 class _DesktopMediaTrack {
   /// 创建包含安全主备地址与编码名称的内部轨道。
-  const _DesktopMediaTrack({this.urls = const <String>[], this.codec = ''});
+  const _DesktopMediaTrack({
+    this.urls = const <String>[],
+    this.codec = '',
+    this.quality = 0,
+  });
 
   final List<String> urls;
   final String codec;
+  final int quality;
 }

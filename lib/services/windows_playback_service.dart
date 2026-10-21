@@ -5,6 +5,9 @@ import 'apple_playback_session.dart';
 import 'linux_media_session.dart';
 import 'linux_mini_player.dart';
 import 'apple_video_capabilities.dart';
+import 'ios_decode_session.dart';
+import 'playback_preferences_service.dart';
+import '../platform/app_platform.dart';
 
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
@@ -40,6 +43,7 @@ class WindowsPlaybackService
     BilibiliVideoShotService? videoShotService,
     Player? player,
     WindowsPlaybackProgressStore? progressStore,
+    IosDecodeSession? decodeSession,
   }) : _sourceService = sourceService ?? BilibiliDesktopPlaybackSourceService(),
        _videoShotService = videoShotService ?? BilibiliVideoShotService(),
        _progressStore = progressStore ?? const WindowsPlaybackProgressStore(),
@@ -55,6 +59,30 @@ class WindowsPlaybackService
       _player,
       configuration: AppleVideoCapabilities.configuration,
     );
+    _decodeSession =
+        decodeSession ??
+        IosDecodeSession(
+          platform: AppPlatformDetector.current,
+          loadPreferences: const PlaybackPreferencesService().load,
+          readProperty: (name) async {
+            final platform = _player.platform;
+            return platform is NativePlayer
+                ? await platform.getProperty(name)
+                : '';
+          },
+          writeProperty: (name, value) async {
+            final platform = _player.platform;
+            if (platform is! NativePlayer) {
+              throw StateError('Native decoder unavailable');
+            }
+            await platform.setProperty(name, value);
+          },
+          canReadVideo: () =>
+              !_disposed &&
+              !_opening &&
+              !_audioOnly &&
+              _snapshot.phase == PlaybackPhase.ready,
+        );
     WindowsMediaCacheRuntime.registerPlaybackSession();
     _subscribeToPlayer();
   }
@@ -74,6 +102,7 @@ class WindowsPlaybackService
   final WindowsPlaybackProgressStore _progressStore;
   final Player _player;
   late final VideoController _videoController;
+  late final IosDecodeSession _decodeSession;
   final ApplePlaybackSession _appleSession = ApplePlaybackSession();
   final LinuxMediaSession _linuxSession = LinuxMediaSession();
   final LinuxMiniPlayer _linuxMiniPlayer = LinuxMiniPlayer();
@@ -205,6 +234,12 @@ class WindowsPlaybackService
   Future<void> _openPlayerMedia(Media media, {required bool play}) async {
     final generation = _sourceGeneration;
     await _sessionStop;
+    if (!await _validateActiveSession(generation)) return;
+    if (!await _decodeSession.configure(
+      isCurrent: () => _isCurrentSourceRequest(generation),
+    )) {
+      return;
+    }
     if (!await _validateActiveSession(generation)) return;
     await _player.open(media, play: play);
     await _validateActiveSession(generation);
@@ -803,6 +838,8 @@ class WindowsPlaybackService
         // 偏好设置写入失败不能阻止播放器、磁盘缓冲句柄和活跃会话标记释放。
       }
       _disposed = true;
+      // Finish diagnostic reads/option writes before releasing the mpv handle.
+      await _decodeSession.dispose();
       await _diskCacheSession?.stopMonitoring();
       for (final StreamSubscription<dynamic> subscription in _subscriptions) {
         await subscription.cancel();
@@ -1394,6 +1431,7 @@ class WindowsPlaybackService
   /// 开始新的播放源请求并让先前仍在等待网络的分P或清晰度请求立即失效。
   int _beginSourceRequest() {
     _sourceGeneration += 1;
+    _decodeSession.beginSource();
     _activeSessionValidator = null;
     _bufferedRanges = const [];
     _restoringPosition = false;
@@ -1510,6 +1548,7 @@ class WindowsPlaybackService
       speed: _snapshot.speed,
     );
     _stateController.add(_snapshot);
+    if (width > 0 && height > 0) _decodeSession.captureReady();
   }
 
   /// 保存稳定进度；待解码时仅允许暂停或退出用目标位置强制保存，避免写入瞬态零值。
