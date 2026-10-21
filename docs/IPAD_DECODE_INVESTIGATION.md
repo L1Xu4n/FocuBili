@@ -1,6 +1,6 @@
 # iPad 发热反馈：代码审查、解码偏好与验证记录
 
-日期：2026-10-21。结论：已提供可持久化、能传至实际播放器的 iOS 解码及流编码偏好，并补充本机实际解码诊断。**没有证据证明反馈中的发热一定来自软解，也尚未验证真机降温。**
+日期：2026-10-21。本报告记录初始本地调查阶段；后续用户已另行授权独立测试分支的 Android/iOS Actions 构建，原生构建结果以对应 Actions run 为准。结论：已提供可持久化、能传至实际播放器的 iOS 解码及流编码偏好，并补充本机实际解码诊断。**没有证据证明反馈中的发热一定来自软解，也尚未验证真机降温。**
 
 ## 基线与授权范围
 
@@ -8,7 +8,7 @@
 - 本次执行 `git fetch origin test/v1.8.2-search-details`，核实结果为 `f7a4b31c919a55fb823cd473cafc27554d5217a3`。
 - 从该精确提交新建隔离 worktree `/workspace/FocuBili-ipad` 和本地分支 `fix/ipad-decoder-preferences`；保留此前 Android 缓冲/诊断、Mac 搜索及会话修复。
 - 正式版到测试基线只有 `a94413f`、`f7a4b31` 两个提交；本次没有合入 dev1.9，没有修改版本号、依赖锁、缓存容量或超时。
-- 只做本地源码、测试、提交及交付文件；没有 push、PR、merge、tag、release 或新远端 workflow。
+- 初始阶段只做本地源码、测试、提交及交付文件；随后追加的授权仅限原仓库独立测试分支 push 与双平台 Actions 构建，不含 master/dev、PR merge、tag 或 release。
 - 工作区及仓库未找到适用的 AGENTS.md；工作区 .agents/.codex 为空。
 
 ## 确定的代码事实
