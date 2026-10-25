@@ -33,7 +33,7 @@
 | Windows 10 1809+ / x64 便携版 | [FocuBili-v1.8.0-windows-x64-portable.zip](https://github.com/L1Xu4n/FocuBili/releases/download/v1.8.0/FocuBili-v1.8.0-windows-x64-portable.zip) | 完整解压后运行 `FocuBili.exe`，保留同目录 DLL 和 `data/` |
 | macOS | `FocuBili-v1.8.0-macos-universal.dmg` | 打开后将 App 拖入 Applications；当前为 ad-hoc 签名、未公证，详见 [Apple 平台说明](docs/APPLE_PLATFORMS.md) |
 | iOS 真机 | [FocuBili-v1.8.0-ios-unsigned.ipa](https://github.com/L1Xu4n/FocuBili/releases/download/v1.8.0/FocuBili-v1.8.0-ios-unsigned.ipa) | 未签名 device IPA，需自行签名并配置适用于设备的 provisioning profile 后安装 |
-| Ubuntu 24.04 系列 / amd64 | `FocuBili-v1.8.0-linux-amd64.deb` | 通过系统软件安装器安装；其他发行版见 [Linux 平台说明](docs/LINUX_PLATFORMS.md) |
+| Ubuntu 24.04 系列 / amd64 | `FocuBili-v1.8.0-linux-amd64.deb` | 建议用 `sudo apt install ./实际包名.deb` 安装；支持范围与“未知错误”排查见 [Linux 平台说明](docs/LINUX_PLATFORMS.md) |
 
 iOS Release 提供的是未签名真机 IPA，需自行完成签名和设备 provisioning；它不是模拟器包，也不是 App Store / TestFlight 分发包。签名与安装限制参见 [Apple 平台说明](docs/APPLE_PLATFORMS.md)。
 
