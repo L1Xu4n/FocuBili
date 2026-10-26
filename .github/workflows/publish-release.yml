@@ -6,6 +6,28 @@ on:
       - master
     paths:
       - docs/RELEASE_NOTES_v*.md
+      - .github/workflows/publish-release.yml
+      - tool/replace_linux_v181.py
+      - tool/test_replace_linux_v181.py
+      - tool/linux_v181_replacement_snapshot.json
+  pull_request:
+    branches: [dev, master]
+    paths:
+      - .github/workflows/publish-release.yml
+      - tool/replace_linux_v181.py
+      - tool/test_replace_linux_v181.py
+      - tool/linux_v181_replacement_snapshot.json
+  workflow_dispatch:
+    inputs:
+      linux_v181_phase:
+        description: 'Repair only v1.8.1 Linux DEB; prepare before promote'
+        required: true
+        type: choice
+        options: [prepare, promote]
+      expected_sha256:
+        description: 'Public candidate SHA256 independently verified before promote'
+        type: string
+        default: ''
 
 permissions:
   actions: read
@@ -16,8 +38,44 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate-linux-v181-publisher:
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Test reversible Linux asset replacement without network
+        run: python3 -m unittest discover -s tool -p test_replace_linux_v181.py -v
+
+  replace-linux-v181:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
+    needs: validate-linux-v181-publisher
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Install dependency scanner and target runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends dpkg-dev binutils python3 libgtk-3-0t64 libmpv2 libsecret-1-0 libasound2t64 libwebkit2gtk-4.1-0
+      - name: Repair metadata or promote independently verified candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PHASE: ${{ inputs.linux_v181_phase }}
+          EXPECTED_SHA: ${{ inputs.expected_sha256 }}
+        run: python3 tool/replace_linux_v181.py "$PHASE" --expected-sha "$EXPECTED_SHA"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-v181-replacement-${{ github.run_id }}
+          path: build/linux-v181-replacement/
+          retention-days: 90
+          if-no-files-found: warn
+
   publish:
-    if: "${{ startsWith(github.event.head_commit.message, 'release: publish v') }}"
+    if: "${{ github.event_name == 'push' && github.ref == 'refs/heads/master' && startsWith(github.event.head_commit.message, 'release: publish v') }}"
     runs-on: ubuntu-latest
     timeout-minutes: 90
 

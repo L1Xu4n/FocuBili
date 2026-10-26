@@ -1,0 +1,87 @@
+{
+  "id": 418662871,
+  "tag_name": "v1.8.1",
+  "name": "FocuBili v1.8.1",
+  "target_commitish": "master",
+  "draft": false,
+  "prerelease": false,
+  "immutable": false,
+  "created_at": "2026-10-20T17:13:59Z",
+  "published_at": "2026-10-20T17:14:07Z",
+  "body_sha256": "7a2668f5ec18b85b3eef256a55fb6959d3af9a976c572a481ce8b491ecf53f6f",
+  "assets": [
+    {
+      "id": 659960167,
+      "name": "FocuBili-v1.8.1-android.apk",
+      "size": 34117228,
+      "digest": "sha256:8a8f934b731c9c9a5aa6274573ea834857d505e0be3558a5dbc15f87b403cf87",
+      "state": "uploaded",
+      "label": "",
+      "content_type": "application/vnd.android.package-archive",
+      "created_at": "2026-10-20T17:14:03Z",
+      "updated_at": "2026-10-20T17:14:06Z",
+      "browser_download_url": "https://github.com/L1Xu4n/FocuBili/releases/download/v1.8.1/FocuBili-v1.8.1-android.apk"
+    },
+    {
+      "id": 659960169,
+      "name": "FocuBili-v1.8.1-ios-unsigned.ipa",
+      "size": 21001246,
+      "digest": "sha256:f276277234b3a2e3198f4027537d8a88098e9442236e79027c52e66dd482af06",
+      "state": "uploaded",
+      "label": "",
+      "content_type": "application/octet-stream",
+      "created_at": "2026-10-20T17:14:03Z",
+      "updated_at": "2026-10-20T17:14:05Z",
+      "browser_download_url": "https://github.com/L1Xu4n/FocuBili/releases/download/v1.8.1/FocuBili-v1.8.1-ios-unsigned.ipa"
+    },
+    {
+      "id": 659960165,
+      "name": "FocuBili-v1.8.1-linux-amd64.deb",
+      "size": 10758272,
+      "digest": "sha256:8486884307a0551bd19ce78dec1f3ed03c5e78d4ffb961904a12b1c87e6a940a",
+      "state": "uploaded",
+      "label": "",
+      "content_type": "application/x-debian-package",
+      "created_at": "2026-10-20T17:14:02Z",
+      "updated_at": "2026-10-20T17:14:04Z",
+      "browser_download_url": "https://github.com/L1Xu4n/FocuBili/releases/download/v1.8.1/FocuBili-v1.8.1-linux-amd64.deb"
+    },
+    {
+      "id": 659960161,
+      "name": "FocuBili-v1.8.1-macos-universal.dmg",
+      "size": 50822196,
+      "digest": "sha256:780dad751219e64eac5effe1cf5430d753903548e588838bcdb97a910bf7e33b",
+      "state": "uploaded",
+      "label": "",
+      "content_type": "application/x-apple-diskimage",
+      "created_at": "2026-10-20T17:14:02Z",
+      "updated_at": "2026-10-20T17:14:06Z",
+      "browser_download_url": "https://github.com/L1Xu4n/FocuBili/releases/download/v1.8.1/FocuBili-v1.8.1-macos-universal.dmg"
+    },
+    {
+      "id": 659960164,
+      "name": "FocuBili-v1.8.1-windows-x64-portable.zip",
+      "size": 37927792,
+      "digest": "sha256:e2d99a56a9a132c6da0fd971421e16a04594333b3b1487dd6160613055793d05",
+      "state": "uploaded",
+      "label": "",
+      "content_type": "application/zip",
+      "created_at": "2026-10-20T17:14:02Z",
+      "updated_at": "2026-10-20T17:14:06Z",
+      "browser_download_url": "https://github.com/L1Xu4n/FocuBili/releases/download/v1.8.1/FocuBili-v1.8.1-windows-x64-portable.zip"
+    },
+    {
+      "id": 659960227,
+      "name": "FocuBili-v1.8.1-windows-x64-setup.exe",
+      "size": 27626263,
+      "digest": "sha256:1cc589ceec229f8b1ea2bde841ba6e9e4daf67197de709fbb98fb03ed8535ade",
+      "state": "uploaded",
+      "label": "",
+      "content_type": "application/octet-stream",
+      "created_at": "2026-10-20T17:14:05Z",
+      "updated_at": "2026-10-20T17:14:06Z",
+      "browser_download_url": "https://github.com/L1Xu4n/FocuBili/releases/download/v1.8.1/FocuBili-v1.8.1-windows-x64-setup.exe"
+    }
+  ],
+  "depends": "libasound2t64 (>= 1.0.16), libatk1.0-0t64 (>= 2.7.91), libc6 (>= 2.38), libcairo-gobject2 (>= 1.10.0), libcairo2 (>= 1.14.0), libepoxy0 (>= 1.0), libfontconfig1 (>= 2.12.6), libgcc-s1 (>= 3.0), libgdk-pixbuf-2.0-0 (>= 2.22.0), libglib2.0-0t64 (>= 2.79.0), libgtk-3-0t64 (>= 3.21.4), libharfbuzz0b (>= 0.6.0), libjavascriptcoregtk-4.1-0, libmpv2 (>= 0.29), libpango-1.0-0 (>= 1.29.4), libpangocairo-1.0-0 (>= 1.14.0), libsecret-1-0 (>= 0.7), libsoup-3.0-0 (>= 2.32.2), libstdc++6 (>= 13.1), libwebkit2gtk-4.1-0 (>= 2.39.90), zlib1g (>= 1:1.1.4), xdg-desktop-portal"
+}
