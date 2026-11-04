@@ -57,7 +57,8 @@ jobs:
           - platform: ios
             os: macos-26
           - platform: macos
-            os: macos-26
+            # 标准 Intel 池避开 ARM 容量排队；同一 Xcode 与通用 Release 构建继续接受原门禁。
+            os: macos-26-intel
     steps:
       - uses: actions/checkout@v6
         with:
