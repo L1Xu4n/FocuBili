@@ -59,7 +59,9 @@ public class VideoOutput: NSObject {
     let requestedHandle = Int64(Int(bitPattern: self.handle))
     pipObserver = NotificationCenter.default.addObserver(forName: Notification.Name("FocuBili.PiP.Capture"), object: nil, queue: nil) { [weak self] note in
       if note.userInfo?["handle"] as? Int64 == requestedHandle, note.userInfo?["enabled"] as? Bool == true {
-        self?.updateCallback() // Also supply the current frame when paused.
+        // Let all capture observers enable the bridge before requesting the
+        // paused frame; their notification delivery order is unspecified.
+        DispatchQueue.main.async { [weak self] in self?.updateCallback() }
       }
     }
 
