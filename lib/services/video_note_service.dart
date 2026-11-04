@@ -60,16 +60,25 @@ class VideoNoteService {
     }
   }
 
-  /// 读取指定 BV 视频的笔记，并按视频时间点从早到晚排列。
+  /// 读取指定 BV 视频的笔记，依次按分 P、播放位置和创建时间升序排列。
   Future<List<VideoNote>> loadNotesForVideo(String bvid) async {
     final String normalizedBvid = bvid.trim();
     final List<VideoNote> notes = (await loadNotes())
         .where((VideoNote note) => note.bvid == normalizedBvid)
         .toList(growable: true);
     notes.sort(
-      // 时间点排序函数让全屏左侧列表与视频播放时间线保持一致。
-      (VideoNote left, VideoNote right) =>
-          left.position.compareTo(right.position),
+      // 按观看顺序排列；同位置笔记按创建时间排列，编号兜底确保编辑后顺序稳定。
+      (VideoNote left, VideoNote right) {
+        final int partOrder = left.partPageNumber.compareTo(
+          right.partPageNumber,
+        );
+        if (partOrder != 0) return partOrder;
+        final int positionOrder = left.position.compareTo(right.position);
+        if (positionOrder != 0) return positionOrder;
+        final int createdOrder = left.createdAt.compareTo(right.createdAt);
+        if (createdOrder != 0) return createdOrder;
+        return left.id.compareTo(right.id);
+      },
     );
     return List<VideoNote>.unmodifiable(notes);
   }
