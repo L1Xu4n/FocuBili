@@ -42,6 +42,7 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
   Future<void> _switchActiveVideo(
     VideoPreview video, {
     LearningListEntry? learningEntry,
+    required bool fromBeginning,
   });
 
   /// 读取本机观看记录并按 BV 号索引，供合集封面显示“上次看过”。
@@ -492,7 +493,11 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
       if (!mounted || _activeVideo.bvid != bvid) {
         return;
       }
-      await _switchActiveVideo(nextVideo, learningEntry: next);
+      await _switchActiveVideo(
+        nextVideo,
+        learningEntry: next,
+        fromBeginning: false,
+      );
     } catch (_) {
       if (mounted) {
         if (completionSaved &&

@@ -12,6 +12,7 @@ import '../../features/profile/personalization_settings_page.dart';
 import '../../features/profile/watch_history_page.dart';
 import '../../features/shell/main_shell.dart';
 import '../../models/video_preview.dart';
+import '../../models/playback_queue.dart';
 import '../../features/classroom/purchased_courses_page.dart';
 
 /// 保存应用所有路由名称，减少页面之间手写字符串造成的错误。
@@ -51,11 +52,16 @@ abstract final class AppRouter {
         final Object? arguments = settings.arguments;
         final VideoPreview video = arguments is VideoPreview
             ? arguments
+            : arguments is PlayerLaunchRequest
+            ? arguments.video
             : VideoPreview.placeholder();
         return MaterialPageRoute<void>(
           // 播放页构建函数把选中的视频信息交给原生播放器占位页。
           builder: (BuildContext context) => PlayerPage(
             video: video,
+            playbackQueue: arguments is PlayerLaunchRequest
+                ? arguments.queue
+                : null,
             initialPartCid: video.requestedCourseEpisodeId == null
                 ? null
                 : video.cid,

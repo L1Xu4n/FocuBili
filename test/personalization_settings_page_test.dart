@@ -55,6 +55,37 @@ Future<void> _openSettingsLevel(WidgetTester tester, Key entryKey) async {
 
 /// 注册设置页专注勿扰开关、说明和系统权限入口测试。
 void main() {
+  /// 从设置搜索进入线路菜单并持久化备用优先，窄屏下不溢出。
+  testWidgets('播放线路可搜索、选择并保存', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: PersonalizationSettingsPage(appPlatform: AppPlatform.android),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('settings-search')), '线路');
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('智能优选'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('备用线路优先'));
+    await tester.pumpAndSettle();
+    expect(
+      (await const PlaybackPreferencesService().load()).linePreference,
+      PlaybackLinePreference.backup,
+    );
+    await tester.tap(find.byKey(const Key('prefer-non-pcdn')));
+    await tester.pumpAndSettle();
+    expect(
+      (await const PlaybackPreferencesService().load()).preferNonPcdn,
+      isFalse,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   /// 笔记开关可以搜索、即时保存；失败后保留原值。
   for (final fail in [false, true]) {
     testWidgets('笔记标记开关搜索并${fail ? '失败回滚' : '立即保存'}', (tester) async {

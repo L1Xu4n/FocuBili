@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../../models/learning_list_entry.dart';
 import '../../models/video_preview.dart';
+import '../../models/playback_queue.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/learning_list_service.dart';
 import '../player/player_page.dart';
@@ -15,6 +16,7 @@ abstract final class LearningVideoLauncher {
     LearningListEntry entry, {
     BilibiliService? service,
     LearningListService? learningListService,
+    List<LearningListEntry>? playlist,
   }) async {
     final String bvid = entry.bvid.trim();
     if (bvid.isEmpty) {
@@ -48,6 +50,7 @@ abstract final class LearningVideoLauncher {
             entry,
             videoService: videoService,
             learningListService: learningListService,
+            playlist: playlist,
           ),
         ),
       );
@@ -68,10 +71,24 @@ abstract final class LearningVideoLauncher {
     LearningListEntry entry, {
     BilibiliService? videoService,
     LearningListService? learningListService,
+    List<LearningListEntry>? playlist,
   }) {
     final VideoPart part = _findPart(video, entry);
     return PlayerPage(
       video: video,
+      playbackQueue: playlist == null
+          ? null
+          : PlaybackQueue(
+              title: '学习清单',
+              items: playlist.map(
+                (item) => PlaybackQueueItem(
+                  bvid: item.bvid,
+                  title:
+                      '${item.title} · P${item.partPageNumber} ${item.partTitle}',
+                  learningEntry: item,
+                ),
+              ),
+            ),
       bilibiliService: videoService,
       learningListService: learningListService,
       initialPartCid: part.cid,

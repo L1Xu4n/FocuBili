@@ -9,6 +9,27 @@ class PlaybackPreferencesService {
   /// 创建播放器配置服务；默认通过 SharedPreferences 保存开关。
   const PlaybackPreferencesService();
 
+  static const linePreferenceKey = 'playback_preferences.line_preference';
+  static const modeKey = 'playback_preferences.mode';
+  static const subtitlePositionKey = 'playback_preferences.subtitle_position';
+  static const appVolumeKey = 'playback_preferences.app_volume';
+  static const preferNonPcdnKey = 'playback_preferences.prefer_non_pcdn';
+
+  /// 播放链只读取线路字段；存储不可用时仍以默认策略播放，不受其他损坏偏好影响。
+  Future<PlaybackPreferences> loadRoutePreferences() async {
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      return PlaybackPreferences(
+        linePreference: PlaybackLinePreference.fromName(
+          preferences.get(linePreferenceKey),
+        ),
+        preferNonPcdn: preferences.get(preferNonPcdnKey) != false,
+      );
+    } catch (_) {
+      return const PlaybackPreferences();
+    }
+  }
+
   static const String _doubleTapSeekKey =
       'playback_preferences.enable_double_tap_seek';
   static const _speedsKey = 'playback_preferences.speeds';
@@ -31,6 +52,13 @@ class PlaybackPreferencesService {
   Future<PlaybackPreferences> load() async {
     final SharedPreferences preferences = await SharedPreferences.getInstance();
     return PlaybackPreferences(
+      mode: PlaybackMode.fromName(preferences.get(modeKey)),
+      subtitlePosition: _readUnitValue(preferences.get(subtitlePositionKey)),
+      appVolume: _readUnitValue(preferences.get(appVolumeKey)),
+      linePreference: PlaybackLinePreference.fromName(
+        preferences.get(linePreferenceKey),
+      ),
+      preferNonPcdn: preferences.get(preferNonPcdnKey) != false,
       longPressPlaybackSpeed:
           PlaybackPreferences.normalizeLongPressPlaybackSpeed(
             switch (preferences.get(longPressSpeedKey)) {
@@ -73,6 +101,60 @@ class PlaybackPreferencesService {
         preferences.getInt(_mobileDefaultQualityKey),
       ),
     );
+  }
+
+  /// 保存线路策略或 PCDN 偏好；失败后重新读取磁盘，避免内存保留未保存值。
+  /// 把持久化比例限制到 0–1，缺失和损坏值保持原有默认行为。
+  double _readUnitValue(Object? value) =>
+      value is num ? DoubleTapRegions.normalize(value.toDouble(), 0, 1, 1) : 1;
+
+  /// 保存播放模式，拒绝写入失败，避免界面与下次打开的模式不一致。
+  Future<void> saveMode(PlaybackMode mode) => _saveValue(modeKey, mode.name);
+
+  /// 保存字幕在可见视频区域中的相对位置。
+  Future<void> saveSubtitlePosition(double value) =>
+      _saveValue(subtitlePositionKey, _readUnitValue(value));
+
+  /// 保存应用音量；不改变其他应用或操作系统音量。
+  Future<void> saveAppVolume(double value) =>
+      _saveValue(appVolumeKey, _readUnitValue(value));
+
+  /// 统一检查新偏好写入并在失败时恢复存储缓存。
+  Future<void> _saveValue(String key, Object value) async {
+    final preferences = await SharedPreferences.getInstance();
+    try {
+      final saved = value is String
+          ? await preferences.setString(key, value)
+          : await preferences.setDouble(key, value as double);
+      if (saved) return;
+    } catch (_) {
+      // 失败由下面统一报告。
+    }
+    await preferences.reload();
+    throw StateError('播放偏好保存失败');
+  }
+
+  /// 保存线路策略或 PCDN 偏好；失败后重新读取磁盘，避免内存保留未保存值。
+  Future<void> saveRoutePreference({
+    PlaybackLinePreference? line,
+    bool? preferNonPcdn,
+  }) async {
+    final preferences = await SharedPreferences.getInstance();
+    try {
+      final saved = line != null
+          ? await preferences.setString(linePreferenceKey, line.name)
+          : preferNonPcdn != null &&
+                await preferences.setBool(preferNonPcdnKey, preferNonPcdn);
+      if (saved) return;
+    } catch (_) {
+      // 下面恢复存储缓存，并向界面报告保存失败。
+    }
+    try {
+      await preferences.reload();
+    } catch (_) {
+      /* 保留原始失败原因。 */
+    }
+    throw StateError('播放线路设置保存失败');
   }
 
   /// 安全读取区域 JSON；旧版本和损坏配置均恢复默认范围。

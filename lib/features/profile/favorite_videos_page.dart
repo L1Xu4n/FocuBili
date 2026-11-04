@@ -8,6 +8,7 @@ import '../../core/layout/adaptive_two_column_list.dart';
 import '../../core/router/app_router.dart';
 import '../../models/account_collection.dart';
 import '../../models/video_preview.dart';
+import '../../models/playback_queue.dart';
 import '../../services/bilibili_account_data_service.dart';
 import '../../services/bilibili_service.dart';
 
@@ -147,7 +148,40 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
         return;
       }
       setState(() => _openingBvid = null);
-      Navigator.of(context).pushNamed(AppRoutes.player, arguments: preview);
+      final service = _accountDataService;
+      final folder = widget.folder;
+      final queue = PlaybackQueue(
+        title: folder.title,
+        items: _filteredVideos()
+            .where((item) => item.isAvailable)
+            .map(
+              (item) => PlaybackQueueItem(bvid: item.bvid, title: item.title),
+            ),
+        nextPage: (_page?.page ?? 1) + 1,
+        hasMore: (_page?.hasMore ?? false) && _searchQuery.trim().isEmpty,
+        // 分页读取器仅持有服务和来源身份，不读取已离开的页面状态。
+        loadPage: (page) async {
+          final result = await service.loadFavoriteVideos(
+            folder.mediaId,
+            page: page,
+          );
+          if (!result.isSuccess) throw StateError('收藏夹读取失败');
+          return PlaybackQueuePage(
+            result.items
+                .where((item) => item.isAvailable)
+                .map(
+                  (item) =>
+                      PlaybackQueueItem(bvid: item.bvid, title: item.title),
+                )
+                .toList(),
+            hasMore: result.hasMore,
+          );
+        },
+      );
+      Navigator.of(context).pushNamed(
+        AppRoutes.player,
+        arguments: PlayerLaunchRequest(preview, queue),
+      );
     } on BilibiliLookupException catch (error) {
       if (mounted) {
         setState(() => _openingBvid = null);

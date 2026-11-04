@@ -7,6 +7,9 @@ import 'app_behavior_preferences_service.dart';
 import 'bilibili_wbi_signing_service.dart';
 import 'native_playback_service.dart';
 import 'media_url_policy.dart';
+import 'playback_preferences_service.dart';
+import 'playback_route_policy.dart';
+import '../models/playback_preferences.dart';
 import '../models/video_preview.dart';
 import 'bilibili_course_link.dart';
 import 'bilibili_course_service.dart';
@@ -199,6 +202,8 @@ class BilibiliDesktopPlaybackSourceService {
       facts['stage'] = 'parse';
       final sources = _parseResponse(
         responseText,
+        preferences: await const PlaybackPreferencesService()
+            .loadRoutePreferences(),
         requestedQuality: quality,
         referer: referer,
         cookieHeader: requestSession.snapshot.header,
@@ -380,6 +385,8 @@ class BilibiliDesktopPlaybackSourceService {
     }
     return _parseResponse(
       response,
+      preferences: await const PlaybackPreferencesService()
+          .loadRoutePreferences(),
       requestedQuality: quality,
       referer: referer,
       cookieHeader: cookie,
@@ -388,12 +395,14 @@ class BilibiliDesktopPlaybackSourceService {
     );
   }
 
+  /// 解析轨道并按本次偏好排列地址，保留编码优先级与会话校验。
   DesktopPlaybackSources _parseResponse(
     String responseText, {
     required int requestedQuality,
     required String referer,
     required String cookieHeader,
     required bool wbiEnabled,
+    required PlaybackPreferences preferences,
     bool isCourse = false,
     Future<void> Function()? validateSession,
   }) {
@@ -474,7 +483,11 @@ class BilibiliDesktopPlaybackSourceService {
         final qn = (data['quality'] as num?)?.toInt() ?? requestedQuality;
         return DesktopPlaybackSources(
           validateSession: validateSession,
-          videoUrls: urls,
+          videoUrls: PlaybackRoutePolicy.order(
+            urls,
+            preference: preferences.linePreference,
+            preferNonPcdn: preferences.preferNonPcdn,
+          ),
           audioUrls: const [],
           referer: referer,
           cookieHeader: cookieHeader,
@@ -503,7 +516,12 @@ class BilibiliDesktopPlaybackSourceService {
       throw const DesktopPlaybackSourceException('播放数据没有返回安全的音频地址。');
     }
     final List<String> audioUrls = <String>[
-      for (final _DesktopMediaTrack track in audioTracks) ...track.urls,
+      for (final _DesktopMediaTrack track in audioTracks)
+        ...PlaybackRoutePolicy.order(
+          track.urls,
+          preference: preferences.linePreference,
+          preferNonPcdn: preferences.preferNonPcdn,
+        ),
     ];
     final Map<String, String> audioCodecByUrl = <String, String>{
       for (final _DesktopMediaTrack track in audioTracks)
@@ -511,7 +529,11 @@ class BilibiliDesktopPlaybackSourceService {
     };
     return DesktopPlaybackSources(
       validateSession: validateSession,
-      videoUrls: videoTrack.urls,
+      videoUrls: PlaybackRoutePolicy.order(
+        videoTrack.urls,
+        preference: preferences.linePreference,
+        preferNonPcdn: preferences.preferNonPcdn,
+      ),
       audioUrls: List<String>.unmodifiable(audioUrls),
       audioCodecByUrl: Map<String, String>.unmodifiable(audioCodecByUrl),
       referer: referer,

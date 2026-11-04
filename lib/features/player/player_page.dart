@@ -2,6 +2,7 @@ import '../../services/cache_lifecycle.dart';
 import '../learning/learning_add_sheet.dart';
 import 'dart:async';
 import '../../models/ab_repeat_range.dart';
+import '../../models/playback_queue.dart';
 import 'widgets/player_ab_repeat_sheet.dart';
 
 import 'package:focubili/features/common/app_network_image.dart';
@@ -103,6 +104,7 @@ part 'player_controls_coordinator.dart';
 part 'player_listening_coordinator.dart';
 part 'player_sleep_timer_coordinator.dart';
 part 'player_video_coordinator.dart';
+part 'player_playlist_coordinator.dart';
 part 'player_controls_view.dart';
 part 'player_feedback_view.dart';
 part 'player_details_view.dart';
@@ -122,6 +124,7 @@ enum _PlayerMoreMenuAction {
   subtitles,
   danmakuSettings,
   playbackLoop,
+  playlist,
   abRepeat,
   sleepTimer,
   fitContain,
@@ -162,11 +165,13 @@ class PlayerPage extends StatefulWidget {
     this.externalLinkLauncher,
     this.appPlatform,
     this.initialPartCid,
+    this.playbackQueue,
     this.initialPosition,
     this.initialPositionSource = PlayerInitialPositionSource.note,
   });
 
   final VideoPreview video;
+  final PlaybackQueue? playbackQueue;
   final PlaybackService? playbackService;
   final WatchHistoryService? watchHistoryService;
   final LearningListService? learningListService;
@@ -213,7 +218,8 @@ class _PlayerPageState extends State<PlayerPage>
         _PlayerListeningCoordinator,
         _PlayerSleepTimerCoordinator,
         _PlayerControlsCoordinator,
-        _PlayerVideoCoordinator {
+        _PlayerVideoCoordinator,
+        _PlayerPlaylistCoordinator {
   @override
   late final PlaybackService _playbackService;
   @override
@@ -460,6 +466,7 @@ class _PlayerPageState extends State<PlayerPage>
               ? BilibiliPublicPlayerEnhancementService()
               : const EmptyPlayerEnhancementService()),
     )..addListener(_handlePlayerEnhancementChanged);
+    _initializePlaylist();
     _startPlayerPlaybackSession(widget.initialPosition);
     unawaited(_loadWatchHistoryBadges());
     unawaited(_loadCurrentLearningListEntry());
@@ -522,6 +529,7 @@ class _PlayerPageState extends State<PlayerPage>
   /// 离开页面前取消重试状态、订阅和计时器，释放原生资源并恢复竖屏与系统栏。
   @override
   void dispose() {
+    _disposePlaylist();
     final abRepeatDrain = _disposeAbRepeat();
     CacheLifecycle.subtitles.removeListener(_clearSubtitlesForPart);
     OfflineVideoService.revision.removeListener(_refreshOfflinePartState);

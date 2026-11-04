@@ -339,6 +339,20 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
   }
 
   double? _subtitleFontSizeOverride;
+
+  /// 由来源列表协调器推进普通完播事件。
+  Future<void> _advancePlaylistOnCompletion();
+
+  /// 暂停或其他导航使在途的自动下一项失效。
+  void _cancelPlaylistAdvance();
+  int _playbackStopRevision = 0;
+
+  /// 明确的暂停或定时停止同时撤销跨视频、分 P 的在途自动打开。
+  void _stopPendingPlaybackNavigation() {
+    _playbackStopRevision++;
+    _cancelPlaylistAdvance();
+  }
+
   double? _savedSubtitleFontSize;
 
   /// 读取本机偏好，迟到的初始加载不能覆盖用户刚调整的字幕字号。
@@ -348,11 +362,12 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
           .load();
       if (mounted) {
         _savedSubtitleFontSize ??= preferences.subtitleFontSize;
-        setState(
-          () => _playbackPreferences = preferences.copyWith(
+        setState(() {
+          _playbackLoopEnabled = preferences.mode == PlaybackMode.single;
+          _playbackPreferences = preferences.copyWith(
             subtitleFontSize: _subtitleFontSizeOverride,
-          ),
-        );
+          );
+        });
       }
       return preferences;
     } catch (_) {
@@ -496,6 +511,13 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
       snapshot = snapshot.copyWith(currentQuality: _offlineQuality);
     }
     final PlaybackSnapshot previousSnapshot = _playbackSnapshot;
+    final sleepExpired =
+        previousSnapshot.sleepTimerRemaining > Duration.zero &&
+        snapshot.sleepTimerRemaining == Duration.zero &&
+        !snapshot.isPlaying;
+    if (sleepExpired) {
+      _stopPendingPlaybackNavigation();
+    }
     final bool abRepeatConsumesEnd = _observeAbRepeatSnapshot(
       previousSnapshot,
       snapshot,
@@ -577,6 +599,8 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
           targetPlayCount != null && _completedPlayCount >= targetPlayCount;
       shouldRestartLoop =
           !shouldPauseAfterPlayCount &&
+          !sleepExpired &&
+          snapshot.playRequested != false &&
           (_playbackLoopEnabled || targetPlayCount != null);
       if (shouldPauseAfterPlayCount) {
         _pauseAfterPlayCount = null;
@@ -660,6 +684,11 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
         _showTransientSnackBar('已播放 $_completedPlayCount 次，视频已暂停');
       } else if (shouldRestartLoop) {
         unawaited(_restartPlaybackLoop());
+      } else if (!interactiveCompletion &&
+          !sleepExpired &&
+          !_externalNavigationSuspended &&
+          snapshot.playRequested != false) {
+        unawaited(_advancePlaylistOnCompletion());
       }
     }
     _scheduleInteractiveChoicePrompt(snapshot);

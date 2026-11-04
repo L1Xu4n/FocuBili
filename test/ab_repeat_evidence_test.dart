@@ -172,7 +172,7 @@ void main() {
 
       await capture('timeline');
       await menu(tester, 'ab-repeat-menu-item');
-      expect(find.byKey(const Key('ab-repeat-A-input')), findsOneWidget);
+      expect(find.byKey(const Key('ab-repeat-set-A')), findsOneWidget);
       expect(find.byKey(const Key('ab-repeat-clear')), findsOneWidget);
       expect(tester.takeException(), isNull);
       await capture('sheet');

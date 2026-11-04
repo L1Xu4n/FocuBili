@@ -14,6 +14,8 @@ import '../../core/layout/adaptive_layout.dart';
 import '../../core/router/app_router.dart';
 import '../../core/widgets/editable_card_board.dart';
 import '../../services/dashboard_layout_service.dart';
+import '../../models/dashboard_layout.dart';
+import 'home_collection_card.dart';
 import '../../models/focus_session.dart';
 import 'custom_focus_duration_dialog.dart';
 import 'focus_do_not_disturb.dart';
@@ -109,6 +111,136 @@ class _FocusDashboardState extends State<FocusDashboard> {
   );
   bool _showSubscriptionIntroduction = false;
   bool _editingHomeCards = false;
+  bool _drawerEnabled = true;
+  DashboardLayout? _homeLayout;
+
+  /// 抽屉关闭或所有卡片不可见时，不创建卡片滚动空间。
+  bool get _hasHomeDrawer =>
+      _drawerEnabled &&
+      (_homeLayout == null ||
+          _homeLayout!
+              .visibleCards(
+                _homeCardDefinitions(
+                  widget.controller.activeSession,
+                  widget.controller.lastFinishedSession,
+                ),
+              )
+              .isNotEmpty);
+
+  /// 首次读取布局与抽屉开关，保留旧版默认显示。
+  Future<void> _loadHomeLayout() async {
+    try {
+      final enabled = await _homeLayouts.loadDrawerEnabled();
+      final layout = await _homeLayouts.load(
+        'home',
+        _homeCardDefinitions(
+          widget.controller.activeSession,
+          widget.controller.lastFinishedSession,
+        ),
+      );
+      if (mounted) {
+        setState(() {
+          _drawerEnabled = enabled;
+          _homeLayout = layout;
+        });
+      }
+    } catch (_) {
+      /* 卡片容器保留原有重试与错误反馈。 */
+    }
+  }
+
+  /// 从首页常驻菜单调整抽屉及卡片显隐，空布局也能重新添加卡片。
+  Future<void> _customizeHome() async {
+    final cards = _homeCardDefinitions(
+      widget.controller.activeSession,
+      widget.controller.lastFinishedSession,
+    );
+    await _loadHomeLayout();
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, rebuild) => AlertDialog(
+          title: const Text('自定义首页'),
+          content: SizedBox(
+            width: 420,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SwitchListTile(
+                    title: const Text('首页抽屉'),
+                    value: _drawerEnabled,
+                    onChanged: (value) async {
+                      try {
+                        await _homeLayouts.saveDrawerEnabled(value);
+                        if (!mounted) return;
+                        setState(() => _drawerEnabled = value);
+                        if (dialogContext.mounted) rebuild(() {});
+                      } catch (_) {
+                        _showMessage('首页设置保存失败');
+                      }
+                    },
+                  ),
+                  for (final card in cards)
+                    CheckboxListTile(
+                      title: Text(card.title),
+                      secondary: Icon(card.icon),
+                      value:
+                          !(_homeLayout?.hidden.contains(card.id) ??
+                              card.defaultHidden),
+                      onChanged: card.required
+                          ? null
+                          : (value) async {
+                              try {
+                                final current =
+                                    _homeLayout ??
+                                    DashboardLayout(
+                                      order: const [],
+                                    ).reconcile(cards);
+                                final next = value == true
+                                    ? current.addLast(card.id, cards)
+                                    : current.setHidden(card.id, true, cards);
+                                await _homeLayouts.save('home', next);
+                                if (!mounted) return;
+                                setState(() {
+                                  _homeLayout = next;
+                                  _homeBoardKey = GlobalKey(
+                                    debugLabel: 'home-card-board',
+                                  );
+                                });
+                                if (dialogContext.mounted) rebuild(() {});
+                              } catch (_) {
+                                _showMessage('卡片布局保存失败');
+                              }
+                            },
+                    ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('完成'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (mounted) {
+      setState(() {
+        _editingHomeCards = false;
+        _homeScrollStartOffset = null;
+      });
+    }
+  }
+
+  /// 让卡片容器的成功保存立即更新空抽屉判断。
+  void _homeLayoutChanged(DashboardLayout layout) {
+    if (mounted) setState(() => _homeLayout = layout);
+  }
+
   int _selectedMinutes = 25;
   double _scrollOffset = 0;
   double? _homeScrollStartOffset;
@@ -139,6 +271,7 @@ class _FocusDashboardState extends State<FocusDashboard> {
   @override
   void initState() {
     super.initState();
+    unawaited(_loadHomeLayout());
     _subscriptions.addListener(_subscriptionChanged);
     unawaited(_subscriptions.initialize());
     _goalController.addListener(_handleGoalChanged);
@@ -717,7 +850,7 @@ class _FocusDashboardState extends State<FocusDashboard> {
               _handleHomeScrollNotification(context, notification),
           child: CustomScrollView(
             controller: _scrollController,
-            physics: useHomeHero
+            physics: useHomeHero && _hasHomeDrawer
                 ? HomeDrawerScrollPhysics(
                     cardOffset: () => _homeHeroHeight(context) + 12,
                     gestureStart: () => _homeScrollStartOffset,
@@ -727,9 +860,9 @@ class _FocusDashboardState extends State<FocusDashboard> {
                 : null,
             slivers: <Widget>[
               if (useHomeHero) _buildHomeHero(context),
-              if (useHomeHero)
+              if (useHomeHero && _hasHomeDrawer)
                 _buildCardsSliver(context, activeSession, finishedSession)
-              else ...<Widget>[
+              else if (!useHomeHero) ...<Widget>[
                 SliverAppBar.large(
                   title: const Text('焦点哔哩'),
                   actions: <Widget>[

@@ -4270,7 +4270,10 @@ void main() {
   testWidgets('学习清单最后一项完播后显示已完成学习', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    SharedPreferences.setMockInitialValues(<String, Object>{});
+    // 本例验证手动完成操作，连播另由来源队列回归覆盖。
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'playback_preferences.mode': 'pause',
+    });
     final SharedPreferences preferences = await SharedPreferences.getInstance();
     final LearningListService learningListService = LearningListService(
       preferencesLoader: () async => preferences,
@@ -4320,7 +4323,10 @@ void main() {
   testWidgets('下一学习任务 CID 失效时保留当前完成界面与下一项进度', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    SharedPreferences.setMockInitialValues(<String, Object>{});
+    // 本例保留完播画面，单独验证手动继续时的无效 CID 防护。
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'playback_preferences.mode': 'pause',
+    });
     final preferences = await SharedPreferences.getInstance();
     final learning = LearningListService(
       preferencesLoader: () async => preferences,
@@ -4389,7 +4395,10 @@ void main() {
   testWidgets('继续学习会在当前播放器内打开下一条任务', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    SharedPreferences.setMockInitialValues(<String, Object>{});
+    // 保持结束画面，验证用户主动点击继续学习的旧入口。
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'playback_preferences.mode': 'pause',
+    });
     final SharedPreferences preferences = await SharedPreferences.getInstance();
     final LearningListService learningListService = LearningListService(
       preferencesLoader: () async => preferences,

@@ -8,6 +8,10 @@ mixin _PlayerAbRepeatCoordinator
         _PlayerFocusCoordinator,
         _PlayerNotesWorkspace {
   AbRepeatRange? _abRepeatRange;
+  bool _abRepeatEditorVisible = false;
+  int _abRepeatEditorGeneration = 0;
+  String? _abRepeatDraftA;
+  String? _abRepeatDraftB;
   Timer? _abRepeatTimer;
   Future<void>? _abRepeatSeek;
   final Set<Future<void>> _temporaryCaptureSeeks = {};
@@ -132,8 +136,15 @@ mixin _PlayerAbRepeatCoordinator
     if (notify && mounted) _showTransientSnackBar('已清除 A–B 区间，恢复原播放方式');
   }
 
+  /// 导航时清理草稿与编辑会话，旧面板回调不再影响新视频。
   @override
-  void _clearAbRepeatForNavigation() => _clearAbRepeat();
+  void _clearAbRepeatForNavigation() {
+    _abRepeatEditorGeneration++;
+    _abRepeatDraftA = null;
+    _abRepeatDraftB = null;
+    _abRepeatEditorVisible = false;
+    _clearAbRepeat();
+  }
 
   /// External routes must cancel capture work that can outlive an issued seek.
   @override
@@ -337,50 +348,79 @@ mixin _PlayerAbRepeatCoordinator
     }());
   }
 
+  /// 打开非模态标记条，只有第一次打开才用当前播放位置初始化 A。
   Future<void> _showAbRepeatSheet() async {
     _showPlayerControls();
-    final bvid = _activeVideo.bvid;
-    final cid = _currentPart.cid;
-    final sheetEpoch = _abRepeatEpoch;
-    bool isCurrentSheet() =>
-        mounted &&
-        sheetEpoch == _abRepeatEpoch &&
-        bvid == _activeVideo.bvid &&
-        cid == _currentPart.cid;
     if (_displayDuration <= Duration.zero) {
       _showTransientSnackBar('媒体时长尚未就绪，请稍后重试。');
       return;
     }
-    await showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      constraints: const BoxConstraints(maxWidth: 560),
-      builder: (_) => PlayerAbRepeatSheet(
-        bvid: bvid,
-        cid: cid,
-        duration: _displayDuration,
-        readPosition: () => _playbackSnapshot.position,
-        initialRange: _abRepeatRange,
-        resumeFullLoop: _playbackLoopEnabled,
-        onClear: () {
-          if (isCurrentSheet()) _clearAbRepeat(notify: true);
-        },
-        onApply: (range) {
-          if (!isCurrentSheet() ||
-              !range.matches(_activeVideo.bvid, _currentPart.cid)) {
-            return;
-          }
-          if (range.validate(_displayDuration) != null) {
-            _showTransientSnackBar('媒体时长已变化，请重新设置 A、B 点。');
-            return;
-          }
-          unawaited(_applyAbRepeatRange(range));
-        },
-      ),
+    setState(() {
+      _abRepeatEditorGeneration++;
+      _abRepeatDraftA ??= formatAbRepeatTime(
+        _abRepeatRange?.a ?? _playbackSnapshot.position,
+      );
+      _abRepeatDraftB ??= _abRepeatRange == null
+          ? ''
+          : formatAbRepeatTime(_abRepeatRange!.b);
+      _abRepeatEditorVisible = true;
+    });
+  }
+
+  /// 标记条不创建路由或遮罩，关闭后草稿继续属于当前视频。
+  Widget _buildAbRepeatEditor() {
+    final editor = _abRepeatEditorGeneration;
+    // 同一视频重新打开编辑器也属于新会话，旧闭包不得覆盖新标记。
+    bool isCurrent() =>
+        mounted &&
+        _abRepeatEditorVisible &&
+        editor == _abRepeatEditorGeneration;
+    return PlayerAbRepeatSheet(
+      key: ValueKey('ab-editor-${_activeVideo.bvid}-${_currentPart.cid}'),
+      inline: true,
+      bvid: _activeVideo.bvid,
+      cid: _currentPart.cid,
+      draftA: _abRepeatDraftA,
+      draftB: _abRepeatDraftB,
+      duration: _displayDuration,
+      readPosition: () => _playbackSnapshot.position,
+      initialRange: _abRepeatRange,
+      resumeFullLoop: _playbackLoopEnabled,
+      // 保存草稿不触发媒体跳转或每帧重建。
+      onDraftChanged: (a, b) {
+        if (!isCurrent()) return;
+        _abRepeatDraftA = a;
+        _abRepeatDraftB = b;
+      },
+      onClose: () {
+        if (isCurrent()) {
+          setState(() {
+            _abRepeatEditorVisible = false;
+            _abRepeatEditorGeneration++;
+          });
+        }
+      },
+      onClear: () {
+        if (!isCurrent()) return;
+        _abRepeatDraftA = null;
+        _abRepeatDraftB = null;
+        _clearAbRepeat(notify: true);
+      },
+      onApply: (range) {
+        if (!isCurrent() ||
+            !range.matches(_activeVideo.bvid, _currentPart.cid)) {
+          return;
+        }
+        if (range.validate(_displayDuration) != null) {
+          _showTransientSnackBar('媒体时长已变化，请重新设置 A、B 点。');
+          return;
+        }
+        unawaited(_applyAbRepeatRange(range));
+      },
     );
   }
 
+  /// 启用已验证区间并等待旧定位结束，避免迟到的跳转覆盖新标记。
   Future<void> _applyAbRepeatRange(AbRepeatRange range) async {
     final epoch = ++_abRepeatEpoch;
     _abRepeatTimer?.cancel();

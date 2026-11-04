@@ -655,6 +655,37 @@ class _PersonalizationSettingsPageState
     }
   }
 
+  /// 保存单项线路偏好，成功后更新界面；失败维持原值并允许重试。
+  Future<void> _setPlaybackRoute({
+    PlaybackLinePreference? line,
+    bool? preferNonPcdn,
+  }) async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      await widget.preferencesService.saveRoutePreference(
+        line: line,
+        preferNonPcdn: preferNonPcdn,
+      );
+      if (mounted) {
+        setState(
+          () => _preferences = _preferences.copyWith(
+            linePreference: line,
+            preferNonPcdn: preferNonPcdn,
+          ),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('播放线路设置保存失败，请重试。')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   /// 保存 Wi-Fi 或移动网络默认清晰度；失败时恢复进入选择前的配置。
   Future<void> _setDefaultQuality({
     required bool forWifi,
@@ -1016,6 +1047,45 @@ class _PersonalizationSettingsPageState
       children: <Widget>[
         _buildDefaultQualityTile(forWifi: true),
         _buildDefaultQualityTile(forWifi: false),
+        ListTile(
+          key: const Key('playback-line-preference'),
+          leading: const Icon(Icons.alt_route_rounded),
+          title: const Text('默认播放线路'),
+          subtitle: const Text('下次加载视频时生效'),
+          trailing: PopupMenuButton<PlaybackLinePreference>(
+            enabled: !_saving,
+            tooltip: '选择默认播放线路',
+            initialValue: _preferences.linePreference,
+            // 菜单选择后保存到本机，下一次媒体请求读取最新策略。
+            onSelected: (value) => _setPlaybackRoute(line: value),
+            // 使用相同枚举生成菜单，避免显示名称与持久化值脱节。
+            itemBuilder: (context) => [
+              for (final line in PlaybackLinePreference.values)
+                PopupMenuItem(value: line, child: Text(line.label)),
+            ],
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 48),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(_preferences.linePreference.label),
+                  const Icon(Icons.arrow_drop_down, size: 20),
+                ],
+              ),
+            ),
+          ),
+        ),
+        SwitchListTile.adaptive(
+          key: const Key('prefer-non-pcdn'),
+          value: _preferences.preferNonPcdn,
+          // 开关只改变候选顺序，不删除原地址作为最后兜底。
+          onChanged: _saving
+              ? null
+              : (value) => _setPlaybackRoute(preferNonPcdn: value),
+          secondary: const Icon(Icons.route_outlined),
+          title: const Text('优先避开 PCDN'),
+          subtitle: const Text('优先尝试其他线路，不可用时仍会回退'),
+        ),
         SwitchListTile.adaptive(
           key: const Key('enable-wbi-signing'),
           value: _wbiSigningEnabled,

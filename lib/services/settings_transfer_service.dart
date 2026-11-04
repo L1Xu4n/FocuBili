@@ -39,6 +39,11 @@ class SettingsTransferService {
     'focus_preferences.enable_do_not_disturb': _SettingType.boolean,
     'playback_preferences.enable_double_tap_seek': _SettingType.boolean,
     'playback_preferences.speeds': _SettingType.stringList,
+    'playback_preferences.line_preference': _SettingType.text,
+    'playback_preferences.mode': _SettingType.text,
+    'playback_preferences.subtitle_position': _SettingType.decimal,
+    'playback_preferences.app_volume': _SettingType.decimal,
+    'playback_preferences.prefer_non_pcdn': _SettingType.boolean,
     'playback_preferences.long_press_speed': _SettingType.decimal,
     'playback_preferences.double_tap_regions': _SettingType.json,
     'playback_preferences.action_animation': _SettingType.boolean,
@@ -51,6 +56,7 @@ class SettingsTransferService {
     'playback_preferences.mobile_default_quality': _SettingType.integer,
     'focubili_danmaku_preferences_v1': _SettingType.json,
     'dashboard.layout.home': _SettingType.json,
+    'dashboard.home_drawer_enabled': _SettingType.boolean,
     'dashboard.layout.profile': _SettingType.json,
     'windows_media_cache_capacity_bytes': _SettingType.integer,
     'search.content_filter_v2': _SettingType.json,
@@ -173,6 +179,10 @@ class SettingsTransferService {
         !supportedMediaCacheBytes.contains(value)) {
       throw const FormatException('视频缓存容量无效');
     }
+    if (key == 'playback_preferences.line_preference' &&
+        !PlaybackLinePreference.values.any((item) => item.name == value)) {
+      throw const FormatException('播放线路偏好无效');
+    }
     if (key == 'playback_preferences.speeds') {
       final speeds = (value as List)
           .map((item) => double.parse(item as String))
@@ -183,6 +193,13 @@ class SettingsTransferService {
       }
     }
     final normalizedPlaybackNumber = switch (key) {
+      'playback_preferences.subtitle_position' ||
+      'playback_preferences.app_volume' => DoubleTapRegions.normalize(
+        (value as num).toDouble(),
+        0,
+        1,
+        1,
+      ),
       'appearance.text_scale' => AppTextScaleService.normalize(
         (value as num).toDouble(),
       ),
@@ -209,6 +226,10 @@ class SettingsTransferService {
     if (key == 'appearance.theme_mode' &&
         !{'light', 'dark', 'system'}.contains(value)) {
       throw const FormatException('主题模式无效');
+    }
+    if (key == 'playback_preferences.mode' &&
+        !PlaybackMode.values.any((mode) => mode.name == value)) {
+      throw const FormatException('播放模式无效');
     }
     if (key == 'appearance.layout_orientation' &&
         !{'adaptive', 'portrait', 'landscape'}.contains(value)) {

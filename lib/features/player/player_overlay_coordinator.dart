@@ -518,6 +518,8 @@ mixin _PlayerOverlayCoordinator
           initialResult: initialResult,
           selectedTrackId: selectedId,
           fontSize: _playbackPreferences.subtitleFontSize,
+          position: _playbackPreferences.subtitlePosition,
+          onPositionChanged: _commitSubtitlePosition,
           isCurrentVideo: isCurrentVideo,
           // 旧面板不能借刷新入口加载新视频的数据。
           reloadTracks: () async => isCurrentVideo()
@@ -580,6 +582,24 @@ mixin _PlayerOverlayCoordinator
     if (selectedTrack != null) {
       await _selectSubtitleTrack(selectedTrack);
     }
+  }
+
+  /// 字号立即应用于当前画面，并记录用户修改以防初始偏好读取迟到覆盖。
+  /// 保存字幕相对位置；失败保持最近成功值。
+  Future<double> _commitSubtitlePosition(double value) async {
+    try {
+      await _playbackPreferencesService.saveSubtitlePosition(value);
+      if (mounted) {
+        setState(
+          () => _playbackPreferences = _playbackPreferences.copyWith(
+            subtitlePosition: value,
+          ),
+        );
+      }
+    } catch (_) {
+      if (mounted) _showTransientSnackBar('字幕位置保存失败，请重试');
+    }
+    return _playbackPreferences.subtitlePosition;
   }
 
   /// 字号立即应用于当前画面，并记录用户修改以防初始偏好读取迟到覆盖。

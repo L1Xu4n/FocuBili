@@ -1,4 +1,5 @@
 import 'bilibili_auth_service.dart';
+import 'playback_preferences_service.dart';
 import 'dart:async';
 import 'dart:io';
 import 'apple_playback_session.dart';
@@ -317,6 +318,11 @@ class WindowsPlaybackService
   Future<int?> initialize() async {
     if (_disposed) {
       return null;
+    }
+    if (Platform.isMacOS) {
+      final preferences = await const PlaybackPreferencesService().load();
+      if (_disposed) return null;
+      await _player.setVolume(preferences.appVolume * 100);
     }
     await _appleSession.initialize(
       handle: _appleSession.enabled ? await _player.handle : null,
@@ -776,12 +782,12 @@ class WindowsPlaybackService
   Future<SavedPlaybackState?> loadSavedPlaybackState(String bvid) =>
       _progressStore.load(bvid);
 
-  /// 返回软件亮度覆盖层的默认值，并读取 Windows 系统媒体音量。
+  /// Windows 读取系统音量，macOS/Linux 读取播放器增益以支持外接音响。
   @override
   Future<SystemPlaybackLevels> getSystemPlaybackLevels() async {
     // Linux ALSA may have no default Master mixer (PipeWire/headless systems).
     // Use this player's gain instead of a native mixer that can dereference null.
-    if (Platform.isLinux) {
+    if (Platform.isLinux || Platform.isMacOS) {
       return SystemPlaybackLevels(
         brightness: 1,
         volume: (_player.state.volume / 100).clamp(0, 1).toDouble(),
@@ -807,11 +813,11 @@ class WindowsPlaybackService
     return Future<void>.value();
   }
 
-  /// 调整 Windows 系统媒体音量，并隐藏移动端专用的系统音量浮层请求。
+  /// macOS/Linux 调整播放器增益，Windows 调整系统音量并隐藏系统浮层。
   @override
   Future<void> setMediaVolume(double volume) {
     _ensureAvailable();
-    if (Platform.isLinux) {
+    if (Platform.isLinux || Platform.isMacOS) {
       return _player.setVolume(volume.clamp(0, 1).toDouble() * 100);
     }
     VolumeController.instance.showSystemUI = false;

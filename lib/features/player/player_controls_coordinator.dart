@@ -37,6 +37,7 @@ mixin _PlayerControlsCoordinator
   /// 执行原生播放或暂停命令，并把平台异常转换为页面可读的错误。
   @override
   Future<void> _setPlaybackActive(bool shouldPlay) async {
+    if (!shouldPlay) _stopPendingPlaybackNavigation();
     _abRepeatPlaybackIntent(shouldPlay);
     _finishFocusSeekTransition(syncCurrentSnapshot: false);
     try {
@@ -89,6 +90,7 @@ mixin _PlayerControlsCoordinator
   void _restartControlsAutoHideTimer() {
     _stopControlsAutoHideTimer();
     if (!_showControls ||
+        _abRepeatEditorVisible ||
         !_playing ||
         _playbackSnapshot.isInPictureInPicture ||
         _isDraggingProgress ||
@@ -99,6 +101,7 @@ mixin _PlayerControlsCoordinator
     _controlsTimer = Timer(_controlsAutoHideDelay, () {
       if (mounted &&
           _showControls &&
+          !_abRepeatEditorVisible &&
           _playing &&
           !_playbackSnapshot.isInPictureInPicture &&
           !_isDraggingProgress &&
@@ -634,6 +637,9 @@ mixin _PlayerControlsCoordinator
       case _PlayerMoreMenuAction.playbackLoop:
         _togglePlaybackLoop();
         return;
+      case _PlayerMoreMenuAction.playlist:
+        unawaited(_showPlaylist());
+        return;
       case _PlayerMoreMenuAction.abRepeat:
         unawaited(_showAbRepeatSheet());
         return;
@@ -673,17 +679,19 @@ mixin _PlayerControlsCoordinator
     }
   }
 
-  /// 切换当前播放页的无限循环，不写入全局偏好设置。
+  /// 由列表协调器提供模式与来源面板。
+  Future<void> _showPlaylist();
+
+  /// 持久保存模式后应用到当前播放会话。
+  Future<void> _selectPlaybackMode(PlaybackMode mode);
+
+  /// 旧循环快捷入口映射到统一的单项循环模式。
   void _togglePlaybackLoop() {
-    _clearAbRepeatForNavigation();
-    setState(() {
-      _playbackLoopEnabled = !_playbackLoopEnabled;
-      if (_playbackLoopEnabled) {
-        _completedPlayCount = 0;
-      }
-    });
-    _showTransientSnackBar(_playbackLoopEnabled ? '已开启当前分P循环播放' : '已关闭循环播放');
-    _showPlayerControls();
+    unawaited(
+      _selectPlaybackMode(
+        _playbackLoopEnabled ? PlaybackMode.order : PlaybackMode.single,
+      ),
+    );
   }
 
   /// 保存用户选择的画面比例，并用三秒提示确认该设置只作用于渲染层。
@@ -705,6 +713,67 @@ mixin _PlayerControlsCoordinator
         return '填充画面';
       case _VideoFitMode.stretch:
         return '拉伸铺满';
+    }
+  }
+
+  /// 请求 Android 原生画中画；失败时用三秒提示说明系统或播放状态限制。
+  /// macOS 使用应用增益，外接显示器不支持系统音量时也可调整。
+  Future<void> _showAppVolume() async {
+    final levels = await _playbackService.getSystemPlaybackLevels();
+    if (!mounted) return;
+    var value = levels.volume;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => StatefulBuilder(
+        builder: (context, refresh) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                IconButton(
+                  tooltip: value == 0 ? '取消静音' : '静音',
+                  icon: Icon(value == 0 ? Icons.volume_off : Icons.volume_up),
+                  // 静音也持久化，重开播放器不会突然发声。
+                  onPressed: () async {
+                    final next = value == 0 ? .5 : 0.0;
+                    if (await _applyAppVolume(next, save: true) &&
+                        context.mounted) {
+                      refresh(() => value = next);
+                    }
+                  },
+                ),
+                Expanded(
+                  child: Slider(
+                    value: value,
+                    divisions: 100,
+                    label: '${(value * 100).round()}%',
+                    onChanged: (next) {
+                      refresh(() => value = next);
+                      unawaited(_applyAppVolume(next));
+                    },
+                    onChangeEnd: (next) =>
+                        unawaited(_applyAppVolume(next, save: true)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 应用增益并在松手时保存；异常明确反馈而不显示伪成功。
+  Future<bool> _applyAppVolume(double value, {bool save = false}) async {
+    try {
+      await _playbackService.setMediaVolume(value);
+      if (save) await _playbackPreferencesService.saveAppVolume(value);
+      if (mounted) setState(() => _volume = value);
+      return true;
+    } catch (_) {
+      if (mounted) _showTransientSnackBar('音量调整或保存失败，请重试');
+      return false;
     }
   }
 

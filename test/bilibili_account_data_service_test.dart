@@ -78,6 +78,32 @@ BilibiliAccountDataService _service(
 
 /// 集中验证账号数据服务只请求已验证会话对应的固定只读接口。
 void main() {
+  /// 分组读取完整成功才返回快照，成员接口错误不返回可误提交的部分结果。
+  test('关注分组完整读取与失败中止', () async {
+    final session = _FakeSessionProvider(state: _activeSession());
+    var fail = false;
+    final api = _RecordingAccountDataApi((endpoint) async {
+      if (endpoint.path == '/x/relation/tags') {
+        return _ok('{"code":0,"data":[{"tagid":12,"name":"学习"}]}');
+      }
+      expect(endpoint.path, '/x/relation/tag');
+      expect(endpoint.queryParameters['mid'], '42');
+      if (fail) return _ok('{"code":-101}');
+      return _ok(
+        '{"code":0,"data":[{"mid":9,"uname":"UP","face":"","sign":""}]}',
+      );
+    });
+    final result = await _service(session, api).loadFollowingGroups();
+    expect(result.mid, 42);
+    expect(result.groups.single.remoteId, 12);
+    expect(result.groups.single.members.single.mid, 9);
+    fail = true;
+    await expectLater(
+      _service(session, api).loadFollowingGroups(),
+      throwsStateError,
+    );
+  });
+
   /// 验证未登录时服务不会读取 Cookie 或执行收藏夹网络请求。
   test('未登录状态阻止收藏夹请求', () async {
     final _FakeSessionProvider session = _FakeSessionProvider(

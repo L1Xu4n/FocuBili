@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 
 import '../models/account_collection.dart';
+import '../models/following_group.dart';
 import 'bilibili_auth_service.dart';
 
 /// 保存一次账号数据 HTTP 请求的状态码和正文，方便网络层与解析层独立测试。
@@ -127,6 +128,64 @@ class BilibiliAccountDataService {
 
   final BilibiliAccountSessionProvider _sessionProvider;
   final BilibiliAccountDataApi _api;
+
+  /// 取得当前经过会话检查的 UID；未登录时不返回旧账号身份。
+  Future<int?> currentAccountMid() async =>
+      (await _openReadSession()).account?.mid;
+
+  /// 在同一个只读会话内完整读取远端分组及成员，任何失败都不返回半份导入资料。
+  Future<FollowingGroupImport> loadFollowingGroups() async {
+    final session = await _openReadSession();
+    final mid = session.account?.mid;
+    if (mid == null) throw StateError('请先登录并确认账号会话有效');
+    final response = await _request(
+      Uri.https(_apiHost, '/x/relation/tags'),
+      session,
+    );
+    final rawGroups = response.root?['data'];
+    if (rawGroups is! List) throw StateError('读取 B 站分组失败，请重试');
+    final groups = <FollowingGroup>[];
+    final seen = <int>{};
+    for (final raw in rawGroups) {
+      final map = _asObject(raw);
+      final id = _readInteger(map?['tagid']);
+      if (id == null || id == 0 || !seen.add(id)) continue;
+      final members = <int, FollowedCreator>{};
+      for (var page = 1; ; page++) {
+        if (page > 1000) throw StateError('分组过大，导入已停止');
+        final result = await _request(
+          Uri.https(_apiHost, '/x/relation/tag', {
+            'mid': '$mid',
+            'tagid': '$id',
+            'pn': '$page',
+            'ps': '50',
+            'order_type': '',
+          }),
+          session,
+        );
+        final items = result.root?['data'];
+        if (items is! List) throw StateError('读取分组成员失败，已有分组未改变');
+        final previousCount = members.length;
+        for (final item in items) {
+          final creator = _parseFollowedCreator(item);
+          if (creator == null) throw StateError('分组成员资料不完整，请重试');
+          members[creator.mid] = creator;
+        }
+        if (items.length < 50) break;
+        if (members.length == previousCount) throw StateError('分组分页异常，请重试');
+      }
+      groups.add(
+        FollowingGroup(
+          id: 'remote_$id',
+          remoteId: id,
+          name: map?['name']?.toString() ?? '分组 $id',
+          members: members.values,
+        ),
+      );
+    }
+    if (await currentAccountMid() != mid) throw StateError('账号已变化，请重新导入');
+    return FollowingGroupImport(mid, groups);
+  }
 
   /// 读取当前已登录账号自己创建的收藏夹，不会读取其他账号或执行收藏操作。
   Future<AccountDataPage<FavoriteFolder>> loadFavoriteFolders() async {

@@ -10,6 +10,7 @@ import '../../services/bilibili_account_data_service.dart';
 import '../../services/bilibili_public_content_service.dart';
 import '../../services/bilibili_service.dart';
 import 'user_profile_page.dart';
+import 'following_groups_page.dart';
 
 /// “我的关注”只展示当前账号已关注的 UP 主，不与订阅合集混用。
 class FollowedCreatorsPage extends StatefulWidget {
@@ -31,7 +32,7 @@ class FollowedCreatorsPage extends StatefulWidget {
   State<FollowedCreatorsPage> createState() => _FollowedCreatorsPageState();
 }
 
-/// 管理已关注 UP 主的只读分页加载，页面不提供关注、取关或分组操作。
+/// 管理已关注 UP 主的只读分页加载与本机分组入口，不写入远端关系。
 class _FollowedCreatorsPageState extends State<FollowedCreatorsPage> {
   late final BilibiliAccountDataService _accountDataService;
   late final BilibiliPublicContentService _publicContentService;
@@ -449,6 +450,18 @@ class _FollowedCreatorsPageState extends State<FollowedCreatorsPage> {
       appBar: AppBar(
         title: const Text('我的关注'),
         actions: <Widget>[
+          IconButton(
+            tooltip: '关注分组',
+            icon: const Icon(Icons.folder_outlined),
+            // 分组页面复用当前账号读取服务，编辑仅保存到本机。
+            onPressed: () => Navigator.of(context).push<void>(
+              MaterialPageRoute(
+                builder: (_) => FollowingGroupsPage(
+                  accountDataService: _accountDataService,
+                ),
+              ),
+            ),
+          ),
           IconButton(
             // 刷新按钮函数只读取已关注 UP 主，不会执行任何关系写操作。
             onPressed: _isLoading ? null : () => unawaited(_loadFirstPage()),

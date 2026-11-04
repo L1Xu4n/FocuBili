@@ -105,6 +105,7 @@ class AbPlayback extends FeedbackPlayback implements ListeningPlaybackService {
     ),
   );
   @override
+  /// 模拟真实打开：新媒体会恢复播放意图，避免沿用内部暂停的旧快照。
   Future<void> openVideo(
     VideoPreview video, {
     VideoPart? part,
@@ -118,6 +119,7 @@ class AbPlayback extends FeedbackPlayback implements ListeningPlaybackService {
         phase: PlaybackPhase.ready,
         position: initialPosition ?? const Duration(seconds: 20),
         isPlaying: true,
+        playRequested: current.playRequested == null ? null : true,
         currentQuality: quality,
       ),
     );
@@ -224,20 +226,25 @@ Future<void> menu(WidgetTester tester, String key, {bool settle = true}) async {
   }
 }
 
+/// 展开紧凑编辑器的时间输入后设置区间，供原有播放状态回归复用。
 Future<void> configureAb(
   WidgetTester tester, {
   String a = '00:10',
   String b = '00:30',
 }) async {
   await menu(tester, 'ab-repeat-menu-item');
+  await tester.tap(find.byTooltip('输入时间'));
+  await tester.pump();
   await tester.enterText(find.byKey(const Key('ab-repeat-A-input')), a);
   await tester.enterText(find.byKey(const Key('ab-repeat-B-input')), b);
+  await tester.ensureVisible(find.byKey(const Key('ab-repeat-apply')));
   await tester.tap(find.byKey(const Key('ab-repeat-apply')));
   await tester.pumpAndSettle();
 }
 
 Future<void> clearAb(WidgetTester tester) async {
   await menu(tester, 'ab-repeat-menu-item');
+  await tester.ensureVisible(find.byKey(const Key('ab-repeat-clear')));
   await tester.tap(find.byKey(const Key('ab-repeat-clear')));
   await tester.pumpAndSettle();
 }
@@ -544,7 +551,7 @@ void main() {
     await menu(tester, 'ab-repeat-menu-item');
     final sheetFinder = find.byType(PlayerAbRepeatSheet);
     final sheet = tester.widget<PlayerAbRepeatSheet>(sheetFinder);
-    Navigator.of(tester.element(sheetFinder)).pop();
+    await tester.tap(find.byTooltip('收起 A–B 设置'));
     await tester.pumpAndSettle();
     await clearAb(tester);
     await configureAb(tester, a: '00:05', b: '00:40');
@@ -560,6 +567,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('ab-repeat-marker-A')), findsOneWidget);
     await menu(tester, 'ab-repeat-menu-item');
+    await tester.tap(find.byTooltip('输入时间'));
+    await tester.pump();
     expect(
       tester
           .widget<TextField>(find.byKey(const Key('ab-repeat-A-input')))
@@ -661,6 +670,8 @@ void main() {
       await configureAb(tester);
       await menu(tester, 'playback-loop-menu-item');
       expect(find.byKey(const Key('ab-repeat-marker-A')), findsNothing);
+      await p.play();
+      await tester.pump();
       p.at(120, playing: false, phase: PlaybackPhase.ended);
       await tester.pumpAndSettle();
       expect(

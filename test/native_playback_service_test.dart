@@ -1,5 +1,6 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/services/native_playback_service.dart';
@@ -12,6 +13,7 @@ void main() {
 
   /// 每项测试都记录 Flutter 发给 Android 的调用，避免使用真实播放器或网络。
   setUp(() {
+    SharedPreferences.setMockInitialValues({});
     calls.clear();
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (MethodCall call) async {
@@ -24,6 +26,20 @@ void main() {
   tearDown(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, null);
+  });
+
+  /// 切换清晰度会把已保存的线路偏好一并传给 Android。
+  test('线路偏好传给原生后端', () async {
+    SharedPreferences.setMockInitialValues({
+      'playback_preferences.line_preference': 'backup',
+      'playback_preferences.prefer_non_pcdn': false,
+    });
+    final service = NativePlaybackService();
+    await service.selectQuality(64);
+    final args = calls.single.arguments as Map;
+    expect(args['linePreference'], 'backup');
+    expect(args['preferNonPcdn'], isFalse);
+    await service.dispose();
   });
 
   /// 模拟原页面先恢复、剪贴板页面迟到销毁，确认不会释放已恢复的共享播放器。

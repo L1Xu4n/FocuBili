@@ -250,9 +250,12 @@ extension _PlayerFeedbackView on _PlayerPageState {
             children: [
               if (_completionPromptVisible) _buildPlaybackCompletionPrompt(),
               if (_interactivePromptVisible) _buildInteractiveVideoPrompt(),
-              if (subtitleVisible) _buildSubtitleOverlay(),
             ],
           ),
+          subtitle: subtitleVisible
+              ? _buildSubtitleOverlay()
+              : const SizedBox.shrink(),
+          subtitlePosition: _playbackPreferences.subtitlePosition,
         );
       },
     );

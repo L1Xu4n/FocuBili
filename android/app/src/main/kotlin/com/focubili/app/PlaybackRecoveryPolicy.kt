@@ -22,7 +22,7 @@ internal object PlaybackRecoveryPolicy {
     /**
      * 将扁平尝试序号转换为视频、音频候选。
      *
-     * 视频线路先轮换，随后再更换音频线路，所以 2×2 的顺序为 1+1、2+1、1+2、2+2。
+     * 先尝试完整备线，再尝试剩余交叉组合；2×2 的顺序为 1+1、2+2、2+1、1+2。
      */
     fun candidateAt(
         attemptIndex: Int,
@@ -33,9 +33,19 @@ internal object PlaybackRecoveryPolicy {
         val safeAudioCount = audioCount.coerceAtLeast(1)
         val maximumAttempt = safeVideoCount * safeAudioCount - 1
         val safeAttempt = attemptIndex.coerceIn(0, maximumAttempt)
-        return PlaybackCandidateSelection(
-            videoIndex = safeAttempt % safeVideoCount,
-            audioIndex = if (audioCount > 0) safeAttempt / safeVideoCount else null,
-        )
+        val pairedCount = minOf(safeVideoCount, safeAudioCount)
+        if (safeAttempt < pairedCount) {
+            return PlaybackCandidateSelection(safeAttempt, if (audioCount > 0) safeAttempt else null)
+        }
+        var remaining = safeAttempt - pairedCount
+        for (audio in 0 until safeAudioCount) {
+            for (video in 0 until safeVideoCount) {
+                if (video == audio) continue
+                if (remaining-- == 0) {
+                    return PlaybackCandidateSelection(video, if (audioCount > 0) audio else null)
+                }
+            }
+        }
+        return PlaybackCandidateSelection(0, if (audioCount > 0) 0 else null)
     }
 }

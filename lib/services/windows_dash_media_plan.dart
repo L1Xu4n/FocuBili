@@ -33,7 +33,7 @@ class WindowsDashMediaAttempt {
 
 /// 把播放源中的主备 CDN 排成有限且去重的自动重试顺序。
 abstract final class WindowsDashMediaPlan {
-  /// 先尝试主视频与兼容音频，再分别轮换视频、音频，最后补充同序号备线组合。
+  /// 先尝试首选组合及完整备线，再轮换单侧，避免音视频主机同时失效时反复等待。
   static List<WindowsDashMediaAttempt> build(DesktopPlaybackSources sources) {
     if (sources.videoCodec == 'muxed' && sources.audioUrls.isEmpty) {
       return [
@@ -64,18 +64,17 @@ abstract final class WindowsDashMediaPlan {
     }
 
     add(primaryVideo, primaryAudio);
+    final int pairedCount = sources.videoUrls.length < sources.audioUrls.length
+        ? sources.videoUrls.length
+        : sources.audioUrls.length;
+    for (int index = 1; index < pairedCount; index += 1) {
+      add(sources.videoUrls[index], sources.audioUrls[index]);
+    }
     for (final String audioUrl in sources.audioUrls.skip(1)) {
       add(primaryVideo, audioUrl);
     }
     for (final String videoUrl in sources.videoUrls.skip(1)) {
       add(videoUrl, primaryAudio);
-    }
-    final int pairedBackupCount =
-        sources.videoUrls.length < sources.audioUrls.length
-        ? sources.videoUrls.length
-        : sources.audioUrls.length;
-    for (int index = 1; index < pairedBackupCount; index += 1) {
-      add(sources.videoUrls[index], sources.audioUrls[index]);
     }
     return List<WindowsDashMediaAttempt>.unmodifiable(attempts);
   }

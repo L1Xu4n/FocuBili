@@ -15,9 +15,12 @@ mixin _PlayerVideoCoordinator
         _PlayerControlsCoordinator {
   @override
   int _partSwitchGeneration = 0;
+  int _navigationStopRevision = 0;
 
   /// 所有切视频、切分 P 与剧情跳转共用代次，新操作撤销仍在等待的旧操作。
   int _beginVideoNavigation() {
+    _navigationStopRevision = _playbackStopRevision;
+    _cancelPlaylistAdvance();
     _clearAbRepeatForNavigation();
     final generation = ++_partSwitchGeneration;
     if (mounted && _interactiveChoiceOpening) {
@@ -30,6 +33,7 @@ mixin _PlayerVideoCoordinator
   bool _isCurrentVideoNavigation(int generation, {String? bvid}) =>
       mounted &&
       generation == _partSwitchGeneration &&
+      _navigationStopRevision == _playbackStopRevision &&
       (bvid == null || bvid == _activeVideo.bvid);
 
   /// 更新当前正在展示的视频资料。
@@ -194,6 +198,10 @@ mixin _PlayerVideoCoordinator
     unawaited(_loadPlayerEnhancements());
     try {
       await _openPlaybackSource(video, part: part, quality: _currentQuality);
+      if (generation == _partSwitchGeneration &&
+          _navigationStopRevision != _playbackStopRevision) {
+        await _playbackService.pause();
+      }
     } on PlatformException catch (error) {
       if (_isCurrentVideoNavigation(generation, bvid: video.bvid)) {
         _showPlaybackError('无法切换分P：${error.message ?? error.code}');
@@ -314,19 +322,19 @@ mixin _PlayerVideoCoordinator
 
   /// 切换到当前分P的上一集；已是第一集时保持禁用。
   void _playPreviousPart() {
-    final int index = _currentPartIndex;
-    if (index > 0) {
-      unawaited(_changePart(_activeVideo.parts[index - 1]));
-    }
+    unawaited(_moveInPlaylist(forward: false, automatic: false));
   }
 
   /// 切换到当前分P的下一集；已是最后一集时保持禁用。
   void _playNextPart() {
-    final int index = _currentPartIndex;
-    if (index >= 0 && index < _activeVideo.parts.length - 1) {
-      unawaited(_changePart(_activeVideo.parts[index + 1]));
-    }
+    unawaited(_moveInPlaylist(forward: true, automatic: false));
   }
+
+  /// 由播放列表协调器处理来源与分页。
+  Future<void> _moveInPlaylist({
+    required bool forward,
+    required bool automatic,
+  });
 
   /// 当下层播放器夺走唯一原生通道时，重新创建纹理并打开当前视频，恢复原页面的播放所有权。
   @override
@@ -439,7 +447,7 @@ mixin _PlayerVideoCoordinator
       final VideoPreview video = await _bilibiliService.lookupVideo(entry.bvid);
       if (!_isCurrentVideoNavigation(generation)) return;
       final VideoPreview previousVideo = _activeVideo;
-      await _switchActiveVideo(video);
+      await _switchActiveVideo(video, fromBeginning: false);
       if (mounted && _activeVideo.bvid == video.bvid) {
         _collectionVideoBackStack.add(previousVideo);
       }
@@ -459,6 +467,7 @@ mixin _PlayerVideoCoordinator
   Future<void> _switchActiveVideo(
     VideoPreview video, {
     LearningListEntry? learningEntry,
+    required bool fromBeginning,
   }) async {
     final generation = _beginVideoNavigation();
     final LearningListEntry? requestedLearningEntry =
@@ -500,8 +509,11 @@ mixin _PlayerVideoCoordinator
     if (!_isCurrentVideoNavigation(generation)) return;
     final PlaybackResumePlan resolvedPlan = PlaybackResumePlan.resolve(
       video: video,
-      requestedPartCid: requestedPartCid,
-      requestedPosition: requestedLearningEntry?.position,
+      requestedPartCid:
+          requestedPartCid ?? (fromBeginning ? video.parts.first.cid : null),
+      requestedPosition:
+          requestedLearningEntry?.position ??
+          (fromBeginning ? Duration.zero : null),
       savedState: savedState,
       historyEntry: historyEntry,
     );
@@ -571,6 +583,10 @@ mixin _PlayerVideoCoordinator
       quality: _currentQuality,
       initialPosition: resumePlan.position,
     );
+    if (generation == _partSwitchGeneration &&
+        _navigationStopRevision != _playbackStopRevision) {
+      await _playbackService.pause();
+    }
     if (!_isCurrentVideoNavigation(generation, bvid: video.bvid)) return;
     if (resumePlan.shouldShowPartNotice && video.parts.length > 1) {
       _showPartRestoreSnackBar(targetPart.pageNumber);
@@ -586,7 +602,7 @@ mixin _PlayerVideoCoordinator
     final VideoPreview previousVideo = _collectionVideoBackStack.removeLast();
     setState(() => _openingCollectionBvid = previousVideo.bvid);
     try {
-      await _switchActiveVideo(previousVideo);
+      await _switchActiveVideo(previousVideo, fromBeginning: false);
     } catch (error) {
       _collectionVideoBackStack.add(previousVideo);
       if (mounted) {

@@ -21,6 +21,7 @@ enum UnifiedExportSection {
   notes('时间点笔记与截图'),
   learning('学习清单与专注记录'),
   favorites('本地收藏夹'),
+  followingGroups('本机关注分组与首页自选内容'),
   history('观看、搜索与播放进度'),
   subscriptions('焦点订阅与已载入历史'),
   subtitles('本次运行已载入的字幕'),
@@ -97,6 +98,11 @@ class UnifiedExportService {
     'playback_preferences.control_scale',
     'playback_preferences.show_note_time_markers',
     'playback_preferences.subtitle_font_size',
+    'playback_preferences.mode',
+    'playback_preferences.subtitle_position',
+    'playback_preferences.app_volume',
+    'playback_preferences.line_preference',
+    'playback_preferences.prefer_non_pcdn',
     'playback_preferences.two_finger_video_transform',
     'playback_preferences.prefer_offline_cache',
     'playback_preferences.wifi_default_quality',
@@ -115,6 +121,7 @@ class UnifiedExportService {
     'search.content_filter_v2',
     'content.blocklist_v1',
     'dashboard.layout.home',
+    'dashboard.home_drawer_enabled',
     'dashboard.layout.profile',
   };
   static const _learningKeys = <String>{
@@ -144,6 +151,11 @@ class UnifiedExportService {
         UnifiedExportSection.learning => _learningKeys.contains(key),
         UnifiedExportSection.favorites =>
           key == 'app_favorites.folders_v1' || _favoriteItems.hasMatch(key),
+        UnifiedExportSection.followingGroups =>
+          RegExp(r'^following_groups\.v1\.[1-9][0-9]*$').hasMatch(key) ||
+              RegExp(
+                r'^home_collection\.v1\.(favorites|followings)\.[0-9]+$',
+              ).hasMatch(key),
         UnifiedExportSection.offline => key == 'focubili_offline_videos_v1',
         UnifiedExportSection.history =>
           _historyKeys.contains(key) || _progress.hasMatch(key),

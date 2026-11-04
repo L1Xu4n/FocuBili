@@ -22,6 +22,8 @@ class PlayerSubtitleSheet extends StatefulWidget {
     required this.onPreviewFontSize,
     required this.onCommitFontSize,
     this.initialResult,
+    this.position = 1,
+    this.onPositionChanged,
     this.diagnosticReport,
     this.selectedTrackId,
     this.loadCues,
@@ -32,6 +34,8 @@ class PlayerSubtitleSheet extends StatefulWidget {
   final String videoLabel;
   final String offValue;
   final double fontSize;
+  final double position;
+  final Future<double> Function(double)? onPositionChanged;
   final String? selectedTrackId;
   final SubtitleTrackLoadResult? initialResult;
   final bool Function() isCurrentVideo;
@@ -51,6 +55,7 @@ class PlayerSubtitleSheet extends StatefulWidget {
 class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
   SubtitleTrackLoadResult? _result;
   late double _fontSize;
+  late double _position = widget.position;
   bool _loading = false;
   String? _warning;
   int _fontRevision = 0;
@@ -514,6 +519,36 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
                                 ),
                               ),
                             ),
+                            if (widget.onPositionChanged != null) ...[
+                              const Padding(
+                                padding: EdgeInsets.symmetric(horizontal: 16),
+                                child: Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Text('字幕位置'),
+                                ),
+                              ),
+                              Slider(
+                                key: const Key('subtitle-position-slider'),
+                                value: _position,
+                                divisions: 20,
+                                label: _position == 1
+                                    ? '底部'
+                                    : _position == 0
+                                    ? '顶部'
+                                    : '${(_position * 100).round()}%',
+                                // 拖动仅预览滑块，松手后原子保存并应用位置。
+                                onChanged: (value) =>
+                                    setState(() => _position = value),
+                                onChangeEnd: (value) async {
+                                  final saved = await widget.onPositionChanged!(
+                                    value,
+                                  );
+                                  if (mounted) {
+                                    setState(() => _position = saved);
+                                  }
+                                },
+                              ),
+                            ],
                             if (_loading) const LinearProgressIndicator(),
                             if (_warning != null ||
                                 (result != null &&

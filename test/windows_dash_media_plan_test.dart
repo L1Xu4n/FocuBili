@@ -30,7 +30,7 @@ DesktopPlaybackSources _createSources() {
 
 /// 验证 Windows DASH 地址轮换顺序与外部音频请求头注册行为。
 void main() {
-  test('主备 CDN 组合有限去重并优先轮换单侧故障', () {
+  test('主备 CDN 组合有限去重并优先同时避开故障音视频', () {
     final List<WindowsDashMediaAttempt> attempts = WindowsDashMediaPlan.build(
       _createSources(),
     );
@@ -39,13 +39,13 @@ void main() {
     expect(attempts[0].videoUrl, contains('video-main'));
     expect(attempts[0].audioUrl, contains('audio-main'));
     expect(attempts[0].audioCodec, 'mp4a.40.2');
-    expect(attempts[1].videoUrl, contains('video-main'));
+    expect(attempts[1].videoUrl, contains('video-backup'));
     expect(attempts[1].audioUrl, contains('audio-backup'));
     expect(attempts[1].audioCodec, 'ec-3');
-    expect(attempts[2].videoUrl, contains('video-backup'));
-    expect(attempts[2].audioUrl, contains('audio-main'));
+    expect(attempts[2].videoUrl, contains('video-main'));
+    expect(attempts[2].audioUrl, contains('audio-backup'));
     expect(attempts[3].videoUrl, contains('video-backup'));
-    expect(attempts[3].audioUrl, contains('audio-backup'));
+    expect(attempts[3].audioUrl, contains('audio-main'));
   });
 
   test('视频与外部音轨都能从 Media 缓存取得同一组安全请求头', () {

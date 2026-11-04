@@ -285,7 +285,22 @@ extension _PlayerPageView on _PlayerPageState {
                   sideInset: _fullscreen && (_showControls || _controlsLocked)
                       ? 16 + 48 * controlSize.scale
                       : 16,
-                  feedback: _buildPlayerFeedback(),
+                  // 编辑器占用控制栏之间的可滚动区域，不增加底栏高度或遮住进度条。
+                  feedback: Stack(
+                    children: [
+                      _buildPlayerFeedback(),
+                      if (_abRepeatEditorVisible)
+                        Align(
+                          alignment: Alignment.topCenter,
+                          child: SingleChildScrollView(
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 600),
+                              child: _buildAbRepeatEditor(),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
                   bottomOverlay: _buildChapterProgressOverlay(
                     inPictureInPicture: inPictureInPicture,
                   ),
@@ -353,14 +368,12 @@ extension _PlayerPageView on _PlayerPageState {
                                     : Icons.play_arrow_rounded,
                                 tooltip: _playing ? '暂停' : '播放',
                               ),
-                              if (_activeVideo.parts.length > 1) ...<Widget>[
+                              if (_hasPlaylistNavigation) ...<Widget>[
                                 PlayerCompactIconButton(
                                   scale: controlSize.scale,
                                   key: const Key('previous-part-button'),
                                   // 上一集函数切换到当前分P之前的一集。
-                                  onPressed: _currentPartIndex > 0
-                                      ? _playPreviousPart
-                                      : () {},
+                                  onPressed: _playPreviousPart,
                                   icon: Icons.skip_previous_rounded,
                                   tooltip: '上一集',
                                 ),
@@ -368,12 +381,7 @@ extension _PlayerPageView on _PlayerPageState {
                                   scale: controlSize.scale,
                                   key: const Key('next-part-button'),
                                   // 下一集函数切换到当前分P之后的一集。
-                                  onPressed:
-                                      _currentPartIndex >= 0 &&
-                                          _currentPartIndex <
-                                              _activeVideo.parts.length - 1
-                                      ? _playNextPart
-                                      : () {},
+                                  onPressed: _playNextPart,
                                   icon: Icons.skip_next_rounded,
                                   tooltip: '下一集',
                                 ),

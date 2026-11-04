@@ -9,6 +9,7 @@ import '../../core/router/app_router.dart';
 import '../../models/public_profile.dart';
 import '../../models/subscription.dart';
 import '../../models/video_preview.dart';
+import '../../models/playback_queue.dart';
 import '../../services/bilibili_public_content_service.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/learning_list_service.dart';
@@ -223,7 +224,37 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
       if (!mounted) {
         return;
       }
-      await Navigator.of(context).pushNamed(AppRoutes.player, arguments: video);
+      final service = _publicContentService;
+      final collection = widget.collection;
+      final queue = PlaybackQueue(
+        title: collection.title,
+        items: _videos.map(
+          (entry) => PlaybackQueueItem(bvid: entry.bvid, title: entry.title),
+        ),
+        nextPage: _page + 1,
+        hasMore: _hasMore,
+        // 保持当前合集来源，后续分页不依赖列表页面生命周期。
+        loadPage: (page) async {
+          final result = await service.loadCollectionVideos(
+            collection.ownerMid,
+            collection.id,
+            page: page,
+          );
+          return PlaybackQueuePage(
+            result.items
+                .map(
+                  (entry) =>
+                      PlaybackQueueItem(bvid: entry.bvid, title: entry.title),
+                )
+                .toList(),
+            hasMore: result.hasMore,
+          );
+        },
+      );
+      await Navigator.of(context).pushNamed(
+        AppRoutes.player,
+        arguments: PlayerLaunchRequest(video, queue),
+      );
       await _loadLearningListMembership();
     } catch (error) {
       if (mounted) {

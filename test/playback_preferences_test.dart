@@ -17,11 +17,30 @@ void main() {
         await const PlaybackPreferencesService().load();
 
     expect(preferences.enableDoubleTapSeek, isTrue);
+    expect(preferences.linePreference, PlaybackLinePreference.smart);
+    expect(preferences.preferNonPcdn, isTrue);
     expect(preferences.enableTwoFingerVideoTransform, isTrue);
     expect(preferences.showNoteTimeMarkers, isTrue);
     expect(preferences.subtitleFontSize, 16);
     expect(preferences.wifiDefaultQuality, PreferredPlaybackQuality.p720);
     expect(preferences.mobileDefaultQuality, PreferredPlaybackQuality.p720);
+  });
+
+  /// 线路选择和 PCDN 开关独立保存，重载与修改其他偏好均不丢失。
+  test('线路偏好持久化并安全处理旧配置', () async {
+    const service = PlaybackPreferencesService();
+    await service.saveRoutePreference(line: PlaybackLinePreference.backup);
+    await service.saveRoutePreference(preferNonPcdn: false);
+    final preferences = (await service.load()).copyWith(controlScale: 1.2);
+    expect(preferences.linePreference, PlaybackLinePreference.backup);
+    expect(preferences.preferNonPcdn, isFalse);
+    SharedPreferences.setMockInitialValues({
+      PlaybackPreferencesService.linePreferenceKey: 'unknown',
+    });
+    expect(
+      (await service.loadRoutePreferences()).linePreference,
+      PlaybackLinePreference.smart,
+    );
   });
 
   /// 字号持久化、范围限制及损坏值回退不影响其他已有配置。

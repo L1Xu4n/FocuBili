@@ -11,8 +11,13 @@ for density in ['mdpi', 'hdpi', 'xhdpi', 'xxhdpi', 'xxxhdpi']:
         for name in ['ic_launcher', 'ic_launcher_round', 'ic_launcher_foreground']:
             assert (res / f'mipmap-{night}{density}' / f'{name}.png').is_file()
 for name in ['ic_launcher', 'ic_launcher_round']:
-    icon = ET.parse(res / 'mipmap-anydpi-v33' / f'{name}.xml').getroot()
-    assert icon.find('monochrome').attrib[ns + 'drawable'] == '@drawable/ic_launcher_monochrome'
+    for night in ['', 'night-']:
+        for version in [26, 33]:
+            icon = ET.parse(res / f'mipmap-{night}anydpi-v{version}' / f'{name}.xml').getroot()
+            assert icon.tag == 'adaptive-icon'
+            assert icon.find('foreground').attrib[ns + 'drawable'] == '@mipmap/ic_launcher_foreground'
+            if version == 33:
+                assert icon.find('monochrome').attrib[ns + 'drawable'] == '@drawable/ic_launcher_monochrome'
 assert ET.parse(res / 'values-night/colors.xml').getroot().find('color').text == '#101827'
 appicon = root / 'ios/Runner/Assets.xcassets/AppIcon.appiconset'
 images = json.loads((appicon / 'Contents.json').read_text())['images']

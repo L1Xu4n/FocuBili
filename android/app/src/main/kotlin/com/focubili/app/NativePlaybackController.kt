@@ -128,6 +128,8 @@ class NativePlaybackController(
     private var currentOwnerName = ""
     private var requestedQuality = DEFAULT_QUALITY
     private var wbiSigningEnabled = false
+    private var linePreference = "smart"
+    private var preferNonPcdn = true
     @Volatile private var failedVideoTracks: Set<Pair<Int, String>> = emptySet()
     private var canContinueAsGuest = false
     private var guestOfferGeneration: Long? = null
@@ -292,6 +294,8 @@ class NativePlaybackController(
                     result.error("invalid_position", "初始播放位置不能为负数。", null)
                 } else {
                     wbiSigningEnabled = call.argument<Boolean>("wbiEnabled") == true
+                    linePreference = call.argument<String>("linePreference") ?: "smart"
+                    preferNonPcdn = call.argument<Boolean>("preferNonPcdn") != false
                     openVideo(
                         bvid = bvid,
                         cid = cid,
@@ -396,6 +400,8 @@ class NativePlaybackController(
                     result.error("invalid_quality", "请选择有效的清晰度。", null)
                 } else {
                     wbiSigningEnabled = call.argument<Boolean>("wbiEnabled") == true
+                    linePreference = call.argument<String>("linePreference") ?: "smart"
+                    preferNonPcdn = call.argument<Boolean>("preferNonPcdn") != false
                     switchQuality(quality)
                     result.success(null)
                 }
@@ -1291,6 +1297,8 @@ class NativePlaybackController(
     private fun requestPlaybackSources(bvid: String, cid: Long, quality: Int) {
         val requestToken = createPlaybackRequestToken()
         val course = currentCourse
+        val requestLinePreference = linePreference
+        val requestPreferNonPcdn = preferNonPcdn
         val diagnostic = PlaybackRequestDiagnostic(requestToken, course == null && wbiSigningEnabled, quality)
         val explicitGuest = guestConsentGeneration?.takeIf(BilibiliSessionGate::isCurrent)
         diagnostic.guestSelected = explicitGuest != null
@@ -1298,7 +1306,10 @@ class NativePlaybackController(
         canContinueAsGuest = false
         playbackRequestExecutor.execute {
             val sourceResult = runCatching {
-                loadPlaybackSources(bvid, cid, quality, diagnostic, course)
+                applyPlaybackRoutePreference(
+                    loadPlaybackSources(bvid, cid, quality, diagnostic, course),
+                    requestLinePreference, requestPreferNonPcdn,
+                )
             }
             mainHandler.post {
                 if (!isCurrentPlaybackRequest(requestToken, bvid, cid, quality)) {
@@ -1323,6 +1334,17 @@ class NativePlaybackController(
             }
         }
     }
+
+    /** 同时排序视频、音频和解码后备轨道，配置固定在请求开始时避免异步串用。 */
+    private fun applyPlaybackRoutePreference(
+        sources: PlaybackSources, preference: String, preferNonPcdn: Boolean,
+    ): PlaybackSources = sources.copy(
+        videoUrls = PlaybackRoutePolicy.order(sources.videoUrls, preference, preferNonPcdn),
+        audioUrls = PlaybackRoutePolicy.order(sources.audioUrls, preference, preferNonPcdn),
+        videoAlternatives = sources.videoAlternatives.map { track ->
+            track.copy(urls = PlaybackRoutePolicy.order(track.urls, preference, preferNonPcdn))
+        },
+    )
 
     /** 请求播放 JSON，并挑选目标清晰度的 DASH 视频轨和最高质量音频轨。 */
     private fun loadPlaybackSources(

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'bilibili_course_link.dart';
 
 import 'app_behavior_preferences_service.dart';
+import 'playback_preferences_service.dart';
 import 'problem_diagnostics_service.dart';
 import '../models/playback_request_diagnostic.dart';
 
@@ -420,7 +421,11 @@ class NativePlaybackService
         '初始位置不能为负数。',
       );
     }
+    final preferences = await const PlaybackPreferencesService()
+        .loadRoutePreferences();
     await _invokeVoid('open', <String, Object?>{
+      'linePreference': preferences.linePreference.name,
+      'preferNonPcdn': preferences.preferNonPcdn,
       'bvid': video.bvid.trim(),
       'cid': targetPart.cid,
       if (video.isCourse) 'courseEpisodeId': targetPart.courseEpisodeId,
@@ -551,7 +556,11 @@ class NativePlaybackService
     if (quality <= 0) {
       throw ArgumentError.value(quality, 'quality', '需要有效的清晰度编号。');
     }
+    final preferences = await const PlaybackPreferencesService()
+        .loadRoutePreferences();
     await _invokeVoid('selectQuality', <String, Object?>{
+      'linePreference': preferences.linePreference.name,
+      'preferNonPcdn': preferences.preferNonPcdn,
       'quality': quality,
       'wbiEnabled': await _behaviorPreferences.loadWbiSigningEnabled(),
     });

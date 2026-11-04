@@ -6,6 +6,7 @@ import '../../core/layout/adaptive_page_frame.dart';
 import '../../core/layout/adaptive_two_column_list.dart';
 import '../../core/router/app_router.dart';
 import '../../models/app_favorite.dart';
+import '../../models/playback_queue.dart';
 import '../../services/app_favorites_service.dart';
 import '../../services/bilibili_service.dart';
 import 'app_favorite_video_tile.dart';
@@ -86,9 +87,21 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
       if (!mounted) {
         return;
       }
-      await Navigator.of(
-        context,
-      ).pushNamed(AppRoutes.player, arguments: preview);
+      await Navigator.of(context).pushNamed(
+        AppRoutes.player,
+        arguments: PlayerLaunchRequest(
+          preview,
+          PlaybackQueue(
+            title: widget.folder.name,
+            items: _items
+                .where((entry) => entry.matchesQuery(_searchController.text))
+                .map(
+                  (entry) =>
+                      PlaybackQueueItem(bvid: entry.bvid, title: entry.title),
+                ),
+          ),
+        ),
+      );
     } on Object {
       if (mounted) {
         _showMessage('无法打开视频，请检查网络后重试。');

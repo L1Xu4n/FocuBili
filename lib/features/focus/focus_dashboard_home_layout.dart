@@ -22,7 +22,7 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
       context,
       '焦点哔哩',
       theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
-      width - kMinInteractiveDimension * (_subscriptions.enabled ? 2 : 1),
+      width - kMinInteractiveDimension * (_subscriptions.enabled ? 3 : 2),
     );
     final double welcomeHeight = _measureHeroText(
       context,
@@ -80,7 +80,8 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
   /// 创建截图中的首屏欢迎区，保留搜索和“我的”两个最短路径入口。
   Widget _buildHomeHero(BuildContext context) {
     final double heroHeight = _homeHeroHeight(context);
-    final bool animate = _canAnimateHomeHero(context) && !_editingHomeCards;
+    final bool animate =
+        _hasHomeDrawer && _canAnimateHomeHero(context) && !_editingHomeCards;
     final double progress = animate
         ? (_scrollOffset / 280).clamp(0.0, 1.0).toDouble()
         : 0;
@@ -146,6 +147,11 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
                               ),
                               _buildSubscriptionButton(),
                               IconButton(
+                                tooltip: '自定义首页',
+                                onPressed: _customizeHome,
+                                icon: const Icon(Icons.tune_rounded),
+                              ),
+                              IconButton(
                                 key: const Key('home-profile-button'),
                                 // 我的按钮函数切换到个人中心页面。
                                 onPressed: widget.onOpenProfile,
@@ -194,12 +200,13 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
                           // 保留旧入口文字节点，但不在新首屏重复绘制第二个按钮。
                           const SizedBox.shrink(child: Text('打开视频')),
                           const Spacer(),
-                          Icon(
-                            Icons.keyboard_double_arrow_up_rounded,
-                            key: const Key('home-scroll-hint'),
-                            size: 34,
-                            color: textColor,
-                          ),
+                          if (_hasHomeDrawer)
+                            Icon(
+                              Icons.keyboard_double_arrow_up_rounded,
+                              key: const Key('home-scroll-hint'),
+                              size: 34,
+                              color: textColor,
+                            ),
                         ],
                       ),
                     );
@@ -312,6 +319,11 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
                 ),
                 // 保留首页文字节点，兼容已有的页面识别和无障碍测试。
                 const SizedBox.shrink(child: Text('首页')),
+                IconButton(
+                  tooltip: '自定义首页',
+                  onPressed: _customizeHome,
+                  icon: const Icon(Icons.tune_rounded),
+                ),
               ],
             ),
             _buildSubscriptionIntroduction(),
@@ -362,6 +374,16 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
           final double boardWidth = constraints.maxWidth - introWidth - 20;
           final double scale = MediaQuery.textScalerOf(context).scale(16) / 16;
           final int columns = boardWidth >= 760 * scale ? 2 : 1;
+          if (!_hasHomeDrawer) {
+            return Center(
+              child: SizedBox(
+                width: 520,
+                child: SingleChildScrollView(
+                  child: _buildWorkspaceIntro(context),
+                ),
+              ),
+            );
+          }
           return Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[

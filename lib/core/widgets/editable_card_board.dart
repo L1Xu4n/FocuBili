@@ -32,6 +32,7 @@ class EditableCardBoard extends StatefulWidget {
     this.service,
     this.scrollController,
     this.onEditingChanged,
+    this.onLayoutChanged,
     this.columnCount,
     this.spacing = 16,
   }) : assert(columnCount == null || columnCount > 0),
@@ -42,6 +43,7 @@ class EditableCardBoard extends StatefulWidget {
   final DashboardLayoutService? service;
   final ScrollController? scrollController;
   final ValueChanged<bool>? onEditingChanged;
+  final ValueChanged<DashboardLayout>? onLayoutChanged;
 
   /// 不指定时按宽度自动选择一至三列；全宽卡片始终独占一行。
   final int? columnCount;
@@ -141,6 +143,7 @@ class _EditableCardBoardState extends State<EditableCardBoard>
         commitState.layout = _layout;
         _loading = false;
       });
+      widget.onLayoutChanged?.call(_layout);
     } catch (_) {
       if (!mounted || generation != _generation) return;
       setState(() {
@@ -175,6 +178,7 @@ class _EditableCardBoardState extends State<EditableCardBoard>
         commitState.layout = next;
         if (mounted && generation == _generation) {
           setState(() => _layout = next.reconcile(_cards));
+          widget.onLayoutChanged?.call(_layout);
         }
         result.complete(true);
       } catch (_) {

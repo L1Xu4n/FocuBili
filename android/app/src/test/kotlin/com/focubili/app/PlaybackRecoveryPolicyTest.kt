@@ -15,9 +15,9 @@ class PlaybackRecoveryPolicyTest {
         assertEquals(
             listOf(
                 PlaybackCandidateSelection(videoIndex = 0, audioIndex = 0),
+                PlaybackCandidateSelection(videoIndex = 1, audioIndex = 1),
                 PlaybackCandidateSelection(videoIndex = 1, audioIndex = 0),
                 PlaybackCandidateSelection(videoIndex = 0, audioIndex = 1),
-                PlaybackCandidateSelection(videoIndex = 1, audioIndex = 1),
             ),
             selections,
         )

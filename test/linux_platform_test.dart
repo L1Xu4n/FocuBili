@@ -131,7 +131,7 @@ void main() {
         source.indexOf('Future<SystemPlaybackLevels> getSystemPlaybackLevels'),
       );
       expect(
-        getter.indexOf('if (Platform.isLinux)'),
+        getter.indexOf('if (Platform.isLinux || Platform.isMacOS)'),
         lessThan(getter.indexOf('VolumeController.instance.getVolume')),
       );
       expect(source, contains('_player.setVolume'));

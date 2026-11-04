@@ -147,6 +147,7 @@ class _LearningListPageState extends State<LearningListPage> {
         entry,
         service: _videoService,
         learningListService: _learningListService,
+        playlist: [..._activeEntries, ..._completedEntries],
       );
       if (mounted) {
         await _reloadEntries();

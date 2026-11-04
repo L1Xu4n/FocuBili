@@ -64,6 +64,20 @@ extension _FocusDashboardHomeCards on _FocusDashboardState {
         available: _subscriptions.enabled,
         builder: (_) => SubscriptionHomeCard(service: _subscriptions),
       ),
+      DashboardCardDefinition(
+        id: 'home.favorites',
+        title: '我的收藏',
+        icon: Icons.bookmarks_outlined,
+        defaultHidden: true,
+        builder: (_) => const HomeCollectionCard(favorites: true),
+      ),
+      DashboardCardDefinition(
+        id: 'home.followings',
+        title: '我的关注',
+        icon: Icons.people_outline,
+        defaultHidden: true,
+        builder: (_) => const HomeCollectionCard(favorites: false),
+      ),
     ];
   }
 
@@ -81,6 +95,7 @@ extension _FocusDashboardHomeCards on _FocusDashboardState {
       service: _homeLayouts,
       scrollController: _scrollController,
       onEditingChanged: _handleHomeEditingChanged,
+      onLayoutChanged: _homeLayoutChanged,
       columnCount: columns,
       spacing: 14,
     );

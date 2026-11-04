@@ -1,3 +1,8 @@
+import 'playback_line_preference.dart';
+import 'playback_mode.dart';
+export 'playback_line_preference.dart';
+export 'playback_mode.dart';
+
 /// 定义设置页可以选择的常用 B 站视频清晰度。
 enum PreferredPlaybackQuality {
   p360(16, '流畅 360P'),
@@ -145,6 +150,11 @@ class PlaybackPreferences {
 
   /// 创建播放器偏好；旧用户继续默认启用双击，并以 720P 作为两种网络的安全默认值。
   const PlaybackPreferences({
+    this.mode = PlaybackMode.order,
+    this.subtitlePosition = 1,
+    this.appVolume = 1,
+    this.linePreference = PlaybackLinePreference.smart,
+    this.preferNonPcdn = true,
     this.enableDoubleTapSeek = true,
     this.doubleTapRegions = const DoubleTapRegions(),
     this.showPlaybackActionAnimation = true,
@@ -160,6 +170,11 @@ class PlaybackPreferences {
   });
 
   final bool enableDoubleTapSeek;
+  final PlaybackMode mode;
+  final double subtitlePosition;
+  final double appVolume;
+  final PlaybackLinePreference linePreference;
+  final bool preferNonPcdn;
   final DoubleTapRegions doubleTapRegions;
   final bool showPlaybackActionAnimation;
   final double controlScale;
@@ -174,6 +189,11 @@ class PlaybackPreferences {
 
   /// 返回只替换指定字段的新配置，避免页面直接修改旧对象。
   PlaybackPreferences copyWith({
+    PlaybackMode? mode,
+    double? subtitlePosition,
+    double? appVolume,
+    PlaybackLinePreference? linePreference,
+    bool? preferNonPcdn,
     bool? enableDoubleTapSeek,
     DoubleTapRegions? doubleTapRegions,
     bool? showPlaybackActionAnimation,
@@ -188,6 +208,21 @@ class PlaybackPreferences {
     double? longPressPlaybackSpeed,
   }) {
     return PlaybackPreferences(
+      mode: mode ?? this.mode,
+      subtitlePosition: DoubleTapRegions.normalize(
+        subtitlePosition ?? this.subtitlePosition,
+        0,
+        1,
+        1,
+      ),
+      appVolume: DoubleTapRegions.normalize(
+        appVolume ?? this.appVolume,
+        0,
+        1,
+        1,
+      ),
+      linePreference: linePreference ?? this.linePreference,
+      preferNonPcdn: preferNonPcdn ?? this.preferNonPcdn,
       enableDoubleTapSeek: enableDoubleTapSeek ?? this.enableDoubleTapSeek,
       doubleTapRegions: doubleTapRegions?.copyWith() ?? this.doubleTapRegions,
       showPlaybackActionAnimation:

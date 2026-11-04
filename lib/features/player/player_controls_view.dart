@@ -6,6 +6,16 @@ extension _PlayerControlsView on _PlayerPageState {
   Widget _buildTopControlBar() {
     final size = PlayerControlSize(_playbackPreferences.controlScale);
     final actions = <Widget>[
+      if (_appPlatform == AppPlatform.macos)
+        PlayerCompactIconButton(
+          key: const Key('player-app-volume'),
+          scale: size.scale,
+          tooltip: '应用音量',
+          onPressed: () => unawaited(_showAppVolume()),
+          icon: _volume == 0
+              ? Icons.volume_off_rounded
+              : Icons.volume_up_rounded,
+        ),
       if (_boundFocusController != null)
         PlayerCompactIconButton(
           key: const Key('player-focus-button'),
@@ -301,6 +311,11 @@ extension _PlayerControlsView on _PlayerPageState {
         ),
       ),
       const PopupMenuDivider(),
+      const PopupMenuItem<_PlayerMoreMenuAction>(
+        key: Key('playback-playlist-menu-item'),
+        value: _PlayerMoreMenuAction.playlist,
+        child: Text('播放列表与模式'),
+      ),
       CheckedPopupMenuItem<_PlayerMoreMenuAction>(
         key: const Key('playback-loop-menu-item'),
         value: _PlayerMoreMenuAction.playbackLoop,
