@@ -132,6 +132,9 @@ void main() {
       expect(player.video.courseSeasonId, 968174948);
       expect(player.initialPartCid, 102);
       expect(player.initialPosition, const Duration(seconds: 47));
+      expect(player.playbackQueue!.items.single.learningEntry?.partCid, 102);
+      expect(player.playbackQueue!.hasMore, isFalse);
+      player.playbackQueue!.dispose();
       expect(player.video.parts[1].courseEpisodeId, 2);
       expect(player.video.parts[1].courseAid, 12);
     },

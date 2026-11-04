@@ -65,7 +65,7 @@ abstract final class LearningVideoLauncher {
     }
   }
 
-  /// 按保存的 CID 创建带学习位置的播放器；CID 失效时拒绝套用旧进度。
+  /// 按保存的 CID 创建播放器；未传整份清单时只播放所选任务，不能进入视频自带合集。
   static PlayerPage buildPlayerPage(
     VideoPreview video,
     LearningListEntry entry, {
@@ -76,19 +76,16 @@ abstract final class LearningVideoLauncher {
     final VideoPart part = _findPart(video, entry);
     return PlayerPage(
       video: video,
-      playbackQueue: playlist == null
-          ? null
-          : PlaybackQueue(
-              title: '学习清单',
-              items: playlist.map(
-                (item) => PlaybackQueueItem(
-                  bvid: item.bvid,
-                  title:
-                      '${item.title} · P${item.partPageNumber} ${item.partTitle}',
-                  learningEntry: item,
-                ),
-              ),
-            ),
+      playbackQueue: PlaybackQueue(
+        title: '学习清单',
+        items: (playlist ?? [entry]).map(
+          (item) => PlaybackQueueItem(
+            bvid: item.bvid,
+            title: '${item.title} · P${item.partPageNumber} ${item.partTitle}',
+            learningEntry: item,
+          ),
+        ),
+      ),
       bilibiliService: videoService,
       learningListService: learningListService,
       initialPartCid: part.cid,
