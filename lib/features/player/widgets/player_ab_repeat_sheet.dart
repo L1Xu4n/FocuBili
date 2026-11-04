@@ -118,13 +118,14 @@ class _PlayerAbRepeatSheetState extends State<PlayerAbRepeatSheet> {
         ),
       ),
       const SizedBox(width: 8),
-      TextButton(
+      IconButton(
         key: Key('ab-repeat-set-$name'),
+        tooltip: '当前点设为 $name',
         onPressed: () => setState(() {
           controller.text = formatAbRepeatTime(widget.readPosition());
           _error = null;
         }),
-        child: Text('当前点设为 $name'),
+        icon: const Icon(Icons.my_location_rounded),
       ),
     ],
   );
