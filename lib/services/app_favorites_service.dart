@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/app_favorite.dart';
 import '../models/app_favorites_backup.dart';
@@ -13,6 +14,10 @@ class AppFavoritesService {
   /// Accepts an optional preference provider without reading account data.
   AppFavoritesService({AppFavoritesPreferencesLoader? preferencesLoader})
     : _preferencesLoader = preferencesLoader;
+
+  /// Notifies retained views after a folder name is successfully saved.
+  static final ValueNotifier<int> folderNamesRevision = ValueNotifier(0);
+
   static const _foldersKey = 'app_favorites.folders_v1';
   static const _itemsPrefix = 'app_favorites.items_v1.';
   static Future<void> _queue = Future<void>.value();
@@ -124,7 +129,9 @@ class AppFavoritesService {
       createdAt: old.createdAt,
       updatedAt: DateTime.now(),
     );
-    return _saveFolders(folders);
+    final saved = await _saveFolders(folders);
+    if (saved) folderNamesRevision.value++;
+    return saved;
   });
 
   /// Removes metadata before item cleanup; failed cleanup restores the folder list.

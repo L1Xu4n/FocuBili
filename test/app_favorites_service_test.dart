@@ -4,6 +4,25 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/models/app_favorite.dart';
 import 'package:focubili/services/app_favorites_service.dart';
 
+/// Rejects folder writes without changing the in-memory stored value.
+class _RejectingPreferences implements SharedPreferences {
+  _RejectingPreferences(this.delegate, {this.throws = false});
+  final SharedPreferences delegate;
+  final bool throws;
+
+  @override
+  String? getString(String key) => delegate.getString(key);
+
+  @override
+  Future<bool> setString(String key, String value) async {
+    if (throws) throw StateError('storage unavailable');
+    return false;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -27,6 +46,47 @@ void main() {
 
     expect(await service.deleteFolder(folder.id), isTrue);
     expect(await service.loadFolders(), isEmpty);
+  });
+
+  test(
+    'successful rename notifies across service instances after persistence',
+    () async {
+      final folder = (await service.createFolder('Before'))!;
+      final prefs = await SharedPreferences.getInstance();
+      var notifications = 0;
+      void listener() {
+        notifications++;
+        expect(prefs.getString('app_favorites.folders_v1'), contains('After'));
+      }
+
+      AppFavoritesService.folderNamesRevision.addListener(listener);
+      addTearDown(
+        () => AppFavoritesService.folderNamesRevision.removeListener(listener),
+      );
+
+      expect(
+        await AppFavoritesService().renameFolder(folder.id, 'After'),
+        isTrue,
+      );
+      expect(notifications, 1);
+    },
+  );
+
+  test('invalid or failed renames do not publish a name change', () async {
+    final folder = (await service.createFolder('Before'))!;
+    final revision = AppFavoritesService.folderNamesRevision.value;
+    expect(await service.renameFolder(folder.id, '  '), isFalse);
+    expect(await service.renameFolder('missing', 'After'), isFalse);
+    final prefs = await SharedPreferences.getInstance();
+    for (final throws in [false, true]) {
+      final failing = AppFavoritesService(
+        preferencesLoader: () async =>
+            _RejectingPreferences(prefs, throws: throws),
+      );
+      expect(await failing.renameFolder(folder.id, 'After'), isFalse);
+    }
+    expect(AppFavoritesService.folderNamesRevision.value, revision);
+    expect((await service.loadFolders()).single.name, 'Before');
   });
 
   test('空白名称不允许创建或重命名', () async {
