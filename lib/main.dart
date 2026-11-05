@@ -1,3 +1,4 @@
+import 'services/network_proxy_service.dart';
 import 'services/media_cache_service.dart';
 import 'services/cache_lifecycle.dart';
 import 'services/image_resource_cache.dart';
@@ -112,6 +113,7 @@ Future<void> main(List<String> args) async {
     return;
   }
   _installProblemDiagnostics();
+  await NetworkProxyService.instance.initialize();
   // 布局只在启动时载入；设置页明确提示重启，避免播放中强制旋转。
   try {
     await const AppLayoutPreferencesService().initialize();

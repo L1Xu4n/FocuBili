@@ -50,6 +50,11 @@ jobs:
       - name: Run Flutter tests
         run: flutter test --no-pub
 
+      - name: Check native proxy policy helpers without external network
+        run: |
+          python3 tool/check_windows_proxy_parser.py
+          python3 -m unittest tool.test_linux_proxy_environment -v
+
       - name: Check Beta publication tools without network or signing
         run: python3 -m unittest discover -s tool -p test_beta_release.py -v
 

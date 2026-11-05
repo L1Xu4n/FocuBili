@@ -43,6 +43,7 @@ public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCen
         #else
         let messenger = registrar.messenger
         #endif
+        instance.channels.append(FocuBiliNetworkProxy.attach(messenger: messenger))
         #if os(iOS)
         let worker = registeringSubscriptionWorker
         instance.isSubscriptionWorker = worker

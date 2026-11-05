@@ -32,7 +32,7 @@ Section: video
 Priority: optional
 Architecture: amd64
 Maintainer: FocuBili Project
-Depends: $dependencies, xdg-desktop-portal
+Depends: $dependencies, xdg-desktop-portal, glib-networking
 Recommends: xdg-desktop-portal-gtk, gnome-keyring
 Description: Focused Bilibili viewing and timestamp notes
  Linux desktop client with playback, offline cache and notes.
