@@ -110,7 +110,9 @@ static void proxy_lookup_finished(GObject* source, GAsyncResult* result, gpointe
     return;
   }
   g_autoptr(GString) directive = g_string_new(nullptr);
-  for (gsize i = 0; proxies[i]; ++i) {
+  // Match Dart/media-kit: only the first OS-selected route is used. Later
+  // fallback candidates must neither invalidate it nor be used after failure.
+  for (gsize i = 0; i < 1 && proxies[i]; ++i) {
     if (directive->len) g_string_append(directive, "; ");
     if (g_strcmp0(proxies[i], "direct://") == 0) {
       g_string_append(directive, "DIRECT");

@@ -80,6 +80,7 @@ std::string Route(const wchar_t* proxy, const wchar_t* bypass,
   std::vector<std::wstring> generic;
   std::vector<std::wstring> matching;
   bool socks_fallback = false;
+  bool invalid_mapping = false;
   for (const auto& token : Tokens(proxy)) {
     const auto equal = token.find(L'=');
     if (equal != std::wstring::npos) {
@@ -89,7 +90,7 @@ std::string Route(const wchar_t* proxy, const wchar_t* bypass,
           (mapped_scheme != L"http" && mapped_scheme != L"https" &&
            mapped_scheme != L"ftp" && mapped_scheme != L"socks" &&
            mapped_scheme != L"socks4" && mapped_scheme != L"socks5"))
-        throw std::runtime_error("Invalid system proxy scheme mapping");
+        invalid_mapping = true;
       if (mapped_scheme == L"socks" || mapped_scheme == L"socks4" || mapped_scheme == L"socks5")
         socks_fallback = true;
       if (mapped_scheme == scheme) matching.push_back(mapped_address);
@@ -100,33 +101,34 @@ std::string Route(const wchar_t* proxy, const wchar_t* bypass,
   // A scheme-specific map intentionally leaves unconfigured schemes direct.
   const auto& entries = !matching.empty() ? matching : generic;
   if (entries.empty()) {
+    if (invalid_mapping)
+      throw std::runtime_error("Invalid system proxy scheme mapping");
     if (socks_fallback)
       throw std::runtime_error("SOCKS proxies are not supported");
     return "DIRECT";
   }
-  std::string output;
-  for (auto address : entries) {
-    if (Lower(address).compare(0, 7, L"http://") == 0) address.erase(0, 7);
-    if (address.empty() || address.find_first_of(L"/@;#?\\ \t\r\n") != std::wstring::npos)
-      throw std::runtime_error("Only HTTP proxies without credentials are supported");
-    // Require an unambiguous host:port; bracket IPv6 literals.
-    const auto colon = address.rfind(L':');
-    if (colon == std::wstring::npos) address += L":80";
-    const auto port_start = address.rfind(L':');
-    const auto port_text = address.substr(port_start + 1);
-    const auto proxy_host = address.substr(0, port_start);
-    if (proxy_host.empty() || port_text.empty() || port_text.size() > 5 ||
-        port_text.find_first_not_of(L"0123456789") != std::wstring::npos ||
-        (proxy_host.find(L':') != std::wstring::npos &&
-         (proxy_host.front() != L'[' || proxy_host.back() != L']')))
-      throw std::runtime_error("Invalid system proxy address");
-    const auto proxy_port = std::stoul(port_text);
-    if (proxy_port == 0 || proxy_port > 65535)
-      throw std::runtime_error("Invalid system proxy port");
-    if (!output.empty()) output += "; ";
-    output += "PROXY " + Utf8(address);
-  }
-  return output;
+  // Scheme selection happens before route selection. Validate only the first
+  // applicable route: later unsupported or malformed fallback entries must
+  // neither invalidate it nor be used to bypass an unsupported first route.
+  auto address = entries.front();
+  if (Lower(address).compare(0, 7, L"http://") == 0) address.erase(0, 7);
+  if (address.empty() || address.find_first_of(L"/@;#?\\ \t\r\n") != std::wstring::npos)
+    throw std::runtime_error("Only HTTP proxies without credentials are supported");
+  // Require an unambiguous host:port; bracket IPv6 literals.
+  const auto colon = address.rfind(L':');
+  if (colon == std::wstring::npos) address += L":80";
+  const auto port_start = address.rfind(L':');
+  const auto port_text = address.substr(port_start + 1);
+  const auto proxy_host = address.substr(0, port_start);
+  if (proxy_host.empty() || port_text.empty() || port_text.size() > 5 ||
+      port_text.find_first_not_of(L"0123456789") != std::wstring::npos ||
+      (proxy_host.find(L':') != std::wstring::npos &&
+       (proxy_host.front() != L'[' || proxy_host.back() != L']')))
+    throw std::runtime_error("Invalid system proxy address");
+  const auto proxy_port = std::stoul(port_text);
+  if (proxy_port == 0 || proxy_port > 65535)
+    throw std::runtime_error("Invalid system proxy port");
+  return "PROXY " + Utf8(address);
 }
 
 std::string Resolve(const std::string& input, HINTERNET session) {

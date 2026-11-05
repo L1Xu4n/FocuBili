@@ -49,7 +49,9 @@ final class FocuBiliNetworkProxy {
             return FlutterError(code: "system_proxy_failed", message: "Cannot read system proxy settings", details: nil)
         }
         var routes: [String] = []
-        for proxy in proxies {
+        // Match Dart/media-kit: validate only the first OS-selected route.
+        // Unsupported fallback candidates must not invalidate a usable first one.
+        for proxy in proxies.prefix(1) {
             guard let type = proxy[kCFProxyTypeKey as String] as? String else {
                 return unsupported()
             }

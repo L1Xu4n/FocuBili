@@ -37,12 +37,22 @@ assert(Route(L"proxy:8080", L"<local>", L"http", L"localhost", 80) == "DIRECT");
 assert(Route(L"proxy:8080", L"<local>", L"https", L"api.bilibili.com", 443) == "PROXY proxy:8080");
 assert(Route(L"[::1]:7890", nullptr, L"https", L"host", 443) == "PROXY [::1]:7890");
 assert(Route(L"http://proxy", nullptr, L"https", L"host", 443) == "PROXY proxy:80");
-for (const auto* proxy : {L"user:pass@proxy:80", L"socks://proxy:1080", L"SOCKS=proxy:1080", L"proxy:0", L"proxy:65536", L"proxy:x", L"::1:8080", L"SOCKS5=proxy:1080", L"unknown=proxy:8080", L"https=", L"proxy#evil:80", L"proxy?evil:80", L"proxy\\evil:80"}) {
+// Select only the first applicable candidate, without validating fallbacks.
+assert(Route(L"one:80;socks://later:1080", nullptr, L"https", L"host", 443) == "PROXY one:80");
+assert(Route(L"one:80;later:0", nullptr, L"https", L"host", 443) == "PROXY one:80");
+assert(Route(L"https=one:80;https=", nullptr, L"https", L"host", 443) == "PROXY one:80");
+assert(Route(L"https=one:80;unknown=;SOCKS=", nullptr, L"https", L"host", 443) == "PROXY one:80");
+assert(Route(L"one:80;http=;unknown=", nullptr, L"https", L"host", 443) == "PROXY one:80");
+// Scheme-specific routes still take precedence over generic routes, regardless
+// of their position; unrelated malformed mappings do not change selection.
+assert(Route(L"socks://generic:1080;https=selected:81", nullptr, L"https", L"host", 443) == "PROXY selected:81");
+assert(Route(L"http=;https=selected:81", nullptr, L"https", L"host", 443) == "PROXY selected:81");
+for (const auto* proxy : {L"user:pass@proxy:80", L"socks://proxy:1080", L"SOCKS=proxy:1080", L"proxy:0", L"proxy:65536", L"proxy:x", L"::1:8080", L"SOCKS5=proxy:1080", L"unknown=proxy:8080", L"https=", L"proxy#evil:80", L"proxy?evil:80", L"proxy\\evil:80", L"socks://first:1080;valid:80", L"first:0;valid:80", L"https=;https=valid:80", L"generic:80;https=socks://selected:1080"}) {
   bool rejected = false;
   try { Route(proxy, nullptr, L"https", L"host", 443); } catch (...) { rejected = true; }
   assert(rejected);
 }
-std::cout << "22 static proxy parser checks passed\n";
+std::cout << "33 static proxy parser checks passed\n";
 }
 '''
 with tempfile.TemporaryDirectory(prefix="focubili-proxy-test-") as directory:
