@@ -22,9 +22,7 @@ class _ScreenshotService extends NetworkProxyService {
 
 void main() {
   final fontPath = Platform.environment['FOCUBILI_PROXY_SCREENSHOT_FONT'];
-  testWidgets('capture narrow proxy settings widgets for documentation', (
-    tester,
-  ) async {
+  Future<void> capture(WidgetTester tester) async {
     await tester.runAsync(() async {
       final loader = FontLoader('ProxyScreenshotFont');
       loader.addFont(File(fontPath!).readAsBytes().then(ByteData.sublistView));
@@ -93,5 +91,11 @@ void main() {
       });
       await tester.pumpWidget(const SizedBox.shrink());
     }
-  }, skip: fontPath == null);
+  }
+
+  testWidgets(
+    'capture narrow proxy settings widgets for documentation',
+    capture,
+    skip: fontPath == null,
+  );
 }
