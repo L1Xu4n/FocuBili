@@ -1,3 +1,4 @@
+import 'network_proxy_page.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -1266,6 +1267,16 @@ class _PersonalizationSettingsPageState
           secondary: const Icon(Icons.system_update_alt_rounded),
           title: const Text('启动时检查更新'),
           subtitle: const Text('每次启动从 GitHub Release 检查新的正式版本。'),
+        ),
+        ListTile(
+          key: const Key('open-network-proxy'),
+          leading: const Icon(Icons.lan_outlined),
+          title: const Text('代理设置'),
+          subtitle: const Text('默认跟随系统 · 直连或手动 HTTP 代理'),
+          trailing: const Icon(Icons.chevron_right_rounded),
+          onTap: () => Navigator.of(context).push<void>(
+            MaterialPageRoute(builder: (_) => const NetworkProxyPage()),
+          ),
         ),
         ListTile(
           key: const Key('open-cache-management'),

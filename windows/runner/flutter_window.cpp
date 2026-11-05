@@ -135,6 +135,8 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  network_proxy_ = std::make_unique<NetworkProxy>(
+      GetHandle(), flutter_controller_->engine()->messenger());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
   windows_experience_ = std::make_unique<WindowsExperience>(
       GetHandle(), flutter_controller_->engine()->messenger());
@@ -291,6 +293,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  network_proxy_.reset();
   KillTimer(GetHandle(), kSubscriptionTimer);
   subscription_timer_enabled_ = false;
   subscription_scheduler_channel_.reset();
@@ -313,6 +316,10 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
   try {
+    if (message == NetworkProxy::kResultMessage && network_proxy_) {
+      network_proxy_->CompleteResults();
+      return 0;
+    }
     if (message == WM_TIMER && wparam == kSubscriptionTimer &&
         subscription_timer_enabled_ && subscription_scheduler_channel_) {
       subscription_scheduler_channel_->InvokeMethod(

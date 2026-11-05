@@ -1,6 +1,7 @@
 #include "my_application.h"
 
 #include <flutter_linux/flutter_linux.h>
+#include <gio/gio.h>
 #ifdef GDK_WINDOWING_X11
 #include <gdk/gdkx.h>
 #endif
@@ -96,6 +97,138 @@ static void handle_desktop_method(FlMethodChannel*, FlMethodCall* call, gpointer
   fl_method_call_respond_success(call, nullptr, nullptr);
 }
 
+// GIO resolves the desktop's proxy settings (including its configured PAC
+// provider) asynchronously, without changing process or operating-system state.
+static void proxy_lookup_finished(GObject* source, GAsyncResult* result, gpointer data) {
+  g_autoptr(FlMethodCall) call = FL_METHOD_CALL(data);
+  g_autoptr(GError) error = nullptr;
+  g_auto(GStrv) proxies = g_proxy_resolver_lookup_finish(
+      G_PROXY_RESOLVER(source), result, &error);
+  if (!proxies) {
+    fl_method_call_respond_error(call, "proxy_resolution_failed",
+        "System proxy lookup failed", nullptr, nullptr);
+    return;
+  }
+  g_autoptr(GString) directive = g_string_new(nullptr);
+  // Match Dart/media-kit: only the first OS-selected route is used. Later
+  // fallback candidates must neither invalidate it nor be used after failure.
+  for (gsize i = 0; i < 1 && proxies[i]; ++i) {
+    if (directive->len) g_string_append(directive, "; ");
+    if (g_strcmp0(proxies[i], "direct://") == 0) {
+      g_string_append(directive, "DIRECT");
+      continue;
+    }
+    // Dart's HttpClient supports an HTTP CONNECT proxy, not SOCKS, TLS-to-
+    // proxy, or embedded proxy credentials. Never silently bypass those.
+    if (!g_str_has_prefix(proxies[i], "http://") || strchr(proxies[i], '@')) {
+      fl_method_call_respond_error(call, "unsupported_proxy",
+          "Only HTTP proxies without credentials are supported", nullptr, nullptr);
+      return;
+    }
+    g_autoptr(GSocketConnectable) address =
+        g_network_address_parse_uri(proxies[i], 80, &error);
+    if (!address || !G_IS_NETWORK_ADDRESS(address)) {
+      fl_method_call_respond_error(call, "invalid_proxy",
+          "Invalid system proxy address", nullptr, nullptr);
+      return;
+    }
+    const char* host = g_network_address_get_hostname(G_NETWORK_ADDRESS(address));
+    const guint16 port = g_network_address_get_port(G_NETWORK_ADDRESS(address));
+    if (!host || !*host || !port || strpbrk(host, " \t\r\n;#?\\")) {
+      fl_method_call_respond_error(call, "invalid_proxy",
+          "Invalid system proxy address", nullptr, nullptr);
+      return;
+    }
+    g_string_append_printf(directive, strchr(host, ':') ? "PROXY [%s]:%u" : "PROXY %s:%u",
+                           host, port);
+  }
+  if (!directive->len) {
+    fl_method_call_respond_error(call, "proxy_resolution_failed",
+        "System proxy lookup returned no routes", nullptr, nullptr);
+    return;
+  }
+  g_autoptr(FlValue) value = fl_value_new_string(directive->str);
+  fl_method_call_respond_success(call, value, nullptr);
+}
+
+// An explicitly set lowercase variable wins even when empty, matching common
+// command-line proxy conventions. Values are never logged or sent as errors.
+static const char* proxy_environment(const char* lower, const char* upper) {
+  const char* value = g_getenv(lower);
+  return value ? value : g_getenv(upper);
+}
+
+static gboolean valid_environment_proxy(const char* proxy) {
+  if (!proxy || !*proxy) return TRUE;
+  if (!g_str_has_prefix(proxy, "http://") || strpbrk(proxy, "@;#?\\ \t\r\n")) return FALSE;
+  const char* path = strchr(proxy + 7, '/');
+  if (path && path[1] != '\0') return FALSE;
+  g_autoptr(GError) error = nullptr;
+  g_autoptr(GSocketConnectable) address = g_network_address_parse_uri(proxy, 80, &error);
+  return address && G_IS_NETWORK_ADDRESS(address) &&
+      *g_network_address_get_hostname(G_NETWORK_ADDRESS(address)) &&
+      g_network_address_get_port(G_NETWORK_ADDRESS(address)) != 0;
+}
+
+static void handle_network_proxy(FlMethodChannel*, FlMethodCall* call, gpointer) {
+  const char* method = fl_method_call_get_name(call);
+  if (g_strcmp0(method, "configure") == 0) {
+    // The Dart transport owns direct/manual configuration on Linux.
+    fl_method_call_respond_success(call, nullptr, nullptr);
+    return;
+  }
+  if (g_strcmp0(method, "resolve") != 0) {
+    fl_method_call_respond_not_implemented(call, nullptr);
+    return;
+  }
+  FlValue* args = fl_method_call_get_args(call);
+  FlValue* value = args && fl_value_get_type(args) == FL_VALUE_TYPE_MAP
+      ? fl_value_lookup_string(args, "url") : nullptr;
+  const char* url = value && fl_value_get_type(value) == FL_VALUE_TYPE_STRING
+      ? fl_value_get_string(value) : nullptr;
+  if (!url || !(g_str_has_prefix(url, "https://") || g_str_has_prefix(url, "http://"))) {
+    fl_method_call_respond_error(call, "invalid_url", "Expected an HTTP(S) URL", nullptr, nullptr);
+    return;
+  }
+  GProxyResolver* resolver = g_proxy_resolver_get_default();
+  g_autoptr(GProxyResolver) environment_resolver = nullptr;
+  // GDummyProxyResolver reports itself supported but always returns DIRECT.
+  // Do not mistake that stub for a desktop configuration provider.
+  if (!g_proxy_resolver_is_supported(resolver) ||
+      g_strcmp0(G_OBJECT_TYPE_NAME(resolver), "GDummyProxyResolver") == 0) {
+    const char* http = proxy_environment("http_proxy", "HTTP_PROXY");
+    const char* https = proxy_environment("https_proxy", "HTTPS_PROXY");
+    const char* all = proxy_environment("all_proxy", "ALL_PROXY");
+    const char* ignored = proxy_environment("no_proxy", "NO_PROXY");
+    if (!http) http = all;
+    if (!https) https = all;
+    if (!http && !https && !ignored) {
+      fl_method_call_respond_error(call, "proxy_unavailable",
+          "Install glib-networking for system proxy discovery, or choose Direct", nullptr, nullptr);
+      return;
+    }
+    if (!valid_environment_proxy(http) || !valid_environment_proxy(https)) {
+      fl_method_call_respond_error(call, "unsupported_proxy",
+          "Only HTTP proxies without credentials are supported", nullptr, nullptr);
+      return;
+    }
+    g_auto(GStrv) ignore_hosts = g_strsplit(ignored ? ignored : "", ",", -1);
+    bool ignore_all = false;
+    for (gsize i = 0; ignore_hosts[i]; ++i) {
+      g_strstrip(ignore_hosts[i]);
+      if (g_strcmp0(ignore_hosts[i], "*") == 0) ignore_all = true;
+    }
+    environment_resolver = G_PROXY_RESOLVER(g_simple_proxy_resolver_new(nullptr, ignore_hosts));
+    auto* simple = G_SIMPLE_PROXY_RESOLVER(environment_resolver);
+    // GSimpleProxyResolver handles domain suffixes, IPs, ports and CIDR bypass.
+    g_simple_proxy_resolver_set_uri_proxy(simple, "http", !ignore_all && http && *http ? http : "direct://");
+    g_simple_proxy_resolver_set_uri_proxy(simple, "https", !ignore_all && https && *https ? https : "direct://");
+    resolver = environment_resolver;
+  }
+  g_proxy_resolver_lookup_async(resolver, url, nullptr,
+                               proxy_lookup_finished, g_object_ref(call));
+}
+
 // Implements GApplication::activate.
 static void my_application_activate(GApplication* application) {
   MyApplication* self = MY_APPLICATION(application);
@@ -162,6 +295,12 @@ static void my_application_activate(GApplication* application) {
       "com.focubili.app/windows_experience", FL_METHOD_CODEC(codec));
   fl_method_channel_set_method_call_handler(desktop_channel,
       handle_desktop_method, nullptr, nullptr);
+
+  g_autoptr(FlMethodChannel) proxy_channel = fl_method_channel_new(
+      fl_engine_get_binary_messenger(fl_view_get_engine(view)),
+      "com.focubili/network_proxy", FL_METHOD_CODEC(codec));
+  fl_method_channel_set_method_call_handler(proxy_channel,
+      handle_network_proxy, nullptr, nullptr);
 
   self->subscription_channel = fl_method_channel_new(
       fl_engine_get_binary_messenger(fl_view_get_engine(view)),

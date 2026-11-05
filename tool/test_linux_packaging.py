@@ -119,6 +119,7 @@ class LinuxPackagingTest(unittest.TestCase):
         self.assertNotIn('jsoncpp', field)
         self.assertNotIn('libfixture', field)
         self.assertIn('xdg-desktop-portal', field)
+        self.assertIn('glib-networking', field)
         self.assertIn('libstdc++6 (>= ', field)
         minimum = re.search(r'libc6 \(>= ([^)]+)\)', field).group(1)
         self.assertEqual(subprocess.call(['dpkg', '--compare-versions', minimum, 'ge', '2.38']), 0)
