@@ -33,6 +33,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
   bool _externalNavigationSuspended = false;
 
   void _maybeAutoEnableSubtitles();
+  void _cancelAutomaticSubtitlesForLocalSource();
 
   bool _observeAbRepeatSnapshot(
     PlaybackSnapshot previous,
@@ -140,6 +141,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
         if (service is! LocalFilePlaybackService) {
           throw const OfflineVideoException('当前平台不支持本地播放。');
         }
+        _cancelAutomaticSubtitlesForLocalSource();
         _defaultQualityPending = false;
         // Keep online menu options and the complete VideoPreview when only media changes.
         if (local.audioFilePath != null) {

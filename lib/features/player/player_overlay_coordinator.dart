@@ -25,8 +25,12 @@ mixin _PlayerOverlayCoordinator
   List<SubtitleCue> _subtitleCues = const <SubtitleCue>[];
   bool _subtitleCuesLoading = false;
   _SubtitleAutoState _subtitleAutoState = _SubtitleAutoState.pending;
+  int? _subtitleAutoSourceGeneration;
+  bool _refreshSubtitleTracksOnAutoStart = false;
   int _subtitleRequestToken = 0;
+  int _subtitleTracksRequestToken = 0;
   Future<SubtitleTrackLoadResult>? _subtitleTracksRequest;
+  bool _subtitleTracksRequestedManually = false;
   int _subtitleCuesRequestToken = 0;
   (String, int)? _subtitleTrackIdentity;
   (String, int)? _subtitleCueIdentity;
@@ -432,6 +436,8 @@ mixin _PlayerOverlayCoordinator
   /// 清空旧分P的字幕和进行中的请求，避免切换分P后短暂显示错误字幕。
   void _clearSubtitlesForPart({bool allowAutoStart = true}) {
     _subtitleRequestToken += 1;
+    _subtitleAutoSourceGeneration = null;
+    _refreshSubtitleTracksOnAutoStart = false;
     _subtitleTracksRequest = null;
     _subtitleCuesRequestToken++;
     _subtitleAutoState = allowAutoStart
@@ -453,16 +459,22 @@ mixin _PlayerOverlayCoordinator
 
   /// 手动打开列表与自动选择可共用一次轨道请求。
   Future<SubtitleTrackLoadResult> _loadSubtitleTracks({
+    bool automatic = false,
     bool reuseAvailable = false,
   }) {
     final pending = _subtitleTracksRequest;
-    if (pending != null) return pending;
+    if (pending != null) {
+      if (!automatic) _subtitleTracksRequestedManually = true;
+      return pending;
+    }
     final cached = _subtitleTrackResult;
     if (reuseAvailable && cached?.status == SubtitleLoadStatus.available) {
       return Future.value(cached!);
     }
+    final tracksRequestToken = ++_subtitleTracksRequestToken;
+    _subtitleTracksRequestedManually = !automatic;
     late final Future<SubtitleTrackLoadResult> request;
-    request = _fetchSubtitleTracks().whenComplete(() {
+    request = _fetchSubtitleTracks(tracksRequestToken).whenComplete(() {
       if (identical(_subtitleTracksRequest, request)) {
         _subtitleTracksRequest = null;
       }
@@ -471,7 +483,9 @@ mixin _PlayerOverlayCoordinator
   }
 
   /// 保留刷新前仍有效的轨道，忽略旧视频或会话的迟到结果。
-  Future<SubtitleTrackLoadResult> _fetchSubtitleTracks() async {
+  Future<SubtitleTrackLoadResult> _fetchSubtitleTracks(
+    int tracksRequestToken,
+  ) async {
     if (_activeVideo.isCourse) {
       return const SubtitleTrackLoadResult.unavailable(
         message: '课堂字幕暂未接入，视频内嵌字幕不受影响。',
@@ -491,6 +505,7 @@ mixin _PlayerOverlayCoordinator
     }
     if (!mounted ||
         requestToken != _subtitleRequestToken ||
+        tracksRequestToken != _subtitleTracksRequestToken ||
         bvid != _activeVideo.bvid ||
         cid != _currentPart.cid) {
       return const SubtitleTrackLoadResult.unavailable(
@@ -523,6 +538,22 @@ mixin _PlayerOverlayCoordinator
       );
 
   @override
+  void _cancelAutomaticSubtitlesForLocalSource() {
+    if (_subtitleAutoState != _SubtitleAutoState.started ||
+        _selectedSubtitleTrack != null) {
+      return;
+    }
+    _subtitleAutoState = _SubtitleAutoState.pending;
+    _subtitleAutoSourceGeneration = null;
+    // A fresh track response creates a new cue-cache session on return online.
+    _refreshSubtitleTracksOnAutoStart = true;
+    if (_subtitleTracksRequest != null && !_subtitleTracksRequestedManually) {
+      _subtitleTracksRequestToken++;
+      _subtitleTracksRequest = null;
+    }
+  }
+
+  @override
   void _maybeAutoEnableSubtitles() {
     if (_subtitleAutoState != _SubtitleAutoState.pending ||
         !_playbackPreferences.autoEnableSubtitles ||
@@ -530,16 +561,33 @@ mixin _PlayerOverlayCoordinator
       return;
     }
     _subtitleAutoState = _SubtitleAutoState.started;
-    unawaited(_autoSelectSubtitle());
+    final sourceGeneration = _sourceGeneration;
+    _subtitleAutoSourceGeneration = sourceGeneration;
+    final refresh = _refreshSubtitleTracksOnAutoStart;
+    _refreshSubtitleTracksOnAutoStart = false;
+    unawaited(_autoSelectSubtitle(sourceGeneration, refreshTracks: refresh));
   }
 
-  Future<void> _autoSelectSubtitle() async {
+  Future<void> _autoSelectSubtitle(
+    int sourceGeneration, {
+    required bool refreshTracks,
+  }) async {
     final generation = _subtitleRequestToken;
     bool isCurrent() =>
         mounted &&
         generation == _subtitleRequestToken &&
+        sourceGeneration == _subtitleAutoSourceGeneration &&
         _subtitleAutoState == _SubtitleAutoState.started;
-    final result = await _loadSubtitleTracks(reuseAvailable: true);
+    final pending = _subtitleTracksRequest;
+    if (refreshTracks && pending != null) {
+      // Preserve any manual fetch that shared the original automatic request.
+      await pending;
+      if (!isCurrent()) return;
+    }
+    final result = await _loadSubtitleTracks(
+      automatic: true,
+      reuseAvailable: !refreshTracks,
+    );
     if (!isCurrent() || result.status != SubtitleLoadStatus.available) return;
     final available = result.tracks.where((track) => !track.isLocked);
     final priority = _playbackPreferences.subtitlePriority;
@@ -557,7 +605,10 @@ mixin _PlayerOverlayCoordinator
           ];
     for (final track in candidates) {
       if (!isCurrent()) return;
-      final status = await _selectSubtitleTrack(track, automatic: true);
+      final status = await _selectSubtitleTrack(
+        track,
+        automaticSourceGeneration: sourceGeneration,
+      );
       if (status == SubtitleLoadStatus.available ||
           status == SubtitleLoadStatus.loginRequired) {
         return;
@@ -740,8 +791,9 @@ mixin _PlayerOverlayCoordinator
   /// 读取当前视频的选中轨道；晚到的其他分 P 结果不能覆盖当前字幕。
   Future<SubtitleLoadStatus> _selectSubtitleTrack(
     SubtitleTrack track, {
-    bool automatic = false,
+    int? automaticSourceGeneration,
   }) async {
+    final automatic = automaticSourceGeneration != null;
     if (!_subtitleTrackStillAvailable(track)) {
       if (!automatic) _showTransientSnackBar('此字幕当前不可用。');
       return SubtitleLoadStatus.locked;
@@ -779,6 +831,8 @@ mixin _PlayerOverlayCoordinator
     }
     if (!mounted ||
         requestToken != _subtitleCuesRequestToken ||
+        (automatic &&
+            automaticSourceGeneration != _subtitleAutoSourceGeneration) ||
         bvid != _activeVideo.bvid ||
         cid != _currentPart.cid) {
       return SubtitleLoadStatus.unavailable;
