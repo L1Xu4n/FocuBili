@@ -343,6 +343,7 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
           note: note,
           noteService: _noteService,
           videoService: _videoService,
+          localExportService: widget.localExportService,
         ),
       ),
     );

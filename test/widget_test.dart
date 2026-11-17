@@ -13,6 +13,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/app.dart';
 import 'package:focubili/features/focus/focus_timer_controller.dart';
 import 'package:focubili/features/player/player_page.dart';
+import 'package:focubili/features/player/widgets/player_subtitle_caption.dart';
 import 'package:focubili/features/player/widgets/player_timeline.dart';
 import 'package:focubili/features/player/widgets/player_action_feedback.dart';
 import 'package:focubili/features/profile/login_page.dart';
@@ -29,6 +30,7 @@ import 'package:focubili/models/playback_preferences.dart';
 import 'package:focubili/services/bilibili_service.dart';
 import 'package:focubili/services/bilibili_interaction_service.dart';
 import 'package:focubili/services/app_theme_mode_service.dart';
+import 'package:focubili/services/cache_lifecycle.dart';
 import 'package:focubili/services/device_status_service.dart';
 import 'package:focubili/services/danmaku_preferences_service.dart';
 import 'package:focubili/services/native_playback_service.dart';
@@ -814,11 +816,13 @@ class _FakePlayerOverlayService implements PlayerOverlayService {
   final SubtitleTrackLoadResult tracksResult;
   final SubtitleCueLoadResult cuesResult;
   final Future<SubtitleTrackLoadResult> Function(int cid)? tracksLoader;
-  final Future<SubtitleCueLoadResult> Function(int cid)? cuesLoader;
+  final Future<SubtitleCueLoadResult> Function(int cid, String trackId)?
+  cuesLoader;
   final List<int> subtitleTrackRequests = <int>[];
   final List<(String, int)> subtitleTrackIdentities = [];
   final List<int> subtitleCueRequests = <int>[];
   final List<(String, int)> subtitleCueIdentities = [];
+  final List<String> subtitleCueTrackIds = [];
   final DanmakuSegmentLoadResult danmakuResult;
   final Future<DanmakuSegmentLoadResult> Function(int segmentIndex)?
   danmakuLoader;
@@ -844,7 +848,8 @@ class _FakePlayerOverlayService implements PlayerOverlayService {
   }) async {
     subtitleCueRequests.add(cid);
     subtitleCueIdentities.add((bvid, cid));
-    return cuesLoader == null ? cuesResult : await cuesLoader!(cid);
+    subtitleCueTrackIds.add(trackId);
+    return cuesLoader == null ? cuesResult : await cuesLoader!(cid, trackId);
   }
 
   /// 记录段号并返回即时或延迟结果，用于覆盖正常加载与网络晚到两种弹幕场景。
@@ -5451,6 +5456,183 @@ void main() {
     ],
   );
 
+  const englishSubtitle = SubtitleTrack(
+    id: 'en',
+    language: 'en',
+    label: '测试英文字幕',
+    isLocked: false,
+  );
+  const aiSubtitle = SubtitleTrack(
+    id: 'ai',
+    language: 'ai-zh',
+    label: '测试自动字幕',
+    isLocked: false,
+    sourceType: 1,
+  );
+  const multipleSubtitleTracks = SubtitleTrackLoadResult(
+    status: SubtitleLoadStatus.available,
+    message: '',
+    tracks: [
+      englishSubtitle,
+      SubtitleTrack(
+        id: 'locked',
+        language: 'zh-Hans',
+        label: '锁定字幕',
+        isLocked: true,
+        sourceType: 1,
+      ),
+      aiSubtitle,
+      subtitleTrack,
+    ],
+  );
+
+  for (final (priority, failAi, expectedTracks) in [
+    (SubtitlePriority.chineseCcFirst, false, ['101']),
+    (SubtitlePriority.chineseAiFirst, false, ['ai']),
+    (SubtitlePriority.chineseAiFirst, true, ['ai', '101']),
+    (SubtitlePriority.trackOrder, false, ['en']),
+  ]) {
+    testWidgets('自动字幕 ${priority.name}${failAi ? ' 回退' : ''} 从恢复分 P 读取', (
+      tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({
+        PlaybackPreferencesService.autoEnableSubtitlesKey: true,
+        PlaybackPreferencesService.subtitlePriorityKey: priority.name,
+      });
+      final overlays = _FakePlayerOverlayService(
+        tracksResult: multipleSubtitleTracks,
+        cuesResult: subtitleCues,
+        cuesLoader: (_, id) async => failAi && id == 'ai'
+            ? const SubtitleCueLoadResult.empty()
+            : subtitleCues,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PlayerPage(
+            video: _createMultiPartVideo(),
+            playbackService: _FakePlaybackService(),
+            initialPartCid: 137649200,
+            playerOverlayService: overlays,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(overlays.subtitleTrackRequests, [137649200]);
+      expect(overlays.subtitleCueTrackIds, expectedTracks);
+      expect(find.byKey(const Key('active-subtitle')), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
+  for (final manualTrack in [false, true]) {
+    testWidgets('手动${manualTrack ? '选轨' : '关闭'}优先于迟到的自动字幕，换分 P 后恢复自动选择', (
+      tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({
+        PlaybackPreferencesService.autoEnableSubtitlesKey: true,
+      });
+      await tester.binding.setSurfaceSize(const Size(1080, 2400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final pending = Completer<SubtitleCueLoadResult>();
+      final overlays = _FakePlayerOverlayService(
+        tracksResult: multipleSubtitleTracks,
+        cuesResult: subtitleCues,
+        cuesLoader: (cid, id) => cid == 137649199 && id == subtitleTrack.id
+            ? pending.future
+            : Future.value(subtitleCues),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PlayerPage(
+            video: _createMultiPartVideo(),
+            playbackService: _FakePlaybackService(),
+            playerOverlayService: overlays,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(overlays.subtitleCueTrackIds, ['101']);
+      await openSubtitleMenu(tester);
+      await tester.tap(find.text(manualTrack ? englishSubtitle.label : '关闭字幕'));
+      await tester.pumpAndSettle();
+      pending.complete(
+        const SubtitleCueLoadResult(
+          status: SubtitleLoadStatus.available,
+          message: '',
+          cues: [
+            SubtitleCue(
+              from: Duration.zero,
+              to: Duration(minutes: 1),
+              content: '已失效的自动字幕',
+            ),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('已失效的自动字幕'), findsNothing);
+      expect(
+        find.byKey(const Key('active-subtitle')),
+        manualTrack ? findsOneWidget : findsNothing,
+      );
+
+      // A track refresh during the same part preserves the manual choice.
+      await openSubtitleMenu(tester);
+      await tester.tap(find.byTooltip('刷新字幕列表'));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('active-subtitle')),
+        manualTrack ? findsOneWidget : findsNothing,
+      );
+      await tester.tap(find.byTooltip('关闭字幕设置'));
+      await tester.pumpAndSettle();
+      final exitFullscreen = find.byTooltip('退出全屏');
+      if (exitFullscreen.evaluate().isNotEmpty) {
+        tester.widget<IconButton>(exitFullscreen).onPressed!();
+        await tester.pumpAndSettle();
+      }
+      await tester.tap(find.byKey(const Key('part-2')));
+      await tester.pumpAndSettle();
+      expect(overlays.subtitleCueRequests.last, 137649200);
+      expect(overlays.subtitleCueTrackIds.last, '101');
+      expect(find.byKey(const Key('active-subtitle')), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
+  testWidgets('字幕会话清理撤销在途自动请求，仍可手动选择', (tester) async {
+    SharedPreferences.setMockInitialValues({
+      PlaybackPreferencesService.autoEnableSubtitlesKey: true,
+    });
+    final pending = Completer<SubtitleCueLoadResult>();
+    var reads = 0;
+    final overlays = _FakePlayerOverlayService(
+      tracksResult: subtitleTracks,
+      cuesResult: subtitleCues,
+      cuesLoader: (_, _) async => ++reads == 1 ? pending.future : subtitleCues,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _createMultiPartVideo(),
+          playbackService: _FakePlaybackService(),
+          playerOverlayService: overlays,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(reads, 1);
+    CacheLifecycle.clearSubtitles();
+    pending.complete(subtitleCues);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('active-subtitle')), findsNothing);
+    expect(reads, 1);
+    await openSubtitleMenu(tester);
+    await tester.tap(find.text(subtitleTrack.label));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('active-subtitle')), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   Future<void> captureSubtitleLayout(WidgetTester tester, String name) async {
     if (Platform.environment['FOCUBILI_LAYOUT_CAPTURE'] != '1') return;
     await tester.runAsync(() async {
@@ -5799,7 +5981,7 @@ void main() {
       final overlays = _FakePlayerOverlayService(
         tracksResult: subtitleTracks,
         cuesResult: currentCues,
-        cuesLoader: (_) async =>
+        cuesLoader: (_, _) async =>
             ++reads == 1 ? pendingCues.future : currentCues,
       );
       await tester.pumpWidget(
@@ -6270,7 +6452,7 @@ void main() {
       final overlays = _FakePlayerOverlayService(
         tracksResult: subtitleTracks,
         cuesResult: subtitleCues,
-        cuesLoader: (cid) => pendingCues.future,
+        cuesLoader: (_, _) => pendingCues.future,
       );
       await tester.pumpWidget(
         MaterialApp(
@@ -6321,6 +6503,7 @@ void main() {
       label: '中文（简体）',
       isLocked: false,
     );
+    final playback = _FakePlaybackService();
     final _FakePlayerOverlayService overlayService = _FakePlayerOverlayService(
       tracksResult: const SubtitleTrackLoadResult(
         status: SubtitleLoadStatus.available,
@@ -6343,12 +6526,13 @@ void main() {
       MaterialApp(
         home: PlayerPage(
           video: VideoPreview.placeholder(),
-          playbackService: _FakePlaybackService(),
+          playbackService: playback,
           playerOverlayService: overlayService,
         ),
       ),
     );
     await tester.pumpAndSettle();
+    expect(overlayService.subtitleTrackRequests, isEmpty);
     final IconButton fullscreenButton = tester.widget<IconButton>(
       find.byWidgetPredicate(
         (Widget widget) => widget is IconButton && widget.tooltip == '进入全屏',
@@ -6370,6 +6554,8 @@ void main() {
     expect(find.text('真实字幕内容'), findsOneWidget);
     await openSubtitleMenu(tester);
     expect(overlayService.subtitleTrackRequests, hasLength(1));
+    await tester.tap(find.byTooltip('调整字幕外观'));
+    await tester.pumpAndSettle();
     final slider = tester.widget<Slider>(
       find.byKey(const Key('subtitle-font-size-slider')),
     );
@@ -6383,11 +6569,33 @@ void main() {
       28,
     );
     slider.onChangeEnd!(28);
-    await tester.pumpAndSettle();
-    expect(
-      (await const PlaybackPreferencesService().load()).subtitleFontSize,
-      28,
+    final position = tester.widget<Slider>(
+      find.byKey(const Key('subtitle-position-slider')),
     );
+    final opacity = tester.widget<Slider>(
+      find.byKey(const Key('subtitle-opacity-slider')),
+    );
+    final activeSubtitle = find.byKey(const Key('active-subtitle'));
+    final previousTop = tester.getTopLeft(activeSubtitle).dy;
+    position.onChanged!(0);
+    opacity.onChanged!(.55);
+    await tester.pump();
+    expect(tester.getTopLeft(activeSubtitle).dy, lessThan(previousTop));
+    final activeCaption = tester.widget<PlayerSubtitleCaption>(
+      find.byKey(const Key('active-subtitle-caption')),
+    );
+    final sampleCaption = tester.widget<PlayerSubtitleCaption>(
+      find.byKey(const Key('subtitle-appearance-preview')),
+    );
+    expect(activeCaption.opacity, .55);
+    expect(sampleCaption.opacity, .55);
+    position.onChangeEnd!(0);
+    opacity.onChangeEnd!(.55);
+    await tester.pumpAndSettle();
+    final preferences = await const PlaybackPreferencesService().load();
+    expect(preferences.subtitleFontSize, 28);
+    expect(preferences.subtitlePosition, 0);
+    expect(preferences.subtitleOpacity, .55);
     await tester.tap(find.byTooltip('关闭字幕设置'));
     await tester.pumpAndSettle();
     await tester.binding.setSurfaceSize(const Size(640, 360));
@@ -6401,6 +6609,19 @@ void main() {
       find.byKey(const Key('player-feedback-viewport')),
     );
     expect(subtitleBounds.top, greaterThanOrEqualTo(feedbackBounds.top));
+    final playerBounds = tester.getRect(
+      find.byKey(const Key('player-surface')),
+    );
+    final rightTap = Offset(playerBounds.right - 12, playerBounds.center.dy);
+    await tester.tapAt(rightTap);
+    await tester.pump(const Duration(milliseconds: 80));
+    await tester.tapAt(rightTap);
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(playback.seekByRequests, 1);
+    final feedback = find.byType(PlayerSeekFeedback);
+    expect(feedback, findsOneWidget);
+    expect(tester.getRect(feedback).height, greaterThan(0));
+    expect(tester.getRect(feedback).overlaps(subtitleBounds), isFalse);
     expect(subtitleBounds.bottom, lessThanOrEqualTo(feedbackBounds.bottom));
     expect(
       feedbackBounds.bottom,

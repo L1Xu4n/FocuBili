@@ -127,11 +127,25 @@ class PlaybackPreferences {
   static const double defaultSubtitleFontSize = 16;
   static const double minSubtitleFontSize = 12;
   static const double maxSubtitleFontSize = 36;
+  static const double defaultSubtitlePosition = 1;
+  static const double defaultSubtitleOpacity = 1;
+  static const double minSubtitleOpacity = 0.3;
 
   /// 将字幕字号限制在可读范围内，损坏或非有限值恢复原有的 16 号默认值。
   static double normalizeSubtitleFontSize(double value) => value.isFinite
       ? value.clamp(minSubtitleFontSize, maxSubtitleFontSize).roundToDouble()
       : defaultSubtitleFontSize;
+
+  static double normalizeSubtitlePosition(double value) =>
+      DoubleTapRegions.normalize(value, 0, 1, defaultSubtitlePosition);
+
+  static double normalizeSubtitleOpacity(double value) =>
+      DoubleTapRegions.normalize(
+        value,
+        minSubtitleOpacity,
+        1,
+        defaultSubtitleOpacity,
+      );
 
   /// Filters corrupt stored rates, deduplicates and always retains normal speed.
   static List<double> normalizeSpeeds(Iterable<double> values) {
@@ -151,7 +165,10 @@ class PlaybackPreferences {
   /// 创建播放器偏好；旧用户继续默认启用双击，并以 720P 作为两种网络的安全默认值。
   const PlaybackPreferences({
     this.mode = PlaybackMode.order,
-    this.subtitlePosition = 1,
+    this.subtitlePosition = defaultSubtitlePosition,
+    this.subtitleOpacity = defaultSubtitleOpacity,
+    this.autoEnableSubtitles = false,
+    this.subtitlePriority = SubtitlePriority.chineseCcFirst,
     this.appVolume = 1,
     this.linePreference = PlaybackLinePreference.smart,
     this.preferNonPcdn = true,
@@ -172,6 +189,9 @@ class PlaybackPreferences {
   final bool enableDoubleTapSeek;
   final PlaybackMode mode;
   final double subtitlePosition;
+  final double subtitleOpacity;
+  final bool autoEnableSubtitles;
+  final SubtitlePriority subtitlePriority;
   final double appVolume;
   final PlaybackLinePreference linePreference;
   final bool preferNonPcdn;
@@ -191,6 +211,9 @@ class PlaybackPreferences {
   PlaybackPreferences copyWith({
     PlaybackMode? mode,
     double? subtitlePosition,
+    double? subtitleOpacity,
+    bool? autoEnableSubtitles,
+    SubtitlePriority? subtitlePriority,
     double? appVolume,
     PlaybackLinePreference? linePreference,
     bool? preferNonPcdn,
@@ -209,12 +232,14 @@ class PlaybackPreferences {
   }) {
     return PlaybackPreferences(
       mode: mode ?? this.mode,
-      subtitlePosition: DoubleTapRegions.normalize(
+      subtitlePosition: normalizeSubtitlePosition(
         subtitlePosition ?? this.subtitlePosition,
-        0,
-        1,
-        1,
       ),
+      subtitleOpacity: normalizeSubtitleOpacity(
+        subtitleOpacity ?? this.subtitleOpacity,
+      ),
+      autoEnableSubtitles: autoEnableSubtitles ?? this.autoEnableSubtitles,
+      subtitlePriority: subtitlePriority ?? this.subtitlePriority,
       appVolume: DoubleTapRegions.normalize(
         appVolume ?? this.appVolume,
         0,
@@ -247,4 +272,41 @@ class PlaybackPreferences {
           : normalizeLongPressPlaybackSpeed(longPressPlaybackSpeed),
     );
   }
+}
+
+/// Controls the order in which the player tries available subtitle tracks.
+enum SubtitlePriority {
+  chineseCcFirst('中文字幕（CC）优先'),
+  chineseAiFirst('中文字幕（AI）优先'),
+  trackOrder('按视频字幕顺序');
+
+  const SubtitlePriority(this.label);
+  final String label;
+
+  static SubtitlePriority fromName(Object? value) => values.firstWhere(
+    (priority) => priority.name == value,
+    orElse: () => chineseCcFirst,
+  );
+}
+
+enum SubtitleAppearanceSetting {
+  fontSize('字幕字号'),
+  position('字幕位置'),
+  opacity('字幕不透明度');
+
+  const SubtitleAppearanceSetting(this.label);
+  final String label;
+
+  double read(PlaybackPreferences preferences) => switch (this) {
+    fontSize => preferences.subtitleFontSize,
+    position => preferences.subtitlePosition,
+    opacity => preferences.subtitleOpacity,
+  };
+
+  PlaybackPreferences apply(PlaybackPreferences preferences, double value) =>
+      switch (this) {
+        fontSize => preferences.copyWith(subtitleFontSize: value),
+        position => preferences.copyWith(subtitlePosition: value),
+        opacity => preferences.copyWith(subtitleOpacity: value),
+      };
 }

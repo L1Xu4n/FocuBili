@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import '../../models/video_note.dart';
+import 'video_note_body_editor.dart';
 import 'video_note_frames_view.dart';
 
 /// 将视频时间点格式化为 mm:ss 或 h:mm:ss。
@@ -581,28 +582,31 @@ class VideoNoteComposer extends StatelessWidget {
           ),
         ),
         if (borderless) const Divider(height: 8) else const SizedBox(height: 8),
-        TextField(
-          key: const Key('note-body-field'),
+        VideoNoteBodyEditor(
           controller: bodyController,
-          enabled: inputEnabled ?? !saving,
-          // 正文变化函数只通知外层安排自动保存，不在输入每个字符时直接写磁盘。
-          onChanged: onBodyChanged,
-          minLines: borderless ? (compact ? 4 : 3) : (compact ? 3 : 4),
-          maxLines: borderless ? (compact ? 9 : 7) : (compact ? 5 : 8),
-          maxLength: 6000,
-          style: borderless
-              ? textTheme.bodyLarge?.copyWith(height: 1.45)
-              : null,
-          decoration: InputDecoration(
-            labelText: borderless ? null : '正文',
-            hintText: '写下此刻的想法…',
-            filled: !borderless,
-            fillColor: borderless ? Colors.transparent : null,
-            alignLabelWithHint: true,
-            border: fieldBorder,
-            enabledBorder: fieldBorder,
-            focusedBorder: fieldBorder,
-            contentPadding: fieldPadding,
+          field: TextField(
+            key: const Key('note-body-field'),
+            controller: bodyController,
+            enabled: inputEnabled ?? !saving,
+            // 正文变化函数只通知外层安排自动保存，不在输入每个字符时直接写磁盘。
+            onChanged: onBodyChanged,
+            minLines: borderless ? (compact ? 4 : 3) : (compact ? 3 : 4),
+            maxLines: borderless ? (compact ? 9 : 7) : (compact ? 5 : 8),
+            maxLength: 6000,
+            style: borderless
+                ? textTheme.bodyLarge?.copyWith(height: 1.45)
+                : null,
+            decoration: InputDecoration(
+              labelText: borderless ? null : '正文',
+              hintText: '写下此刻的想法…',
+              filled: !borderless,
+              fillColor: borderless ? Colors.transparent : null,
+              alignLabelWithHint: true,
+              border: fieldBorder,
+              enabledBorder: fieldBorder,
+              focusedBorder: fieldBorder,
+              contentPadding: fieldPadding,
+            ),
           ),
         ),
         _buildBottomActions(),

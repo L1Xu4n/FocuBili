@@ -74,7 +74,6 @@ import 'enhancements/interactive_video_overlay.dart';
 import 'enhancements/playback_completion_overlay.dart';
 import 'enhancements/player_enhancement_controller.dart';
 import 'enhancements/video_chapter_widgets.dart';
-import '../../core/theme/app_text_scale.dart';
 import 'playback_resume_plan.dart';
 import 'widgets/player_control_widgets.dart';
 import 'widgets/player_control_layout.dart';
@@ -83,6 +82,7 @@ import 'widgets/player_note_tile.dart';
 import 'widgets/fullscreen_video_transform.dart';
 import 'widgets/player_timeline.dart';
 import 'widgets/player_subtitle_sheet.dart';
+import 'widgets/player_subtitle_caption.dart';
 import 'widgets/player_action_feedback.dart';
 import 'widgets/player_feedback_layout.dart';
 import 'widgets/player_notice_controller.dart';
@@ -423,7 +423,7 @@ class _PlayerPageState extends State<PlayerPage>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _initializePlayerOverlayCoordinator(vsync: this);
-    CacheLifecycle.subtitles.addListener(_clearSubtitlesForPart);
+    CacheLifecycle.subtitles.addListener(_invalidateSubtitleSession);
     _activeVideo = widget.video;
     _currentPart = _activeVideo.initialPart;
     _notePartCid = _currentPart.cid;
@@ -531,7 +531,7 @@ class _PlayerPageState extends State<PlayerPage>
   void dispose() {
     _disposePlaylist();
     final abRepeatDrain = _disposeAbRepeat();
-    CacheLifecycle.subtitles.removeListener(_clearSubtitlesForPart);
+    CacheLifecycle.subtitles.removeListener(_invalidateSubtitleSession);
     OfflineVideoService.revision.removeListener(_refreshOfflinePartState);
     unawaited(_downloadCompletionSubscription?.cancel());
     _routeSession.detach();

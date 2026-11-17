@@ -10,6 +10,7 @@ import '../platform/app_platform.dart';
 import 'native_playback_progress_export.dart';
 import 'subtitle_export_service.dart';
 import 'cached_player_overlay_service.dart';
+import 'playback_preferences_service.dart';
 import 'problem_diagnostics_service.dart';
 import 'subscription_service.dart';
 import 'settings_runtime_adapter.dart';
@@ -98,6 +99,9 @@ class UnifiedExportService {
     'playback_preferences.control_scale',
     'playback_preferences.show_note_time_markers',
     'playback_preferences.subtitle_font_size',
+    PlaybackPreferencesService.subtitleOpacityKey,
+    PlaybackPreferencesService.autoEnableSubtitlesKey,
+    PlaybackPreferencesService.subtitlePriorityKey,
     'playback_preferences.mode',
     'playback_preferences.subtitle_position',
     'playback_preferences.app_volume',

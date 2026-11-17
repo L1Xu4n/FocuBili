@@ -5,6 +5,67 @@ import 'package:focubili/features/notes/video_note_composer.dart';
 
 /// 验证时间点笔记底部操作在宽屏和窄屏都保持稳定的右对齐布局。
 void main() {
+  testWidgets('播放器笔记可切换预览，草稿和修改回调不变', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(340, 600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final titleController = TextEditingController();
+    final bodyController = TextEditingController();
+    addTearDown(titleController.dispose);
+    addTearDown(bodyController.dispose);
+    final List<String> changes = <String>[];
+    const String source =
+        '# 复习\n\n第一步\n第二步\n\n![附图](file:///note.png)\n\n'
+        '[继续阅读](https://example.org/notes)';
+    final bodyField = find.byKey(const Key('note-body-field'));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(),
+        home: Scaffold(
+          body: SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: VideoNoteComposer(
+              titleController: titleController,
+              bodyController: bodyController,
+              position: const Duration(seconds: 3),
+              includeFrame: false,
+              saving: false,
+              onIncludeFrameChanged: (_) {},
+              onSave: () {},
+              onNew: () {},
+              onClose: () {},
+              onBodyChanged: changes.add,
+              compact: true,
+              borderless: true,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.enterText(bodyField, source);
+    await tester.tap(find.text('Markdown 预览'));
+    await tester.pumpAndSettle();
+    expect(bodyField, findsNothing);
+    expect(find.text('复习', findRichText: true), findsOneWidget);
+    expect(find.text('第一步\n第二步', findRichText: true), findsOneWidget);
+    expect(find.text('［图片：附图］', findRichText: true), findsOneWidget);
+    expect(find.byType(Image), findsNothing);
+
+    final link = find.text('继续阅读', findRichText: true);
+    await tester.tapAt(tester.getTopLeft(link) + const Offset(6, 6));
+    await tester.pumpAndSettle();
+    expect(find.text('https://example.org/notes'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('编辑正文'));
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(bodyField).controller!.text, source);
+    expect(changes, <String>[source]);
+    expect(tester.takeException(), isNull);
+  });
+
   /// 宽屏应把删除和保存放在同一个最右侧操作组，不随左侧按钮宽度漂移。
   testWidgets('笔记删除保存按钮在宽屏默认靠右', (WidgetTester tester) async {
     tester.view.devicePixelRatio = 1;

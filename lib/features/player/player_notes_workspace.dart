@@ -485,12 +485,12 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
       }
     }
     final String enteredTitle = _noteTitleController.text.trim();
-    final String body = _noteBodyController.text.trim();
+    final String body = _noteBodyController.text;
     if (enteredTitle.isEmpty && !automatic) {
       _showTransientSnackBar('请先填写笔记标题。');
       return;
     }
-    if (enteredTitle.isEmpty && body.isEmpty) {
+    if (enteredTitle.isEmpty && body.trim().isEmpty) {
       return;
     }
     if (automatic) {
@@ -683,6 +683,7 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
   /// 创建播放器笔记编辑器，并把保存、删除、画面选择等操作连接到本机服务。
   Widget _buildVideoNoteComposer({required bool compact}) {
     return VideoNoteComposer(
+      key: ValueKey<int>(_noteDraftRevision),
       titleController: _noteTitleController,
       bodyController: _noteBodyController,
       position: _notePosition,

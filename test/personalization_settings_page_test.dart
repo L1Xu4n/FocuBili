@@ -267,6 +267,30 @@ void main() {
     expect(find.text('新版本：优化平板播放器和账号卡片'), findsOneWidget);
   });
 
+  testWidgets('设置搜索可开启默认字幕并更改轨道优先级', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: PersonalizationSettingsPage(appPlatform: AppPlatform.android),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('settings-search')), '字幕');
+    await tester.pumpAndSettle();
+    final auto = find.byKey(const Key('auto-enable-subtitles-preference'));
+    expect(tester.widget<SwitchListTile>(auto).value, isFalse);
+    await tester.tap(auto);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('subtitle-priority-preference')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('中文字幕（AI）优先'));
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(auto).value, isTrue);
+    final preferences = await const PlaybackPreferencesService().load();
+    expect(preferences.autoEnableSubtitles, isTrue);
+    expect(preferences.subtitlePriority, SubtitlePriority.chineseAiFirst);
+    expect(tester.takeException(), isNull);
+  });
+
   /// 验证设置页分别保存 Wi-Fi 和移动网络清晰度，并展示向下回退说明。
   testWidgets('设置页保存两种网络默认清晰度', (WidgetTester tester) async {
     const PlaybackPreferencesService preferencesService =

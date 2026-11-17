@@ -209,7 +209,8 @@ class VideoNote {
       partPageNumber: normalizedPartPageNumber,
       partTitle: partTitle.trim(),
       title: normalizedTitle,
-      body: body.trim(),
+      // Leading spaces can start a Markdown code block.
+      body: body,
       createdAt: parsedCreatedAt.toLocal(),
       updatedAt: parsedUpdatedAt.toLocal(),
       position: Duration(milliseconds: positionMs.toInt().clamp(0, 604800000)),

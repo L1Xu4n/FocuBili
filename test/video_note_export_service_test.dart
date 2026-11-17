@@ -121,7 +121,9 @@ void main() {
       addTearDown(() => directory.delete(recursive: true));
       final first = await File('${directory.path}/a.png').writeAsBytes([1, 2]);
       final second = await File('${directory.path}/b.jpg').writeAsBytes([3, 4]);
+      const source = '    x = 2\n\n**公式**\n';
       final note = _note().copyWith(
+        body: source,
         frames: [
           VideoNoteFrame(
             path: second.path,
@@ -146,6 +148,7 @@ void main() {
       final content = utf8.decode(archive.find('focubili_notes.json')!.content);
       expect(content, isNot(contains(directory.path)));
       final json = jsonDecode(content) as Map<String, dynamic>;
+      expect(json['notes'][0]['body'], source);
       final frames = json['notes'][0]['frames'] as List;
       expect(frames.map((frame) => frame['positionMs']), [20015, 3000, 10005]);
       expect(frames[0]['path'], 'images/1_note-1_1.jpg');
@@ -162,6 +165,7 @@ void main() {
             .find('focubili_notes.md')!
             .content,
       );
+      expect(markdown, contains(source));
       expect(
         markdown.indexOf('00:20.015'),
         lessThan(markdown.indexOf('00:03')),

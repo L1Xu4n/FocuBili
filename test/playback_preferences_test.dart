@@ -22,8 +22,35 @@ void main() {
     expect(preferences.enableTwoFingerVideoTransform, isTrue);
     expect(preferences.showNoteTimeMarkers, isTrue);
     expect(preferences.subtitleFontSize, 16);
+    expect(preferences.subtitlePosition, 1.0);
+    expect(preferences.subtitleOpacity, 1.0);
+    expect(preferences.autoEnableSubtitles, isFalse);
+    expect(preferences.subtitlePriority, SubtitlePriority.chineseCcFirst);
     expect(preferences.wifiDefaultQuality, PreferredPlaybackQuality.p720);
     expect(preferences.mobileDefaultQuality, PreferredPlaybackQuality.p720);
+  });
+
+  test('字幕外观、默认开关与优先级分别保存，损坏值可恢复', () async {
+    const service = PlaybackPreferencesService();
+    await service.saveSubtitlePosition(.25);
+    await service.saveSubtitleOpacity(.65);
+    await service.saveAutoEnableSubtitles(true);
+    await service.saveSubtitlePriority(SubtitlePriority.chineseAiFirst);
+    final loaded = (await service.load()).copyWith(appVolume: .4);
+    expect(loaded.subtitlePosition, .25);
+    expect(loaded.subtitleOpacity, .65);
+    expect(loaded.autoEnableSubtitles, isTrue);
+    expect(loaded.subtitlePriority, SubtitlePriority.chineseAiFirst);
+
+    SharedPreferences.setMockInitialValues({
+      PlaybackPreferencesService.subtitleOpacityKey: 'invalid',
+      PlaybackPreferencesService.autoEnableSubtitlesKey: 'true',
+      PlaybackPreferencesService.subtitlePriorityKey: 'unknown',
+    });
+    final recovered = await service.load();
+    expect(recovered.subtitleOpacity, 1.0);
+    expect(recovered.autoEnableSubtitles, isFalse);
+    expect(recovered.subtitlePriority, SubtitlePriority.chineseCcFirst);
   });
 
   /// 线路选择和 PCDN 开关独立保存，重载与修改其他偏好均不丢失。

@@ -520,6 +520,61 @@ class _PersonalizationSettingsPageState
     }
   }
 
+  Future<void> _editSubtitlePriority() async {
+    final priority = await showDialog<SubtitlePriority>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('字幕优先级'),
+        children: [
+          for (final choice in SubtitlePriority.values)
+            ListTile(
+              title: Text(choice.label),
+              selected: choice == _preferences.subtitlePriority,
+              trailing: choice == _preferences.subtitlePriority
+                  ? const Icon(Icons.check_rounded)
+                  : null,
+              onTap: () => Navigator.of(context).pop(choice),
+            ),
+        ],
+      ),
+    );
+    if (priority == null || priority == _preferences.subtitlePriority) return;
+    await _saveSubtitlePlaybackPreference(subtitlePriority: priority);
+  }
+
+  Future<void> _saveSubtitlePlaybackPreference({
+    bool? autoEnableSubtitles,
+    SubtitlePriority? subtitlePriority,
+  }) async {
+    if (!mounted || _saving) return;
+    setState(() => _saving = true);
+    try {
+      if (autoEnableSubtitles != null) {
+        await widget.preferencesService.saveAutoEnableSubtitles(
+          autoEnableSubtitles,
+        );
+      }
+      if (subtitlePriority != null) {
+        await widget.preferencesService.saveSubtitlePriority(subtitlePriority);
+      }
+      if (!mounted) return;
+      setState(() {
+        _preferences = _preferences.copyWith(
+          autoEnableSubtitles: autoEnableSubtitles,
+          subtitlePriority: subtitlePriority,
+        );
+      });
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('字幕设置保存失败，请重试。')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   /// Saves each add/delete immediately; closing the editor needs no confirmation.
   Future<void> _editPlaybackSpeeds() async {
     await showDialog<void>(
@@ -1115,6 +1170,25 @@ class _PersonalizationSettingsPageState
           secondary: const Icon(Icons.flag_outlined),
           title: const Text('显示笔记时间标记'),
           subtitle: const Text('在进度条上方显示当前分 P 的笔记，点击可打开。'),
+        ),
+        SwitchListTile.adaptive(
+          key: const Key('auto-enable-subtitles-preference'),
+          value: _preferences.autoEnableSubtitles,
+          onChanged: _saving
+              ? null
+              : (value) =>
+                    _saveSubtitlePlaybackPreference(autoEnableSubtitles: value),
+          secondary: const Icon(Icons.subtitles_outlined),
+          title: const Text('默认开启字幕'),
+          subtitle: const Text('播放在线 B 站视频时自动选择可用字幕'),
+        ),
+        ListTile(
+          key: const Key('subtitle-priority-preference'),
+          leading: const Icon(Icons.low_priority_rounded),
+          title: const Text('字幕优先级'),
+          subtitle: Text(_preferences.subtitlePriority.label),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: _saving ? null : _editSubtitlePriority,
         ),
         ListTile(
           key: const Key('playback-speeds-preference'),

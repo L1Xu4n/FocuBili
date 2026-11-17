@@ -250,6 +250,44 @@ void main() {
     expect(await service.loadNotes(), isEmpty);
   });
 
+  testWidgets('笔记详情预览 Markdown，保存并重新打开后保留原文', (tester) async {
+    const String source = '    x = 2\n\n# 复习提纲\n\n**关键公式**\n\n- 复盘\n';
+    const bodyField = Key('note-detail-body-field');
+    const openNote = Key('managed-video-note-managed-note');
+    final VideoNoteService service = await _createPageNoteService();
+    await service.saveNote(_createPageNote());
+    await tester.pumpWidget(
+      MaterialApp(
+        home: VideoNotesPage(
+          noteService: service,
+          videoService: _FakeNoteVideoService(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(openNote));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byKey(bodyField), source);
+    await tester.ensureVisible(find.text('Markdown 预览'));
+    await tester.tap(find.text('Markdown 预览'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(bodyField), findsNothing);
+    expect(find.text('复习提纲', findRichText: true), findsOneWidget);
+    expect(find.text('关键公式', findRichText: true), findsOneWidget);
+    expect(find.text('**关键公式**', findRichText: true), findsNothing);
+
+    await tester.tap(find.byKey(const Key('save-note-detail')));
+    await tester.pumpAndSettle();
+    expect((await service.loadNotes()).single.body, source);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(openNote));
+    await tester.pumpAndSettle();
+    final TextField editor = tester.widget<TextField>(find.byKey(bodyField));
+    expect(editor.controller!.text, source);
+  });
+
   /// 验证右上角使用明确“导出”文字，进入选择后同时提供保存和分享文件。
   testWidgets('笔记列表导出入口支持多选后保存或分享文件', (WidgetTester tester) async {
     final VideoNoteService service = await _createPageNoteService();

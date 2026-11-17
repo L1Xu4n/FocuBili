@@ -5,11 +5,11 @@ import 'package:flutter/services.dart';
 
 import '../../../models/playback_preferences.dart';
 import '../../../models/player_overlay_data.dart';
-import '../../../core/theme/app_text_scale.dart';
 import '../../../services/local_export_service.dart';
 import '../../../services/subtitle_export_service.dart';
+import 'player_subtitle_caption.dart';
 
-/// 在同一个面板选择字幕、刷新失败请求与预览字号，不把网络失败藏在短提示里。
+/// 在播放器内选择字幕、浏览正文和调整字幕外观。
 class PlayerSubtitleSheet extends StatefulWidget {
   /// 只接收当前视频的安全轨道描述及回调，不持有字幕地址或账号资料。
   const PlayerSubtitleSheet({
@@ -22,8 +22,12 @@ class PlayerSubtitleSheet extends StatefulWidget {
     required this.onPreviewFontSize,
     required this.onCommitFontSize,
     this.initialResult,
-    this.position = 1,
+    this.position = PlaybackPreferences.defaultSubtitlePosition,
+    this.opacity = PlaybackPreferences.defaultSubtitleOpacity,
+    this.onPreviewPosition,
     this.onPositionChanged,
+    this.onPreviewOpacity,
+    this.onOpacityChanged,
     this.diagnosticReport,
     this.selectedTrackId,
     this.loadCues,
@@ -35,7 +39,11 @@ class PlayerSubtitleSheet extends StatefulWidget {
   final String offValue;
   final double fontSize;
   final double position;
+  final double opacity;
+  final ValueChanged<double>? onPreviewPosition;
   final Future<double> Function(double)? onPositionChanged;
+  final ValueChanged<double>? onPreviewOpacity;
+  final Future<double> Function(double)? onOpacityChanged;
   final String? selectedTrackId;
   final SubtitleTrackLoadResult? initialResult;
   final bool Function() isCurrentVideo;
@@ -47,18 +55,17 @@ class PlayerSubtitleSheet extends StatefulWidget {
   final LocalExportService exportService;
   final String Function()? diagnosticReport;
 
-  /// 创建管理面板读取状态和实时字号预览的状态对象。
   @override
   State<PlayerSubtitleSheet> createState() => _PlayerSubtitleSheetState();
 }
 
 class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
   SubtitleTrackLoadResult? _result;
-  late double _fontSize;
-  late double _position = widget.position;
+  late PlaybackPreferences _appearance;
+  bool _appearanceOpen = false;
   bool _loading = false;
   String? _warning;
-  int _fontRevision = 0;
+  final _appearanceRevisions = <SubtitleAppearanceSetting, int>{};
   final _searchController = TextEditingController();
   SubtitleTrack? _browsingTrack;
   SubtitleCueLoadResult? _cueResult;
@@ -312,7 +319,11 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
   @override
   void initState() {
     super.initState();
-    _fontSize = PlaybackPreferences.normalizeSubtitleFontSize(widget.fontSize);
+    _appearance = const PlaybackPreferences().copyWith(
+      subtitleFontSize: widget.fontSize,
+      subtitlePosition: widget.position,
+      subtitleOpacity: widget.opacity,
+    );
     _result = widget.initialResult;
     if (_result == null) unawaited(_refresh());
   }
@@ -347,29 +358,151 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
   }
 
   /// 每次滑动立即预览，保存仅在松手时执行，避免逐帧写入存储。
-  void _previewFontSize(double value) {
-    final size = PlaybackPreferences.normalizeSubtitleFontSize(value);
+  void _previewAppearance(SubtitleAppearanceSetting setting, double value) {
     setState(() {
-      _fontSize = size;
-      _fontRevision++;
+      _appearance = setting.apply(_appearance, value);
+      _appearanceRevisions.update(
+        setting,
+        (revision) => revision + 1,
+        ifAbsent: () => 1,
+      );
     });
-    widget.onPreviewFontSize(size);
+    final preview = switch (setting) {
+      SubtitleAppearanceSetting.fontSize => widget.onPreviewFontSize,
+      SubtitleAppearanceSetting.position => widget.onPreviewPosition,
+      SubtitleAppearanceSetting.opacity => widget.onPreviewOpacity,
+    };
+    preview?.call(setting.read(_appearance));
   }
 
-  /// 保存完成后同步最终字号，迟到的旧保存不能覆盖新的拖动预览。
-  Future<void> _commitFontSize(double value) async {
-    final revision = _fontRevision;
-    final saved = await widget.onCommitFontSize(value);
-    if (mounted && revision == _fontRevision) {
-      setState(() => _fontSize = saved);
+  /// 迟到的保存仅可同步尚未被再次调整的设置。
+  Future<void> _commitAppearance(
+    SubtitleAppearanceSetting setting,
+    double value,
+  ) async {
+    final revision = _appearanceRevisions[setting];
+    final saved = await switch (setting) {
+      SubtitleAppearanceSetting.fontSize => widget.onCommitFontSize(value),
+      SubtitleAppearanceSetting.position => widget.onPositionChanged!(value),
+      SubtitleAppearanceSetting.opacity => widget.onOpacityChanged!(value),
+    };
+    if (mounted && revision == _appearanceRevisions[setting]) {
+      setState(() => _appearance = setting.apply(_appearance, saved));
     }
   }
 
-  /// 恢复原有的 16 号字幕并立即保存。
-  void _resetFontSize() {
-    _previewFontSize(PlaybackPreferences.defaultSubtitleFontSize);
-    unawaited(_commitFontSize(_fontSize));
+  Iterable<SubtitleAppearanceSetting> get _appearanceSettings sync* {
+    yield SubtitleAppearanceSetting.fontSize;
+    if (widget.onPositionChanged != null) {
+      yield SubtitleAppearanceSetting.position;
+    }
+    if (widget.onOpacityChanged != null) {
+      yield SubtitleAppearanceSetting.opacity;
+    }
   }
+
+  void _resetAppearance() {
+    for (final setting in _appearanceSettings) {
+      final value = setting.read(const PlaybackPreferences());
+      _previewAppearance(setting, value);
+      unawaited(_commitAppearance(setting, value));
+    }
+  }
+
+  Widget _buildAppearance() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            height: 100,
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Align(
+              alignment: Alignment(0, _appearance.subtitlePosition * 2 - 1),
+              child: PlayerSubtitleCaption(
+                key: const Key('subtitle-appearance-preview'),
+                text: '这是字幕预览',
+                fontSize: _appearance.subtitleFontSize,
+                opacity: _appearance.subtitleOpacity,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          for (final setting in _appearanceSettings)
+            _buildAppearanceSlider(setting),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAppearanceSlider(SubtitleAppearanceSetting setting) {
+    final value = setting.read(_appearance);
+    final (id, min, max, divisions, label) = switch (setting) {
+      SubtitleAppearanceSetting.fontSize => (
+        'font-size',
+        PlaybackPreferences.minSubtitleFontSize,
+        PlaybackPreferences.maxSubtitleFontSize,
+        24,
+        '${value.round()}',
+      ),
+      SubtitleAppearanceSetting.position => (
+        'position',
+        0.0,
+        1.0,
+        20,
+        _positionLabel(value),
+      ),
+      SubtitleAppearanceSetting.opacity => (
+        'opacity',
+        PlaybackPreferences.minSubtitleOpacity,
+        1.0,
+        14,
+        '${(value * 100).round()}%',
+      ),
+    };
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(child: Text(setting.label)),
+            Text(label),
+          ],
+        ),
+        Semantics(
+          label: setting.label,
+          child: Slider(
+            key: Key('subtitle-$id-slider'),
+            value: value,
+            min: min,
+            max: max,
+            divisions: divisions,
+            label: label,
+            semanticFormatterCallback: switch (setting) {
+              SubtitleAppearanceSetting.fontSize =>
+                (value) => '${value.round()}',
+              SubtitleAppearanceSetting.position => _positionLabel,
+              SubtitleAppearanceSetting.opacity =>
+                (value) => '${(value * 100).round()}%',
+            },
+            onChanged: (value) => _previewAppearance(setting, value),
+            onChangeEnd: (value) => _commitAppearance(setting, value),
+          ),
+        ),
+      ],
+    );
+  }
+
+  String _positionLabel(double position) => switch (position) {
+    0 => '顶部',
+    0.5 => '居中',
+    1 => '底部',
+    _ => '${(position * 100).round()}%',
+  };
 
   /// 只提交仍属于当前视频的选择，防止旧面板操作影响后来打开的视频。
   void _chooseTrack(String id) {
@@ -385,7 +518,7 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
     Navigator.of(context).pop(id);
   }
 
-  /// 固定标题、刷新与关闭入口，字号预览和长语言列表在受限区域内滚动。
+  /// 固定返回与关闭入口，轨道、外观和字幕正文各自滚动。
   @override
   Widget build(BuildContext context) {
     final result = _result;
@@ -409,7 +542,7 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
                 padding: const EdgeInsets.only(left: 16, right: 4),
                 child: Row(
                   children: [
-                    if (_browsingTrack != null)
+                    if (_browsingTrack != null || _appearanceOpen)
                       IconButton(
                         key: const Key('back-to-subtitle-tracks'),
                         tooltip: '返回字幕轨道',
@@ -418,25 +551,50 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
                           _browsingTrack = null;
                           _cueResult = null;
                           _cuesLoading = false;
+                          _appearanceOpen = false;
                         }),
                         icon: const Icon(Icons.arrow_back_rounded),
                       ),
                     Expanded(
                       child: Text(
-                        _browsingTrack == null ? '字幕' : '字幕列表',
+                        _appearanceOpen
+                            ? '字幕外观'
+                            : _browsingTrack == null
+                            ? '字幕'
+                            : '字幕列表',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.titleLarge,
                       ),
                     ),
-                    IconButton(
-                      key: const Key('refresh-subtitle-tracks'),
-                      tooltip: '刷新字幕列表',
-                      onPressed: _loading || _cuesLoading
-                          ? null
-                          : _browsingTrack == null
-                          ? _refresh
-                          : () => _browseTrack(_browsingTrack!),
-                      icon: const Icon(Icons.refresh_rounded),
-                    ),
+                    if (_appearanceOpen)
+                      IconButton(
+                        tooltip: '恢复默认字幕外观',
+                        onPressed: _resetAppearance,
+                        icon: const Icon(Icons.restart_alt_rounded),
+                      )
+                    else ...[
+                      if (_browsingTrack == null)
+                        Tooltip(
+                          key: const Key('open-subtitle-appearance'),
+                          message: '调整字幕外观',
+                          child: TextButton(
+                            onPressed: () =>
+                                setState(() => _appearanceOpen = true),
+                            child: const Text('外观'),
+                          ),
+                        ),
+                      IconButton(
+                        key: const Key('refresh-subtitle-tracks'),
+                        tooltip: '刷新字幕列表',
+                        onPressed: _loading || _cuesLoading
+                            ? null
+                            : _browsingTrack == null
+                            ? _refresh
+                            : () => _browseTrack(_browsingTrack!),
+                        icon: const Icon(Icons.refresh_rounded),
+                      ),
+                    ],
                     IconButton(
                       tooltip: '关闭字幕设置',
                       // 关闭面板不改变已选中的字幕或播放器状态。
@@ -447,108 +605,14 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
                 ),
               ),
               Flexible(
-                child: _browsingTrack != null
+                child: _appearanceOpen
+                    ? _buildAppearance()
+                    : _browsingTrack != null
                     ? _buildCueBrowser()
                     : SingleChildScrollView(
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                              ),
-                              child: Align(
-                                alignment: Alignment.centerLeft,
-                                child: Text(
-                                  widget.videoLabel,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: Theme.of(context).textTheme.bodySmall,
-                                ),
-                              ),
-                            ),
-                            Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                              ),
-                              child: Row(
-                                children: [
-                                  const Expanded(child: Text('字幕字号')),
-                                  Text(
-                                    '${_fontSize.round()}',
-                                    key: const Key('subtitle-font-size-value'),
-                                  ),
-                                  TextButton(
-                                    onPressed: _resetFontSize,
-                                    child: const Text('默认'),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            Slider(
-                              key: const Key('subtitle-font-size-slider'),
-                              value: _fontSize,
-                              min: PlaybackPreferences.minSubtitleFontSize,
-                              max: PlaybackPreferences.maxSubtitleFontSize,
-                              divisions: 24,
-                              label: '${_fontSize.round()}',
-                              onChanged: _previewFontSize,
-                              onChangeEnd: _commitFontSize,
-                            ),
-                            Container(
-                              margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 8,
-                              ),
-                              width: double.infinity,
-                              decoration: BoxDecoration(
-                                color: Colors.black87,
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Text(
-                                '这是字幕预览',
-                                textScaler: AppTextScaleScope.subtitleScalerOf(
-                                  context,
-                                ),
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: _fontSize,
-                                  height: 1.28,
-                                ),
-                              ),
-                            ),
-                            if (widget.onPositionChanged != null) ...[
-                              const Padding(
-                                padding: EdgeInsets.symmetric(horizontal: 16),
-                                child: Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: Text('字幕位置'),
-                                ),
-                              ),
-                              Slider(
-                                key: const Key('subtitle-position-slider'),
-                                value: _position,
-                                divisions: 20,
-                                label: _position == 1
-                                    ? '底部'
-                                    : _position == 0
-                                    ? '顶部'
-                                    : '${(_position * 100).round()}%',
-                                // 拖动仅预览滑块，松手后原子保存并应用位置。
-                                onChanged: (value) =>
-                                    setState(() => _position = value),
-                                onChangeEnd: (value) async {
-                                  final saved = await widget.onPositionChanged!(
-                                    value,
-                                  );
-                                  if (mounted) {
-                                    setState(() => _position = saved);
-                                  }
-                                },
-                              ),
-                            ],
                             if (_loading) const LinearProgressIndicator(),
                             if (_warning != null ||
                                 (result != null &&
@@ -564,6 +628,7 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
                             ListTile(
                               leading: const Icon(Icons.subtitles_off_rounded),
                               title: const Text('关闭字幕'),
+                              selected: widget.selectedTrackId == null,
                               trailing: widget.selectedTrackId == null
                                   ? const Icon(Icons.check_rounded)
                                   : null,
@@ -576,6 +641,7 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
                                 in result?.tracks ?? const <SubtitleTrack>[])
                               ListTile(
                                 enabled: !track.isLocked,
+                                selected: widget.selectedTrackId == track.id,
                                 leading: Icon(
                                   track.isLocked
                                       ? Icons.lock_outline_rounded

@@ -8,6 +8,7 @@ import 'app_theme_mode_service.dart';
 import 'app_text_scale_service.dart';
 import 'image_resource_cache.dart';
 import 'media_cache_service.dart';
+import 'playback_preferences_service.dart';
 import 'settings_runtime_adapter.dart';
 
 /// 定义允许迁移的基础偏好类型，账号、协议和学习数据从不进入白名单。
@@ -42,6 +43,9 @@ class SettingsTransferService {
     'playback_preferences.line_preference': _SettingType.text,
     'playback_preferences.mode': _SettingType.text,
     'playback_preferences.subtitle_position': _SettingType.decimal,
+    PlaybackPreferencesService.subtitleOpacityKey: _SettingType.decimal,
+    PlaybackPreferencesService.autoEnableSubtitlesKey: _SettingType.boolean,
+    PlaybackPreferencesService.subtitlePriorityKey: _SettingType.text,
     'playback_preferences.app_volume': _SettingType.decimal,
     'playback_preferences.prefer_non_pcdn': _SettingType.boolean,
     'playback_preferences.long_press_speed': _SettingType.decimal,
@@ -183,6 +187,10 @@ class SettingsTransferService {
         !PlaybackLinePreference.values.any((item) => item.name == value)) {
       throw const FormatException('播放线路偏好无效');
     }
+    if (key == PlaybackPreferencesService.subtitlePriorityKey &&
+        !SubtitlePriority.values.any((priority) => priority.name == value)) {
+      throw const FormatException('字幕优先级无效');
+    }
     if (key == 'playback_preferences.speeds') {
       final speeds = (value as List)
           .map((item) => double.parse(item as String))
@@ -193,7 +201,12 @@ class SettingsTransferService {
       }
     }
     final normalizedPlaybackNumber = switch (key) {
-      'playback_preferences.subtitle_position' ||
+      PlaybackPreferencesService.subtitlePositionKey =>
+        PlaybackPreferences.normalizeSubtitlePosition(
+          (value as num).toDouble(),
+        ),
+      PlaybackPreferencesService.subtitleOpacityKey =>
+        PlaybackPreferences.normalizeSubtitleOpacity((value as num).toDouble()),
       'playback_preferences.app_volume' => DoubleTapRegions.normalize(
         (value as num).toDouble(),
         0,

@@ -12,6 +12,10 @@ class PlaybackPreferencesService {
   static const linePreferenceKey = 'playback_preferences.line_preference';
   static const modeKey = 'playback_preferences.mode';
   static const subtitlePositionKey = 'playback_preferences.subtitle_position';
+  static const subtitleOpacityKey = 'playback_preferences.subtitle_opacity';
+  static const autoEnableSubtitlesKey =
+      'playback_preferences.auto_enable_subtitles';
+  static const subtitlePriorityKey = 'playback_preferences.subtitle_priority';
   static const appVolumeKey = 'playback_preferences.app_volume';
   static const preferNonPcdnKey = 'playback_preferences.prefer_non_pcdn';
 
@@ -54,6 +58,16 @@ class PlaybackPreferencesService {
     return PlaybackPreferences(
       mode: PlaybackMode.fromName(preferences.get(modeKey)),
       subtitlePosition: _readUnitValue(preferences.get(subtitlePositionKey)),
+      subtitleOpacity: PlaybackPreferences.normalizeSubtitleOpacity(
+        switch (preferences.get(subtitleOpacityKey)) {
+          final num value => value.toDouble(),
+          _ => PlaybackPreferences.defaultSubtitleOpacity,
+        },
+      ),
+      autoEnableSubtitles: preferences.get(autoEnableSubtitlesKey) == true,
+      subtitlePriority: SubtitlePriority.fromName(
+        preferences.get(subtitlePriorityKey),
+      ),
       appVolume: _readUnitValue(preferences.get(appVolumeKey)),
       linePreference: PlaybackLinePreference.fromName(
         preferences.get(linePreferenceKey),
@@ -112,8 +126,21 @@ class PlaybackPreferencesService {
   Future<void> saveMode(PlaybackMode mode) => _saveValue(modeKey, mode.name);
 
   /// 保存字幕在可见视频区域中的相对位置。
-  Future<void> saveSubtitlePosition(double value) =>
-      _saveValue(subtitlePositionKey, _readUnitValue(value));
+  Future<void> saveSubtitlePosition(double value) => _saveValue(
+    subtitlePositionKey,
+    PlaybackPreferences.normalizeSubtitlePosition(value),
+  );
+
+  Future<void> saveSubtitleOpacity(double value) => _saveValue(
+    subtitleOpacityKey,
+    PlaybackPreferences.normalizeSubtitleOpacity(value),
+  );
+
+  Future<void> saveAutoEnableSubtitles(bool enabled) =>
+      _saveValue(autoEnableSubtitlesKey, enabled);
+
+  Future<void> saveSubtitlePriority(SubtitlePriority priority) =>
+      _saveValue(subtitlePriorityKey, priority.name);
 
   /// 保存应用音量；不改变其他应用或操作系统音量。
   Future<void> saveAppVolume(double value) =>
@@ -123,9 +150,12 @@ class PlaybackPreferencesService {
   Future<void> _saveValue(String key, Object value) async {
     final preferences = await SharedPreferences.getInstance();
     try {
-      final saved = value is String
-          ? await preferences.setString(key, value)
-          : await preferences.setDouble(key, value as double);
+      final saved = switch (value) {
+        final String text => await preferences.setString(key, text),
+        final bool flag => await preferences.setBool(key, flag),
+        final double number => await preferences.setDouble(key, number),
+        _ => throw ArgumentError.value(value),
+      };
       if (saved) return;
     } catch (_) {
       // 失败由下面统一报告。
@@ -201,25 +231,10 @@ class PlaybackPreferencesService {
   }
 
   /// 保存字幕字号并检查写入结果，失败时由字幕设置恢复最近成功的字号。
-  Future<void> saveSubtitleFontSize(double fontSize) async {
-    final preferences = await SharedPreferences.getInstance();
-    try {
-      if (await preferences.setDouble(
-        _subtitleFontSizeKey,
-        PlaybackPreferences.normalizeSubtitleFontSize(fontSize),
-      )) {
-        return;
-      }
-    } catch (_) {
-      // 下面统一从磁盘恢复偏好缓存，避免失败值被下一次读取误当作成功值。
-    }
-    try {
-      await preferences.reload();
-    } catch (_) {
-      // 平台存储不可读时由播放器维持最近一次成功值并提示用户。
-    }
-    throw StateError('字幕字号保存失败');
-  }
+  Future<void> saveSubtitleFontSize(double fontSize) => _saveValue(
+    _subtitleFontSizeKey,
+    PlaybackPreferences.normalizeSubtitleFontSize(fontSize),
+  );
 
   /// 立即保存笔记标记开关；写入失败交给设置页恢复原值。
   Future<void> saveShowNoteTimeMarkers(bool enabled) async {

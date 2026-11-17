@@ -32,6 +32,8 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
   int _sourceGeneration = 0;
   bool _externalNavigationSuspended = false;
 
+  void _maybeAutoEnableSubtitles();
+
   bool _observeAbRepeatSnapshot(
     PlaybackSnapshot previous,
     PlaybackSnapshot snapshot, {
@@ -168,6 +170,13 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
           quality: quality,
           initialPosition: initialPosition,
         );
+        if (mounted &&
+            generation == _sourceGeneration &&
+            !_externalNavigationSuspended &&
+            video.bvid == _activeVideo.bvid &&
+            part.cid == _currentPart.cid) {
+          _maybeAutoEnableSubtitles();
+        }
       }
     } finally {
       if (generation == _sourceGeneration) _resumeAbRepeatAfterSource();
@@ -338,7 +347,8 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     unawaited(_playbackSubscription?.cancel() ?? Future<void>.value());
   }
 
-  double? _subtitleFontSizeOverride;
+  final _subtitleStyleOverrides = <SubtitleAppearanceSetting, double>{};
+  final _savedSubtitleStyles = <SubtitleAppearanceSetting, double>{};
 
   /// 由来源列表协调器推进普通完播事件。
   Future<void> _advancePlaylistOnCompletion();
@@ -353,20 +363,25 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     _cancelPlaylistAdvance();
   }
 
-  double? _savedSubtitleFontSize;
-
-  /// 读取本机偏好，迟到的初始加载不能覆盖用户刚调整的字幕字号。
+  /// 读取本机偏好，迟到的初始加载不能覆盖用户刚调整的字幕外观。
   Future<PlaybackPreferences> _loadPlaybackPreferences() async {
     try {
       final PlaybackPreferences preferences = await _playbackPreferencesService
           .load();
       if (mounted) {
-        _savedSubtitleFontSize ??= preferences.subtitleFontSize;
+        for (final control in SubtitleAppearanceSetting.values) {
+          _savedSubtitleStyles.putIfAbsent(
+            control,
+            () => control.read(preferences),
+          );
+        }
+        var current = preferences;
+        for (final entry in _subtitleStyleOverrides.entries) {
+          current = entry.key.apply(current, entry.value);
+        }
         setState(() {
           _playbackLoopEnabled = preferences.mode == PlaybackMode.single;
-          _playbackPreferences = preferences.copyWith(
-            subtitleFontSize: _subtitleFontSizeOverride,
-          );
+          _playbackPreferences = current;
         });
       }
       return preferences;

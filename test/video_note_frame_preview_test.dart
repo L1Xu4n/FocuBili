@@ -11,9 +11,45 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/features/notes/video_note_composer.dart';
 import 'package:focubili/features/notes/video_note_detail_page.dart';
 import 'package:focubili/models/video_note.dart';
+import 'package:focubili/platform/app_platform.dart';
+import 'package:focubili/services/local_export_service.dart';
 import 'package:focubili/services/video_note_service.dart';
 
 const _evidence = bool.fromEnvironment('UPDATE_NOTES_PREVIEW_EVIDENCE');
+
+Future<void> _waitForFrameSave(WidgetTester tester, Finder status) async {
+  final deadline = DateTime.now().add(const Duration(seconds: 5));
+  while (status.evaluate().isEmpty && DateTime.now().isBefore(deadline)) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 10)),
+    );
+    await tester.pump(const Duration(milliseconds: 16));
+  }
+  expect(status, findsOneWidget);
+}
+
+VideoNote _screenshotNote({
+  String? framePath,
+  List<VideoNoteFrame> frames = const [],
+}) {
+  final time = DateTime(2026, 10, 18);
+  return VideoNote(
+    id: 'frame-save',
+    bvid: 'BV1GJ411x7h7',
+    videoTitle: '截图测试视频',
+    ownerName: '测试资料',
+    partCid: 1,
+    partPageNumber: 1,
+    partTitle: '第一节',
+    title: '原始标题',
+    body: '原始正文',
+    createdAt: time,
+    updatedAt: time,
+    position: const Duration(seconds: 20),
+    framePath: framePath,
+    frames: frames,
+  );
+}
 
 Future<List<VideoNoteFrame>> _realFrames(WidgetTester tester) async {
   late Directory directory;
@@ -310,5 +346,120 @@ void main() {
       await tester.pumpAndSettle();
     }
     await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('长按旧笔记原图可以取消，仍可打开全屏并保存原始字节', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(480, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final frames = await _realFrames(tester);
+    final source = File(frames.first.path);
+    final bytes = source.readAsBytesSync();
+    final output = File('${source.parent.path}/exported screenshot.png');
+    final note = _screenshotNote(framePath: source.path);
+    final service = VideoNoteService();
+    await service.saveNote(note);
+    final requests = <LocalExportRequest>[];
+    final exportService = LocalExportService(
+      platform: AppPlatform.windows,
+      saveDialog: (request) async {
+        requests.add(request);
+        if (requests.length == 1) return null;
+        await output.writeAsBytes(request.bytes);
+        return output.path;
+      },
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: VideoNoteDetailPage(
+          note: note,
+          noteService: service,
+          localExportService: exportService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final thumbnail = find.byKey(const Key('open-note-frame-fullscreen'));
+    await tester.ensureVisible(thumbnail);
+    await tester.pumpAndSettle();
+    await tester.longPress(thumbnail);
+    await _waitForFrameSave(tester, find.text('已取消保存截图。'));
+    expect(find.byType(VideoNoteFrameViewerPage), findsNothing);
+    expect(output.existsSync(), isFalse);
+
+    await tester.tap(thumbnail);
+    await tester.pumpAndSettle();
+    final viewer = find.byKey(const Key('fullscreen-note-frame-viewer'));
+    expect(viewer, findsOneWidget);
+    final zoomController = tester.widget<PhotoView>(viewer).controller!;
+    final initialScale = zoomController.scale!;
+    await tester.tap(viewer);
+    await tester.pump(const Duration(milliseconds: 80));
+    await tester.tap(viewer);
+    await tester.pumpAndSettle();
+    expect(zoomController.scale, greaterThan(initialScale));
+    await tester.longPress(viewer);
+    await _waitForFrameSave(tester, find.text('截图已保存。'));
+    expect(requests.length, 2);
+    for (final request in requests) {
+      expect(request.extension, 'png');
+      expect(request.dialogTitle, '保存截图到本地');
+      expect(request.bytes, bytes);
+    }
+    expect(output.readAsBytesSync(), bytes);
+    expect(source.readAsBytesSync(), bytes);
+    final saved = (await service.loadNotes()).single;
+    expect(saved.body, note.body);
+    expect(saved.allFrames, note.allFrames);
+  });
+
+  testWidgets('多帧另存为保留截图顺序并提示写入失败或缺图', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(420, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final frames = await _realFrames(tester);
+    final first = File(frames.first.path);
+    final second = File(frames.last.path);
+    final requests = <LocalExportRequest>[];
+    final exportService = LocalExportService(
+      platform: AppPlatform.android,
+      saveDialog: (request) async {
+        requests.add(request);
+        throw PlatformException(
+          code: 'permission_denied',
+          message: second.path,
+        );
+      },
+    );
+    final note = _screenshotNote(frames: frames);
+    final service = VideoNoteService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: VideoNoteDetailPage(
+          note: note,
+          noteService: service,
+          localExportService: exportService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final saveSecond = find.byKey(const ValueKey('save-note-frame-1'));
+    await tester.ensureVisible(saveSecond);
+    await tester.pumpAndSettle();
+    await tester.tap(saveSecond);
+    await _waitForFrameSave(
+      tester,
+      find.textContaining('android/save/permission_denied'),
+    );
+    expect(find.textContaining(second.path), findsNothing);
+    expect(requests.single.bytes, second.readAsBytesSync());
+
+    first.deleteSync();
+    final saveFirst = find.byKey(const ValueKey('save-note-frame-0'));
+    await tester.ensureVisible(saveFirst);
+    await tester.pumpAndSettle();
+    await tester.tap(saveFirst);
+    await _waitForFrameSave(tester, find.text('截图文件缺失或无法读取。'));
+    expect(requests.length, 1);
   });
 }

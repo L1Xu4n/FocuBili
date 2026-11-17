@@ -10,11 +10,14 @@ import '../../features/player/player_page.dart';
 import '../../models/video_note.dart';
 import '../../models/video_preview.dart';
 import '../../services/bilibili_service.dart';
+import '../../services/local_export_service.dart';
 import '../../services/video_note_service.dart';
 import '../../services/video_note_share_service.dart';
+import 'video_note_body_editor.dart';
 import 'video_note_composer.dart';
-import 'video_note_share_preview.dart';
+import 'video_note_frame_save.dart';
 import 'video_note_frames_view.dart';
+import 'video_note_share_preview.dart';
 
 /// 允许测试替换播放器目标页，同时保留视频、分P和时间点三项跳转参数。
 typedef VideoNotePlayerBuilder =
@@ -34,6 +37,7 @@ class VideoNoteDetailPage extends StatefulWidget {
     this.videoService,
     this.playerBuilder,
     this.shareService = const VideoNoteShareService(),
+    this.localExportService = const LocalExportService(),
   });
 
   final VideoNote note;
@@ -41,6 +45,7 @@ class VideoNoteDetailPage extends StatefulWidget {
   final BilibiliService? videoService;
   final VideoNotePlayerBuilder? playerBuilder;
   final VideoNoteShareService shareService;
+  final LocalExportService localExportService;
 
   /// 创建负责详情编辑、截图预览和保存状态的页面状态。
   @override
@@ -84,7 +89,7 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
   /// 判断当前输入是否与最后一次保存内容不同，用于拦截误退出。
   bool get _hasUnsavedChanges {
     return _titleController.text.trim() != _note.title ||
-        _bodyController.text.trim() != _note.body ||
+        _bodyController.text != _note.body ||
         !listEquals(_frames, _note.allFrames);
   }
 
@@ -108,7 +113,7 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
     try {
       final VideoNote updated = _note.copyWith(
         title: title,
-        body: _bodyController.text.trim(),
+        body: _bodyController.text,
         updatedAt: DateTime.now(),
         frames: _frames,
       );
@@ -273,8 +278,10 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
   Future<void> _openFrameFullscreen(String framePath) async {
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        builder: (BuildContext context) =>
-            VideoNoteFrameViewerPage(framePath: framePath),
+        builder: (BuildContext context) => VideoNoteFrameViewerPage(
+          framePath: framePath,
+          localExportService: widget.localExportService,
+        ),
       ),
     );
   }
@@ -341,6 +348,7 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
           enabled: !_saving,
           onChanged: (frames) => setState(() => _frames = frames),
           onOpen: (frame) => _openFrameFullscreen(frame.path),
+          localExportService: widget.localExportService,
         ),
       ],
     );
@@ -458,21 +466,24 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
           ),
         ),
         const Divider(height: 28),
-        TextField(
-          key: const Key('note-detail-body-field'),
+        VideoNoteBodyEditor(
           controller: _bodyController,
-          enabled: !_saving,
-          minLines: 8,
-          maxLines: null,
-          maxLength: 6000,
-          style: theme.textTheme.bodyLarge?.copyWith(height: 1.55),
-          decoration: const InputDecoration(
-            hintText: '写下此刻的想法…',
-            filled: false,
-            border: InputBorder.none,
-            enabledBorder: InputBorder.none,
-            focusedBorder: InputBorder.none,
-            contentPadding: EdgeInsets.zero,
+          field: TextField(
+            key: const Key('note-detail-body-field'),
+            controller: _bodyController,
+            enabled: !_saving,
+            minLines: 8,
+            maxLines: null,
+            maxLength: 6000,
+            style: theme.textTheme.bodyLarge?.copyWith(height: 1.55),
+            decoration: const InputDecoration(
+              hintText: '写下此刻的想法…',
+              filled: false,
+              border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              contentPadding: EdgeInsets.zero,
+            ),
           ),
         ),
         if (includeFrame) _buildFrameSection(),
@@ -674,9 +685,14 @@ class _NoteMetadataChip extends StatelessWidget {
 /// 以黑色背景全屏显示一张笔记视频截图，并允许缩放和平移。
 class VideoNoteFrameViewerPage extends StatefulWidget {
   /// 创建只读取本机截图文件的全屏浏览页。
-  const VideoNoteFrameViewerPage({super.key, required this.framePath});
+  const VideoNoteFrameViewerPage({
+    super.key,
+    required this.framePath,
+    this.localExportService = const LocalExportService(),
+  });
 
   final String framePath;
+  final LocalExportService localExportService;
 
   /// 创建负责读取原图尺寸和保存缩放矩阵的全屏截图浏览状态。
   @override
@@ -713,55 +729,66 @@ class _VideoNoteFrameViewerPageState extends State<VideoNoteFrameViewerPage> {
 
   /// 构建全屏图片查看器；初始完整居中，双击和双指缩放都由 PhotoView 处理。
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => VideoNoteFrameSave(
+    localExportService: widget.localExportService,
+    builder: (context, saveFrame) => _buildViewer(
+      context,
+      saveFrame == null ? null : () => saveFrame(widget.framePath),
+    ),
+  );
+
+  Widget _buildViewer(BuildContext context, VoidCallback? onSave) {
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         fit: StackFit.expand,
         children: <Widget>[
           Positioned.fill(
-            child: PhotoView(
-              key: const Key('fullscreen-note-frame-viewer'),
-              imageProvider: FileImage(File(widget.framePath)),
-              controller: _photoController,
-              scaleStateController: _scaleStateController,
-              backgroundDecoration: const BoxDecoration(color: Colors.black),
-              basePosition: Alignment.center,
-              initialScale: PhotoViewComputedScale.contained,
-              minScale: PhotoViewComputedScale.contained,
-              maxScale: PhotoViewComputedScale.contained * 6,
-              strictScale: true,
-              enablePanAlways: false,
-              filterQuality: FilterQuality.high,
-              gestureDetectorBehavior: HitTestBehavior.opaque,
-              semanticLabel: '时间点笔记视频截图',
-              // 截图加载函数在大文件解码期间显示居中进度，不闪烁旧画面。
-              loadingBuilder:
-                  (BuildContext context, ImageChunkEvent? progress) => Center(
-                    child: CircularProgressIndicator(
-                      value:
-                          progress?.expectedTotalBytes == null ||
-                              progress!.expectedTotalBytes == 0
-                          ? null
-                          : progress.cumulativeBytesLoaded /
-                                progress.expectedTotalBytes!,
-                    ),
-                  ),
-              // 全屏截图错误函数在文件缺失或损坏时显示说明并保留返回能力。
-              errorBuilder:
-                  (
-                    BuildContext context,
-                    Object error,
-                    StackTrace? stackTrace,
-                  ) => const ColoredBox(
-                    color: Colors.black,
-                    child: Center(
-                      child: Text(
-                        '截图文件不存在或已损坏',
-                        style: TextStyle(color: Colors.white),
+            child: GestureDetector(
+              onLongPress: onSave,
+              child: PhotoView(
+                key: const Key('fullscreen-note-frame-viewer'),
+                imageProvider: FileImage(File(widget.framePath)),
+                controller: _photoController,
+                scaleStateController: _scaleStateController,
+                backgroundDecoration: const BoxDecoration(color: Colors.black),
+                basePosition: Alignment.center,
+                initialScale: PhotoViewComputedScale.contained,
+                minScale: PhotoViewComputedScale.contained,
+                maxScale: PhotoViewComputedScale.contained * 6,
+                strictScale: true,
+                enablePanAlways: false,
+                filterQuality: FilterQuality.high,
+                gestureDetectorBehavior: HitTestBehavior.opaque,
+                semanticLabel: '时间点笔记视频截图',
+                // 截图加载函数在大文件解码期间显示居中进度，不闪烁旧画面。
+                loadingBuilder:
+                    (BuildContext context, ImageChunkEvent? progress) => Center(
+                      child: CircularProgressIndicator(
+                        value:
+                            progress?.expectedTotalBytes == null ||
+                                progress!.expectedTotalBytes == 0
+                            ? null
+                            : progress.cumulativeBytesLoaded /
+                                  progress.expectedTotalBytes!,
                       ),
                     ),
-                  ),
+                // 全屏截图错误函数在文件缺失或损坏时显示说明并保留返回能力。
+                errorBuilder:
+                    (
+                      BuildContext context,
+                      Object error,
+                      StackTrace? stackTrace,
+                    ) => const ColoredBox(
+                      color: Colors.black,
+                      child: Center(
+                        child: Text(
+                          '截图文件不存在或已损坏',
+                          style: TextStyle(color: Colors.white),
+                        ),
+                      ),
+                    ),
+              ),
             ),
           ),
           Positioned(
@@ -786,6 +813,13 @@ class _VideoNoteFrameViewerPageState extends State<VideoNoteFrameViewerPage> {
                       onPressed: _resetZoom,
                       icon: const Icon(Icons.center_focus_strong_rounded),
                       tooltip: '重置缩放',
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton.filledTonal(
+                      key: const Key('save-fullscreen-note-frame'),
+                      onPressed: onSave,
+                      icon: const Icon(Icons.save_alt_rounded),
+                      tooltip: videoNoteFrameSaveLabel,
                     ),
                   ],
                 ),
