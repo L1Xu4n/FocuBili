@@ -23,6 +23,7 @@ mixin _PlayerVideoCoordinator
     _clearDesktopPointerForTransition();
     _cancelHorizontalScrub();
     _cancelTemporaryLongPress();
+    _cancelLiveNoteFrame();
     _cancelPlaylistAdvance();
     _clearAbRepeatForNavigation();
     final generation = ++_partSwitchGeneration;
@@ -534,6 +535,9 @@ mixin _PlayerVideoCoordinator
     if (!mounted) {
       return;
     }
+    // A final edit may have arrived while the first write or resume lookup
+    // was in flight. Snapshot it under the old video before clearing the UI.
+    _flushVideoNoteAutoSave(updateUi: false);
     setState(() {
       _activeVideo = video;
       _currentPart = targetPart;
@@ -557,6 +561,9 @@ mixin _PlayerVideoCoordinator
       _noteAutoSavePending = false;
       _currentVideoNotes = const <VideoNote>[];
       _editingVideoNote = null;
+      _noteDraftIdentity = null;
+      _noteDraftAccountRevision = CacheLifecycle.account.value;
+      _noteDraftAccountScope = CacheLifecycle.accountScope;
       _noteDraftRevision++;
       _noteTitleController.clear();
       _noteBodyController.clear();
