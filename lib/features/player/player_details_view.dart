@@ -424,24 +424,39 @@ extension _PlayerDetailsView on _PlayerPageState {
   }
 
   /// 请求用户输入新收藏夹名称，空名称时禁用创建按钮。
-  Future<String?> _showCreateFavoriteFolderDialog() {
+  Future<({String title, bool isPrivate})?> _showCreateFavoriteFolderDialog() {
     String title = '';
-    return showDialog<String>(
+    var isPrivate = false;
+    return showDialog<({String title, bool isPrivate})>(
       context: context,
       builder: (BuildContext dialogContext) => StatefulBuilder(
         // 对话框状态函数只刷新名称校验，不改动播放器页面状态。
         builder: (BuildContext context, StateSetter setDialogState) {
           return AlertDialog(
             title: const Text('创建收藏夹'),
-            content: TextField(
-              key: const Key('favorite-folder-name'),
-              autofocus: true,
-              maxLength: 20,
-              decoration: const InputDecoration(hintText: '输入收藏夹名称'),
-              // 名称变化函数用于即时启用或禁用确认按钮。
-              onChanged: (String value) {
-                setDialogState(() => title = value.trim());
-              },
+            scrollable: true,
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  key: const Key('favorite-folder-name'),
+                  autofocus: true,
+                  maxLength: 20,
+                  decoration: const InputDecoration(hintText: '输入收藏夹名称'),
+                  // 名称变化函数用于即时启用或禁用确认按钮。
+                  onChanged: (String value) {
+                    setDialogState(() => title = value.trim());
+                  },
+                ),
+                SwitchListTile.adaptive(
+                  key: const Key('favorite-folder-private'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('私密收藏夹'),
+                  subtitle: Text(isPrivate ? '仅自己可见' : '公开，其他人可见'),
+                  value: isPrivate,
+                  onChanged: (value) => setDialogState(() => isPrivate = value),
+                ),
+              ],
             ),
             actions: <Widget>[
               TextButton(
@@ -451,7 +466,9 @@ extension _PlayerDetailsView on _PlayerPageState {
               FilledButton(
                 onPressed: title.isEmpty
                     ? null
-                    : () => Navigator.of(dialogContext).pop(title),
+                    : () => Navigator.of(
+                        dialogContext,
+                      ).pop((title: title, isPrivate: isPrivate)),
                 child: const Text('创建'),
               ),
             ],
@@ -466,12 +483,18 @@ extension _PlayerDetailsView on _PlayerPageState {
     if (_interactionAction != null || _activeVideo.aid <= 0) {
       return;
     }
+    final aid = _activeVideo.aid;
+    final account = CacheLifecycle.account.value;
+    final scope = CacheLifecycle.accountScope;
+    bool current() =>
+        mounted &&
+        _activeVideo.aid == aid &&
+        CacheLifecycle.account.value == account &&
+        CacheLifecycle.accountScope == scope;
     List<BilibiliFavoriteFolder> folders;
     _updatePlayerState(() => _interactionAction = 'favorite');
     try {
-      folders = await _interactionService.loadFavoriteFolders(
-        aid: _activeVideo.aid,
-      );
+      folders = await _interactionService.loadFavoriteFolders(aid: aid);
     } on Object catch (error) {
       if (mounted) {
         _showTransientSnackBar(error.toString());
@@ -482,13 +505,13 @@ extension _PlayerDetailsView on _PlayerPageState {
         _updatePlayerState(() => _interactionAction = null);
       }
     }
-    if (!mounted) {
+    if (!current()) {
       return;
     }
     final _FavoriteFolderSelection? selection = await _showFavoriteFolderSheet(
       folders,
     );
-    if (!mounted || selection == null) {
+    if (!current() || selection == null) {
       return;
     }
     final Set<int> initialMediaIds = folders
@@ -496,28 +519,32 @@ extension _PlayerDetailsView on _PlayerPageState {
         .map((BilibiliFavoriteFolder folder) => folder.mediaId)
         .toSet();
     final Set<int> selectedMediaIds = selection.selectedMediaIds.toSet();
-    String? newFolderTitle;
+    ({String title, bool isPrivate})? newFolder;
     if (selection.createNewFolder) {
-      newFolderTitle = await _showCreateFavoriteFolderDialog();
-      if (!mounted || newFolderTitle == null) {
+      newFolder = await _showCreateFavoriteFolderDialog();
+      if (!current() || newFolder == null) {
         return;
       }
     }
     _updatePlayerState(() => _interactionAction = 'favorite');
     try {
-      if (newFolderTitle != null) {
+      if (newFolder != null) {
         final BilibiliFavoriteFolder createdFolder = await _interactionService
-            .createFavoriteFolder(title: newFolderTitle);
+            .createFavoriteFolder(
+              title: newFolder.title,
+              isPrivate: newFolder.isPrivate,
+            );
+        if (!current()) return;
         selectedMediaIds.add(createdFolder.mediaId);
       }
       final Set<int> additions = selectedMediaIds.difference(initialMediaIds);
       final Set<int> deletions = initialMediaIds.difference(selectedMediaIds);
       await _interactionService.setFavoriteFolders(
-        aid: _activeVideo.aid,
+        aid: aid,
         addMediaIds: additions,
         deleteMediaIds: deletions,
       );
-      if (mounted) {
+      if (current()) {
         final bool wasFavorited = _interactionState.isFavorited;
         final bool nextFavorited = selectedMediaIds.isNotEmpty;
         _updatePlayerState(() {

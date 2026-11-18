@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'app_behavior_preferences_service.dart';
 import 'bilibili_auth_service.dart';
+import 'cache_lifecycle.dart';
 
 /// 保存一次 B 站互动接口的 HTTP 状态和 JSON 正文，测试时可替换真实网络。
 class BilibiliInteractionResponse {
@@ -313,9 +314,10 @@ class BilibiliInteractionService {
     return _parseFavoriteFolders(data['list']);
   }
 
-  /// 创建一个公开收藏夹，并返回可立即用于收藏当前视频的目录摘要。
+  /// 按用户确认的可见性创建一个收藏夹，并返回可立即用于收藏当前视频的目录摘要。
   Future<BilibiliFavoriteFolder> createFavoriteFolder({
     required String title,
+    bool isPrivate = false,
   }) async {
     final String normalizedTitle = title.trim();
     if (normalizedTitle.isEmpty) {
@@ -328,7 +330,7 @@ class BilibiliInteractionService {
       <String, String>{
         'title': normalizedTitle,
         'intro': '',
-        'privacy': '0',
+        'privacy': isPrivate ? '1' : '0',
         'cover': '',
       },
     );
@@ -408,6 +410,8 @@ class BilibiliInteractionService {
     final current = await _openSession();
     if (!isCurrent() ||
         current.accountMid != expectedMid ||
+        current.generation != session.generation ||
+        current.revision != session.revision ||
         current.cookieHeader != session.cookieHeader) {
       throw const BilibiliInteractionException('账号已变化，未继续收藏。');
     }
@@ -470,24 +474,38 @@ class BilibiliInteractionService {
 
   /// 打开已验证会话并提取 CSRF；未登录或 Cookie 不完整时不发起写请求。
   Future<_InteractionSession> _openSession() async {
-    final BilibiliSessionState state = await _authService.loadCurrentSession();
-    if (!state.isActive) {
+    final session = await _authService.withVerifiedInteractionSession((
+      mid,
+      cookieHeader,
+      generation,
+      revision,
+    ) {
+      final match = _csrfPattern.firstMatch(cookieHeader);
+      final csrf = match == null
+          ? ''
+          : Uri.decodeComponent(match.group(2)!.trim());
+      if (csrf.isEmpty) {
+        throw const BilibiliInteractionException('当前登录会话缺少安全校验信息，请重新登录。');
+      }
+      return _InteractionSession(
+        cookieHeader: cookieHeader,
+        csrf: csrf,
+        accountMid: mid,
+        generation: generation,
+        revision: revision,
+      );
+    });
+    if (session == null) {
       throw const BilibiliInteractionException('请先登录 B 站后再执行此操作。');
     }
-    final String cookieHeader = (await _authService.readCookieHeader()).trim();
-    final RegExpMatch? csrfMatch = _csrfPattern.firstMatch(cookieHeader);
-    final String csrf = csrfMatch == null
-        ? ''
-        : Uri.decodeComponent(csrfMatch.group(2)!.trim());
-    if (csrf.isEmpty) {
-      throw const BilibiliInteractionException('当前登录会话缺少安全校验信息，请重新登录。');
-    }
-    return _InteractionSession(
-      cookieHeader: cookieHeader,
-      csrf: csrf,
-      accountMid: state.account!.mid,
-    );
+    if (!_matchesCurrentScope(session)) throw _staleSession;
+    return session;
   }
+
+  bool _matchesCurrentScope(_InteractionSession session) =>
+      session.generation == _authService.accountMutationGeneration &&
+      session.revision == CacheLifecycle.account.value &&
+      CacheLifecycle.accountScope == 'mid:${session.accountMid}';
 
   /// 读取可用收藏夹编号；取消收藏时优先选择当前确实包含该视频的目录。
   Future<int> _loadFavoriteMediaId(
@@ -642,6 +660,10 @@ class BilibiliInteractionService {
   }
 
   /// 请求 POST 接口并自动附加 csrf 与 csrf_token 字段。
+  static const _staleSession = BilibiliInteractionException(
+    '账号已切换，此次操作未提交。请重新打开后再试。',
+  );
+
   Future<Map<Object?, Object?>> _postData(
     Uri endpoint,
     _InteractionSession session,
@@ -652,6 +674,14 @@ class BilibiliInteractionService {
       throw const BilibiliInteractionException(
         '账号只读已开启，请先在“设置 - 账号与隐私”中关闭后再操作。',
       );
+    }
+    // Recheck after the asynchronous read-only preference. Even a logout and
+    // login into the same account invalidates a previously confirmed write.
+    if (!_matchesCurrentScope(session)) throw _staleSession;
+    final currentCookie = (await _authService.readCookieHeader()).trim();
+    if (!_matchesCurrentScope(session) ||
+        currentCookie != session.cookieHeader) {
+      throw _staleSession;
     }
     if (isCurrent != null && !isCurrent()) {
       throw const BilibiliInteractionException('操作已停止，未继续收藏。');
@@ -788,9 +818,12 @@ class _InteractionSession {
     required this.cookieHeader,
     required this.csrf,
     required this.accountMid,
+    required this.generation,
+    required this.revision,
   });
 
   final String cookieHeader;
   final String csrf;
   final int accountMid;
+  final int generation, revision;
 }

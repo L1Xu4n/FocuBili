@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:focubili/services/app_behavior_preferences_service.dart';
@@ -14,6 +16,16 @@ class _InteractionBehaviorPreferences extends AppBehaviorPreferencesService {
   /// 返回当前测试指定的账号只读状态。
   @override
   Future<bool> loadAccountReadOnly() async => readOnly;
+}
+
+class _DelayedWritePreference extends AppBehaviorPreferencesService {
+  final started = Completer<void>(), release = Completer<void>();
+  @override
+  Future<bool> loadAccountReadOnly() async {
+    started.complete();
+    await release.future;
+    return false;
+  }
 }
 
 /// 提供内存 Cookie 容器，让互动服务测试可以模拟已登录和未登录状态。
@@ -46,11 +58,29 @@ class _InteractionAuthApi implements BilibiliAuthApi {
   _InteractionAuthApi();
 
   int navigationCalls = 0;
+  final List<String> verifiedHeaders = [];
 
   /// 返回一份最小的已登录 `/nav` 响应。
   @override
   Future<BilibiliNavResponse> requestNavigation(String cookieHeader) async {
     navigationCalls += 1;
+    verifiedHeaders.add(cookieHeader);
+    return const BilibiliNavResponse(
+      statusCode: 200,
+      body: '{"code":0,"data":{"isLogin":true,"mid":42,"uname":"测试账号"}}',
+    );
+  }
+}
+
+class _HeldInteractionNavigation implements BilibiliAuthApi {
+  final seen = Completer<String>(), release = Completer<void>();
+  int calls = 0;
+
+  @override
+  Future<BilibiliNavResponse> requestNavigation(String cookieHeader) async {
+    calls++;
+    seen.complete(cookieHeader);
+    await release.future;
     return const BilibiliNavResponse(
       statusCode: 200,
       body: '{"code":0,"data":{"isLogin":true,"mid":42,"uname":"测试账号"}}',
@@ -111,7 +141,137 @@ BilibiliInteractionService _createInteractionService({
   );
 }
 
+class _HeldFinalCookies extends _InteractionCookieStore {
+  _HeldFinalCookies() : super(cookies: 'SESSDATA=fixture; bili_jct=fixture');
+  final entered = Completer<void>(), release = Completer<void>();
+  bool armed = false;
+  @override
+  Future<String> readCookies() async {
+    if (armed) {
+      if (!entered.isCompleted) entered.complete();
+      await release.future;
+    }
+    return super.readCookies();
+  }
+}
+
 void main() {
+  test(
+    'native cookie rotation while verifying account cannot make a private write',
+    () async {
+      const verifiedCookie = 'SESSDATA=fixture-a; bili_jct=fixture-csrf-a';
+      final cookies = _InteractionCookieStore(cookies: verifiedCookie);
+      final nav = _HeldInteractionNavigation();
+      final request = _RecordedInteractionRequest();
+      final auth = BilibiliAuthService(cookieStore: cookies, api: nav);
+      final service = BilibiliInteractionService(
+        authService: auth,
+        request: request.call,
+        behaviorPreferencesService: _InteractionBehaviorPreferences(
+          readOnly: false,
+        ),
+      );
+
+      final generation = auth.accountMutationGeneration;
+      final operation = service.createFavoriteFolder(
+        title: '测试私密夹',
+        isPrivate: true,
+      );
+      // Record the outcome rather than allowing an unhandled async exception.
+      final outcome = operation.then<Object>(
+        (result) => result,
+        onError: (Object error) => error,
+      );
+      expect(await nav.seen.future, verifiedCookie);
+      // The platform cookie jar can rotate without a Dart login/logout.
+      cookies.cookies = 'SESSDATA=fixture-b; bili_jct=fixture-csrf-b';
+      expect(auth.accountMutationGeneration, generation);
+      nav.release.complete();
+
+      final result = await outcome;
+      expect(request.bodies.whereType<String>(), isEmpty);
+      expect(result, isA<BilibiliInteractionException>());
+      expect(nav.calls, 1);
+    },
+  );
+
+  test('stable bulk writes reuse the exact verified header and CSRF', () async {
+    const header = 'SESSDATA=fixture; bili_jct=fixture%2Dcsrf';
+    final authApi = _InteractionAuthApi();
+    final request = _RecordedInteractionRequest(
+      responses: {
+        '/x/v3/fav/folder/created/list-all':
+            '{"code":0,"data":{"list":[{"id":17,"title":"目标","fav_state":0}]}}',
+      },
+    );
+    final service = BilibiliInteractionService(
+      authService: BilibiliAuthService(
+        cookieStore: _InteractionCookieStore(cookies: header),
+        api: authApi,
+      ),
+      request: request.call,
+      behaviorPreferencesService: _InteractionBehaviorPreferences(
+        readOnly: false,
+      ),
+    );
+
+    expect(
+      await service.addToVerifiedFavoriteFolder(
+        aid: 47,
+        mediaId: 17,
+        expectedMid: 42,
+        isCurrent: () => true,
+      ),
+      isTrue,
+    );
+    expect(authApi.verifiedHeaders, [header, header]);
+    expect(request.cookieHeaders, [header, header]);
+    expect(
+      _formFields(request.bodies.singleWhere((body) => body != null)),
+      containsPair('csrf_token', 'fixture-csrf'),
+    );
+  });
+
+  test(
+    'selection or rule changes during the final cookie read cancel the bulk write',
+    () async {
+      final prefs = _DelayedWritePreference();
+      final cookies = _HeldFinalCookies();
+      final request = _RecordedInteractionRequest(
+        responses: {
+          '/x/v3/fav/folder/created/list-all':
+              '{"code":0,"data":{"list":[{"id":17,"title":"目标","fav_state":0}]}}',
+        },
+      );
+      final api = BilibiliInteractionService(
+        authService: BilibiliAuthService(
+          cookieStore: cookies,
+          api: _InteractionAuthApi(),
+        ),
+        request: request.call,
+        behaviorPreferencesService: prefs,
+      );
+      var current = true;
+      final rejected = expectLater(
+        api.addToVerifiedFavoriteFolder(
+          aid: 47,
+          mediaId: 17,
+          expectedMid: 42,
+          isCurrent: () => current,
+        ),
+        throwsA(isA<BilibiliInteractionException>()),
+      );
+      await prefs.started.future;
+      cookies.armed = true;
+      prefs.release.complete();
+      await cookies.entered.future;
+      current = false;
+      cookies.release.complete();
+      await rejected;
+      expect(request.bodies.whereType<String>(), isEmpty);
+    },
+  );
+
   for (final case_ in [
     (43, false, false), // 账号错
     (42, true, false), // 只读账号
@@ -425,6 +585,69 @@ void main() {
       containsPair('add_media_ids', '333'),
     );
   });
+
+  test(
+    'logout while checking write permission never sends the old private form',
+    () async {
+      final prefs = _DelayedWritePreference();
+      final req = _RecordedInteractionRequest();
+      final auth = BilibiliAuthService(
+        cookieStore: _InteractionCookieStore(
+          cookies: 'SESSDATA=test; bili_jct=test',
+        ),
+        api: _InteractionAuthApi(),
+      );
+      final service = BilibiliInteractionService(
+        authService: auth,
+        request: req.call,
+        behaviorPreferencesService: prefs,
+      );
+      final rejected = expectLater(
+        service.createFavoriteFolder(title: 'A', isPrivate: true),
+        throwsA(isA<BilibiliInteractionException>()),
+      );
+      await prefs.started.future;
+      await auth.clearBilibiliSession();
+      prefs.release.complete();
+      await rejected;
+      expect(req.endpoints, isEmpty);
+    },
+  );
+
+  test(
+    'private remote folder encodes privacy=1 once; errors never fall back to public',
+    () async {
+      for (final code in [0, -400]) {
+        final request = _RecordedInteractionRequest(
+          responses: {
+            '/x/v3/fav/folder/add': '{"code":$code,"data":{"id":333}}',
+          },
+        );
+        final service = _createInteractionService(request: request);
+        final action = service.createFavoriteFolder(
+          title: '私密 & 资料',
+          isPrivate: true,
+        );
+        if (code == 0) {
+          expect((await action).mediaId, 333);
+        } else {
+          await expectLater(
+            action,
+            throwsA(isA<BilibiliInteractionException>()),
+          );
+        }
+        expect(request.endpoints.single.path, '/x/v3/fav/folder/add');
+        expect(
+          _formFields(request.bodies.single),
+          containsPair('privacy', '1'),
+        );
+        expect(
+          _formFields(request.bodies.single),
+          containsPair('title', '私密 & 资料'),
+        );
+      }
+    },
+  );
 
   /// 验证多个新增和移除目录会被编码到同一次收藏请求中。
   test('收藏夹批量更新同时提交新增和移除编号', () async {
