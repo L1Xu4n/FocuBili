@@ -379,6 +379,48 @@ class BilibiliInteractionService {
     );
   }
 
+  /// 只向用户指定账号的一个夹追加。单个请求复用匹配的会话，不移除其他收藏。
+  /// 已在目标夹返回 false；无法核实归属、已切号或失效时不发写请求。
+  Future<bool> addToVerifiedFavoriteFolder({
+    required int aid,
+    required int mediaId,
+    required int expectedMid,
+    required bool Function() isCurrent,
+  }) async {
+    if (aid <= 0 || mediaId <= 0 || expectedMid <= 0 || !isCurrent()) {
+      throw const BilibiliInteractionException('当前视频、账号或收藏夹不可用。');
+    }
+    final session = await _openSession();
+    if (session.accountMid != expectedMid || !isCurrent()) {
+      throw const BilibiliInteractionException('账号已变化，未继续收藏。');
+    }
+    final data = await _getData(
+      _favoriteFolderEndpoint(session: session, aid: aid),
+      session,
+    );
+    final target = _parseFavoriteFolders(
+      data['list'],
+    ).where((f) => f.mediaId == mediaId).firstOrNull;
+    if (!isCurrent() || target == null) {
+      throw const BilibiliInteractionException('账号或收藏夹已不可用。');
+    }
+    if (target.containsVideo) return false;
+    final current = await _openSession();
+    if (!isCurrent() ||
+        current.accountMid != expectedMid ||
+        current.cookieHeader != session.cookieHeader) {
+      throw const BilibiliInteractionException('账号已变化，未继续收藏。');
+    }
+    await _setFavoriteFolders(
+      current,
+      aid: aid,
+      addMediaIds: [mediaId],
+      deleteMediaIds: const [],
+      isCurrent: isCurrent,
+    );
+    return true;
+  }
+
   /// 把视频加入或移出当前账号的第一个可用收藏夹。
   Future<void> setFavorited({
     required int aid,
@@ -410,6 +452,7 @@ class BilibiliInteractionService {
     required int aid,
     required Iterable<int> addMediaIds,
     required Iterable<int> deleteMediaIds,
+    bool Function()? isCurrent,
   }) async {
     await _postData(
       Uri.https(_apiHost, '/x/v3/fav/resource/deal'),
@@ -421,6 +464,7 @@ class BilibiliInteractionService {
         'del_media_ids': deleteMediaIds.join(','),
         'platform': 'web',
       },
+      isCurrent: isCurrent,
     );
   }
 
@@ -601,12 +645,16 @@ class BilibiliInteractionService {
   Future<Map<Object?, Object?>> _postData(
     Uri endpoint,
     _InteractionSession session,
-    Map<String, String> fields,
-  ) async {
+    Map<String, String> fields, {
+    bool Function()? isCurrent,
+  }) async {
     if (await _behaviorPreferencesService.loadAccountReadOnly()) {
       throw const BilibiliInteractionException(
         '账号只读已开启，请先在“设置 - 账号与隐私”中关闭后再操作。',
       );
+    }
+    if (isCurrent != null && !isCurrent()) {
+      throw const BilibiliInteractionException('操作已停止，未继续收藏。');
     }
     final Map<String, String> payload = <String, String>{
       ...fields,

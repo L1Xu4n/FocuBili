@@ -46,7 +46,27 @@ abstract final class LearningAddSheet {
         service: contentService,
       ),
     );
-    if (selected == null || selected.isEmpty || !context.mounted) return null;
+    if (selected == null || !context.mounted) return null;
+    return showSelectedVideos(
+      context,
+      items: selected,
+      videoService: videoService,
+      service: service,
+    );
+  }
+
+  /// 从已经勾选的独立视频开始：仍由用户决定分 P、学科分组与容量，不重选视频。
+  static Future<LearningBatchResult?> showSelectedVideos(
+    BuildContext context, {
+    required List<CreatorVideo> items,
+    required BilibiliService videoService,
+    required LearningListService service,
+  }) async {
+    final seen = <String>{};
+    final selected = items
+        .where((e) => e.bvid.isNotEmpty && seen.add(e.bvid))
+        .toList(growable: false);
+    if (selected.isEmpty) return null;
     final details = await showDialog<_LoadedCollection>(
       context: context,
       builder: (_) =>
