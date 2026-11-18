@@ -1,5 +1,6 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/core/theme/app_theme.dart';
@@ -20,6 +21,18 @@ import 'subscription_compact_ui_test.dart'
     show captureSubscriptionUi, loadBetaReviewFonts;
 
 class _SurfacePlayback extends GesturePlayback implements PlaybackVideoSurface {
+  int playCommands = 0;
+  int pauseCommands = 0;
+
+  @override
+  Future<void> play() async => playCommands++;
+
+  @override
+  Future<void> pause() {
+    pauseCommands++;
+    return super.pause();
+  }
+
   @override
   Widget buildVideoSurface() => const DecoratedBox(
     // Stand-in for decoded video: enough contrast to see the moving shade,
@@ -56,9 +69,20 @@ Future<void> _tapSide(
         ? tester.getRect(find.byKey(_viewport)).center.dy
         : rect.center.dy,
   );
-  await tester.tapAt(point, kind: kind);
-  await tester.pump(const Duration(milliseconds: 70));
-  await tester.tapAt(point, kind: kind);
+  if (kind == PointerDeviceKind.mouse) {
+    final mouse = await tester.createGesture(kind: kind);
+    await mouse.addPointer(location: point);
+    await mouse.down(point);
+    await mouse.up();
+    await tester.pump(const Duration(milliseconds: 70));
+    await mouse.down(point);
+    await mouse.up();
+    await mouse.removePointer();
+  } else {
+    await tester.tapAt(point, kind: kind);
+    await tester.pump(const Duration(milliseconds: 70));
+    await tester.tapAt(point, kind: kind);
+  }
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 180));
 }
@@ -114,6 +138,7 @@ void main() {
     ('portrait-240pct', const Size(320, 760), AppPlatform.android, 2.4, true),
     ('landscape', const Size(820, 390), AppPlatform.android, 1.0, true),
     ('desktop', const Size(1280, 900), AppPlatform.linux, 1.0, true),
+    ('desktop-rewind', const Size(1000, 720), AppPlatform.windows, 1.8, false),
   ]) {
     testWidgets(
       'preview and real surface use the same normalized seek shape: $name',
@@ -124,9 +149,11 @@ void main() {
         addTearDown(tester.view.resetDevicePixelRatio);
         await loadBetaReviewFonts(tester);
         final boundary = GlobalKey();
-        final kind = platform == AppPlatform.android
-            ? PointerDeviceKind.touch
-            : PointerDeviceKind.mouse;
+        // A desktop mouse may operate the settings simulation, but its live
+        // video gesture is not the gesture being previewed.
+        final previewKind = platform.isDesktop
+            ? PointerDeviceKind.mouse
+            : PointerDeviceKind.touch;
         await _mount(
           tester,
           boundary: boundary,
@@ -137,7 +164,13 @@ void main() {
           textScale: textScale,
         );
         final preview = find.byKey(_preview);
-        await _tapSide(tester, surface: preview, forward: forward, kind: kind);
+        expect(find.textContaining('桌面鼠标双击仅切全屏'), findsOneWidget);
+        await _tapSide(
+          tester,
+          surface: preview,
+          forward: forward,
+          kind: previewKind,
+        );
         await captureSubscriptionUi(
           tester,
           boundary,
@@ -148,6 +181,39 @@ void main() {
         final previewRect = tester.getRect(preview);
         final previewArrows = paintedRect(tester, _triangles());
 
+        final fullscreenRequests = <bool>[];
+        final protectionRequests = <bool>[];
+        if (platform.isDesktop) {
+          const channel = MethodChannel('window_manager');
+          final messenger =
+              TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+          messenger.setMockMethodCallHandler(channel, (call) async {
+            if (call.method == 'isMaximized') return false;
+            if (call.method == 'setFullScreen') {
+              fullscreenRequests.add(
+                (call.arguments as Map)['isFullScreen'] as bool,
+              );
+            }
+            return null;
+          });
+          addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+          if (platform == AppPlatform.windows) {
+            const protection = MethodChannel(
+              'com.focubili.app/windows_experience',
+            );
+            // Windows awaits cursor protection before requesting native exit.
+            messenger.setMockMethodCallHandler(protection, (call) async {
+              expect(call.method, 'setFullscreenProtection');
+              protectionRequests.add(
+                (call.arguments as Map)['enabled'] as bool,
+              );
+              return true;
+            });
+            addTearDown(
+              () => messenger.setMockMethodCallHandler(protection, null),
+            );
+          }
+        }
         final playback = _SurfacePlayback();
         await _mount(
           tester,
@@ -182,7 +248,12 @@ void main() {
           expect(find.byTooltip('播放倍速').hitTestable(), findsOneWidget);
           expect(find.byTooltip('进入全屏').hitTestable(), findsOneWidget);
         }
-        await _tapSide(tester, surface: surface, forward: forward, kind: kind);
+        await _tapSide(
+          tester,
+          surface: surface,
+          forward: forward,
+          kind: PointerDeviceKind.touch,
+        );
         await captureSubscriptionUi(
           tester,
           boundary,
@@ -219,8 +290,13 @@ void main() {
         expect(paintedRect(tester, label).height, greaterThanOrEqualTo(14));
 
         // Repeat while the direction band is still painted. Its full height
-        // must not consume touch or mouse taps.
-        await _tapSide(tester, surface: surface, forward: forward, kind: kind);
+        // must not consume the next touch gesture.
+        await _tapSide(
+          tester,
+          surface: surface,
+          forward: forward,
+          kind: PointerDeviceKind.touch,
+        );
         expect(
           playback.offsets.map((e) => e.inSeconds),
           forward ? [5, 5] : [-5, -5],
@@ -228,6 +304,40 @@ void main() {
         await tester.pump(const Duration(milliseconds: 1201));
         expect(_background(), findsNothing);
         expect(find.byType(PlayerSeekFeedback), findsNothing);
+
+        if (platform.isDesktop) {
+          // Use the same live surface and point as the touch assertion. A
+          // mouse pair must enter fullscreen, never seek or dispatch singles.
+          for (final fullscreen in [true, false]) {
+            await _tapSide(
+              tester,
+              surface: surface,
+              forward: forward,
+              kind: PointerDeviceKind.mouse,
+            );
+            await tester.pump(kDoubleTapTimeout);
+            await tester.pumpAndSettle();
+            expect(
+              tester.getSize(surface),
+              fullscreen ? size : surfaceRect.size,
+              reason: 'mouse fullscreen transition on the same video surface',
+            );
+            final expectedRequests = fullscreen ? [true] : [true, false];
+            expect(fullscreenRequests, expectedRequests);
+            if (platform == AppPlatform.windows) {
+              expect(protectionRequests, expectedRequests);
+            }
+            expect(
+              playback.offsets.map((offset) => offset.inSeconds),
+              forward ? [5, 5] : [-5, -5],
+            );
+            expect(_background(), findsNothing);
+            expect(find.byType(PlayerSeekFeedback), findsNothing);
+            expect(find.byType(PlayerActionFeedback), findsNothing);
+            expect(playback.playCommands, 0);
+            expect(playback.pauseCommands, 0);
+          }
+        }
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox.shrink());
       },

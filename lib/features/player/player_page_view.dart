@@ -182,7 +182,12 @@ extension _PlayerPageView on _PlayerPageState {
                           GestureRecognizerFactoryWithHandlers<
                             PlayerTapGestureRecognizer
                           >(
-                            () => PlayerTapGestureRecognizer(debugOwner: this),
+                            () => PlayerTapGestureRecognizer(
+                              debugOwner: this,
+                              supportedDevices: _appPlatform.isDesktop
+                                  ? _nonMousePointerKinds
+                                  : null,
+                            ),
                             (recognizer) => recognizer
                               ..gestureSettings = playerTouchGestureSettings
                               ..onSingleTap = _toggleControls
@@ -190,6 +195,8 @@ extension _PlayerPageView on _PlayerPageState {
                               ..onDoubleTap = () =>
                                   _handleDoubleTap(constraints.biggest),
                           ),
+                      if (_appPlatform.isDesktop)
+                        PlayerMouseTapGestureRecognizer: _mouseTapGestures(),
                     }
                   : const {},
               child: Stack(
@@ -253,7 +260,12 @@ extension _PlayerPageView on _PlayerPageState {
             AdaptiveLayout.usesWorkspace(MediaQuery.sizeOf(context));
         final bool showPlayerStatus = _fullscreen || workspacePlayer;
         _schedulePlayerStatusVisibility(showPlayerStatus);
-        return Listener(
+        final feedbackSideInset =
+            _fullscreen && (_showControls || _controlsLocked)
+            ? 16 + 48 * controlSize.scale
+            : 16.0;
+        final edgeInsets = MediaQuery.paddingOf(context);
+        final playerSurface = Listener(
           // 指针被系统取消时优先撤销预览，避免取消事件被拖动识别器当作普通松手。
           onPointerCancel: _handlePlayerPointerCancel,
           child: ColoredBox(
@@ -320,14 +332,18 @@ extension _PlayerPageView on _PlayerPageState {
                 PlayerFeedbackViewport(
                   controlsVisible:
                       _showControls && !_controlsLocked && !inPictureInPicture,
-                  edgeInsets: MediaQuery.paddingOf(context),
-                  sideInset: _fullscreen && (_showControls || _controlsLocked)
-                      ? 16 + 48 * controlSize.scale
-                      : 16,
+                  edgeInsets: edgeInsets,
+                  sideInset: feedbackSideInset,
                   // 编辑器占用控制栏之间的可滚动区域，不增加底栏高度或遮住进度条。
                   feedback: Stack(
                     children: [
                       _buildPlayerFeedback(),
+                      if (_timelineHover case final hover?
+                          when hover.width == constraints.maxWidth)
+                        _buildTimelineHoverCard(
+                          progress: hover.progress,
+                          x: hover.x - edgeInsets.left - feedbackSideInset,
+                        ),
                       if (_abRepeatEditorVisible &&
                           !editAbBelowVideo &&
                           !inPictureInPicture &&
@@ -388,15 +404,17 @@ extension _PlayerPageView on _PlayerPageState {
                               !_controlsLocked &&
                               !inPictureInPicture)
                             _buildTimelineAnnotations(),
-                          PlayerProgressSlider(
-                            scale: controlSize.scale,
-                            sliderKey: const Key('player-progress-slider'),
-                            value: _progress,
-                            duration: _playbackSnapshot.duration,
-                            bufferedRanges: _playbackSnapshot.bufferedRanges,
-                            onChangeStart: _startProgressDrag,
-                            onChanged: _updateProgressDrag,
-                            onChangeEnd: _finishProgressDrag,
+                          _withTimelineMouseHover(
+                            PlayerProgressSlider(
+                              scale: controlSize.scale,
+                              sliderKey: const Key('player-progress-slider'),
+                              value: _progress,
+                              duration: _playbackSnapshot.duration,
+                              bufferedRanges: _playbackSnapshot.bufferedRanges,
+                              onChangeStart: _startProgressDrag,
+                              onChanged: _updateProgressDrag,
+                              onChangeEnd: _finishProgressDrag,
+                            ),
                           ),
                           PlayerControlGroups(
                             playbackControls: <Widget>[
@@ -543,6 +561,9 @@ extension _PlayerPageView on _PlayerPageState {
                         ],
                       ),
                     ),
+                    regionKey: _appPlatform.isDesktop
+                        ? _desktopBottomBarKey
+                        : null,
                   ),
                 ),
                 if (_partSelectorExpanded && _fullscreen)
@@ -640,6 +661,7 @@ extension _PlayerPageView on _PlayerPageState {
             ),
           ),
         );
+        return _withDesktopPointerRegion(playerSurface, constraints.maxHeight);
       },
     );
 

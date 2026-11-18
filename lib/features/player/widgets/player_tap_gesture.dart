@@ -8,11 +8,19 @@ const playerTouchGestureSettings = DeviceGestureSettings(touchSlop: 24);
 /// 共用点击识别器处理单击和双击，让轻微位移容差与画面拖动阈值一致。
 class PlayerTapGestureRecognizer extends TapGestureRecognizer {
   /// 使用 Flutter 的点击/拖动竞争规则，增加双击配对和单击延迟派发。
-  PlayerTapGestureRecognizer({super.debugOwner}) {
+  PlayerTapGestureRecognizer({
+    super.debugOwner,
+    super.supportedDevices,
+    Duration minimumDoubleTapInterval = kDoubleTapMinTime,
+    double doubleTapSlop = kDoubleTapSlop,
+  }) : _minimumDoubleTapInterval = minimumDoubleTapInterval,
+       _doubleTapSlop = doubleTapSlop {
     onTapUp = _handleTapUp;
     onTapCancel = _cancelPendingTap;
   }
 
+  final Duration _minimumDoubleTapInterval;
+  final double _doubleTapSlop;
   GestureTapCallback? onSingleTap;
   GestureTapDownCallback? onDoubleTapDown;
   GestureTapCallback? onDoubleTap;
@@ -29,8 +37,8 @@ class PlayerTapGestureRecognizer extends TapGestureRecognizer {
     _completingDoubleTap =
         pending != null &&
         _singleTapTimer?.isActive == true &&
-        _minimumTapTimer?.isActive == false &&
-        (event.position - pending.globalPosition).distance <= kDoubleTapSlop;
+        _minimumTapTimer?.isActive != true &&
+        (event.position - pending.globalPosition).distance <= _doubleTapSlop;
     if (_completingDoubleTap) {
       _singleTapTimer?.cancel();
     } else if (pending != null) {
@@ -38,7 +46,9 @@ class PlayerTapGestureRecognizer extends TapGestureRecognizer {
     }
     if (!_completingDoubleTap) {
       _minimumTapTimer?.cancel();
-      _minimumTapTimer = Timer(kDoubleTapMinTime, () {});
+      _minimumTapTimer = _minimumDoubleTapInterval == Duration.zero
+          ? null
+          : Timer(_minimumDoubleTapInterval, () {});
     }
     _currentDown = TapDownDetails(
       globalPosition: event.position,
@@ -98,4 +108,17 @@ class PlayerTapGestureRecognizer extends TapGestureRecognizer {
     _cancelPendingTap();
     super.dispose();
   }
+}
+
+/// PC 鼠标与触点分别配对；双击可能比触屏的最小间隔更快。
+class PlayerMouseTapGestureRecognizer extends PlayerTapGestureRecognizer {
+  PlayerMouseTapGestureRecognizer({super.debugOwner})
+    : super(
+        supportedDevices: const {PointerDeviceKind.mouse},
+        minimumDoubleTapInterval: Duration.zero,
+        doubleTapSlop: kDoubleTapTouchSlop,
+      );
+
+  /// 进度条拖动、切分 P 或切来源时，撤销画面尚未确认的单击。
+  void cancelPendingTap() => _cancelPendingTap();
 }
