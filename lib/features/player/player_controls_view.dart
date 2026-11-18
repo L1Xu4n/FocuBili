@@ -260,27 +260,9 @@ extension _PlayerControlsView on _PlayerPageState {
     );
   }
 
-  /// 构建“更多”菜单，包含本机屏蔽入口与字幕、弹幕、画面比例等设置。
+  /// 优先展示观看与学习操作；画面设置和低频屏蔽管理置于末尾。
   List<PopupMenuEntry<_PlayerMoreMenuAction>> _buildMoreSettingsMenu() {
     return <PopupMenuEntry<_PlayerMoreMenuAction>>[
-      if (!_activeVideo.isCourse)
-        const PopupMenuItem(
-          key: Key('player-block-video'),
-          value: _PlayerMoreMenuAction.blockVideo,
-          child: Text('屏蔽该视频'),
-        ),
-      PopupMenuItem(
-        key: const Key('player-block-creator'),
-        value: _PlayerMoreMenuAction.blockCreator,
-        enabled: _activeVideo.ownerMid > 0,
-        child: const Text('屏蔽该 UP 主'),
-      ),
-      const PopupMenuItem(
-        key: Key('player-manage-blocklist'),
-        value: _PlayerMoreMenuAction.manageBlocklist,
-        child: Text('管理黑名单'),
-      ),
-      const PopupMenuDivider(),
       if (_playbackService is ListeningPlaybackService)
         PopupMenuItem<_PlayerMoreMenuAction>(
           key: const Key('listening-menu-item'),
@@ -296,7 +278,9 @@ extension _PlayerControlsView on _PlayerPageState {
                     : Icons.headphones_rounded,
               ),
               const SizedBox(width: 8),
-              Text(_playbackSnapshot.audioOnly ? '返回看视频' : '听视频（省流）'),
+              Expanded(
+                child: Text(_playbackSnapshot.audioOnly ? '返回看视频' : '听视频（省流）'),
+              ),
             ],
           ),
         ),
@@ -306,7 +290,7 @@ extension _PlayerControlsView on _PlayerPageState {
           children: <Widget>[
             Icon(Icons.subtitles_rounded),
             SizedBox(width: 8),
-            Text('字幕'),
+            Expanded(child: Text('字幕')),
           ],
         ),
       ),
@@ -346,7 +330,7 @@ extension _PlayerControlsView on _PlayerPageState {
           children: <Widget>[
             Icon(Icons.tune_rounded),
             SizedBox(width: 8),
-            Text('弹幕设置'),
+            Expanded(child: Text('弹幕设置')),
           ],
         ),
       ),
@@ -366,6 +350,24 @@ extension _PlayerControlsView on _PlayerPageState {
       _buildVideoFitModeMenuItem(
         action: _PlayerMoreMenuAction.fitStretch,
         mode: _VideoFitMode.stretch,
+      ),
+      const PopupMenuDivider(),
+      if (!_activeVideo.isCourse)
+        const PopupMenuItem(
+          key: Key('player-block-video'),
+          value: _PlayerMoreMenuAction.blockVideo,
+          child: Text('屏蔽该视频'),
+        ),
+      PopupMenuItem(
+        key: const Key('player-block-creator'),
+        value: _PlayerMoreMenuAction.blockCreator,
+        enabled: _activeVideo.ownerMid > 0,
+        child: const Text('屏蔽该 UP 主'),
+      ),
+      const PopupMenuItem(
+        key: Key('player-manage-blocklist'),
+        value: _PlayerMoreMenuAction.manageBlocklist,
+        child: Text('管理黑名单'),
       ),
     ];
   }

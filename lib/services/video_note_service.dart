@@ -24,19 +24,102 @@ class VideoNoteService {
 
   final VideoNotePreferencesLoader _preferencesLoader;
 
+  // 读、写和截图回收共享同一队列，不能读取另一个操作尚未提交的笔记。
+  static final Expando<Future<void>> _queues = Expando('note storage');
+  static final Expando<bool> _unverifiedCaches = Expando(
+    'unverified note cache',
+  );
+
+  Future<T> _withNotes<T>(Future<T> Function(SharedPreferences) action) async {
+    final prefs = await _preferencesLoader();
+    final previous = _queues[prefs];
+    final release = Completer<void>();
+    _queues[prefs] = release.future;
+    try {
+      if (previous != null) await previous;
+      if (_unverifiedCaches[prefs] == true) await _reloadNotes(prefs);
+      return await action(prefs);
+    } finally {
+      release.complete();
+      if (identical(_queues[prefs], release.future)) {
+        _queues[prefs] = null;
+      }
+    }
+  }
+
+  Future<void> _reloadNotes(SharedPreferences preferences) async {
+    await preferences.reload();
+    _unverifiedCaches[preferences] = null;
+  }
+
+  Future<void> _writeNotes(
+    SharedPreferences preferences,
+    String raw,
+    String errorMessage,
+  ) async {
+    try {
+      if (!await preferences.setString(storageKey, raw)) {
+        throw StateError(errorMessage);
+      }
+    } catch (_) {
+      // SharedPreferences 先改内存再调用平台写入。回到持久值后才允许下一个
+      // 读、写或截图回收；否则下一次补封面可能把被拒的删除真正写入。
+      _unverifiedCaches[preferences] = true;
+      try {
+        await _reloadNotes(preferences);
+      } catch (_) {
+        // 不用读取错误替换原始写入错误；下次操作在访问缓存前会再次校验。
+      }
+      rethrow;
+    }
+  }
+
+  /// 迟到的封面只更新仍存在且仍缺封面的记录，不回写查询开始时的正文或截图。
+  Future<Set<String>> fillMissingCovers(String bvid, String coverUrl) async {
+    if (coverUrl.trim().isEmpty || bvid.trim().isEmpty) return {};
+    return _withNotes((prefs) async {
+      final raw = prefs.getString(storageKey);
+      if (raw == null) return <String>{};
+      final rows = jsonDecode(raw);
+      if (rows is! List) return <String>{};
+      final changed = <String>{};
+      for (final row in rows) {
+        if (row is! Map<String, dynamic> ||
+            row['bvid'] != bvid ||
+            row['id'] is! String) {
+          continue;
+        }
+        final existing = row['videoCoverUrl'];
+        if (existing != null &&
+            (existing is! String || existing.trim().isNotEmpty)) {
+          continue;
+        }
+        row['videoCoverUrl'] = coverUrl;
+        changed.add(row['id'] as String);
+      }
+      // 就地改原始字段，同时保留未识别字段、记录顺序、用户编辑时间和画面。
+      if (changed.isNotEmpty) {
+        await _writeNotes(prefs, jsonEncode(rows), '封面保存失败');
+        _changes.add(bvid);
+      }
+      return changed;
+    });
+  }
+
   /// 清理导航撤销后的新截图；存储不可读或仍被任一笔记引用时保留文件。
   Future<void> discardUnreferencedFrame(String path) async {
     try {
-      final preferences = await _preferencesLoader();
-      final raw = preferences.getString(storageKey);
-      if (raw != null && jsonDecode(raw) is! List) return;
-      final notes = _decodeNotes(raw);
-      if (notes.any(
-        (note) => note.allFrames.any((frame) => frame.path == path),
-      )) {
-        return;
-      }
-      await _deleteFrameIfPresent(path);
+      await _withNotes((preferences) async {
+        final raw = preferences.getString(storageKey);
+        if (raw != null && jsonDecode(raw) is! List) return;
+        final notes = _decodeNotes(raw);
+        if (notes.any(
+          (note) => note.allFrames.any((frame) => frame.path == path),
+        )) {
+          return;
+        }
+        await _deleteFrameIfPresent(path);
+      });
     } catch (_) {
       // 无法确认引用状态时不删除。
     }
@@ -45,9 +128,8 @@ class VideoNoteService {
   /// 读取全部合法笔记，并按最近更新时间从新到旧排列。
   Future<List<VideoNote>> loadNotes() async {
     try {
-      final SharedPreferences preferences = await _preferencesLoader();
-      final List<VideoNote> notes = _decodeNotes(
-        preferences.getString(storageKey),
+      final List<VideoNote> notes = await _withNotes(
+        (preferences) async => _decodeNotes(preferences.getString(storageKey)),
       );
       notes.sort(
         // 排序函数让最近编辑过的笔记优先出现在“我的笔记”页面。
@@ -89,7 +171,13 @@ class VideoNoteService {
     if (normalized == null) {
       throw ArgumentError.value(note, 'note', '笔记缺少必要信息。');
     }
-    final SharedPreferences preferences = await _preferencesLoader();
+    await _withNotes((prefs) => _saveNormalized(prefs, normalized));
+  }
+
+  Future<void> _saveNormalized(
+    SharedPreferences preferences,
+    VideoNote normalized,
+  ) async {
     final List<VideoNote> notes = _decodeNotes(
       preferences.getString(storageKey),
     );
@@ -100,7 +188,12 @@ class VideoNoteService {
     if (existingIndex >= 0) {
       final VideoNote previous = notes[existingIndex];
       obsoleteFramePaths.addAll(previous.allFrames.map((frame) => frame.path));
-      notes[existingIndex] = normalized;
+      notes[existingIndex] =
+          normalized.videoCoverUrl.isEmpty &&
+              previous.bvid == normalized.bvid &&
+              previous.videoCoverUrl.isNotEmpty
+          ? normalized.copyWith(videoCoverUrl: previous.videoCoverUrl)
+          : normalized;
     } else {
       notes.add(normalized);
     }
@@ -124,13 +217,13 @@ class VideoNoteService {
         .expand((item) => item.allFrames.map((frame) => frame.path))
         .toSet();
     obsoleteFramePaths.removeAll(retainedFramePaths);
-    final saved = await preferences.setString(
-      storageKey,
+    await _writeNotes(
+      preferences,
       jsonEncode(
         limited.map((VideoNote item) => item.toJson()).toList(growable: false),
       ),
+      '笔记保存失败',
     );
-    if (!saved) throw StateError('笔记保存失败');
     _changes.add(normalized.bvid);
     for (final String framePath in obsoleteFramePaths) {
       await _deleteFrameIfPresent(framePath);
@@ -143,7 +236,13 @@ class VideoNoteService {
     if (normalizedId.isEmpty) {
       return;
     }
-    final SharedPreferences preferences = await _preferencesLoader();
+    await _withNotes((prefs) => _deleteStoredNote(prefs, normalizedId));
+  }
+
+  Future<void> _deleteStoredNote(
+    SharedPreferences preferences,
+    String normalizedId,
+  ) async {
     final List<VideoNote> notes = _decodeNotes(
       preferences.getString(storageKey),
     );
@@ -152,13 +251,13 @@ class VideoNoteService {
       orElse: () => null,
     );
     notes.removeWhere((VideoNote item) => item.id == normalizedId);
-    final saved = await preferences.setString(
-      storageKey,
+    await _writeNotes(
+      preferences,
       jsonEncode(
         notes.map((VideoNote item) => item.toJson()).toList(growable: false),
       ),
+      '笔记删除失败',
     );
-    if (!saved) throw StateError('笔记删除失败');
     if (removed != null) _changes.add(removed.bvid);
     final retainedPaths = notes
         .expand((item) => item.allFrames.map((frame) => frame.path))

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -42,6 +43,55 @@ Future<VideoNoteService> _createService() async {
 }
 
 void main() {
+  test('迟到的封面补全只改同视频缺失字段，不重建已删笔记也不碰旧截图', () async {
+    final store = await SharedPreferences.getInstance();
+    final note = _createNote();
+    const cover = 'https://example.invalid/cover.jpg';
+    final original = [
+      {...note.toJson(), 'body': '已保存的新正文', 'futureField': 9},
+      _createNote(id: 'with-cover', videoCoverUrl: 'existing').toJson(),
+      _createNote(id: 'other', bvid: 'BV1XX411x7h7').toJson(),
+    ];
+    await store.setString(VideoNoteService.storageKey, jsonEncode(original));
+    final service = await _createService();
+    expect(await service.fillMissingCovers(note.bvid, cover), {note.id});
+    final updated = jsonDecode(store.getString(VideoNoteService.storageKey)!);
+    expect(updated, [
+      {...original.first, 'videoCoverUrl': cover},
+      ...original.skip(1),
+    ]);
+    await service.deleteNote(note.id);
+    expect(await service.fillMissingCovers(note.bvid, cover), isEmpty);
+    expect((await service.loadNotes()).where((n) => n.id == note.id), isEmpty);
+  });
+
+  test('两个笔记服务同时编辑和补图时保持新正文与封面', () async {
+    final editor = await _createService();
+    final list = await _createService();
+    final note = _createNote();
+    await editor.saveNote(note);
+    const cover = 'https://example.invalid/cover.jpg';
+    for (final coverFirst in [true, false]) {
+      final edited = note.copyWith(body: '新正文 $coverFirst');
+      if (coverFirst) {
+        await Future.wait([
+          list.fillMissingCovers(note.bvid, cover),
+          editor.saveNote(edited),
+        ]);
+      } else {
+        await Future.wait([
+          editor.saveNote(edited),
+          list.fillMissingCovers(note.bvid, cover),
+        ]);
+      }
+      final result = (await editor.loadNotes()).single;
+      expect(result.body, edited.body);
+      expect(result.videoCoverUrl, cover);
+      await editor.deleteNote(note.id);
+      if (coverFirst) await editor.saveNote(note);
+    }
+  });
+
   test(
     'cancelled captures delete only unreferenced files and retain files when storage is unreadable',
     () async {
