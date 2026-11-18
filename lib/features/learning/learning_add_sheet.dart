@@ -16,18 +16,18 @@ abstract final class LearningAddSheet {
     BuildContext context, {
     required VideoPreview video,
     required LearningListService service,
+    bool Function()? canConfirm,
     VideoPart? currentPart,
     VideoPart? recentPart,
     Duration position = Duration.zero,
-    bool Function()? canConfirm,
   }) => _showParts(
     context,
     [video],
     service,
+    canConfirm: canConfirm,
     currentPart: currentPart,
     recentPart: recentPart,
     position: position,
-    canConfirm: canConfirm,
   );
 
   static Future<LearningBatchResult?> showCollection(
@@ -61,6 +61,7 @@ abstract final class LearningAddSheet {
   static Future<LearningBatchResult?> showSelectedVideos(
     BuildContext context, {
     required List<CreatorVideo> items,
+    bool Function()? canConfirm,
     required BilibiliService videoService,
     required LearningListService service,
   }) async {
@@ -68,13 +69,15 @@ abstract final class LearningAddSheet {
     final selected = items
         .where((e) => e.bvid.isNotEmpty && seen.add(e.bvid))
         .toList(growable: false);
-    if (selected.isEmpty) return null;
+    if (selected.isEmpty || canConfirm?.call() == false) return null;
     final details = await showDialog<_LoadedCollection>(
       context: context,
       builder: (_) =>
           _CollectionDetailLoader(items: selected, service: videoService),
     );
-    if (details == null || !context.mounted) return null;
+    if (details == null || !context.mounted || canConfirm?.call() == false) {
+      return null;
+    }
     final videos = details.videos, failed = details.failed;
     if (failed.isNotEmpty) {
       final confirmed = await showDialog<bool>(
@@ -102,20 +105,20 @@ abstract final class LearningAddSheet {
       if (confirmed != true || !context.mounted) return null;
     }
     if (videos.isEmpty) return null;
-    return _showParts(context, videos, service);
+    return _showParts(context, videos, service, canConfirm: canConfirm);
   }
 
   static Future<LearningBatchResult?> _showParts(
     BuildContext context,
     List<VideoPreview> videos,
     LearningListService service, {
+    bool Function()? canConfirm,
     VideoPart? currentPart,
     VideoPart? recentPart,
     Duration position = Duration.zero,
-    bool Function()? canConfirm,
   }) async {
     final state = await service.loadState();
-    if (!context.mounted) return null;
+    if (!context.mounted || canConfirm?.call() == false) return null;
     if (service.readFailed) {
       ScaffoldMessenger.of(
         context,
@@ -133,6 +136,7 @@ abstract final class LearningAddSheet {
       isDismissible: false,
       builder: (_) => _PartSelection(
         videos: videos,
+        canConfirm: canConfirm,
         service: service,
         existingIds: entries.map((e) => e.stableId).toSet(),
         count: entries.length,
@@ -140,7 +144,6 @@ abstract final class LearningAddSheet {
         currentPart: currentPart,
         recentPart: recentPart,
         position: position,
-        canConfirm: canConfirm,
       ),
     );
   }
@@ -236,6 +239,7 @@ class _LearningPartChoice {
 class _PartSelection extends StatefulWidget {
   const _PartSelection({
     required this.videos,
+    this.canConfirm,
     required this.service,
     required this.existingIds,
     required this.count,
@@ -243,9 +247,9 @@ class _PartSelection extends StatefulWidget {
     this.currentPart,
     this.recentPart,
     required this.position,
-    this.canConfirm,
   });
   final List<VideoPreview> videos;
+  final bool Function()? canConfirm;
   final LearningListService service;
   final Set<String> existingIds;
   final int count;
@@ -253,7 +257,6 @@ class _PartSelection extends StatefulWidget {
   final VideoPart? currentPart;
   final VideoPart? recentPart;
   final Duration position;
-  final bool Function()? canConfirm;
   @override
   State<_PartSelection> createState() => _PartSelectionState();
 }

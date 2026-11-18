@@ -20,6 +20,7 @@ class VideoFavoritesBatchDialog extends StatefulWidget {
     required this.account,
     required this.interactions,
     required this.details,
+    this.sourceIsCurrent,
   });
   final List<CreatorVideo> items;
   final String ownerName;
@@ -27,6 +28,7 @@ class VideoFavoritesBatchDialog extends StatefulWidget {
   final BilibiliAccountDataService account;
   final BilibiliInteractionService interactions;
   final BilibiliService details;
+  final bool Function()? sourceIsCurrent;
   @override
   State<VideoFavoritesBatchDialog> createState() =>
       _VideoFavoritesBatchDialogState();
@@ -151,6 +153,10 @@ class _VideoFavoritesBatchDialogState extends State<VideoFavoritesBatchDialog> {
 
   Future<void> _save() async {
     if (_saving || _loading) return;
+    if (widget.sourceIsCurrent?.call() == false) {
+      setState(() => _message = '投稿筛选已变化，请取消并重新选择。');
+      return;
+    }
     setState(() {
       _saving = true;
       _stop = false;
@@ -171,6 +177,10 @@ class _VideoFavoritesBatchDialogState extends State<VideoFavoritesBatchDialog> {
           });
         }
         if (folderId == null || !mounted) return;
+        if (widget.sourceIsCurrent?.call() == false) {
+          setState(() => _message = '投稿筛选已变化，未继续添加视频。');
+          return;
+        }
         final now = DateTime.now();
         final items = [
           for (final (i, v) in widget.items.indexed)
@@ -196,6 +206,7 @@ class _VideoFavoritesBatchDialogState extends State<VideoFavoritesBatchDialog> {
       bool valid() =>
           mounted &&
           !_stop &&
+          widget.sourceIsCurrent?.call() != false &&
           _mid == mid &&
           CacheLifecycle.account.value == revision;
       if (mid == null || folder == null) return;

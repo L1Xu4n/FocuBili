@@ -418,18 +418,22 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('加入学习清单'), findsNothing);
-    expect(find.byTooltip('加入学习清单'), findsWidgets);
+    expect(find.byTooltip('更多操作：测试投稿'), findsOneWidget);
     expect(find.byIcon(Icons.more_vert_rounded), findsNothing);
     await tester.tap(find.byKey(const Key('add-creator-video-BV1GJ411x7h7')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('加入学习清单'));
     await tester.pumpAndSettle();
 
     await tester.tap(find.widgetWithText(FilledButton, '确认加入'));
     await tester.pumpAndSettle();
     expect(await learningListService.loadEntries(), hasLength(1));
     expect(find.textContaining('已加入所选分 P'), findsOneWidget);
-    expect(find.byIcon(Icons.playlist_add_check_rounded), findsWidgets);
+    expect(find.byIcon(Icons.more_horiz_rounded), findsWidgets);
 
     await tester.tap(find.byKey(const Key('add-creator-video-BV1GJ411x7h7')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('学习清单 · 选择更多分 P'));
     await tester.pumpAndSettle();
     expect(find.text('剩余容量 99'), findsOneWidget);
     expect(find.textContaining('已存在'), findsNothing);
@@ -443,7 +447,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(await learningListService.loadEntries(), hasLength(1));
-    expect(find.byTooltip('选择更多分 P'), findsWidgets);
+    await tester.tap(find.byKey(const Key('add-creator-video-BV1GJ411x7h7')));
+    await tester.pumpAndSettle();
+    expect(find.text('学习清单 · 选择更多分 P'), findsOneWidget);
   });
 
   /// 验证合集条目右侧播放图标被学习清单图标替换，并支持再次点击取消。
