@@ -133,6 +133,16 @@ class BilibiliAccountDataService {
   Future<int?> currentAccountMid() async =>
       (await _openReadSession()).account?.mid;
 
+  /// 首页配置使用已验证 UID，明确未登录才使用访客键 0；未知状态不读写。
+  Future<int?> currentHomeCollectionMid() async {
+    final session = await _openReadSession();
+    return switch (session.status) {
+      _AccountReadSessionStatus.ready => session.account!.mid,
+      _AccountReadSessionStatus.signedOut => 0,
+      _ => null,
+    };
+  }
+
   /// 在同一个只读会话内完整读取远端分组及成员，任何失败都不返回半份导入资料。
   Future<FollowingGroupImport> loadFollowingGroups() async {
     final session = await _openReadSession();
