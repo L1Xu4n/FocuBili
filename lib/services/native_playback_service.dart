@@ -317,12 +317,17 @@ class NativePlaybackService
   /// 注册 Android 到 Flutter 的状态回调，让此页面能接收原生播放状态。
   NativePlaybackService({
     AppBehaviorPreferencesService? behaviorPreferences,
+    this.courseCacheMid,
+    this.courseCacheUntil,
     ProblemDiagnosticsService? diagnosticsService,
   }) : _diagnosticsService = diagnosticsService ?? ProblemDiagnosticsService(),
        _behaviorPreferences =
            behaviorPreferences ?? AppBehaviorPreferencesService() {
     _claimPlatformChannel();
   }
+
+  final int? courseCacheMid;
+  final DateTime? courseCacheUntil;
 
   static const MethodChannel _channel = MethodChannel(
     'com.focubili.app/playback',
@@ -499,13 +504,27 @@ class NativePlaybackService
     }
     final target = part ?? video?.initialPart;
     if (video != null &&
-        (!_bvidPattern.hasMatch(video.bvid.trim()) ||
+        ((video.isCourse
+                ? (courseCacheMid ?? 0) <= 0 ||
+                      courseCacheUntil == null ||
+                      !DateTime.now().isBefore(courseCacheUntil!) ||
+                      !BilibiliCourseLink.isStorageKey(video.bvid) ||
+                      video.bvid != 'cheese:ss${video.courseSeasonId}' ||
+                      (target?.courseEpisodeId ?? 0) <= 0 ||
+                      (target?.courseAid ?? 0) <= 0
+                : !_bvidPattern.hasMatch(video.bvid.trim())) ||
             target == null ||
             target.cid <= 0)) {
       throw ArgumentError('无效的本地视频身份。');
     }
     await _invokeVoid('openLocal', <String, Object?>{
       'filePath': normalizedPath,
+      if (video?.isCourse == true) ...{
+        'courseCacheMid': courseCacheMid,
+        'courseCacheUntil': courseCacheUntil!.millisecondsSinceEpoch,
+        'courseEpisodeId': target!.courseEpisodeId,
+        'courseAid': target.courseAid,
+      },
       if (audioFilePath != null) 'audioFilePath': audioFilePath.trim(),
       'title': title,
       'initialPositionMs': initialPosition?.inMilliseconds,

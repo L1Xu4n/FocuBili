@@ -150,6 +150,58 @@ void main() {
     await service.dispose();
   });
 
+  test('课堂文件只通过有期限的账号章节通道，不退回 BV 或在线接口', () async {
+    const part = VideoPart(
+      pageNumber: 1,
+      cid: 31,
+      title: '合成章节',
+      duration: Duration(seconds: 1),
+      courseEpisodeId: 21,
+      courseAid: 55,
+    );
+    const course = VideoPreview(
+      bvid: 'cheese:ss11',
+      courseSeasonId: 11,
+      cid: 31,
+      title: '合成课堂',
+      ownerName: '测试',
+      parts: [part],
+    );
+    for (final s in [
+      NativePlaybackService(),
+      NativePlaybackService(
+        courseCacheMid: 51,
+        courseCacheUntil: DateTime.fromMillisecondsSinceEpoch(1),
+      ),
+    ]) {
+      await expectLater(
+        s.openLocalFile(filePath: '/test/video.bin', video: course),
+        throwsArgumentError,
+      );
+    }
+    expect(calls, isEmpty);
+    final end = DateTime.now().add(const Duration(minutes: 5));
+    final allowed = NativePlaybackService(
+      courseCacheMid: 51,
+      courseCacheUntil: end,
+    );
+    await allowed.openLocalTracks(
+      videoFilePath: '/test/video.bin',
+      audioFilePath: '/test/audio.bin',
+      video: course,
+      part: part,
+    );
+    expect(calls.single.method, 'openLocal');
+    expect(calls.single.arguments, containsPair('courseCacheMid', 51));
+    expect(
+      calls.single.arguments,
+      containsPair('courseCacheUntil', end.millisecondsSinceEpoch),
+    );
+    expect(calls.single.arguments, containsPair('courseEpisodeId', 21));
+    expect(calls.single.arguments, containsPair('courseAid', 55));
+    await allowed.dispose();
+  });
+
   /// 验证 Flutter 的观看记录兜底位置会随打开命令交给 Android，在 prepare 前直接定位。
   test('原生播放服务发送调用方提供的初始位置', () async {
     final NativePlaybackService service = NativePlaybackService();

@@ -464,7 +464,9 @@ class WindowsPlaybackService
     }
     final generation = sourceGeneration ?? _beginSourceRequest();
     if (sourceGeneration == null) {
-      _courseAccountRevision = null;
+      _courseAccountRevision = video?.isCourse == true
+          ? CacheLifecycle.account.value
+          : null;
       await _accountChangeStop;
       if (!_isCurrentSourceRequest(generation)) return;
     }
