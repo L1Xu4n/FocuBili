@@ -69,6 +69,14 @@ class _DragSelectionRegionState extends State<DragSelectionRegion>
         widget.itemCount < oldWidget.itemCount ||
         widget.controller != oldWidget.controller) {
       _clearDrag();
+    } else if (_lastIndex != null && widget.itemCount > oldWidget.itemCount) {
+      // A slow next page can arrive after the edge ticker has stopped at the
+      // old maximum. Resume the same drag once the new rows have laid out.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _lastIndex == null) return;
+        _applyAtPointer();
+        _syncTicker();
+      });
     }
   }
 
