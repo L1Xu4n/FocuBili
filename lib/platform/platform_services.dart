@@ -36,8 +36,12 @@ class PlatformServices {
   /// 创建 Android Media3、Windows media_kit 或明确不可用的播放服务。
   PlaybackService createPlaybackService() {
     return switch (capabilities.playbackBackend) {
-      PlaybackBackendKind.androidMedia3 => NativePlaybackService(),
-      PlaybackBackendKind.mediaKit => WindowsPlaybackService(),
+      PlaybackBackendKind.androidMedia3 => NativePlaybackService(
+        appPlatform: platform,
+      ),
+      PlaybackBackendKind.mediaKit => WindowsPlaybackService(
+        appPlatform: platform,
+      ),
       PlaybackBackendKind.unavailable => const _UnavailablePlaybackService(),
     };
   }

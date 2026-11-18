@@ -1,6 +1,9 @@
 import 'live_video_frame_playback_service.dart';
 import 'dart:async';
 
+import '../platform/app_platform.dart';
+import 'bilibili_http_user_agent.dart';
+import 'http_user_agent_preferences.dart';
 import 'course_cache_validity.dart';
 import 'bilibili_course_link.dart';
 
@@ -325,7 +328,9 @@ class NativePlaybackService
     this.courseCacheCheckedAt,
     this.courseCacheExpiryKind,
     ProblemDiagnosticsService? diagnosticsService,
-  }) : _diagnosticsService = diagnosticsService ?? ProblemDiagnosticsService(),
+    AppPlatform? appPlatform,
+  }) : _appPlatform = appPlatform ?? AppPlatformDetector.current,
+       _diagnosticsService = diagnosticsService ?? ProblemDiagnosticsService(),
        _behaviorPreferences =
            behaviorPreferences ?? AppBehaviorPreferencesService() {
     _claimPlatformChannel();
@@ -347,7 +352,9 @@ class NativePlaybackService
   final StreamController<PlaybackSnapshot> _stateController =
       StreamController<PlaybackSnapshot>.broadcast();
   bool _disposed = false;
+  bool _ordinaryApiUserAgentAllowed = false;
   final AppBehaviorPreferencesService _behaviorPreferences;
+  final AppPlatform _appPlatform;
   final ProblemDiagnosticsService _diagnosticsService;
 
   @override
@@ -434,6 +441,16 @@ class NativePlaybackService
     }
     final preferences = await const PlaybackPreferencesService()
         .loadRoutePreferences();
+    final confirmedOrdinary =
+        _appPlatform == AppPlatform.android &&
+        BilibiliHttpUserAgent.isKnownOrdinaryUpload(video) &&
+        video.parts.any((part) => part.cid == targetPart.cid);
+    final custom =
+        confirmedOrdinary &&
+            BilibiliHttpUserAgent.allowsPlaybackQuality(quality)
+        ? await const HttpUserAgentPreferences().forRequest()
+        : null;
+    _ordinaryApiUserAgentAllowed = confirmedOrdinary;
     await _invokeVoid('open', <String, Object?>{
       'linePreference': preferences.linePreference.name,
       'preferNonPcdn': preferences.preferNonPcdn,
@@ -448,6 +465,8 @@ class NativePlaybackService
       'ownerName': video.ownerName,
       'initialPositionMs': initialPosition?.inMilliseconds,
       'wbiEnabled': await _behaviorPreferences.loadWbiSigningEnabled(),
+      if (confirmedOrdinary) 'ordinaryApiUserAgentAllowed': true,
+      'ordinaryApiUserAgent': ?custom,
     });
   }
 
@@ -527,6 +546,7 @@ class NativePlaybackService
             target.cid <= 0)) {
       throw ArgumentError('无效的本地视频身份。');
     }
+    _ordinaryApiUserAgentAllowed = false;
     await _invokeVoid('openLocal', <String, Object?>{
       'filePath': normalizedPath,
       if (video?.isCourse == true) ...{
@@ -590,11 +610,18 @@ class NativePlaybackService
     }
     final preferences = await const PlaybackPreferencesService()
         .loadRoutePreferences();
+    final custom =
+        _ordinaryApiUserAgentAllowed &&
+            _appPlatform == AppPlatform.android &&
+            BilibiliHttpUserAgent.allowsPlaybackQuality(quality)
+        ? await const HttpUserAgentPreferences().forRequest()
+        : null;
     await _invokeVoid('selectQuality', <String, Object?>{
       'linePreference': preferences.linePreference.name,
       'preferNonPcdn': preferences.preferNonPcdn,
       'quality': quality,
       'wbiEnabled': await _behaviorPreferences.loadWbiSigningEnabled(),
+      'ordinaryApiUserAgent': ?custom,
     });
   }
 

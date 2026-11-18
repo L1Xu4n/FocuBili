@@ -14,6 +14,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:volume_controller/volume_controller.dart';
 
 import '../models/video_preview.dart';
+import '../platform/app_platform.dart';
 import 'desktop_playback_source_service.dart';
 import 'flutter_video_frame_capture.dart';
 import 'live_video_frame_playback_service.dart';
@@ -48,7 +49,9 @@ class WindowsPlaybackService
     WindowsPlaybackProgressStore? progressStore,
     Future<String> Function()? bufferStateReader,
     this.courseCacheGuard,
-  }) : _sourceService = sourceService ?? BilibiliDesktopPlaybackSourceService(),
+    AppPlatform? appPlatform,
+  }) : _appPlatform = appPlatform ?? AppPlatformDetector.current,
+       _sourceService = sourceService ?? BilibiliDesktopPlaybackSourceService(),
        _videoShotService = videoShotService ?? BilibiliVideoShotService(),
        _progressStore = progressStore ?? const WindowsPlaybackProgressStore(),
        _bufferStateReader = bufferStateReader,
@@ -81,6 +84,7 @@ class WindowsPlaybackService
     milliseconds: 100,
   );
 
+  final AppPlatform _appPlatform;
   final BilibiliDesktopPlaybackSourceService _sourceService;
   final BilibiliVideoShotService _videoShotService;
   final WindowsPlaybackProgressStore _progressStore;
@@ -1156,6 +1160,12 @@ class WindowsPlaybackService
           ? await _sourceService.loadCourse(
               video: video,
               part: part,
+              quality: quality,
+            )
+          : _appPlatform.isDesktop
+          ? await _sourceService.loadForVideo(
+              video: video,
+              cid: part.cid,
               quality: quality,
             )
           : await _sourceService.load(

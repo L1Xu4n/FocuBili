@@ -17,6 +17,7 @@ import '../../services/windows_clipboard_link_service.dart';
 import '../../platform/app_platform.dart';
 import 'app_theme_mode_controller.dart';
 import 'app_text_size_page.dart';
+import 'http_user_agent_settings_page.dart';
 import 'playback_speeds_dialog.dart';
 import 'double_tap_regions_page.dart';
 import 'player_control_size_page.dart';
@@ -1365,6 +1366,18 @@ class _PersonalizationSettingsPageState
           secondary: const Icon(Icons.system_update_alt_rounded),
           title: const Text('启动时检查更新'),
           subtitle: const Text('每次启动从 GitHub Release 检查新的正式版本。'),
+        ),
+        ListTile(
+          key: const Key('open-http-user-agent-settings'),
+          leading: const Icon(Icons.http_rounded),
+          title: const Text('HTTP User-Agent'),
+          subtitle: const Text('普通网络请求的兼容标识 · 可恢复默认'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.of(context).push<void>(
+            MaterialPageRoute(
+              builder: (_) => const HttpUserAgentSettingsPage(),
+            ),
+          ),
         ),
         ListTile(
           key: const Key('open-cache-management'),
