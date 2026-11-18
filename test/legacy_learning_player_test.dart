@@ -130,17 +130,20 @@ void main() {
     );
     await tester.ensureVisible(add);
     await tester.pumpAndSettle();
-    Future<void> settlePicker() async {
-      // The button in the underlying route keeps animating until the form is
-      // closed. Pump the bounded transitions instead of waiting on that ticker.
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400));
-      await tester.pump();
-    }
-
+    final addPosition = tester.getCenter(add);
     await tester.tap(add);
-    await settlePicker();
+    // Tapping the same screen position again cannot launch another picker.
+    await tester.tapAt(addPosition);
+    await tester.pumpAndSettle();
     expect(find.text('全部 P'), findsOneWidget);
+    expect(tester.widget<IconButton>(add).onPressed, isNull);
+    expect(
+      find.descendant(
+        of: add,
+        matching: find.byType(CircularProgressIndicator),
+      ),
+      findsNothing,
+    );
     expect(find.text('上次观看的 P'), findsOneWidget);
     expect(
       tester
@@ -156,12 +159,12 @@ void main() {
     expect(await learning.loadEntries(), isEmpty);
 
     await tester.tap(add);
-    await settlePicker();
+    await tester.pumpAndSettle();
     await tester.tap(find.text('全部 P'));
     await tester.tap(find.byKey(const Key('add-learning-folder')));
-    await settlePicker();
+    await tester.pumpAndSettle();
     await tester.tap(find.text('数学').last);
-    await settlePicker();
+    await tester.pumpAndSettle();
     await tester.tap(find.text('确认加入'));
     await tester.pumpAndSettle();
     final saved = await learning.loadEntries();

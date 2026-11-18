@@ -214,7 +214,7 @@ extension _PlayerCollectionView on _PlayerPageState {
                       ? null
                       : () =>
                             unawaited(_addCollectionVideoToLearningList(entry)),
-                  icon: adding
+                  icon: adding && !_choosingLearningParts
                       ? const SizedBox.square(
                           dimension: 16,
                           child: CircularProgressIndicator(strokeWidth: 2),

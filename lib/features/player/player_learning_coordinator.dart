@@ -13,6 +13,7 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
   LearningListEntry? _learningListEntry;
   bool _learningListLoading = false;
   String? _addingLearningBvid;
+  bool _choosingLearningParts = false;
   int? _recordedLearningListPartCid;
   Duration _lastLearningListSavedPosition = Duration.zero;
   bool _learningProgressSaveInFlight = false;
@@ -87,6 +88,29 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
     });
   }
 
+  /// Keep the action locked, but let the visible picker own its feedback.
+  /// Its pending selection is not a background request on the player route.
+  Future<LearningBatchResult?> _showLearningPartPicker({
+    required VideoPreview video,
+    VideoPart? currentPart,
+    VideoPart? recentPart,
+    required Duration position,
+  }) async {
+    setState(() => _choosingLearningParts = true);
+    try {
+      return await LearningAddSheet.show(
+        context,
+        video: video,
+        currentPart: currentPart,
+        recentPart: recentPart,
+        position: position,
+        service: _learningListService,
+      );
+    } finally {
+      if (mounted) setState(() => _choosingLearningParts = false);
+    }
+  }
+
   /// 将当前分 P 加入学习清单；播放器已就绪时优先保存真实进度。
   Future<void> _addCurrentVideoToLearningList() async {
     if (_addingLearningBvid != null) {
@@ -98,12 +122,10 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
     final bool hasLivePlayback = _playbackSnapshot.phase == PlaybackPhase.ready;
     setState(() => _addingLearningBvid = bvid);
     try {
-      final result = await LearningAddSheet.show(
-        context,
+      final result = await _showLearningPartPicker(
         video: video,
         currentPart: part,
         position: hasLivePlayback ? _playbackSnapshot.position : Duration.zero,
-        service: _learningListService,
       );
       if (result == null) return;
       final entries = result.entries;
@@ -231,8 +253,7 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
           }
         }
       }
-      final result = await LearningAddSheet.show(
-        context,
+      final result = await _showLearningPartPicker(
         video: video,
         currentPart: currentVideo ? _currentPart : null,
         recentPart: recentPart,
@@ -241,7 +262,6 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
             : recentPart != null
             ? history!.lastPosition
             : Duration.zero,
-        service: _learningListService,
       );
       if (!mounted || result == null) return;
       if (_activeVideo.bvid == bvid) {
