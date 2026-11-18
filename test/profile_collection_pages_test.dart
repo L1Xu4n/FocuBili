@@ -428,7 +428,14 @@ void main() {
 
     await tester.tap(find.byKey(const Key('add-creator-video-BV1GJ411x7h7')));
     await tester.pumpAndSettle();
-    expect(find.textContaining('已存在 1'), findsOneWidget);
+    expect(find.text('剩余容量 99'), findsOneWidget);
+    expect(find.textContaining('已存在'), findsNothing);
+    final part = VideoPreview.placeholder().initialPart;
+    final checkbox = find.descendant(
+      of: find.widgetWithText(ListTile, 'P${part.pageNumber} ${part.title}'),
+      matching: find.byType(Checkbox),
+    );
+    expect(tester.widget<Checkbox>(checkbox).value, isTrue);
     await tester.tap(find.widgetWithText(FilledButton, '确认加入'));
     await tester.pumpAndSettle();
 
