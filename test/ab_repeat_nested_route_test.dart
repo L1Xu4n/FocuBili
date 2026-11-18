@@ -1,3 +1,4 @@
+import 'support/player_portrait_viewport.dart';
 import 'dart:async';
 
 import 'package:flutter/gestures.dart';
@@ -100,8 +101,7 @@ Future<void> mountNested(
   ReviewNoteService notes, {
   bool capturing = false,
 }) async {
-  await tester.binding.setSurfaceSize(const Size(900, 1200));
-  addTearDown(() => tester.binding.setSurfaceSize(null));
+  setPlayerPortraitViewport(tester, const Size(900, 1200));
   if (capturing) {
     final now = DateTime(2026, 10, 18);
     await notes.saveNote(

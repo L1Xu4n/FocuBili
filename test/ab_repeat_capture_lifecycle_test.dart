@@ -1,3 +1,4 @@
+import 'support/player_portrait_viewport.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -66,8 +67,7 @@ Future<void> startOldNoteCapture(
   VideoNoteService notes, {
   int initialPartCid = 101,
 }) async {
-  await tester.binding.setSurfaceSize(const Size(900, 1200));
-  addTearDown(() => tester.binding.setSurfaceSize(null));
+  setPlayerPortraitViewport(tester, const Size(900, 1200));
   final now = DateTime(2026, 10, 18);
   await notes.saveNote(
     VideoNote(
@@ -262,8 +262,7 @@ void main() {
   testWidgets('review: internal old-note capture preserves AB range', (
     tester,
   ) async {
-    await tester.binding.setSurfaceSize(const Size(900, 1200));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+    setPlayerPortraitViewport(tester, const Size(900, 1200));
     final notes = VideoNoteService();
     final now = DateTime(2026, 10, 18);
     await notes.saveNote(
