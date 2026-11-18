@@ -17,6 +17,13 @@ class VideoListSelection {
     _beforeDrag = {};
   }
 
+  /// 投影变化只移除不再可见的身份，不能让旧手势的原始快照把它们还原。
+  void keepVisible(Iterable<String> visible) {
+    final valid = visible.toSet();
+    ids.retainAll(valid);
+    _beforeDrag.retainAll(valid);
+  }
+
   void toggle(String id) {
     active = true;
     if (!ids.remove(id)) ids.add(id);

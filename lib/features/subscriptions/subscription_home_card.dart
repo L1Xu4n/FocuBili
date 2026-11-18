@@ -6,6 +6,7 @@ import '../../models/subscription.dart';
 import '../../models/video_preview.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/subscription_service.dart';
+import '../common/discovery_blocklist.dart';
 import '../player/player_page.dart';
 import 'subscription_feed_tile.dart';
 import 'subscription_updates_page.dart';
@@ -27,7 +28,8 @@ class SubscriptionHomeCard extends StatefulWidget {
   State<SubscriptionHomeCard> createState() => _SubscriptionHomeCardState();
 }
 
-class _SubscriptionHomeCardState extends State<SubscriptionHomeCard> {
+class _SubscriptionHomeCardState extends State<SubscriptionHomeCard>
+    with DiscoveryBlocklistState<SubscriptionHomeCard> {
   late final _service = widget.service ?? SubscriptionService.instance;
   late final _videos = widget.videoService ?? BilibiliVideoInfoService();
   bool _opening = false;
@@ -46,11 +48,19 @@ class _SubscriptionHomeCardState extends State<SubscriptionHomeCard> {
   );
 
   Future<void> _open(SubscriptionFeedItem item) async {
-    if (_opening) return;
+    if (_opening ||
+        !discoveryBlocklistActionsReady ||
+        blocksSubscriptionUpdate(discoveryBlocklist, item)) {
+      return;
+    }
     setState(() => _opening = true);
     try {
       final video = await _videos.lookupVideo(item.bvid);
-      if (!mounted) return;
+      if (!mounted ||
+          !discoveryBlocklistActionsReady ||
+          blocksSubscriptionUpdate(discoveryBlocklist, item)) {
+        return;
+      }
       await Navigator.of(context).push<void>(
         MaterialPageRoute(
           builder: (_) =>
@@ -73,7 +83,18 @@ class _SubscriptionHomeCardState extends State<SubscriptionHomeCard> {
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: _service,
     builder: (context, _) {
-      final items = _service.feed.take(3).toList();
+      final feed = _service.feed;
+      final visible = discoveryBlocklist.isNotEmpty
+          ? feed
+                .where(
+                  (item) => !blocksSubscriptionUpdate(discoveryBlocklist, item),
+                )
+                .toList()
+          : feed;
+      final items = discoveryBlocklistReady
+          ? visible.take(3)
+          : const <SubscriptionFeedItem>[];
+      final hidden = feed.length - visible.length;
       return Card(
         key: const Key('home-subscription-card'),
         clipBehavior: Clip.antiAlias,
@@ -117,12 +138,15 @@ class _SubscriptionHomeCardState extends State<SubscriptionHomeCard> {
             ),
             if (_service.refreshing || _opening)
               const LinearProgressIndicator(),
+            if (!discoveryBlocklistActionsReady)
+              buildDiscoveryBlocklistStatus(),
             if (_service.storageError != null)
               Padding(
                 padding: const EdgeInsets.all(16),
                 child: Text(_service.storageError!),
               ),
-            if (items.isEmpty)
+            if (hidden > 0) DiscoveryBlocklistNotice(hiddenCount: hidden),
+            if (discoveryBlocklistReady && items.isEmpty && hidden == 0)
               Padding(
                 padding: const EdgeInsets.all(16),
                 child: Column(
@@ -144,7 +168,9 @@ class _SubscriptionHomeCardState extends State<SubscriptionHomeCard> {
               SubscriptionFeedTile(
                 item: item,
                 compact: true,
-                onTap: _opening ? null : () => unawaited(_open(item)),
+                onTap: _opening || !discoveryBlocklistActionsReady
+                    ? null
+                    : () => unawaited(_open(item)),
               ),
             const SizedBox(height: 4),
           ],

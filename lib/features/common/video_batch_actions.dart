@@ -32,21 +32,29 @@ class VideoBatchActions {
     required List<CreatorVideo> videos,
     String ownerName = '',
     VideoSaveDestination? destination,
+    bool Function()? sourceIsCurrent,
   }) async {
     final seen = <String>{};
     final items = videos
         .where((e) => e.bvid.isNotEmpty && seen.add(e.bvid))
         .toList(growable: false);
-    if (items.isEmpty) return false;
+    if (items.isEmpty || sourceIsCurrent?.call() == false) return false;
     try {
       final target =
           destination ??
           await chooseVideoSaveDestination(context, count: items.length);
       if (!context.mounted || target == null) return false;
+      if (sourceIsCurrent?.call() == false) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('投稿筛选已变化，请重新选择。')));
+        return false;
+      }
       if (target == VideoSaveDestination.learning) {
         final result = await LearningAddSheet.showSelectedVideos(
           context,
           items: items,
+          canConfirm: sourceIsCurrent,
           service: learningService,
           videoService: videoService,
         );
@@ -70,6 +78,7 @@ class VideoBatchActions {
               account: accountService,
               interactions: interactionService,
               details: videoService,
+              sourceIsCurrent: sourceIsCurrent,
             ),
           ) ??
           false;

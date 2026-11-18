@@ -278,7 +278,10 @@ Widget _host(Widget child) {
 /// 验证用户主页和订阅合集页面的核心导航与信息架构。
 void main() {
   /// 用户主页的账号读取使用空内存容器，不访问 Windows 系统凭据。
-  setUp(() => FlutterSecureStorage.setMockInitialValues(<String, String>{}));
+  setUp(() {
+    FlutterSecureStorage.setMockInitialValues(<String, String>{});
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+  });
 
   /// 验证用户主页只有投稿、专栏和合集标签，不出现消息入口。
   testWidgets('用户主页显示投稿专栏合集且不显示消息', (WidgetTester tester) async {

@@ -1,4 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
+import 'package:focubili/models/app_favorite.dart';
+import 'package:focubili/models/learning_list_entry.dart';
+import 'package:focubili/services/content_blocklist_service.dart';
 import 'package:focubili/core/widgets/drag_selection_region.dart';
 import 'package:focubili/features/common/video_batch_actions.dart';
 import 'package:focubili/services/app_favorites_service.dart';
@@ -346,6 +350,97 @@ class _Odd extends _Many {
   }
 }
 
+/// Record the exact payload crossing the favorite-write boundary. Durable
+/// favorite storage itself is exercised by the real-store and account suites.
+class _RecordedFavoriteWrites extends AppFavoritesService {
+  final writes = <AppFavoriteItem>[];
+  @override
+  Future<int?> addItems(String folderId, List<AppFavoriteItem> items) async {
+    expect(items.every((item) => item.folderId == folderId), isTrue);
+    writes.addAll(items);
+    return items.length;
+  }
+}
+
+AppFavoriteFolder seedCrossFolder({bool oldItem = false}) {
+  final folder = AppFavoriteFolder(
+    id: 'cross',
+    name: '独审收藏',
+    createdAt: DateTime(2020),
+    updatedAt: DateTime(2020),
+  );
+  SharedPreferences.setMockInitialValues({
+    'app_favorites.folders_v1': jsonEncode([folder.toJson()]),
+    if (oldItem)
+      'app_favorites.items_v1.cross': jsonEncode([
+        AppFavoriteItem(
+          folderId: folder.id,
+          bvid: bv(6),
+          title: '旧条目不覆盖',
+          coverUrl: '',
+          ownerName: '原作者',
+          durationText: '3:00',
+          addedAt: DateTime(2020),
+        ).toJson(),
+      ]),
+  });
+  return folder;
+}
+
+String bv(int n) => 'BV${n.toString().padLeft(10, '0')}';
+CreatorVideo cv(int n) => CreatorVideo(
+  bvid: bv(n),
+  title: '独审课程 $n',
+  coverUrl: '',
+  duration: const Duration(minutes: 3),
+  partCount: 2,
+);
+
+class _CrossContent extends _Many {
+  Completer<CreatorContentPage<CreatorVideo>>? gate;
+  final pages = <int>[];
+  @override
+  Future<CreatorContentPage<CreatorVideo>> loadVideos(
+    int mid, {
+    int page = 1,
+    String keyword = '',
+    CreatorVideoOrder order = CreatorVideoOrder.latest,
+  }) async {
+    pages.add(page);
+    if (page > 1) return gate!.future;
+    return CreatorContentPage(
+      items: [for (var i = 1; i <= (gate == null ? 7 : 10); i++) cv(i)],
+      page: 1,
+      hasMore: gate != null,
+      totalCount: 30,
+    );
+  }
+}
+
+Future<void> flush(WidgetTester t) async {
+  for (var i = 0; i < 5; i++) {
+    await t.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 12)),
+    );
+    await t.pump(const Duration(milliseconds: 50));
+  }
+}
+
+Finder card(int n) => find.byKey(Key('creator-video-${bv(n)}'));
+Finder check(int n) => find.byKey(Key('check-creator-${bv(n)}'));
+Future<void> saveLocal(WidgetTester t) async {
+  await t.tap(find.byKey(const Key('creator-batch-save')));
+  await t.pumpAndSettle();
+  await t.tap(find.byKey(const ValueKey('save-destination-favorites')));
+  await flush(t);
+  await t.pumpAndSettle();
+  await t.tap(find.text('独审收藏'));
+  await t.pumpAndSettle();
+  await t.tap(find.text('加入收藏夹'));
+  await flush(t);
+  await t.pumpAndSettle();
+}
+
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
@@ -600,4 +695,271 @@ void main() {
     expect(find.textContaining('迟到'), findsNothing);
     expect(t.takeException(), isNull);
   });
+  testWidgets('隐藏中间行后按可见索引拖选仅存屏上 BV', (t) async {
+    final local = _RecordedFavoriteWrites(), block = ContentBlocklistService();
+    seedCrossFolder();
+    await block.blockVideo(bv(2), '隐藏第2条');
+    await _pump(t, content: _CrossContent(), local: local);
+    await flush(t);
+    expect(card(2), findsNothing);
+    await t.longPress(card(1));
+    await t.pumpAndSettle();
+    final g = await t.startGesture(t.getCenter(check(1)));
+    await t.pump(const Duration(milliseconds: 650));
+    await g.up();
+    await t.pumpAndSettle();
+    // 长按已勾选框先清除起点，然后对可见 1→4 做加选。
+    final g2 = await t.startGesture(t.getCenter(check(1)));
+    await t.pump(const Duration(milliseconds: 650));
+    await g2.moveTo(t.getCenter(check(4)));
+    await t.pump();
+    await g2.up();
+    await t.pumpAndSettle();
+    expect(find.text('已选 3'), findsOneWidget);
+    await saveLocal(t);
+    final saved = local.writes;
+    expect(saved.map((v) => v.bvid), [bv(1), bv(3), bv(4)]);
+    expect(t.takeException(), isNull);
+  });
+  testWidgets('另一服务新规则剔除已选项而不覆盖既有收藏和学习进度', (t) async {
+    final local = _RecordedFavoriteWrites(),
+        learning = LearningListService(),
+        f = seedCrossFolder(oldItem: true);
+    final old = (await t.runAsync(
+      () => local.loadItems(f.id),
+    ))!.single.toJson();
+    final v = await _Details().lookupVideo(bv(2));
+    await t.runAsync(
+      () => learning.addVideo(
+        v,
+        part: v.parts.first,
+        position: const Duration(seconds: 39),
+        status: LearningListStatus.completed,
+      ),
+    );
+    final oldProgress = (await t.runAsync(
+      learning.loadEntries,
+    ))!.single.toJson();
+    await _pump(t, content: _CrossContent(), local: local, learning: learning);
+    await t.longPress(card(1));
+    await t.pumpAndSettle();
+    await t.tap(check(2));
+    await t.pumpAndSettle();
+    expect(find.text('已选 2'), findsOneWidget);
+    await ContentBlocklistService().blockVideo(bv(2), '其他窗口屏蔽');
+    await flush(t);
+    await t.pumpAndSettle();
+    expect(card(2), findsNothing);
+    expect(find.text('已选 1'), findsOneWidget);
+    await saveLocal(t);
+    final saved = local.writes;
+    expect(saved.map((v) => v.bvid).toList(), [bv(1)]);
+    final existing = (await t.runAsync(() => local.loadItems(f.id)))!;
+    expect(existing.single.toJson(), old);
+    expect(
+      (await t.runAsync(learning.loadEntries))!.single.toJson(),
+      oldProgress,
+    );
+    expect(t.takeException(), isNull);
+  });
+  testWidgets('慢页到达时过滤后勾选的触点继续只引用可见 BV', (t) async {
+    final c = _CrossContent()
+          ..gate = Completer<CreatorContentPage<CreatorVideo>>(),
+        local = _RecordedFavoriteWrites();
+    seedCrossFolder();
+    await ContentBlocklistService().blockVideo(bv(11), '过滤下一页首条');
+    await _pump(t, content: c, local: local);
+    await t.tap(find.byTooltip('多选投稿'));
+    await t.pumpAndSettle();
+    final start = t.getCenter(check(1)),
+        region = t.getRect(find.byType(DragSelectionRegion));
+    final g = await t.startGesture(start);
+    await t.pump(const Duration(milliseconds: 650));
+    await g.moveTo(Offset(start.dx, region.bottom - 3));
+    for (var i = 0; i < 120; i++) {
+      await t.pump(const Duration(milliseconds: 20));
+    }
+    expect(c.pages, [1, 2]);
+    c.gate!.complete(
+      CreatorContentPage(
+        items: [for (var i = 11; i <= 25; i++) cv(i)],
+        page: 2,
+        hasMore: false,
+        totalCount: 25,
+      ),
+    );
+    for (var i = 0; i < 125; i++) {
+      await t.pump(const Duration(milliseconds: 20));
+    }
+    await g.up();
+    await t.pumpAndSettle();
+    expect(card(11), findsNothing);
+    final count = int.parse(
+      t
+          .widgetList<Text>(find.byType(Text))
+          .map((x) => x.data ?? '')
+          .singleWhere((x) => x.startsWith('已选 '))
+          .substring(3),
+    );
+    expect(count, greaterThan(10));
+    await saveLocal(t);
+    final saved = local.writes;
+    expect(saved.length, count);
+    expect(saved.any((x) => x.bvid == bv(11)), false);
+    expect(saved.map((x) => x.bvid).toSet().length, count);
+    expect(t.takeException(), isNull);
+  });
+
+  testWidgets('首次规则损坏不展示投稿，修复重试后只允许筛过的选择', (t) async {
+    final local = _RecordedFavoriteWrites();
+    seedCrossFolder();
+    final pref = await SharedPreferences.getInstance();
+    await pref.setString(ContentBlocklistService.storageKey, 'broken');
+    await _pump(t, content: _CrossContent(), local: local);
+    expect(find.text('黑名单读取失败，内容暂未显示。'), findsOneWidget);
+    expect(card(1), findsNothing);
+    final multi = find.byWidgetPredicate(
+      (widget) => widget is IconButton && widget.tooltip == '多选投稿',
+    );
+    expect(t.widget<IconButton>(multi).onPressed, isNull);
+    await pref.setString(
+      ContentBlocklistService.storageKey,
+      jsonEncode({
+        'version': 1,
+        'videos': {bv(1): '第一条'},
+        'creators': {},
+      }),
+    );
+    await t.tap(find.text('重试读取黑名单'));
+    await t.pumpAndSettle();
+    expect(card(1), findsNothing);
+    expect(card(2), findsOneWidget);
+    await t.longPress(card(2));
+    await t.pumpAndSettle();
+    await saveLocal(t);
+    expect(local.writes.map((e) => e.bvid), [bv(2)]);
+    expect(t.takeException(), isNull);
+  });
+
+  testWidgets('规则刷新前截留的复选和提交回调不能沿用旧快照，重试后只存仍可见项', (t) async {
+    final local = _RecordedFavoriteWrites();
+    seedCrossFolder();
+    final pref = await SharedPreferences.getInstance();
+    await _pump(t, content: _CrossContent(), local: local);
+    await t.longPress(card(1));
+    await t.pumpAndSettle();
+    await t.tap(check(2));
+    await t.pumpAndSettle();
+    final save = find.byKey(const Key('creator-batch-save'));
+    final oldSave = t.widget<TextButton>(save).onPressed!;
+    final oldCheck = t.widget<Checkbox>(check(3)).onChanged!;
+    await pref.setString(ContentBlocklistService.storageKey, 'broken');
+    ContentBlocklistService.changes.value++;
+    oldCheck(true);
+    oldSave();
+    await t.pumpAndSettle();
+    expect(find.text('已选 2'), findsOneWidget);
+    expect(find.textContaining('相关操作已暂停'), findsOneWidget);
+    expect(t.widget<TextButton>(save).onPressed, isNull);
+    expect(t.widget<Checkbox>(check(3)).onChanged, isNull);
+    expect(
+      t.widget<DragSelectionRegion>(find.byType(DragSelectionRegion)).enabled,
+      isFalse,
+    );
+    expect(local.writes, isEmpty);
+    expect(
+      find.byKey(const ValueKey('save-destination-favorites')),
+      findsNothing,
+    );
+    await pref.setString(
+      ContentBlocklistService.storageKey,
+      jsonEncode({
+        'version': 1,
+        'videos': {bv(1): '刚屏蔽'},
+        'creators': {},
+      }),
+    );
+    await t.tap(find.text('重试读取黑名单'));
+    await t.pumpAndSettle();
+    expect(card(1), findsNothing);
+    expect(find.text('已选 1'), findsOneWidget);
+    await saveLocal(t);
+    expect(local.writes.map((e) => e.bvid), [bv(2)]);
+    expect(t.takeException(), isNull);
+  });
+
+  testWidgets('单项三点的收藏确认遇规则重读失败也不能提交', (t) async {
+    final local = _RecordedFavoriteWrites();
+    seedCrossFolder();
+    final pref = await SharedPreferences.getInstance();
+    await _pump(t, content: _CrossContent(), local: local);
+    await t.tap(find.byKey(Key('add-creator-video-${bv(2)}')));
+    await t.pumpAndSettle();
+    await t.tap(find.text('加入收藏夹'));
+    await t.pumpAndSettle();
+    await t.tap(find.text('独审收藏'));
+    await t.pumpAndSettle();
+    await pref.setString(ContentBlocklistService.storageKey, 'bad');
+    ContentBlocklistService.changes.value++;
+    await t.tap(find.text('加入收藏夹'));
+    await t.pumpAndSettle();
+    expect(local.writes, isEmpty);
+    expect(find.textContaining('投稿筛选已变化'), findsOneWidget);
+    await t.tap(find.text('取消'));
+    await t.pumpAndSettle();
+    expect(find.textContaining('相关操作已暂停'), findsOneWidget);
+    expect(
+      t
+          .widget<PopupMenuButton>(
+            find.byKey(Key('add-creator-video-${bv(2)}')),
+          )
+          .enabled,
+      isFalse,
+    );
+    expect(t.takeException(), isNull);
+  });
+
+  for (final target in ['favorites', 'learning']) {
+    testWidgets('目标确认期间外部屏蔽已选视频，不提交过期的 $target 选择', (t) async {
+      final local = AppFavoritesService(), learn = LearningListService();
+      final f = seedCrossFolder();
+      await _pump(t, content: _CrossContent(), local: local, learning: learn);
+      await t.longPress(card(1));
+      await t.pumpAndSettle();
+      await t.tap(check(2));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('creator-batch-save')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(ValueKey('save-destination-$target')));
+      await flush(t);
+      await t.pumpAndSettle();
+      if (target == 'favorites') {
+        await t.tap(find.text('独审收藏'));
+        await t.pumpAndSettle();
+      }
+      await t.runAsync(
+        () => ContentBlocklistService().blockVideo(bv(2), '确认前其他窗口屏蔽'),
+      );
+      await flush(t);
+      await t.pumpAndSettle();
+      final commit = target == 'favorites'
+          ? find.text('加入收藏夹')
+          : find.widgetWithText(FilledButton, '确认加入');
+      await t.tap(commit);
+      await flush(t);
+      await t.pumpAndSettle();
+      expect((await t.runAsync(() => local.loadItems(f.id)))!, isEmpty);
+      expect((await t.runAsync(learn.loadEntries))!, isEmpty);
+      expect(
+        find.textContaining(
+          target == 'favorites' ? '投稿筛选已变化' : '来源列表的规则或状态已变化',
+        ),
+        findsOneWidget,
+      );
+      await t.tap(find.text('取消'));
+      await t.pumpAndSettle();
+      expect(find.text('已选 1'), findsOneWidget);
+      expect(t.takeException(), isNull);
+    });
+  }
 }
