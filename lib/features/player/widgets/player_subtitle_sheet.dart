@@ -86,12 +86,15 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
       return;
     }
     final revision = ++_cueRevision;
+    final changedTrack = _browsingTrack?.id != track.id;
     setState(() {
       _browsingTrack = track;
       _cueResult = null;
       _cuesLoading = true;
-      _query = '';
-      _searchController.clear();
+      if (changedTrack) {
+        _query = '';
+        _searchController.clear();
+      }
     });
     SubtitleCueLoadResult result;
     try {
@@ -183,13 +186,12 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
     final cues = result?.status == SubtitleLoadStatus.available
         ? result!.cues
         : const <SubtitleCue>[];
-    final visible = cues
-        .where(
-          (cue) =>
-              _query.isEmpty ||
-              cue.content.toLowerCase().contains(_query.toLowerCase()),
-        )
-        .toList();
+    final needle = _query.toLowerCase();
+    final visible = needle.isEmpty
+        ? cues
+        : cues
+              .where((cue) => cue.content.toLowerCase().contains(needle))
+              .toList();
     return SizedBox(
       height:
           (MediaQuery.sizeOf(context).height -
@@ -203,61 +205,78 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
             child: TextField(
               key: const Key('subtitle-search'),
               controller: _searchController,
-              decoration: const InputDecoration(
-                prefixIcon: Icon(Icons.search_rounded),
+              decoration: InputDecoration(
+                prefixIcon: const Icon(Icons.search_rounded),
                 hintText: '搜索已有字幕',
+                suffixIcon: _searchController.text.isEmpty
+                    ? null
+                    : IconButton(
+                        tooltip: '清除字幕搜索',
+                        icon: const Icon(Icons.clear_rounded),
+                        onPressed: () {
+                          _searchController.clear();
+                          setState(() => _query = '');
+                        },
+                      ),
               ),
               onChanged: (value) => setState(() => _query = value.trim()),
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.only(left: 16, right: 4),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    '${_browsingTrack!.label} · ${visible.length}/${cues.length} 条',
+          // Keep the search field usable while the track header and body
+          // share the remaining scrollable viewport above the keyboard.
+          Expanded(
+            child: CustomScrollView(
+              key: const Key('subtitle-cue-list'),
+              slivers: [
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 16, right: 4),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '${_browsingTrack!.label} · ${visible.length}/${cues.length} 条',
+                          ),
+                        ),
+                        PopupMenuButton<SubtitleExportFormat>(
+                          key: const Key('export-subtitle-timeline'),
+                          tooltip: '导出完整字幕时间轴',
+                          enabled:
+                              !_exporting &&
+                              !_cuesLoading &&
+                              cues.isNotEmpty &&
+                              widget.isCurrentVideo(),
+                          onSelected: _exportCues,
+                          itemBuilder: (context) => const [
+                            PopupMenuItem(
+                              value: SubtitleExportFormat.srt,
+                              child: Text('导出 SRT'),
+                            ),
+                            PopupMenuItem(
+                              value: SubtitleExportFormat.text,
+                              child: Text('导出文本（含时间轴）'),
+                            ),
+                          ],
+                          icon: _exporting
+                              ? const SizedBox.square(
+                                  dimension: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.download_rounded),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-                PopupMenuButton<SubtitleExportFormat>(
-                  key: const Key('export-subtitle-timeline'),
-                  tooltip: '导出完整字幕时间轴',
-                  enabled:
-                      !_exporting &&
-                      !_cuesLoading &&
-                      cues.isNotEmpty &&
-                      widget.isCurrentVideo(),
-                  onSelected: _exportCues,
-                  itemBuilder: (context) => const [
-                    PopupMenuItem(
-                      value: SubtitleExportFormat.srt,
-                      child: Text('导出 SRT'),
-                    ),
-                    PopupMenuItem(
-                      value: SubtitleExportFormat.text,
-                      child: Text('导出文本（含时间轴）'),
-                    ),
-                  ],
-                  icon: _exporting
-                      ? const SizedBox.square(
-                          dimension: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.download_rounded),
-                ),
-              ],
-            ),
-          ),
-          if (_cuesLoading) const LinearProgressIndicator(),
-          Expanded(
-            child: _cuesLoading
-                ? const SizedBox.shrink()
-                : cues.isEmpty
-                ? Center(
+                if (_cuesLoading)
+                  const SliverToBoxAdapter(child: LinearProgressIndicator())
+                else if (cues.isEmpty)
+                  SliverToBoxAdapter(
                     child: Padding(
                       padding: const EdgeInsets.all(16),
                       child: Column(
-                        mainAxisSize: MainAxisSize.min,
                         children: [
                           Text(result?.message ?? '暂无可用字幕。'),
                           TextButton(
@@ -268,10 +287,12 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
                       ),
                     ),
                   )
-                : visible.isEmpty
-                ? const Center(child: Text('没有匹配的字幕'))
-                : ListView.builder(
-                    key: const Key('subtitle-cue-list'),
+                else if (visible.isEmpty)
+                  const SliverToBoxAdapter(
+                    child: Center(child: Text('没有匹配的字幕')),
+                  )
+                else
+                  SliverList.builder(
                     itemCount: visible.length,
                     itemBuilder: (context, index) {
                       final cue = visible[index];
@@ -288,6 +309,8 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
                       );
                     },
                   ),
+              ],
+            ),
           ),
         ],
       ),
