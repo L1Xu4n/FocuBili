@@ -1076,6 +1076,24 @@ class _DelayedWriteNotes extends VideoNoteService {
 
 /// 注册播放器已有功能及笔记旗标的必要回归。
 void main() {
+  Future<void> openPlayerTools(WidgetTester tester) async {
+    final trigger = find.byKey(const Key('more-settings-menu'));
+    if (trigger.hitTestable().evaluate().isEmpty) {
+      await tester.tap(find.byKey(const Key('player-surface')).first);
+      await tester.pump(const Duration(milliseconds: 350));
+      await tester.pumpAndSettle();
+    }
+    expect(trigger.hitTestable(), findsOneWidget);
+    await tester.tap(trigger);
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> tapPlayerTool(WidgetTester tester, String key) async {
+    final item = find.byKey(Key(key));
+    await tester.ensureVisible(item);
+    await tester.tap(item);
+  }
+
   /// 进入时读取已有标记，点击单笔记只打开正文，跨实例增删后及时更新。
   testWidgets('笔记旗标进入即显示点击不seek并随增删刷新', (tester) async {
     final service = _FakePlaybackService();
@@ -2868,12 +2886,8 @@ void main() {
         .widget<PopupMenuButton<int>>(find.byKey(const Key('quality-menu')))
         .onSelected!(32);
     await tester.pump(const Duration(milliseconds: 100));
-    final dynamic menu = tester.state(
-      find.byKey(const Key('more-settings-menu')),
-    );
-    menu.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('playback-loop-menu-item')));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'playback-loop-menu-item');
     await tester.pump(const Duration(milliseconds: 300));
     final viewport = tester.getRect(
       find.byKey(const Key('player-feedback-viewport')),
@@ -5521,12 +5535,8 @@ void main() {
       tester.widget<IconButton>(find.byTooltip('进入全屏')).onPressed!();
       await tester.pumpAndSettle();
     }
-    final dynamic menu = tester.state(
-      find.byKey(const Key('more-settings-menu')),
-    );
-    menu.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('字幕'));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'player-subtitle-menu-item');
     await tester.pumpAndSettle();
   }
 
@@ -6162,12 +6172,8 @@ void main() {
         )
         .onPressed!();
     await tester.pumpAndSettle();
-    final dynamic menu = tester.state(
-      find.byKey(const Key('more-settings-menu')),
-    );
-    menu.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('listening-menu-item')));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'listening-menu-item');
     await tester.pump(const Duration(milliseconds: 300));
     final progress = find.byKey(const Key('listening-time-progress'));
     final center = tester.getCenter(progress);
@@ -6214,12 +6220,8 @@ void main() {
     await tester.tap(find.byKey(const Key('danmaku-toggle')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('danmaku-canvas')), findsOneWidget);
-    final dynamic menu = tester.state(
-      find.byKey(const Key('more-settings-menu')),
-    );
-    menu.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('listening-menu-item')));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'listening-menu-item');
     await tester.pumpAndSettle();
     expect(service.audioOnly, isTrue);
     expect(find.byKey(const Key('danmaku-canvas')), findsNothing);
@@ -6228,16 +6230,14 @@ void main() {
     expect(find.byKey(const Key('listening-return-video')), findsNothing);
     expect(find.byKey(const Key('listening-time-progress')), findsOneWidget);
     expect(find.text('00:00/03:32'), findsOneWidget);
-    menu.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('sleep-timer-menu-item')));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'sleep-timer-menu-item');
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('sleep-timer-15-minutes')));
     await tester.pumpAndSettle();
     expect(service.timerDuration, const Duration(minutes: 15));
-    menu.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('sleep-timer-menu-item')));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'sleep-timer-menu-item');
     await tester.pumpAndSettle();
     expect(find.text('剩余时间：15:00 后暂停'), findsOneWidget);
     service.timerDuration = const Duration(minutes: 14, seconds: 59);
@@ -6247,9 +6247,8 @@ void main() {
     await tester.tap(find.byKey(const Key('sleep-timer-off')));
     await tester.pumpAndSettle();
     expect(service.timerDuration, isNull);
-    menu.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('listening-menu-item')));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'listening-menu-item');
     await tester.pumpAndSettle();
     expect(service.audioOnly, isFalse);
     expect(find.byKey(const Key('danmaku-canvas')), findsOneWidget);
@@ -6637,12 +6636,8 @@ void main() {
     );
     fullscreenButton.onPressed!();
     await tester.pumpAndSettle();
-    final dynamic moreMenuState = tester.state(
-      find.byKey(const Key('more-settings-menu')),
-    );
-    moreMenuState.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('字幕'));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'player-subtitle-menu-item');
     await tester.pumpAndSettle();
     await tester.tap(find.text('中文（简体）'));
     await tester.pumpAndSettle();
@@ -6953,13 +6948,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final dynamic moreMenuState = tester.state(
-      find.byKey(const Key('more-settings-menu')),
-    );
-    // 测试环境直接调用 Flutter 菜单状态，避免外层播放手势抢占模拟点击。
-    moreMenuState.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('danmaku-settings-menu-item')));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'danmaku-settings-menu-item');
     await tester.pumpAndSettle();
     expect(find.text('屏蔽关键词'), findsOneWidget);
 
@@ -6994,12 +6984,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final dynamic moreMenuState = tester.state(
-      find.byKey(const Key('more-settings-menu')),
-    );
-    moreMenuState.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('danmaku-settings-menu-item')));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'danmaku-settings-menu-item');
     await tester.pumpAndSettle();
 
     final Finder opacitySlider = find.byKey(
@@ -7052,12 +7038,9 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    final dynamic moreMenuState = tester.state(
-      find.byKey(const Key('more-settings-menu')),
-    );
-    moreMenuState.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('playback-loop-menu-item')));
+    await openPlayerTools(tester);
+    expect(find.byKey(const Key('listening-menu-item')), findsNothing);
+    await tapPlayerTool(tester, 'playback-loop-menu-item');
     await tester.pump();
 
     service.emitEnded();
@@ -7081,12 +7064,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    final dynamic moreMenuState = tester.state(
-      find.byKey(const Key('more-settings-menu')),
-    );
-    moreMenuState.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('sleep-timer-menu-item')));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'sleep-timer-menu-item');
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('sleep-timer-2-plays')));
     await tester.pumpAndSettle();
@@ -7096,9 +7075,8 @@ void main() {
     expect(service.seekToRequests, 1);
     expect(service.playRequests, 1);
 
-    moreMenuState.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('sleep-timer-menu-item')));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'sleep-timer-menu-item');
     await tester.pumpAndSettle();
     expect(find.text('剩余次数：1 次后暂停（含当前这一轮）'), findsOneWidget);
     tester.state<NavigatorState>(find.byType(Navigator)).pop();
@@ -7125,12 +7103,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    final dynamic moreMenuState = tester.state(
-      find.byKey(const Key('more-settings-menu')),
-    );
-    moreMenuState.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('sleep-timer-menu-item')));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'sleep-timer-menu-item');
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('sleep-timer-custom-play-count')));
     await tester.pumpAndSettle();
@@ -7169,12 +7143,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    final dynamic moreMenuState = tester.state(
-      find.byKey(const Key('more-settings-menu')),
-    );
-    moreMenuState.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('sleep-timer-menu-item')));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'sleep-timer-menu-item');
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('sleep-timer-custom-duration')));
     await tester.pumpAndSettle();
@@ -7189,9 +7159,13 @@ void main() {
     await tester.enterText(input, '25');
     await tester.tap(find.byKey(const Key('sleep-timer-custom-confirm')));
     await tester.pumpAndSettle();
-    moreMenuState.showButtonMenu();
-    await tester.pumpAndSettle();
-    expect(find.textContaining('定时关闭：约 25 分钟后'), findsOneWidget);
+    await openPlayerTools(tester);
+    final timer = find.byKey(const Key('sleep-timer-menu-item'));
+    await tester.ensureVisible(timer);
+    expect(
+      find.descendant(of: timer, matching: find.text('约 25 分钟后暂停')),
+      findsOneWidget,
+    );
   });
 
   /// 验证全屏锁定后只有解锁按钮可操作，其他控制层完全隐藏且不接收触摸。
@@ -7388,25 +7362,23 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(find.byKey(const Key('video-fit-contain')), findsOneWidget);
-    await tester.tap(find.byKey(const Key('more-settings-menu')));
-    await tester.pump(const Duration(milliseconds: 300));
+    await openPlayerTools(tester);
     final Finder coverItem = find.byKey(const Key('video-fit-mode-cover'));
     await tester.ensureVisible(coverItem);
     await tester.pump(const Duration(milliseconds: 100));
     await tester.tap(coverItem);
-    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pumpAndSettle();
     expect(
       tester.widget<FittedBox>(find.byKey(const Key('video-fit-cover'))).fit,
       BoxFit.cover,
     );
 
-    await tester.tap(find.byKey(const Key('more-settings-menu')));
-    await tester.pump(const Duration(milliseconds: 300));
+    await openPlayerTools(tester);
     final Finder stretchItem = find.byKey(const Key('video-fit-mode-stretch'));
     await tester.ensureVisible(stretchItem);
     await tester.pump(const Duration(milliseconds: 100));
     await tester.tap(stretchItem);
-    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pumpAndSettle();
     expect(
       tester.widget<FittedBox>(find.byKey(const Key('video-fit-stretch'))).fit,
       BoxFit.fill,
