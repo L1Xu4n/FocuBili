@@ -107,6 +107,7 @@ part 'player_sleep_timer_coordinator.dart';
 part 'player_video_coordinator.dart';
 part 'player_playlist_coordinator.dart';
 part 'player_controls_view.dart';
+part 'player_tools_panel.dart';
 part 'player_feedback_view.dart';
 part 'player_details_view.dart';
 part 'player_local_library.dart';
@@ -115,23 +116,6 @@ part 'player_page_view.dart';
 
 /// 标识播放器画面应保留比例、裁切填充，还是按容器比例拉伸。
 enum _VideoFitMode { contain, cover, stretch }
-
-/// 标识播放器右上角“更多”菜单中可执行的本地播放器设置。
-enum _PlayerMoreMenuAction {
-  blockVideo,
-  blockCreator,
-  manageBlocklist,
-  listening,
-  subtitles,
-  danmakuSettings,
-  playbackLoop,
-  playlist,
-  abRepeat,
-  sleepTimer,
-  fitContain,
-  fitCover,
-  fitStretch,
-}
 
 /// 标识合集展开列表的四种本地排序方式，不改变服务端原始合集顺序。
 enum _CollectionEntryOrder { original, newest, oldest, mostPlayed }
@@ -272,6 +256,12 @@ class _PlayerPageState extends State<PlayerPage>
       <String, TapGestureRecognizer>{};
   @override
   bool _showControls = true;
+  final FocusNode _playerToolsTriggerFocus = FocusNode(
+    debugLabel: 'Player tools trigger',
+  );
+  _PlayerToolsSession? _playerToolsSession;
+  @override
+  bool get _playerToolsOpen => _playerToolsSession != null;
 
   /// 清理上一支视频的互动状态，并开始读取新视频对应的账号状态。
   @override
@@ -536,6 +526,8 @@ class _PlayerPageState extends State<PlayerPage>
   /// 离开页面前取消重试状态、订阅和计时器，释放原生资源并恢复竖屏与系统栏。
   @override
   void dispose() {
+    _playerToolsSession?.closeAfterOwnerDisposed();
+    _playerToolsTriggerFocus.dispose();
     _disposePlaylist();
     final abRepeatDrain = _disposeAbRepeat();
     CacheLifecycle.subtitles.removeListener(_invalidateSubtitleSession);
@@ -559,5 +551,8 @@ class _PlayerPageState extends State<PlayerPage>
   }
 
   @override
-  Widget build(BuildContext context) => _buildPlayerPage(context);
+  Widget build(BuildContext context) {
+    _refreshPlayerTools();
+    return _buildPlayerPage(context);
+  }
 }
