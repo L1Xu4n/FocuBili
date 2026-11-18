@@ -56,16 +56,18 @@ extension _PlayerControlsView on _PlayerPageState {
       SizedBox(
         width: size.moreButton,
         height: size.moreButton,
-        child: PopupMenuButton<_PlayerMoreMenuAction>(
+        child: IconButton(
           key: const Key('more-settings-menu'),
-          tooltip: '更多选项',
+          tooltip: '播放器功能',
+          focusNode: _playerToolsTriggerFocus,
           padding: EdgeInsets.zero,
           iconSize: 22 * size.scale,
-          popUpAnimationStyle:
-              _PlayerControlsCoordinator._playerPopupMenuAnimationStyle,
+          style: IconButton.styleFrom(
+            fixedSize: Size.square(size.moreButton),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
           icon: const Icon(Icons.more_vert_rounded, color: Colors.white),
-          onSelected: _handleMoreSettingsSelection,
-          itemBuilder: (context) => _buildMoreSettingsMenu(),
+          onPressed: () => unawaited(_openPlayerTools()),
         ),
       ),
     ];
@@ -257,131 +259,6 @@ extension _PlayerControlsView on _PlayerPageState {
           ),
         ),
       ),
-    );
-  }
-
-  /// 优先展示观看与学习操作；画面设置和低频屏蔽管理置于末尾。
-  List<PopupMenuEntry<_PlayerMoreMenuAction>> _buildMoreSettingsMenu() {
-    return <PopupMenuEntry<_PlayerMoreMenuAction>>[
-      if (_playbackService is ListeningPlaybackService)
-        PopupMenuItem<_PlayerMoreMenuAction>(
-          key: const Key('listening-menu-item'),
-          value: _PlayerMoreMenuAction.listening,
-          enabled:
-              !_switchingListening &&
-              _playbackSnapshot.phase != PlaybackPhase.loading,
-          child: Row(
-            children: [
-              Icon(
-                _playbackSnapshot.audioOnly
-                    ? Icons.ondemand_video_rounded
-                    : Icons.headphones_rounded,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(_playbackSnapshot.audioOnly ? '返回看视频' : '听视频（省流）'),
-              ),
-            ],
-          ),
-        ),
-      const PopupMenuItem<_PlayerMoreMenuAction>(
-        value: _PlayerMoreMenuAction.subtitles,
-        child: Row(
-          children: <Widget>[
-            Icon(Icons.subtitles_rounded),
-            SizedBox(width: 8),
-            Expanded(child: Text('字幕')),
-          ],
-        ),
-      ),
-      const PopupMenuDivider(),
-      const PopupMenuItem<_PlayerMoreMenuAction>(
-        key: Key('playback-playlist-menu-item'),
-        value: _PlayerMoreMenuAction.playlist,
-        child: Text('播放列表与模式'),
-      ),
-      CheckedPopupMenuItem<_PlayerMoreMenuAction>(
-        key: const Key('playback-loop-menu-item'),
-        value: _PlayerMoreMenuAction.playbackLoop,
-        checked: _playbackLoopEnabled,
-        child: Text(_playbackLoopEnabled ? '循环播放（已开启）' : '循环播放'),
-      ),
-      PopupMenuItem<_PlayerMoreMenuAction>(
-        key: const Key('ab-repeat-menu-item'),
-        value: _PlayerMoreMenuAction.abRepeat,
-        child: Text(_abRepeatRange == null ? 'A–B 区间循环' : 'A–B 区间循环（已启用）'),
-      ),
-      PopupMenuItem<_PlayerMoreMenuAction>(
-        key: const Key('sleep-timer-menu-item'),
-        value: _PlayerMoreMenuAction.sleepTimer,
-        child: Row(
-          children: <Widget>[
-            const Icon(Icons.bedtime_outlined),
-            const SizedBox(width: 8),
-            Expanded(child: Text(_sleepTimerSummary)),
-          ],
-        ),
-      ),
-      const PopupMenuDivider(),
-      const PopupMenuItem<_PlayerMoreMenuAction>(
-        key: Key('danmaku-settings-menu-item'),
-        value: _PlayerMoreMenuAction.danmakuSettings,
-        child: Row(
-          children: <Widget>[
-            Icon(Icons.tune_rounded),
-            SizedBox(width: 8),
-            Expanded(child: Text('弹幕设置')),
-          ],
-        ),
-      ),
-      const PopupMenuDivider(),
-      const PopupMenuItem<_PlayerMoreMenuAction>(
-        enabled: false,
-        child: Text('画面比例'),
-      ),
-      _buildVideoFitModeMenuItem(
-        action: _PlayerMoreMenuAction.fitContain,
-        mode: _VideoFitMode.contain,
-      ),
-      _buildVideoFitModeMenuItem(
-        action: _PlayerMoreMenuAction.fitCover,
-        mode: _VideoFitMode.cover,
-      ),
-      _buildVideoFitModeMenuItem(
-        action: _PlayerMoreMenuAction.fitStretch,
-        mode: _VideoFitMode.stretch,
-      ),
-      const PopupMenuDivider(),
-      if (!_activeVideo.isCourse)
-        const PopupMenuItem(
-          key: Key('player-block-video'),
-          value: _PlayerMoreMenuAction.blockVideo,
-          child: Text('屏蔽该视频'),
-        ),
-      PopupMenuItem(
-        key: const Key('player-block-creator'),
-        value: _PlayerMoreMenuAction.blockCreator,
-        enabled: _activeVideo.ownerMid > 0,
-        child: const Text('屏蔽该 UP 主'),
-      ),
-      const PopupMenuItem(
-        key: Key('player-manage-blocklist'),
-        value: _PlayerMoreMenuAction.manageBlocklist,
-        child: Text('管理黑名单'),
-      ),
-    ];
-  }
-
-  /// 创建一项带勾选状态的画面比例菜单，帮助用户确认当前正在使用的模式。
-  CheckedPopupMenuItem<_PlayerMoreMenuAction> _buildVideoFitModeMenuItem({
-    required _PlayerMoreMenuAction action,
-    required _VideoFitMode mode,
-  }) {
-    return CheckedPopupMenuItem<_PlayerMoreMenuAction>(
-      key: Key('video-fit-mode-${mode.name}'),
-      value: action,
-      checked: _videoFitMode == mode,
-      child: Text(_videoFitModeLabel(mode)),
     );
   }
 

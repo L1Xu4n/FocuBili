@@ -575,6 +575,9 @@ class BilibiliPlaybackSession {
     snapshot = next;
   }
 
+  /// Opaque request identity; never exported or persisted.
+  Object get scopeKey => (_localGeneration, snapshot.generation);
+
   Future<String> headerFor(String path) async {
     await _checkLocal();
     if (_native case final native?) {
