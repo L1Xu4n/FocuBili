@@ -1,0 +1,1209 @@
+{
+  "fixture": "Real Flutter HomePage with synthetic local preferences, WidgetTester; logical dp. No physical-device FPS measurements.",
+  "versions": {
+    "stable": "dd3ebb7 (v1.8.1)",
+    "beta4": "8245c6b",
+    "restoredProduction": "59af808d7a1835b4094393b2e746a7f613a9c203"
+  },
+  "fixedOffsets": {
+    "light": {
+      "00-closed": {
+        "scroll": 0.0,
+        "sources": {
+          "stable": {
+            "searchY": 389.0,
+            "firstCardY": 768.0,
+            "filter": [
+              "ImageFilter.blur(0.0, 0.0, unspecified)"
+            ],
+            "opacity": [
+              1.0
+            ],
+            "hittableSearch": true
+          },
+          "beta4": {
+            "searchY": 389.0,
+            "firstCardY": 768.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": true
+          },
+          "restored": {
+            "searchY": 389.0,
+            "firstCardY": 768.0,
+            "filter": [],
+            "opacity": [
+              1.0
+            ],
+            "hittableSearch": true
+          }
+        }
+      },
+      "01-pull-42": {
+        "scroll": 42.0,
+        "sources": {
+          "stable": {
+            "searchY": 402.44,
+            "firstCardY": 726.0,
+            "filter": [
+              "ImageFilter.blur(1.05, 1.05, unspecified)"
+            ],
+            "opacity": [
+              0.868
+            ],
+            "hittableSearch": true
+          },
+          "beta4": {
+            "searchY": 347.0,
+            "firstCardY": 726.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": true
+          },
+          "restored": {
+            "searchY": 402.44,
+            "firstCardY": 726.0,
+            "filter": [
+              "ImageFilter.blur(1.05, 1.05, unspecified)"
+            ],
+            "opacity": [
+              0.868
+            ],
+            "hittableSearch": true
+          }
+        }
+      },
+      "02-pull-140": {
+        "scroll": 140.0,
+        "sources": {
+          "stable": {
+            "searchY": 433.8,
+            "firstCardY": 628.0,
+            "filter": [
+              "ImageFilter.blur(3.5, 3.5, unspecified)"
+            ],
+            "opacity": [
+              0.56
+            ],
+            "hittableSearch": true
+          },
+          "beta4": {
+            "searchY": 249.0,
+            "firstCardY": 628.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": true
+          },
+          "restored": {
+            "searchY": 433.8,
+            "firstCardY": 628.0,
+            "filter": [
+              "ImageFilter.blur(3.5, 3.5, unspecified)"
+            ],
+            "opacity": [
+              0.56
+            ],
+            "hittableSearch": true
+          }
+        }
+      },
+      "03-pull-280": {
+        "scroll": 280.0,
+        "sources": {
+          "stable": {
+            "searchY": 478.6,
+            "firstCardY": 488.0,
+            "filter": [
+              "ImageFilter.blur(7.0, 7.0, unspecified)"
+            ],
+            "opacity": [
+              0.12
+            ],
+            "hittableSearch": false
+          },
+          "beta4": {
+            "searchY": 109.0,
+            "firstCardY": 488.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": true
+          },
+          "restored": {
+            "searchY": 478.6,
+            "firstCardY": 488.0,
+            "filter": [
+              "ImageFilter.blur(7.0, 7.0, unspecified)"
+            ],
+            "opacity": [
+              0.12
+            ],
+            "hittableSearch": false
+          }
+        }
+      },
+      "04-half": {
+        "scroll": 384.0,
+        "sources": {
+          "stable": {
+            "searchY": 511.88,
+            "firstCardY": 384.0,
+            "filter": [
+              "ImageFilter.blur(7.0, 7.0, unspecified)"
+            ],
+            "opacity": [
+              0.12
+            ],
+            "hittableSearch": false
+          },
+          "beta4": {
+            "searchY": 5.0,
+            "firstCardY": 384.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": true
+          },
+          "restored": {
+            "searchY": 511.88,
+            "firstCardY": 384.0,
+            "filter": [
+              "ImageFilter.blur(7.0, 7.0, unspecified)"
+            ],
+            "opacity": [
+              0.12
+            ],
+            "hittableSearch": false
+          }
+        }
+      },
+      "05-open": {
+        "scroll": 768.0,
+        "sources": {
+          "stable": {
+            "searchY": null,
+            "firstCardY": 0.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": false
+          },
+          "beta4": {
+            "searchY": null,
+            "firstCardY": 0.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": false
+          },
+          "restored": {
+            "searchY": null,
+            "firstCardY": 0.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": false
+          }
+        }
+      },
+      "06-deep": {
+        "scroll": 922.0,
+        "sources": {
+          "stable": {
+            "searchY": null,
+            "firstCardY": -154.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": false
+          },
+          "beta4": {
+            "searchY": null,
+            "firstCardY": -154.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": false
+          },
+          "restored": {
+            "searchY": null,
+            "firstCardY": -154.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": false
+          }
+        }
+      },
+      "07-release-140": {
+        "scroll": 140.0,
+        "sources": {
+          "stable": {
+            "searchY": 433.8,
+            "firstCardY": 628.0,
+            "filter": [
+              "ImageFilter.blur(3.5, 3.5, unspecified)"
+            ],
+            "opacity": [
+              0.56
+            ],
+            "hittableSearch": true
+          },
+          "beta4": {
+            "searchY": 249.0,
+            "firstCardY": 628.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": true
+          },
+          "restored": {
+            "searchY": 433.8,
+            "firstCardY": 628.0,
+            "filter": [
+              "ImageFilter.blur(3.5, 3.5, unspecified)"
+            ],
+            "opacity": [
+              0.56
+            ],
+            "hittableSearch": true
+          }
+        }
+      },
+      "08-reclosed": {
+        "scroll": 0.0,
+        "sources": {
+          "stable": {
+            "searchY": 389.0,
+            "firstCardY": 768.0,
+            "filter": [
+              "ImageFilter.blur(0.0, 0.0, unspecified)"
+            ],
+            "opacity": [
+              1.0
+            ],
+            "hittableSearch": true
+          },
+          "beta4": {
+            "searchY": 389.0,
+            "firstCardY": 768.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": true
+          },
+          "restored": {
+            "searchY": 389.0,
+            "firstCardY": 768.0,
+            "filter": [],
+            "opacity": [
+              1.0
+            ],
+            "hittableSearch": true
+          }
+        }
+      }
+    },
+    "dark": {
+      "00-closed": {
+        "scroll": 0.0,
+        "sources": {
+          "stable": {
+            "searchY": 389.0,
+            "firstCardY": 768.0,
+            "filter": [
+              "ImageFilter.blur(0.0, 0.0, unspecified)"
+            ],
+            "opacity": [
+              1.0
+            ],
+            "hittableSearch": true
+          },
+          "beta4": {
+            "searchY": 389.0,
+            "firstCardY": 768.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": true
+          },
+          "restored": {
+            "searchY": 389.0,
+            "firstCardY": 768.0,
+            "filter": [],
+            "opacity": [
+              1.0
+            ],
+            "hittableSearch": true
+          }
+        }
+      },
+      "02-pull-140": {
+        "scroll": 140.0,
+        "sources": {
+          "stable": {
+            "searchY": 433.8,
+            "firstCardY": 628.0,
+            "filter": [
+              "ImageFilter.blur(3.5, 3.5, unspecified)"
+            ],
+            "opacity": [
+              0.56
+            ],
+            "hittableSearch": true
+          },
+          "beta4": {
+            "searchY": 249.0,
+            "firstCardY": 628.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": true
+          },
+          "restored": {
+            "searchY": 433.8,
+            "firstCardY": 628.0,
+            "filter": [
+              "ImageFilter.blur(3.5, 3.5, unspecified)"
+            ],
+            "opacity": [
+              0.56
+            ],
+            "hittableSearch": true
+          }
+        }
+      },
+      "04-half": {
+        "scroll": 384.0,
+        "sources": {
+          "stable": {
+            "searchY": 511.88,
+            "firstCardY": 384.0,
+            "filter": [
+              "ImageFilter.blur(7.0, 7.0, unspecified)"
+            ],
+            "opacity": [
+              0.12
+            ],
+            "hittableSearch": false
+          },
+          "beta4": {
+            "searchY": 5.0,
+            "firstCardY": 384.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": true
+          },
+          "restored": {
+            "searchY": 511.88,
+            "firstCardY": 384.0,
+            "filter": [
+              "ImageFilter.blur(7.0, 7.0, unspecified)"
+            ],
+            "opacity": [
+              0.12
+            ],
+            "hittableSearch": false
+          }
+        }
+      },
+      "05-open": {
+        "scroll": 768.0,
+        "sources": {
+          "stable": {
+            "searchY": null,
+            "firstCardY": 0.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": false
+          },
+          "beta4": {
+            "searchY": null,
+            "firstCardY": 0.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": false
+          },
+          "restored": {
+            "searchY": null,
+            "firstCardY": 0.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": false
+          }
+        }
+      }
+    },
+    "narrow": {
+      "00-closed": {
+        "scroll": 0.0,
+        "sources": {
+          "stable": {
+            "searchY": 299.0,
+            "firstCardY": 588.0,
+            "filter": [
+              "ImageFilter.blur(0.0, 0.0, unspecified)"
+            ],
+            "opacity": [
+              1.0
+            ],
+            "hittableSearch": true
+          },
+          "beta4": {
+            "searchY": 299.0,
+            "firstCardY": 588.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": true
+          },
+          "restored": {
+            "searchY": 299.0,
+            "firstCardY": 588.0,
+            "filter": [],
+            "opacity": [
+              1.0
+            ],
+            "hittableSearch": true
+          }
+        }
+      },
+      "02-pull-140": {
+        "scroll": 140.0,
+        "sources": {
+          "stable": {
+            "searchY": 343.8,
+            "firstCardY": 448.0,
+            "filter": [
+              "ImageFilter.blur(3.5, 3.5, unspecified)"
+            ],
+            "opacity": [
+              0.56
+            ],
+            "hittableSearch": true
+          },
+          "beta4": {
+            "searchY": 159.0,
+            "firstCardY": 448.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": true
+          },
+          "restored": {
+            "searchY": 343.8,
+            "firstCardY": 448.0,
+            "filter": [
+              "ImageFilter.blur(3.5, 3.5, unspecified)"
+            ],
+            "opacity": [
+              0.56
+            ],
+            "hittableSearch": true
+          }
+        }
+      },
+      "04-half": {
+        "scroll": 294.0,
+        "sources": {
+          "stable": {
+            "searchY": 393.08,
+            "firstCardY": 294.0,
+            "filter": [
+              "ImageFilter.blur(7.0, 7.0, unspecified)"
+            ],
+            "opacity": [
+              0.12
+            ],
+            "hittableSearch": false
+          },
+          "beta4": {
+            "searchY": 5.0,
+            "firstCardY": 294.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": true
+          },
+          "restored": {
+            "searchY": 393.08,
+            "firstCardY": 294.0,
+            "filter": [
+              "ImageFilter.blur(7.0, 7.0, unspecified)"
+            ],
+            "opacity": [
+              0.12
+            ],
+            "hittableSearch": false
+          }
+        }
+      },
+      "05-open": {
+        "scroll": 588.0,
+        "sources": {
+          "stable": {
+            "searchY": null,
+            "firstCardY": 0.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": false
+          },
+          "beta4": {
+            "searchY": null,
+            "firstCardY": 0.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": false
+          },
+          "restored": {
+            "searchY": null,
+            "firstCardY": 0.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": false
+          }
+        }
+      }
+    },
+    "large": {
+      "00-closed": {
+        "scroll": 0.0,
+        "sources": {
+          "stable": {
+            "searchY": 291.0,
+            "firstCardY": 448.0,
+            "filter": [
+              "ImageFilter.blur(0.0, 0.0, unspecified)"
+            ],
+            "opacity": [
+              1.0
+            ],
+            "hittableSearch": true
+          },
+          "beta4": {
+            "searchY": 341.0,
+            "firstCardY": 484.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": true
+          },
+          "restored": {
+            "searchY": 341.0,
+            "firstCardY": 484.0,
+            "filter": [],
+            "opacity": [
+              1.0
+            ],
+            "hittableSearch": true
+          }
+        }
+      },
+      "02-pull-140": {
+        "scroll": 140.0,
+        "sources": {
+          "stable": {
+            "searchY": 335.8,
+            "firstCardY": 308.0,
+            "filter": [
+              "ImageFilter.blur(3.5, 3.5, unspecified)"
+            ],
+            "opacity": [
+              0.56
+            ],
+            "hittableSearch": false
+          },
+          "beta4": {
+            "searchY": 201.0,
+            "firstCardY": 344.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": true
+          },
+          "restored": {
+            "searchY": 201.0,
+            "firstCardY": 344.0,
+            "filter": [],
+            "opacity": [
+              1.0
+            ],
+            "hittableSearch": true
+          }
+        }
+      },
+      "04-half": {
+        "scroll": 242.0,
+        "sources": {
+          "stable": {
+            "searchY": 362.68,
+            "firstCardY": 224.0,
+            "filter": [
+              "ImageFilter.blur(5.6000000000000005, 5.6000000000000005, unspecified)"
+            ],
+            "opacity": [
+              0.29599999999999993
+            ],
+            "hittableSearch": false
+          },
+          "beta4": {
+            "searchY": 99.0,
+            "firstCardY": 242.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": true
+          },
+          "restored": {
+            "searchY": 99.0,
+            "firstCardY": 242.0,
+            "filter": [],
+            "opacity": [
+              1.0
+            ],
+            "hittableSearch": true
+          }
+        }
+      },
+      "05-open": {
+        "scroll": 484.0,
+        "sources": {
+          "stable": {
+            "searchY": null,
+            "firstCardY": 0.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": false
+          },
+          "beta4": {
+            "searchY": null,
+            "firstCardY": 0.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": false
+          },
+          "restored": {
+            "searchY": null,
+            "firstCardY": 0.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": false
+          }
+        }
+      }
+    },
+    "reduced": {
+      "00-closed": {
+        "scroll": 0.0,
+        "sources": {
+          "stable": {
+            "searchY": 389.0,
+            "firstCardY": 768.0,
+            "filter": [
+              "ImageFilter.blur(0.0, 0.0, unspecified)"
+            ],
+            "opacity": [
+              1.0
+            ],
+            "hittableSearch": true
+          },
+          "beta4": {
+            "searchY": 389.0,
+            "firstCardY": 768.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": true
+          },
+          "restored": {
+            "searchY": 389.0,
+            "firstCardY": 768.0,
+            "filter": [],
+            "opacity": [
+              1.0
+            ],
+            "hittableSearch": true
+          }
+        }
+      },
+      "02-pull-140": {
+        "scroll": 140.0,
+        "sources": {
+          "stable": {
+            "searchY": 433.8,
+            "firstCardY": 628.0,
+            "filter": [
+              "ImageFilter.blur(3.5, 3.5, unspecified)"
+            ],
+            "opacity": [
+              0.56
+            ],
+            "hittableSearch": true
+          },
+          "beta4": {
+            "searchY": 249.0,
+            "firstCardY": 628.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": true
+          },
+          "restored": {
+            "searchY": 249.0,
+            "firstCardY": 628.0,
+            "filter": [],
+            "opacity": [
+              1.0
+            ],
+            "hittableSearch": true
+          }
+        }
+      },
+      "04-half": {
+        "scroll": 384.0,
+        "sources": {
+          "stable": {
+            "searchY": 511.88,
+            "firstCardY": 384.0,
+            "filter": [
+              "ImageFilter.blur(7.0, 7.0, unspecified)"
+            ],
+            "opacity": [
+              0.12
+            ],
+            "hittableSearch": false
+          },
+          "beta4": {
+            "searchY": 5.0,
+            "firstCardY": 384.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": true
+          },
+          "restored": {
+            "searchY": 5.0,
+            "firstCardY": 384.0,
+            "filter": [],
+            "opacity": [
+              1.0
+            ],
+            "hittableSearch": true
+          }
+        }
+      },
+      "05-open": {
+        "scroll": 768.0,
+        "sources": {
+          "stable": {
+            "searchY": null,
+            "firstCardY": 0.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": false
+          },
+          "beta4": {
+            "searchY": null,
+            "firstCardY": 0.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": false
+          },
+          "restored": {
+            "searchY": null,
+            "firstCardY": 0.0,
+            "filter": [],
+            "opacity": [],
+            "hittableSearch": false
+          }
+        }
+      }
+    }
+  },
+  "realGesture": [
+    {
+      "index": "000",
+      "action": "closed",
+      "offset": 0.0
+    },
+    {
+      "index": "001",
+      "action": "pull to half",
+      "offset": 19.200000000000045
+    },
+    {
+      "index": "002",
+      "action": "pull to half",
+      "offset": 38.39999999999998
+    },
+    {
+      "index": "003",
+      "action": "pull to half",
+      "offset": 57.60000000000002
+    },
+    {
+      "index": "004",
+      "action": "pull to half",
+      "offset": 76.79999999999995
+    },
+    {
+      "index": "005",
+      "action": "pull to half",
+      "offset": 96.0
+    },
+    {
+      "index": "006",
+      "action": "pull to half",
+      "offset": 115.20000000000005
+    },
+    {
+      "index": "007",
+      "action": "pull to half",
+      "offset": 134.39999999999998
+    },
+    {
+      "index": "008",
+      "action": "pull to half",
+      "offset": 153.60000000000002
+    },
+    {
+      "index": "009",
+      "action": "pull to half",
+      "offset": 172.79999999999995
+    },
+    {
+      "index": "010",
+      "action": "pull to half",
+      "offset": 192.0
+    },
+    {
+      "index": "011",
+      "action": "pull to half",
+      "offset": 211.2
+    },
+    {
+      "index": "012",
+      "action": "pull to half",
+      "offset": 230.39999999999998
+    },
+    {
+      "index": "013",
+      "action": "pull to half",
+      "offset": 249.60000000000002
+    },
+    {
+      "index": "014",
+      "action": "pull to half",
+      "offset": 268.8
+    },
+    {
+      "index": "015",
+      "action": "pull to half",
+      "offset": 288.0
+    },
+    {
+      "index": "016",
+      "action": "pull to half",
+      "offset": 307.2
+    },
+    {
+      "index": "017",
+      "action": "pull to half",
+      "offset": 326.4
+    },
+    {
+      "index": "018",
+      "action": "pull to half",
+      "offset": 345.6
+    },
+    {
+      "index": "019",
+      "action": "pull to half",
+      "offset": 364.8
+    },
+    {
+      "index": "020",
+      "action": "pull to half",
+      "offset": 384.0
+    },
+    {
+      "index": "021",
+      "action": "release at half",
+      "offset": 384.0
+    },
+    {
+      "index": "022",
+      "action": "release at half",
+      "offset": 384.0
+    },
+    {
+      "index": "023",
+      "action": "release at half",
+      "offset": 384.0
+    },
+    {
+      "index": "024",
+      "action": "release at half",
+      "offset": 384.0
+    },
+    {
+      "index": "025",
+      "action": "release at half",
+      "offset": 384.0
+    },
+    {
+      "index": "026",
+      "action": "release at half",
+      "offset": 384.0
+    },
+    {
+      "index": "027",
+      "action": "release at half",
+      "offset": 384.0
+    },
+    {
+      "index": "028",
+      "action": "release at half",
+      "offset": 384.0
+    },
+    {
+      "index": "029",
+      "action": "release at half",
+      "offset": 384.0
+    },
+    {
+      "index": "030",
+      "action": "release at half",
+      "offset": 384.0
+    },
+    {
+      "index": "031",
+      "action": "flick to open",
+      "offset": 408.0
+    },
+    {
+      "index": "032",
+      "action": "flick to open",
+      "offset": 432.0
+    },
+    {
+      "index": "033",
+      "action": "flick to open",
+      "offset": 456.0
+    },
+    {
+      "index": "034",
+      "action": "flick to open",
+      "offset": 480.0
+    },
+    {
+      "index": "035",
+      "action": "flick to open",
+      "offset": 504.0
+    },
+    {
+      "index": "036",
+      "action": "flick to open",
+      "offset": 528.0
+    },
+    {
+      "index": "037",
+      "action": "flick to open",
+      "offset": 552.0
+    },
+    {
+      "index": "038",
+      "action": "opening",
+      "offset": 552.0
+    },
+    {
+      "index": "039",
+      "action": "opening",
+      "offset": 616.5125550219816
+    },
+    {
+      "index": "040",
+      "action": "opening",
+      "offset": 678.6744163803544
+    },
+    {
+      "index": "041",
+      "action": "opening",
+      "offset": 719.6135184545776
+    },
+    {
+      "index": "042",
+      "action": "opening",
+      "offset": 743.080563999086
+    },
+    {
+      "index": "043",
+      "action": "opening",
+      "offset": 755.589612668875
+    },
+    {
+      "index": "044",
+      "action": "opening",
+      "offset": 761.9653902429517
+    },
+    {
+      "index": "045",
+      "action": "opening",
+      "offset": 765.1177250144038
+    },
+    {
+      "index": "046",
+      "action": "opening",
+      "offset": 766.6423829534739
+    },
+    {
+      "index": "047",
+      "action": "opening",
+      "offset": 768.0
+    },
+    {
+      "index": "048",
+      "action": "opening",
+      "offset": 768.0
+    },
+    {
+      "index": "049",
+      "action": "opening",
+      "offset": 768.0
+    },
+    {
+      "index": "050",
+      "action": "opening",
+      "offset": 768.0
+    },
+    {
+      "index": "051",
+      "action": "opening",
+      "offset": 768.0
+    },
+    {
+      "index": "052",
+      "action": "opening",
+      "offset": 768.0
+    },
+    {
+      "index": "053",
+      "action": "open",
+      "offset": 768.0
+    },
+    {
+      "index": "054",
+      "action": "reverse flick",
+      "offset": 746.0
+    },
+    {
+      "index": "055",
+      "action": "reverse flick",
+      "offset": 724.0
+    },
+    {
+      "index": "056",
+      "action": "reverse flick",
+      "offset": 702.0
+    },
+    {
+      "index": "057",
+      "action": "reverse flick",
+      "offset": 680.0
+    },
+    {
+      "index": "058",
+      "action": "reverse flick",
+      "offset": 658.0
+    },
+    {
+      "index": "059",
+      "action": "reverse flick",
+      "offset": 636.0
+    },
+    {
+      "index": "060",
+      "action": "reverse flick",
+      "offset": 614.0
+    },
+    {
+      "index": "061",
+      "action": "reverse flick",
+      "offset": 592.0
+    },
+    {
+      "index": "062",
+      "action": "reverse flick",
+      "offset": 570.0
+    },
+    {
+      "index": "063",
+      "action": "returning",
+      "offset": 570.0
+    },
+    {
+      "index": "064",
+      "action": "returning",
+      "offset": 429.26163239297665
+    },
+    {
+      "index": "065",
+      "action": "returning",
+      "offset": 260.58979681071924
+    },
+    {
+      "index": "066",
+      "action": "returning",
+      "offset": 143.40928001114835
+    },
+    {
+      "index": "067",
+      "action": "returning",
+      "offset": 74.59522797542513
+    },
+    {
+      "index": "068",
+      "action": "returning",
+      "offset": 37.40459247476886
+    },
+    {
+      "index": "069",
+      "action": "returning",
+      "offset": 18.2789911648422
+    },
+    {
+      "index": "070",
+      "action": "returning",
+      "offset": 8.763668834404804
+    },
+    {
+      "index": "071",
+      "action": "returning",
+      "offset": 4.14022853348723
+    },
+    {
+      "index": "072",
+      "action": "returning",
+      "offset": 1.9332152560567397
+    },
+    {
+      "index": "073",
+      "action": "returning",
+      "offset": 0.0
+    },
+    {
+      "index": "074",
+      "action": "returning",
+      "offset": 0.0
+    },
+    {
+      "index": "075",
+      "action": "returning",
+      "offset": 0.0
+    },
+    {
+      "index": "076",
+      "action": "returning",
+      "offset": 0.0
+    },
+    {
+      "index": "077",
+      "action": "returning",
+      "offset": 0.0
+    },
+    {
+      "index": "078",
+      "action": "returning",
+      "offset": 0.0
+    },
+    {
+      "index": "079",
+      "action": "returning",
+      "offset": 0.0
+    },
+    {
+      "index": "080",
+      "action": "closed again",
+      "offset": 0.0
+    }
+  ]
+}

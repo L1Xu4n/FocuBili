@@ -2,91 +2,114 @@ part of 'player_page.dart';
 
 /// 组合播放器的拖动预览、学习完播和互动剧情选择反馈。
 extension _PlayerFeedbackView on _PlayerPageState {
-  /// 裁切雪碧图中的一格并按统一宽度缩放，避免下载大量独立截图。
+  /// 等完整图集实际解码才画目标格；传输期间不用上一张图冒充。
   Widget _buildVideoShotFrame(VideoShotFrame frame) {
-    const double displayWidth = 176;
-    final double scale = displayWidth / frame.frameWidth;
-    final double displayHeight = frame.frameHeight * scale;
-    final double sheetWidth = frame.frameWidth * frame.sheetColumns * scale;
-    final double sheetHeight = frame.frameHeight * frame.sheetRows * scale;
-    return ClipRRect(
-      key: const Key('video-shot-frame'),
-      borderRadius: BorderRadius.circular(8),
-      child: ClipRect(
-        child: SizedBox(
-          width: displayWidth,
-          height: displayHeight,
-          child: Stack(
-            clipBehavior: Clip.hardEdge,
-            children: <Widget>[
-              Positioned(
-                left: -frame.column * frame.frameWidth * scale,
-                top: -frame.row * frame.frameHeight * scale,
-                width: sheetWidth,
-                height: sheetHeight,
-                child: AppNetworkImage(
-                  imageUrl: frame.imageUrl,
-                  width: sheetWidth,
-                  height: sheetHeight,
-                  fit: BoxFit.fill,
-                  errorWidget:
-                      (BuildContext context, String url, Object error) =>
-                          const ColoredBox(color: Colors.black26),
+    const displayWidth = 176.0;
+    final displayHeight = displayWidth * frame.frameHeight / frame.frameWidth;
+    final sheetPixelWidth = frame.frameWidth * frame.sheetColumns;
+    final decodeWidth =
+        (displayWidth *
+                frame.sheetColumns *
+                MediaQuery.devicePixelRatioOf(context))
+            .ceil()
+            .clamp(1, 2048);
+    final smallerUrl = sheetPixelWidth > decodeWidth
+        ? frame.resizedPublicAtlasUrl(decodeWidth)
+        : null;
+
+    Widget atlas(String url, {required bool resized}) {
+      Widget unavailable() => resized
+          ? atlas(frame.imageUrl, resized: false)
+          : const Padding(
+              padding: EdgeInsets.only(bottom: 4),
+              child: Text(
+                '预览暂不可用',
+                key: Key('video-shot-unavailable'),
+                style: TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+            );
+      return AppNetworkImage(
+        key: ValueKey((_activeVideo.bvid, _currentPart.cid, url)),
+        imageUrl: url,
+        cache: widget.videoShotImageCache,
+        memCacheWidth: decodeWidth,
+        excludeFromSemantics: true,
+        placeholder: (_, _) => const _VideoShotLoading(),
+        errorWidget: (_, _, _) => unavailable(),
+        frameBuilder: (context, child, number, _) {
+          if (number == null || child is! RawImage || child.image == null) {
+            return const _VideoShotLoading();
+          }
+          final image = child.image!;
+          final scale = image.width / sheetPixelWidth;
+          final rowHeight = frame.frameHeight * scale;
+          final rows = (image.height / rowHeight).round();
+          // 最后一页可以少于完整行数；比例错误或缺少目标格时不能拉伸假图。
+          if (rows > frame.sheetRows ||
+              frame.row >= rows ||
+              (rows * rowHeight - image.height).abs() > 1) {
+            return unavailable();
+          }
+          final width = image.width / frame.sheetColumns;
+          final height = image.height / rows;
+          return ClipRRect(
+            key: const Key('video-shot-frame'),
+            borderRadius: BorderRadius.circular(8),
+            child: CustomPaint(
+              size: Size(displayWidth, displayHeight),
+              painter: _VideoShotCellPainter(
+                image,
+                Rect.fromLTWH(
+                  frame.column * width,
+                  frame.row * height,
+                  width,
+                  height,
                 ),
               ),
-            ],
-          ),
-        ),
-      ),
-    );
+            ),
+          );
+        },
+      );
+    }
+
+    return atlas(smallerUrl ?? frame.imageUrl, resized: smallerUrl != null);
   }
 
-  /// 创建由统一提示区排列的拖动卡；无截图时仍显示准确目标时间。
+  /// 横滑显示目标图和时间；拖播放器底部进度条仍沿用原来的行为。
   Widget _buildSeekFeedback() {
-    if (_seekFeedback == null) return const SizedBox.shrink();
     final Duration target = Duration(
       milliseconds:
           (_displayDuration.inMilliseconds * _horizontalScrubTargetProgress)
               .round(),
     );
-    final VideoShotFrame? frame = _horizontalScrubbing
+    final message = _horizontalScrubbing
+        ? '跳转至 ${_formatSeconds((target.inMilliseconds / 1000).round())}'
+        : _seekFeedback;
+    if (message == null) return const SizedBox.shrink();
+    final frame = _horizontalScrubbing
         ? _videoShotPreview?.frameFor(target)
         : null;
+
     return Center(
       child: IgnorePointer(
-        child: AnimatedOpacity(
-          opacity: _seekFeedback == null ? 0 : 1,
-          duration: const Duration(milliseconds: 160),
-          child: FittedBox(
-            fit: BoxFit.scaleDown,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: Colors.black87,
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(8),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    if (frame != null) _buildVideoShotFrame(frame),
-                    if (_horizontalScrubbing && _videoShotLoading) ...<Widget>[
-                      const SizedBox(
-                        width: 22,
-                        height: 22,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                    ],
-                    Text(
-                      _seekFeedback ?? '',
-                      style: const TextStyle(color: Colors.white),
-                    ),
-                  ],
-                ),
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: Colors.black87,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  if (frame != null)
+                    _buildVideoShotFrame(frame)
+                  else if (_horizontalScrubbing && _videoShotLoading)
+                    const _VideoShotLoading(),
+                  Text(message, style: const TextStyle(color: Colors.white)),
+                ],
               ),
             ),
           ),
@@ -146,12 +169,13 @@ extension _PlayerFeedbackView on _PlayerPageState {
   }
 
   /// 让上下栏分别淡出并透传隐藏后的触摸，不影响提示可见性。
-  Widget _buildFadingControls(Widget child) {
+  Widget _buildFadingControls(Widget child, {Key? regionKey}) {
     final visible =
         _showControls &&
         !_controlsLocked &&
         !_playbackSnapshot.isInPictureInPicture;
     return IgnorePointer(
+      key: regionKey,
       ignoring: !visible,
       child: AnimatedOpacity(
         opacity: visible ? 1 : 0,
@@ -207,17 +231,22 @@ extension _PlayerFeedbackView on _PlayerPageState {
           center: LayoutBuilder(
             builder: (context, constraints) {
               final hasGesture =
+                  _horizontalScrubbing ||
                   _seekFeedback != null ||
                   _doubleTapSeekSeconds != 0 ||
                   _playbackActionPlaying != null;
-              final Widget gesture = _seekFeedback != null
+              final liveScrub = _horizontalScrubbing || _seekFeedback != null;
+              final doubleTap = !liveScrub && _doubleTapSeekSeconds != 0;
+              Widget seek({bool fillWidth = false}) => PlayerSeekFeedback(
+                key: ValueKey('seek-$_doubleTapFeedbackSequence'),
+                seconds: _doubleTapSeekSeconds,
+                foregroundOnly: true,
+                fillWidth: fillWidth,
+              );
+              final Widget gesture = liveScrub
                   ? _buildSeekFeedback()
-                  : _doubleTapSeekSeconds != 0
-                  ? PlayerSeekFeedback(
-                      key: ValueKey('seek-$_doubleTapFeedbackSequence'),
-                      seconds: _doubleTapSeekSeconds,
-                      compact: true,
-                    )
+                  : doubleTap
+                  ? seek()
                   : _playbackActionPlaying != null
                   ? PlayerActionFeedback(
                       key: ValueKey('playback-action-$_playbackActionSequence'),
@@ -231,6 +260,58 @@ extension _PlayerFeedbackView on _PlayerPageState {
               );
               if (!playbackHintVisible) return gesture;
               if (!hasGesture) return hint;
+              if (doubleTap) {
+                // A blocking error needs all the remaining height for Retry;
+                // the noninteractive picture band can continue to fade below.
+                if (phase == PlaybackPhase.error) return hint;
+                if (constraints.maxHeight < 124) {
+                  if (constraints.maxWidth < 56) return hint;
+                  // In a short viewport, share width rather than splitting a
+                  // single readable line into two too-short rows.
+                  final direction = SizedBox(
+                    width:
+                        constraints.maxWidth *
+                        PlayerSeekFeedback.bandWidthFactor,
+                    child: seek(fillWidth: true),
+                  );
+                  final compactHint = Expanded(
+                    child: IgnorePointer(
+                      child: Center(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const SizedBox.square(
+                                dimension: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Flexible(
+                                child: Text(
+                                  _playbackSnapshot.message ?? '正在准备播放…',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(color: Colors.white),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: _doubleTapSeekSeconds > 0
+                        ? [compactHint, direction]
+                        : [direction, compactHint],
+                  );
+                }
+              }
               // Native seek may temporarily enter loading. Its spinner/retry
               // row must not paint over the still-running direction animation.
               final height = (constraints.maxHeight * .45).clamp(0.0, 72.0);
@@ -264,4 +345,45 @@ extension _PlayerFeedbackView on _PlayerPageState {
       },
     );
   }
+}
+
+class _VideoShotLoading extends StatelessWidget {
+  const _VideoShotLoading();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Padding(
+      key: Key('video-shot-loading'),
+      padding: EdgeInsets.only(bottom: 4),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: Colors.white,
+            ),
+          ),
+          SizedBox(width: 7),
+          Text('正在加载预览', style: TextStyle(color: Colors.white70, fontSize: 12)),
+        ],
+      ),
+    );
+  }
+}
+
+class _VideoShotCellPainter extends CustomPainter {
+  const _VideoShotCellPainter(this.image, this.source);
+  final ui.Image image;
+  final Rect source;
+
+  @override
+  void paint(Canvas canvas, Size size) =>
+      canvas.drawImageRect(image, source, Offset.zero & size, Paint());
+
+  @override
+  bool shouldRepaint(_VideoShotCellPainter oldDelegate) =>
+      image != oldDelegate.image || source != oldDelegate.source;
 }

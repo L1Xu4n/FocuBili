@@ -20,7 +20,10 @@ mixin _PlayerVideoCoordinator
   /// 所有切视频、切分 P 与剧情跳转共用代次，新操作撤销仍在等待的旧操作。
   int _beginVideoNavigation() {
     _navigationStopRevision = _playbackStopRevision;
+    _clearDesktopPointerForTransition();
+    _cancelHorizontalScrub();
     _cancelTemporaryLongPress();
+    _cancelLiveNoteFrame();
     _cancelPlaylistAdvance();
     _clearAbRepeatForNavigation();
     final generation = ++_partSwitchGeneration;
@@ -532,6 +535,9 @@ mixin _PlayerVideoCoordinator
     if (!mounted) {
       return;
     }
+    // A final edit may have arrived while the first write or resume lookup
+    // was in flight. Snapshot it under the old video before clearing the UI.
+    _flushVideoNoteAutoSave(updateUi: false);
     setState(() {
       _activeVideo = video;
       _currentPart = targetPart;
@@ -555,6 +561,9 @@ mixin _PlayerVideoCoordinator
       _noteAutoSavePending = false;
       _currentVideoNotes = const <VideoNote>[];
       _editingVideoNote = null;
+      _noteDraftIdentity = null;
+      _noteDraftAccountRevision = CacheLifecycle.account.value;
+      _noteDraftAccountScope = CacheLifecycle.accountScope;
       _noteDraftRevision++;
       _noteTitleController.clear();
       _noteBodyController.clear();

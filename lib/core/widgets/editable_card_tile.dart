@@ -303,10 +303,15 @@ class _EditableCardTileState extends State<_EditableCardTile>
             child: RepaintBoundary(
               key: _boundary,
               child: AbsorbPointer(
-                absorbing: widget.editing || _removing,
+                absorbing:
+                    (widget.editing && widget.card.editingBuilder == null) ||
+                    _removing,
                 child: ExcludeSemantics(
-                  excluding: widget.editing,
-                  child: widget.card.builder(context),
+                  excluding:
+                      widget.editing && widget.card.editingBuilder == null,
+                  child: (widget.editing
+                      ? widget.card.editingBuilder ?? widget.card.builder
+                      : widget.card.builder)(context),
                 ),
               ),
             ),

@@ -20,6 +20,8 @@ class AppNetworkImage extends StatefulWidget {
     this.memCacheHeight,
     this.placeholder,
     this.errorWidget,
+    this.frameBuilder,
+    this.excludeFromSemantics = false,
     this.cache,
   });
   final String imageUrl;
@@ -29,6 +31,8 @@ class AppNetworkImage extends StatefulWidget {
   final int? memCacheWidth, memCacheHeight;
   final Widget Function(BuildContext, String)? placeholder;
   final Widget Function(BuildContext, String, Object)? errorWidget;
+  final ImageFrameBuilder? frameBuilder;
+  final bool excludeFromSemantics;
   final ImageResourceCache? cache;
   @override
   State<AppNetworkImage> createState() => _AppNetworkImageState();
@@ -148,6 +152,8 @@ class _AppNetworkImageState extends State<AppNetworkImage> {
           width: widget.width,
           height: widget.height,
           fit: widget.fit,
+          frameBuilder: widget.frameBuilder,
+          excludeFromSemantics: widget.excludeFromSemantics,
           errorBuilder: (context, error, stack) {
             unawaited(
               cache

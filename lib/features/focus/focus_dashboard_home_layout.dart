@@ -21,7 +21,7 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
       context,
       '焦点哔哩',
       theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
-      width - kMinInteractiveDimension * (_subscriptions.enabled ? 3 : 2),
+      width - kMinInteractiveDimension * (_subscriptions.enabled ? 2 : 1),
     );
     final double welcomeHeight = _measureHeroText(
       context,
@@ -72,7 +72,7 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
     return height;
   }
 
-  /// 欢迎区和卡片在同一个滚动平面，不做反向位移或逐帧模糊。
+  /// 卡片按实际滚动位置移动；仅欢迎内容使用正式版的下坠、模糊及淡出。
   Widget _buildHomeHero(BuildContext context, double heroHeight, double width) {
     final ThemeData theme = Theme.of(context);
     final Color textColor = theme.colorScheme.onSurface;
@@ -85,8 +85,9 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
       compact: 24,
     );
     return SliverToBoxAdapter(
-      child: SizedBox(
+      child: HomeDrawerHeroDepth(
         key: const Key('focus-home-hero'),
+        enabled: _hasHomeDrawer && !_editingHomeCards,
         height: heroHeight,
         child: Padding(
           padding: EdgeInsets.fromLTRB(
@@ -117,11 +118,6 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
                     ),
                   ),
                   _buildSubscriptionButton(),
-                  IconButton(
-                    tooltip: '自定义首页',
-                    onPressed: _customizeHome,
-                    icon: const Icon(Icons.tune_rounded),
-                  ),
                   IconButton(
                     key: const Key('home-profile-button'),
                     // 我的按钮函数切换到个人中心页面。
@@ -176,6 +172,7 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
                   size: 34,
                   color: textColor,
                 ),
+              if (!_hasHomeDrawer && _homeLayoutLoaded) _drawerRecoveryButton(),
             ],
           ),
         ),
@@ -282,11 +279,6 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
                 ),
                 // 保留首页文字节点，兼容已有的页面识别和无障碍测试。
                 const SizedBox.shrink(child: Text('首页')),
-                IconButton(
-                  tooltip: '自定义首页',
-                  onPressed: _customizeHome,
-                  icon: const Icon(Icons.tune_rounded),
-                ),
               ],
             ),
             _buildSubscriptionIntroduction(),
@@ -315,6 +307,8 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
             ),
             // 保留旧入口文字节点，但工作台只绘制一个清晰的主要动作。
             const SizedBox.shrink(child: Text('打开视频')),
+            if (!_hasHomeDrawer && _homeLayoutLoaded)
+              Center(child: _drawerRecoveryButton()),
           ],
         ),
       ),

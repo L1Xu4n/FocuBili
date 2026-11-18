@@ -17,6 +17,7 @@ import '../models/video_preview.dart';
 import '../platform/app_platform.dart';
 import 'desktop_playback_source_service.dart';
 import 'flutter_video_frame_capture.dart';
+import 'live_video_frame_playback_service.dart';
 import 'media_cache_service.dart';
 import 'desktop_disk_cache_session.dart';
 import 'native_playback_service.dart';
@@ -37,6 +38,7 @@ class WindowsPlaybackService
     implements
         PlaybackService,
         PlaybackVideoSurface,
+        LiveVideoFramePlaybackService,
         ListeningPlaybackService,
         LocalTrackPlaybackService {
   /// 创建 Windows 播放服务并立即订阅底层播放器状态；测试可注入播放源服务。
@@ -97,6 +99,9 @@ class WindowsPlaybackService
   final LinuxMediaSession _linuxSession = LinuxMediaSession();
   final LinuxMiniPlayer _linuxMiniPlayer = LinuxMiniPlayer();
   final FlutterVideoFrameCapture _frameCapture = FlutterVideoFrameCapture();
+  int _frameTimelineRevision = 0;
+  int _frameSeeksInFlight = 0;
+  final Stopwatch _sinceFrameSeek = Stopwatch()..start();
   final StreamController<PlaybackSnapshot> _stateController =
       StreamController<PlaybackSnapshot>.broadcast();
   final List<StreamSubscription<dynamic>> _subscriptions =
@@ -727,21 +732,30 @@ class WindowsPlaybackService
   @override
   Future<void> seekBy(Duration offset) async {
     _ensureAvailable();
-    final Duration duration = _player.state.duration;
-    int targetMilliseconds =
-        _player.state.position.inMilliseconds + offset.inMilliseconds;
-    targetMilliseconds = targetMilliseconds.clamp(
-      0,
-      duration > Duration.zero ? duration.inMilliseconds : 1 << 31,
-    );
-    _leaveEndedPhaseWhenSeekingBeforeEnd(
-      Duration(milliseconds: targetMilliseconds),
-      duration,
-    );
-    final Duration targetPosition = Duration(milliseconds: targetMilliseconds);
-    await _player.seek(targetPosition);
-    if (_pendingResumePositionAfterDecode > Duration.zero) {
-      _pendingResumePositionAfterDecode = targetPosition;
+    _frameTimelineRevision++;
+    _frameSeeksInFlight++;
+    try {
+      final Duration duration = _player.state.duration;
+      int targetMilliseconds =
+          _player.state.position.inMilliseconds + offset.inMilliseconds;
+      targetMilliseconds = targetMilliseconds.clamp(
+        0,
+        duration > Duration.zero ? duration.inMilliseconds : 1 << 31,
+      );
+      _leaveEndedPhaseWhenSeekingBeforeEnd(
+        Duration(milliseconds: targetMilliseconds),
+        duration,
+      );
+      final Duration targetPosition = Duration(
+        milliseconds: targetMilliseconds,
+      );
+      await _player.seek(targetPosition);
+      if (_pendingResumePositionAfterDecode > Duration.zero) {
+        _pendingResumePositionAfterDecode = targetPosition;
+      }
+    } finally {
+      _frameSeeksInFlight--;
+      _sinceFrameSeek.reset();
     }
   }
 
@@ -749,19 +763,28 @@ class WindowsPlaybackService
   @override
   Future<void> seekTo(Duration position) async {
     _ensureAvailable();
-    final Duration duration = _player.state.duration;
-    final int targetMilliseconds = position.inMilliseconds.clamp(
-      0,
-      duration > Duration.zero ? duration.inMilliseconds : 1 << 31,
-    );
-    _leaveEndedPhaseWhenSeekingBeforeEnd(
-      Duration(milliseconds: targetMilliseconds),
-      duration,
-    );
-    final Duration targetPosition = Duration(milliseconds: targetMilliseconds);
-    await _player.seek(targetPosition);
-    if (_pendingResumePositionAfterDecode > Duration.zero) {
-      _pendingResumePositionAfterDecode = targetPosition;
+    _frameTimelineRevision++;
+    _frameSeeksInFlight++;
+    try {
+      final Duration duration = _player.state.duration;
+      final int targetMilliseconds = position.inMilliseconds.clamp(
+        0,
+        duration > Duration.zero ? duration.inMilliseconds : 1 << 31,
+      );
+      _leaveEndedPhaseWhenSeekingBeforeEnd(
+        Duration(milliseconds: targetMilliseconds),
+        duration,
+      );
+      final Duration targetPosition = Duration(
+        milliseconds: targetMilliseconds,
+      );
+      await _player.seek(targetPosition);
+      if (_pendingResumePositionAfterDecode > Duration.zero) {
+        _pendingResumePositionAfterDecode = targetPosition;
+      }
+    } finally {
+      _frameSeeksInFlight--;
+      _sinceFrameSeek.reset();
     }
   }
 
@@ -923,6 +946,47 @@ class WindowsPlaybackService
     return rect != null && await _appleSession.startPictureInPicture(rect);
   }
 
+  /// 仅回读当前画面。Windows/macOS/Linux/iOS 均不调用可能终止进程
+  /// 的原生 screenshot，也不以 B 站近似预览图冒充实际画面。
+  @override
+  Future<LiveVideoFrame?> captureLiveVideoFrame() async {
+    final video = _currentVideo;
+    final part = _currentPart;
+    if (video == null || part == null) return null;
+    final generation = _sourceGeneration;
+    final timeline = _frameTimelineRevision;
+    bool isCurrent() =>
+        _isCurrentSourceRequest(generation) &&
+        timeline == _frameTimelineRevision &&
+        _frameSeeksInFlight == 0 &&
+        _sinceFrameSeek.elapsed >= const Duration(milliseconds: 250) &&
+        !_opening &&
+        !_audioOnly &&
+        !_player.state.buffering &&
+        _snapshot.phase == PlaybackPhase.ready &&
+        !_snapshot.isRestoringPosition;
+    final sample = await _frameCapture.captureLivePng(
+      readPosition: () => _player.state.position,
+      isCurrent: isCurrent,
+    );
+    if (sample == null || !isCurrent()) return null;
+    final output = await _persistCapturedFrame(sample.bytes);
+    if (!isCurrent()) {
+      try {
+        await File(output).delete();
+      } on FileSystemException {
+        // Best effort for an unpublished, already cancelled frame.
+      }
+      return null;
+    }
+    return LiveVideoFrame(
+      path: output,
+      position: sample.position,
+      bvid: video.bvid,
+      cid: part.cid,
+    );
+  }
+
   /// 优先读取 Flutter 已绘制画面，失败时裁切 B 站时间点雪碧图，始终绕开会终止进程的原生截图。
   @override
   Future<String?> captureCurrentFrame() async {
@@ -943,6 +1007,10 @@ class WindowsPlaybackService
     if (bytes == null || bytes.isEmpty) {
       return null;
     }
+    return _persistCapturedFrame(bytes);
+  }
+
+  Future<String> _persistCapturedFrame(List<int> bytes) async {
     final Directory supportDirectory = await getApplicationSupportDirectory();
     final Directory frameDirectory = Directory(
       '${supportDirectory.path}${Platform.pathSeparator}video_frames',
@@ -952,8 +1020,17 @@ class WindowsPlaybackService
       '${frameDirectory.path}${Platform.pathSeparator}'
       'frame_${DateTime.now().microsecondsSinceEpoch}.png',
     );
-    await output.writeAsBytes(bytes, flush: true);
-    return output.path;
+    try {
+      await output.writeAsBytes(bytes, flush: true);
+      return output.path;
+    } on FileSystemException {
+      try {
+        await output.delete();
+      } on FileSystemException {
+        // A failed write need not have created a file.
+      }
+      rethrow;
+    }
   }
 
   /// 保存最后进度、释放 media_kit 与全部订阅，不触碰 Windows 显示器亮度。

@@ -112,6 +112,49 @@ BilibiliInteractionService _createInteractionService({
 }
 
 void main() {
+  for (final case_ in [
+    (43, false, false), // 账号错
+    (42, true, false), // 只读账号
+    (42, false, true), // 已在夹内
+    (42, false, false), // 追加
+  ]) {
+    test('批量收藏核实账号、只读与目录内去重，绝不移出其他夹：$case_', () async {
+      final request = _RecordedInteractionRequest(
+        responses: {
+          '/x/v3/fav/folder/created/list-all':
+              '{"code":0,"data":{"list":[{"id":17,"title":"目标","fav_state":${case_.$3 ? 1 : 0}},{"id":23,"title":"已有夹","fav_state":1}]}}',
+        },
+      );
+      final api = _createInteractionService(
+        request: request,
+        readOnly: case_.$2,
+      );
+      final op = api.addToVerifiedFavoriteFolder(
+        aid: 47,
+        mediaId: 17,
+        expectedMid: case_.$1,
+        isCurrent: () => true,
+      );
+      if (case_.$1 != 42 || case_.$2) {
+        await expectLater(op, throwsA(isA<BilibiliInteractionException>()));
+        expect(request.bodies.whereType<String>(), isEmpty);
+      } else {
+        expect(await op, !case_.$3);
+        final writes = request.bodies.whereType<String>().toList();
+        if (case_.$3) {
+          expect(writes, isEmpty);
+        } else {
+          expect(writes, hasLength(1));
+          expect(
+            _formFields(writes.single),
+            containsPair('add_media_ids', '17'),
+          );
+          expect(_formFields(writes.single), containsPair('del_media_ids', ''));
+        }
+      }
+    });
+  }
+
   /// 验证默认只读门禁会在真正发起账号写请求前拒绝操作。
   test('账号只读开启时不发起互动写请求', () async {
     final _RecordedInteractionRequest request = _RecordedInteractionRequest();

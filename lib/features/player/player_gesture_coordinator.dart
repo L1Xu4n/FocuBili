@@ -36,6 +36,10 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
   double _horizontalSeekMaximumOffsetSeconds = 0;
   VideoShotPreview? _videoShotPreview;
   bool _videoShotLoading = false;
+  final GlobalKey _desktopBottomBarKey = GlobalKey();
+  PlayerMouseTapGestureRecognizer? _desktopTapRecognizer;
+  bool _desktopBottomHover = false;
+  _DesktopTimelinePoint? _desktopTimelineHover;
   int _videoShotRequestToken = 0;
   double _brightness = 1;
   double _volume = 0.5;
@@ -302,6 +306,7 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
         playerSize.width <= 0) {
       return;
     }
+    _seekFeedbackTimer?.cancel();
     _stopControlsAutoHideTimer();
     final double seekRangeSeconds = (durationSeconds * 0.1)
         .clamp(
@@ -331,22 +336,46 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
       return;
     }
     final int requestToken = ++_videoShotRequestToken;
+    final bvid = _activeVideo.bvid;
+    final cid = _currentPart.cid;
     setState(() => _videoShotLoading = true);
-    final VideoShotPreview? preview = await _videoShotService.loadPreview(
-      bvid: _activeVideo.bvid,
-      cid: _currentPart.cid,
-    );
-    if (!mounted || requestToken != _videoShotRequestToken) {
-      return;
+    VideoShotPreview? preview;
+    try {
+      preview = await _videoShotService
+          .loadPreview(bvid: bvid, cid: cid)
+          .timeout(const Duration(seconds: 8));
+    } catch (_) {
+      // These previews are optional. The next gesture can retry.
     }
+    if (!mounted || requestToken != _videoShotRequestToken) return;
     setState(() {
       _videoShotLoading = false;
-      _videoShotPreview = preview;
+      _videoShotPreview = bvid == _activeVideo.bvid && cid == _currentPart.cid
+          ? preview
+          : null;
     });
+  }
+
+  void _setDesktopTimelineHover(_DesktopTimelinePoint? point) {
+    if (mounted && _desktopTimelineHover != point) {
+      setState(() => _desktopTimelineHover = point);
+    }
+  }
+
+  /// Seek, navigation and viewport transitions drop a pending mouse click and hover.
+  @override
+  void _clearDesktopPointerForTransition() {
+    _desktopTapRecognizer?.cancelPendingTap();
+    final releaseControls = _desktopBottomHover;
+    _desktopBottomHover = false;
+    _setDesktopTimelineHover(null);
+    if (releaseControls) _restartControlsAutoHideTimer();
   }
 
   /// 切换分 P 或视频时清除旧截图，避免把上一支视频的画面当成新进度预览。
   void _resetVideoShotPreview() {
+    _desktopTimelineHover = null;
+    _desktopBottomHover = false;
     _videoShotRequestToken += 1;
     _videoShotPreview = null;
     _videoShotLoading = false;

@@ -521,14 +521,21 @@ void main() {
         } else {
           (document[kind] as List).add((document[kind] as List).first);
         }
+        final raw = jsonEncode(document);
         SharedPreferences.setMockInitialValues({
-          SubscriptionService.storageKey: jsonEncode(document),
+          SubscriptionService.storageKey: raw,
         });
         final service = SubscriptionService(
           preferencesLoader: SharedPreferences.getInstance,
+          clock: () => DateTime.utc(2026, 11, 7),
         );
         try {
           await service.initialize();
+          expect(service.feed, isEmpty);
+          expect(service.sources, hasLength(1));
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.reload();
+          expect(prefs.getString(SubscriptionService.storageKey), raw);
           await expectLater(
             service.exportLocalData(),
             throwsA(isA<SubscriptionStorageException>()),
@@ -547,10 +554,11 @@ void main() {
       () async {
         final document =
             jsonDecode(feedFixture(count: 1, sourceCount: 1)) as Map;
-        // An expired read row also exercises v1.8's initialization cleanup after
-        // integration. Export must validate the original bytes before any such
-        // browsing-side normalization, including SQLite's first migration.
-        document['feed'].first['readAt'] = DateTime.utc(2020).toIso8601String();
+        // Cold export must validate the expired row's original bytes before
+        // browsing-side normalization, including cleanup and SQLite migration.
+        document['feed'].first['publishedAt'] = DateTime.utc(
+          2020,
+        ).toIso8601String();
         if (duplicate) {
           (document['feed'] as List).add(
             Map<String, dynamic>.from(document['feed'].first as Map),

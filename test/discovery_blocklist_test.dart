@@ -601,6 +601,8 @@ void main() {
     );
     await tester.pumpAndSettle();
     // The feed's existing busy indicator animates under the modal.
+    await tester.tap(find.byTooltip('${service.feed.single.title}的更多操作'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('加入学习清单'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));

@@ -8,6 +8,7 @@ class DashboardCardDefinition {
     required this.title,
     required this.icon,
     required this.builder,
+    this.editingBuilder,
     this.required = false,
     this.available = true,
     this.fullWidth = false,
@@ -17,6 +18,9 @@ class DashboardCardDefinition {
   final String title;
   final IconData icon;
   final WidgetBuilder builder;
+
+  /// 可选的受限编辑内容，仅此构建器自行开放安全的个性化操作。
+  final WidgetBuilder? editingBuilder;
   final bool required;
   final bool available;
   final bool fullWidth;
