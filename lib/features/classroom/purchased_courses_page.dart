@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../core/layout/adaptive_layout.dart';
+import '../../services/bilibili_auth_service.dart';
 import '../../services/bilibili_course_link.dart';
 import '../../services/bilibili_course_service.dart';
+import '../../services/cache_lifecycle.dart';
 import '../profile/login_page.dart';
 import 'course_page.dart';
 
@@ -19,6 +23,7 @@ class _PurchasedCoursesPageState extends State<PurchasedCoursesPage>
   late final _service = widget.service ?? BilibiliCourseService();
   List<PurchasedCourse> _courses = const [];
   bool _loading = true;
+  bool _suspended = false;
   String? _error;
   int _generation = 0;
 
@@ -26,11 +31,17 @@ class _PurchasedCoursesPageState extends State<PurchasedCoursesPage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _load();
+    CacheLifecycle.account.addListener(_accountChanged);
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    _suspended =
+        lifecycle == AppLifecycleState.hidden ||
+        lifecycle == AppLifecycleState.paused;
+    unawaited(_load());
   }
 
   @override
   void dispose() {
+    CacheLifecycle.account.removeListener(_accountChanged);
     WidgetsBinding.instance.removeObserver(this);
     _generation++;
     super.dispose();
@@ -38,29 +49,40 @@ class _PurchasedCoursesPageState extends State<PurchasedCoursesPage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // 后台不保留账号购买列表；返回前台必须重新读取当前会话。
-    if (state == AppLifecycleState.resumed &&
-        ModalRoute.of(context)?.isCurrent != false) {
-      _load();
-    } else if (state == AppLifecycleState.hidden ||
-        state == AppLifecycleState.paused) {
-      _generation++;
-      if (mounted) {
-        setState(() {
-          _courses = const [];
-          _loading = true;
-        });
-      }
+    // A dialog may still cover this route after resuming. Restart even then so
+    // dismissing it never exposes an empty list with a stranded spinner.
+    if (state == AppLifecycleState.resumed && _suspended) {
+      _suspended = false;
+      unawaited(_load());
+    } else if (!_suspended &&
+        (state == AppLifecycleState.hidden ||
+            state == AppLifecycleState.paused)) {
+      _suspended = true;
+      _invalidate();
     }
   }
 
-  Future<void> _load() async {
+  void _accountChanged() {
+    if (_suspended) {
+      _invalidate();
+    } else {
+      unawaited(_load());
+    }
+  }
+
+  int _invalidate() {
     final generation = ++_generation;
     setState(() {
       _loading = true;
       _error = null;
       _courses = const [];
     });
+    return generation;
+  }
+
+  Future<void> _load() async {
+    if (_suspended) return;
+    final generation = _invalidate();
     try {
       final courses = await _service.purchasedCourses();
       if (mounted && generation == _generation) {
@@ -82,13 +104,13 @@ class _PurchasedCoursesPageState extends State<PurchasedCoursesPage>
   }
 
   Future<void> _openLink() async {
-    final controller = TextEditingController();
+    var input = '';
     final text = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('打开课程链接'),
         content: TextField(
-          controller: controller,
+          onChanged: (value) => input = value,
           autofocus: true,
           decoration: const InputDecoration(hintText: '粘贴 B站课堂 ss / ep 链接'),
           onSubmitted: (value) => Navigator.pop(context, value),
@@ -99,15 +121,12 @@ class _PurchasedCoursesPageState extends State<PurchasedCoursesPage>
             child: const Text('取消'),
           ),
           FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text),
+            onPressed: () => Navigator.pop(context, input),
             child: const Text('打开'),
           ),
         ],
       ),
     );
-    // 等待对话框退出动画后释放输入控制器。
-    await Future<void>.delayed(const Duration(milliseconds: 250));
-    controller.dispose();
     if (!mounted || text == null) return;
     final uri = BilibiliCourseLink.fromInput(text);
     if (uri == null) {
@@ -184,12 +203,18 @@ class _PurchasedCoursesPageState extends State<PurchasedCoursesPage>
                             children: [
                               OutlinedButton(
                                 onPressed: () async {
-                                  await Navigator.of(context).push(
-                                    MaterialPageRoute<void>(
-                                      builder: (_) => const LoginPage(),
-                                    ),
-                                  );
-                                  if (mounted) await _load();
+                                  final generation = _generation;
+                                  final account = await Navigator.of(context)
+                                      .push<BilibiliAccount>(
+                                        MaterialPageRoute(
+                                          builder: (_) => const LoginPage(),
+                                        ),
+                                      );
+                                  if (mounted &&
+                                      account != null &&
+                                      generation == _generation) {
+                                    await _load();
+                                  }
                                 },
                                 child: const Text('登录购买账号'),
                               ),

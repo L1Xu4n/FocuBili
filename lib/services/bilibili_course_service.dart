@@ -3,8 +3,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../models/video_preview.dart';
-import 'bilibili_course_link.dart';
 import 'bilibili_auth_service.dart';
+import 'bilibili_course_link.dart';
+import 'cache_lifecycle.dart';
 
 /// Transport is injectable so tests never use a real login or paid content.
 typedef CourseJsonRequest = Future<String> Function(Uri uri, String cookie);
@@ -37,30 +38,65 @@ class BilibiliCourseService {
     CourseJsonRequest? requestJson,
     Future<String> Function()? readCookies,
   }) : _requestJson = requestJson ?? _request,
-       _readCookies = readCookies ?? BilibiliAuthService().readCookieHeader;
+       _readCookies =
+           readCookies ?? BilibiliAuthService().readStableCookieHeader;
 
   final CourseJsonRequest _requestJson;
   final Future<String> Function() _readCookies;
+
+  static const _courseSessionChanged = '登录状态已变化，请重新打开课程。';
+  static const _listSessionChanged = '登录状态已变化，请刷新已购课程。';
+
+  void _checkRevision(int revision, String message) {
+    if (revision != CacheLifecycle.account.value) {
+      throw CourseLookupException(message);
+    }
+  }
+
+  Future<void> _checkSession(
+    int revision,
+    String cookie,
+    String message,
+  ) async {
+    _checkRevision(revision, message);
+    if (cookie != await _readCookies().timeout(const Duration(seconds: 10))) {
+      throw CourseLookupException(message);
+    }
+    _checkRevision(revision, message);
+  }
+
+  Future<Map<String, dynamic>> _readData(
+    Uri url,
+    String cookie,
+    int revision,
+    String sessionChanged,
+  ) async {
+    _checkRevision(revision, sessionChanged);
+    final json = await _requestJson(
+      url,
+      cookie,
+    ).timeout(const Duration(seconds: 30));
+    _checkRevision(revision, sessionChanged);
+    return _data(json);
+  }
 
   /// 仅确认目标课程的当前账号购买资格，不保存或返回其他购买资料。
   Future<void> requirePurchasedCourse(int seasonId, String cookie) async {
     if (seasonId <= 0 || cookie.trim().isEmpty) {
       throw const CourseLookupException('请先登录购买课程的 B 站账号。');
     }
-    var received = 0;
+    final revision = CacheLifecycle.account.value;
     final seen = <int>{};
     for (var page = 1; page <= 100; page++) {
-      if (cookie != await _readCookies().timeout(const Duration(seconds: 10))) {
-        throw const CourseLookupException('登录状态已变化，请重新打开课程。');
-      }
-      final data = _data(
-        await _requestJson(
-          Uri.https('api.bilibili.com', '/pugv/pay/web/my/paid', {
-            'pn': '$page',
-            'ps': '10',
-          }),
-          cookie,
-        ).timeout(const Duration(seconds: 30)),
+      await _checkSession(revision, cookie, _courseSessionChanged);
+      final data = await _readData(
+        Uri.https('api.bilibili.com', '/pugv/pay/web/my/paid', {
+          'pn': '$page',
+          'ps': '10',
+        }),
+        cookie,
+        revision,
+        _courseSessionChanged,
       );
       final total = _int(data['total'], fallback: -1);
       final raw = data['data'];
@@ -68,6 +104,9 @@ class BilibiliCourseService {
         throw const CourseLookupException('无法确认课程购买状态，请重试。');
       }
       final items = raw is List ? raw : const [];
+      if (total == 0 && items.isNotEmpty) {
+        throw const CourseLookupException('无法确认课程购买状态，请重试。');
+      }
       final before = seen.length;
       for (final value in items) {
         final item = _map(value);
@@ -80,41 +119,39 @@ class BilibiliCourseService {
             _int(item['is_expired']) == 1) {
           throw const CourseLookupException('本课程已过期或已下架，请到官方课堂确认。');
         }
-        if (cookie !=
-            await _readCookies().timeout(const Duration(seconds: 10))) {
-          throw const CourseLookupException('登录状态已变化，请重新打开课程。');
-        }
+        await _checkSession(revision, cookie, _courseSessionChanged);
         return;
       }
-      received += items.length;
-      if (received >= total) break;
-      if (seen.length == before) {
-        throw const CourseLookupException('无法完整确认课程购买状态，请重试。');
+      if (seen.length >= total) {
+        await _checkSession(revision, cookie, _courseSessionChanged);
+        throw const CourseLookupException('当前账号未购买本课程，或购买资格已失效。');
       }
+      if (seen.length == before) break;
     }
-    throw const CourseLookupException('当前账号未购买本课程，或购买资格已失效。');
+    throw const CourseLookupException('无法完整确认课程购买状态，请重试。');
   }
 
   /// Same paginated endpoint and fields as the official classroom "mine" page.
   /// Publish only a complete list from one session; never cache purchase data.
   Future<List<PurchasedCourse>> purchasedCourses() async {
     try {
+      final revision = CacheLifecycle.account.value;
       final cookie = await _readCookies().timeout(const Duration(seconds: 10));
+      _checkRevision(revision, _listSessionChanged);
       if (cookie.trim().isEmpty) {
         throw const CourseLookupException('请先在“我的”登录购买课程的 B 站账号。');
       }
       final courses = <PurchasedCourse>[];
       final seen = <int>{};
-      var received = 0;
       for (var pn = 1; pn <= 100; pn++) {
-        final data = _data(
-          await _requestJson(
-            Uri.https('api.bilibili.com', '/pugv/pay/web/my/paid', {
-              'pn': '$pn',
-              'ps': '10',
-            }),
-            cookie,
-          ).timeout(const Duration(seconds: 30)),
+        final data = await _readData(
+          Uri.https('api.bilibili.com', '/pugv/pay/web/my/paid', {
+            'pn': '$pn',
+            'ps': '10',
+          }),
+          cookie,
+          revision,
+          _listSessionChanged,
         );
         final total = _int(data['total'], fallback: -1);
         final items = data['data'];
@@ -122,6 +159,9 @@ class BilibiliCourseService {
           throw const CourseLookupException('已购课程返回格式发生变化，请稍后重试。');
         }
         final batch = items is List ? items : const [];
+        if (total == 0 && batch.isNotEmpty) {
+          throw const CourseLookupException('已购课程列表未加载完整，请刷新重试。');
+        }
         final before = courses.length;
         for (final raw in batch) {
           final item = _map(raw);
@@ -145,17 +185,8 @@ class BilibiliCourseService {
             ),
           );
         }
-        if (cookie !=
-            await _readCookies().timeout(const Duration(seconds: 10))) {
-          throw const CourseLookupException('登录状态已变化，请刷新已购课程。');
-        }
-        received += batch.length;
-        if (received >= total) {
-          if (courses.length < total) {
-            throw const CourseLookupException('已购课程列表未加载完整，请刷新重试。');
-          }
-          return List.unmodifiable(courses);
-        }
+        await _checkSession(revision, cookie, _listSessionChanged);
+        if (courses.length >= total) return List.unmodifiable(courses);
         if (courses.length == before) break;
       }
       throw const CourseLookupException('已购课程列表未加载完整，请刷新重试。');
@@ -173,7 +204,9 @@ class BilibiliCourseService {
     if (uri == null) throw const CourseLookupException('无效的课堂链接。');
     try {
       // Keep a single session snapshot across pagination. Never store it in data.
+      final revision = CacheLifecycle.account.value;
       final cookie = await _readCookies().timeout(const Duration(seconds: 10));
+      _checkRevision(revision, _courseSessionChanged);
       final target = uri.pathSegments.last;
       if (cookie.trim().isEmpty) {
         throw const CourseLookupException('请先登录购买课程的 B 站账号。');
@@ -181,15 +214,13 @@ class BilibiliCourseService {
       final requestedEpisode = target.startsWith('ep')
           ? int.parse(target.substring(2))
           : null;
-      final data = _data(
-        await _requestJson(
-          Uri.https('api.bilibili.com', '/pugv/view/web/season', {
-            requestedEpisode == null ? 'season_id' : 'ep_id': target.substring(
-              2,
-            ),
-          }),
-          cookie,
-        ),
+      final data = await _readData(
+        Uri.https('api.bilibili.com', '/pugv/view/web/season', {
+          requestedEpisode == null ? 'season_id' : 'ep_id': target.substring(2),
+        }),
+        cookie,
+        revision,
+        _courseSessionChanged,
       );
       final seasonId = _int(data['season_id']);
       if (seasonId <= 0) throw const CourseLookupException('课程接口缺少课程编号。');
@@ -220,16 +251,17 @@ class BilibiliCourseService {
         episodeIds.clear();
         var finished = false;
         for (var pn = 1; pn <= 100; pn++) {
-          final batch = _data(
-            await _requestJson(
-              Uri.https('api.bilibili.com', '/pugv/view/web/ep/list', {
-                'season_id': '$seasonId',
-                'pn': '$pn',
-                'ps': '100',
-              }),
-              cookie,
-            ),
+          final batch = await _readData(
+            Uri.https('api.bilibili.com', '/pugv/view/web/ep/list', {
+              'season_id': '$seasonId',
+              'pn': '$pn',
+              'ps': '100',
+            }),
+            cookie,
+            revision,
+            _courseSessionChanged,
           );
+          await _checkSession(revision, cookie, _courseSessionChanged);
           final before = rawEpisodes.length;
           append(batch['items']);
           final pageInfo = _map(batch['page']);
@@ -275,9 +307,7 @@ class BilibiliCourseService {
         throw const CourseLookupException('目录中没有找到指定章节，请从课程主页重新打开。');
       }
       // A concurrent logout/account switch must not publish stale metadata.
-      if (cookie != await _readCookies().timeout(const Duration(seconds: 10))) {
-        throw const CourseLookupException('登录状态已变化，请重新打开课程。');
-      }
+      await _checkSession(revision, cookie, _courseSessionChanged);
       final author = _map(data['up_info']);
       return VideoPreview(
         bvid: 'cheese:ss$seasonId',
