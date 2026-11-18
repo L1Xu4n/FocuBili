@@ -24,6 +24,7 @@ void main() {
   late int mediaBodyBytes;
   late bool unsupported;
   late bool unavailable;
+  late bool rejectBody;
   Completer<void>? entered, releaseHead;
 
   void plan(
@@ -58,7 +59,7 @@ void main() {
     requests = [];
     mediaBodyBytes = 0;
     tag = '"etag-local-test-one"';
-    unsupported = unavailable = false;
+    unsupported = unavailable = rejectBody = false;
     entered = releaseHead = null;
     access = Access()..now = DateTime.utc(2026, 11, 18);
     plan('secret-signature-before');
@@ -77,7 +78,9 @@ void main() {
         if (!entered!.isCompleted) entered!.complete();
         await releaseHead!.future;
       }
-      if (r.method == 'HEAD' &&
+      if (rejectBody && r.method == 'GET') {
+        r.response.statusCode = 503;
+      } else if (r.method == 'HEAD' &&
           (r.uri.path == '/backup.m4s' || unavailable || unsupported)) {
         r.response.statusCode = unavailable || r.uri.path == '/backup.m4s'
             ? 503
@@ -252,6 +255,40 @@ void main() {
       await expectLater(store.open(old), throwsA(isA<CourseCacheFailure>()));
     },
   );
+
+  for (final replacement in [false, true]) {
+    test(
+      'interrupted download retains a real cutoff; replacement=$replacement',
+      () async {
+        final end = access.now.add(access.window);
+        if (replacement) {
+          await cache();
+          tag = '"different-version"';
+          access.expiryKind = CourseCacheExpiryKind.noDeclaredDeadline;
+        }
+        rejectBody = true;
+        await store.start(video, part);
+        expect(store.error, isNotNull);
+        final partial = (await store.entries()).single;
+        expect(partial.complete, isFalse);
+        expect(
+          partial.toJson()['retainedServerDeadline'],
+          end.millisecondsSinceEpoch,
+        );
+        access.now = end.add(const Duration(minutes: 1));
+        access.expiryKind = CourseCacheExpiryKind.noDeclaredDeadline;
+        rejectBody = false;
+        requests.clear();
+        await store.start(video, part);
+        expect(requests, isEmpty);
+        expect((await store.entries()).single.complete, isFalse);
+        await expectLater(
+          store.open(partial),
+          throwsA(isA<CourseCacheFailure>()),
+        );
+      },
+    );
+  }
 
   test('a later missing date cannot extend a known real cutoff', () async {
     final old = await cache();

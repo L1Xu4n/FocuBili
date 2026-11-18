@@ -636,7 +636,8 @@ class CourseCacheLibrary extends ChangeNotifier {
     c.check();
     CourseCacheEntry? shortened(DateTime? until) {
       final old = previous;
-      if (old == null || until == null) return null;
+      if (until == null) return null;
+      if (old == null) return _withoutReceipt(pending, observed: until);
       final known = old._knownServerDeadline;
       if (known != null && !until.isBefore(known)) return null;
       if (!old.complete ||
@@ -715,7 +716,10 @@ class CourseCacheLibrary extends ChangeNotifier {
     // Fresh authorization but no proof that old bytes are equivalent. Hide
     // them before touching any files; the replacement only commits atomically.
     _checking = false;
-    await _save(dir, pending, validate: check);
+    // An interrupted replacement is not a playback receipt. It still has to
+    // remember the effective server deadline even before the first media byte.
+    final transferPending = _withoutReceipt(pending, observed: g.validUntil);
+    await _save(dir, transferPending, validate: check);
     _listVersion++;
     _emit();
     final expiry = g.validUntil;
@@ -858,7 +862,7 @@ class CourseCacheLibrary extends ChangeNotifier {
           videoVersion: video.version,
           audioVersion: audio?.version,
         ),
-        pending,
+        transferPending,
         check,
       );
     } finally {
