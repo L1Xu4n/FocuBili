@@ -6,6 +6,9 @@ import 'package:flutter/material.dart';
 import '../../core/layout/adaptive_page_frame.dart';
 import '../../core/layout/adaptive_two_column_list.dart';
 import '../../core/router/app_router.dart';
+import '../../core/widgets/drag_selection_region.dart';
+import '../common/video_batch_actions.dart';
+import '../common/video_list_selection.dart';
 import '../../models/public_profile.dart';
 import '../../models/subscription.dart';
 import '../../models/video_preview.dart';
@@ -27,9 +30,11 @@ class CollectionDetailPage extends StatefulWidget {
     this.videoService,
     this.learningListService,
     this.subscriptionService,
+    this.batchActions,
   });
 
   final SubscriptionService? subscriptionService;
+  final VideoBatchActions? batchActions;
   final CreatorCollection collection;
   final BilibiliPublicContentService? publicContentService;
   final BilibiliService? videoService;
@@ -81,12 +86,17 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
   late final BilibiliPublicContentService _publicContentService;
   late final BilibiliService _videoService;
   late final LearningListService _learningListService;
+  final VideoListSelection _selection = VideoListSelection();
+  late final VideoBatchActions _batchActions;
+  bool _batchBusy = false;
+  int _dataGeneration = 0;
   final ScrollController _scrollController = ScrollController();
   List<CreatorVideo> _videos = const <CreatorVideo>[];
   int _page = 0;
   bool _hasMore = true;
   bool _loading = true;
   bool _loadingMore = false;
+  bool _needsPageTap = false;
   String? _errorMessage;
   String? _openingBvid;
   String? _addingBvid;
@@ -100,6 +110,12 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
         widget.publicContentService ?? BilibiliHttpPublicContentService();
     _videoService = widget.videoService ?? BilibiliVideoInfoService();
     _learningListService = widget.learningListService ?? LearningListService();
+    _batchActions =
+        widget.batchActions ??
+        VideoBatchActions(
+          learningService: _learningListService,
+          videoService: _videoService,
+        );
     _scrollController.addListener(_loadMoreNearBottom);
     unawaited(_loadFirstPage());
     unawaited(_loadLearningListMembership());
@@ -126,9 +142,13 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
 
   /// 首次或刷新时读取合集第一页，失败时仍保留接口自带的预览视频。
   Future<void> _loadFirstPage() async {
+    if (_selection.active) return;
+    final generation = ++_dataGeneration;
     if (mounted) {
       setState(() {
         _loading = true;
+        _loadingMore = false;
+        _needsPageTap = false;
         _errorMessage = null;
       });
     }
@@ -138,21 +158,21 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
             widget.collection.ownerMid,
             widget.collection.id,
           );
-      if (!mounted) {
+      if (!mounted || generation != _dataGeneration) {
         return;
       }
       setState(() {
-        _videos = result.items;
+        _videos = _mergeVideos(const [], result.items);
         _page = result.page;
         _hasMore = result.hasMore;
         _loading = false;
       });
     } catch (error) {
-      if (!mounted) {
+      if (!mounted || generation != _dataGeneration) {
         return;
       }
       setState(() {
-        _videos = widget.collection.previewVideos;
+        _videos = _mergeVideos(const [], widget.collection.previewVideos);
         _page = 1;
         _hasMore = false;
         _loading = false;
@@ -168,34 +188,50 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
     }
   }
 
-  /// 读取下一页并按 BV 号去重合并，失败时保留已有列表。
-  Future<void> _loadMore() async {
-    if (_loading || _loadingMore || !_hasMore) {
+  /// 偏移分页可能整页重合。有限地越过重复页；不把它误认作合集结束。
+  Future<void> _loadMore({bool manual = false}) async {
+    if (_loading || _loadingMore || !_hasMore || (_needsPageTap && !manual)) {
       return;
     }
-    setState(() => _loadingMore = true);
+    final generation = _dataGeneration;
+    setState(() {
+      _loadingMore = true;
+      _needsPageTap = false;
+    });
     try {
-      final CreatorContentPage<CreatorVideo> result =
-          await _publicContentService.loadCollectionVideos(
-            widget.collection.ownerMid,
-            widget.collection.id,
-            page: _page + 1,
-          );
-      if (!mounted) {
-        return;
+      const maxAutomaticPages = 3;
+      for (var attempt = 0; attempt < maxAutomaticPages; attempt++) {
+        final next = _page + 1;
+        final result = await _publicContentService.loadCollectionVideos(
+          widget.collection.ownerMid,
+          widget.collection.id,
+          page: next,
+        );
+        if (!mounted || generation != _dataGeneration) return;
+        if (result.page != next) {
+          // 服务端页码停滞/跳号，保留最后一个可靠游标，允许显式重试。
+          setState(() => _needsPageTap = true);
+          return;
+        }
+        final size = _videos.length;
+        setState(() {
+          _videos = _mergeVideos(_videos, result.items);
+          _page = result.page;
+          _hasMore = result.hasMore;
+        });
+        if (!_hasMore || _videos.length > size) return;
       }
-      setState(() {
-        _videos = _mergeVideos(_videos, result.items);
-        _page = result.page;
-        _hasMore = result.hasMore;
-        _loadingMore = false;
-      });
+      // 服务端仍提示有后页。限制本次请求数，由用户决定是否继续查找。
+      setState(() => _needsPageTap = true);
     } catch (error) {
-      if (!mounted) {
-        return;
+      if (mounted && generation == _dataGeneration) {
+        setState(() => _needsPageTap = true);
+        _showMessage('加载更多失败：$error');
       }
-      setState(() => _loadingMore = false);
-      _showMessage('加载更多失败：$error');
+    } finally {
+      if (mounted && generation == _dataGeneration) {
+        setState(() => _loadingMore = false);
+      }
     }
   }
 
@@ -209,7 +245,9 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
         .toSet();
     return List<CreatorVideo>.unmodifiable(<CreatorVideo>[
       ...current,
-      ...incoming.where((CreatorVideo video) => bvids.add(video.bvid)),
+      ...incoming.where(
+        (CreatorVideo video) => video.bvid.isNotEmpty && bvids.add(video.bvid),
+      ),
     ]);
   }
 
@@ -299,6 +337,33 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
     }
   }
 
+  Future<void> _saveSelected() async {
+    if (_batchBusy || _selection.ids.isEmpty) return;
+    final items = _videos
+        .where((e) => _selection.ids.contains(e.bvid))
+        .toList(growable: false);
+    setState(() => _batchBusy = true);
+    try {
+      final saved = await _batchActions.run(
+        context,
+        videos: items,
+        ownerName: widget.collection.ownerName,
+      );
+      if (!mounted) return;
+      if (saved) {
+        setState(_selection.end);
+        await _loadLearningListMembership();
+      }
+    } finally {
+      if (mounted) setState(() => _batchBusy = false);
+    }
+  }
+
+  // 放大文字时把空间留给可区分课程的标题，而不是装饰性缩略图。
+  bool get _largeTypeOnPhone =>
+      MediaQuery.sizeOf(context).width < 600 &&
+      MediaQuery.textScalerOf(context).scale(14) >= 21;
+
   /// 创建合集封面、标题、简介和真实视频数量头部。
   Widget _buildHeader() {
     return Padding(
@@ -310,11 +375,11 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
             borderRadius: BorderRadius.circular(14),
             child: _buildCover(
               widget.collection.coverUrl,
-              width: 132,
-              height: 84,
+              width: _largeTypeOnPhone ? 76 : 132,
+              height: _largeTypeOnPhone ? 48 : 84,
             ),
           ),
-          const SizedBox(width: 14),
+          SizedBox(width: _largeTypeOnPhone ? 10 : 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -332,6 +397,20 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
                   '共 ${widget.collection.totalCount} 支独立视频',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
+                if (_videos.isNotEmpty && !_selection.active)
+                  TextButton.icon(
+                    key: const Key('select-collection-videos'),
+                    onPressed: _addingBvid != null || _openingBvid != null
+                        ? null
+                        : () => setState(() => _selection.start()),
+                    icon: const Icon(Icons.checklist_rounded),
+                    label: const Text('选择视频'),
+                  ),
+                if (_selection.active)
+                  Text(
+                    '按住勾选框滑动，可连续选择。',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
                 if (widget.collection.description.isNotEmpty) ...<Widget>[
                   const SizedBox(height: 6),
                   Text(
@@ -397,23 +476,38 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
   }
 
   /// 创建单支合集视频卡片，点击后打开这支独立视频而不是切换分P。
-  Widget _buildVideoTile(CreatorVideo item) {
+  Widget _buildVideoTile(CreatorVideo item, Key handleKey) {
     final bool opening = _openingBvid == item.bvid;
     final bool adding = _addingBvid == item.bvid;
     final bool added = _learningListBvids.contains(item.bvid);
     return Card(
       key: Key('collection-video-${item.bvid}'),
+      color: _selection.ids.contains(item.bvid)
+          ? Theme.of(context).colorScheme.secondaryContainer
+          : null,
       margin: EdgeInsets.zero,
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         // 合集视频点击函数查询完整详情后进入播放器。
-        onTap: opening || adding ? null : () => unawaited(_openVideo(item)),
+        onTap: _batchBusy || opening || adding
+            ? null
+            : _selection.active
+            ? () => setState(() => _selection.toggle(item.bvid))
+            : () => unawaited(_openVideo(item)),
+        onLongPress:
+            _selection.active || _addingBvid != null || _openingBvid != null
+            ? null
+            : () => setState(() => _selection.start(item.bvid)),
         child: Row(
           children: <Widget>[
             Stack(
               alignment: Alignment.bottomRight,
               children: <Widget>[
-                _buildCover(item.coverUrl, width: 150, height: 92),
+                _buildCover(
+                  item.coverUrl,
+                  width: _largeTypeOnPhone ? 74 : 150,
+                  height: _largeTypeOnPhone ? 68 : 92,
+                ),
                 Container(
                   margin: const EdgeInsets.all(6),
                   padding: const EdgeInsets.symmetric(
@@ -428,29 +522,36 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
                 ),
               ],
             ),
-            const SizedBox(width: 12),
+            SizedBox(width: _largeTypeOnPhone ? 8 : 12),
             Expanded(
-              child: SizedBox(
-                height: 92,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(minHeight: 92),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 7),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      Expanded(
-                        child: Text(
-                          item.title,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                    ],
+                  child: Text(
+                    item.title,
+                    maxLines: _largeTypeOnPhone ? 3 : 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
                 ),
               ),
             ),
-            if (opening)
+            if (_selection.active)
+              SizedBox(
+                key: handleKey,
+                width: 48,
+                height: 48,
+                child: Checkbox(
+                  key: ValueKey('check-collection-${item.bvid}'),
+                  semanticLabel: '选择 ${item.title}',
+                  value: _selection.ids.contains(item.bvid),
+                  onChanged: _batchBusy
+                      ? null
+                      : (_) => setState(() => _selection.toggle(item.bvid)),
+                ),
+              )
+            else if (opening)
               const Padding(
                 padding: EdgeInsets.all(12),
                 child: SizedBox.square(
@@ -512,26 +613,51 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
         ),
       );
     }
-    return RefreshIndicator(
-      // 下拉刷新函数重新读取合集第一页。
-      onRefresh: _loadFirstPage,
-      child: AdaptiveTwoColumnList(
-        key: const Key('collection-detail-video-list'),
-        controller: _scrollController,
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-        header: _buildHeader(),
-        itemCount: _videos.length,
-        footer: _loadingMore
-            ? const Padding(
-                padding: EdgeInsets.all(16),
-                child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
-              )
-            : const SizedBox(height: 8),
-        mainAxisSpacing: 10,
-        itemBuilder: (BuildContext context, int index) {
-          return _buildVideoTile(_videos[index]);
-        },
+    return DragSelectionRegion(
+      controller: _scrollController,
+      itemCount: _videos.length,
+      enabled: _selection.active && !_batchBusy,
+      checkedAt: (i) => _selection.ids.contains(_videos[i].bvid),
+      onDragUpdate: (change) =>
+          setState(() => _selection.range(change, _videos)),
+      builder: (context, dragging) => RefreshIndicator(
+        notificationPredicate: (notification) =>
+            !_selection.active && notification.depth == 0,
+        onRefresh: _loadFirstPage,
+        child: AdaptiveTwoColumnList(
+          key: const Key('collection-detail-video-list'),
+          controller: _scrollController,
+          physics: dragging
+              ? const NeverScrollableScrollPhysics()
+              : const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          header: _buildHeader(),
+          itemCount: _videos.length,
+          footer: _loadingMore
+              ? const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Center(
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                )
+              : _needsPageTap
+              ? Center(
+                  child: TextButton.icon(
+                    key: const Key('continue-collection-pages'),
+                    onPressed: () => _loadMore(manual: true),
+                    icon: const Icon(Icons.expand_more),
+                    label: const Text('继续加载后续视频'),
+                  ),
+                )
+              : const SizedBox(height: 8),
+          mainAxisSpacing: 10,
+          itemBuilder: (BuildContext context, int index) {
+            return DragSelectionTarget(
+              index: index,
+              builder: (context, key) => _buildVideoTile(_videos[index], key),
+            );
+          },
+        ),
       ),
     );
   }
@@ -539,49 +665,84 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
   /// 创建带刷新入口的 UGC 合集详情页。
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          widget.collection.title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        actions: <Widget>[
-          FocusSubscriptionButton(
-            service: widget.subscriptionService,
-            source: SubscriptionSource(
-              kind: SubscriptionKind.collection,
-              mid: widget.collection.ownerMid,
-              seasonId: widget.collection.id,
-              name: widget.collection.title,
-              imageUrl: widget.collection.coverUrl,
-              token: DateTime.now().microsecondsSinceEpoch.toString(),
-            ),
-          ),
-          IconButton(
-            tooltip: '批量加入学习清单',
-            icon: const Icon(Icons.playlist_add),
-            onPressed: () async {
-              await LearningAddSheet.showCollection(
-                context,
-                ownerMid: widget.collection.ownerMid,
-                collectionId: widget.collection.id,
-                contentService: _publicContentService,
-                videoService: _videoService,
-                service: _learningListService,
-              );
-              if (mounted) await _loadLearningListMembership();
-            },
-          ),
-          IconButton(
-            // 顶部刷新函数重新读取合集第一页。
-            onPressed: _loading ? null : () => unawaited(_loadFirstPage()),
-            icon: const Icon(Icons.refresh_rounded),
-            tooltip: '刷新合集',
-          ),
-        ],
+    return PopScope(
+      canPop: !_selection.active,
+      onPopInvokedWithResult: (popped, _) {
+        if (!popped && _selection.active && !_batchBusy) {
+          setState(_selection.end);
+        }
+      },
+      child: Scaffold(
+        appBar: _selection.active
+            ? AppBar(
+                leading: IconButton(
+                  icon: const Icon(Icons.close_rounded),
+                  tooltip: '退出多选',
+                  onPressed: _batchBusy ? null : () => setState(_selection.end),
+                ),
+                title: Text(
+                  '已选 ${_selection.ids.length}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                actions: [
+                  TextButton.icon(
+                    key: const Key('batch-save-selected'),
+                    onPressed: _batchBusy || _selection.ids.isEmpty
+                        ? null
+                        : _saveSelected,
+                    icon: _largeTypeOnPhone
+                        ? null
+                        : const Icon(Icons.add_rounded),
+                    label: const Text('添加到'),
+                  ),
+                ],
+              )
+            : AppBar(
+                title: Text(
+                  widget.collection.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                actions: <Widget>[
+                  FocusSubscriptionButton(
+                    service: widget.subscriptionService,
+                    source: SubscriptionSource(
+                      kind: SubscriptionKind.collection,
+                      mid: widget.collection.ownerMid,
+                      seasonId: widget.collection.id,
+                      name: widget.collection.title,
+                      imageUrl: widget.collection.coverUrl,
+                      token: DateTime.now().microsecondsSinceEpoch.toString(),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: '批量加入学习清单',
+                    icon: const Icon(Icons.playlist_add),
+                    onPressed: () async {
+                      await LearningAddSheet.showCollection(
+                        context,
+                        ownerMid: widget.collection.ownerMid,
+                        collectionId: widget.collection.id,
+                        contentService: _publicContentService,
+                        videoService: _videoService,
+                        service: _learningListService,
+                      );
+                      if (mounted) await _loadLearningListMembership();
+                    },
+                  ),
+                  IconButton(
+                    // 顶部刷新函数重新读取合集第一页。
+                    onPressed: _loading
+                        ? null
+                        : () => unawaited(_loadFirstPage()),
+                    icon: const Icon(Icons.refresh_rounded),
+                    tooltip: '刷新合集',
+                  ),
+                ],
+              ),
+        body: AdaptivePageFrame(maxWidth: 1180, child: _buildBody()),
       ),
-      body: AdaptivePageFrame(maxWidth: 1180, child: _buildBody()),
     );
   }
 }
