@@ -201,21 +201,56 @@ void main() {
         (await const ContentBlocklistService().load()).videos,
         contains(abVideo.bvid),
       );
-      await t.tap(find.text('撤销'));
+      // The compact player uses a SnackBar for the preceding listening-mode
+      // notice. Let it finish naturally; the block notice must not replace it.
+      if (v.$4 != 'desktop') {
+        final restored = find.widgetWithText(SnackBar, '已恢复视频画面');
+        expect(restored, findsOneWidget);
+        expect(find.text('撤销'), findsNothing);
+        await t.pump(t.widget<SnackBar>(restored).duration);
+        await t.pumpAndSettle();
+      }
+      final undo = find.widgetWithText(SnackBarAction, '撤销').hitTestable();
+      final blocked = find.widgetWithText(SnackBar, '已屏蔽该视频，可在黑名单中取消。');
+      expect(t.widget<SnackBar>(blocked).duration, const Duration(seconds: 4));
+      await t.pump(const Duration(seconds: 3));
+      expect(undo, findsOneWidget);
+      await t.tap(undo);
       await t.pumpAndSettle();
       expect((await const ContentBlocklistService().load()).videos, isEmpty);
-      await t.tap(find.byKey(const Key('more-settings-menu')));
+      expect(find.byType(PlayerPage), findsOneWidget);
+      // Playback controls can auto-hide while the two notices are visible.
+      if (_trigger.hitTestable().evaluate().isEmpty) {
+        await t.tap(find.byKey(const Key('player-surface')).first);
+        await t.pump(kDoubleTapTimeout);
+        await t.pumpAndSettle();
+      }
+      await t.tap(_trigger.hitTestable());
       await t.pumpAndSettle();
+      expect(_panel, findsOneWidget);
       await t.sendKeyEvent(LogicalKeyboardKey.escape);
       await t.pumpAndSettle();
       expect(find.byKey(const Key('listening-menu-item')), findsNothing);
       expect(find.byType(PlayerPage), findsOneWidget);
-      await t.tap(find.byKey(const Key('more-settings-menu')));
+      await t.tap(_trigger.hitTestable());
       await t.pumpAndSettle();
+      expect(_panel, findsOneWidget);
       await t.binding.handlePopRoute();
       await t.pumpAndSettle();
       expect(find.byType(PlayerPage), findsOneWidget);
       expect(find.byKey(const Key('listening-menu-item')), findsNothing);
+
+      await menu(t, 'player-block-video');
+      expect(undo, findsOneWidget);
+      await t.pump(const Duration(seconds: 4));
+      await t.pumpAndSettle();
+      expect(blocked, findsNothing);
+      expect(undo, findsNothing);
+      expect(
+        (await const ContentBlocklistService().load()).videos,
+        contains(abVideo.bvid),
+      );
+      expect(find.byType(PlayerPage), findsOneWidget);
       expect(t.takeException(), isNull);
 
       await unmountAb(t);
