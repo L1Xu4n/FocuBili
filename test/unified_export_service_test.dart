@@ -521,14 +521,21 @@ void main() {
         } else {
           (document[kind] as List).add((document[kind] as List).first);
         }
+        final raw = jsonEncode(document);
         SharedPreferences.setMockInitialValues({
-          SubscriptionService.storageKey: jsonEncode(document),
+          SubscriptionService.storageKey: raw,
         });
         final service = SubscriptionService(
           preferencesLoader: SharedPreferences.getInstance,
+          clock: () => DateTime.utc(2026, 11, 7),
         );
         try {
           await service.initialize();
+          expect(service.feed, isEmpty);
+          expect(service.sources, hasLength(1));
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.reload();
+          expect(prefs.getString(SubscriptionService.storageKey), raw);
           await expectLater(
             service.exportLocalData(),
             throwsA(isA<SubscriptionStorageException>()),

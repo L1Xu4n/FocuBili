@@ -143,7 +143,8 @@ class SubscriptionService extends ChangeNotifier {
   Map<String, SubscriptionFeedItem> _feed = {};
   Set<String> _announced = {};
   Set<String> _notificationClaims = {};
-  String? _snapshotText;
+  String? _snapshotText, _checkedRetentionSnapshot;
+  bool _retentionSnapshotSafe = true;
   List<SubscriptionFeedItem>? _feedView;
   int _visibleUnread = 0;
   DateTime? _firstExpiry, _firstStoredExpiry;
@@ -251,6 +252,11 @@ class SubscriptionService extends ChangeNotifier {
         (document['version'] != 1 && document['version'] != 2)) {
       throw const SubscriptionStorageException();
     }
+    _validateExportFlags(document);
+    return document;
+  }
+
+  static void _validateExportFlags(Map<String, dynamic> document) {
     for (final key in [
       'enabled',
       'notificationsEnabled',
@@ -260,7 +266,6 @@ class SubscriptionService extends ChangeNotifier {
         throw const SubscriptionStorageException();
       }
     }
-    return document;
   }
 
   /// A portable local snapshot, without notification leases or runtime owners.
@@ -268,28 +273,8 @@ class SubscriptionService extends ChangeNotifier {
   Future<Map<String, Object?>> exportLocalData() async {
     // Browsing maps dedupe rows; strict export must retain and validate raw rows.
     final document = await _readExportSnapshot();
-    final sourceSnapshot = _exportRows(
-      document['sources'],
-      SubscriptionSource.fromJson,
-      (source) => source.key,
-      booleanFields: const ['paused'],
-      allowedFields: const {
-        'kind',
-        'mid',
-        'seasonId',
-        'name',
-        'token',
-        'paused',
-        'imageUrl',
-      },
-    );
-    final feedSnapshot = _exportRows(
-      document['feed'],
-      SubscriptionFeedItem.fromJson,
-      (item) => item.bvid,
-      booleanFields: const ['collectionAdded'],
-      allowedFields: _exportFeedFields,
-    );
+    final sourceSnapshot = _parseExportSources(document['sources']);
+    final feedSnapshot = _parseExportFeedRows(document['feed']);
     final checkpoints = Map<String, dynamic>.from(
       document['checkpoints'] as Map,
     );
@@ -298,28 +283,9 @@ class SubscriptionService extends ChangeNotifier {
     }
     final legacy = <String, List<SubscriptionFeedItem>>{
       for (final entry in checkpoints.entries)
-        entry.key: _exportRows(
-          (entry.value as Map)['pending'],
-          SubscriptionFeedItem.fromJson,
-          (item) => item.bvid,
-          booleanFields: const ['collectionAdded'],
-          allowedFields: _exportFeedFields,
-        ),
+        entry.key: _parseExportFeedRows((entry.value as Map)['pending']),
     };
-    final jobs = <String, SubscriptionHistoryJob>{};
-    for (final entry in (document['historyJobs'] as Map? ?? {}).entries) {
-      final values = Map<String, dynamic>.from(entry.value as Map);
-      final rawIds = values['ids'] as List;
-      final job = SubscriptionHistoryJob.fromJson(values);
-      if (entry.key is! String ||
-          job.sourceKey != entry.key ||
-          job.batches < 0 ||
-          rawIds.any((id) => id is! String || id.trim().isEmpty) ||
-          rawIds.length != job.ids.length) {
-        throw const SubscriptionStorageException();
-      }
-      jobs[entry.key as String] = job;
-    }
+    final jobs = _parseExportHistoryJobs(document['historyJobs']);
     final history = <String, Object?>{};
     for (final key in {
       ...sourceSnapshot.map((source) => source.key),
@@ -389,6 +355,44 @@ class SubscriptionService extends ChangeNotifier {
         _ => historyStorage.read(job, batch),
       };
 
+  static List<SubscriptionSource> _parseExportSources(Object? rows) =>
+      _exportRows(
+        rows,
+        SubscriptionSource.fromJson,
+        (source) => source.key,
+        booleanFields: const ['paused'],
+        allowedFields: _exportSourceFields,
+      );
+
+  static List<SubscriptionFeedItem> _parseExportFeedRows(Object? rows) =>
+      _exportRows(
+        rows,
+        SubscriptionFeedItem.fromJson,
+        (item) => item.bvid,
+        booleanFields: const ['collectionAdded'],
+        allowedFields: _exportFeedFields,
+      );
+
+  static Map<String, SubscriptionHistoryJob> _parseExportHistoryJobs(
+    Object? raw,
+  ) {
+    final jobs = <String, SubscriptionHistoryJob>{};
+    for (final entry in (raw as Map? ?? {}).entries) {
+      final values = Map<String, dynamic>.from(entry.value as Map);
+      final rawIds = values['ids'] as List;
+      final job = SubscriptionHistoryJob.fromJson(values);
+      if (entry.key is! String ||
+          job.sourceKey != entry.key ||
+          job.batches < 0 ||
+          rawIds.any((id) => id is! String || id.trim().isEmpty) ||
+          rawIds.length != job.ids.length) {
+        throw const SubscriptionStorageException();
+      }
+      jobs[entry.key as String] = job;
+    }
+    return jobs;
+  }
+
   static List<T> _exportRows<T>(
     Object? raw,
     T Function(Map<String, dynamic>) parse,
@@ -418,6 +422,16 @@ class SubscriptionService extends ChangeNotifier {
     return result;
   }
 
+  static const _exportSourceFields = {
+    'kind',
+    'mid',
+    'seasonId',
+    'name',
+    'token',
+    'paused',
+    'imageUrl',
+  };
+
   static const _exportFeedFields = {
     'bvid',
     'title',
@@ -428,6 +442,29 @@ class SubscriptionService extends ChangeNotifier {
     'readAt',
     'collectionAdded',
   };
+
+  // Browsing tolerates some malformed legacy metadata. Expiration is not
+  // permission to serialize that projection over ambiguous authoritative
+  // bytes. Only inspect changed snapshots once and only when expiry is due.
+  bool get _canPruneSnapshot {
+    final raw = _snapshotText;
+    if (raw == null) return true;
+    if (raw == _checkedRetentionSnapshot) return _retentionSnapshotSafe;
+    _checkedRetentionSnapshot = raw;
+    try {
+      final document = jsonDecode(raw) as Map<String, dynamic>;
+      _validateExportFlags(document);
+      _parseExportSources(document['sources']);
+      _parseExportFeedRows(document['feed']);
+      for (final checkpoint in (document['checkpoints'] as Map).values) {
+        _parseExportFeedRows((checkpoint as Map)['pending']);
+      }
+      _parseExportHistoryJobs(document['historyJobs']);
+      return _retentionSnapshotSafe = true;
+    } catch (_) {
+      return _retentionSnapshotSafe = false;
+    }
+  }
 
   int get unreadCount {
     feed; // Refresh the cached view if its earliest entry has just expired.
@@ -612,6 +649,7 @@ class SubscriptionService extends ChangeNotifier {
   Future<T> _mutate<T>(
     FutureOr<T> Function() action, {
     bool readOnly = false,
+    bool retentionOnly = false,
   }) async {
     await initialize();
     final prior = _writes ?? Future<void>.value();
@@ -621,17 +659,35 @@ class SubscriptionService extends ChangeNotifier {
       final hadError = storageError != null;
       var previous = before;
       Object? actionFailure;
+      var preserveRawSnapshot = false;
       Future<T> apply() async {
         try {
+          final canPrune = _hasExpiredFeed(_clock()) && _canPruneSnapshot;
+          preserveRawSnapshot = retentionOnly && !canPrune;
+          if (preserveRawSnapshot) return await action();
           // An action may partially change memory before failing. Force rollback
           // and every CAS replay to restore a fresh authoritative snapshot.
           _snapshotText = null;
-          _pruneExpiredFeed();
+          if (canPrune) _pruneExpiredFeed();
           return await action();
         } catch (error) {
           actionFailure = error;
           rethrow;
         }
+      }
+
+      String encodeMutation() {
+        if (!retentionOnly) return jsonEncode(_json());
+        if (preserveRawSnapshot) return previous;
+        // This sweep is not an edit to sources, history, flags or other
+        // stored metadata. Keep the untouched fields and surviving rows raw.
+        final document = jsonDecode(previous) as Map<String, dynamic>;
+        document['feed'] = (document['feed'] as List)
+            .where((row) => _feed.containsKey((row as Map)['bvid']))
+            .toList();
+        document['announced'] = _announced.toList();
+        document['notificationClaims'] = _notificationClaims.toList();
+        return jsonEncode(document);
       }
 
       try {
@@ -646,14 +702,18 @@ class SubscriptionService extends ChangeNotifier {
             if (current != null) _restoreRaw(current);
             previous = _snapshotText ?? jsonEncode(_json());
             final value = await apply();
-            committed = jsonEncode(_json());
-            if (committed != current) save(committed!);
+            if (preserveRawSnapshot) {
+              committed = current;
+            } else {
+              committed = encodeMutation();
+              if (committed != current) save(committed!);
+            }
             return value;
           });
           _snapshotText = committed;
         } else {
           result = await apply();
-          final encoded = jsonEncode(_json());
+          final encoded = encodeMutation();
           if (encoded != previous) {
             final prefs = await _preferencesLoader();
             if (!await prefs.setString(backupKey, previous) ||
@@ -995,10 +1055,12 @@ class SubscriptionService extends ChangeNotifier {
   }
 
   Future<void> _clearIfExpired() async {
-    if (_hasExpiredFeed(_clock())) await clearExpiredFeed();
+    if (_hasExpiredFeed(_clock()) && _canPruneSnapshot) {
+      await clearExpiredFeed();
+    }
   }
 
-  Future<void> clearExpiredFeed() => _mutate(() {});
+  Future<void> clearExpiredFeed() => _mutate(() {}, retentionOnly: true);
 
   void _scheduleFeedExpiry() {
     final schedule = _retentionTimerFactory;
@@ -1016,7 +1078,8 @@ class SubscriptionService extends ChangeNotifier {
         } else {
           at = storedExpiry.add(timerGranularity);
         }
-        if (!_retentionSweepRunning) {
+        if (!_retentionSweepRunning &&
+            (!now.isAfter(storedExpiry) || _canPruneSnapshot)) {
           // Exactly fourteen days still counts. A millisecond beyond the
           // cutoff also avoids zero-delay loops from Timer rounding.
           var cleanup = storedExpiry.add(timerGranularity);
@@ -1053,7 +1116,8 @@ class SubscriptionService extends ChangeNotifier {
     final sweep =
         hasExpired &&
         !_retentionSweepRunning &&
-        (retryAt == null || !now.isBefore(retryAt));
+        (retryAt == null || !now.isBefore(retryAt)) &&
+        _canPruneSnapshot;
     if (sweep) _retentionSweepRunning = true;
     // Readers derive content age immediately, independently of the write.
     if (hasExpired) notifyListeners();

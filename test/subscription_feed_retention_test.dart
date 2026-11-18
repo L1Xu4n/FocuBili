@@ -166,6 +166,12 @@ void main() {
             sources: [origin],
           ),
         );
+      final rawSnapshot = jsonDecode(store.value!) as Map;
+      rawSnapshot['futureLocalSection'] = {
+        'untouched': [1, 'opaque'],
+      };
+      rawSnapshot['checkpoints'][origin.key]['opaqueCursor'] = {'raw': true};
+      store.value = jsonEncode(rawSnapshot);
       final original = store.value;
       final service = SubscriptionService(
         snapshotStore: store,
@@ -186,6 +192,10 @@ void main() {
       expect(service.unreadCount, 2);
       final persisted = jsonDecode(store.value!) as Map;
       expect(persisted['feed'], hasLength(4));
+      expect(
+        persisted['futureLocalSection'],
+        rawSnapshot['futureLocalSection'],
+      );
       expect(
         persisted['announced'],
         unorderedEquals(['too-old-read', 'too-old-unread']),
@@ -235,6 +245,47 @@ void main() {
     expect(persisted['announced'], contains('old'));
     expect(persisted['feed'], hasLength(2));
   });
+
+  test(
+    'retention CAS replay never rewrites a concurrent ambiguous raw snapshot',
+    () async {
+      var now = _start;
+      final origin = source(1);
+      final rows = [
+        _row(
+          'overdue',
+          published: now.subtract(const Duration(days: 14)),
+          origin: origin,
+        ),
+        _row('still-readable', origin: origin),
+      ];
+      final store = CountingSnapshots()
+        ..value = jsonEncode(_data(rows, sources: [origin]));
+      final service = SubscriptionService(
+        snapshotStore: store,
+        clock: () => now,
+      );
+      addTearDown(service.dispose);
+      await service.initialize();
+      now = now.add(const Duration(milliseconds: 1));
+      final malformed = _data(rows, sources: [origin, origin]);
+      final raw = jsonEncode(malformed);
+      store.conflictOnce = (current, proposed) => raw;
+      await service.reload();
+      expect(store.forcedConflicts, 1);
+      expect(store.value, raw);
+      expect(service.feed.single.bvid, 'still-readable');
+      expect(service.sources.single.key, origin.key);
+      await expectLater(
+        service.exportLocalData(),
+        throwsA(isA<SubscriptionStorageException>()),
+      );
+      store.resetCounts();
+      await service.reload();
+      expect(store.transactions, 0);
+      expect(store.value, raw);
+    },
+  );
 
   testWidgets(
     'open feed drops the row, unread count and its selection immediately after expiry',
