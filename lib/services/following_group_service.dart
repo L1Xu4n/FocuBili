@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/following_group.dart';
 
@@ -12,6 +13,10 @@ class FollowingGroupService {
   final Future<SharedPreferences> Function() _loader;
   Future<void> _pending = Future.value();
   final Map<int, String?> _fallback = {};
+  final _changes = ValueNotifier<({int mid, int revision})?>(null);
+
+  /// 通知本次成功落盘的账号，不广播分组内容。
+  ValueListenable<({int mid, int revision})?> get changes => _changes;
 
   /// 仅接受登录账号，避免所有访客共用一个分组空间。
   static String storageKey(int mid) {
@@ -57,6 +62,10 @@ class FollowingGroupService {
         _fallback[mid] = previous;
         rethrow;
       }
+      _changes.value = (
+        mid: mid,
+        revision: (_changes.value?.revision ?? 0) + 1,
+      );
     });
     _pending = result.then<void>((_) {}, onError: (Object _, StackTrace _) {});
     return result;
