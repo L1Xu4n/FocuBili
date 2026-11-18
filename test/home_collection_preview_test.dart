@@ -360,9 +360,11 @@ void main() {
     String visibleAvatar() =>
         t.widget<AppNetworkImage>(find.byType(AppNetworkImage)).imageUrl;
     expect(visibleAvatar(), avatar);
-    await FollowingGroupService.instance.save(api.mid, [
-      FollowingGroup(id: 'x', name: '另一分组'),
-    ]);
+    await t.runAsync(
+      () => FollowingGroupService.instance.save(api.mid, [
+        FollowingGroup(id: 'x', name: '另一分组'),
+      ]),
+    );
     await settle(t);
     expect(visibleAvatar(), avatar);
     expect(api.calls, 1);
