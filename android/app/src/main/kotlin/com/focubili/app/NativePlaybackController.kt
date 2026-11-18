@@ -2557,6 +2557,8 @@ class NativePlaybackController(
             "User-Agent" to DESKTOP_USER_AGENT,
         )
         // Media requests must never forward the logged-in API session.
+        // DefaultHttpDataSource uses URLConnection and the app-process ProxySelector
+        // installed by focubili_android, just like the native API calls above.
         val networkFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(false)
             .setConnectTimeoutMs(MEDIA_CONNECT_TIMEOUT_MS)

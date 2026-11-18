@@ -1,3 +1,4 @@
+import 'network_proxy_service.dart';
 import 'dart:async';
 
 import 'package:flutter/widgets.dart';
@@ -14,6 +15,7 @@ import 'subscription_service.dart';
 @pragma('vm:entry-point')
 Future<void> subscriptionAppleBackgroundMain() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await NetworkProxyService.instance.initialize();
   await runAppleSubscriptionWorker(
     channel: const MethodChannel('com.focubili.app/subscription_worker'),
     createService: () => SubscriptionService(
@@ -113,6 +115,7 @@ Future<void> runAppleSubscriptionWorker({
 void subscriptionCallbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
     WidgetsFlutterBinding.ensureInitialized();
+    await NetworkProxyService.instance.initialize();
     // Workmanager creates an auto-registered Android Flutter engine.
     if (task != SubscriptionBackgroundScheduler.taskName) return true;
     final generation = inputData?['generation'];

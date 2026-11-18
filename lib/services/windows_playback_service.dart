@@ -1,3 +1,4 @@
+import 'network_proxy_service.dart';
 import 'bilibili_auth_service.dart';
 import 'playback_preferences_service.dart';
 import 'dart:async';
@@ -189,6 +190,7 @@ class WindowsPlaybackService
   Future<void> _accountChangeStop = Future<void>.value();
   // Includes issued play commands: logout must stop after every media activation.
   final Set<Future<void>> _pendingMediaOpens = {};
+  Future<void> _mediaOpenQueue = Future<void>.value();
   Future<void> Function()? _activeSessionValidator;
 
   Future<bool> _validateActiveSession(int generation) async {
@@ -217,9 +219,29 @@ class WindowsPlaybackService
     if (!await _validateActiveSession(generation)) return;
     final fence = Completer<void>();
     _pendingMediaOpens.add(fence.future);
-    try {
+    final audioUri = _activeAudioMedia?.uri;
+    final operation = _mediaOpenQueue.then((_) async {
+      if (!_isCurrentSourceRequest(generation)) return;
+      final platformPlayer = _player.platform;
+      if (platformPlayer is NativePlayer) {
+        await NetworkProxyService.instance.configurePlayer(
+          uris: [
+            Uri.parse(media.uri),
+            if (audioUri != null) Uri.parse(audioUri),
+          ],
+          writeProperty: platformPlayer.setProperty,
+          isCurrent: () => _isCurrentSourceRequest(generation),
+        );
+      }
+      if (!_isCurrentSourceRequest(generation)) return;
       await _player.open(media, play: play);
       await _validateActiveSession(generation);
+    });
+    // Proxy writes and open belong to one serialized operation. An older delayed
+    // OS lookup cannot overwrite a newer source's proxy after that source opens.
+    _mediaOpenQueue = operation.catchError((Object _) {});
+    try {
+      await operation;
     } finally {
       fence.complete();
       _pendingMediaOpens.remove(fence.future);
@@ -1043,7 +1065,9 @@ class WindowsPlaybackService
       _opening = false;
       _restoringPosition = false;
       _restoredPosition = Duration.zero;
-      final String message = error is DesktopPlaybackSourceException
+      final String message = error is NetworkProxyException
+          ? error.message
+          : error is DesktopPlaybackSourceException
           ? error.message
           : error is BilibiliPlaybackSessionException
           ? error.toString()
@@ -1070,6 +1094,8 @@ class WindowsPlaybackService
         );
         return;
       } on BilibiliPlaybackSessionException {
+        rethrow;
+      } on NetworkProxyException {
         rethrow;
       } catch (_) {
         if (!_isCurrentSourceRequest(generation)) {

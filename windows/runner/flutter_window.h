@@ -11,6 +11,7 @@
 
 #include "win32_window.h"
 #include "windows_experience.h"
+#include "network_proxy.h"
 
 // A window that does nothing but host a Flutter view.
 class FlutterWindow : public Win32Window {
@@ -31,6 +32,7 @@ class FlutterWindow : public Win32Window {
   int64_t subscription_generation_ = 0;
   bool subscription_timer_enabled_ = false;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> subscription_scheduler_channel_;
+  std::unique_ptr<NetworkProxy> network_proxy_;
   // The project to run.
   flutter::DartProject project_;
   std::unique_ptr<WindowsExperience> windows_experience_;
