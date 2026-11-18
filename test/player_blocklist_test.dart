@@ -12,6 +12,28 @@ void main() {
   testWidgets(
     'player menu blocks video and creator and opens cancellation list',
     (tester) async {
+      Future<void> chooseMenuItem(String key) async {
+        final more = find.byKey(const Key('more-settings-menu'));
+        if (more.hitTestable().evaluate().isEmpty) {
+          await tester.tap(find.byKey(const Key('player-surface')).first);
+          // 单击需等双击判断结束，之后才能再次点“更多”。
+          await tester.pump(const Duration(milliseconds: 350));
+          await tester.pumpAndSettle();
+        }
+        expect(more.hitTestable(), findsOneWidget);
+        await tester.tap(more);
+        await tester.pumpAndSettle();
+        final item = find.byKey(Key(key));
+        // 屏蔽管理在观看工具之后，短窗口要先滚动到它才能点击。
+        if (item.hitTestable().evaluate().isEmpty) {
+          await tester.drag(find.text('字幕').last, const Offset(0, -350));
+          await tester.pumpAndSettle();
+        }
+        expect(item.hitTestable(), findsOneWidget);
+        await tester.tap(item);
+        await tester.pumpAndSettle();
+      }
+
       final playback = ReviewLocalPlayback();
       final cached = ReviewOfflineLibrary.record.toPreview();
       final video = VideoPreview(
@@ -35,31 +57,19 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('more-settings-menu')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('player-block-video')));
-      await tester.pumpAndSettle();
+      await chooseMenuItem('player-block-video');
       expect((await const ContentBlocklistService().load()).videos.keys, [
         cached.bvid,
       ]);
       expect(playback.localOpenCount, 1);
-      await tester.tap(find.byKey(const Key('more-settings-menu')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('player-block-video')));
-      await tester.pumpAndSettle();
+      await chooseMenuItem('player-block-video');
       expect(find.text('已在黑名单中，可在管理页面取消屏蔽。'), findsOneWidget);
       expect(find.text('撤销'), findsNothing);
-      await tester.tap(find.byKey(const Key('more-settings-menu')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('player-block-creator')));
-      await tester.pumpAndSettle();
+      await chooseMenuItem('player-block-creator');
       expect((await const ContentBlocklistService().load()).creators.keys, [
         42,
       ]);
-      await tester.tap(find.byKey(const Key('more-settings-menu')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('player-manage-blocklist')));
-      await tester.pumpAndSettle();
+      await chooseMenuItem('player-manage-blocklist');
       await tester.tap(find.byKey(Key('unblock-video-${cached.bvid}')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('unblock-creator-42')));

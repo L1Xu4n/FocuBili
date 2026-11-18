@@ -82,7 +82,10 @@ class SearchVideoRow extends StatelessWidget {
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.only(top: 5, right: 40),
+                padding: const EdgeInsets.only(
+                  top: 5,
+                  right: kMinInteractiveDimension,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
@@ -124,7 +127,13 @@ class SearchVideoRow extends StatelessWidget {
             ],
           ),
         ),
-        Positioned(right: 0, bottom: 0, width: 40, height: 40, child: menu),
+        Positioned(
+          right: 0,
+          bottom: 0,
+          width: kMinInteractiveDimension,
+          height: kMinInteractiveDimension,
+          child: menu,
+        ),
       ],
     );
   }

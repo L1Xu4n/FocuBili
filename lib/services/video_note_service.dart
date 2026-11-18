@@ -24,6 +24,59 @@ class VideoNoteService {
 
   final VideoNotePreferencesLoader _preferencesLoader;
 
+  // 列表、详情和播放器可各自持有服务实例，但不可同时改写同一份笔记。
+  static final Expando<Future<void>> _writeQueues = Expando('note writes');
+
+  Future<T> _mutate<T>(Future<T> Function(SharedPreferences) action) async {
+    final prefs = await _preferencesLoader();
+    final previous = _writeQueues[prefs];
+    final release = Completer<void>();
+    _writeQueues[prefs] = release.future;
+    try {
+      if (previous != null) await previous;
+      return await action(prefs);
+    } finally {
+      release.complete();
+      if (identical(_writeQueues[prefs], release.future)) {
+        _writeQueues[prefs] = null;
+      }
+    }
+  }
+
+  /// 迟到的封面只更新仍存在且仍缺封面的记录，不回写查询开始时的正文或截图。
+  Future<Set<String>> fillMissingCovers(String bvid, String coverUrl) async {
+    if (coverUrl.trim().isEmpty || bvid.trim().isEmpty) return {};
+    return _mutate((prefs) async {
+      final raw = prefs.getString(storageKey);
+      if (raw == null) return <String>{};
+      final rows = jsonDecode(raw);
+      if (rows is! List) return <String>{};
+      final changed = <String>{};
+      for (final row in rows) {
+        if (row is! Map<String, dynamic> ||
+            row['bvid'] != bvid ||
+            row['id'] is! String) {
+          continue;
+        }
+        final existing = row['videoCoverUrl'];
+        if (existing != null &&
+            (existing is! String || existing.trim().isNotEmpty)) {
+          continue;
+        }
+        row['videoCoverUrl'] = coverUrl;
+        changed.add(row['id'] as String);
+      }
+      // 就地改原始字段，同时保留未识别字段、记录顺序、用户编辑时间和画面。
+      if (changed.isNotEmpty) {
+        if (!await prefs.setString(storageKey, jsonEncode(rows))) {
+          throw StateError('封面保存失败');
+        }
+        _changes.add(bvid);
+      }
+      return changed;
+    });
+  }
+
   /// 清理导航撤销后的新截图；存储不可读或仍被任一笔记引用时保留文件。
   Future<void> discardUnreferencedFrame(String path) async {
     try {
@@ -89,7 +142,13 @@ class VideoNoteService {
     if (normalized == null) {
       throw ArgumentError.value(note, 'note', '笔记缺少必要信息。');
     }
-    final SharedPreferences preferences = await _preferencesLoader();
+    await _mutate((prefs) => _saveNormalized(prefs, normalized));
+  }
+
+  Future<void> _saveNormalized(
+    SharedPreferences preferences,
+    VideoNote normalized,
+  ) async {
     final List<VideoNote> notes = _decodeNotes(
       preferences.getString(storageKey),
     );
@@ -100,7 +159,12 @@ class VideoNoteService {
     if (existingIndex >= 0) {
       final VideoNote previous = notes[existingIndex];
       obsoleteFramePaths.addAll(previous.allFrames.map((frame) => frame.path));
-      notes[existingIndex] = normalized;
+      notes[existingIndex] =
+          normalized.videoCoverUrl.isEmpty &&
+              previous.bvid == normalized.bvid &&
+              previous.videoCoverUrl.isNotEmpty
+          ? normalized.copyWith(videoCoverUrl: previous.videoCoverUrl)
+          : normalized;
     } else {
       notes.add(normalized);
     }
@@ -143,7 +207,13 @@ class VideoNoteService {
     if (normalizedId.isEmpty) {
       return;
     }
-    final SharedPreferences preferences = await _preferencesLoader();
+    await _mutate((prefs) => _deleteStoredNote(prefs, normalizedId));
+  }
+
+  Future<void> _deleteStoredNote(
+    SharedPreferences preferences,
+    String normalizedId,
+  ) async {
     final List<VideoNote> notes = _decodeNotes(
       preferences.getString(storageKey),
     );

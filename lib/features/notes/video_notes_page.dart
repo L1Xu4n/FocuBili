@@ -1,7 +1,7 @@
 import 'dart:async';
 
-import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/layout/adaptive_page_frame.dart';
 import '../../core/layout/adaptive_two_column_list.dart';
@@ -12,7 +12,7 @@ import '../../services/video_note_service.dart';
 import '../../services/video_note_export_service.dart';
 import '../../services/video_note_share_service.dart';
 import '../../services/local_export_service.dart';
-import 'video_note_composer.dart';
+import 'video_note_list_tile.dart';
 import 'video_note_detail_page.dart';
 
 /// 在“我的”页面统一搜索、查看和删除保存在本机的时间点笔记。
@@ -43,6 +43,7 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
   late final VideoNoteService _noteService;
   late final BilibiliService _videoService;
   late final TextEditingController _searchController;
+  final _listFocus = FocusNode(debugLabel: '时间点笔记');
   List<VideoNote> _notes = const <VideoNote>[];
   bool _loading = true;
   String? _errorMessage;
@@ -64,6 +65,7 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
   /// 页面销毁时释放搜索输入控制器，避免输入资源泄漏。
   @override
   void dispose() {
+    _listFocus.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -93,7 +95,7 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
   Future<void> _loadNotes() async {
     if (mounted) {
       setState(() {
-        _loading = true;
+        _loading = _notes.isEmpty;
         _errorMessage = null;
       });
     }
@@ -104,6 +106,7 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
       }
       setState(() {
         _notes = notes;
+        _retainVisibleSelection();
         _loading = false;
       });
       unawaited(_backfillMissingVideoCovers(notes));
@@ -114,6 +117,8 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
       setState(() {
         _loading = false;
         _errorMessage = '暂时无法读取本机笔记，请稍后重试。';
+        _selectionMode = false;
+        _selectedNoteIds.clear();
       });
     }
   }
@@ -130,24 +135,25 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
       if (coverUrl == null || coverUrl.isEmpty) {
         continue;
       }
-      final List<VideoNote> matching = sourceNotes
-          .where((VideoNote note) => note.bvid == bvid)
-          .map((VideoNote note) => note.copyWith(videoCoverUrl: coverUrl))
-          .toList(growable: false);
-      for (final VideoNote updated in matching) {
-        await _noteService.saveNote(updated);
+      if (!mounted) return;
+      try {
+        final changed = await _noteService.fillMissingCovers(bvid, coverUrl);
+        if (!mounted) return;
+        if (changed.isEmpty) continue;
+        setState(() {
+          _notes = [
+            for (final note in _notes)
+              if (note.bvid == bvid &&
+                  note.videoCoverUrl.isEmpty &&
+                  changed.contains(note.id))
+                note.copyWith(videoCoverUrl: coverUrl)
+              else
+                note,
+          ];
+        });
+      } catch (_) {
+        // 补图是可选操作，本机存储暂不可写时继续显示原笔记。
       }
-      if (!mounted) {
-        return;
-      }
-      final Map<String, VideoNote> replacements = <String, VideoNote>{
-        for (final VideoNote note in matching) note.id: note,
-      };
-      setState(() {
-        _notes = _notes
-            .map((VideoNote note) => replacements[note.id] ?? note)
-            .toList(growable: false);
-      });
     }
   }
 
@@ -164,20 +170,31 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
 
   /// 更新搜索关键词并立即刷新列表筛选结果。
   void _updateQuery(String value) {
-    setState(() => _query = value);
+    setState(() {
+      _query = value;
+      _retainVisibleSelection();
+    });
+  }
+
+  void _retainVisibleSelection() {
+    if (_selectedNoteIds.isNotEmpty) {
+      final visible = _filteredNotes.map((note) => note.id).toSet();
+      _selectedNoteIds.retainAll(visible);
+    }
   }
 
   /// 清空搜索输入和筛选条件，恢复显示全部笔记。
   void _clearSearch() {
     _searchController.clear();
-    setState(() => _query = '');
+    _updateQuery('');
   }
 
   /// 进入选择模式并选中长按的第一条笔记。
-  void _startSelection(VideoNote note) {
+  void _startSelection([VideoNote? note]) {
+    _listFocus.requestFocus();
     setState(() {
       _selectionMode = true;
-      _selectedNoteIds.add(note.id);
+      if (note != null) _selectedNoteIds.add(note.id);
     });
   }
 
@@ -215,8 +232,11 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
         await showModalBottomSheet<VideoNoteExportFormat>(
           context: context,
           showDragHandle: true,
+          isScrollControlled: true,
+          useSafeArea: true,
           builder: (BuildContext context) => SafeArea(
-            child: Padding(
+            top: false,
+            child: SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -380,158 +400,6 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
     await _loadNotes();
   }
 
-  /// 创建固定为 16:9 的视频封面，而不是把笔记截图误当成列表封面。
-  Widget _buildVideoCover(VideoNote note) {
-    final ColorScheme colors = Theme.of(context).colorScheme;
-    final Widget placeholder = Container(
-      color: colors.surfaceContainerHighest,
-      alignment: Alignment.center,
-      child: const Icon(Icons.ondemand_video_rounded),
-    );
-    if (note.videoCoverUrl.isEmpty) {
-      return placeholder;
-    }
-    return AppNetworkImage(
-      key: Key('managed-video-note-cover-${note.id}'),
-      imageUrl: note.videoCoverUrl,
-      fit: BoxFit.cover,
-      // 封面加载函数使用相同占位布局，避免图片出现前卡片跳动。
-      placeholder: (BuildContext context, String url) => placeholder,
-      // 封面错误函数回退到视频图标，搜索和详情入口仍保持可用。
-      errorWidget: (BuildContext context, String url, Object error) =>
-          placeholder,
-    );
-  }
-
-  /// 创建包含视频封面、笔记标题、视频标题、时间信息和菜单的列表卡片。
-  Widget _buildNoteCard(VideoNote note) {
-    final ThemeData theme = Theme.of(context);
-    final ColorScheme colors = theme.colorScheme;
-    return Card(
-      key: Key('managed-video-note-${note.id}'),
-      margin: EdgeInsets.zero,
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        // 笔记卡点击函数在选择模式切换选中状态，否则进入独立详情页。
-        onTap: _selectionMode
-            ? () => _toggleNoteSelection(note)
-            : () => _openNote(note),
-        // 笔记卡长按函数进入批量选择模式并选中当前笔记。
-        onLongPress: () => _startSelection(note),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              if (_selectionMode) ...<Widget>[
-                Checkbox(
-                  value: _selectedNoteIds.contains(note.id),
-                  // 复选框函数与整张卡片共享相同选择逻辑。
-                  onChanged: (_) => _toggleNoteSelection(note),
-                ),
-                const SizedBox(width: 4),
-              ],
-              ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: SizedBox(
-                  width: 132,
-                  height: 74,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: <Widget>[
-                      _buildVideoCover(note),
-                      Positioned(
-                        right: 6,
-                        bottom: 5,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 7,
-                            vertical: 3,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.72),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Text(
-                            formatVideoNotePosition(note.position),
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: SizedBox(
-                  height: 74,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      Text(
-                        note.title,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w800,
-                          height: 1.2,
-                        ),
-                      ),
-                      const Spacer(),
-                      Text(
-                        note.videoTitle,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: colors.onSurfaceVariant,
-                        ),
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        formatVideoNoteDateTime(note.createdAt),
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          color: colors.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              if (!_selectionMode)
-                PopupMenuButton<String>(
-                  key: Key('managed-video-note-menu-${note.id}'),
-                  tooltip: '笔记操作',
-                  // 菜单选择函数把删除操作交给带确认框的统一删除流程。
-                  onSelected: (String value) {
-                    if (value == 'delete') {
-                      _deleteNote(note);
-                    }
-                  },
-                  itemBuilder: (BuildContext context) =>
-                      const <PopupMenuEntry<String>>[
-                        PopupMenuItem<String>(
-                          value: 'delete',
-                          child: ListTile(
-                            dense: true,
-                            leading: Icon(Icons.delete_outline_rounded),
-                            title: Text('删除笔记'),
-                          ),
-                        ),
-                      ],
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   /// 创建页面顶部的圆角搜索框，并在有输入时提供一键清空按钮。
   Widget _buildSearchField() {
     final ColorScheme colors = Theme.of(context).colorScheme;
@@ -573,7 +441,7 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
   /// 创建没有笔记或搜索无结果时的图标、标题和说明文字。
   Widget _buildEmptyState({required bool searchEmpty}) {
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -598,41 +466,73 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
   /// 选择模式下在底部同时提供保存文件和分享文件，避免两个动作隐藏在菜单里。
   Widget _buildSelectionActions() {
     final bool enabled = _selectedNoteIds.isNotEmpty && !_exporting;
-    return SafeArea(
-      top: false,
-      child: Material(
-        elevation: 10,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-          child: Row(
-            children: <Widget>[
-              Expanded(
-                child: OutlinedButton.icon(
-                  key: const Key('save-selected-video-notes'),
-                  onPressed: enabled
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      child: SafeArea(
+        top: false,
+        child: Align(
+          heightFactor: 1,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 560),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final short =
+                      (constraints.maxWidth - 12) / 2 <
+                      MediaQuery.textScalerOf(context).scale(14) * 4 + 72;
+                  final save = enabled
                       ? () => _chooseExportFormat(share: false)
-                      : null,
-                  icon: const Icon(Icons.download_outlined),
-                  label: const Text('导出文件'),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: FilledButton.icon(
-                  key: const Key('share-selected-video-notes'),
-                  onPressed: enabled
+                      : null;
+                  final share = enabled
                       ? () => _chooseExportFormat(share: true)
-                      : null,
-                  icon: _exporting
-                      ? const SizedBox.square(
-                          dimension: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.ios_share_rounded),
-                  label: Text(_exporting ? '处理中…' : '分享文件'),
-                ),
+                      : null;
+                  return Row(
+                    children: [
+                      Expanded(
+                        child: short
+                            ? OutlinedButton(
+                                key: const Key('save-selected-video-notes'),
+                                onPressed: save,
+                                child: const Text('导出', semanticsLabel: '导出文件'),
+                              )
+                            : OutlinedButton.icon(
+                                key: const Key('save-selected-video-notes'),
+                                onPressed: save,
+                                icon: const Icon(Icons.download_outlined),
+                                label: const Text('导出文件'),
+                              ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: short
+                            ? FilledButton(
+                                key: const Key('share-selected-video-notes'),
+                                onPressed: share,
+                                child: Text(
+                                  _exporting ? '处理中' : '分享',
+                                  semanticsLabel: _exporting ? '处理中' : '分享文件',
+                                ),
+                              )
+                            : FilledButton.icon(
+                                key: const Key('share-selected-video-notes'),
+                                onPressed: share,
+                                icon: _exporting
+                                    ? const SizedBox.square(
+                                        dimension: 18,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : const Icon(Icons.ios_share_rounded),
+                                label: Text(_exporting ? '处理中…' : '分享文件'),
+                              ),
+                      ),
+                    ],
+                  );
+                },
               ),
-            ],
+            ),
           ),
         ),
       ),
@@ -664,46 +564,55 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
       body = _buildEmptyState(searchEmpty: false);
     } else {
       final List<VideoNote> visibleNotes = _filteredNotes;
-      body = Column(
-        children: <Widget>[
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
-            child: _buildSearchField(),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(18, 0, 18, 8),
-            child: Row(
-              children: <Widget>[
-                Text(
-                  _query.isEmpty
+      body = RefreshIndicator(
+        onRefresh: _loadNotes,
+        child: AdaptiveTwoColumnList(
+          key: const PageStorageKey<String>('video-notes-list'),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          physics: const AlwaysScrollableScrollPhysics(),
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+          header: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildSearchField(),
+              Padding(
+                padding: const EdgeInsets.only(left: 2, top: 10),
+                child: Text(
+                  _query.trim().isEmpty
                       ? '共 ${_notes.length} 条笔记'
                       : '找到 ${visibleNotes.length} 条笔记',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-          Expanded(
-            child: visibleNotes.isEmpty
-                ? _buildEmptyState(searchEmpty: true)
-                : RefreshIndicator(
-                    // 下拉刷新函数重新读取其他页面刚保存的本机笔记。
-                    onRefresh: _loadNotes,
-                    child: AdaptiveTwoColumnList(
-                      key: const Key('video-notes-list'),
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-                      itemCount: visibleNotes.length,
-                      mainAxisSpacing: 10,
-                      // 列表构建函数按最近更新时间展示筛选后的本机笔记。
-                      itemBuilder: (BuildContext context, int index) =>
-                          _buildNoteCard(visibleNotes[index]),
-                    ),
-                  ),
-          ),
-        ],
+          itemCount: visibleNotes.length,
+          footer: visibleNotes.isEmpty
+              ? _buildEmptyState(searchEmpty: true)
+              : null,
+          mainAxisSpacing: 10,
+          itemBuilder: (context, index) {
+            final note = visibleNotes[index];
+            return VideoNoteListTile(
+              key: Key('managed-video-note-${note.id}'),
+              note: note,
+              query: _query,
+              selecting: _selectionMode,
+              selected: _selectedNoteIds.contains(note.id),
+              onTap: _selectionMode
+                  ? () => _toggleNoteSelection(note)
+                  : () => _openNote(note),
+              onLongPress: () => _startSelection(note),
+              onDelete: () => _deleteNote(note),
+            );
+          },
+        ),
       );
     }
-    return Scaffold(
+    final compactTitle =
+        MediaQuery.sizeOf(context).width <
+        210 + MediaQuery.textScalerOf(context).scale(22) * 5;
+    final page = Scaffold(
       appBar: AppBar(
         leading: _selectionMode
             ? IconButton(
@@ -714,13 +623,22 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
               )
             : null,
         title: Text(
-          _selectionMode ? '已选择 ${_selectedNoteIds.length} 条' : '时间点笔记',
+          _selectionMode
+              ? (compactTitle
+                    ? '已选 ${_selectedNoteIds.length}'
+                    : '已选择 ${_selectedNoteIds.length} 条')
+              : compactTitle
+              ? '笔记'
+              : '时间点笔记',
+          semanticsLabel: _selectionMode
+              ? '已选择 ${_selectedNoteIds.length} 条'
+              : '时间点笔记',
         ),
         actions: <Widget>[
           if (_selectionMode) ...<Widget>[
             IconButton(
               // 全选按钮函数只勾选当前搜索结果中的可见笔记。
-              onPressed: _selectAllVisibleNotes,
+              onPressed: _filteredNotes.isEmpty ? null : _selectAllVisibleNotes,
               icon: const Icon(Icons.select_all_rounded),
               tooltip: '全选当前结果',
             ),
@@ -728,9 +646,9 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
             TextButton(
               key: const Key('select-video-notes'),
               // “导出”文字按钮进入批量选择模式，避免含义不明的清单图标。
-              onPressed: _notes.isEmpty
+              onPressed: _notes.isEmpty || _errorMessage != null || _loading
                   ? null
-                  : () => setState(() => _selectionMode = true),
+                  : () => _startSelection(),
               child: const Text('导出'),
             ),
             IconButton(
@@ -744,6 +662,20 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
       ),
       body: AdaptivePageFrame(maxWidth: 1180, child: body),
       bottomNavigationBar: _selectionMode ? _buildSelectionActions() : null,
+    );
+    return PopScope(
+      canPop: !_selectionMode,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _selectionMode) _leaveSelectionMode();
+      },
+      child: CallbackShortcuts(
+        bindings: {
+          if (_selectionMode)
+            const SingleActivator(LogicalKeyboardKey.escape):
+                _leaveSelectionMode,
+        },
+        child: Focus(focusNode: _listFocus, skipTraversal: true, child: page),
+      ),
     );
   }
 }
