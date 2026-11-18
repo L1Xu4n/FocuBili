@@ -98,6 +98,23 @@ extension _PlayerDesktopPointer on _PlayerPageState {
           _setDesktopBottomHover(false);
           _setDesktopTimelineHover(null);
         },
+        onPointerUp: (event) {
+          if (event.kind != PointerDeviceKind.mouse || event.buttons != 0) {
+            return;
+          }
+          // A stationary mouse produces no hover event after a click or drag.
+          // Reclaim only the toolbar hold, not the timeline image preview.
+          // Pointer-up follows the down hit-test path even outside the player.
+          final bar = _desktopBottomBarKey.currentContext?.findRenderObject();
+          _setDesktopBottomHover(
+            _desktopControlsAvailable &&
+                bar is RenderBox &&
+                bar.hasSize &&
+                (Offset.zero & bar.size).contains(
+                  bar.globalToLocal(event.position),
+                ),
+          );
+        },
         child: child,
       ),
     );
