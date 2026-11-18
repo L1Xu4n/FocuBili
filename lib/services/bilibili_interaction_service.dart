@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'app_behavior_preferences_service.dart';
 import 'bilibili_auth_service.dart';
+import 'cache_lifecycle.dart';
 
 /// 保存一次 B 站互动接口的 HTTP 状态和 JSON 正文，测试时可替换真实网络。
 class BilibiliInteractionResponse {
@@ -431,7 +432,13 @@ class BilibiliInteractionService {
     if (!state.isActive) {
       throw const BilibiliInteractionException('请先登录 B 站后再执行此操作。');
     }
+    final generation = _authService.accountMutationGeneration;
+    final revision = CacheLifecycle.account.value;
     final String cookieHeader = (await _authService.readCookieHeader()).trim();
+    if (generation != _authService.accountMutationGeneration ||
+        revision != CacheLifecycle.account.value) {
+      throw _staleSession;
+    }
     final RegExpMatch? csrfMatch = _csrfPattern.firstMatch(cookieHeader);
     final String csrf = csrfMatch == null
         ? ''
@@ -443,6 +450,8 @@ class BilibiliInteractionService {
       cookieHeader: cookieHeader,
       csrf: csrf,
       accountMid: state.account!.mid,
+      generation: generation,
+      revision: revision,
     );
   }
 
@@ -599,6 +608,10 @@ class BilibiliInteractionService {
   }
 
   /// 请求 POST 接口并自动附加 csrf 与 csrf_token 字段。
+  static const _staleSession = BilibiliInteractionException(
+    '账号已切换，此次操作未提交。请重新打开后再试。',
+  );
+
   Future<Map<Object?, Object?>> _postData(
     Uri endpoint,
     _InteractionSession session,
@@ -608,6 +621,18 @@ class BilibiliInteractionService {
       throw const BilibiliInteractionException(
         '账号只读已开启，请先在“设置 - 账号与隐私”中关闭后再操作。',
       );
+    }
+    // Recheck after the asynchronous read-only preference. Even a logout and
+    // login into the same account invalidates a previously confirmed write.
+    if (session.generation != _authService.accountMutationGeneration ||
+        session.revision != CacheLifecycle.account.value) {
+      throw _staleSession;
+    }
+    final currentCookie = (await _authService.readCookieHeader()).trim();
+    if (session.generation != _authService.accountMutationGeneration ||
+        session.revision != CacheLifecycle.account.value ||
+        currentCookie != session.cookieHeader) {
+      throw _staleSession;
     }
     final Map<String, String> payload = <String, String>{
       ...fields,
@@ -741,9 +766,12 @@ class _InteractionSession {
     required this.cookieHeader,
     required this.csrf,
     required this.accountMid,
+    required this.generation,
+    required this.revision,
   });
 
   final String cookieHeader;
   final String csrf;
   final int accountMid;
+  final int generation, revision;
 }

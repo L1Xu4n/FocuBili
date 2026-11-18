@@ -160,6 +160,9 @@ class BilibiliAuthService {
        _requestTimeout = requestTimeout;
 
   static int _loginGeneration = 0;
+
+  /// Opaque epoch for app-initiated login/logout/replacement, not a credential.
+  int get accountMutationGeneration => _loginGeneration;
   static Future<void> _accountWrites = Future.value();
 
   final BilibiliCookieStore _cookieStore;

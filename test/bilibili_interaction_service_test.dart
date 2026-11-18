@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:focubili/services/app_behavior_preferences_service.dart';
@@ -14,6 +16,16 @@ class _InteractionBehaviorPreferences extends AppBehaviorPreferencesService {
   /// 返回当前测试指定的账号只读状态。
   @override
   Future<bool> loadAccountReadOnly() async => readOnly;
+}
+
+class _DelayedWritePreference extends AppBehaviorPreferencesService {
+  final started = Completer<void>(), release = Completer<void>();
+  @override
+  Future<bool> loadAccountReadOnly() async {
+    started.complete();
+    await release.future;
+    return false;
+  }
 }
 
 /// 提供内存 Cookie 容器，让互动服务测试可以模拟已登录和未登录状态。
@@ -382,6 +394,34 @@ void main() {
       containsPair('add_media_ids', '333'),
     );
   });
+
+  test(
+    'logout while checking write permission never sends the old private form',
+    () async {
+      final prefs = _DelayedWritePreference();
+      final req = _RecordedInteractionRequest();
+      final auth = BilibiliAuthService(
+        cookieStore: _InteractionCookieStore(
+          cookies: 'SESSDATA=test; bili_jct=test',
+        ),
+        api: _InteractionAuthApi(),
+      );
+      final service = BilibiliInteractionService(
+        authService: auth,
+        request: req.call,
+        behaviorPreferencesService: prefs,
+      );
+      final rejected = expectLater(
+        service.createFavoriteFolder(title: 'A', isPrivate: true),
+        throwsA(isA<BilibiliInteractionException>()),
+      );
+      await prefs.started.future;
+      await auth.clearBilibiliSession();
+      prefs.release.complete();
+      await rejected;
+      expect(req.endpoints, isEmpty);
+    },
+  );
 
   test(
     'private remote folder encodes privacy=1 once; errors never fall back to public',
