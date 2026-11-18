@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -60,8 +61,30 @@ class _Source extends Fake implements BilibiliService, BilibiliVideoTagSource {
   }
 }
 
+class _ThrowingWrite extends InMemorySharedPreferencesStore {
+  _ThrowingWrite()
+    : super.withData({'flutter.${VideoTagPreferences.key}': 'hidden'});
+  @override
+  Future<bool> setValue(String type, String key, Object value) async =>
+      throw StateError('synthetic write failure');
+}
+
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
+  testWidgets(
+    'failed write keeps confirmed hidden mode and makes no tag request',
+    (t) async {
+      SharedPreferencesStorePlatform.instance = _ThrowingWrite();
+      expect(await VideoTagPreferences.load(), VideoTagMode.hidden);
+      expect(await VideoTagPreferences.save(VideoTagMode.expanded), isFalse);
+      final source = _Source(), session = PlayerTagSession()..bind(a);
+      session.initialize(source);
+      addTearDown(session.dispose);
+      await t.pump();
+      expect(session.visible, isFalse);
+      expect(source.calls, isEmpty);
+    },
+  );
   test('migrates only the setting, rejects unknown imported modes', () async {
     final service = SettingsTransferService();
     await service.importSettings({VideoTagPreferences.key: 'hidden'});
