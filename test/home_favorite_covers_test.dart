@@ -79,7 +79,11 @@ Widget host(CoverAccount api, {double scale = 1, bool dark = false}) =>
       ),
       home: Scaffold(
         body: SingleChildScrollView(
-          child: HomeCollectionCard(favorites: true, accountDataService: api),
+          child: HomeCollectionCard(
+            showCustomization: true,
+            favorites: true,
+            accountDataService: api,
+          ),
         ),
       ),
     );

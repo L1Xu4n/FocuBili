@@ -26,7 +26,7 @@ Widget _host({bool offstage = false}) => MaterialApp(
   home: Scaffold(
     body: Offstage(
       offstage: offstage,
-      child: const HomeCollectionCard(favorites: true),
+      child: const HomeCollectionCard(showCustomization: true, favorites: true),
     ),
   ),
 );

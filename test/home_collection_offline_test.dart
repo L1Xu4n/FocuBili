@@ -94,7 +94,11 @@ class _FailedEndpoint implements BilibiliAccountDataApi {
 Widget _host(BilibiliAccountDataService api, {bool favorites = true}) =>
     MaterialApp(
       home: Scaffold(
-        body: HomeCollectionCard(favorites: favorites, accountDataService: api),
+        body: HomeCollectionCard(
+          showCustomization: true,
+          favorites: favorites,
+          accountDataService: api,
+        ),
       ),
     );
 

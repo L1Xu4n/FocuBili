@@ -116,19 +116,101 @@ class _FocusDashboardState extends State<FocusDashboard> {
   bool _editingHomeCards = false;
   bool _drawerEnabled = true;
   DashboardLayout? _homeLayout;
+  bool _homeLayoutLoaded = false;
 
-  /// 抽屉关闭或所有卡片不可见时，不创建卡片滚动空间。
+  bool _allAvailableCardsHidden(DashboardLayout? layout) {
+    if (layout == null) return false;
+    final available = _homeCardDefinitions(
+      widget.controller.activeSession,
+      widget.controller.lastFinishedSession,
+    ).where((card) => card.available).toList();
+    return available.isNotEmpty &&
+        available.every((card) => layout.hidden.contains(card.id));
+  }
+
+  /// 编辑空抽屉时仍保留“添加卡片”；加载/暂不可用不代表用户全部隐藏。
   bool get _hasHomeDrawer =>
-      _drawerEnabled &&
-      (_homeLayout == null ||
-          _homeLayout!
-              .visibleCards(
-                _homeCardDefinitions(
-                  widget.controller.activeSession,
-                  widget.controller.lastFinishedSession,
+      _editingHomeCards ||
+      (_drawerEnabled &&
+          (!_homeLayoutLoaded || !_allAvailableCardsHidden(_homeLayout)));
+  bool _restoringDrawer = false;
+  bool _closingDrawer = false;
+
+  Future<void> _closeEmptyDrawer() async {
+    if (!mounted || _closingDrawer) return;
+    final wasEnabled = _drawerEnabled;
+    final wasEditing = _editingHomeCards;
+    final previousOffset = _scrollController.hasClients
+        ? _scrollController.offset
+        : 0.0;
+    if (_scrollController.hasClients) _scrollController.jumpTo(0);
+    setState(() {
+      _closingDrawer = true;
+      _drawerEnabled = false;
+      _editingHomeCards = false;
+      _homeScrollStartOffset = null;
+    });
+    try {
+      await _homeLayouts.saveDrawerEnabled(false);
+    } catch (_) {
+      if (mounted) {
+        if (!_allAvailableCardsHidden(_homeLayout)) {
+          setState(() {
+            _drawerEnabled = wasEnabled;
+            _editingHomeCards = wasEditing;
+            _homeBoardKey = GlobalKey(debugLabel: 'home-card-board');
+          });
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && _scrollController.hasClients) {
+              _scrollController.jumpTo(
+                previousOffset.clamp(
+                  0.0,
+                  _scrollController.position.maxScrollExtent,
                 ),
-              )
-              .isNotEmpty);
+              );
+            }
+          });
+        }
+        _showMessage('抽屉设置保存失败，卡片配置未更改。');
+      }
+    } finally {
+      if (mounted) setState(() => _closingDrawer = false);
+    }
+  }
+
+  Future<void> _restoreDrawerForEditing() async {
+    if (_restoringDrawer || _closingDrawer || !_homeLayoutLoaded) return;
+    setState(() => _restoringDrawer = true);
+    try {
+      await _homeLayouts.saveDrawerEnabled(true);
+      if (!mounted) return;
+      setState(() {
+        _drawerEnabled = true;
+        _editingHomeCards = true;
+        _homeScrollStartOffset = null;
+        _homeBoardKey = GlobalKey(debugLabel: 'home-card-board');
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _scrollController.hasClients) {
+          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+        }
+      });
+    } catch (_) {
+      if (mounted) _showMessage('抽屉设置保存失败，请重试。');
+    } finally {
+      if (mounted) setState(() => _restoringDrawer = false);
+    }
+  }
+
+  Widget _drawerRecoveryButton() => IconButton(
+    key: const Key('home-restore-drawer'),
+    tooltip: '启用抽屉并编辑',
+    constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+    onPressed: _restoringDrawer || _closingDrawer
+        ? null
+        : _restoreDrawerForEditing,
+    icon: const Icon(Icons.view_agenda_outlined, size: 22),
+  );
 
   /// 首次读取布局与抽屉开关，保留旧版默认显示。
   Future<void> _loadHomeLayout() async {
@@ -145,6 +227,7 @@ class _FocusDashboardState extends State<FocusDashboard> {
         setState(() {
           _drawerEnabled = enabled;
           _homeLayout = layout;
+          _homeLayoutLoaded = true;
         });
       }
     } catch (_) {
@@ -152,96 +235,16 @@ class _FocusDashboardState extends State<FocusDashboard> {
     }
   }
 
-  /// 从首页常驻菜单调整抽屉及卡片显隐，空布局也能重新添加卡片。
-  Future<void> _customizeHome() async {
-    final cards = _homeCardDefinitions(
-      widget.controller.activeSession,
-      widget.controller.lastFinishedSession,
-    );
-    await _loadHomeLayout();
-    if (!mounted) return;
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, rebuild) => AlertDialog(
-          title: const Text('自定义首页'),
-          content: SizedBox(
-            width: 420,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  SwitchListTile(
-                    title: const Text('首页抽屉'),
-                    value: _drawerEnabled,
-                    onChanged: (value) async {
-                      try {
-                        await _homeLayouts.saveDrawerEnabled(value);
-                        if (!mounted) return;
-                        setState(() => _drawerEnabled = value);
-                        if (dialogContext.mounted) rebuild(() {});
-                      } catch (_) {
-                        _showMessage('首页设置保存失败');
-                      }
-                    },
-                  ),
-                  for (final card in cards)
-                    CheckboxListTile(
-                      title: Text(card.title),
-                      secondary: Icon(card.icon),
-                      value:
-                          !(_homeLayout?.hidden.contains(card.id) ??
-                              card.defaultHidden),
-                      onChanged: card.required
-                          ? null
-                          : (value) async {
-                              try {
-                                final current =
-                                    _homeLayout ??
-                                    DashboardLayout(
-                                      order: const [],
-                                    ).reconcile(cards);
-                                final next = value == true
-                                    ? current.addLast(card.id, cards)
-                                    : current.setHidden(card.id, true, cards);
-                                await _homeLayouts.save('home', next);
-                                if (!mounted) return;
-                                setState(() {
-                                  _homeLayout = next;
-                                  _homeBoardKey = GlobalKey(
-                                    debugLabel: 'home-card-board',
-                                  );
-                                });
-                                if (dialogContext.mounted) rebuild(() {});
-                              } catch (_) {
-                                _showMessage('卡片布局保存失败');
-                              }
-                            },
-                    ),
-                ],
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('完成'),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (mounted) {
-      setState(() {
-        _editingHomeCards = false;
-        _homeScrollStartOffset = null;
-      });
-    }
-  }
-
-  /// 让卡片容器的成功保存立即更新空抽屉判断。
+  /// 成功保存最后一个可用卡片的隐藏后收起抽屉，不改隐藏集合或顺序。
   void _homeLayoutChanged(DashboardLayout layout) {
-    if (mounted) setState(() => _homeLayout = layout);
+    if (!mounted) return;
+    final becameEmpty =
+        _homeLayoutLoaded &&
+        _homeLayout != null &&
+        !_allAvailableCardsHidden(_homeLayout) &&
+        _allAvailableCardsHidden(layout);
+    setState(() => _homeLayout = layout);
+    if (becameEmpty) unawaited(_closeEmptyDrawer());
   }
 
   int _selectedMinutes = 25;
@@ -316,6 +319,9 @@ class _FocusDashboardState extends State<FocusDashboard> {
       _scrollController.jumpTo(_scrollController.offset);
     }
     setState(() => _editingHomeCards = editing);
+    if (!editing && _allAvailableCardsHidden(_homeLayout)) {
+      unawaited(_closeEmptyDrawer());
+    }
   }
 
   /// 使用当前目标和所选分钟数开始专注，并在失败时给出可读提示。
