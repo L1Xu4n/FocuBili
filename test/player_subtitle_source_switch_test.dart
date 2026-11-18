@@ -219,12 +219,17 @@ void main() {
       await _openPlayer(tester, overlay);
       expect(find.text('caption zh'), findsOneWidget);
       if (selection != 'keep') {
-        final dynamic more = tester.state(
-          find.byKey(const Key('more-settings-menu')),
-        );
-        more.showButtonMenu();
+        final more = find.byKey(const Key('more-settings-menu'));
+        if (more.hitTestable().evaluate().isEmpty) {
+          await tester.tap(find.byKey(const Key('player-surface')).first);
+          await tester.pump(const Duration(milliseconds: 350));
+          await tester.pumpAndSettle();
+        }
+        await tester.tap(more);
         await tester.pumpAndSettle();
-        await tester.tap(find.text('字幕'));
+        final subtitle = find.byKey(const Key('player-subtitle-menu-item'));
+        await tester.ensureVisible(subtitle);
+        await tester.tap(subtitle);
         await tester.pumpAndSettle();
         await tester.tap(find.text(selection));
         await tester.pumpAndSettle();

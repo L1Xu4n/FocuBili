@@ -4,24 +4,16 @@ import 'dart:io';
 import '../models/video_preview.dart';
 import '../models/user_search.dart';
 import 'bilibili_request_policy.dart';
+import 'bilibili_lookup_exception.dart';
+import 'bilibili_video_metadata_client.dart';
+
+export 'bilibili_lookup_exception.dart';
 import 'bilibili_course_link.dart';
 import 'bilibili_course_service.dart';
 import 'offline_video_service.dart';
 
 /// 定义可替换的 JSON 请求函数，方便测试时不用真的访问网络。
 typedef JsonRequest = Future<String> Function(Uri uri);
-
-/// 表示公开视频信息查询失败，并向页面提供适合直接展示给用户的说明。
-class BilibiliLookupException implements Exception {
-  /// 创建一条用户能理解的查询失败说明。
-  const BilibiliLookupException(this.message);
-
-  final String message;
-
-  /// 把异常转换为简短文字，便于调试日志和页面统一展示。
-  @override
-  String toString() => message;
-}
 
 /// 定义 FocuBili 目前需要的视频查询能力：由 BV 号或视频链接取得一支视频的信息。
 abstract interface class BilibiliService {
@@ -55,7 +47,7 @@ abstract interface class BilibiliUserSearchService {
   });
 }
 
-/// 使用公开视频详情接口查询标题、UP 主和时长，不读取或保存用户 Cookie。
+/// 详情使用当前会话与 WBI 签名；搜索、标签仍使用公开请求。
 class BilibiliVideoInfoService
     implements
         BilibiliService,
@@ -66,13 +58,17 @@ class BilibiliVideoInfoService
     JsonRequest? requestJson,
     OfflineVideoService? offlineVideoService,
     BilibiliCourseService? courseService,
-  }) : _requestJson = requestJson ?? _requestPublicJson,
+    BilibiliVideoMetadataClient? metadataClient,
+  }) : _metadataClient =
+           metadataClient ??
+           (requestJson == null ? BilibiliVideoMetadataClient() : null),
+       _requestJson = requestJson ?? _requestPublicJson,
        _offlineVideoService = offlineVideoService,
        _courseService = courseService;
 
   static const String _apiHost = 'api.bilibili.com';
   static const String _suggestHost = 's.search.bilibili.com';
-  static const String _videoInfoPath = '/x/web-interface/view';
+  static const String _videoInfoPath = BilibiliVideoMetadataClient.viewPath;
   static const String _videoTagsPath = '/x/tag/archive/tags';
   static const String _videoSearchPath = '/x/web-interface/wbi/search/type';
   static const String _searchSuggestPath = '/main/suggest';
@@ -86,6 +82,7 @@ class BilibiliVideoInfoService
   );
 
   final JsonRequest _requestJson;
+  final BilibiliVideoMetadataClient? _metadataClient;
   final BilibiliCourseService? _courseService;
   final OfflineVideoService? _offlineVideoService;
 
@@ -123,9 +120,17 @@ class BilibiliVideoInfoService
     final Uri endpoint = Uri.https(_apiHost, _videoInfoPath, <String, String>{
       'bvid': bvid,
     });
+    final client = _metadataClient;
+    if (client != null) {
+      return client.load(
+        bvid: bvid,
+        details: true,
+        parse: (body) => _parseVideoInfo(body, bvid),
+        offlineFallback: () => _cachedVideo(bvid),
+      );
+    }
     try {
-      final String responseText = await _requestJson(endpoint);
-      return _parseVideoInfo(responseText, bvid);
+      return _parseVideoInfo(await _requestJson(endpoint), bvid);
     } catch (_) {
       final cached = await _cachedVideo(bvid);
       if (cached != null) return cached;

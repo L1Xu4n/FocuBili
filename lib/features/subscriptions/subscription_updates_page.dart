@@ -1404,7 +1404,11 @@ class FocusSubscriptionButton extends StatefulWidget {
     super.key,
     required this.source,
     this.service,
+    this.configureCreatorNotifications = false,
+    this.notificationService = const FocusNotificationService(),
   });
+  final bool configureCreatorNotifications;
+  final FocusNotificationService notificationService;
   final SubscriptionSource source;
   final SubscriptionService? service;
   @override
@@ -1426,11 +1430,20 @@ class _FocusSubscriptionButtonState extends State<FocusSubscriptionButton> {
     if (_opening) return;
     setState(() => _opening = true);
     try {
+      await _service.initialize();
+      if (!mounted) return;
       await showDialog<void>(
         context: context,
         barrierDismissible: false,
         builder: (_) =>
-            _AddSourceDialog(service: _service, initialSource: widget.source),
+            widget.configureCreatorNotifications &&
+                widget.source.kind == SubscriptionKind.creator
+            ? _CreatorNotificationDialog(
+                service: _service,
+                source: widget.source,
+                notificationService: widget.notificationService,
+              )
+            : _AddSourceDialog(service: _service, initialSource: widget.source),
       );
     } finally {
       if (mounted) setState(() => _opening = false);
@@ -1479,7 +1492,11 @@ class _FocusSubscriptionButtonState extends State<FocusSubscriptionButton> {
       );
       return IconButton(
         key: const Key('focus-subscribe-button'),
-        tooltip: subscribed ? '取消焦点订阅' : '加入焦点订阅',
+        tooltip: subscribed
+            ? '取消焦点订阅'
+            : widget.configureCreatorNotifications
+            ? '添加订阅源'
+            : '加入焦点订阅',
         onPressed: _opening || widget.source.mid <= 0
             ? null
             : subscribed
@@ -1492,5 +1509,116 @@ class _FocusSubscriptionButtonState extends State<FocusSubscriptionButton> {
         ),
       );
     },
+  );
+}
+
+/// UP 主页快捷入口：编辑草稿，只有保存才改变全局通知/订阅状态。
+class _CreatorNotificationDialog extends StatefulWidget {
+  const _CreatorNotificationDialog({
+    required this.service,
+    required this.source,
+    required this.notificationService,
+  });
+  final SubscriptionService service;
+  final SubscriptionSource source;
+  final FocusNotificationService notificationService;
+  @override
+  State<_CreatorNotificationDialog> createState() =>
+      _CreatorNotificationDialogState();
+}
+
+class _CreatorNotificationDialogState
+    extends State<_CreatorNotificationDialog> {
+  late bool _notifications = widget.service.notificationsEnabled;
+  bool _busy = false;
+  String? _error;
+  Future<void> _save() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      if (_notifications && !widget.service.notificationsEnabled) {
+        final allowed = await widget.notificationService.requestPermission();
+        if (!mounted) return;
+        if (!allowed) {
+          setState(() {
+            _notifications = false;
+            _error = '通知未获授权。可关闭系统通知后保存，更新列表仍可使用。';
+          });
+          return;
+        }
+      }
+      await widget.service.addSource(widget.source);
+      if (_notifications != widget.service.notificationsEnabled) {
+        await widget.service.setNotificationsEnabled(_notifications);
+      }
+      if (!widget.service.enabled) await widget.service.setEnabled(true);
+      if (mounted) Navigator.pop(context);
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => _error =
+              widget.service.sources.any(
+                (source) => source.key == widget.source.key,
+              )
+              ? '订阅源已保存，但设置未全部完成，请重试。'
+              : '订阅未保存，请重试。',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => PopScope(
+    canPop: !_busy,
+    child: AlertDialog(
+      title: const Text('添加通知设置'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              widget.source.name,
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 12),
+            const Text('保存后加入焦点订阅并开启更新检查，不修改 B 站关注。'),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('系统通知'),
+              subtitle: const Text('全局设置，影响所有焦点订阅，并非仅此 UP 主。专注期间只更新角标。'),
+              value: _notifications,
+              onChanged: _busy
+                  ? null
+                  : (value) => setState(() => _notifications = value),
+            ),
+            const Text('系统通知默认关闭，仅在保存开启时申请权限。'),
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Text(
+                  _error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: _busy ? null : _save,
+          child: Text(_busy ? '处理中…' : '保存'),
+        ),
+      ],
+    ),
   );
 }

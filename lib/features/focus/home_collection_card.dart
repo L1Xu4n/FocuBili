@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'dart:async';
+import 'home_favorite_cover.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../models/account_collection.dart';
@@ -13,6 +15,7 @@ import '../profile/favorite_videos_page.dart';
 import '../profile/followed_creators_page.dart';
 import '../profile/following_groups_page.dart';
 import '../profile/user_profile_page.dart';
+import 'home_favorite_source_dialog.dart';
 
 /// 首页选择项只保存稳定身份与展示名，不保存会话或远端媒体地址。
 class _HomeChoice {
@@ -58,10 +61,17 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
   late final _groups = FollowingGroupService.instance;
   List<_HomeChoice> _selected = [];
   Map<String, String> _localFolderNames = {};
+  Map<String, String> _localFolderCovers = {};
+  Map<String, String> _remoteFolderCovers = {};
+  Future<AccountDataPage<FavoriteFolder>>? _remoteFoldersPending;
+  AccountDataPage<FavoriteFolder>? _remoteFoldersSnapshot;
+  DateTime? _remoteFoldersLoadedAt;
+  Map<int, Future<String>> _fallbackCoverRequests = {};
   int _folderNamesGeneration = 0;
   Map<String, String> _localGroupNames = {};
   int _groupNamesGeneration = 0;
   int _groupNamesMid = 0;
+  bool _choosingFavoriteSource = false;
   bool _custom = false;
   bool _loading = true;
   bool _identityUnavailable = false;
@@ -77,7 +87,7 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
   void initState() {
     super.initState();
     CacheLifecycle.account.addListener(_accountChanged);
-    AppFavoritesService.folderNamesRevision.addListener(_loadLocalFolderNames);
+    AppFavoritesService.contentsRevision.addListener(_loadLocalFolderNames);
     if (!widget.favorites) _groups.changes.addListener(_onGroupsChanged);
     _load();
   }
@@ -89,9 +99,7 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
     _folderNamesGeneration++;
     _groupNamesGeneration++;
     if (!widget.favorites) _groups.changes.removeListener(_onGroupsChanged);
-    AppFavoritesService.folderNamesRevision.removeListener(
-      _loadLocalFolderNames,
-    );
+    AppFavoritesService.contentsRevision.removeListener(_loadLocalFolderNames);
     CacheLifecycle.account.removeListener(_accountChanged);
     super.dispose();
   }
@@ -100,7 +108,14 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
   void _accountChanged() {
     if (!mounted) return;
     _groupNamesGeneration++;
+    _folderNamesGeneration++;
+    _remoteFoldersPending = null;
+    _remoteFoldersSnapshot = null;
+    _remoteFoldersLoadedAt = null;
+    _fallbackCoverRequests = {};
     setState(() {
+      _localFolderCovers = {};
+      _remoteFolderCovers = {};
       _groupNamesMid = 0;
       _localGroupNames = {};
       _selected = [];
@@ -114,9 +129,25 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
   /// 只接受最后一次账号读取的结果，避免旧请求覆盖新账号。
   Future<void> _load() async {
     final generation = ++_generation;
+    _remoteFoldersSnapshot = null;
+    _remoteFoldersLoadedAt = null;
+    _fallbackCoverRequests = {};
     try {
       final mid = await _api.currentHomeCollectionMid();
       if (!mounted || generation != _generation) return;
+      if (mid != _mid) {
+        _folderNamesGeneration++;
+        _remoteFoldersPending = null;
+        _remoteFoldersSnapshot = null;
+        _remoteFoldersLoadedAt = null;
+        _fallbackCoverRequests = {};
+        setState(() {
+          _localFolderCovers = {};
+          _remoteFolderCovers = {};
+          _selected = [];
+          _loading = true;
+        });
+      }
       if (mid == null) {
         _groupNamesGeneration++;
         setState(() {
@@ -138,9 +169,7 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
           .map((e) => _HomeChoice.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList();
       if (!mounted || generation != _generation) return;
-      if (selected.any((choice) => choice.kind == 'local')) {
-        await _loadLocalFolderNames();
-      } else if (!widget.favorites && mid > 0) {
+      if (!widget.favorites && mid > 0) {
         await _loadLocalGroupNames(mid);
       }
       if (mounted && generation == _generation) {
@@ -151,6 +180,16 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
           _selected = selected;
           _loading = false;
         });
+        if (widget.favorites &&
+            selected.any((choice) => choice.kind == 'local')) {
+          unawaited(_loadLocalFolderNames());
+        }
+        if (widget.favorites &&
+            _custom &&
+            mid > 0 &&
+            selected.any((choice) => choice.kind == 'remote')) {
+          unawaited(_loadRemoteCovers(mid, generation));
+        }
       }
     } catch (_) {
       if (mounted && generation == _generation) {
@@ -160,20 +199,166 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
   }
 
   /// 本机名称独立刷新，不取消正在编辑的配置，也不回写保存的入口快照。
-  Future<void> _loadLocalFolderNames() async {
+  Future<void> _loadLocalFolderNames({List<_HomeChoice>? choices}) async {
     if (!widget.favorites) return;
     final generation = ++_folderNamesGeneration;
     try {
       final folders = await _favorites.loadFolders();
+      final selectedIds = (choices ?? _selected)
+          .where((choice) => choice.kind == 'local')
+          .map((choice) => choice.id)
+          .toSet();
+      final covers = <String, String>{};
+      for (final folder in folders.where(
+        (folder) => selectedIds.contains(folder.id),
+      )) {
+        try {
+          final items = await _favorites.loadItems(folder.id);
+          final available = items.where(
+            (item) => item.coverUrl.trim().isNotEmpty,
+          );
+          if (available.isNotEmpty) {
+            covers[folder.id] = available.first.coverUrl;
+          }
+        } catch (_) {
+          // 无法确认当前内容时使用占位，不把过期画面当成当前封面。
+        }
+      }
       if (mounted && generation == _folderNamesGeneration) {
         setState(() {
+          _localFolderCovers = covers;
           _localFolderNames = {
             for (final folder in folders) folder.id: folder.name,
           };
         });
       }
     } catch (_) {
-      // 损坏或不可读的收藏数据不应隐藏入口，继续显示最后成功名称或保存的名称。
+      // 名称仍保留快照，但无法确认内容时不展示旧封面。
+      if (mounted && generation == _folderNamesGeneration) {
+        setState(() => _localFolderCovers = {});
+      }
+    }
+  }
+
+  /// 合并在途列表并短暂复用成功快照；页面返回会失效，重建不发请求。
+  Future<AccountDataPage<FavoriteFolder>> _favoriteFolders() {
+    final pending = _remoteFoldersPending;
+    if (pending != null) return pending;
+    if (_remoteFoldersSnapshot != null &&
+        _remoteFoldersLoadedAt != null &&
+        DateTime.now().difference(_remoteFoldersLoadedAt!) <
+            const Duration(minutes: 2)) {
+      return Future.value(_remoteFoldersSnapshot);
+    }
+    _fallbackCoverRequests = {};
+    final request = _api.loadFavoriteFolders();
+    _remoteFoldersPending = request;
+    unawaited(
+      request.then<void>(
+        (page) {
+          if (identical(_remoteFoldersPending, request)) {
+            _remoteFoldersPending = null;
+            if (page.isSuccess) {
+              _remoteFoldersSnapshot = page;
+              _remoteFoldersLoadedAt = DateTime.now();
+            }
+          }
+        },
+        onError: (Object _, StackTrace _) {
+          if (identical(_remoteFoldersPending, request)) {
+            _remoteFoldersPending = null;
+          }
+        },
+      ),
+    );
+    return request;
+  }
+
+  /// 账号和页面读取代次都匹配时才采用封面；失败清空而不覆盖选择配置。
+  Future<void> _loadRemoteCovers(int mid, int generation) async {
+    try {
+      final page = await _favoriteFolders();
+      final currentMid = await _api.currentHomeCollectionMid();
+      if (!mounted || generation != _generation || mid != _mid) return;
+      if (currentMid != mid) {
+        _accountChanged();
+        return;
+      }
+      setState(() {
+        _remoteFolderCovers = page.isSuccess
+            ? {
+                for (final folder in page.items)
+                  if (folder.isAvailable) '${folder.mediaId}': folder.coverUrl,
+              }
+            : {};
+      });
+      if (page.isSuccess) {
+        await _backfillSelectedCovers(page.items, mid, generation);
+      }
+    } catch (_) {
+      if (mounted && generation == _generation && mid == _mid) {
+        setState(() => _remoteFolderCovers = {});
+      }
+    }
+  }
+
+  /// 只为已选且有视频的缺图收藏夹补查第一页，每批最多三项。
+  Future<void> _backfillSelectedCovers(
+    List<FavoriteFolder> folders,
+    int mid,
+    int generation,
+  ) async {
+    final ids = _selected
+        .where((choice) => choice.kind == 'remote')
+        .map((choice) => choice.id)
+        .toSet();
+    final missing = folders
+        .where(
+          (folder) =>
+              ids.contains('${folder.mediaId}') &&
+              folder.isAvailable &&
+              folder.mediaCount > 0 &&
+              folder.coverUrl.trim().isEmpty,
+        )
+        .toList();
+    for (var offset = 0; offset < missing.length; offset += 3) {
+      if (!mounted || generation != _generation || mid != _mid) return;
+      final batch = missing.skip(offset).take(3);
+      final covers = await Future.wait(
+        batch.map((folder) async {
+          final request = _fallbackCoverRequests.putIfAbsent(
+            folder.mediaId,
+            () async {
+              try {
+                final videos = await _api.loadFavoriteVideos(folder.mediaId);
+                if (videos.isSuccess) {
+                  for (final video in videos.items) {
+                    if (video.isAvailable && video.coverUrl.trim().isNotEmpty) {
+                      return video.coverUrl;
+                    }
+                  }
+                }
+              } catch (_) {
+                /* 单夹失败不影响其余来源。 */
+              }
+              return '';
+            },
+          );
+          final cover = await request;
+          if (cover.isEmpty &&
+              identical(_fallbackCoverRequests[folder.mediaId], request)) {
+            _fallbackCoverRequests.remove(folder.mediaId);
+          }
+          return MapEntry('${folder.mediaId}', cover);
+        }),
+      );
+      if (!mounted || generation != _generation || mid != _mid) return;
+      if (await _api.currentHomeCollectionMid() != mid) {
+        if (mounted && generation == _generation) _accountChanged();
+        return;
+      }
+      if (!mounted || generation != _generation || mid != _mid) return;
+      setState(() => _remoteFolderCovers.addEntries(covers));
     }
   }
 
@@ -233,26 +418,20 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
       await _push(const FollowedCreatorsPage());
       return;
     }
-    final local = await showDialog<bool>(
-      context: context,
-      builder: (context) => SimpleDialog(
-        title: const Text('我的收藏'),
-        children: [
-          SimpleDialogOption(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('本机收藏夹'),
-          ),
-          SimpleDialogOption(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('B 站收藏夹'),
-          ),
-        ],
-      ),
-    );
-    if (local != null && mounted) {
-      await _push(
-        local ? const AppFavoriteFoldersPage() : const FavoriteFoldersPage(),
+    if (_choosingFavoriteSource) return;
+    _choosingFavoriteSource = true;
+    try {
+      final local = await showDialog<bool>(
+        context: context,
+        builder: (context) => const HomeFavoriteSourceDialog(),
       );
+      if (local != null && mounted) {
+        await _push(
+          local ? const AppFavoriteFoldersPage() : const FavoriteFoldersPage(),
+        );
+      }
+    } finally {
+      _choosingFavoriteSource = false;
     }
   }
 
@@ -311,8 +490,12 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
     final choices = <_HomeChoice>[];
     try {
       if (widget.favorites) {
-        final page = await _api.loadFavoriteFolders();
+        final page = await _favoriteFolders();
         if (!page.isSuccess || !stillEditing()) return null;
+        if (await _api.currentHomeCollectionMid() != _mid || !stillEditing()) {
+          return null;
+        }
+
         for (final folder in page.items) {
           choices.add(_HomeChoice('remote', '${folder.mediaId}', folder.title));
         }
@@ -412,6 +595,13 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
           _custom = config.$1;
           _selected = config.$2;
         });
+        await _loadLocalFolderNames();
+        if (widget.favorites &&
+            _custom &&
+            mid > 0 &&
+            _selected.any((choice) => choice.kind == 'remote')) {
+          unawaited(_loadRemoteCovers(mid, generation));
+        }
       }
     } catch (e) {
       if (isCurrent()) _message('$e');
@@ -461,11 +651,20 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
               ListTile(
                 dense: true,
                 title: Text(_label(choice)),
-                leading: Icon(
-                  choice.kind == 'creator'
-                      ? Icons.person_outline
-                      : Icons.folder_outlined,
-                ),
+                leading:
+                    widget.favorites &&
+                        (choice.kind == 'local' || choice.kind == 'remote')
+                    ? HomeFavoriteCover(
+                        key: ValueKey('home-cover-${choice.key}'),
+                        coverUrl: choice.kind == 'local'
+                            ? (_localFolderCovers[choice.id] ?? '')
+                            : (_remoteFolderCovers[choice.id] ?? ''),
+                      )
+                    : Icon(
+                        choice.kind == 'creator'
+                            ? Icons.person_outline
+                            : Icons.folder_outlined,
+                      ),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => _open(choice),
               ),
