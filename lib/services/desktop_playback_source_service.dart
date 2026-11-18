@@ -4,6 +4,8 @@ import 'dart:io';
 
 import 'bilibili_auth_service.dart';
 import 'app_behavior_preferences_service.dart';
+import 'bilibili_http_user_agent.dart';
+import 'http_user_agent_preferences.dart';
 import 'bilibili_wbi_signing_service.dart';
 import 'native_playback_service.dart';
 import 'media_url_policy.dart';
@@ -110,11 +112,42 @@ class BilibiliDesktopPlaybackSourceService {
   late final _wbiSigner = BilibiliWbiSigningService(requestJson: _readJson);
   static int _requestId = 0;
 
+  /// The regular Windows player alone has current, parsed upload rights.
+  /// Other callers of load() keep exactly their original request headers.
+  Future<DesktopPlaybackSources> loadForVideo({
+    required VideoPreview video,
+    required int cid,
+    required int quality,
+  }) async {
+    final custom =
+        BilibiliHttpUserAgent.isKnownOrdinaryUpload(video) &&
+            BilibiliHttpUserAgent.allowsPlaybackQuality(quality) &&
+            video.parts.any((part) => part.cid == cid)
+        ? await const HttpUserAgentPreferences().forRequest()
+        : null;
+    if (custom == null) {
+      return load(bvid: video.bvid, cid: cid, quality: quality);
+    }
+    return _load(
+      bvid: video.bvid,
+      cid: cid,
+      quality: quality,
+      customUserAgent: custom,
+    );
+  }
+
   /// 校验视频参数，请求固定播放接口，并挑选不超过目标清晰度的兼容音视频轨。
   Future<DesktopPlaybackSources> load({
     required String bvid,
     required int cid,
     required int quality,
+  }) => _load(bvid: bvid, cid: cid, quality: quality);
+
+  Future<DesktopPlaybackSources> _load({
+    required String bvid,
+    required int cid,
+    required int quality,
+    String? customUserAgent,
   }) async {
     final String normalizedBvid = bvid.trim();
     if (!_bvidPattern.hasMatch(normalizedBvid)) {
@@ -195,7 +228,10 @@ class BilibiliDesktopPlaybackSourceService {
       facts['stage'] = 'playurl';
       final responseText = await _readJson(
         endpoint,
-        headers,
+        customUserAgent != null &&
+                BilibiliHttpUserAgent.allowsPlayback(endpoint)
+            ? {...headers, 'User-Agent': customUserAgent}
+            : headers,
         facts,
         requestSession,
       );

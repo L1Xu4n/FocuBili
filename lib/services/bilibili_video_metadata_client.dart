@@ -6,6 +6,8 @@ import '../models/video_metadata_request_diagnostic.dart';
 import 'bilibili_auth_service.dart';
 import 'bilibili_lookup_exception.dart';
 import 'bilibili_request_policy.dart';
+import 'bilibili_http_user_agent.dart';
+import 'http_user_agent_preferences.dart';
 import 'bilibili_wbi_signing_service.dart';
 import 'problem_diagnostics_service.dart';
 
@@ -76,10 +78,15 @@ class BilibiliVideoMetadataClient {
       facts['auth_state'] = session.snapshot.state == 'session'
           ? 'session_present_unverified'
           : 'anonymous';
-      final key = (session.scopeKey, bvid, details);
+      final customUserAgent = await const HttpUserAgentPreferences()
+          .forRequest();
+      // Changing this optional header must not attach new requests to an
+      // in-flight response from a different preference. The WBI material
+      // cache remains scoped by authorization only.
+      final key = (session.scopeKey, bvid, details, customUserAgent);
       var work = _pending[key];
       if (work == null) {
-        work = (_load(bvid, details, session, facts), facts);
+        work = (_load(bvid, details, session, facts, customUserAgent), facts);
         _pending[key] = work;
         // The listener consumes both outcomes and cannot leak an unhandled error.
         unawaited(
@@ -177,6 +184,7 @@ class BilibiliVideoMetadataClient {
     bool details,
     BilibiliPlaybackSession session,
     Map<String, Object?> facts,
+    String? customUserAgent,
   ) async {
     var parameters = <String, String>{'bvid': bvid};
     final path = details ? viewPath : partsPath;
@@ -204,7 +212,12 @@ class BilibiliVideoMetadataClient {
       'api.bilibili.com',
       path,
     ).replace(query: BilibiliWbiSigningService.encodeQuery(parameters));
-    final body = await _read(endpoint, session, facts);
+    final body = await _read(
+      endpoint,
+      session,
+      facts,
+      customUserAgent: customUserAgent,
+    );
     await session.validate();
     return body;
   }
@@ -212,8 +225,9 @@ class BilibiliVideoMetadataClient {
   Future<String> _read(
     Uri uri,
     BilibiliPlaybackSession session,
-    Map<String, Object?> facts,
-  ) async {
+    Map<String, Object?> facts, {
+    String? customUserAgent,
+  }) async {
     facts.remove('http_status');
     facts.remove('api_code');
     facts['endpoint_kind'] = uri.path == '/x/web-interface/nav'
@@ -223,7 +237,12 @@ class BilibiliVideoMetadataClient {
         : 'pagelist';
     final cookie = await session.headerFor(uri.path);
     final headers = <String, String>{
-      ...BilibiliRequestPolicy.publicJsonHeaders(uri, userAgent: _userAgent),
+      ...BilibiliRequestPolicy.publicJsonHeaders(
+        uri,
+        userAgent: BilibiliHttpUserAgent.allowsMetadata(uri)
+            ? customUserAgent ?? _userAgent
+            : _userAgent,
+      ),
       if (cookie.isNotEmpty) 'Cookie': cookie,
     };
     final response = await _transport(uri, headers);

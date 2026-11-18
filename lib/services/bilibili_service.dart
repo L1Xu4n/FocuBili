@@ -6,11 +6,13 @@ import '../models/user_search.dart';
 import 'bilibili_request_policy.dart';
 import 'bilibili_lookup_exception.dart';
 import 'bilibili_video_metadata_client.dart';
-
-export 'bilibili_lookup_exception.dart';
+import 'bilibili_http_user_agent.dart';
+import 'http_user_agent_preferences.dart';
 import 'bilibili_course_link.dart';
 import 'bilibili_course_service.dart';
 import 'offline_video_service.dart';
+
+export 'bilibili_lookup_exception.dart';
 
 /// 定义可替换的 JSON 请求函数，方便测试时不用真的访问网络。
 typedef JsonRequest = Future<String> Function(Uri uri);
@@ -387,6 +389,8 @@ class BilibiliVideoInfoService
       publishedAt: _parseUnixTime(data['pubdate']),
       stats: _parseVideoStats(data['stat']),
       collection: _parseVideoCollection(data['ugc_season'], resolvedBvid),
+      isKnownUnrestrictedUpload:
+          BilibiliHttpUserAgent.isUnrestrictedUploadResponse(data),
       duration: initialPart.duration,
       thumbnailUrl: _normalizeThumbnailUrl(_readText(data['pic'], '')),
       parts: parts,
@@ -1019,13 +1023,17 @@ class BilibiliVideoInfoService
 
   /// 发出不带 Cookie 的 HTTPS GET 请求，并返回详情接口的 JSON 文本。
   static Future<String> _requestPublicJson(Uri uri) async {
+    final custom = BilibiliHttpUserAgent.allowsMetadata(uri)
+        ? await const HttpUserAgentPreferences().forRequest()
+        : null;
     final HttpClient client = HttpClient();
     try {
       final HttpClientRequest request = await client.getUrl(uri);
+      if (custom != null) request.followRedirects = false;
       final Map<String, String> requestHeaders =
           BilibiliRequestPolicy.publicJsonHeaders(
             uri,
-            userAgent: _desktopUserAgent,
+            userAgent: custom ?? _desktopUserAgent,
           );
       for (final MapEntry<String, String> header in requestHeaders.entries) {
         request.headers.set(header.key, header.value);
