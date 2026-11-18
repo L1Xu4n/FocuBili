@@ -8,7 +8,8 @@ import 'package:focubili/services/subscription_service.dart';
 import 'package:focubili/services/subscription_history_store.dart';
 import 'package:focubili/services/bilibili_public_content_service.dart';
 import 'subscription_background_test.dart' show AtomicSnapshots;
-import 'subscription_performance_probe_test.dart' show feedFixture;
+import 'subscription_performance_probe_test.dart'
+    show feedFixture, feedFixtureClock;
 import 'support/subscription_public_pages.dart';
 
 class InterruptingHistory extends MemorySubscriptionHistoryStore {
@@ -36,7 +37,13 @@ void main() {
     'legacy partial baseline migration is repeatable and retains pending, reads and claims',
     () async {
       final data =
-          jsonDecode(feedFixture(count: 2, sourceCount: 1))
+          jsonDecode(
+                feedFixture(
+                  count: 2,
+                  sourceCount: 1,
+                  at: DateTime.utc(2026, 1, 2),
+                ),
+              )
               as Map<String, dynamic>;
       final cp = (data['checkpoints'] as Map)['creator:1'] as Map;
       cp.removeWhere(
@@ -124,7 +131,10 @@ void main() {
         'creator:1': {'status': 'broken'},
       };
       store.value = jsonEncode(corrupt);
-      final recovered = SubscriptionService(snapshotStore: store);
+      final recovered = SubscriptionService(
+        snapshotStore: store,
+        clock: () => feedFixtureClock,
+      );
       addTearDown(recovered.dispose);
       await recovered.initialize();
       expect(recovered.feed.length, 2);
