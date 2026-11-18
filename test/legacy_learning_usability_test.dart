@@ -138,7 +138,7 @@ void main() {
     await tester.tap(folderOption);
     await tester.pumpAndSettle();
     await _capture(tester, key, '02-picker-folder');
-    final lastPart = find.widgetWithText(CheckboxListTile, 'P5 第5课');
+    final lastPart = find.widgetWithText(ListTile, 'P5 第5课');
     final parts = find.byWidgetPredicate(
       (widget) =>
           widget is Scrollable && widget.axisDirection == AxisDirection.down,
