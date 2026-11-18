@@ -1243,7 +1243,7 @@ class _PersonalizationSettingsPageState
           onChanged: _saving ? null : _setDoubleTapSeekEnabled,
           secondary: const Icon(Icons.touch_app_outlined),
           title: const Text('启用双击快进快退'),
-          subtitle: const Text('关闭后，双击视频画面的任何位置都会切换播放或暂停。'),
+          subtitle: const Text('关闭后，触摸双击视频画面只切换播放或暂停。'),
         ),
         ListTile(
           key: const Key('double-tap-regions-preference'),

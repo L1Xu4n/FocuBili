@@ -26,7 +26,7 @@ Widget _host({bool offstage = false}) => MaterialApp(
   home: Scaffold(
     body: Offstage(
       offstage: offstage,
-      child: const HomeCollectionCard(favorites: true),
+      child: const HomeCollectionCard(showCustomization: true, favorites: true),
     ),
   ),
 );
@@ -186,9 +186,11 @@ void main() {
     await _settle(tester);
     await _tap(tester, find.byTooltip('自定义内容'));
     await _settle(tester);
+    await _tap(tester, find.byKey(const ValueKey('home-mode-custom')));
+    await _settle(tester);
     await tester.runAsync(() => favorites.renameFolder(first.id, 'After'));
     await _settle(tester);
-    await _tap(tester, find.text('Second'));
+    await _tap(tester, find.byKey(ValueKey('add-local:${second.id}')));
     await _settle(tester);
     await _tap(tester, find.text('保存'));
     await _settle(tester);
@@ -269,6 +271,10 @@ void main() {
       expect(find.text(save ? 'After' : 'Before'), findsOneWidget);
     }
     await tester.pageBack();
+    await _settle(tester);
+    if (find.byKey(const ValueKey('home-mode-custom')).evaluate().isNotEmpty) {
+      await tester.pageBack();
+    }
     await _settle(tester);
     expect(find.text('After'), findsOneWidget);
     expect(find.text('Before'), findsNothing);

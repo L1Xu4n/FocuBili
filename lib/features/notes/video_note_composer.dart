@@ -49,6 +49,7 @@ class VideoNoteComposer extends StatelessWidget {
     this.frames = const <VideoNoteFrame>[],
     this.onFramesChanged,
     this.onAddFrame,
+    this.addingFrame = false,
     this.onDelete,
     this.compact = false,
     this.borderless = false,
@@ -67,6 +68,7 @@ class VideoNoteComposer extends StatelessWidget {
   final List<VideoNoteFrame> frames;
   final ValueChanged<List<VideoNoteFrame>>? onFramesChanged;
   final VoidCallback? onAddFrame;
+  final bool addingFrame;
   final bool saving;
   final ValueChanged<bool> onIncludeFrameChanged;
   final VoidCallback onSave;
@@ -446,7 +448,7 @@ class VideoNoteComposer extends StatelessWidget {
         if (onAddFrame != null)
           OutlinedButton.icon(
             key: const Key('append-video-note-frame'),
-            onPressed: saving ? null : onAddFrame,
+            onPressed: saving || addingFrame ? null : onAddFrame,
             icon: const Icon(Icons.add_photo_alternate_outlined, size: 18),
             label: const Text('追加当前画面'),
           ),

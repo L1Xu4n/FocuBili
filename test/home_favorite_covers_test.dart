@@ -79,7 +79,11 @@ Widget host(CoverAccount api, {double scale = 1, bool dark = false}) =>
       ),
       home: Scaffold(
         body: SingleChildScrollView(
-          child: HomeCollectionCard(favorites: true, accountDataService: api),
+          child: HomeCollectionCard(
+            showCustomization: true,
+            favorites: true,
+            accountDataService: api,
+          ),
         ),
       ),
     );
@@ -361,6 +365,10 @@ void main() {
     api.next = () => second.future;
     await tester.pageBack();
     await settle(tester);
+    if (find.byKey(const ValueKey('home-mode-custom')).evaluate().isNotEmpty) {
+      await tester.pageBack();
+    }
+    await settle(tester);
     expect(find.text('新账号'), findsOneWidget);
     expect(api.calls, 2);
     first.complete(
@@ -404,6 +412,10 @@ void main() {
       hasMore: false,
     );
     await tester.pageBack();
+    await settle(tester);
+    if (find.byKey(const ValueKey('home-mode-custom')).evaluate().isNotEmpty) {
+      await tester.pageBack();
+    }
     await settle(tester);
     expect(api.calls, 2);
     expect(cover(tester, 'remote', '7'), 'https://fixture.invalid/updated');
@@ -469,7 +481,13 @@ void main() {
     expect(cover(tester, 'remote', '7'), 'https://fixture.invalid/fallback');
     await tester.tap(find.byTooltip('自定义内容'));
     await settle(tester);
+    await tester.tap(find.byKey(const ValueKey('home-mode-custom')));
+    await settle(tester);
     await tester.pageBack();
+    await settle(tester);
+    if (find.byKey(const ValueKey('home-mode-custom')).evaluate().isNotEmpty) {
+      await tester.pageBack();
+    }
     await settle(tester);
     expect(cover(tester, 'remote', '7'), 'https://fixture.invalid/fallback');
     expect(api.videoCalls, [7]);
@@ -482,7 +500,9 @@ void main() {
     expect(api.calls, 0);
     await tester.tap(find.byTooltip('自定义内容'));
     await settle(tester);
-    await tester.tap(find.text('远端课程'));
+    await tester.tap(find.byKey(const ValueKey('home-mode-custom')));
+    await settle(tester);
+    await tester.tap(find.byKey(const ValueKey('add-remote:7')));
     await settle(tester);
     await tester.tap(find.text('保存'));
     await settle(tester);

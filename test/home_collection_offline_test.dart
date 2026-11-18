@@ -94,7 +94,11 @@ class _FailedEndpoint implements BilibiliAccountDataApi {
 Widget _host(BilibiliAccountDataService api, {bool favorites = true}) =>
     MaterialApp(
       home: Scaffold(
-        body: HomeCollectionCard(favorites: favorites, accountDataService: api),
+        body: HomeCollectionCard(
+          showCustomization: true,
+          favorites: favorites,
+          accountDataService: api,
+        ),
       ),
     );
 
@@ -166,18 +170,29 @@ void main() {
       await tester.pumpWidget(_host(api));
       await _settle(tester);
       await _tap(tester, find.byTooltip('自定义内容'));
+      await _settle(tester);
+      await _tap(tester, find.byKey(const ValueKey('home-mode-custom')));
       expect(find.text(_remoteMessage), findsOneWidget);
       expect(find.text(_firstRemote), findsOneWidget);
       expect(find.text(_secondRemote), findsOneWidget);
 
-      await _tap(tester, find.text(folder.name));
+      await _tap(tester, find.byKey(ValueKey('add-local:${folder.id}')));
       await tester.pageBack();
+      await _settle(tester);
+      if (find
+          .byKey(const ValueKey('home-mode-custom'))
+          .evaluate()
+          .isNotEmpty) {
+        await tester.pageBack();
+      }
       await _settle(tester);
       expect(prefs.getString(_key(_firstMid)), raw);
       expect(find.text(folder.name), findsNothing);
 
       await _tap(tester, find.byTooltip('自定义内容'));
-      await _tap(tester, find.text(folder.name));
+      await _settle(tester);
+      await _tap(tester, find.byKey(const ValueKey('home-mode-custom')));
+      await _tap(tester, find.byKey(ValueKey('add-local:${folder.id}')));
       await _tap(tester, find.text('保存'));
       final saved = _config([
         _choice('remote', '11', _firstRemote),
@@ -214,9 +229,10 @@ void main() {
     await tester.pumpWidget(_host(api));
     await _settle(tester);
     await _tap(tester, find.byTooltip('自定义内容'));
-    await _tap(tester, find.text('自选内容'));
+    await _settle(tester);
+    await _tap(tester, find.byKey(const ValueKey('home-mode-custom')));
     expect(find.text(_firstRemote), findsNothing);
-    await _tap(tester, find.text(folder.name));
+    await _tap(tester, find.byKey(ValueKey('add-local:${folder.id}')));
     await _tap(tester, find.text('保存'));
 
     expect(api.favoriteLoads, 0);
@@ -243,13 +259,15 @@ void main() {
       await tester.pumpWidget(_host(api, favorites: false));
       await _settle(tester);
       await _tap(tester, find.byTooltip('自定义内容'));
+      await _settle(tester);
+      await _tap(tester, find.byKey(const ValueKey('home-mode-custom')));
 
       expect(api.followingPages, [1, 2]);
       expect(find.text(_remoteMessage), findsOneWidget);
       expect(find.text('Incomplete remote page'), findsNothing);
       expect(find.text(_firstRemote), findsOneWidget);
       expect(find.text(_secondRemote), findsOneWidget);
-      await _tap(tester, find.text('Local following group'));
+      await _tap(tester, find.byKey(const ValueKey('add-group:local-01')));
       await _tap(tester, find.text('保存'));
       expect(
         prefs.getString(_key(_firstMid, favorites: false)),
@@ -277,9 +295,11 @@ void main() {
     await tester.pumpWidget(_host(api));
     await _settle(tester);
     await _tap(tester, find.byTooltip('自定义内容'));
+    await _settle(tester);
+    await _tap(tester, find.byKey(const ValueKey('home-mode-custom')));
     // We can already edit even though the network has not responded.
     expect(api.favoriteLoads, 1);
-    await _tap(tester, find.text(folder.name));
+    await _tap(tester, find.byKey(ValueKey('add-local:${folder.id}')));
     expect(find.text('保存'), findsOneWidget);
 
     api.mid = _secondMid;
@@ -307,6 +327,10 @@ void main() {
     expect(find.text(_firstRemote), findsNothing);
     expect(find.text('Late previous account choice'), findsNothing);
     await tester.pageBack();
+    await _settle(tester);
+    if (find.byKey(const ValueKey('home-mode-custom')).evaluate().isNotEmpty) {
+      await tester.pageBack();
+    }
     await _settle(tester);
     expect(find.text('Second account only'), findsOneWidget);
     expect(find.text(folder.name), findsNothing);
@@ -447,7 +471,9 @@ void main() {
     await tester.pumpWidget(_host(api));
     await _settle(tester);
     await _tap(tester, find.byTooltip('自定义内容'));
-    await _tap(tester, find.text(folder.name));
+    await _settle(tester);
+    await _tap(tester, find.byKey(const ValueKey('home-mode-custom')));
+    await _tap(tester, find.byKey(ValueKey('add-local:${folder.id}')));
     session.state = const BilibiliSessionState.networkError();
     await _tap(tester, find.text('保存'));
     expect(find.textContaining('无法确认当前账号，配置未保存'), findsOneWidget);

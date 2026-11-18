@@ -1,4 +1,6 @@
 import 'dart:async';
+import '../../platform/app_platform.dart';
+import '../classroom/course_cache_page.dart';
 
 import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/material.dart';
@@ -387,6 +389,14 @@ class _OfflineVideosPageState extends State<OfflineVideosPage> {
             ],
           ),
           actions: <Widget>[
+            if (CourseCachePage.supported(AppPlatformDetector.current))
+              IconButton(
+                tooltip: '课程缓存',
+                icon: const Icon(Icons.school_outlined),
+                onPressed: () => Navigator.of(context).push<void>(
+                  MaterialPageRoute(builder: (_) => const CourseCachePage()),
+                ),
+              ),
             if (_downloads.isNotEmpty)
               IconButton(
                 key: const Key('clear-offline-videos'),

@@ -3,7 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/services/subscription_service.dart';
 import 'subscription_performance_probe_test.dart'
-    show CountingSnapshots, feedFixture;
+    show CountingSnapshots, feedFixture, feedFixtureClock;
 import 'subscription_service_test.dart' show Content, item;
 
 void main() {
@@ -13,8 +13,14 @@ void main() {
     'cached feed survives unchanged reload; changes and rollback invalidate it',
     () async {
       final store = CountingSnapshots()..value = feedFixture(count: 5);
-      final ui = SubscriptionService(snapshotStore: store);
-      final worker = SubscriptionService(snapshotStore: store);
+      final ui = SubscriptionService(
+        snapshotStore: store,
+        clock: () => feedFixtureClock,
+      );
+      final worker = SubscriptionService(
+        snapshotStore: store,
+        clock: () => feedFixtureClock,
+      );
       addTearDown(ui.dispose);
       addTearDown(worker.dispose);
       await ui.initialize();
@@ -86,6 +92,7 @@ void main() {
     final service = SubscriptionService(
       snapshotStore: store,
       contentService: content,
+      clock: () => feedFixtureClock,
     );
     addTearDown(service.dispose);
     await service.initialize();
