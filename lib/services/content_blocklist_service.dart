@@ -3,6 +3,31 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/content_blocklist.dart';
 
+/// A single undo for the exact local block inserted by a successful action.
+class ContentBlockUndo {
+  ContentBlockUndo._(this._remove, this._release);
+
+  final Future<void> Function() _remove;
+  final VoidCallback _release;
+  bool _used = false;
+
+  Future<void> apply() async {
+    if (_used) return;
+    _used = true;
+    try {
+      await _remove();
+    } finally {
+      _release();
+    }
+  }
+
+  void discard() {
+    if (_used) return;
+    _used = true;
+    _release();
+  }
+}
+
 /// Serializes local mutations so concurrent menus cannot overwrite one another.
 class ContentBlocklistService {
   const ContentBlocklistService({
@@ -14,6 +39,7 @@ class ContentBlocklistService {
   static final ValueNotifier<int> changes = ValueNotifier(0);
   static Future<void>? _pending;
   static final _needsReload = Expando<bool>();
+  static final _undoOwners = Expando<Map<Object, Object>>();
   static final _bvid = RegExp(r'^BV[0-9A-Za-z]{10}$');
 
   Future<ContentBlocklist> load() async {
@@ -67,8 +93,10 @@ class ContentBlocklistService {
   }
 
   Future<void> _change(
-    void Function(Map<String, String>, Map<int, String>) edit,
-  ) {
+    void Function(Map<String, String>, Map<int, String>) edit, {
+    bool Function(SharedPreferences)? shouldCommit,
+    void Function(SharedPreferences)? onCommit,
+  }) {
     final result = (_pending ?? Future<void>.value()).then((_) async {
       final preferences = await _authoritativePreferences();
       // Do not replace unreadable storage with an empty list during a mutation.
@@ -76,6 +104,7 @@ class ContentBlocklistService {
       final videos = Map<String, String>.from(current.videos);
       final creators = Map<int, String>.from(current.creators);
       edit(videos, creators);
+      if (shouldCommit?.call(preferences) == false) return;
       try {
         final saved = await preferences.setString(
           storageKey,
@@ -97,6 +126,14 @@ class ContentBlocklistService {
         }
         rethrow;
       }
+      _undoOwners[preferences]?.removeWhere(
+        (id, _) => switch (id) {
+          String() => current.videos[id] != videos[id],
+          int() => current.creators[id] != creators[id],
+          _ => true,
+        },
+      );
+      onCommit?.call(preferences);
       changes.value++;
     });
     final settled = result.catchError((Object _) {});
@@ -105,6 +142,60 @@ class ContentBlocklistService {
       if (identical(_pending, settled)) _pending = null;
     });
     return result;
+  }
+
+  /// An existing ID is not overwritten and never gets a new undo action.
+  Future<ContentBlockUndo?> blockVideoWithUndo(String bvid, String title) {
+    if (!_bvid.hasMatch(bvid)) throw ArgumentError.value(bvid, 'bvid');
+    return _blockWithUndo(bvid, title.trim());
+  }
+
+  Future<ContentBlockUndo?> blockCreatorWithUndo(int mid, String name) {
+    if (mid <= 0) throw ArgumentError.value(mid, 'mid');
+    return _blockWithUndo(mid, name.trim());
+  }
+
+  Future<ContentBlockUndo?> _blockWithUndo(Object id, String label) async {
+    final token = Object();
+    var added = false;
+    Map<Object, Object>? owners;
+    await _change(
+      (videos, creators) {
+        if (id is String) {
+          if (videos.containsKey(id)) return;
+          videos[id] = label;
+        } else {
+          final mid = id as int;
+          if (creators.containsKey(mid)) return;
+          creators[mid] = label;
+        }
+        added = true;
+      },
+      shouldCommit: (_) => added,
+      onCommit: (preferences) {
+        owners = _undoOwners[preferences] ??= {};
+        owners![id] = token;
+      },
+    );
+    final committedOwners = owners;
+    if (committedOwners == null) return null;
+    return ContentBlockUndo._(
+      () async {
+        var removed = false;
+        await _change(
+          (videos, creators) {
+            removed = id is String
+                ? videos.remove(id) != null
+                : creators.remove(id as int) != null;
+          },
+          shouldCommit: (preferences) =>
+              removed && identical(_undoOwners[preferences]?[id], token),
+        );
+      },
+      () {
+        if (identical(committedOwners[id], token)) committedOwners.remove(id);
+      },
+    );
   }
 
   Future<void> blockVideo(String bvid, String title) {
