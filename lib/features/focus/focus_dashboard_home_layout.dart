@@ -21,7 +21,7 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
       context,
       '焦点哔哩',
       theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
-      width - kMinInteractiveDimension * (_subscriptions.enabled ? 3 : 2),
+      width - kMinInteractiveDimension * (_subscriptions.enabled ? 2 : 1),
     );
     final double welcomeHeight = _measureHeroText(
       context,
@@ -118,11 +118,6 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
                   ),
                   _buildSubscriptionButton(),
                   IconButton(
-                    tooltip: '自定义首页',
-                    onPressed: _customizeHome,
-                    icon: const Icon(Icons.tune_rounded),
-                  ),
-                  IconButton(
                     key: const Key('home-profile-button'),
                     // 我的按钮函数切换到个人中心页面。
                     onPressed: widget.onOpenProfile,
@@ -176,6 +171,7 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
                   size: 34,
                   color: textColor,
                 ),
+              if (!_hasHomeDrawer && _homeLayoutLoaded) _drawerRecoveryButton(),
             ],
           ),
         ),
@@ -282,11 +278,6 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
                 ),
                 // 保留首页文字节点，兼容已有的页面识别和无障碍测试。
                 const SizedBox.shrink(child: Text('首页')),
-                IconButton(
-                  tooltip: '自定义首页',
-                  onPressed: _customizeHome,
-                  icon: const Icon(Icons.tune_rounded),
-                ),
               ],
             ),
             _buildSubscriptionIntroduction(),
@@ -315,6 +306,8 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
             ),
             // 保留旧入口文字节点，但工作台只绘制一个清晰的主要动作。
             const SizedBox.shrink(child: Text('打开视频')),
+            if (!_hasHomeDrawer && _homeLayoutLoaded)
+              Center(child: _drawerRecoveryButton()),
           ],
         ),
       ),

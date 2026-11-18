@@ -46,9 +46,13 @@ class HomeCollectionCard extends StatefulWidget {
     super.key,
     required this.favorites,
     this.accountDataService,
+    this.showCustomization = false,
+    this.allowNavigation = true,
   });
   final BilibiliAccountDataService? accountDataService;
   final bool favorites;
+  final bool showCustomization;
+  final bool allowNavigation;
 
   /// 创建监听账号切换的卡片状态。
   @override
@@ -625,12 +629,22 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
                   : Icons.people_outline,
             ),
             title: Text(widget.favorites ? '我的收藏' : '我的关注'),
-            onTap: _overview,
-            trailing: IconButton(
-              tooltip: '自定义内容',
-              onPressed: _loading || _identityUnavailable ? null : _configure,
-              icon: const Icon(Icons.tune_rounded),
-            ),
+            onTap: widget.allowNavigation ? _overview : null,
+            trailing: widget.showCustomization
+                ? IconButton(
+                    key: ValueKey(
+                      'customize-home-${widget.favorites ? "favorites" : "followings"}',
+                    ),
+                    tooltip: '自定义内容',
+                    onPressed: _loading || _identityUnavailable
+                        ? null
+                        : _configure,
+                    icon: Icon(
+                      Icons.tune_rounded,
+                      semanticLabel: widget.favorites ? '自定义我的收藏' : '自定义我的关注',
+                    ),
+                  )
+                : null,
           ),
           if (_loading) const LinearProgressIndicator(minHeight: 2),
           if (_identityUnavailable && !_loading)
@@ -645,7 +659,7 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
               ),
             ),
           if (_custom && !_loading) ...[
-            if (_selected.isEmpty)
+            if (_selected.isEmpty && widget.showCustomization)
               TextButton(onPressed: _configure, child: const Text('选择内容')),
             for (final choice in _selected)
               ListTile(
@@ -666,7 +680,7 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
                             : Icons.folder_outlined,
                       ),
                 trailing: const Icon(Icons.chevron_right),
-                onTap: () => _open(choice),
+                onTap: widget.allowNavigation ? () => _open(choice) : null,
               ),
           ],
         ],

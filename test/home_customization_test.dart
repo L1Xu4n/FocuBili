@@ -87,12 +87,10 @@ void main() {
       find.byKey(const Key('home-start-search')).hitTestable(),
       findsOneWidget,
     );
-    await tester.tap(find.byTooltip('自定义首页'));
+    await tester.tap(find.byKey(const Key('home-restore-drawer')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byType(SwitchListTile));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('完成'));
-    await tester.pumpAndSettle();
+    expect(find.text('添加卡片'), findsOneWidget);
+    await _tapVisible(tester, find.text('完成'));
     final cards = _board(tester).items;
     expect(cards.where((c) => c.defaultHidden).map((c) => c.id), [
       'home.favorites',
@@ -113,7 +111,8 @@ void main() {
       find.byKey(const Key('home-start-search')).hitTestable(),
       findsOneWidget,
     );
-    expect(find.byTooltip('自定义首页'), findsOneWidget);
+    expect(find.byKey(const Key('home-restore-drawer')), findsOneWidget);
+    expect(find.byTooltip('自定义首页'), findsNothing);
   });
 
   /// 首页底部可进入编辑，加回卡片追加末尾，重进后保留用户保存的最终布局。
@@ -313,9 +312,10 @@ void main() {
       find.byKey(const Key('home-start-search')).hitTestable(),
       findsOneWidget,
     );
-    await _tapVisible(tester, find.byTooltip('自定义首页'));
+    await _tapVisible(tester, find.byKey(const Key('home-restore-drawer')));
+    await _tapVisible(tester, find.text('添加卡片'));
     expect(tester.takeException(), isNull, reason: '大字体布局编辑区不溢出');
-    expect(find.widgetWithText(CheckboxListTile, '继续学习'), findsOneWidget);
+    expect(find.widgetWithText(ListTile, '继续学习'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
