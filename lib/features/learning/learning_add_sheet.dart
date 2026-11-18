@@ -18,6 +18,7 @@ abstract final class LearningAddSheet {
     VideoPart? currentPart,
     VideoPart? recentPart,
     Duration position = Duration.zero,
+    bool Function()? canConfirm,
   }) => _showParts(
     context,
     [video],
@@ -25,6 +26,7 @@ abstract final class LearningAddSheet {
     currentPart: currentPart,
     recentPart: recentPart,
     position: position,
+    canConfirm: canConfirm,
   );
 
   static Future<LearningBatchResult?> showCollection(
@@ -89,6 +91,7 @@ abstract final class LearningAddSheet {
     VideoPart? currentPart,
     VideoPart? recentPart,
     Duration position = Duration.zero,
+    bool Function()? canConfirm,
   }) async {
     final state = await service.loadState();
     if (!context.mounted) return null;
@@ -116,6 +119,7 @@ abstract final class LearningAddSheet {
         currentPart: currentPart,
         recentPart: recentPart,
         position: position,
+        canConfirm: canConfirm,
       ),
     );
   }
@@ -205,6 +209,7 @@ class _PartSelection extends StatefulWidget {
     this.currentPart,
     this.recentPart,
     required this.position,
+    this.canConfirm,
   });
   final List<VideoPreview> videos;
   final LearningListService service;
@@ -214,6 +219,7 @@ class _PartSelection extends StatefulWidget {
   final VideoPart? currentPart;
   final VideoPart? recentPart;
   final Duration position;
+  final bool Function()? canConfirm;
   @override
   State<_PartSelection> createState() => _PartSelectionState();
 }
@@ -248,6 +254,11 @@ class _PartSelectionState extends State<_PartSelection> {
 
   Future<void> _save() async {
     if (_saving) return;
+    if (widget.canConfirm?.call() == false) {
+      setState(() => _error = '来源列表的规则或状态已变化，暂未加入学习清单。');
+      if (_options.hasClients) _options.jumpTo(0);
+      return;
+    }
     setState(() {
       _saving = true;
       _error = null;

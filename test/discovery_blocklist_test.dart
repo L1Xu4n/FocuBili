@@ -19,6 +19,7 @@ import 'package:focubili/services/bilibili_interaction_service.dart';
 import 'package:focubili/services/bilibili_public_content_service.dart';
 import 'package:focubili/services/bilibili_service.dart';
 import 'package:focubili/services/content_blocklist_service.dart';
+import 'package:focubili/services/learning_list_service.dart';
 import 'package:focubili/services/subscription_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
@@ -109,6 +110,24 @@ class _NoVideoRequests implements BilibiliService, BilibiliVideoTagSource {
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _OneVideo extends _NoVideoRequests {
+  @override
+  Future<VideoPreview> lookupVideo(String input) async => VideoPreview(
+    bvid: input,
+    cid: 1,
+    title: '合成学习稿件',
+    ownerName: '合成课室',
+    parts: const [
+      VideoPart(
+        pageNumber: 1,
+        cid: 1,
+        title: 'P1',
+        duration: Duration(minutes: 2),
+      ),
+    ],
+  );
 }
 
 Widget _host(Widget child, GlobalKey key) => RepaintBoundary(
@@ -555,4 +574,47 @@ void main() {
       expect(service.unreadCount, 2);
     },
   );
+
+  testWidgets('an open learning picker rechecks rules before writing', (
+    tester,
+  ) async {
+    _viewport(tester);
+    final prefs = await SharedPreferences.getInstance();
+    final store = CountingSnapshots()..value = _discoveryFeedFixture(1);
+    final service = SubscriptionService(
+      snapshotStore: store,
+      contentService: Content(),
+      clock: () => DateTime(2026, 10, 10, 12),
+    );
+    addTearDown(service.dispose);
+    await service.initialize();
+    final learning = LearningListService();
+    await tester.pumpWidget(
+      _host(
+        SubscriptionUpdatesPage(
+          service: service,
+          videoService: _OneVideo(),
+          learningService: learning,
+        ),
+        GlobalKey(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // The feed's existing busy indicator animates under the modal.
+    await tester.tap(find.text('加入学习清单'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pump();
+    final save = find.text('确认加入');
+    expect(save, findsOneWidget);
+    await prefs.setString(ContentBlocklistService.storageKey, '坏的规则快照');
+    ContentBlocklistService.changes.value++;
+    await tester.tap(save);
+    await tester.pump();
+    expect(find.text('来源列表的规则或状态已变化，暂未加入学习清单。'), findsOneWidget);
+    expect(await learning.loadEntries(), isEmpty);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(find.text('重试读取黑名单'), findsOneWidget);
+  });
 }

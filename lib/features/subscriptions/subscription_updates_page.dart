@@ -121,6 +121,8 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
       context,
       video: video,
       service: _learning,
+      canConfirm: () =>
+          mounted && discoveryBlocklistActionsReady && !_isUpdateBlocked(item),
     );
     if (result != null) _message('已加入所选分 P。');
   });

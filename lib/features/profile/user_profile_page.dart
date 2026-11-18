@@ -642,6 +642,10 @@ class _UserProfilePageState extends State<UserProfilePage>
         context,
         video: video,
         service: _learningListService,
+        canConfirm: () =>
+            mounted &&
+            discoveryBlocklistActionsReady &&
+            !_isCreatorVideoBlocked(item),
       );
       if (result == null || !mounted) return;
       await _loadLearningListMembership();
