@@ -13,6 +13,7 @@ mixin _PlayerAbRepeatCoordinator
   String? _abRepeatDraftA;
   String? _abRepeatDraftB;
   Timer? _abRepeatTimer;
+  Timer? _abRepeatSeekAckTimer;
   Future<void>? _abRepeatSeek;
   final Set<Future<void>> _temporaryCaptureSeeks = {};
 
@@ -121,11 +122,17 @@ mixin _PlayerAbRepeatCoordinator
   @override
   void _showPlayerControls();
 
+  void _stopWaitingForAbRepeatPosition() {
+    _abRepeatAwaitingPosition = false;
+    _abRepeatSeekAckTimer?.cancel();
+    _abRepeatSeekAckTimer = null;
+  }
+
   void _clearAbRepeat({bool notify = false}) {
     _abRepeatEpoch++;
     _abRepeatTimer?.cancel();
     _abRepeatTimer = null;
-    _abRepeatAwaitingPosition = false;
+    _stopWaitingForAbRepeatPosition();
     _abRepeatEndExpected = false;
     _abRepeatSeekReachedEnd = false;
     _abRepeatCaptureRestoreTarget = null;
@@ -158,7 +165,7 @@ mixin _PlayerAbRepeatCoordinator
   @override
   Future<void> _suspendAbRepeatForSource() async {
     _abRepeatSourceChanging = true;
-    _abRepeatAwaitingPosition = false;
+    _stopWaitingForAbRepeatPosition();
     _abRepeatCaptureRestoreTarget = null;
     _abRepeatEpoch++;
     _abRepeatTimer?.cancel();
@@ -182,7 +189,7 @@ mixin _PlayerAbRepeatCoordinator
     _abRepeatCaptureSerial++;
     _abRepeatCaptureRestoreTarget = null;
     _abRepeatCaptureRestoreSource = null;
-    _abRepeatAwaitingPosition = false;
+    _stopWaitingForAbRepeatPosition();
     _abRepeatEpoch++;
     _abRepeatTimer?.cancel();
     final range = _abRepeatRange;
@@ -193,8 +200,12 @@ mixin _PlayerAbRepeatCoordinator
   void _abRepeatPlaybackIntent(bool playing, {bool backend = false}) {
     if (!playing && !backend) _abRepeatPauseRevision++;
     _abRepeatUserPaused = !playing;
-    if (!playing) _abRepeatEndExpected = false;
-    if (!playing) _abRepeatTimer?.cancel();
+    if (!playing) {
+      _abRepeatEndExpected = false;
+      _abRepeatTimer?.cancel();
+      _abRepeatSeekAckTimer?.cancel();
+      _abRepeatSeekAckTimer = null;
+    }
   }
 
   bool _validAbRepeat(int epoch, AbRepeatRange range) =>
@@ -263,9 +274,13 @@ mixin _PlayerAbRepeatCoordinator
     if (positionEvent &&
         _abRepeatAwaitingPosition &&
         snapshot.phase == PlaybackPhase.ready &&
-        (snapshot.position - range.a).inMilliseconds.abs() <=
-            ((range.b - range.a).inMilliseconds ~/ 4).clamp(1, 500)) {
-      _abRepeatAwaitingPosition = false;
+        !snapshot.isRestoringPosition &&
+        range.contains(snapshot.position) &&
+        // At high speeds the first fresh sample can already be well past A,
+        // and even ahead of the last sample before a timer-triggered seek.
+        (snapshot.position == range.a ||
+            snapshot.position != previous.position)) {
+      _stopWaitingForAbRepeatPosition();
     }
     if (_externalNavigationSuspended ||
         _abRepeatSourceChanging ||
@@ -275,7 +290,29 @@ mixin _PlayerAbRepeatCoordinator
         _abRepeatSeek != null) {
       return ended;
     }
-    if (_abRepeatAwaitingPosition) return ended;
+    if (_abRepeatAwaitingPosition) {
+      if (!_abRepeatUserPaused &&
+          (ended ||
+              (snapshot.phase == PlaybackPhase.ready && snapshot.isPlaying))) {
+        final epoch = _abRepeatEpoch;
+        // A backend may finish a seek without delivering a usable position.
+        // Do not hammer it with retries or leave an indefinitely stale loop.
+        _abRepeatSeekAckTimer ??= Timer(const Duration(seconds: 5), () {
+          _abRepeatSeekAckTimer = null;
+          final current = _playbackSnapshot;
+          if (_validAbRepeat(epoch, range) &&
+              _abRepeatAwaitingPosition &&
+              !_abRepeatUserPaused &&
+              (current.phase == PlaybackPhase.ended ||
+                  (current.phase == PlaybackPhase.ready &&
+                      current.isPlaying))) {
+            _clearAbRepeat();
+            _showTransientSnackBar('未能确认区间回跳，已关闭 A–B 循环');
+          }
+        });
+      }
+      return ended;
+    }
     if (snapshot.phase != PlaybackPhase.ready && !ended) return false;
     if (snapshot.isRestoringPosition) return ended;
     if (ended) {
@@ -367,6 +404,16 @@ mixin _PlayerAbRepeatCoordinator
     });
   }
 
+  /// 收起编辑器而不清除当前分 P 的标记或已启用的区间。
+  void _closeAbRepeatEditor() {
+    if (!_abRepeatEditorVisible) return;
+    setState(() {
+      _abRepeatEditorVisible = false;
+      _abRepeatEditorGeneration++;
+    });
+    _restartControlsAutoHideTimer();
+  }
+
   /// 标记条不创建路由或遮罩，关闭后草稿继续属于当前视频。
   Widget _buildAbRepeatEditor() {
     final editor = _abRepeatEditorGeneration;
@@ -393,12 +440,7 @@ mixin _PlayerAbRepeatCoordinator
         _abRepeatDraftB = b;
       },
       onClose: () {
-        if (isCurrent()) {
-          setState(() {
-            _abRepeatEditorVisible = false;
-            _abRepeatEditorGeneration++;
-          });
-        }
+        if (isCurrent()) _closeAbRepeatEditor();
       },
       onClear: () {
         if (!isCurrent()) return;
@@ -434,6 +476,11 @@ mixin _PlayerAbRepeatCoordinator
       _showTransientSnackBar('媒体时长已变化，请重新设置 A、B 点。');
       return;
     }
+    // A completed seek may still be waiting for a position event from the
+    // previous interval. Its acknowledgement flags do not belong to this one.
+    _stopWaitingForAbRepeatPosition();
+    _abRepeatEndExpected = false;
+    _abRepeatSeekReachedEnd = false;
     _interactivePromptTimer?.cancel();
     setState(() {
       _abRepeatRange = range;
@@ -456,6 +503,7 @@ mixin _PlayerAbRepeatCoordinator
   Future<void> _disposeAbRepeat() {
     _abRepeatEpoch++;
     _abRepeatTimer?.cancel();
+    _stopWaitingForAbRepeatPosition();
     _abRepeatRange = null;
     return _drainAbRepeatSeek();
   }

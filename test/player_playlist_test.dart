@@ -126,6 +126,45 @@ void main() {
       await unmountAb(tester);
     },
   );
+  testWidgets(
+    'manual previous supersedes a pending automatic next-video lookup',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final playback = AbPlayback();
+      final service = _PlaylistVideoService()..gate = Completer<VideoPreview>();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PlayerPage(
+            video: abVideo,
+            initialPartCid: 102,
+            playbackService: playback,
+            playbackQueue: PlaybackQueue(
+              title: '合集',
+              items: [
+                PlaybackQueueItem(bvid: abVideo.bvid, title: abVideo.title),
+                PlaybackQueueItem(bvid: nextVideo.bvid, title: nextVideo.title),
+              ],
+            ),
+            bilibiliService: service,
+            offlineVideoService: ReviewOfflineLibrary(),
+            playerOverlayService: AbOverlay(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(playback.currentCid, 102);
+      playback.at(120, phase: PlaybackPhase.ended, playing: false);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('previous-part-button')));
+      await tester.pumpAndSettle();
+      expect(playback.currentCid, 101, reason: '用户不用等旧下一集请求返回');
+      service.gate!.complete(nextVideo);
+      await tester.pumpAndSettle();
+      expect(playback.currentCid, 101, reason: '旧自动连播不能抢回当前分 P');
+      await unmountAb(tester);
+    },
+  );
+
   testWidgets('sleep expiry cancels pending next-video lookup', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final playback = AbPlayback();

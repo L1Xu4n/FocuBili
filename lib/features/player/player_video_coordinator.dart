@@ -20,6 +20,7 @@ mixin _PlayerVideoCoordinator
   /// 所有切视频、切分 P 与剧情跳转共用代次，新操作撤销仍在等待的旧操作。
   int _beginVideoNavigation() {
     _navigationStopRevision = _playbackStopRevision;
+    _cancelTemporaryLongPress();
     _cancelPlaylistAdvance();
     _clearAbRepeatForNavigation();
     final generation = ++_partSwitchGeneration;
@@ -348,7 +349,7 @@ mixin _PlayerVideoCoordinator
     // 初始化会推送空状态，必须先保存原视频位置、清晰度和倍速。
     final position = _playbackSnapshot.position;
     final quality = _currentQuality;
-    final speed = _playbackSpeed;
+    final speed = _normalPlaybackSpeed;
     try {
       final int? textureId = await service.initialize();
       if (!mounted) {

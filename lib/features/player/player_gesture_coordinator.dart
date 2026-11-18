@@ -25,8 +25,10 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
   bool _temporarySpeedActive = false;
   @override
   bool _horizontalScrubbing = false;
-  double _speedBeforeLongPress = 1;
-  int _temporarySpeedRequest = 0;
+  double? _requestedNormalSpeed;
+  int _playbackSpeedRequest = 0;
+  Future<void> _playbackSpeedCommands = Future.value();
+  double get _normalPlaybackSpeed => _requestedNormalSpeed ?? _playbackSpeed;
   double _horizontalScrubStartProgress = 0;
   double _horizontalScrubTargetProgress = 0;
   double _horizontalScrubStartX = 0;
@@ -126,7 +128,7 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
 
   /// 取消手势反馈计时器并使晚到的预览图请求失效。
   void _disposePlayerGestureCoordinator() {
-    _temporarySpeedRequest++;
+    _playbackSpeedRequest++;
     _seekFeedbackTimer?.cancel();
     _doubleTapFeedbackTimer?.cancel();
     _playbackActionTimer?.cancel();
@@ -209,39 +211,63 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
     _restartControlsAutoHideTimer();
   }
 
-  /// 长按正在播放的画面时记住原倍速，并临时切换为三倍速。
-  void _startTemporaryTripleSpeed(LongPressStartDetails details) {
-    if (!_playing || _temporarySpeedActive || _horizontalScrubbing) {
-      return;
-    }
-    _speedBeforeLongPress = _playbackSpeed;
+  /// 长按使用已设置的临时倍速，恢复过程中再次长按也不会把临时速度当成原速度。
+  void _startTemporarySpeed(LongPressStartDetails details) {
+    if (!_playing || _temporarySpeedActive || _horizontalScrubbing) return;
+    _requestedNormalSpeed ??= _playbackSpeed;
     _stopControlsAutoHideTimer();
     setState(() => _temporarySpeedActive = true);
     unawaited(
-      _setTemporaryPlaybackSpeed(_playbackPreferences.longPressPlaybackSpeed),
+      _queuePlaybackSpeed(
+        _playbackPreferences.longPressPlaybackSpeed,
+        temporary: true,
+      ),
     );
   }
 
-  /// 松开长按手势后恢复长按前的倍速，不改变当前播放进度。
-  void _stopTemporaryTripleSpeed(LongPressEndDetails details) {
-    if (!_temporarySpeedActive) {
-      return;
-    }
-    final double speedToRestore = _speedBeforeLongPress;
+  void _stopTemporarySpeed(LongPressEndDetails details) =>
+      _cancelTemporaryLongPress();
+
+  /// 松手、指针取消、暂停或切换分 P 时还原，不沿用临时速度。
+  void _cancelTemporaryLongPress() {
+    if (!_temporarySpeedActive) return;
     setState(() => _temporarySpeedActive = false);
-    unawaited(_setTemporaryPlaybackSpeed(speedToRestore));
+    unawaited(_queuePlaybackSpeed(_normalPlaybackSpeed, temporary: false));
     _restartControlsAutoHideTimer();
   }
 
-  /// 长按被系统取消时恢复原倍速，避免手势竞争后残留三倍速状态。
-  void _cancelTemporaryLongPress() {
-    if (!_temporarySpeedActive) {
-      return;
-    }
-    final double speedToRestore = _speedBeforeLongPress;
-    setState(() => _temporarySpeedActive = false);
-    unawaited(_setTemporaryPlaybackSpeed(speedToRestore));
-    _restartControlsAutoHideTimer();
+  @override
+  Future<void> _settleTemporaryPlaybackSpeed() {
+    _cancelTemporaryLongPress();
+    return _playbackSpeedCommands;
+  }
+
+  /// A bridge call may finish after release. Wait before applying the newest
+  /// request so the last applied backend value (not just the label) is correct.
+  Future<void> _queuePlaybackSpeed(double speed, {required bool temporary}) {
+    if (!temporary) _requestedNormalSpeed = speed;
+    final request = ++_playbackSpeedRequest;
+    return _playbackSpeedCommands = _playbackSpeedCommands.then((_) async {
+      if (!mounted || request != _playbackSpeedRequest) return;
+      try {
+        await _playbackService.setPlaybackSpeed(speed);
+        if (!mounted || request != _playbackSpeedRequest) return;
+        if (!temporary) _requestedNormalSpeed = null;
+        setState(() => _playbackSpeed = speed);
+        _syncDanmakuAnimation(_playbackSnapshot.copyWith(speed: speed));
+      } catch (error) {
+        if (!mounted || request != _playbackSpeedRequest) return;
+        if (temporary) {
+          _cancelTemporaryLongPress();
+        } else {
+          _requestedNormalSpeed = null;
+        }
+        final message = error is PlatformException
+            ? error.message ?? error.code
+            : error.toString();
+        _showPlaybackError('无法切换倍速：$message');
+      }
+    });
   }
 
   /// 开始横向拖动时记录当前位置，并按视频时长和画面宽度计算自适应快进速度。
@@ -389,30 +415,6 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
       _verticalAdjustmentMode = _VerticalAdjustmentMode.none;
       _scheduleSeekFeedbackClear();
       _restartControlsAutoHideTimer();
-    }
-  }
-
-  /// 向播放器发送临时倍速，失败时恢复提示状态并显示原因。
-  Future<void> _setTemporaryPlaybackSpeed(double speed) async {
-    final request = ++_temporarySpeedRequest;
-    try {
-      await _playbackService.setPlaybackSpeed(speed);
-      if (mounted && request == _temporarySpeedRequest) {
-        setState(() => _playbackSpeed = speed);
-        _syncDanmakuAnimation(_playbackSnapshot.copyWith(speed: speed));
-      }
-    } on PlatformException catch (error) {
-      if (!mounted || request != _temporarySpeedRequest) return;
-      if (mounted) {
-        setState(() => _temporarySpeedActive = false);
-      }
-      _showPlaybackError('无法临时切换倍速：${error.message ?? error.code}');
-    } catch (error) {
-      if (!mounted || request != _temporarySpeedRequest) return;
-      if (mounted) {
-        setState(() => _temporarySpeedActive = false);
-      }
-      _showPlaybackError('无法临时切换倍速：$error');
     }
   }
 

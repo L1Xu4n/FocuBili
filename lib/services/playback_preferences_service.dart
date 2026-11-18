@@ -142,9 +142,27 @@ class PlaybackPreferencesService {
   Future<void> saveSubtitlePriority(SubtitlePriority priority) =>
       _saveValue(subtitlePriorityKey, priority.name);
 
-  /// 保存应用音量；不改变其他应用或操作系统音量。
-  Future<void> saveAppVolume(double value) =>
-      _saveValue(appVolumeKey, _readUnitValue(value));
+  static const _lastAudibleAppVolumeKey =
+      'playback_preferences.last_audible_app_volume';
+
+  /// Older installations can have a persisted mute but no known audible level.
+  Future<double?> loadLastAudibleAppVolume() async {
+    final preferences = await SharedPreferences.getInstance();
+    final value = preferences.get(_lastAudibleAppVolumeKey);
+    return value is num && value.isFinite && value > 0
+        ? _readUnitValue(value)
+        : null;
+  }
+
+  /// 保存应用音量；单独记住解除静音的音量，不改变系统音量。
+  Future<void> saveAppVolume(double value, {double? lastAudibleVolume}) async {
+    final volume = _readUnitValue(value);
+    final audible = volume > 0 ? volume : lastAudibleVolume;
+    if (audible != null && audible.isFinite && audible > 0) {
+      await _saveValue(_lastAudibleAppVolumeKey, _readUnitValue(audible));
+    }
+    await _saveValue(appVolumeKey, volume);
+  }
 
   /// 统一检查新偏好写入并在失败时恢复存储缓存。
   Future<void> _saveValue(String key, Object value) async {

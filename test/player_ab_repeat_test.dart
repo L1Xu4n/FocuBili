@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/features/player/player_page.dart';
@@ -14,9 +16,14 @@ import 'package:focubili/services/listening_playback_service.dart';
 import 'package:focubili/services/native_playback_service.dart';
 import 'package:focubili/services/player_overlay_service.dart';
 import 'package:focubili/services/player_route_session.dart';
+import 'package:focubili/platform/app_platform.dart';
+import 'package:focubili/core/theme/app_theme.dart';
 import 'refactor_r3_feedback_test.dart' show FeedbackPlayback;
 import 'review_pr24_regression_test.dart' show ReviewOfflineLibrary;
 import 'classroom_access_test.dart' show course;
+
+import 'subscription_compact_ui_test.dart'
+    show loadBetaReviewFonts, captureSubscriptionUi;
 
 const abVideo = VideoPreview(
   bvid: 'BV1GJ411x7h7',
@@ -256,6 +263,117 @@ Future<void> unmountAb(WidgetTester tester) async {
 
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
+  testWidgets('replacing a loop does not wait for the previous A snapshot', (
+    tester,
+  ) async {
+    final p = AbPlayback();
+    await mountAb(tester, p);
+    await configureAb(tester);
+    p.emitOnSeek = false;
+    p.at(30);
+    await tester.pump();
+    expect(p.seeks, [const Duration(seconds: 10)]);
+
+    // The old A seek was issued but its position event hasn't arrived. The
+    // new range contains the current position, so applying it won't seek.
+    await configureAb(tester, a: '00:25', b: '00:40');
+    p.emitOnSeek = true;
+    p.at(39);
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    expect(p.seeks, [const Duration(seconds: 10), const Duration(seconds: 25)]);
+    await unmountAb(tester);
+  });
+
+  testWidgets(
+    'narrow large-text AB toolbar stays below the video and closes on Esc',
+    (tester) async {
+      await loadBetaReviewFonts(tester);
+      tester.view.physicalSize = const Size(320, 560);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      const capture = String.fromEnvironment('BETA3_CAPTURE_DIR');
+      final boundary = GlobalKey();
+      final theme = AppTheme.dark();
+      final p = AbPlayback();
+      await tester.pumpWidget(
+        RepaintBoundary(
+          key: boundary,
+          child: MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: capture.isEmpty
+                ? theme
+                : theme.copyWith(
+                    textTheme: theme.textTheme.apply(fontFamily: 'BetaReview'),
+                  ),
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: const TextScaler.linear(1.8)),
+              child: child!,
+            ),
+            home: PlayerPage(
+              video: abVideo,
+              appPlatform: AppPlatform.linux,
+              playbackService: p,
+              offlineVideoService: ReviewOfflineLibrary(),
+              playerOverlayService: AbOverlay(),
+              initialPosition: const Duration(seconds: 20),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await menu(tester, 'ab-repeat-menu-item');
+      await captureSubscriptionUi(tester, boundary, 'ab-narrow-large-text');
+      final picture = find.byKey(const Key('player-surface'));
+      final editor = find.byType(PlayerAbRepeatSheet);
+      expect(
+        tester.getRect(editor).top,
+        greaterThanOrEqualTo(tester.getRect(picture).bottom),
+      );
+      expect(
+        find.byKey(const Key('player-progress-slider')).hitTestable(),
+        findsOneWidget,
+      );
+      final a = find.byKey(const Key('ab-repeat-set-A'));
+      final b = find.byKey(const Key('ab-repeat-set-B'));
+      final close = find.byTooltip('收起 A–B 设置');
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: tester.getCenter(a));
+      await mouse.down(tester.getCenter(a));
+      await mouse.up();
+      await tester.pumpAndSettle();
+
+      // Leave with an unfinished draft, move the playback position, then set B.
+      expect(close.hitTestable(), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(editor, findsNothing);
+      p.at(43);
+      await tester.pump();
+      await menu(tester, 'ab-repeat-menu-item');
+      expect(find.text('A 00:20'), findsOneWidget);
+      final slider = tester.getRect(
+        find.byKey(const Key('player-progress-slider')),
+      );
+      await tester.tapAt(slider.center, kind: PointerDeviceKind.mouse);
+      await tester.pumpAndSettle();
+      expect(p.current.position, greaterThan(const Duration(seconds: 43)));
+      final markedB = formatAbRepeatTime(p.current.position);
+      await tester.tap(b);
+      await tester.pump();
+      expect(find.text('B $markedB'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('ab-repeat-apply')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('ab-repeat-marker-A')), findsOneWidget);
+      await mouse.removePointer();
+      expect(tester.takeException(), isNull);
+      await unmountAb(tester);
+    },
+  );
+
   testWidgets('real player validates fields and marks current A/B points', (
     tester,
   ) async {

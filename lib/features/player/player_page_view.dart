@@ -6,7 +6,33 @@ extension _PlayerPageView on _PlayerPageState {
   Widget _buildCollapsingPlayerBody({
     required Widget player,
     required double playerHeight,
+    Widget? abEditor,
   }) {
+    if (abEditor != null) {
+      // Keep the seek bar visible while the editor/details scroll. When a
+      // keyboard leaves less than one player height, give the fields the space.
+      return LayoutBuilder(
+        builder: (context, constraints) => Column(
+          children: [
+            if (constraints.maxHeight > playerHeight)
+              SizedBox(
+                width: double.infinity,
+                height: playerHeight,
+                child: player,
+              ),
+            Expanded(
+              child: SingleChildScrollView(
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                child: Column(
+                  children: [abEditor, _buildNonFullscreenDetails()],
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     return CustomScrollView(
       key: const Key('collapsing-player-scroll'),
       slivers: <Widget>[
@@ -102,12 +128,10 @@ extension _PlayerPageView on _PlayerPageState {
             key: const Key('player-surface'),
             behavior: HitTestBehavior.opaque,
             dragStartBehavior: DragStartBehavior.down,
-            // 长按开始函数仅临时切换到三倍速，横向快进由独立拖动手势负责。
-            onLongPressStart: gesturesEnabled
-                ? _startTemporaryTripleSpeed
-                : null,
+            // 长按开始函数应用预设临时倍速，横向快进由独立拖动手势负责。
+            onLongPressStart: gesturesEnabled ? _startTemporarySpeed : null,
             // 长按结束函数恢复原倍速，不改变播放位置。
-            onLongPressEnd: gesturesEnabled ? _stopTemporaryTripleSpeed : null,
+            onLongPressEnd: gesturesEnabled ? _stopTemporarySpeed : null,
             // 长按取消函数恢复界面状态且不提交未确认的进度。
             onLongPressCancel: gesturesEnabled
                 ? _cancelTemporaryLongPress
@@ -205,6 +229,17 @@ extension _PlayerPageView on _PlayerPageState {
   Widget _buildPlayerPage(BuildContext context) {
     final controlSize = PlayerControlSize(_playbackPreferences.controlScale);
     final bool inPictureInPicture = _playbackSnapshot.isInPictureInPicture;
+    final bool fullscreenLayout = _fullscreen || inPictureInPicture;
+    final Size screenSize = MediaQuery.sizeOf(context);
+    final bool workspaceLayout =
+        !fullscreenLayout && AdaptiveLayout.usesWorkspace(screenSize);
+    // Small portrait players may have no room between the two control bars
+    // at large text sizes. Editing in the page leaves the video and seek bar free.
+    final bool editAbBelowVideo =
+        !fullscreenLayout &&
+        screenSize.width < AdaptiveLayout.tabletBreakpoint &&
+        !_notesOpen &&
+        !_partSelectorExpanded;
     // 错误或选集展开时关闭画面手势，避免画面层干扰重试与选集按钮点击。
     final bool enableSurfaceGestures =
         _playbackSnapshot.phase != PlaybackPhase.error &&
@@ -289,7 +324,10 @@ extension _PlayerPageView on _PlayerPageState {
                   feedback: Stack(
                     children: [
                       _buildPlayerFeedback(),
-                      if (_abRepeatEditorVisible)
+                      if (_abRepeatEditorVisible &&
+                          !editAbBelowVideo &&
+                          !inPictureInPicture &&
+                          !_controlsLocked)
                         Align(
                           alignment: Alignment.topCenter,
                           child: SingleChildScrollView(
@@ -601,15 +639,11 @@ extension _PlayerPageView on _PlayerPageState {
       },
     );
 
-    final bool fullscreenLayout = _fullscreen || inPictureInPicture;
     final double aspectRatio = _playbackSnapshot.videoAspectRatio > 0
         ? _playbackSnapshot.videoAspectRatio
         : 16 / 9;
-    final Size screenSize = MediaQuery.sizeOf(context);
     final bool landscapeLayout = screenSize.width > screenSize.height;
     _schedulePlayerSystemUiSync(landscapeLayout: landscapeLayout);
-    final bool workspaceLayout =
-        !fullscreenLayout && AdaptiveLayout.usesWorkspace(screenSize);
     final extraControlRow = screenSize.width < 6 * controlSize.button
         ? controlSize.button
         : 0.0;
@@ -648,6 +682,15 @@ extension _PlayerPageView on _PlayerPageState {
       pageBody = _buildCollapsingPlayerBody(
         player: player,
         playerHeight: playerHeight,
+        abEditor: _abRepeatEditorVisible && editAbBelowVideo
+            ? Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 600),
+                  child: _buildAbRepeatEditor(),
+                ),
+              )
+            : null,
       );
     }
     final Scaffold pageScaffold = Scaffold(

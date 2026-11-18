@@ -102,6 +102,8 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     }
   }
 
+  Future<void> _settleTemporaryPlaybackSpeed();
+
   /// Opens the chosen source through the existing backend and retains player controls.
   Future<void> _openPlaybackSource(
     VideoPreview video, {
@@ -111,7 +113,10 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     bool? useLocal,
   }) async {
     final generation = ++_sourceGeneration;
-    await _suspendAbRepeatForSource();
+    await Future.wait([
+      _suspendAbRepeatForSource(),
+      _settleTemporaryPlaybackSpeed(),
+    ]);
     if (!mounted ||
         generation != _sourceGeneration ||
         _externalNavigationSuspended) {

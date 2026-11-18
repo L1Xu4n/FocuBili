@@ -37,7 +37,10 @@ mixin _PlayerControlsCoordinator
   /// 执行原生播放或暂停命令，并把平台异常转换为页面可读的错误。
   @override
   Future<void> _setPlaybackActive(bool shouldPlay) async {
-    if (!shouldPlay) _stopPendingPlaybackNavigation();
+    if (!shouldPlay) {
+      _cancelTemporaryLongPress();
+      _stopPendingPlaybackNavigation();
+    }
     _abRepeatPlaybackIntent(shouldPlay);
     _finishFocusSeekTransition(syncCurrentSnapshot: false);
     try {
@@ -207,19 +210,10 @@ mixin _PlayerControlsCoordinator
   }
 
   /// 请求原生播放器切换倍速，并让控制层继续显示以便用户确认选择。
-  Future<void> _changePlaybackSpeed(double speed) async {
+  Future<void> _changePlaybackSpeed(double speed) {
+    if (_temporarySpeedActive) setState(() => _temporarySpeedActive = false);
     _showPlayerControls();
-    try {
-      await _playbackService.setPlaybackSpeed(speed);
-      if (mounted) {
-        setState(() => _playbackSpeed = speed);
-        _syncDanmakuAnimation(_playbackSnapshot.copyWith(speed: speed));
-      }
-    } on PlatformException catch (error) {
-      _showPlaybackError('无法切换倍速：${error.message ?? error.code}');
-    } catch (error) {
-      _showPlaybackError('无法切换倍速：$error');
-    }
+    return _queuePlaybackSpeed(speed, temporary: false);
   }
 
   /// 请求原生播放器保留当前进度并切换到所选清晰度。
@@ -266,7 +260,7 @@ mixin _PlayerControlsCoordinator
     required bool useLocal,
   }) async {
     final position = _playbackSnapshot.position;
-    final speed = _playbackSpeed;
+    final speed = _normalPlaybackSpeed;
     final wasPlaying = _playing;
     _changingPlaybackSource = true;
     _openingResumePlan = PlaybackResumePlan.direct(
@@ -429,10 +423,13 @@ mixin _PlayerControlsCoordinator
 
   /// 处理桌面播放器快捷键；文本输入框获得焦点时完全交还键盘事件。
   KeyEventResult _handlePlayerKeyEvent(FocusNode _, KeyEvent event) {
-    if (event is! KeyDownEvent || _isTextEditingFocused()) {
-      return KeyEventResult.ignored;
-    }
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
     final LogicalKeyboardKey key = event.logicalKey;
+    if (key == LogicalKeyboardKey.escape && _abRepeatEditorVisible) {
+      _closeAbRepeatEditor();
+      return KeyEventResult.handled;
+    }
+    if (_isTextEditingFocused()) return KeyEventResult.ignored;
     if (key == LogicalKeyboardKey.space) {
       _togglePlayback();
       return KeyEventResult.handled;
@@ -495,6 +492,7 @@ mixin _PlayerControlsCoordinator
     if (!_fullscreen) {
       return;
     }
+    _cancelTemporaryLongPress();
     _stopControlsAutoHideTimer();
     setState(() {
       _controlsLocked = !_controlsLocked;
@@ -572,6 +570,8 @@ mixin _PlayerControlsCoordinator
   void _handleBackPressed() {
     if (_controlsLocked) {
       _toggleControlsLock();
+    } else if (_abRepeatEditorVisible) {
+      _closeAbRepeatEditor();
     } else if (_notesOpen) {
       _closeVideoNotes();
     } else if (_fullscreen) {
@@ -590,6 +590,8 @@ mixin _PlayerControlsCoordinator
     }
     if (_controlsLocked) {
       _toggleControlsLock();
+    } else if (_abRepeatEditorVisible) {
+      _closeAbRepeatEditor();
     } else if (_notesOpen) {
       _closeVideoNotes();
     } else if (_fullscreen) {
@@ -716,12 +718,26 @@ mixin _PlayerControlsCoordinator
     }
   }
 
-  /// 请求 Android 原生画中画；失败时用三秒提示说明系统或播放状态限制。
+  // Legacy mute records do not know their previous gain. Come back quietly.
+  static const _unknownUnmuteAppVolume = 0.1;
+  double? _lastAudibleAppVolume;
+
   /// macOS 使用应用增益，外接显示器不支持系统音量时也可调整。
   Future<void> _showAppVolume() async {
     final levels = await _playbackService.getSystemPlaybackLevels();
     if (!mounted) return;
     var value = levels.volume;
+    if (value > 0) {
+      _lastAudibleAppVolume = value;
+    } else if (_lastAudibleAppVolume == null) {
+      try {
+        _lastAudibleAppVolume = await _playbackPreferencesService
+            .loadLastAudibleAppVolume();
+      } catch (_) {
+        // A bad preference read must not block the manual volume controls.
+      }
+      if (!mounted) return;
+    }
     await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
@@ -736,7 +752,9 @@ mixin _PlayerControlsCoordinator
                   icon: Icon(value == 0 ? Icons.volume_off : Icons.volume_up),
                   // 静音也持久化，重开播放器不会突然发声。
                   onPressed: () async {
-                    final next = value == 0 ? .5 : 0.0;
+                    final next = value == 0
+                        ? _lastAudibleAppVolume ?? _unknownUnmuteAppVolume
+                        : 0.0;
                     if (await _applyAppVolume(next, save: true) &&
                         context.mounted) {
                       refresh(() => value = next);
@@ -768,7 +786,13 @@ mixin _PlayerControlsCoordinator
   Future<bool> _applyAppVolume(double value, {bool save = false}) async {
     try {
       await _playbackService.setMediaVolume(value);
-      if (save) await _playbackPreferencesService.saveAppVolume(value);
+      if (value > 0) _lastAudibleAppVolume = value;
+      if (save) {
+        await _playbackPreferencesService.saveAppVolume(
+          value,
+          lastAudibleVolume: _lastAudibleAppVolume,
+        );
+      }
       if (mounted) setState(() => _volume = value);
       return true;
     } catch (_) {

@@ -497,6 +497,7 @@ class _PlayerPageState extends State<PlayerPage>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _handleAbRepeatLifecycle(state);
+    if (state != AppLifecycleState.resumed) _cancelTemporaryLongPress();
     if (state == AppLifecycleState.resumed) {
       unawaited(_loadCurrentVideoNotes());
     }
