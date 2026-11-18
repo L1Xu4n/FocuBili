@@ -393,10 +393,18 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
         ],
       ),
     );
-    if (confirmed != true) {
+    if (confirmed != true || !mounted) {
       return;
     }
-    await _noteService.deleteNote(note.id);
+    final messenger = ScaffoldMessenger.of(context)..hideCurrentSnackBar();
+    try {
+      await _noteService.deleteNote(note.id);
+    } catch (_) {
+      if (mounted) {
+        messenger.showSnackBar(const SnackBar(content: Text('删除笔记失败，请稍后重试。')));
+      }
+      return;
+    }
     await _loadNotes();
   }
 
