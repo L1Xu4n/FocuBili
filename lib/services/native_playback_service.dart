@@ -1,5 +1,9 @@
 import 'dart:async';
 
+import '../platform/app_platform.dart';
+import 'bilibili_http_user_agent.dart';
+import 'http_user_agent_preferences.dart';
+import 'course_cache_validity.dart';
 import 'bilibili_course_link.dart';
 
 import 'app_behavior_preferences_service.dart';
@@ -317,12 +321,22 @@ class NativePlaybackService
   /// 注册 Android 到 Flutter 的状态回调，让此页面能接收原生播放状态。
   NativePlaybackService({
     AppBehaviorPreferencesService? behaviorPreferences,
+    this.courseCacheMid,
+    this.courseCacheUntil,
+    this.courseCacheCheckedAt,
+    this.courseCacheExpiryKind,
     ProblemDiagnosticsService? diagnosticsService,
-  }) : _diagnosticsService = diagnosticsService ?? ProblemDiagnosticsService(),
+    AppPlatform? appPlatform,
+  }) : _appPlatform = appPlatform ?? AppPlatformDetector.current,
+       _diagnosticsService = diagnosticsService ?? ProblemDiagnosticsService(),
        _behaviorPreferences =
            behaviorPreferences ?? AppBehaviorPreferencesService() {
     _claimPlatformChannel();
   }
+
+  final int? courseCacheMid;
+  final DateTime? courseCacheUntil, courseCacheCheckedAt;
+  final CourseCacheExpiryKind? courseCacheExpiryKind;
 
   static const MethodChannel _channel = MethodChannel(
     'com.focubili.app/playback',
@@ -336,7 +350,9 @@ class NativePlaybackService
   final StreamController<PlaybackSnapshot> _stateController =
       StreamController<PlaybackSnapshot>.broadcast();
   bool _disposed = false;
+  bool _ordinaryApiUserAgentAllowed = false;
   final AppBehaviorPreferencesService _behaviorPreferences;
+  final AppPlatform _appPlatform;
   final ProblemDiagnosticsService _diagnosticsService;
 
   @override
@@ -423,6 +439,16 @@ class NativePlaybackService
     }
     final preferences = await const PlaybackPreferencesService()
         .loadRoutePreferences();
+    final confirmedOrdinary =
+        _appPlatform == AppPlatform.android &&
+        BilibiliHttpUserAgent.isKnownOrdinaryUpload(video) &&
+        video.parts.any((part) => part.cid == targetPart.cid);
+    final custom =
+        confirmedOrdinary &&
+            BilibiliHttpUserAgent.allowsPlaybackQuality(quality)
+        ? await const HttpUserAgentPreferences().forRequest()
+        : null;
+    _ordinaryApiUserAgentAllowed = confirmedOrdinary;
     await _invokeVoid('open', <String, Object?>{
       'linePreference': preferences.linePreference.name,
       'preferNonPcdn': preferences.preferNonPcdn,
@@ -437,6 +463,8 @@ class NativePlaybackService
       'ownerName': video.ownerName,
       'initialPositionMs': initialPosition?.inMilliseconds,
       'wbiEnabled': await _behaviorPreferences.loadWbiSigningEnabled(),
+      if (confirmedOrdinary) 'ordinaryApiUserAgentAllowed': true,
+      'ordinaryApiUserAgent': ?custom,
     });
   }
 
@@ -499,13 +527,35 @@ class NativePlaybackService
     }
     final target = part ?? video?.initialPart;
     if (video != null &&
-        (!_bvidPattern.hasMatch(video.bvid.trim()) ||
+        ((video.isCourse
+                ? (courseCacheMid ?? 0) <= 0 ||
+                      courseCacheExpiryKind?.usableAt(
+                            DateTime.now(),
+                            courseCacheCheckedAt,
+                            courseCacheUntil,
+                          ) !=
+                          true ||
+                      !BilibiliCourseLink.isStorageKey(video.bvid) ||
+                      video.bvid != 'cheese:ss${video.courseSeasonId}' ||
+                      (target?.courseEpisodeId ?? 0) <= 0 ||
+                      (target?.courseAid ?? 0) <= 0
+                : !_bvidPattern.hasMatch(video.bvid.trim())) ||
             target == null ||
             target.cid <= 0)) {
       throw ArgumentError('无效的本地视频身份。');
     }
+    _ordinaryApiUserAgentAllowed = false;
     await _invokeVoid('openLocal', <String, Object?>{
       'filePath': normalizedPath,
+      if (video?.isCourse == true) ...{
+        'courseCacheMid': courseCacheMid,
+        'courseCacheCheckedAt': courseCacheCheckedAt!.millisecondsSinceEpoch,
+        'courseCacheExpiryKind': courseCacheExpiryKind!.name,
+        if (courseCacheUntil != null)
+          'courseCacheUntil': courseCacheUntil!.millisecondsSinceEpoch,
+        'courseEpisodeId': target!.courseEpisodeId,
+        'courseAid': target.courseAid,
+      },
       if (audioFilePath != null) 'audioFilePath': audioFilePath.trim(),
       'title': title,
       'initialPositionMs': initialPosition?.inMilliseconds,
@@ -558,11 +608,18 @@ class NativePlaybackService
     }
     final preferences = await const PlaybackPreferencesService()
         .loadRoutePreferences();
+    final custom =
+        _ordinaryApiUserAgentAllowed &&
+            _appPlatform == AppPlatform.android &&
+            BilibiliHttpUserAgent.allowsPlaybackQuality(quality)
+        ? await const HttpUserAgentPreferences().forRequest()
+        : null;
     await _invokeVoid('selectQuality', <String, Object?>{
       'linePreference': preferences.linePreference.name,
       'preferNonPcdn': preferences.preferNonPcdn,
       'quality': quality,
       'wbiEnabled': await _behaviorPreferences.loadWbiSigningEnabled(),
+      'ordinaryApiUserAgent': ?custom,
     });
   }
 

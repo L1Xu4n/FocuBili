@@ -272,6 +272,7 @@ class VideoPreview {
     this.collection,
     this.tags = const <String>[],
     this.fromOfflineCache = false,
+    this.isKnownUnrestrictedUpload = false,
     this.courseSeasonId,
     this.requestedCourseEpisodeId,
   });
@@ -300,6 +301,10 @@ class VideoPreview {
   final Duration duration;
   final bool fromOfflineCache;
 
+  /// Only populated from current public upload rights, not from local caches.
+  /// Controls the optional API header, never whether playback itself is allowed.
+  final bool isKnownUnrestrictedUpload;
+
   /// 视频封面地址，仅用于低流量缩略图展示；为空时页面显示本地占位图。
   final String thumbnailUrl;
   final List<VideoPart> parts;
@@ -322,6 +327,7 @@ class VideoPreview {
       collection: collection,
       tags: List<String>.unmodifiable(values),
       fromOfflineCache: fromOfflineCache,
+      isKnownUnrestrictedUpload: isKnownUnrestrictedUpload,
       courseSeasonId: courseSeasonId,
       requestedCourseEpisodeId: requestedCourseEpisodeId,
       duration: duration,

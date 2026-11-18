@@ -85,13 +85,14 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     VideoPreview video,
     VideoPart part, {
     bool? useLocal,
-  }) =>
-      useLocal ??
-      ('${video.bvid}:${part.cid}' == _sourceChoicePart
-          ? _sourceChoiceLocal
-          : null) ??
-      (video.fromOfflineCache ||
-          (widget.forceOffline && video.bvid == widget.video.bvid));
+  }) => widget.forceOffline && widget.video.isCourse
+      ? true
+      : useLocal ??
+            ('${video.bvid}:${part.cid}' == _sourceChoicePart
+                ? _sourceChoiceLocal
+                : null) ??
+            (video.fromOfflineCache ||
+                (widget.forceOffline && video.bvid == widget.video.bvid));
 
   /// Validates offline-only transitions before page identity or progress ownership changes.
   Future<void> _checkPlaybackPart(VideoPreview video, VideoPart part) async {
@@ -141,6 +142,10 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
       _sourceChoicePart = identity;
       if (useLocal != null) _sourceChoiceLocal = useLocal;
       _playingOffline = local != null;
+      if (widget.forceOffline && widget.video.isCourse) {
+        _availableQualities = const [];
+      }
+
       _offlineQuality = local?.qualityId;
       if (local != null) {
         if (service is! LocalFilePlaybackService) {
