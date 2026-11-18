@@ -140,11 +140,9 @@ class _BlockFeedbackChannel {
                   try {
                     await undo.apply();
                   } catch (_) {
-                    if (notice.isCurrent) {
-                      ContentBlockActions._showError(
-                        notice.context,
-                        '撤销屏蔽失败，请重试。',
-                      );
+                    final context = notice.context;
+                    if (context.mounted && notice.isCurrent) {
+                      ContentBlockActions._showError(context, '撤销屏蔽失败，请重试。');
                     }
                   }
                 },

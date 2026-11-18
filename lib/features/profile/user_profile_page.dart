@@ -17,6 +17,7 @@ import '../../services/bilibili_interaction_service.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/learning_list_service.dart';
 import '../../services/subscription_service.dart';
+import '../common/discovery_blocklist.dart';
 import '../learning/learning_add_sheet.dart';
 import '../subscriptions/subscription_updates_page.dart';
 import '../../services/watch_history_service.dart';
@@ -62,7 +63,9 @@ enum _CreatorTab { videos, articles, collections }
 
 /// 管理用户主页资料读取、标签切换、分页以及内容导航。
 class _UserProfilePageState extends State<UserProfilePage>
-    with SingleTickerProviderStateMixin {
+    with
+        SingleTickerProviderStateMixin,
+        DiscoveryBlocklistState<UserProfilePage> {
   static const int _maximumPartCountLookupConcurrency = 2;
   late final BilibiliPublicContentService _publicContentService;
   late final BilibiliService _videoService;
@@ -522,11 +525,27 @@ class _UserProfilePageState extends State<UserProfilePage>
     });
   }
 
+  bool _isCreatorVideoBlocked(CreatorVideo item) =>
+      discoveryBlocklist.isNotEmpty &&
+      blocksCreatorPost(
+        discoveryBlocklist,
+        item,
+        profileMid: widget.mid,
+        profileName: _profile?.name ?? widget.initialName,
+      );
+
+  List<CreatorVideo> _visibleCreatorVideos(List<CreatorVideo> loaded) =>
+      !discoveryBlocklist.isNotEmpty
+      ? loaded
+      : loaded.where((item) => !_isCreatorVideoBlocked(item)).toList();
+
   /// 判断 BV 号是否仍属于当前投稿结果，防止搜索或切页后更新旧列表。
   bool _isVideoDisplayed(String bvid) {
     return _selectedTab == _CreatorTab.videos &&
+        discoveryBlocklistActionsReady &&
         _items.whereType<CreatorVideo>().any(
-          (CreatorVideo item) => item.bvid == bvid,
+          (CreatorVideo item) =>
+              item.bvid == bvid && !_isCreatorVideoBlocked(item),
         );
   }
 
@@ -568,13 +587,18 @@ class _UserProfilePageState extends State<UserProfilePage>
 
   /// 查询投稿的完整详情并进入播放器。
   Future<void> _openVideo(CreatorVideo item) async {
-    if (_openingBvid != null || _addingBvid != null) {
+    if (_openingBvid != null ||
+        _addingBvid != null ||
+        !discoveryBlocklistActionsReady ||
+        _isCreatorVideoBlocked(item)) {
       return;
     }
     setState(() => _openingBvid = item.bvid);
     try {
       final VideoPreview video = await _videoService.lookupVideo(item.bvid);
-      if (!mounted) {
+      if (!mounted ||
+          !discoveryBlocklistActionsReady ||
+          _isCreatorVideoBlocked(item)) {
         return;
       }
       await Navigator.of(context).pushNamed(AppRoutes.player, arguments: video);
@@ -593,16 +617,29 @@ class _UserProfilePageState extends State<UserProfilePage>
 
   /// Opens explicit P selection even when another P of the BV already exists.
   Future<void> _toggleVideoLearningList(CreatorVideo item) async {
-    if (_openingBvid != null || _addingBvid != null) return;
+    if (_openingBvid != null ||
+        _addingBvid != null ||
+        !discoveryBlocklistActionsReady ||
+        _isCreatorVideoBlocked(item)) {
+      return;
+    }
     setState(() => _addingBvid = item.bvid);
     try {
       final video = await _videoService.lookupVideo(item.bvid);
-      if (!mounted) return;
+      if (!mounted ||
+          !discoveryBlocklistActionsReady ||
+          _isCreatorVideoBlocked(item)) {
+        return;
+      }
       setState(() => _addingBvid = null);
       final result = await LearningAddSheet.show(
         context,
         video: video,
         service: _learningListService,
+        canConfirm: () =>
+            mounted &&
+            discoveryBlocklistActionsReady &&
+            !_isCreatorVideoBlocked(item),
       );
       if (result == null || !mounted) return;
       await _loadLearningListMembership();
@@ -1123,7 +1160,9 @@ class _UserProfilePageState extends State<UserProfilePage>
           child: InkWell(
             key: Key('creator-video-${item.bvid}'),
             // 投稿行点击函数查询完整详情后进入播放器。
-            onTap: opening ? null : () => unawaited(_openVideo(item)),
+            onTap: opening || !discoveryBlocklistActionsReady
+                ? null
+                : () => unawaited(_openVideo(item)),
             child: IntrinsicHeight(
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1276,7 +1315,10 @@ class _UserProfilePageState extends State<UserProfilePage>
                                 key: Key('add-creator-video-${item.bvid}'),
                                 tooltip: added ? '选择更多分 P' : '加入学习清单',
                                 // 学习清单图标函数按当前 BV 状态执行加入或确认取消。
-                                onPressed: opening || adding
+                                onPressed:
+                                    opening ||
+                                        adding ||
+                                        !discoveryBlocklistActionsReady
                                     ? null
                                     : () => unawaited(
                                         _toggleVideoLearningList(item),
@@ -1429,6 +1471,11 @@ class _UserProfilePageState extends State<UserProfilePage>
 
   /// 创建当前标签的加载、错误、空状态或内容列表。
   Widget _buildContent() {
+    if (_selectedTab == _CreatorTab.videos &&
+        !discoveryBlocklistActionsReady &&
+        (!discoveryBlocklistReady || _items.isEmpty)) {
+      return ListView(children: [buildDiscoveryBlocklistStatus()]);
+    }
     if (_loadingContent && _items.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -1479,18 +1526,34 @@ class _UserProfilePageState extends State<UserProfilePage>
       );
     }
     if (_selectedTab == _CreatorTab.videos) {
+      final videos = _visibleCreatorVideos(_items.cast<CreatorVideo>());
+      final hidden = _items.length - videos.length;
       return RefreshIndicator(
         // 投稿列表下拉刷新函数重新读取当前筛选条件的第一页。
         onRefresh: _loadFirstContentPage,
         child: AdaptiveTwoColumnList(
           key: const Key('creator-video-list'),
+          physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-          itemCount: _items.length,
+          itemCount: videos.length,
+          header: hidden > 0 || !discoveryBlocklistActionsReady
+              ? Column(
+                  children: [
+                    if (!discoveryBlocklistActionsReady)
+                      buildDiscoveryBlocklistStatus(),
+                    if (hidden > 0)
+                      DiscoveryBlocklistNotice(
+                        hiddenCount: hidden,
+                        onLoadNextPage: !_loadingMore && _hasMore
+                            ? () => unawaited(_loadMore())
+                            : null,
+                      ),
+                  ],
+                )
+              : null,
           footer: _buildLoadingFooter(),
           mainAxisSpacing: 12,
-          itemBuilder: (BuildContext context, int index) {
-            return _buildVideoCard(_items[index] as CreatorVideo);
-          },
+          itemBuilder: (context, index) => _buildVideoCard(videos[index]),
         ),
       );
     }

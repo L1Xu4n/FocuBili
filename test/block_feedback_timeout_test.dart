@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:focubili/features/player/player_page.dart';
 import 'package:focubili/features/search/search_page.dart';
 import 'package:focubili/models/video_preview.dart';
+import 'package:focubili/models/content_blocklist.dart';
 import 'package:focubili/services/content_blocklist_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
@@ -246,5 +247,16 @@ void main() {
     expect((await service.load()).creators, isEmpty);
     expect((await service.load()).videos, hasLength(1));
     actions[2]!.discard();
+  });
+
+  test('旧撤销不能删除 #123 管理页面另加回的 UID 规则', () async {
+    const service = ContentBlocklistService();
+    final original = await service.blockCreatorWithUndo(42, '已屏蔽的 UP 主');
+    const oldRule = ContentBlockRule(ContentBlockKind.creatorUid, '42');
+    const newRule = ContentBlockRule(ContentBlockKind.creatorUid, '43');
+    await service.saveRule(newRule, previous: oldRule);
+    await service.saveRule(oldRule);
+    await original!.apply();
+    expect((await service.load()).creators.keys, unorderedEquals([42, 43]));
   });
 }

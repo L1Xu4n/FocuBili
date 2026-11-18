@@ -86,14 +86,46 @@ class ContentBlocklistService {
         creators[mid] = entry.value as String;
       }
     }
+    final rules = <ContentBlockKind, List<String>>{};
+    if (data.containsKey('rules')) {
+      final rawRules = data['rules'];
+      if (rawRules is! Map) throw const FormatException('Invalid block rules');
+      for (final entry in rawRules.entries) {
+        final kind = ContentBlockKind.values.asNameMap()[entry.key];
+        final rawValues = entry.value;
+        if (kind == null ||
+            kind == ContentBlockKind.creatorUid ||
+            rawValues is! List) {
+          throw const FormatException('Invalid block rule kind');
+        }
+        final values = <String>[];
+        final seen = <String>{};
+        for (final rawValue in rawValues) {
+          if (rawValue is! String) {
+            throw const FormatException('Invalid block rule value');
+          }
+          final value = ContentBlockRule(kind, rawValue).validated().value;
+          if (seen.add(ContentBlockRule.normalizeText(value))) {
+            values.add(value);
+          }
+        }
+        if (values.isNotEmpty) rules[kind] = List.unmodifiable(values);
+      }
+    }
     return ContentBlocklist(
       videos: Map.unmodifiable(videos),
       creators: Map.unmodifiable(creators),
+      rules: Map.unmodifiable(rules),
     );
   }
 
   Future<void> _change(
-    void Function(Map<String, String>, Map<int, String>) edit, {
+    void Function(
+      Map<String, String>,
+      Map<int, String>,
+      Map<ContentBlockKind, List<String>>,
+    )
+    edit, {
     bool Function(SharedPreferences)? shouldCommit,
     void Function(SharedPreferences)? onCommit,
   }) {
@@ -103,7 +135,10 @@ class ContentBlocklistService {
       final current = _read(preferences);
       final videos = Map<String, String>.from(current.videos);
       final creators = Map<int, String>.from(current.creators);
-      edit(videos, creators);
+      final rules = current.rules.map(
+        (kind, values) => MapEntry(kind, List<String>.of(values)),
+      );
+      edit(videos, creators, rules);
       if (shouldCommit?.call(preferences) == false) return;
       try {
         final saved = await preferences.setString(
@@ -112,6 +147,8 @@ class ContentBlocklistService {
             'version': 1,
             'videos': videos,
             'creators': creators.map((mid, name) => MapEntry('$mid', name)),
+            if (rules.isNotEmpty)
+              'rules': rules.map((kind, values) => MapEntry(kind.name, values)),
           }),
         );
         if (!saved) throw StateError('Blocklist was not saved');
@@ -160,7 +197,7 @@ class ContentBlocklistService {
     var added = false;
     Map<Object, Object>? owners;
     await _change(
-      (videos, creators) {
+      (videos, creators, _) {
         if (id is String) {
           if (videos.containsKey(id)) return;
           videos[id] = label;
@@ -183,7 +220,7 @@ class ContentBlocklistService {
       () async {
         var removed = false;
         await _change(
-          (videos, creators) {
+          (videos, creators, _) {
             removed = id is String
                 ? videos.remove(id) != null
                 : creators.remove(id as int) != null;
@@ -200,17 +237,85 @@ class ContentBlocklistService {
 
   Future<void> blockVideo(String bvid, String title) {
     if (!_bvid.hasMatch(bvid)) throw ArgumentError.value(bvid, 'bvid');
-    return _change((videos, _) => videos[bvid] = title.trim());
+    return _change((videos, _, _) => videos[bvid] = title.trim());
   }
 
   Future<void> blockCreator(int mid, String name) {
     if (mid <= 0) throw ArgumentError.value(mid, 'mid');
-    return _change((_, creators) => creators[mid] = name.trim());
+    return _change((_, creators, _) => creators[mid] = name.trim());
   }
 
   Future<void> unblockVideo(String bvid) =>
-      _change((videos, _) => videos.remove(bvid));
+      _change((videos, _, _) => videos.remove(bvid));
 
   Future<void> unblockCreator(int mid) =>
-      _change((_, creators) => creators.remove(mid));
+      _change((_, creators, _) => creators.remove(mid));
+
+  /// Adds or replaces a rule in the same atomic write as stable ID blocks.
+  /// An edit does not resurrect a rule deleted in another open page.
+  Future<void> saveRule(
+    ContentBlockRule input, {
+    ContentBlockRule? previous,
+  }) async {
+    final rule = input.validated();
+    final old = previous?.validated();
+    if (old != null && old.kind != rule.kind) {
+      throw ArgumentError('不能更改规则类型。');
+    }
+    await _change((_, creators, rules) {
+      if (rule.kind == ContentBlockKind.creatorUid) {
+        final uid = int.parse(rule.value);
+        final oldUid = old == null ? null : int.parse(old.value);
+        if (oldUid != null && !creators.containsKey(oldUid)) {
+          throw ArgumentError('这条规则已不存在，请返回后重试。');
+        }
+        if (uid != oldUid && creators.containsKey(uid)) {
+          throw ArgumentError('这条规则已存在。');
+        }
+        if (uid == oldUid) return;
+        if (oldUid != null) creators.remove(oldUid);
+        // A label accompanying the old UID cannot identify a different UID.
+        creators[uid] = '';
+        return;
+      }
+      final values = rules.putIfAbsent(rule.kind, () => []);
+      int indexOf(String value) {
+        final key = ContentBlockRule.normalizeText(value);
+        return values.indexWhere(
+          (item) => ContentBlockRule.normalizeText(item) == key,
+        );
+      }
+
+      final oldIndex = old == null ? -1 : indexOf(old.value);
+      if (old != null && oldIndex < 0) {
+        throw ArgumentError('这条规则已不存在，请返回后重试。');
+      }
+      final duplicate = indexOf(rule.value);
+      if (duplicate >= 0 && duplicate != oldIndex) {
+        throw ArgumentError('这条规则已存在。');
+      }
+      if (oldIndex < 0) {
+        values.add(rule.value);
+      } else {
+        values[oldIndex] = rule.value;
+      }
+    });
+  }
+
+  Future<void> removeRule(ContentBlockRule input) async {
+    final rule = input.validated();
+    if (rule.kind == ContentBlockKind.creatorUid) {
+      await unblockCreator(int.parse(rule.value));
+      return;
+    }
+    await _change((_, _, rules) {
+      final values = rules[rule.kind];
+      if (values == null) return;
+      final key = ContentBlockRule.normalizeText(rule.value);
+      values.removeWhere(
+        (value) => ContentBlockRule.normalizeText(value) == key,
+      );
+      if (values.isEmpty) rules.remove(rule.kind);
+    });
+  }
 }
