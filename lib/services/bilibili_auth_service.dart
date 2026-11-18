@@ -338,6 +338,12 @@ class BilibiliAuthService {
   /// 从当前平台的安全会话容器读取 Cookie 请求头，不创建额外明文副本。
   Future<String> readCookieHeader() => _cookieStore.readCookies();
 
+  /// For classroom metadata: never read the old cookie mid-replacement.
+  Future<String> readStableCookieHeader() async {
+    await _accountWrites;
+    return readCookieHeader();
+  }
+
   /// Capture only after local account writes finish; Apple additionally fences
   /// mutations performed by WKWebView itself, independent of Dart login state.
   Future<BilibiliPlaybackSession> capturePlaybackSession(String path) async {
