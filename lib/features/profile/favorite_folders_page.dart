@@ -204,25 +204,28 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
     }
     return Center(
       key: Key('favorite-folders-status-${page.status.name}'),
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            Icon(icon, size: 44),
-            const SizedBox(height: 12),
-            Text(
-              page.message ?? '暂时无法读取收藏夹，请稍后重试。',
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 12),
-            OutlinedButton(
-              key: const Key('favorite-folders-retry'),
-              // 重试按钮函数只重新读取当前账号的收藏夹列表。
-              onPressed: _isLoading ? null : _loadFolders,
-              child: const Text('重试'),
-            ),
-          ],
+      child: SingleChildScrollView(
+        key: const Key('favorite-folders-status-scroll'),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Icon(icon, size: 44),
+              const SizedBox(height: 12),
+              Text(
+                page.message ?? '暂时无法读取收藏夹，请稍后重试。',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton(
+                key: const Key('favorite-folders-retry'),
+                // 重试按钮函数只重新读取当前账号的收藏夹列表。
+                onPressed: _isLoading ? null : _loadFolders,
+                child: const Text('重试'),
+              ),
+            ],
+          ),
         ),
       ),
     );

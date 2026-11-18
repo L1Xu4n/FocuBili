@@ -179,12 +179,11 @@ void main() {
       await render(tester, fixture, const Size(1280, 800), key, scale: 1.3);
       expect(fixture.loads, 1);
       expect(find.text('已购课程'), findsOneWidget);
-      final expired = tester.widget<ListTile>(
+      final expired = tester.widget<InkWell>(
         find.byKey(const Key('purchased-course-2')),
       );
-      expect(expired.enabled, isFalse);
       expect(expired.onTap, isNull);
-      final removed = tester.widget<ListTile>(
+      final removed = tester.widget<InkWell>(
         find.byKey(const Key('purchased-course-3')),
       );
       expect(removed.onTap, isNull);
