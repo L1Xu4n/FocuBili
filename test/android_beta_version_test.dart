@@ -36,7 +36,7 @@ void main() {
         r'debug\s*\{([^}]+)\}',
       ).firstMatch(gradle)!.group(1)!;
       expect(debug, contains('applicationIdSuffix ".preview"'));
-      expect(debug, contains('versionNameSuffix "-beta.3"'));
+      expect(debug, contains('versionNameSuffix "-beta.4"'));
       expect(debug, contains('焦点哔哩 Beta'));
       final debugManifest = File(
         'android/app/src/debug/AndroidManifest.xml',
