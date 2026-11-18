@@ -39,7 +39,7 @@ void main() {
     await tester.tap(find.byTooltip('打开课程链接'));
     await tester.pumpAndSettle();
     await tester.enterText(
-      find.byType(TextField),
+      find.byKey(const Key('purchased-courses-link-input')),
       'https://www.bilibili.com/cheese/play/ss3',
     );
 

@@ -92,7 +92,7 @@ class _PublicSearchFixture {
                 ],
                 'numPages': 1,
               },
-      '/x/web-interface/view' => {
+      '/x/web-interface/wbi/view' => {
         'bvid': uri.queryParameters['bvid'],
         'cid': 701,
         'title': '已读取详情',
@@ -225,7 +225,7 @@ void main() {
       await _submit(t, _bvid(7));
       final card = find.byKey(ValueKey('direct-${_bvid(7)}'));
       expect(card, findsOneWidget);
-      expect(fixture.requests.map((u) => u.path), ['/x/web-interface/view']);
+      expect(fixture.requests.map((u) => u.path), ['/x/web-interface/wbi/view']);
       await rules.saveRule(
         const ContentBlockRule(ContentBlockKind.videoTag, '系统基础'),
       );
@@ -235,7 +235,7 @@ void main() {
         await t.pumpAndSettle();
       }
       expect(fixture.requests.map((u) => u.path), [
-        '/x/web-interface/view',
+        '/x/web-interface/wbi/view',
         '/x/tag/archive/tags',
       ]);
       expect(
@@ -398,7 +398,7 @@ void main() {
       await tester.tap(find.byKey(ValueKey('search-${_bvid(6)}')));
       await tester.pumpAndSettle();
       expect(find.text('测试播放器路由'), findsOneWidget);
-      expect(fixture.requests.last.path, '/x/web-interface/view');
+      expect(fixture.requests.last.path, '/x/web-interface/wbi/view');
       expect(fixture.requests.length, 2);
       await tester.pageBack();
       await tester.pumpAndSettle();
@@ -410,8 +410,8 @@ void main() {
       expect(find.text('测试播放器路由'), findsNothing);
       expect(fixture.requests.map((uri) => uri.path), [
         '/x/web-interface/wbi/search/type',
-        '/x/web-interface/view',
-        '/x/web-interface/view',
+        '/x/web-interface/wbi/view',
+        '/x/web-interface/wbi/view',
         '/x/tag/archive/tags',
       ]);
       fixture.failTags = true;
@@ -444,7 +444,7 @@ void main() {
       await _submit(tester, _bvid(8));
       expect(find.byKey(ValueKey('direct-${_bvid(8)}')), findsOneWidget);
       expect(fixture.requests.skip(requestCount).map((uri) => uri.path), [
-        '/x/web-interface/view',
+        '/x/web-interface/wbi/view',
       ]);
 
       await tester.tap(find.text('用户'));

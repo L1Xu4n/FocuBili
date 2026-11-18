@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../core/widgets/drag_checkbox_list.dart';
 import '../../models/video_preview.dart';
 import '../../models/learning_subject_folder.dart';
 import '../../models/public_profile.dart';
@@ -199,6 +200,19 @@ class _CollectionDetailLoaderState extends State<_CollectionDetailLoader> {
   );
 }
 
+class _LearningPartChoice {
+  const _LearningPartChoice(this.video, this.part, {required this.startsGroup});
+
+  final VideoPreview video;
+  final VideoPart part;
+  final bool startsGroup;
+
+  static String idFor(VideoPreview video, VideoPart part) =>
+      '${video.bvid.trim()}:${part.cid}';
+
+  String get id => idFor(video, part);
+}
+
 class _PartSelection extends StatefulWidget {
   const _PartSelection({
     required this.videos,
@@ -227,23 +241,49 @@ class _PartSelection extends StatefulWidget {
 class _PartSelectionState extends State<_PartSelection> {
   final Set<String> _selected = {};
   final ScrollController _options = ScrollController();
+  late final List<_LearningPartChoice> _parts;
   bool _saving = false;
   String? _folderId;
   String? _error;
-  String _id(VideoPreview video, VideoPart part) => '${video.bvid}:${part.cid}';
   @override
   void initState() {
     super.initState();
+    _parts = [
+      for (final video in widget.videos)
+        for (var i = 0; i < video.parts.length; i++)
+          _LearningPartChoice(video, video.parts[i], startsGroup: i == 0),
+    ];
     _resetDefaults();
   }
 
   VideoPart? get _referencePart => widget.currentPart ?? widget.recentPart;
 
   void _resetDefaults() {
-    _selected.clear();
+    _selected
+      ..clear()
+      ..addAll(
+        _parts
+            .where((option) => widget.existingIds.contains(option.id))
+            .map((option) => option.id),
+      );
     for (final video in widget.videos) {
-      _selected.add(_id(video, _referencePart ?? video.initialPart));
+      final reference = _referencePart ?? video.initialPart;
+      _selected.add(_LearningPartChoice.idFor(video, reference));
     }
+  }
+
+  void _setSelectionRange(int first, int last, bool selected) {
+    if (_saving) return;
+    setState(() {
+      for (var i = first; i <= last; i++) {
+        final id = _parts[i].id;
+        if (selected) {
+          _selected.add(id);
+        } else {
+          _selected.remove(id);
+        }
+      }
+    });
   }
 
   @override
@@ -264,16 +304,15 @@ class _PartSelectionState extends State<_PartSelection> {
       _error = null;
     });
     final result = await widget.service.addBatch([
-      for (final video in widget.videos)
-        for (final part in video.parts)
-          if (_selected.contains(_id(video, part)))
-            LearningPartSelection(
-              video,
-              part,
-              position: _referencePart?.cid == part.cid
-                  ? widget.position
-                  : Duration.zero,
-            ),
+      for (final option in _parts)
+        if (_selected.contains(option.id))
+          LearningPartSelection(
+            option.video,
+            option.part,
+            position: _referencePart?.cid == option.part.cid
+                ? widget.position
+                : Duration.zero,
+          ),
     ], folderId: _folderId);
     if (!mounted) return;
     if (!result.persisted ||
@@ -305,132 +344,120 @@ class _PartSelectionState extends State<_PartSelection> {
         child: Column(
           children: [
             Expanded(
-              child: ListView(
-                key: const Key('learning-part-options'),
+              child: DragCheckboxList(
+                scrollViewKey: const Key('learning-part-options'),
                 controller: _options,
-                children: [
-                  if (_error != null)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-                      child: Text(
-                        _error!,
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.error,
+                itemCount: _parts.length,
+                labelAt: (index) {
+                  final part = _parts[index].part;
+                  return 'P${part.pageNumber} ${part.title}';
+                },
+                checkedAt: (index) => _selected.contains(_parts[index].id),
+                groupTitleAt: (index) {
+                  final option = _parts[index];
+                  return option.startsGroup ? option.video.title : null;
+                },
+                enabled: !_saving,
+                onRangeChanged: _setSelectionRange,
+                header: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (_error != null)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                        child: Text(
+                          _error!,
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
                         ),
                       ),
-                    ),
-                  Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '加入学习清单',
-                          style: Theme.of(context).textTheme.titleMedium
-                              ?.copyWith(fontWeight: FontWeight.w700),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          '新增 $added · 已存在 $duplicate · 剩余容量 $remaining\n已存在任务保留进度、状态和顺序。',
-                        ),
-                        if (widget.folders.isNotEmpty)
-                          DropdownButtonFormField<String>(
-                            key: const Key('add-learning-folder'),
-                            initialValue: '',
-                            isExpanded: true,
-                            isDense: false,
-                            itemHeight: null,
-                            decoration: const InputDecoration(
-                              labelText: '新增任务的学科分组',
-                            ),
-                            items: [
-                              const DropdownMenuItem(
-                                value: '',
-                                child: Text('未分组'),
-                              ),
-                              for (final folder in widget.folders)
-                                DropdownMenuItem(
-                                  value: folder.id,
-                                  child: Text(
-                                    folder.name,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                            ],
-                            onChanged: _saving
-                                ? null
-                                : (value) => setState(
-                                    () =>
-                                        _folderId = value == '' ? null : value,
-                                  ),
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '加入学习清单',
+                            style: Theme.of(context).textTheme.titleMedium
+                                ?.copyWith(fontWeight: FontWeight.w700),
                           ),
-                        Wrap(
-                          spacing: 8,
-                          children: [
-                            TextButton(
-                              onPressed: _saving
-                                  ? null
-                                  : () => setState(_resetDefaults),
-                              child: Text(
-                                widget.currentPart != null
-                                    ? '当前 P'
-                                    : widget.recentPart != null
-                                    ? '上次观看的 P'
-                                    : '默认 P',
+                          const SizedBox(height: 8),
+                          Text('剩余容量 $remaining'),
+                          if (widget.folders.isNotEmpty) ...[
+                            const SizedBox(height: 12),
+                            DropdownButtonFormField<String>(
+                              key: const Key('add-learning-folder'),
+                              initialValue: '',
+                              isExpanded: true,
+                              isDense: false,
+                              itemHeight: null,
+                              decoration: const InputDecoration(
+                                labelText: '新增任务的学科分组',
                               ),
-                            ),
-                            TextButton(
-                              onPressed: _saving
+                              items: [
+                                const DropdownMenuItem(
+                                  value: '',
+                                  child: Text('未分组'),
+                                ),
+                                for (final folder in widget.folders)
+                                  DropdownMenuItem(
+                                    value: folder.id,
+                                    child: Text(
+                                      folder.name,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                              ],
+                              onChanged: _saving
                                   ? null
-                                  : () => setState(() {
-                                      _selected.clear();
-                                      for (final video in widget.videos) {
-                                        for (final part in video.parts) {
-                                          _selected.add(_id(video, part));
-                                        }
-                                      }
-                                    }),
-                              child: const Text('全部 P'),
-                            ),
-                            TextButton(
-                              onPressed: _saving
-                                  ? null
-                                  : () => setState(_selected.clear),
-                              child: const Text('清空选择'),
+                                  : (value) => setState(
+                                      () => _folderId = value == ''
+                                          ? null
+                                          : value,
+                                    ),
                             ),
                           ],
-                        ),
-                      ],
-                    ),
-                  ),
-                  for (final video in widget.videos) ...[
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Text(
-                        video.title,
-                        style: const TextStyle(fontWeight: FontWeight.bold),
+                          Wrap(
+                            spacing: 8,
+                            children: [
+                              TextButton(
+                                onPressed: _saving
+                                    ? null
+                                    : () => setState(_resetDefaults),
+                                child: Text(
+                                  widget.currentPart != null
+                                      ? '当前 P'
+                                      : widget.recentPart != null
+                                      ? '上次观看的 P'
+                                      : '默认 P',
+                                ),
+                              ),
+                              TextButton(
+                                onPressed: _saving
+                                    ? null
+                                    : () => setState(() {
+                                        _selected.clear();
+                                        _selected.addAll(
+                                          _parts.map((option) => option.id),
+                                        );
+                                      }),
+                                child: const Text('全部 P'),
+                              ),
+                              TextButton(
+                                onPressed: _saving
+                                    ? null
+                                    : () => setState(_selected.clear),
+                                child: const Text('清空选择'),
+                              ),
+                            ],
+                          ),
+                        ],
                       ),
                     ),
-                    for (final part in video.parts)
-                      CheckboxListTile(
-                        value: _selected.contains(_id(video, part)),
-                        title: Text('P${part.pageNumber} ${part.title}'),
-                        subtitle: widget.existingIds.contains(_id(video, part))
-                            ? const Text('已存在 · 保留学习进度')
-                            : null,
-                        onChanged: _saving
-                            ? null
-                            : (value) => setState(() {
-                                if (value == true) {
-                                  _selected.add(_id(video, part));
-                                } else {
-                                  _selected.remove(_id(video, part));
-                                }
-                              }),
-                      ),
                   ],
-                ],
+                ),
               ),
             ),
             Padding(
