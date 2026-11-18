@@ -461,4 +461,43 @@ void main() {
       expect(service.loads, 1);
     },
   );
+  for (final sizeAndScale in [
+    (const Size(390, 700), 1.0),
+    (const Size(320, 590), 2.0),
+  ]) {
+    testWidgets(
+      'search field semantics exclude count and purchase notice at ${sizeAndScale.$1}',
+      (tester) async {
+        tester.view.devicePixelRatio = 1;
+        tester.view.physicalSize = sizeAndScale.$1;
+        addTearDown(tester.view.resetDevicePixelRatio);
+        addTearDown(tester.view.resetPhysicalSize);
+        await _show(
+          tester,
+          _ManyCourses([_course(1, '摄影')]),
+          textScale: sizeAndScale.$2,
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(_search);
+        await tester.pumpAndSettle();
+        const notice = '仅显示当前账号的已购课堂';
+        for (final query in ['', '摄影']) {
+          if (query.isNotEmpty) {
+            await tester.enterText(_search, query);
+            await tester.pumpAndSettle();
+          }
+          final field = tester
+              .getSemantics(find.byType(EditableText))
+              .getSemanticsData();
+          expect(field.flagsCollection.isTextField, isTrue);
+          expect(field.label, contains('搜索课程名或简介'));
+          expect(field.label, isNot(contains('门课程')));
+          expect(field.label, isNot(contains('门已购课程')));
+          expect(field.label, isNot(contains(notice)));
+          expect(field.value, query);
+          expect(find.bySemanticsLabel(RegExp(notice)), findsOneWidget);
+        }
+      },
+    );
+  }
 }

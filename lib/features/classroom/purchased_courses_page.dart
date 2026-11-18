@@ -306,8 +306,10 @@ class _PurchasedCoursesPageState extends State<PurchasedCoursesPage>
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               if (_courses.isNotEmpty) ...[
-                                KeyedSubtree(
+                                // Keep purchase notices and result counts out of the field label.
+                                Semantics(
                                   key: ValueKey(_searchRevision),
+                                  container: true,
                                   child: _searchField(
                                     separateLabel: separateLabel,
                                   ),
