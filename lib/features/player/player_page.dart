@@ -1,6 +1,7 @@
 import '../../services/cache_lifecycle.dart';
 import '../learning/learning_add_sheet.dart';
 import 'dart:async';
+import 'dart:ui' as ui;
 import '../../models/ab_repeat_range.dart';
 import '../../models/playback_queue.dart';
 import 'widgets/player_ab_repeat_sheet.dart';
@@ -59,6 +60,7 @@ import '../../services/player_route_session.dart';
 import '../profile/offline_videos_page.dart';
 import '../../services/app_favorites_service.dart';
 import '../../services/video_shot_service.dart';
+import '../../services/image_resource_cache.dart';
 import '../../services/video_note_service.dart';
 import '../../models/player_overlay_data.dart';
 import '../../models/danmaku_preferences.dart';
@@ -138,6 +140,7 @@ class PlayerPage extends StatefulWidget {
     this.publicContentService,
     this.interactionService,
     this.videoShotService,
+    this.videoShotImageCache,
     this.videoNoteService,
     this.danmakuPreferencesService,
     this.playbackPreferencesService,
@@ -170,6 +173,7 @@ class PlayerPage extends StatefulWidget {
   final BilibiliPublicContentService? publicContentService;
   final BilibiliInteractionService? interactionService;
   final VideoShotService? videoShotService;
+  final ImageResourceCache? videoShotImageCache;
   final VideoNoteService? videoNoteService;
   final DanmakuPreferencesService? danmakuPreferencesService;
   final PlaybackPreferencesService? playbackPreferencesService;
@@ -397,6 +401,8 @@ class _PlayerPageState extends State<PlayerPage>
   }) {
     final partChanged = _currentPart.cid != part.cid;
     if (partChanged) {
+      _cancelHorizontalScrub();
+      _resetVideoShotPreview();
       _clearSubtitlesForPart();
       _clearDanmakuForPart();
     }
