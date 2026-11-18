@@ -7,6 +7,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/playback_request_diagnostic.dart';
+import '../models/video_metadata_request_diagnostic.dart';
 import '../platform/app_platform.dart';
 import '../platform/platform_services.dart';
 import '../core/build_metadata.g.dart';
@@ -286,6 +287,7 @@ class ProblemDiagnosticEntry {
     'network' => '网络错误',
     'playback' => '播放错误',
     'playbackRequest' => '播放请求',
+    'videoMetadataRequest' => '视频资料请求',
     'app' => '应用错误',
     _ => '其他错误',
   };
@@ -548,6 +550,26 @@ class ProblemDiagnosticsService {
         throw const FormatException('Invalid diagnostic details');
       }
     }
+  }
+
+  Future<void> recordVideoMetadataRequest(
+    VideoMetadataRequestDiagnostic diagnostic, {
+    required bool details,
+  }) {
+    return record(
+      ProblemDiagnosticEntry(
+        occurredAt: _clock(),
+        category: 'videoMetadataRequest',
+        operation: details ? 'open_video_detail' : 'resolve_video_parts',
+        errorCode: int.tryParse(diagnostic.fields['api_code'] ?? '') == 0
+            ? null
+            : int.tryParse(diagnostic.fields['api_code'] ?? ''),
+        description: diagnostic.fields['outcome'] == 'success'
+            ? '视频资料请求成功。'
+            : '视频资料请求未完成，请结合阶段和状态码检查。',
+        additionalInfo: diagnostic.fields,
+      ),
+    );
   }
 
   /// 保存本次请求的安全执行事实，成功返回低画质也会留下诊断证据。
@@ -995,6 +1017,7 @@ class ProblemDiagnosticsService {
       'network' => 'network',
       'playback' => 'playback',
       'playbackRequest' => 'playbackRequest',
+      'videoMetadataRequest' => 'videoMetadataRequest',
       'app' => 'app',
       _ => 'other',
     };

@@ -301,10 +301,14 @@ void main() {
     final Finder profileSign = find.byKey(const Key('creator-profile-sign'));
     expect(tester.widget<Text>(profileSign).maxLines, 2);
     expect(find.text('展开简介'), findsOneWidget);
-    final SliverAppBar compactAppBar = tester.widget<SliverAppBar>(
+    final AppBar compactAppBar = tester.widget<AppBar>(
       find.byKey(const Key('creator-profile-app-bar')),
     );
-    expect(compactAppBar.expandedHeight, lessThan(380));
+    expect(compactAppBar.title, isNull);
+    expect(
+      tester.getSize(find.byKey(const Key('creator-profile-header'))).height,
+      lessThan(380),
+    );
     await tester.tap(find.byKey(const Key('toggle-creator-profile-sign')));
     await tester.pumpAndSettle();
     expect(tester.widget<Text>(profileSign).maxLines, isNull);
@@ -642,7 +646,7 @@ void main() {
     expect(firstVideo.top, secondVideo.top);
     expect(secondVideo.left, greaterThan(firstVideo.right));
   });
-  testWidgets('UP 主页可直接确认焦点订阅且不修改关注', (tester) async {
+  testWidgets('UP 主页直接配置通知并订阅且不修改关注', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final subscriptions = SubscriptionService();
     addTearDown(subscriptions.dispose);
@@ -659,10 +663,11 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('加入焦点订阅'));
+    await tester.tap(find.byTooltip('添加订阅源'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('确认来源：测试UP主'), findsOneWidget);
-    await tester.tap(find.text('确认订阅'));
+    expect(find.text('添加通知设置'), findsOneWidget);
+    expect(find.text('确认订阅'), findsNothing);
+    await tester.tap(find.text('保存'));
     await tester.pumpAndSettle();
     expect(subscriptions.sources.single.key, 'creator:7');
     expect(interaction.writeRequests, 0);
@@ -672,7 +677,7 @@ void main() {
     await tester.tap(find.text('取消订阅'));
     await tester.pumpAndSettle();
     expect(subscriptions.sources, isEmpty);
-    expect(find.byTooltip('加入焦点订阅'), findsOneWidget);
+    expect(find.byTooltip('添加订阅源'), findsOneWidget);
     expect(interaction.writeRequests, 0);
   });
 
