@@ -76,6 +76,11 @@ extension _FocusDashboardHomeCards on _FocusDashboardState {
         icon: Icons.bookmarks_outlined,
         defaultHidden: true,
         builder: (_) => const HomeCollectionCard(favorites: true),
+        editingBuilder: (_) => const HomeCollectionCard(
+          favorites: true,
+          showCustomization: true,
+          allowNavigation: false,
+        ),
       ),
       DashboardCardDefinition(
         id: 'home.followings',
@@ -83,6 +88,11 @@ extension _FocusDashboardHomeCards on _FocusDashboardState {
         icon: Icons.people_outline,
         defaultHidden: true,
         builder: (_) => const HomeCollectionCard(favorites: false),
+        editingBuilder: (_) => const HomeCollectionCard(
+          favorites: false,
+          showCustomization: true,
+          allowNavigation: false,
+        ),
       ),
     ];
   }
@@ -97,10 +107,12 @@ extension _FocusDashboardHomeCards on _FocusDashboardState {
     return EditableCardBoard(
       key: _homeBoardKey,
       storageId: 'home',
+      initialEditing: _editingHomeCards,
       items: _homeCardDefinitions(activeSession, finishedSession),
       service: _homeLayouts,
       scrollController: _scrollController,
       onEditingChanged: _handleHomeEditingChanged,
+      onCloseRequested: _closeEmptyDrawer,
       onLayoutChanged: _homeLayoutChanged,
       columnCount: columns,
       spacing: 14,

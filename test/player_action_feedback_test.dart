@@ -104,6 +104,10 @@ void main() {
       const Size(1200, 650),
     ]) {
       testWidgets('快进快退 $seconds 在 $size 和大字体下保持方向且内容不越界', (tester) async {
+        tester.view.physicalSize = size;
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
         await tester.pumpWidget(
           MaterialApp(
             home: MediaQuery(
@@ -113,7 +117,7 @@ void main() {
                   key: const Key('bounds'),
                   width: size.width,
                   height: size.height,
-                  child: PlayerSeekFeedback(seconds: seconds, compact: true),
+                  child: PlayerSeekFeedback(seconds: seconds),
                 ),
               ),
             ),
@@ -126,7 +130,8 @@ void main() {
         final bounds = tester.getRect(find.byKey(const Key('bounds')));
         final backgroundRect = paintedRect(tester, background);
         fits(backgroundRect, bounds);
-        expect(backgroundRect.width, lessThanOrEqualTo(220));
+        expect(backgroundRect.width, closeTo(size.width * .42, .1));
+        expect(backgroundRect.height, closeTo(size.height, .1));
         if (seconds > 0) {
           expect(backgroundRect.right, closeTo(bounds.right, .1));
         } else {
@@ -175,11 +180,9 @@ void main() {
     final viewport = tester.getRect(
       find.byKey(const Key('player-feedback-viewport')),
     );
-    final background = find.descendant(
-      of: find.byType(PlayerSeekFeedback),
-      matching: find.byType(DecoratedBox),
-    );
-    fits(paintedRect(tester, background), viewport);
+    final background = find.byKey(const Key('double-tap-seek-backdrop'));
+    fits(paintedRect(tester, background), surface);
+    expect(tester.getSize(background).height, surface.height);
     fits(paintedRect(tester, find.text('快进 5 秒')), viewport);
     await tester.pump(const Duration(milliseconds: 60));
     await doubleTap(tester, right);
@@ -235,21 +238,17 @@ void main() {
       }
 
       void checkSide(bool forward) {
-        final viewport = tester.getRect(
-          find.byKey(const Key('player-feedback-viewport')),
-        );
+        final surface = tester.getRect(find.byKey(const Key('player-surface')));
         final background = paintedRect(
           tester,
-          find.descendant(
-            of: find.byType(PlayerSeekFeedback),
-            matching: find.byType(DecoratedBox),
-          ),
+          find.byKey(const Key('double-tap-seek-backdrop')),
         );
-        fits(background, viewport);
+        fits(background, surface);
         expect(
           forward ? background.right : background.left,
-          closeTo(forward ? viewport.right : viewport.left, .1),
+          closeTo(forward ? surface.right : surface.left, .1),
         );
+        expect(background.height, closeTo(surface.height, .1));
       }
 
       await tapSide(true);
@@ -263,7 +262,7 @@ void main() {
       expect(find.text('快进 10 秒'), findsNothing);
       expect(find.text('快退 5 秒'), findsOneWidget);
       checkSide(false);
-      tester.view.physicalSize = const Size(900, 650);
+      tester.view.physicalSize = const Size(820, 650);
       await tester.pump(const Duration(milliseconds: 450));
       checkSide(false);
       expect(find.text('快退 5 秒'), findsOneWidget);
