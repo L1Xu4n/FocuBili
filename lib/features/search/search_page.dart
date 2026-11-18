@@ -3,7 +3,7 @@ import 'dart:async';
 import 'dart:collection';
 
 import 'package:focubili/features/common/app_network_image.dart';
-import 'package:flutter/foundation.dart' show listEquals;
+import 'package:flutter/foundation.dart' show listEquals, setEquals;
 import 'package:flutter/material.dart';
 import '../../services/bilibili_course_link.dart';
 
@@ -20,6 +20,7 @@ import '../../services/content_blocklist_service.dart';
 import '../../services/search_content_filter_service.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/learning_list_service.dart';
+import '../../services/multi_category_video_search.dart';
 import '../../services/problem_diagnostics_service.dart';
 import '../../services/search_history_service.dart';
 import '../profile/user_profile_page.dart';
@@ -45,9 +46,11 @@ class _SearchCategory {
   /// 创建一个可以传给 B 站搜索接口的内容分区选项。
   const _SearchCategory(this.id, this.label);
 
-  final int? id;
+  final int id;
   final String label;
 }
+
+typedef _FilterSelection = ({VideoSearchFilter filter, Set<int> categories});
 
 /// 搜索页支持关键词候选、筛选、分页、BV 直达和主动选择的视频结果。
 class SearchPage extends StatefulWidget {
@@ -80,7 +83,6 @@ class _SearchPageState extends State<SearchPage> {
     caseSensitive: false,
   );
   static const List<_SearchCategory> _categories = <_SearchCategory>[
-    _SearchCategory(null, '全部'),
     _SearchCategory(1, '动画'),
     _SearchCategory(13, '番剧'),
     _SearchCategory(168, '国创'),
@@ -140,6 +142,9 @@ class _SearchPageState extends State<SearchPage> {
   int _totalPages = 0;
   int _activeEpisodeCountLookups = 0;
   VideoSearchFilter _filter = const VideoSearchFilter();
+  Set<int> _categoryIds = const {};
+  final _categorySearchPool = MultiCategorySearchPool();
+  MultiCategoryVideoSearch? _categorySearch;
   UserSearchFilter _userFilter = const UserSearchFilter();
   List<UserSearchResult> _userResults = const <UserSearchResult>[];
   _SearchMode _searchMode = _SearchMode.videos;
@@ -172,6 +177,7 @@ class _SearchPageState extends State<SearchPage> {
   void dispose() {
     ContentBlocklistService.changes.removeListener(_reloadBlocklist);
     _requestGeneration++;
+    _categorySearch?.close();
     _suggestionDebounce?.cancel();
     _resultScrollController
       ..removeListener(_handleResultScroll)
@@ -196,6 +202,7 @@ class _SearchPageState extends State<SearchPage> {
   /// Continues while the viewport is at the bottom, stopping on errors or exhausted pages.
   void _scheduleFilteredPage() {
     if (_searchMode != _SearchMode.videos ||
+        _categorySearch != null ||
         _loading ||
         _loadingMore ||
         _autoLoadFailed ||
@@ -314,87 +321,109 @@ class _SearchPageState extends State<SearchPage> {
       return;
     }
     setState(() {});
+    final generation = _requestGeneration;
     _suggestionDebounce = Timer(const Duration(milliseconds: 350), () {
-      unawaited(_loadSuggestions(input));
+      unawaited(_loadSuggestions(input, generation));
     });
   }
 
   /// 请求并显示与当前输入完全对应的候选词，忽略已经过时的异步结果。
-  Future<void> _loadSuggestions(String input) async {
+  Future<void> _loadSuggestions(String input, int generation) async {
+    bool current() =>
+        mounted &&
+        generation == _requestGeneration &&
+        _searchMode == _SearchMode.videos &&
+        _controller.text.trim() == input;
     try {
       final List<String> suggestions = await _service.suggestKeywords(input);
-      if (!mounted || _controller.text.trim() != input) {
-        return;
-      }
+      if (!current()) return;
       setState(() => _suggestions = suggestions);
     } catch (_) {
-      if (mounted && _controller.text.trim() == input) {
+      if (current()) {
         setState(() => _suggestions = const <String>[]);
       }
     }
   }
 
-  /// BV 号直接查询详情，普通文字按当前筛选条件请求第一页真实结果。
-  Future<void> _submitSearch() async {
-    await _contentFilterReady;
-    if (!mounted) return;
+  bool _isDirectVideoInput(String input) =>
+      _bvidPattern.hasMatch(input) ||
+      BilibiliCourseLink.fromInput(input) != null;
+
+  VideoSearchFilter get _singleCategoryFilter => _filter.copyWith(
+    categoryId: _categoryIds.length == 1 ? _categoryIds.single : null,
+    clearCategory: _categoryIds.length != 1,
+    categoryLabel: _categoryIds.length == 1
+        ? _categories
+              .firstWhere((category) => category.id == _categoryIds.single)
+              .label
+        : '全部',
+  );
+
+  /// Record the committed input and invalidate old results before awaiting
+  /// local storage. Tab changes can safely reuse it even in a cold start.
+  Future<void> _submitSearch({String? query, bool recordHistory = true}) async {
     final generation = ++_requestGeneration;
-    _autoLoadFailed = false;
     final mode = _searchMode;
-    final String input = _controller.text.trim();
+    final input = query ?? _controller.text.trim();
+    final opensDirectly =
+        mode == _SearchMode.videos && _isDirectVideoInput(input);
+    final filter = _singleCategoryFilter;
+    final userFilter = _userFilter;
+    final categories =
+        mode == _SearchMode.videos &&
+            input.isNotEmpty &&
+            !opensDirectly &&
+            _categoryIds.length > 1
+        ? MultiCategoryVideoSearch(
+            service: _service,
+            pool: _categorySearchPool,
+            keyword: input,
+            filter: filter,
+            categoryIds: _categoryIds,
+          )
+        : null;
+    bool current() =>
+        mounted && generation == _requestGeneration && mode == _searchMode;
     _searchFocusNode.unfocus();
     _suggestionDebounce?.cancel();
+    _categorySearch?.close();
     setState(() {
-      _loading = true;
-      _loadingMore = false;
-      _hasSubmitted = true;
-      _errorMessage = null;
-      _directResult = null;
-      _searchResults = const <VideoSearchResult>[];
-      _userResults = const <UserSearchResult>[];
-      _suggestions = const <String>[];
-      _activeQuery = input;
-      _currentPage = 0;
-      _totalPages = 0;
+      _resetSearchResults(query: input, loading: true, submitted: true);
+      _categorySearch = categories;
     });
     try {
+      await _contentFilterReady;
+      if (!current()) return;
       if (input.isEmpty) {
         throw BilibiliLookupException(
-          _searchMode == _SearchMode.videos
-              ? '请输入关键词、BV 号或视频链接。'
-              : '请输入要搜索的用户名。',
+          mode == _SearchMode.videos ? '请输入关键词、BV 号或视频链接。' : '请输入要搜索的用户名。',
         );
       }
-      final List<String> history = await _historyService.addHistory(input);
-      if (!mounted || generation != _requestGeneration || mode != _searchMode) {
-        return;
-      }
-      final bool opensDirectly =
-          _searchMode == _SearchMode.videos &&
-          (_bvidPattern.hasMatch(input) ||
-              BilibiliCourseLink.fromInput(input) != null);
+      final history = recordHistory
+          ? await _historyService.addHistory(input)
+          : _searchHistory;
+      if (!current()) return;
       final VideoPreview? directResult = opensDirectly
           ? await _service.lookupVideo(input)
           : null;
       final VideoSearchPage? searchPage =
-          opensDirectly || _searchMode == _SearchMode.users
+          opensDirectly || mode == _SearchMode.users || categories != null
           ? null
-          : await _service.searchVideos(input, page: 1, filter: _filter);
-      final UserSearchPage? userPage = _searchMode == _SearchMode.users
+          : await _service.searchVideos(input, page: 1, filter: filter);
+      final UserSearchPage? userPage = mode == _SearchMode.users
           ? await _userSearchService.searchUsers(
               input,
               page: 1,
-              filter: _userFilter,
+              filter: userFilter,
             )
           : null;
-      if (!mounted || generation != _requestGeneration || mode != _searchMode) {
-        return;
-      }
+      if (categories != null) await categories.loadNext();
+      if (!current()) return;
       setState(() {
         _searchHistory = history;
         _directResult = directResult;
-        _searchResults = searchPage?.results ?? const <VideoSearchResult>[];
-        _userResults = userPage?.results ?? const <UserSearchResult>[];
+        _searchResults = categories?.results ?? searchPage?.results ?? const [];
+        _userResults = userPage?.results ?? const [];
         _currentPage = searchPage?.page ?? userPage?.page ?? 0;
         _totalPages = searchPage?.totalPages ?? userPage?.totalPages ?? 0;
         _loading = false;
@@ -404,40 +433,40 @@ class _SearchPageState extends State<SearchPage> {
       }
       _scheduleFilteredPage();
     } on BilibiliLookupException catch (error) {
-      if (!mounted || generation != _requestGeneration || mode != _searchMode) {
-        return;
-      }
-      if (input.isNotEmpty) {
-        unawaited(
-          _problemDiagnosticsService.recordNetworkFailure(
-            operation: _searchMode == _SearchMode.videos
-                ? 'search_video'
-                : 'search_user',
-            message: error.message,
-          ),
-        );
-      }
-      _showLookupError(error.message);
+      if (!current()) return;
+      _reportSearchError(input, mode, error.message);
     } catch (_) {
-      if (!mounted || generation != _requestGeneration || mode != _searchMode) {
-        return;
-      }
-      if (input.isNotEmpty) {
-        unawaited(
-          _problemDiagnosticsService.recordNetworkFailure(
-            operation: _searchMode == _SearchMode.videos
-                ? 'search_video'
-                : 'search_user',
-            message: '网络连接失败。',
-          ),
-        );
-      }
-      _showLookupError('搜索失败，请检查网络或稍后再试。');
+      if (!current()) return;
+      _reportSearchError(input, mode, '网络连接失败。', display: '搜索失败，请检查网络或稍后再试。');
     }
+  }
+
+  void _reportSearchError(
+    String input,
+    _SearchMode mode,
+    String reason, {
+    String? display,
+  }) {
+    if (input.isNotEmpty) {
+      unawaited(
+        _problemDiagnosticsService.recordNetworkFailure(
+          operation: mode == _SearchMode.videos
+              ? 'search_video'
+              : 'search_user',
+          message: reason,
+        ),
+      );
+    }
+    _showLookupError(display ?? reason);
   }
 
   /// 请求下一页并按 BV 号去重追加，失败时保留已经显示的搜索结果。
   Future<void> _loadMoreResults() async {
+    final categories = _categorySearch;
+    if (categories != null) {
+      if (categories.hasNext) await _loadCategoryPages(categories);
+      return;
+    }
     if (_loading ||
         _loadingMore ||
         _activeQuery.isEmpty ||
@@ -484,7 +513,7 @@ class _SearchPageState extends State<SearchPage> {
       final VideoSearchPage nextPage = await _service.searchVideos(
         _activeQuery,
         page: _currentPage + 1,
-        filter: _filter,
+        filter: _singleCategoryFilter,
       );
       if (!mounted || generation != _requestGeneration || mode != _searchMode) {
         return;
@@ -516,6 +545,31 @@ class _SearchPageState extends State<SearchPage> {
         _showTransientMessage('下一页加载失败，请稍后重试。');
       }
     }
+  }
+
+  Future<void> _loadCategoryPages(
+    MultiCategoryVideoSearch categories, {
+    bool retry = false,
+  }) async {
+    if (_loading || _loadingMore || !identical(_categorySearch, categories)) {
+      return;
+    }
+    final generation = _requestGeneration;
+    setState(() => _loadingMore = true);
+    if (retry) {
+      await categories.retryFailures();
+    } else {
+      await categories.loadNext();
+    }
+    if (!mounted ||
+        generation != _requestGeneration ||
+        !identical(_categorySearch, categories)) {
+      return;
+    }
+    setState(() {
+      _searchResults = categories.results;
+      _loadingMore = false;
+    });
   }
 
   /// 从本地存储加载搜索记录，并在页面仍存在时更新记录栏。
@@ -607,40 +661,54 @@ class _SearchPageState extends State<SearchPage> {
     });
   }
 
-  /// 清空输入、候选词、结果和错误说明，让用户开始新的主动搜索。
-  void _clearInput() {
-    _suggestionDebounce?.cancel();
-    _controller.clear();
-    setState(() {
-      _directResult = null;
-      _searchResults = const <VideoSearchResult>[];
-      _userResults = const <UserSearchResult>[];
-      _suggestions = const <String>[];
-      _errorMessage = null;
-      _hasSubmitted = false;
-      _activeQuery = '';
-      _currentPage = 0;
-      _totalPages = 0;
-    });
+  void _resetSearchResults({
+    required String query,
+    required bool loading,
+    required bool submitted,
+  }) {
+    _directResult = null;
+    _searchResults = const [];
+    _userResults = const [];
+    _suggestions = const [];
+    _errorMessage = null;
+    _loading = loading;
+    _loadingMore = false;
+    _hasSubmitted = submitted;
+    _activeQuery = query;
+    _currentPage = 0;
+    _totalPages = 0;
+    _autoLoadFailed = false;
+    _categorySearch = null;
   }
 
-  /// 切换视频或用户搜索，并清除上一模式结果，避免两类卡片混在同一列表。
+  /// Clearing or changing modes invalidates all previous asynchronous results.
+  void _clearInput() {
+    _requestGeneration++;
+    _suggestionDebounce?.cancel();
+    _categorySearch?.close();
+    _controller.clear();
+    setState(
+      () => _resetSearchResults(query: '', loading: false, submitted: false),
+    );
+  }
+
   void _changeSearchMode(Set<_SearchMode> values) {
-    if (values.isEmpty || values.first == _searchMode) {
-      return;
+    if (values.isEmpty || values.first == _searchMode) return;
+    final input = _activeQuery;
+    final mode = values.first;
+    if (input.isNotEmpty &&
+        (mode == _SearchMode.videos || !_isDirectVideoInput(input))) {
+      setState(() => _searchMode = mode);
+      unawaited(_submitSearch(query: input, recordHistory: false));
+    } else {
+      _requestGeneration++;
+      _suggestionDebounce?.cancel();
+      _categorySearch?.close();
+      setState(() {
+        _searchMode = mode;
+        _resetSearchResults(query: input, loading: false, submitted: false);
+      });
     }
-    setState(() {
-      _searchMode = values.first;
-      _directResult = null;
-      _searchResults = const <VideoSearchResult>[];
-      _userResults = const <UserSearchResult>[];
-      _suggestions = const <String>[];
-      _errorMessage = null;
-      _hasSubmitted = false;
-      _activeQuery = '';
-      _currentPage = 0;
-      _totalPages = 0;
-    });
   }
 
   /// 打开用户搜索结果对应的公开主页。
@@ -1115,10 +1183,11 @@ class _SearchPageState extends State<SearchPage> {
       _scheduleFilteredPage();
     }
     VideoSearchFilter editingFilter = _filter;
+    Set<int> editingCategories = {..._categoryIds};
     SearchContentFilter editingContent = storedContent;
     final formKey = GlobalKey<FormState>();
-    final VideoSearchFilter?
-    selectedFilter = await showModalBottomSheet<VideoSearchFilter>(
+    final _FilterSelection?
+    selection = await showModalBottomSheet<_FilterSelection>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -1180,32 +1249,42 @@ class _SearchPageState extends State<SearchPage> {
                       '内容分区',
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
-                    const Text('仅在主动选择时限制分区；“全部”不限制内容类型。'),
+                    const Text(
+                      '可多选，最多 ${MultiCategoryVideoSearch.maxSelectedCategories} 个。'
+                      '“全部”不限制分区。',
+                    ),
                     const SizedBox(height: 10),
                     Wrap(
                       spacing: 8,
                       runSpacing: 4,
-                      children: _categories
-                          .map((_SearchCategory category) {
-                            return ChoiceChip(
-                              key: Key(
-                                'search-category-${category.id ?? 'all'}',
-                              ),
-                              label: Text(category.label),
-                              selected: editingFilter.categoryId == category.id,
-                              // 分区选择函数更新筛选面板中的临时内容分区。
-                              onSelected: (_) {
-                                setModalState(() {
-                                  editingFilter = editingFilter.copyWith(
-                                    categoryId: category.id,
-                                    categoryLabel: category.label,
-                                    clearCategory: category.id == null,
-                                  );
-                                });
-                              },
-                            );
-                          })
-                          .toList(growable: false),
+                      children: [
+                        ChoiceChip(
+                          key: const Key('search-category-all'),
+                          label: const Text('全部'),
+                          selected: editingCategories.isEmpty,
+                          onSelected: (_) =>
+                              setModalState(() => editingCategories = {}),
+                        ),
+                        for (final category in _categories)
+                          FilterChip(
+                            key: Key('search-category-${category.id}'),
+                            label: Text(category.label),
+                            selected: editingCategories.contains(category.id),
+                            onSelected:
+                                !editingCategories.contains(category.id) &&
+                                    editingCategories.length >=
+                                        MultiCategoryVideoSearch
+                                            .maxSelectedCategories
+                                ? null
+                                : (selected) => setModalState(() {
+                                    if (selected) {
+                                      editingCategories.add(category.id);
+                                    } else {
+                                      editingCategories.remove(category.id);
+                                    }
+                                  }),
+                          ),
+                      ],
                     ),
                   ],
                 ),
@@ -1222,6 +1301,7 @@ class _SearchPageState extends State<SearchPage> {
                             editingFilter = VideoSearchFilter(
                               order: editingFilter.order,
                             );
+                            editingCategories = {};
                             editingContent = const SearchContentFilter();
                           });
                         },
@@ -1234,7 +1314,12 @@ class _SearchPageState extends State<SearchPage> {
                         // 筛选应用函数把临时条件返回搜索页面。
                         onPressed: () {
                           if (formKey.currentState!.validate()) {
-                            Navigator.of(context).pop(editingFilter);
+                            Navigator.of(context).pop((
+                              filter: editingFilter,
+                              categories: Set<int>.unmodifiable(
+                                editingCategories,
+                              ),
+                            ));
                           }
                         },
                         child: const Text('应用筛选'),
@@ -1248,9 +1333,7 @@ class _SearchPageState extends State<SearchPage> {
         );
       },
     );
-    if (!mounted || selectedFilter == null) {
-      return;
-    }
+    if (!mounted || selection == null) return;
     if (!_sameLocalFilter(storedContent, editingContent)) {
       try {
         await _contentFilterService.save(editingContent);
@@ -1259,26 +1342,32 @@ class _SearchPageState extends State<SearchPage> {
         return;
       }
     }
-    if (!mounted) return;
+    if (!mounted || _searchMode != _SearchMode.videos) return;
+    final selectedFilter = selection.filter;
     final serverFiltersChanged =
         _filter.order != selectedFilter.order ||
         _filter.publishedRange != selectedFilter.publishedRange ||
         _filter.durationRange != selectedFilter.durationRange ||
-        _filter.categoryId != selectedFilter.categoryId;
+        !setEquals(_categoryIds, selection.categories);
     setState(() {
       _filter = selectedFilter;
+      _categoryIds = selection.categories;
       _contentFilter = editingContent;
     });
-    final input = _controller.text.trim();
+    final input = _activeQuery.isNotEmpty
+        ? _activeQuery
+        : _controller.text.trim();
     if (input.isEmpty) return;
-    if (input == _activeQuery &&
-        (_directResult != null ||
-            !serverFiltersChanged && (_loading || _currentPage > 0))) {
-      // Local rules only change visibility. Keep fetched pages so loosening
-      // them can reveal results even when the connection is gone.
+    if (_directResult != null ||
+        (!serverFiltersChanged &&
+            (_loading || _currentPage > 0 || _categorySearch != null))) {
+      // Do not discard fetched rows when changing local rules, even offline
+      // or when the search box contains an uncommitted draft.
       _scheduleFilteredPage();
     } else {
-      unawaited(_submitSearch());
+      unawaited(
+        _submitSearch(query: input, recordHistory: _activeQuery.isEmpty),
+      );
     }
   }
 
@@ -1375,7 +1464,7 @@ class _SearchPageState extends State<SearchPage> {
     if (_filter.durationRange != VideoDurationRange.any) {
       count += 1;
     }
-    if (_filter.categoryId != null) {
+    if (_categoryIds.isNotEmpty) {
       count += 1;
     }
     return count;
@@ -1900,6 +1989,19 @@ class _SearchPageState extends State<SearchPage> {
         text: _errorMessage!,
       );
     }
+    final categories = _categorySearch;
+    final results = _buildLoadedResultArea();
+    if (categories == null) return results;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildCategorySummary(categories),
+        Expanded(child: results),
+      ],
+    );
+  }
+
+  Widget _buildLoadedResultArea() {
     final VideoPreview? directResult = _directResult;
     if (directResult != null) {
       if (_blocklist.blocks(
@@ -1953,6 +2055,7 @@ class _SearchPageState extends State<SearchPage> {
       );
     }
     if (_searchResults.isNotEmpty ||
+        _categorySearch != null ||
         (_searchMode == _SearchMode.videos && _currentPage > 0)) {
       final List<VideoSearchResult> visibleResults = _visibleSearchResults;
       if (visibleResults.isEmpty) {
@@ -1960,13 +2063,20 @@ class _SearchPageState extends State<SearchPage> {
           controller: _resultScrollController,
           physics: const AlwaysScrollableScrollPhysics(),
           children: <Widget>[
-            const Padding(
-              padding: EdgeInsets.all(24),
+            Padding(
+              padding: const EdgeInsets.all(24),
               child: Column(
                 children: [
-                  Icon(Icons.filter_alt_off_rounded, size: 48),
-                  SizedBox(height: 12),
-                  Text('已加载结果中暂无符合筛选条件的视频。', textAlign: TextAlign.center),
+                  const Icon(Icons.filter_alt_off_rounded, size: 48),
+                  const SizedBox(height: 12),
+                  Text(
+                    _categorySearch?.hasLoadedCategory == false
+                        ? '所选分区暂未加载，重试后查看结果。'
+                        : _categorySearch != null && _searchResults.isEmpty
+                        ? '当前已加载的分区没有视频结果。'
+                        : '已加载结果中暂无符合筛选条件的视频。',
+                    textAlign: TextAlign.center,
+                  ),
                 ],
               ),
             ),
@@ -2281,6 +2391,45 @@ class _SearchPageState extends State<SearchPage> {
     );
   }
 
+  Widget _buildCategorySummary(MultiCategoryVideoSearch search) {
+    final selectedLabels = _categories
+        .where((category) => _categoryIds.contains(category.id))
+        .map((category) => category.label)
+        .join('、');
+    final failed = search.failedCategoryIds;
+    final failedLabels = _categories
+        .where((category) => failed.contains(category.id))
+        .map((category) => category.label)
+        .join('、');
+    final orderDescription = switch (_filter.order) {
+      VideoSearchOrder.relevance => '按各区名次交替排列',
+      VideoSearchOrder.mostFavorited => '按已加载收藏数排序，缺失时按各区名次排列',
+      _ => '按已加载结果排序',
+    };
+    return Padding(
+      key: const Key('search-category-summary'),
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 6,
+        children: [
+          Text(
+            '合并 $selectedLabels · $orderDescription',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          if (failed.isNotEmpty)
+            TextButton(
+              key: const Key('search-retry-failed-categories'),
+              onPressed: _loadingMore
+                  ? null
+                  : () => unawaited(_loadCategoryPages(search, retry: true)),
+              child: Text('$failedLabels未加载完 · 重试'),
+            ),
+        ],
+      ),
+    );
+  }
+
   /// 创建分页列表底部的加载状态或“已经到底”说明。
   Widget _buildLoadMoreFooter() {
     return Column(
@@ -2328,10 +2477,23 @@ class _SearchPageState extends State<SearchPage> {
         ),
       );
     }
-    if (_currentPage > 0 && _currentPage >= _totalPages) {
-      return const Padding(
-        padding: EdgeInsets.all(14),
-        child: Center(child: Text('已经到底了')),
+    final categories = _categorySearch;
+    final atEnd = categories == null
+        ? _currentPage > 0 && _currentPage >= _totalPages
+        : !categories.hasNext;
+    if (atEnd) {
+      if (categories?.hasLoadedCategory == false) {
+        return const SizedBox.shrink();
+      }
+      return Padding(
+        padding: const EdgeInsets.all(14),
+        child: Center(
+          child: Text(
+            categories?.failedCategoryIds.isNotEmpty == true
+                ? '已显示其他已加载分区的结果'
+                : '已经到底了',
+          ),
+        ),
       );
     }
     return Padding(

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -731,12 +732,15 @@ class BilibiliVideoInfoService
       );
     }
     final Map<Object?, Object?> data = _readObject(root['data']);
+    final serverPage = _readInteger(data['page']);
+    final reportedPage = serverPage > 0 ? serverPage : null;
     final Object? rawResults = data['result'];
     if (rawResults is! List) {
       return VideoSearchPage(
         results: const <VideoSearchResult>[],
         page: requestedPage,
         totalPages: requestedPage,
+        reportedPage: reportedPage,
       );
     }
     final List<VideoSearchResult> results = <VideoSearchResult>[];
@@ -766,13 +770,16 @@ class BilibiliVideoInfoService
               .where((tag) => tag.isNotEmpty)
               .toList(),
           danmakuCount: _readInteger(item['danmaku'] ?? item['video_review']),
+          favoriteCount: _readOptionalCount(
+            item['favorites'] ?? item['favorite'],
+          ),
           episodeCountText: _stripHtml(
             _readText(item['episode_count_text'], ''),
           ),
         ),
       );
     }
-    final int page = _readInteger(data['page']).clamp(1, 50).toInt();
+    final int page = serverPage.clamp(1, 50).toInt();
     final int totalPages = _readInteger(
       data['numPages'],
     ).clamp(page, 50).toInt();
@@ -780,6 +787,7 @@ class BilibiliVideoInfoService
       results: List<VideoSearchResult>.unmodifiable(results),
       page: page == 1 && requestedPage > 1 ? requestedPage : page,
       totalPages: totalPages,
+      reportedPage: reportedPage,
     );
   }
 
@@ -878,6 +886,13 @@ class BilibiliVideoInfoService
     }
     return int.tryParse(value?.toString() ?? '')?.clamp(0, 1 << 31).toInt() ??
         0;
+  }
+
+  int? _readOptionalCount(Object? value) {
+    final count = value is num && value.isFinite
+        ? value.toInt()
+        : int.tryParse(value?.toString() ?? '');
+    return count == null || count < 0 ? null : count;
   }
 
   /// 将 aid、cid、mid 等可能超过 32 位的编号完整转换为非负整数，避免错误截断成 2147483648。
@@ -1021,23 +1036,30 @@ class BilibiliVideoInfoService
   static Future<String> _requestPublicJson(Uri uri) async {
     final HttpClient client = HttpClient();
     try {
-      final HttpClientRequest request = await client.getUrl(uri);
-      final Map<String, String> requestHeaders =
-          BilibiliRequestPolicy.publicJsonHeaders(
-            uri,
-            userAgent: _desktopUserAgent,
+      Future<String> send() async {
+        final HttpClientRequest request = await client.getUrl(uri);
+        final Map<String, String> requestHeaders =
+            BilibiliRequestPolicy.publicJsonHeaders(
+              uri,
+              userAgent: _desktopUserAgent,
+            );
+        for (final MapEntry<String, String> header in requestHeaders.entries) {
+          request.headers.set(header.key, header.value);
+        }
+        final HttpClientResponse response = await request.close();
+        final String responseText = await response.transform(utf8.decoder).join();
+        if (response.statusCode != HttpStatus.ok) {
+          throw BilibiliLookupException(
+            '视频详情接口暂时不可用（HTTP ${response.statusCode}）。',
           );
-      for (final MapEntry<String, String> header in requestHeaders.entries) {
-        request.headers.set(header.key, header.value);
+        }
+        return responseText;
       }
-      final HttpClientResponse response = await request.close();
-      final String responseText = await response.transform(utf8.decoder).join();
-      if (response.statusCode != HttpStatus.ok) {
-        throw BilibiliLookupException(
-          '视频详情接口暂时不可用（HTTP ${response.statusCode}）。',
-        );
-      }
-      return responseText;
+      final pending = send();
+      if (uri.path != _videoSearchPath) return await pending;
+      return await pending.timeout(const Duration(seconds: 12));
+    } on TimeoutException {
+      throw const BilibiliLookupException('搜索请求超时，请稍后重试。');
     } on SocketException {
       throw const BilibiliLookupException('无法连接到视频详情接口，请检查网络后重试。');
     } on HttpException {

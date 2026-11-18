@@ -127,6 +127,7 @@ class VideoSearchResult {
     required this.danmakuCount,
     required this.episodeCountText,
     this.ownerMid = 0,
+    this.favoriteCount,
     this.categoryId,
     this.tags = const [],
   });
@@ -139,6 +140,7 @@ class VideoSearchResult {
   final DateTime? publishedAt;
   final int playCount;
   final int danmakuCount;
+  final int? favoriteCount;
   final String episodeCountText;
   final int ownerMid;
   final int? categoryId;
@@ -209,11 +211,15 @@ class VideoSearchPage {
     required this.results,
     required this.page,
     required this.totalPages,
+    this.reportedPage,
   });
 
   final List<VideoSearchResult> results;
   final int page;
   final int totalPages;
+
+  /// Explicit server page, before the legacy fallback for missing values.
+  final int? reportedPage;
 
   /// 判断服务端是否仍有下一页结果可以加载。
   bool get hasMore => page < totalPages;
