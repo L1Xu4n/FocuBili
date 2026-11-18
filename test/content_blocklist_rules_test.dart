@@ -225,7 +225,9 @@ void main() {
       await _submit(t, _bvid(7));
       final card = find.byKey(ValueKey('direct-${_bvid(7)}'));
       expect(card, findsOneWidget);
-      expect(fixture.requests.map((u) => u.path), ['/x/web-interface/wbi/view']);
+      expect(fixture.requests.map((u) => u.path), [
+        '/x/web-interface/wbi/view',
+      ]);
       await rules.saveRule(
         const ContentBlockRule(ContentBlockKind.videoTag, '系统基础'),
       );
