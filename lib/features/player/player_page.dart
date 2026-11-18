@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 import '../../models/ab_repeat_range.dart';
 import '../../models/playback_queue.dart';
 import 'widgets/player_ab_repeat_sheet.dart';
+import 'widgets/player_ab_repeat_dock.dart';
 
 import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/foundation.dart';

@@ -350,15 +350,17 @@ extension _PlayerPageView on _PlayerPageState {
                           !editAbBelowVideo &&
                           !inPictureInPicture &&
                           !_controlsLocked)
-                        Align(
-                          alignment: Alignment.topCenter,
-                          child: SingleChildScrollView(
-                            child: ConstrainedBox(
-                              constraints: const BoxConstraints(maxWidth: 600),
+                        if (_fullscreen)
+                          Positioned.fill(
+                            child: _buildAbRepeatEditor(floating: true),
+                          )
+                        else
+                          Align(
+                            alignment: Alignment.topCenter,
+                            child: SingleChildScrollView(
                               child: _buildAbRepeatEditor(),
                             ),
                           ),
-                        ),
                     ],
                   ),
                   bottomOverlay: _buildChapterProgressOverlay(

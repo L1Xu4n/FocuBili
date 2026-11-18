@@ -323,6 +323,61 @@ Future<Color> _previewPixel(WidgetTester t) async {
 }
 
 void main() {
+  testWidgets('stationary mouse keeps toolbar visible after transport clicks', (
+    t,
+  ) async {
+    final playback = _Playback();
+    await _mount(t, playback, _Metadata());
+    final button = find.byKey(const Key('play-pause-button'));
+    final mouse = await _mouse(t, t.getCenter(_surface));
+    addTearDown(mouse.removePointer);
+    await mouse.moveTo(t.getCenter(button));
+    await t.pump();
+    for (var i = 0; i < 2; i++) {
+      await mouse.down(t.getCenter(button));
+      await mouse.up();
+      await t.pumpAndSettle();
+    }
+    expect(playback.commands, ['pause', 'play']);
+    await t.pump(const Duration(seconds: 6));
+    expect(_controlOpacity(t), 1);
+  });
+
+  for (final kind in [PointerDeviceKind.mouse, PointerDeviceKind.touch]) {
+    for (final outside in [false, true]) {
+      testWidgets(
+        'stationary ${kind.name} after timeline release outside=$outside',
+        (t) async {
+          final playback = _Playback();
+          final metadata = _Metadata();
+          await _mount(t, playback, metadata);
+          final pointer = await t.createGesture(kind: kind);
+          addTearDown(pointer.removePointer);
+          await pointer.addPointer(location: t.getCenter(_surface));
+          await pointer.down(_trackAt(t, .2));
+          await pointer.moveTo(_trackAt(t, .8));
+          await t.pump();
+          if (outside) {
+            await pointer.moveTo(
+              t.getRect(_surface).bottomRight + const Offset(30, 30),
+            );
+            await t.pump();
+          }
+          await pointer.up();
+          await t.pumpAndSettle();
+          expect(playback.seeks, hasLength(1));
+          expect(metadata.calls, isEmpty);
+          expect(_hover, findsNothing);
+          await t.pump(const Duration(seconds: 6));
+          expect(
+            _controlOpacity(t),
+            kind == PointerDeviceKind.mouse && !outside ? 1 : 0,
+          );
+        },
+      );
+    }
+  }
+
   for (final platform in [
     AppPlatform.windows,
     AppPlatform.macos,
