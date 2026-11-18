@@ -111,14 +111,14 @@ void main() {
     expect(
       scroll.offset,
       closeTo(
-        physics.cardOffset().clamp(0.0, scroll.position.maxScrollExtent) / 2,
+        physics.cardOffset().clamp(0.0, scroll.position.maxScrollExtent),
         2,
       ),
     );
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('编辑卡片时接受订阅引导重置编辑手势，专注会话连续且恢复三档吸附', (tester) async {
+  testWidgets('编辑卡片时接受订阅引导重置编辑手势，专注会话连续且恢复抽屉吸附', (tester) async {
     final focus = await mountDashboard(tester, startFocus: true);
     final sessionId = focus.activeSession!.id;
     final originalKey = tester
@@ -160,7 +160,7 @@ void main() {
     expect(
       scroll.offset,
       closeTo(
-        physics.cardOffset().clamp(0.0, scroll.position.maxScrollExtent) / 2,
+        physics.cardOffset().clamp(0.0, scroll.position.maxScrollExtent),
         2,
       ),
     );
@@ -198,7 +198,7 @@ void main() {
     expect(
       scroll.offset,
       closeTo(
-        physics.cardOffset().clamp(0.0, scroll.position.maxScrollExtent) / 2,
+        physics.cardOffset().clamp(0.0, scroll.position.maxScrollExtent),
         2,
       ),
     );
@@ -215,7 +215,7 @@ void main() {
     await mountDashboard(
       tester,
       learningCard: SizedBox(
-        height: 280,
+        height: 420,
         child: ListView.builder(
           key: const Key('synthetic-inner-list'),
           controller: inner,
@@ -240,8 +240,11 @@ void main() {
     expect(scroll.offset, closeTo(openOffset, .01));
     expect(physics.gestureStart(), isNull);
 
+    // Let the list reach the intended deep starting point. This fling
+    // crosses the boundary only briefly before release.
     scroll.jumpTo(openOffset + 350);
     await tester.pumpAndSettle();
+    expect(scroll.offset, closeTo(openOffset + 350, .1));
     await tester.flingFrom(const Offset(8, 350), const Offset(0, 450), 5000);
     await tester.pumpAndSettle();
     expect(scroll.offset, closeTo(openOffset, 2));

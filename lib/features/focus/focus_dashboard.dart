@@ -5,8 +5,8 @@ import '../subscriptions/subscription_home_card.dart';
 import '../subscriptions/subscription_introduction.dart';
 import 'dart:async';
 import 'dart:io';
-import 'dart:ui' as ui;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show SliverConstraints;
 
@@ -70,6 +70,8 @@ class FocusDashboard extends StatefulWidget {
 /// 管理专注台表单输入、确认弹窗和计时操作反馈。
 class _FocusDashboardState extends State<FocusDashboard> {
   static const List<int> _presetMinutes = <int>[25, 45, 60];
+  static const double _homeCardTopPadding = 12;
+  static const double _homeCardBottomPadding = 32;
 
   final TextEditingController _goalController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
@@ -242,8 +244,16 @@ class _FocusDashboardState extends State<FocusDashboard> {
   }
 
   int _selectedMinutes = 25;
-  double _scrollOffset = 0;
   double? _homeScrollStartOffset;
+  double _homeDrawerExtent = 0;
+  double _homeWindowHeight = 0;
+
+  bool get _canSnapHomeDrawer {
+    if (_editingHomeCards || !_scrollController.hasClients) return false;
+    final position = _scrollController.position;
+    return position.hasViewportDimension &&
+        _homeDrawerExtent <= position.viewportDimension;
+  }
 
   Widget _buildSubscriptionButton() => ListenableBuilder(
     listenable: _subscriptions,
@@ -275,7 +285,6 @@ class _FocusDashboardState extends State<FocusDashboard> {
     _subscriptions.addListener(_subscriptionChanged);
     unawaited(_subscriptions.initialize());
     _goalController.addListener(_handleGoalChanged);
-    _scrollController.addListener(_handleScrollChanged);
   }
 
   /// 目标输入变化时刷新开始按钮，不修改控制器中的活动计时。
@@ -285,19 +294,8 @@ class _FocusDashboardState extends State<FocusDashboard> {
     }
   }
 
-  /// 记录首页滚动距离，用来驱动首屏内容的上移、模糊和透明度变化。
-  void _handleScrollChanged() {
-    if (!mounted) {
-      return;
-    }
-    setState(() => _scrollOffset = _scrollController.offset);
-  }
-
   /// Only the outer scroll view participates; card lists keep their own gestures.
-  bool _handleHomeScrollNotification(
-    BuildContext context,
-    ScrollNotification notification,
-  ) {
+  bool _handleHomeScrollNotification(ScrollNotification notification) {
     if (_editingHomeCards || notification.depth != 0) return false;
     if (notification is ScrollStartNotification &&
         notification.dragDetails != null &&
@@ -312,13 +310,11 @@ class _FocusDashboardState extends State<FocusDashboard> {
   /// 编辑时停止首页吸附，并清理旧手势，防止长按拖动被自动滚动抢走。
   void _handleHomeEditingChanged(bool editing) {
     if (!mounted || editing == _editingHomeCards) return;
+    _homeScrollStartOffset = null;
     if (editing && _scrollController.hasClients) {
       _scrollController.jumpTo(_scrollController.offset);
     }
-    setState(() {
-      _editingHomeCards = editing;
-      _homeScrollStartOffset = null;
-    });
+    setState(() => _editingHomeCards = editing);
   }
 
   /// 使用当前目标和所选分钟数开始专注，并在失败时给出可读提示。
@@ -845,23 +841,49 @@ class _FocusDashboardState extends State<FocusDashboard> {
             finishedSession,
           );
         }
+        final viewport = MediaQuery.sizeOf(context);
+        final heroHeight = useHomeHero
+            ? _homeHeroHeight(context, viewport)
+            : 0.0;
+        final hasDrawer = useHomeHero && _hasHomeDrawer;
+        final drawerExtent = heroHeight + _homeCardTopPadding;
+        if (_homeDrawerExtent != drawerExtent ||
+            _homeWindowHeight != viewport.height ||
+            !hasDrawer) {
+          _homeScrollStartOffset = null;
+        }
+        _homeDrawerExtent = drawerExtent;
+        _homeWindowHeight = viewport.height;
+        final behavior = ScrollConfiguration.of(context);
         return NotificationListener<ScrollNotification>(
-          onNotification: (ScrollNotification notification) =>
-              _handleHomeScrollNotification(context, notification),
+          onNotification: _handleHomeScrollNotification,
           child: CustomScrollView(
             controller: _scrollController,
-            physics: useHomeHero && _hasHomeDrawer
+            dragStartBehavior: hasDrawer
+                ? DragStartBehavior.down
+                : DragStartBehavior.start,
+            // Only this scroll view adds mouse dragging. Native wheel and
+            // nested scrollables keep their existing behavior.
+            scrollBehavior: hasDrawer
+                ? behavior.copyWith(
+                    dragDevices: {
+                      ...behavior.dragDevices,
+                      PointerDeviceKind.mouse,
+                    },
+                  )
+                : null,
+            physics: hasDrawer
                 ? HomeDrawerScrollPhysics(
-                    cardOffset: () => _homeHeroHeight(context) + 12,
+                    cardOffset: () => _homeDrawerExtent,
                     gestureStart: () => _homeScrollStartOffset,
-                    enabled: () =>
-                        !_editingHomeCards && _canAnimateHomeHero(context),
+                    enabled: () => _canSnapHomeDrawer,
                   )
                 : null,
             slivers: <Widget>[
-              if (useHomeHero) _buildHomeHero(context),
-              if (useHomeHero && _hasHomeDrawer)
-                _buildCardsSliver(context, activeSession, finishedSession)
+              if (useHomeHero)
+                _buildHomeHero(context, heroHeight, viewport.width),
+              if (hasDrawer)
+                _buildHomeCardsSliver(context, activeSession, finishedSession)
               else if (!useHomeHero) ...<Widget>[
                 SliverAppBar.large(
                   title: const Text('焦点哔哩'),
@@ -906,9 +928,7 @@ class _FocusDashboardState extends State<FocusDashboard> {
     _goalController
       ..removeListener(_handleGoalChanged)
       ..dispose();
-    _scrollController
-      ..removeListener(_handleScrollChanged)
-      ..dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 }

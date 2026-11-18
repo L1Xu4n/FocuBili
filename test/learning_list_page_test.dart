@@ -225,10 +225,12 @@ void main() {
     expect(find.text('首页继续学习测试'), findsOneWidget);
   });
 
-  /// 首页使用关闭、半开、全开停靠点，快速手势每次只移动一档。
-  testWidgets('首页上滑依次吸附到半开和卡片区', (WidgetTester tester) async {
-    await tester.binding.setSurfaceSize(const Size(420, 900));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+  /// 一次明确的上拉展开卡片，下拉同样不需要等待中途停靠。
+  testWidgets('首页卡片一次上拉打开一次下拉关闭', (WidgetTester tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(420, 900);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
     final LearningListService service = await _learningListService();
     final FocusTimerController focusController = FocusTimerController(
       tickInterval: const Duration(days: 1),
@@ -253,24 +255,11 @@ void main() {
     await tester.drag(scrollView, const Offset(0, -260));
     await tester.pumpAndSettle();
 
-    final Rect halfOpenRect = tester.getRect(
-      find.byKey(const Key('continue-learning-empty')),
-    );
-    expect(halfOpenRect.top, inInclusiveRange(180, 450));
-
-    await tester.fling(scrollView, const Offset(0, -120), 2500);
-    await tester.pumpAndSettle();
     final Rect cardRect = tester.getRect(
       find.byKey(const Key('continue-learning-empty')),
     );
     expect(cardRect.top, lessThan(110));
 
-    await tester.fling(scrollView, const Offset(0, 120), 2500);
-    await tester.pumpAndSettle();
-    expect(
-      tester.getRect(find.byKey(const Key('continue-learning-empty'))).top,
-      closeTo(halfOpenRect.top, 2),
-    );
     await tester.fling(scrollView, const Offset(0, 120), 2500);
     await tester.pumpAndSettle();
     final Rect returnedCardRect = tester.getRect(
@@ -307,11 +296,7 @@ void main() {
     await tester.pumpAndSettle();
 
     final Finder scrollView = find.byType(CustomScrollView);
-    // 越过欢迎区及 220 像素吸附窗口，模拟明确进入深层卡片的大幅手势。
-    await tester.fling(scrollView, const Offset(0, -120), 2500);
-    await tester.pumpAndSettle();
-    await tester.fling(scrollView, const Offset(0, -120), 2500);
-    await tester.pumpAndSettle();
+    // 单次拖动从首屏穿过首张卡片，松手后应停在已抵达的列表深处。
     await tester.drag(scrollView, const Offset(0, -1300));
     await tester.pumpAndSettle();
 
