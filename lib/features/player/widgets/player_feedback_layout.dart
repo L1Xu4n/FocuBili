@@ -105,11 +105,10 @@ class _FeedbackLayoutDelegate extends MultiChildLayoutDelegate {
   /// 上下栏始终按真实尺寸布局，反馈不会绘制到控制栏或侧边入口上。
   @override
   void performLayout(Size size) {
-    final barConstraints = BoxConstraints(
-      minWidth: size.width,
-      maxWidth: size.width,
-      maxHeight: size.height,
-    );
+    // Scrolling to a detail (such as its tags) continuously collapses the
+    // clipped header, sometimes below a single control row. Measure the bars
+    // at natural height instead of forcing their Column to overflow.
+    final barConstraints = BoxConstraints.tightFor(width: size.width);
     final top = layoutChild(_FeedbackSlot.top, barConstraints);
     final bottom = layoutChild(_FeedbackSlot.bottom, barConstraints);
     final overlay = layoutChild(_FeedbackSlot.bottomOverlay, barConstraints);

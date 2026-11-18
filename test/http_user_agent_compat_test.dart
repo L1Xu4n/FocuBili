@@ -421,7 +421,12 @@ void main() {
       await api.run(() async {
         final ordinary = await service.lookupVideo(_ordinaryBvid);
         expect(ordinary.isKnownUnrestrictedUpload, isTrue);
-        expect(ordinary.tags, ['本地测试']);
+        expect(ordinary.tags, isEmpty);
+        expect(
+          api.received.where((call) => call.path == '/x/tag/archive/tags'),
+          isEmpty,
+        );
+        expect(await service.loadVideoTags(_ordinaryBvid), ['本地测试']);
         expect(api.received.map((call) => call.path), [
           '/x/web-interface/nav',
           '/x/web-interface/wbi/view',
@@ -434,6 +439,11 @@ void main() {
         api.received.clear();
         await prefs.save(_ua);
         await service.lookupVideo(_ordinaryBvid);
+        expect(
+          api.received.where((call) => call.path == '/x/tag/archive/tags'),
+          isEmpty,
+        );
+        await service.loadVideoTags(_ordinaryBvid);
         await service.searchVideos('example fixture');
         await service.searchUsers('example fixture');
         await service.suggestKeywords('example fixture');

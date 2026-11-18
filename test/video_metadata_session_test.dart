@@ -493,33 +493,66 @@ void main() {
     });
   }
 
-  test('logout during optional tags discards complete details', () async {
-    final auth = BilibiliAuthService(cookieStore: _Cookies());
-    final tagGate = Completer<String>(), tagStarted = Completer<void>();
-    final service = BilibiliVideoInfoService(
-      metadataClient: BilibiliVideoMetadataClient(
+  test(
+    'logout during asynchronous detail parsing discards the old result',
+    () async {
+      final auth = BilibiliAuthService(cookieStore: _Cookies());
+      final parseStarted = Completer<void>(), parseGate = Completer<void>();
+      final client = BilibiliVideoMetadataClient(
         authService: auth,
         diagnostics: _Diagnostics(),
         transport: (uri, _) async => VideoMetadataResponse(
           200,
           uri.path.endsWith('/nav') ? _nav : _view,
         ),
-      ),
-      requestJson: (_) {
-        tagStarted.complete();
-        return tagGate.future;
-      },
-    );
-    final old = service.lookupVideo(_bvid);
-    final rejected = expectLater(
-      old,
-      throwsA(isA<BilibiliPlaybackSessionException>()),
-    );
-    await tagStarted.future;
-    await auth.logout();
-    tagGate.complete('{"code":0,"data":[]}');
-    await rejected;
-  });
+      );
+      final old = client.load<String>(
+        bvid: _bvid,
+        details: true,
+        parse: (body) async {
+          parseStarted.complete();
+          await parseGate.future;
+          return body;
+        },
+      );
+      final rejected = expectLater(
+        old,
+        throwsA(isA<BilibiliPlaybackSessionException>()),
+      );
+      await parseStarted.future;
+      await auth.logout();
+      parseGate.complete();
+      await rejected;
+    },
+  );
+
+  test(
+    'WBI detail never fetches tags; explicit tag reveal fetches once',
+    () async {
+      var tagCalls = 0;
+      final service = BilibiliVideoInfoService(
+        metadataClient: BilibiliVideoMetadataClient(
+          authService: BilibiliAuthService(cookieStore: _Cookies()),
+          diagnostics: _Diagnostics(),
+          transport: (uri, _) async => VideoMetadataResponse(
+            200,
+            uri.path.endsWith('/nav') ? _nav : _view,
+          ),
+        ),
+        requestJson: (uri) async {
+          expect(uri.path, '/x/tag/archive/tags');
+          expect(uri.queryParameters['bvid'], _bvid);
+          tagCalls++;
+          return '{"code":0,"data":[{"tag_name":"物理"}]}';
+        },
+      );
+      final result = await service.lookupVideo(_bvid);
+      expect(result.bvid, _bvid);
+      expect(tagCalls, 0);
+      expect(await service.loadVideoTags(_bvid), ['物理']);
+      expect(tagCalls, 1);
+    },
+  );
 
   test('cached offline replacement cannot cross native generation', () async {
     final cookies = _NativeCookies();

@@ -1,3 +1,4 @@
+import 'video_tag_setting.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -1317,6 +1318,7 @@ class _PersonalizationSettingsPageState
         if ((widget.appPlatform ?? AppPlatformDetector.current).isMobile)
           _buildLayoutModeTile(),
         _buildThemeModeTile(themeModeController),
+        const VideoTagSetting(key: Key('video-tag-mode')),
         ListTile(
           key: const Key('ui-text-size-preference'),
           leading: const Icon(Icons.text_fields),

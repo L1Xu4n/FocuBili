@@ -25,10 +25,8 @@ void main() {
         await tester.pumpAndSettle();
         final item = find.byKey(Key(key));
         // 屏蔽管理在观看工具之后，短窗口要先滚动到它才能点击。
-        if (item.hitTestable().evaluate().isEmpty) {
-          await tester.drag(find.text('字幕').last, const Offset(0, -350));
-          await tester.pumpAndSettle();
-        }
+        await tester.ensureVisible(item);
+        await tester.pumpAndSettle();
         expect(item.hitTestable(), findsOneWidget);
         await tester.tap(item);
         await tester.pumpAndSettle();
