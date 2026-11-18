@@ -933,8 +933,8 @@ class _SubscriptionSettingsPageState extends State<SubscriptionSettingsPage> {
                                                           )
                                                           ?.initialized ==
                                                       true
-                                                  ? '更新检查失败 · 请刷新重试'
-                                                  : '获取已有内容失败 · 请刷新重试'
+                                                  ? '更新检查失败 · 可重试此来源'
+                                                  : '获取已有内容失败 · 可重试此来源'
                                             : _service
                                                       .checkpoint(source.key)
                                                       ?.initialized ==
@@ -985,17 +985,24 @@ class _SubscriptionSettingsPageState extends State<SubscriptionSettingsPage> {
                                                   ),
                                               child: const Text('历史内容'),
                                             ),
-                                            if (_service
-                                                    .checkpoint(source.key)
-                                                    ?.blocked ==
-                                                true)
+                                            if (!source.paused &&
+                                                _service
+                                                        .checkpoint(source.key)
+                                                        ?.error !=
+                                                    null)
                                               TextButton(
-                                                onPressed: () => _action(
-                                                  () => _service.retrySource(
-                                                    source.key,
-                                                  ),
-                                                ),
-                                                child: const Text('重新检查'),
+                                                onPressed:
+                                                    !_service.enabled ||
+                                                        _service.refreshing ||
+                                                        _busy
+                                                    ? null
+                                                    : () => _action(
+                                                        () => _service
+                                                            .retrySource(
+                                                              source.key,
+                                                            ),
+                                                      ),
+                                                child: const Text('重试此来源'),
                                               ),
                                             TextButton(
                                               onPressed: _busy

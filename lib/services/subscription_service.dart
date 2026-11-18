@@ -887,8 +887,13 @@ class SubscriptionService extends ChangeNotifier {
   }
 
   Future<void> markRead(String bvid) => markReadBatch({bvid});
-  Future<void> markReadBatch(Set<String> bvids) => _mutate(() {
+  Future<void> markReadBatch(Set<String> bvids) =>
+      _mutate(() => _applyRead(bvids));
+  Future<void> markAllRead() => _mutate(() => _applyRead(_feed.keys));
+
+  void _applyRead(Iterable<String> bvids) {
     final now = _clock();
+    var changed = false;
     for (final bvid in bvids) {
       final item = _feed[bvid];
       if (item != null && item.readAt == null) {
@@ -896,18 +901,12 @@ class SubscriptionService extends ChangeNotifier {
         // notification batch. Keep the intentional suppression durably.
         _notificationClaims.add(bvid);
         _feed[bvid] = item.copyWith(readAt: now);
-        _invalidateFeed();
+        changed = true;
       }
     }
-  });
-  Future<void> markAllRead() => _mutate(() {
-    for (final item in _feed.values.toList()) {
-      if (item.readAt == null) {
-        _feed[item.bvid] = item.copyWith(readAt: _clock());
-        _invalidateFeed();
-      }
-    }
-  });
+    if (changed) _invalidateFeed();
+  }
+
   Future<void> clearDisplayCache() => _mutate(() {
     _feed.clear();
     _invalidateFeed();
@@ -1320,17 +1319,36 @@ class SubscriptionService extends ChangeNotifier {
   }
 
   Future<void> retrySource(String key) async {
-    await _mutate(() {
+    final retry = await _mutate(() {
       final cp = _checkpoints[key];
-      if (cp == null) return;
-      // Explicit retry keeps saved data, but starts a new bounded coverage pass.
-      cp.blocked = false;
-      cp.signatures.clear();
-      cp.nextPage = 1;
-      cp.knownPages = 0;
+      if (!enabled ||
+          _sources[key]?.paused != false ||
+          cp == null ||
+          cp.error == null) {
+        return false;
+      }
+      // Only explicit source retry bypasses backoff. Keep the cursor after
+      // transient errors; restart coverage only for an invalid page sequence.
+      cp.retryAt = null;
+      if (cp.blocked) {
+        cp.blocked = false;
+        cp.signatures.clear();
+        cp.nextPage = 1;
+        cp.knownPages = 0;
+        cp.needsHeadRecheck = false;
+      }
+      // Make this incomplete source eligible without forcing all other recent
+      // sources past the normal one-hour freshness window.
+      cp.catchingUp = true;
       cp.error = null;
+      return true;
     });
-    await refresh(manual: true);
+    if (!retry) return;
+    if (_refresh != null) {
+      // An in-flight check might already have skipped this backed-off source.
+      _refreshAgain = true;
+    }
+    await refresh();
   }
 
   Future<Map<String, SubscriptionFeedItem>> _scan(

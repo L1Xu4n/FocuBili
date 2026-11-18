@@ -10,6 +10,7 @@ import 'package:focubili/models/public_profile.dart';
 import 'package:focubili/models/subscription.dart';
 import 'package:focubili/services/focus_notification_service.dart';
 import 'package:focubili/platform/app_platform.dart';
+import 'subscription_service_test.dart' show Content, item, source;
 
 class Permission extends FocusNotificationService {
   int requests = 0;
@@ -250,7 +251,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(find.text('获取已有内容失败 · 请刷新重试'), 200);
+    await tester.scrollUntilVisible(find.text('获取已有内容失败 · 可重试此来源'), 200);
     s.checkpoint(source.key)!.initialized = true;
     s.checkpoint(source.key)!.error = null;
     await tester.pumpWidget(
@@ -262,6 +263,43 @@ void main() {
     await tester.scrollUntilVisible(find.text('已订阅更新'), 200);
     expect(find.text('已订阅更新'), findsOneWidget);
   });
+  testWidgets(
+    'failed subscription gives a reachable retry that resumes updates',
+    (tester) async {
+      final content = Content()
+        ..pages[1] = [
+          [item('existing')],
+        ];
+      final service = SubscriptionService(contentService: content);
+      addTearDown(service.dispose);
+      await service.addSource(source(1));
+      await service.setEnabled(true);
+      service.setForeground(true);
+      await service.refresh(manual: true);
+      expect(service.feed, isEmpty);
+
+      content.pages[1] = [
+        [item('new'), item('existing')],
+      ];
+      content.failPage = 1;
+      await service.refresh(manual: true);
+      expect(service.checkpoint('creator:1')!.retryAt, isNotNull);
+      await tester.pumpWidget(
+        MaterialApp(home: SubscriptionSettingsPage(service: service)),
+      );
+      await tester.pumpAndSettle();
+      final retry = find.text('重试此来源');
+      await tester.scrollUntilVisible(retry, 150);
+      content.failPage = null;
+      await tester.tap(retry);
+      await tester.pumpAndSettle();
+      expect(find.text('已订阅更新'), findsOneWidget);
+      expect(service.feed.map((item) => item.bvid), ['new']);
+      expect(tester.takeException(), isNull);
+      service.setForeground(false);
+    },
+  );
+
   testWidgets(
     'creator link guidance and avatar preview preserve resolved metadata',
     (tester) async {
