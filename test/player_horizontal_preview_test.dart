@@ -316,7 +316,7 @@ void main() {
       if (shouldFail) throw const ImageCacheFailure();
       return bytes;
     });
-    final p = _Playback();
+    final p = _Playback(position: const Duration(hours: 1, minutes: 42));
     final metadata = _Metadata((_) => _oneAtlas(_first));
     await _mount(t, p, metadata, cache);
     var swipe = await _begin(t);
