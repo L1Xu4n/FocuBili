@@ -3,8 +3,7 @@ part of 'focus_dashboard.dart';
 /// 首页的欢迎区与响应式容器；专注业务卡片继续由页面状态维护。
 extension _FocusDashboardHomeLayout on _FocusDashboardState {
   /// 根据文字实际换行高度为首屏留足空间，矮屏和大字体允许自然滚动。
-  double _homeHeroHeight(BuildContext context) {
-    final Size windowSize = MediaQuery.sizeOf(context);
+  double _homeHeroHeight(BuildContext context, Size windowSize) {
     final bool compact =
         windowSize.width >= AdaptiveLayout.tabletBreakpoint ||
         windowSize.height < 648;
@@ -73,147 +72,111 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
     return height;
   }
 
-  /// 首屏内容高于视口时保留自然滚动，确保搜索按钮不会在到达前淡出。
-  bool _canAnimateHomeHero(BuildContext context) =>
-      _homeHeroHeight(context) <= MediaQuery.sizeOf(context).height - 64;
-
-  /// 创建截图中的首屏欢迎区，保留搜索和“我的”两个最短路径入口。
-  Widget _buildHomeHero(BuildContext context) {
-    final double heroHeight = _homeHeroHeight(context);
-    final bool animate =
-        _hasHomeDrawer && _canAnimateHomeHero(context) && !_editingHomeCards;
-    final double progress = animate
-        ? (_scrollOffset / 280).clamp(0.0, 1.0).toDouble()
-        : 0;
-    // Sliver 随滚动上移；额外向下位移后，首屏元素会相对原位下坠再淡出。
-    final double fallOffset = animate ? _scrollOffset * 1.32 : 0;
+  /// 欢迎区和卡片在同一个滚动平面，不做反向位移或逐帧模糊。
+  Widget _buildHomeHero(BuildContext context, double heroHeight, double width) {
     final ThemeData theme = Theme.of(context);
     final Color textColor = theme.colorScheme.onSurface;
     // 两个首页动作按钮都复用应用主题，避免草图颜色泄漏到成品界面。
     final Color actionColor = theme.colorScheme.primary;
     final Color actionTextColor = theme.colorScheme.onPrimary;
+    final horizontalPadding = AdaptiveLayout.centeredHorizontalPadding(
+      width: width,
+      maxContentWidth: AdaptiveLayout.homeContentMaxWidth,
+      compact: 24,
+    );
     return SliverToBoxAdapter(
       child: SizedBox(
         key: const Key('focus-home-hero'),
         height: heroHeight,
-        child: ClipRect(
-          child: ImageFiltered(
-            imageFilter: ui.ImageFilter.blur(
-              sigmaX: progress * 7,
-              sigmaY: progress * 7,
-            ),
-            child: Opacity(
-              opacity: 1 - (progress * 0.88),
-              child: Transform.translate(
-                // 首屏本身随滚动离开，但内容相对原位向下坠落并逐渐淡出。
-                offset: Offset(0, fallOffset),
-                child: LayoutBuilder(
-                  builder: (BuildContext context, BoxConstraints constraints) {
-                    final double horizontalPadding =
-                        AdaptiveLayout.centeredHorizontalPadding(
-                          width: constraints.maxWidth,
-                          maxContentWidth: AdaptiveLayout.homeContentMaxWidth,
-                          compact: 24,
-                        );
-                    return Padding(
-                      padding: EdgeInsets.fromLTRB(
-                        horizontalPadding,
-                        18,
-                        horizontalPadding,
-                        12,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+            horizontalPadding,
+            18,
+            horizontalPadding,
+            12,
+          ),
+          child: Column(
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  // 保留首页文字节点，便于旧版无障碍和启动回归测试识别当前页面。
+                  const SizedBox.shrink(child: Text('首页')),
+                  Expanded(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      key: const Key('home-open-about'),
+                      onTap: () =>
+                          Navigator.of(context).pushNamed(AppRoutes.about),
+                      child: Text(
+                        '焦点哔哩',
+                        style: theme.textTheme.headlineSmall?.copyWith(
+                          fontWeight: FontWeight.w800,
+                          color: textColor,
+                        ),
                       ),
-                      child: Column(
-                        children: <Widget>[
-                          Row(
-                            children: <Widget>[
-                              // 保留首页文字节点，便于旧版无障碍和启动回归测试识别当前页面。
-                              const SizedBox.shrink(child: Text('首页')),
-                              Expanded(
-                                child: GestureDetector(
-                                  behavior: HitTestBehavior.opaque,
-                                  key: const Key('home-open-about'),
-                                  onTap: () => Navigator.of(
-                                    context,
-                                  ).pushNamed(AppRoutes.about),
-                                  child: Text(
-                                    '焦点哔哩',
-                                    style: theme.textTheme.headlineSmall
-                                        ?.copyWith(
-                                          fontWeight: FontWeight.w800,
-                                          color: textColor,
-                                        ),
-                                  ),
-                                ),
-                              ),
-                              _buildSubscriptionButton(),
-                              IconButton(
-                                tooltip: '自定义首页',
-                                onPressed: _customizeHome,
-                                icon: const Icon(Icons.tune_rounded),
-                              ),
-                              IconButton(
-                                key: const Key('home-profile-button'),
-                                // 我的按钮函数切换到个人中心页面。
-                                onPressed: widget.onOpenProfile,
-                                tooltip: '我的',
-                                style: IconButton.styleFrom(
-                                  backgroundColor: actionColor,
-                                  foregroundColor: actionTextColor,
-                                  fixedSize: const Size.square(46),
-                                  padding: EdgeInsets.zero,
-                                  shape: const CircleBorder(),
-                                ),
-                                icon: _buildProfileIcon(actionTextColor),
-                              ),
-                              // 保留旧启动测试需要的文字节点，实际按钮仍只绘制图标。
-                              const SizedBox.shrink(child: Text('我的')),
-                            ],
-                          ),
-                          _buildSubscriptionIntroduction(),
-                          const Spacer(),
-                          Text(
-                            '今天要学点什么？',
-                            textAlign: TextAlign.center,
-                            style: theme.textTheme.headlineMedium?.copyWith(
-                              fontWeight: FontWeight.w500,
-                              color: textColor,
-                            ),
-                          ),
-                          const SizedBox(height: 24),
-                          FilledButton(
-                            key: const Key('home-start-search'),
-                            // 开始搜索按钮函数进入搜索页面，保持首页动作单一明确。
-                            onPressed: widget.onOpenVideo,
-                            style: FilledButton.styleFrom(
-                              backgroundColor: actionColor,
-                              foregroundColor: actionTextColor,
-                              minimumSize: const Size(160, 58),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 28,
-                              ),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(30),
-                              ),
-                            ),
-                            child: const Text('开始搜索'),
-                          ),
-                          // 保留旧入口文字节点，但不在新首屏重复绘制第二个按钮。
-                          const SizedBox.shrink(child: Text('打开视频')),
-                          const Spacer(),
-                          if (_hasHomeDrawer)
-                            Icon(
-                              Icons.keyboard_double_arrow_up_rounded,
-                              key: const Key('home-scroll-hint'),
-                              size: 34,
-                              color: textColor,
-                            ),
-                        ],
-                      ),
-                    );
-                  },
+                    ),
+                  ),
+                  _buildSubscriptionButton(),
+                  IconButton(
+                    tooltip: '自定义首页',
+                    onPressed: _customizeHome,
+                    icon: const Icon(Icons.tune_rounded),
+                  ),
+                  IconButton(
+                    key: const Key('home-profile-button'),
+                    // 我的按钮函数切换到个人中心页面。
+                    onPressed: widget.onOpenProfile,
+                    tooltip: '我的',
+                    style: IconButton.styleFrom(
+                      backgroundColor: actionColor,
+                      foregroundColor: actionTextColor,
+                      fixedSize: const Size.square(46),
+                      padding: EdgeInsets.zero,
+                      shape: const CircleBorder(),
+                    ),
+                    icon: _buildProfileIcon(actionTextColor),
+                  ),
+                  // 保留旧启动测试需要的文字节点，实际按钮仍只绘制图标。
+                  const SizedBox.shrink(child: Text('我的')),
+                ],
+              ),
+              _buildSubscriptionIntroduction(),
+              const Spacer(),
+              Text(
+                '今天要学点什么？',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.headlineMedium?.copyWith(
+                  fontWeight: FontWeight.w500,
+                  color: textColor,
                 ),
               ),
-            ),
+              const SizedBox(height: 24),
+              FilledButton(
+                key: const Key('home-start-search'),
+                // 开始搜索按钮函数进入搜索页面，保持首页动作单一明确。
+                onPressed: widget.onOpenVideo,
+                style: FilledButton.styleFrom(
+                  backgroundColor: actionColor,
+                  foregroundColor: actionTextColor,
+                  minimumSize: const Size(160, 58),
+                  padding: const EdgeInsets.symmetric(horizontal: 28),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(30),
+                  ),
+                ),
+                child: const Text('开始搜索'),
+              ),
+              // 保留旧入口文字节点，但不在新首屏重复绘制第二个按钮。
+              const SizedBox.shrink(child: Text('打开视频')),
+              const Spacer(),
+              if (_hasHomeDrawer)
+                Icon(
+                  Icons.keyboard_double_arrow_up_rounded,
+                  key: const Key('home-scroll-hint'),
+                  size: 34,
+                  color: textColor,
+                ),
+            ],
           ),
         ),
       ),
@@ -414,66 +377,95 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
     );
   }
 
-  /// 首页使用单个可编辑容器；独立专注模式保留原有业务卡片顺序。
+  EdgeInsets _homeCardPadding(double width) {
+    final horizontal = AdaptiveLayout.centeredHorizontalPadding(
+      width: width,
+      maxContentWidth: AdaptiveLayout.homeContentMaxWidth,
+    );
+    return EdgeInsets.fromLTRB(
+      horizontal,
+      _FocusDashboardState._homeCardTopPadding,
+      horizontal,
+      _FocusDashboardState._homeCardBottomPadding,
+    );
+  }
+
+  /// Extend a short board just enough to clear the welcome area when opened.
+  Widget _buildHomeCardsSliver(
+    BuildContext context,
+    FocusSession? activeSession,
+    FocusSession? finishedSession,
+  ) {
+    // The sliver sees the actual viewport (excluding safe areas). Its
+    // constraints change while scrolling, but the card board stays the same.
+    final board = _buildHomeCardBoard(
+      context,
+      activeSession,
+      finishedSession,
+      columns: 1,
+    );
+    return SliverLayoutBuilder(
+      builder: (context, constraints) {
+        final padding = _homeCardPadding(constraints.crossAxisExtent);
+        final height = constraints.viewportMainAxisExtent;
+        return SliverPadding(
+          key: const Key('focus-adaptive-cards'),
+          padding: padding,
+          sliver: SliverToBoxAdapter(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minHeight: _homeDrawerExtent <= height
+                    ? (height - padding.bottom).clamp(0.0, double.infinity)
+                    : 0,
+              ),
+              child: board,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// 独立专注模式保留原有业务卡片顺序。
   Widget _buildCardsSliver(
     BuildContext context,
     FocusSession? activeSession,
     FocusSession? finishedSession,
   ) {
     return SliverLayoutBuilder(
-      // 卡片区按照实际横向约束居中，容器复用外层滚动控制器。
       builder: (BuildContext context, SliverConstraints constraints) {
-        final double horizontalPadding =
-            AdaptiveLayout.centeredHorizontalPadding(
-              width: constraints.crossAxisExtent,
-              maxContentWidth: AdaptiveLayout.homeContentMaxWidth,
-            );
         return SliverPadding(
           key: const Key('focus-adaptive-cards'),
-          padding: EdgeInsets.fromLTRB(
-            horizontalPadding,
-            12,
-            horizontalPadding,
-            32,
-          ),
-          sliver: widget.onOpenProfile != null
-              ? SliverToBoxAdapter(
-                  child: _buildHomeCardBoard(
-                    context,
-                    activeSession,
-                    finishedSession,
-                    columns: 1,
+          padding: _homeCardPadding(constraints.crossAxisExtent),
+          sliver: SliverList.list(
+            children: <Widget>[
+              if (!widget.controller.isReady)
+                const Card(
+                  child: Padding(
+                    padding: EdgeInsets.all(32),
+                    child: Center(child: CircularProgressIndicator()),
                   ),
                 )
-              : SliverList.list(
-                  children: <Widget>[
-                    if (!widget.controller.isReady)
-                      const Card(
-                        child: Padding(
-                          padding: EdgeInsets.all(32),
-                          child: Center(child: CircularProgressIndicator()),
-                        ),
-                      )
-                    else ...<Widget>[
-                      if (widget.continueLearningCard != null) ...<Widget>[
-                        widget.continueLearningCard!,
-                        const SizedBox(height: 14),
-                      ],
-                      if (finishedSession != null) ...<Widget>[
-                        _buildFinishedCard(context, finishedSession),
-                        const SizedBox(height: 14),
-                      ],
-                      if (activeSession != null)
-                        _buildActiveCard(context, activeSession)
-                      else
-                        _buildReadyCard(context),
-                      const SizedBox(height: 14),
-                      _buildTodaySummary(context),
-                      const SizedBox(height: 14),
-                      _buildRecentHistory(context),
-                    ],
-                  ],
-                ),
+              else ...<Widget>[
+                if (widget.continueLearningCard != null) ...<Widget>[
+                  widget.continueLearningCard!,
+                  const SizedBox(height: 14),
+                ],
+                if (finishedSession != null) ...<Widget>[
+                  _buildFinishedCard(context, finishedSession),
+                  const SizedBox(height: 14),
+                ],
+                if (activeSession != null)
+                  _buildActiveCard(context, activeSession)
+                else
+                  _buildReadyCard(context),
+                const SizedBox(height: 14),
+                _buildTodaySummary(context),
+                const SizedBox(height: 14),
+                _buildRecentHistory(context),
+              ],
+            ],
+          ),
         );
       },
     );

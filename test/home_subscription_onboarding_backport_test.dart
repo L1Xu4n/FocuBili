@@ -56,7 +56,7 @@ void main() {
       (tester.getSize(find.byKey(const Key('focus-home-hero'))).height + 12)
           .clamp(0.0, scroll.position.maxScrollExtent);
 
-  /// 保留 1.8 引导回归场景，按 1.9 的关闭/半开/全开三档验证真实触控。
+  /// 保留 1.8 引导回归场景，验证真实触控能一次展开。
   Future<void> pullAndExpectOpen(
     WidgetTester tester,
     ScrollController scroll,
@@ -66,14 +66,11 @@ void main() {
     final openOffset = firstCardOffset(tester, scroll);
     await tester.flingFrom(const Offset(8, 400), const Offset(0, -120), 2500);
     await tester.pumpAndSettle();
-    expect(scroll.offset, closeTo(openOffset / 2, 2));
-    await tester.flingFrom(const Offset(8, 400), const Offset(0, -120), 2500);
-    await tester.pumpAndSettle();
     expect(scroll.offset, closeTo(openOffset, 2));
   }
 
   for (final editing in [false, true]) {
-    testWidgets('1.8 接受首次订阅提示后恢复三档吸附，原编辑状态 $editing', (tester) async {
+    testWidgets('1.8 接受首次订阅提示后恢复抽屉吸附，原编辑状态 $editing', (tester) async {
       final scroll = await mountHome(tester);
       final originalKey = tester
           .widget<EditableCardBoard>(find.byType(EditableCardBoard))
@@ -107,7 +104,7 @@ void main() {
     });
   }
 
-  testWidgets('1.8 窄屏大字拒绝提示恢复高度，继续使用三档吸附', (tester) async {
+  testWidgets('1.8 窄屏大字拒绝提示恢复高度，继续使用抽屉吸附', (tester) async {
     final scroll = await mountHome(
       tester,
       size: const Size(360, 720),

@@ -2,8 +2,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart';
 
-/// Keeps the welcome area, half-open drawer and first card reachable in one drag.
-/// The content below the first card retains the platform's scrolling behavior.
+/// One scroll position serves the welcome area and its cards. Nothing is
+/// snapped during a drag; on release only the welcome range has detents.
 class HomeDrawerScrollPhysics extends ScrollPhysics {
   const HomeDrawerScrollPhysics({
     required this.cardOffset,
@@ -16,6 +16,12 @@ class HomeDrawerScrollPhysics extends ScrollPhysics {
   final double? Function() gestureStart;
   final bool Function() enabled;
 
+  static const _snapSpring = SpringDescription(
+    mass: 1,
+    stiffness: 576,
+    damping: 48,
+  );
+
   @override
   HomeDrawerScrollPhysics applyTo(ScrollPhysics? ancestor) =>
       HomeDrawerScrollPhysics(
@@ -25,37 +31,44 @@ class HomeDrawerScrollPhysics extends ScrollPhysics {
         parent: buildParent(ancestor),
       );
 
-  /// A fling advances at most one stop from the place the finger started.
+  /// A short deliberate pull is enough at either end. An interrupted snap
+  /// starts in between and uses the release position and its latest direction.
+  /// Half-open is available as a slow, deliberate rest near the midpoint, not
+  /// as a stop a long or fast gesture must visit.
   static double snapTarget({
     required double position,
     required double start,
     required double velocity,
     required double extent,
   }) {
-    if (extent <= 0) return 0;
-    final stops = <double>[0, extent / 2, extent];
-    if (start > extent + 24) return extent;
-    var startIndex = 0;
-    var nearest = 0;
-    for (var i = 1; i < stops.length; i++) {
-      if ((stops[i] - start).abs() < (stops[startIndex] - start).abs()) {
-        startIndex = i;
-      }
-      if ((stops[i] - position).abs() < (stops[nearest] - position).abs()) {
-        nearest = i;
-      }
+    final midpoint = extent / 2;
+    final movingFast = velocity.abs() >= 350;
+    if (!movingFast &&
+        (position - midpoint).abs() <= math.min(24, extent * .05)) {
+      return midpoint;
     }
-    final distance = position - start;
-    // Tiny taps and incidental motion cannot open or close the drawer.
-    if (distance.abs() < 18 && velocity.abs() < 650) {
-      return stops[startIndex];
+
+    // A fast fling from well inside a long list returns to the entry first.
+    // A pull held across the boundary, or one clearly beyond it, can close
+    // from the same gesture.
+    if (start > extent + 160 &&
+        velocity <= -350 &&
+        position > extent - math.min(120, extent / 4)) {
+      return extent;
     }
-    if (velocity.abs() >= 650 && distance.abs() >= 18) {
-      nearest = startIndex + (velocity > 0 ? 1 : -1);
+
+    final double threshold;
+    if (start <= 2) {
+      threshold = math.min(64, extent / 4);
+    } else if (start >= extent - 2) {
+      threshold = extent - math.min(96, extent / 4);
+    } else {
+      threshold = midpoint;
     }
-    final lower = math.max(0, startIndex - 1);
-    final upper = math.min(stops.length - 1, startIndex + 1);
-    return stops[nearest.clamp(lower, upper)];
+    final projection = movingFast
+        ? (velocity * .18).clamp(-extent / 2, extent / 2)
+        : 0.0;
+    return position + projection >= threshold ? extent : 0;
   }
 
   @override
@@ -63,52 +76,57 @@ class HomeDrawerScrollPhysics extends ScrollPhysics {
     ScrollMetrics position,
     double velocity,
   ) {
-    if (!enabled() || gestureStart() == null) {
+    final start = gestureStart();
+    if (!enabled() || start == null) {
+      // Wheel, keyboard, ensureVisible and card editing keep platform physics.
       return super.createBallisticSimulation(position, velocity);
     }
+
     final extent = cardOffset().clamp(0.0, position.maxScrollExtent);
-    if (extent <= 1) {
+    final pixels = position.pixels;
+    final tolerance = toleranceFor(position);
+    if (extent <= 1 || pixels < position.minScrollExtent) {
       return super.createBallisticSimulation(position, velocity);
     }
-    final start = gestureStart()!;
-    if (position.outOfRange &&
-        position.pixels > position.maxScrollExtent &&
-        start >= extent - 24) {
-      return super.createBallisticSimulation(position, velocity);
+
+    if (pixels >= extent) {
+      // A real drag can cross the first card in either direction. Inertia
+      // alone may return a scrolled list to its start, but must not close it.
+      if (velocity < 0 && pixels - extent <= tolerance.distance) return null;
+      final simulation = super.createBallisticSimulation(position, velocity);
+      return simulation != null && velocity < 0
+          ? _CardListBoundarySimulation(simulation, extent)
+          : simulation;
     }
-    if (position.pixels <= extent + 24 || start < extent - 24) {
-      final target = snapTarget(
-        position: position.pixels,
-        start: start,
-        velocity: velocity,
-        extent: extent,
-      );
-      final tolerance = toleranceFor(position);
-      if ((target - position.pixels).abs() <= tolerance.distance &&
-          velocity.abs() <= tolerance.velocity) {
-        return null;
-      }
-      return ScrollSpringSimulation(
-        spring,
-        position.pixels,
-        target,
-        // Bound momentum so a quick gesture does not overshoot another stop.
-        velocity.clamp(-900.0, 900.0),
-        tolerance: tolerance,
-      );
-    }
-    final simulation = super.createBallisticSimulation(position, velocity);
-    // A fling from a scrolled card list first returns to the open drawer.
-    // Closing it requires another deliberate gesture in the welcome area.
-    if (simulation != null && velocity < 0) {
-      return _DrawerBoundarySimulation(simulation, extent);
-    }
-    return simulation;
+
+    final target = snapTarget(
+      position: pixels,
+      start: start,
+      velocity: velocity,
+      extent: extent,
+    );
+    final distance = target - pixels;
+    if (distance.abs() <= tolerance.distance) return null;
+
+    // Critical damping and a velocity in the target direction keep the
+    // remaining motion monotonic, even when release meant reversing.
+    final initialSpeed = (velocity * distance.sign).clamp(
+      0.0,
+      math.min(2200, distance.abs() * 24),
+    );
+    return ScrollSpringSimulation(
+      _snapSpring,
+      pixels,
+      target,
+      initialSpeed * distance.sign,
+      tolerance: tolerance,
+    );
   }
 }
 
-class _DrawerBoundarySimulation extends Simulation {
-  _DrawerBoundarySimulation(this.delegate, this.minimum);
+class _CardListBoundarySimulation extends Simulation {
+  _CardListBoundarySimulation(this.delegate, this.minimum);
+
   final Simulation delegate;
   final double minimum;
 
