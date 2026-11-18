@@ -32,6 +32,18 @@ class SearchContentFilterService {
     }
   }
 
+  /// A writable draft must start from settings read successfully from storage.
+  /// Browsing can use defaults when storage fails; an edit must not save them
+  /// over existing choices or use SharedPreferences' optimistic write cache.
+  Future<SearchContentFilter> loadForEditing() async {
+    final preferences = await preferencesLoader();
+    await preferences.reload();
+    final raw = preferences.getString(storageKey);
+    return raw == null
+        ? const SearchContentFilter()
+        : SearchContentFilter.fromJsonStrict(jsonDecode(raw));
+  }
+
   static List<String> _keywords(Object? raw) => raw is List
       ? SearchContentFilter.parseKeywords(raw.whereType<String>().join('\n'))
       : const [];
