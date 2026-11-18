@@ -410,6 +410,8 @@ class BilibiliInteractionService {
     final current = await _openSession();
     if (!isCurrent() ||
         current.accountMid != expectedMid ||
+        current.generation != session.generation ||
+        current.revision != session.revision ||
         current.cookieHeader != session.cookieHeader) {
       throw const BilibiliInteractionException('账号已变化，未继续收藏。');
     }
@@ -472,32 +474,38 @@ class BilibiliInteractionService {
 
   /// 打开已验证会话并提取 CSRF；未登录或 Cookie 不完整时不发起写请求。
   Future<_InteractionSession> _openSession() async {
-    final BilibiliSessionState state = await _authService.loadCurrentSession();
-    if (!state.isActive) {
+    final session = await _authService.withVerifiedInteractionSession((
+      mid,
+      cookieHeader,
+      generation,
+      revision,
+    ) {
+      final match = _csrfPattern.firstMatch(cookieHeader);
+      final csrf = match == null
+          ? ''
+          : Uri.decodeComponent(match.group(2)!.trim());
+      if (csrf.isEmpty) {
+        throw const BilibiliInteractionException('当前登录会话缺少安全校验信息，请重新登录。');
+      }
+      return _InteractionSession(
+        cookieHeader: cookieHeader,
+        csrf: csrf,
+        accountMid: mid,
+        generation: generation,
+        revision: revision,
+      );
+    });
+    if (session == null) {
       throw const BilibiliInteractionException('请先登录 B 站后再执行此操作。');
     }
-    final generation = _authService.accountMutationGeneration;
-    final revision = CacheLifecycle.account.value;
-    final String cookieHeader = (await _authService.readCookieHeader()).trim();
-    if (generation != _authService.accountMutationGeneration ||
-        revision != CacheLifecycle.account.value) {
-      throw _staleSession;
-    }
-    final RegExpMatch? csrfMatch = _csrfPattern.firstMatch(cookieHeader);
-    final String csrf = csrfMatch == null
-        ? ''
-        : Uri.decodeComponent(csrfMatch.group(2)!.trim());
-    if (csrf.isEmpty) {
-      throw const BilibiliInteractionException('当前登录会话缺少安全校验信息，请重新登录。');
-    }
-    return _InteractionSession(
-      cookieHeader: cookieHeader,
-      csrf: csrf,
-      accountMid: state.account!.mid,
-      generation: generation,
-      revision: revision,
-    );
+    if (!_matchesCurrentScope(session)) throw _staleSession;
+    return session;
   }
+
+  bool _matchesCurrentScope(_InteractionSession session) =>
+      session.generation == _authService.accountMutationGeneration &&
+      session.revision == CacheLifecycle.account.value &&
+      CacheLifecycle.accountScope == 'mid:${session.accountMid}';
 
   /// 读取可用收藏夹编号；取消收藏时优先选择当前确实包含该视频的目录。
   Future<int> _loadFavoriteMediaId(
@@ -669,13 +677,9 @@ class BilibiliInteractionService {
     }
     // Recheck after the asynchronous read-only preference. Even a logout and
     // login into the same account invalidates a previously confirmed write.
-    if (session.generation != _authService.accountMutationGeneration ||
-        session.revision != CacheLifecycle.account.value) {
-      throw _staleSession;
-    }
+    if (!_matchesCurrentScope(session)) throw _staleSession;
     final currentCookie = (await _authService.readCookieHeader()).trim();
-    if (session.generation != _authService.accountMutationGeneration ||
-        session.revision != CacheLifecycle.account.value ||
+    if (!_matchesCurrentScope(session) ||
         currentCookie != session.cookieHeader) {
       throw _staleSession;
     }

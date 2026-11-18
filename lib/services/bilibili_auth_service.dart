@@ -184,6 +184,22 @@ class BilibiliAuthService {
   Future<BilibiliSessionState> loadCurrentSession() =>
       _loadScopedSession(reuseUnchangedSession: false);
 
+  /// Use the exact in-memory cookie passed to this check's /nav request.
+  /// Only the interaction service receives it, never a page or persisted state.
+  Future<T?> withVerifiedInteractionSession<T>(
+    T Function(int mid, String cookieHeader, int generation, int revision)
+    create,
+  ) async {
+    T? snapshot;
+    await _loadScopedSession(
+      reuseUnchangedSession: false,
+      onVerified: (mid, cookie, generation, revision) {
+        snapshot = create(mid, cookie, generation, revision);
+      },
+    );
+    return snapshot;
+  }
+
   /// 登录页轮询复用未变化的已确认结果，手动检测和网络失败仍允许重试。
   Future<BilibiliSessionState> loadCurrentSessionForWebLogin({
     bool force = false,
@@ -192,12 +208,18 @@ class BilibiliAuthService {
   /// 限时读取 Cookie，并按调用场景决定是否复用本次页面生命周期内的验证结果。
   Future<BilibiliSessionState> _loadScopedSession({
     required bool reuseUnchangedSession,
+    void Function(int mid, String cookie, int generation, int revision)?
+    onVerified,
   }) async {
     await _accountWrites;
     final revision = CacheLifecycle.account.value;
     final generation = _loginGeneration;
+    String? verifiedCookie;
     final result = await _loadCurrentSession(
       reuseUnchangedSession: reuseUnchangedSession,
+      onVerifiedCookie: onVerified == null
+          ? null
+          : (cookie) => verifiedCookie = cookie,
     );
     if (revision != CacheLifecycle.account.value ||
         generation != _loginGeneration) {
@@ -206,7 +228,19 @@ class BilibiliAuthService {
       );
     }
     if (result.isActive) {
-      await CacheLifecycle.setAccount(result.account!.mid);
+      final mid = result.account!.mid;
+      final scope = 'mid:$mid';
+      // Publishing a newly verified scope advances the revision once.
+      final verifiedRevision =
+          revision + (CacheLifecycle.accountScope == scope ? 0 : 1);
+      await CacheLifecycle.setAccount(mid);
+      final cookie = verifiedCookie;
+      if (cookie != null &&
+          generation == _loginGeneration &&
+          verifiedRevision == CacheLifecycle.account.value &&
+          scope == CacheLifecycle.accountScope) {
+        onVerified?.call(mid, cookie, generation, verifiedRevision);
+      }
     } else if (result.status == BilibiliSessionStatus.signedOut ||
         result.status == BilibiliSessionStatus.expired) {
       await CacheLifecycle.setAccount(null);
@@ -216,11 +250,12 @@ class BilibiliAuthService {
 
   Future<BilibiliSessionState> _loadCurrentSession({
     required bool reuseUnchangedSession,
+    void Function(String)? onVerifiedCookie,
   }) async {
     try {
-      final String cookieHeader = await readCookieHeader().timeout(
+      final String cookieHeader = (await readCookieHeader().timeout(
         _requestTimeout,
-      );
+      )).trim();
       if (!_containsSessionCookie(cookieHeader)) {
         _checkedWebSession = null;
         _checkedWebSessionState = null;
@@ -233,6 +268,7 @@ class BilibiliAuthService {
         return _checkedWebSessionState!;
       }
       final state = await _requestCurrentSession(cookieHeader);
+      if (state.isActive) onVerifiedCookie?.call(cookieHeader);
       if (state.status == BilibiliSessionStatus.networkError) {
         _checkedWebSession = null;
         _checkedWebSessionState = null;

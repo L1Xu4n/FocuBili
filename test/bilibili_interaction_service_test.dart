@@ -58,11 +58,29 @@ class _InteractionAuthApi implements BilibiliAuthApi {
   _InteractionAuthApi();
 
   int navigationCalls = 0;
+  final List<String> verifiedHeaders = [];
 
   /// 返回一份最小的已登录 `/nav` 响应。
   @override
   Future<BilibiliNavResponse> requestNavigation(String cookieHeader) async {
     navigationCalls += 1;
+    verifiedHeaders.add(cookieHeader);
+    return const BilibiliNavResponse(
+      statusCode: 200,
+      body: '{"code":0,"data":{"isLogin":true,"mid":42,"uname":"测试账号"}}',
+    );
+  }
+}
+
+class _HeldInteractionNavigation implements BilibiliAuthApi {
+  final seen = Completer<String>(), release = Completer<void>();
+  int calls = 0;
+
+  @override
+  Future<BilibiliNavResponse> requestNavigation(String cookieHeader) async {
+    calls++;
+    seen.complete(cookieHeader);
+    await release.future;
     return const BilibiliNavResponse(
       statusCode: 200,
       body: '{"code":0,"data":{"isLogin":true,"mid":42,"uname":"测试账号"}}',
@@ -138,6 +156,82 @@ class _HeldFinalCookies extends _InteractionCookieStore {
 }
 
 void main() {
+  test(
+    'native cookie rotation while verifying account cannot make a private write',
+    () async {
+      const verifiedCookie = 'SESSDATA=fixture-a; bili_jct=fixture-csrf-a';
+      final cookies = _InteractionCookieStore(cookies: verifiedCookie);
+      final nav = _HeldInteractionNavigation();
+      final request = _RecordedInteractionRequest();
+      final auth = BilibiliAuthService(cookieStore: cookies, api: nav);
+      final service = BilibiliInteractionService(
+        authService: auth,
+        request: request.call,
+        behaviorPreferencesService: _InteractionBehaviorPreferences(
+          readOnly: false,
+        ),
+      );
+
+      final generation = auth.accountMutationGeneration;
+      final operation = service.createFavoriteFolder(
+        title: '测试私密夹',
+        isPrivate: true,
+      );
+      // Record the outcome rather than allowing an unhandled async exception.
+      final outcome = operation.then<Object>(
+        (result) => result,
+        onError: (Object error) => error,
+      );
+      expect(await nav.seen.future, verifiedCookie);
+      // The platform cookie jar can rotate without a Dart login/logout.
+      cookies.cookies = 'SESSDATA=fixture-b; bili_jct=fixture-csrf-b';
+      expect(auth.accountMutationGeneration, generation);
+      nav.release.complete();
+
+      final result = await outcome;
+      expect(request.bodies.whereType<String>(), isEmpty);
+      expect(result, isA<BilibiliInteractionException>());
+      expect(nav.calls, 1);
+    },
+  );
+
+  test('stable bulk writes reuse the exact verified header and CSRF', () async {
+    const header = 'SESSDATA=fixture; bili_jct=fixture%2Dcsrf';
+    final authApi = _InteractionAuthApi();
+    final request = _RecordedInteractionRequest(
+      responses: {
+        '/x/v3/fav/folder/created/list-all':
+            '{"code":0,"data":{"list":[{"id":17,"title":"目标","fav_state":0}]}}',
+      },
+    );
+    final service = BilibiliInteractionService(
+      authService: BilibiliAuthService(
+        cookieStore: _InteractionCookieStore(cookies: header),
+        api: authApi,
+      ),
+      request: request.call,
+      behaviorPreferencesService: _InteractionBehaviorPreferences(
+        readOnly: false,
+      ),
+    );
+
+    expect(
+      await service.addToVerifiedFavoriteFolder(
+        aid: 47,
+        mediaId: 17,
+        expectedMid: 42,
+        isCurrent: () => true,
+      ),
+      isTrue,
+    );
+    expect(authApi.verifiedHeaders, [header, header]);
+    expect(request.cookieHeaders, [header, header]);
+    expect(
+      _formFields(request.bodies.singleWhere((body) => body != null)),
+      containsPair('csrf_token', 'fixture-csrf'),
+    );
+  });
+
   test(
     'selection or rule changes during the final cookie read cancel the bulk write',
     () async {
