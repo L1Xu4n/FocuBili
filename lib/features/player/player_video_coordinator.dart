@@ -549,6 +549,7 @@ mixin _PlayerVideoCoordinator
       _descriptionExpanded = false;
       _resumeNotice = null;
       _notesOpen = false;
+      _notesParked = false;
       _notesLoading = false;
       _noteSaving = false;
       _noteAutoSaving = false;

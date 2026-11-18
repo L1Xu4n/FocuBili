@@ -279,8 +279,6 @@ mixin _PlayerViewportCoordinator
       _fullscreenEnteredByOrientation = nextFullscreen && enteredByOrientation;
       _controlsLocked = nextFullscreen ? _controlsLocked : false;
       _showControls = true;
-      // 从竖屏笔记本进入全屏时直接挂载全屏工作区；退出时保留笔记打开状态给竖屏布局继续使用。
-      _notesOverlayMounted = nextFullscreen && _notesOpen;
     });
     _restartControlsAutoHideTimer();
     await _setDesktopWindowFullscreen(nextFullscreen);
