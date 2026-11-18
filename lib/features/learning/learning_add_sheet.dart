@@ -16,12 +16,14 @@ abstract final class LearningAddSheet {
     required VideoPreview video,
     required LearningListService service,
     VideoPart? currentPart,
+    VideoPart? recentPart,
     Duration position = Duration.zero,
   }) => _showParts(
     context,
     [video],
     service,
     currentPart: currentPart,
+    recentPart: recentPart,
     position: position,
   );
 
@@ -55,11 +57,10 @@ abstract final class LearningAddSheet {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (dialog) => AlertDialog(
+          scrollable: true,
           title: const Text('部分视频详情读取失败'),
-          content: SingleChildScrollView(
-            child: Text(
-              '${failed.length} 支失败：${failed.join('、')}\n可继续选择已读取的 ${videos.length} 支视频，失败项不会加入。',
-            ),
+          content: Text(
+            '${failed.length} 支失败：${failed.join('、')}\n可继续选择已读取的 ${videos.length} 支视频，失败项不会加入。',
           ),
           actions: [
             TextButton(
@@ -86,15 +87,26 @@ abstract final class LearningAddSheet {
     List<VideoPreview> videos,
     LearningListService service, {
     VideoPart? currentPart,
+    VideoPart? recentPart,
     Duration position = Duration.zero,
   }) async {
     final state = await service.loadState();
-    final entries = state.entries;
     if (!context.mounted) return null;
+    if (service.readFailed) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('学习清单读取失败，原数据保留。请重试。')));
+      return null;
+    }
+    final entries = state.entries;
     return showModalBottomSheet<LearningBatchResult>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
+      // This form can still be canceled explicitly or with Back; a swipe
+      // must not dismiss it while the confirmed write is committing.
+      enableDrag: false,
+      isDismissible: false,
       builder: (_) => _PartSelection(
         videos: videos,
         service: service,
@@ -102,6 +114,7 @@ abstract final class LearningAddSheet {
         count: entries.length,
         folders: state.folders,
         currentPart: currentPart,
+        recentPart: recentPart,
         position: position,
       ),
     );
@@ -125,34 +138,45 @@ class _CollectionDetailLoader extends StatefulWidget {
 
 class _CollectionDetailLoaderState extends State<_CollectionDetailLoader> {
   int _finished = 0;
+  ModalRoute<dynamic>? _route;
+
   @override
-  void initState() {
-    super.initState();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_route != null) return;
+    _route = ModalRoute.of(context);
     unawaited(_load());
   }
+
+  // A popped route stays mounted during its exit animation. Do not issue
+  // another request or pop the route below it if a reply arrives meanwhile.
+  bool get _isOpen => mounted && _route?.isCurrent == true;
 
   Future<void> _load() async {
     final videos = <VideoPreview>[], failed = <String>[];
     // Canceling the dialog stops new requests and discards the current result.
     for (final item in widget.items) {
-      if (!mounted) return;
+      if (!_isOpen) return;
       try {
         final video = await widget.service
             .lookupVideo(item.bvid)
             .timeout(const Duration(seconds: 30));
-        if (!mounted) return;
+        if (!_isOpen) return;
         videos.add(video);
       } catch (_) {
-        if (!mounted) return;
+        if (!_isOpen) return;
         failed.add(item.title);
       }
       setState(() => _finished++);
     }
-    if (mounted) Navigator.pop(context, _LoadedCollection(videos, failed));
+    if (mounted && _route?.isCurrent == true) {
+      Navigator.pop(context, _LoadedCollection(videos, failed));
+    }
   }
 
   @override
   Widget build(BuildContext context) => AlertDialog(
+    scrollable: true,
     title: const Text('读取所选视频分 P'),
     content: Column(
       mainAxisSize: MainAxisSize.min,
@@ -179,6 +203,7 @@ class _PartSelection extends StatefulWidget {
     required this.count,
     required this.folders,
     this.currentPart,
+    this.recentPart,
     required this.position,
   });
   final List<VideoPreview> videos;
@@ -187,6 +212,7 @@ class _PartSelection extends StatefulWidget {
   final int count;
   final List<LearningSubjectFolder> folders;
   final VideoPart? currentPart;
+  final VideoPart? recentPart;
   final Duration position;
   @override
   State<_PartSelection> createState() => _PartSelectionState();
@@ -194,6 +220,7 @@ class _PartSelection extends StatefulWidget {
 
 class _PartSelectionState extends State<_PartSelection> {
   final Set<String> _selected = {};
+  final ScrollController _options = ScrollController();
   bool _saving = false;
   String? _folderId;
   String? _error;
@@ -201,12 +228,26 @@ class _PartSelectionState extends State<_PartSelection> {
   @override
   void initState() {
     super.initState();
+    _resetDefaults();
+  }
+
+  VideoPart? get _referencePart => widget.currentPart ?? widget.recentPart;
+
+  void _resetDefaults() {
+    _selected.clear();
     for (final video in widget.videos) {
-      _selected.add(_id(video, widget.currentPart ?? video.initialPart));
+      _selected.add(_id(video, _referencePart ?? video.initialPart));
     }
   }
 
+  @override
+  void dispose() {
+    _options.dispose();
+    super.dispose();
+  }
+
   Future<void> _save() async {
+    if (_saving) return;
     setState(() {
       _saving = true;
       _error = null;
@@ -218,7 +259,7 @@ class _PartSelectionState extends State<_PartSelection> {
             LearningPartSelection(
               video,
               part,
-              position: widget.currentPart?.cid == part.cid
+              position: _referencePart?.cid == part.cid
                   ? widget.position
                   : Duration.zero,
             ),
@@ -233,8 +274,9 @@ class _PartSelectionState extends State<_PartSelection> {
             ? '未保存，请检查设备存储后重试。'
             : result.capacityExceeded
             ? '容量已变化或选择超限，请先减少选择；原任务均已保留。'
-            : '部分分 P 已失效，请重新读取详情。';
+            : '部分分 P 已失效，未加入任务。请重新读取详情。';
       });
+      if (_options.hasClients) _options.jumpTo(0);
       return;
     }
     Navigator.pop(context, result);
@@ -251,90 +293,106 @@ class _PartSelectionState extends State<_PartSelection> {
         height: MediaQuery.sizeOf(context).height * .85,
         child: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('加入学习清单', style: Theme.of(context).textTheme.titleLarge),
-                  const SizedBox(height: 8),
-                  Text(
-                    '新增 $added · 已存在 $duplicate · 剩余容量 $remaining\n已存在任务保留进度、状态和顺序。',
-                  ),
-                  if (widget.folders.isNotEmpty)
-                    DropdownButtonFormField<String>(
-                      key: const Key('add-learning-folder'),
-                      initialValue: '',
-                      decoration: const InputDecoration(labelText: '新增任务的学科分组'),
-                      items: [
-                        const DropdownMenuItem(value: '', child: Text('未分组')),
-                        for (final folder in widget.folders)
-                          DropdownMenuItem(
-                            value: folder.id,
-                            child: Text(folder.name),
-                          ),
-                      ],
-                      onChanged: _saving
-                          ? null
-                          : (value) => setState(
-                              () => _folderId = value == '' ? null : value,
-                            ),
-                    ),
-                  Wrap(
-                    spacing: 8,
-                    children: [
-                      TextButton(
-                        onPressed: _saving
-                            ? null
-                            : () => setState(() {
-                                _selected.clear();
-                                for (final video in widget.videos) {
-                                  _selected.add(
-                                    _id(
-                                      video,
-                                      widget.currentPart ?? video.initialPart,
-                                    ),
-                                  );
-                                }
-                              }),
-                        child: Text(
-                          widget.currentPart == null ? '默认 P' : '当前 P',
-                        ),
-                      ),
-                      TextButton(
-                        onPressed: _saving
-                            ? null
-                            : () => setState(() {
-                                _selected.clear();
-                                for (final video in widget.videos) {
-                                  for (final part in video.parts) {
-                                    _selected.add(_id(video, part));
-                                  }
-                                }
-                              }),
-                        child: const Text('全部 P'),
-                      ),
-                      TextButton(
-                        onPressed: _saving
-                            ? null
-                            : () => setState(_selected.clear),
-                        child: const Text('清空选择'),
-                      ),
-                    ],
-                  ),
-                  if (_error != null)
-                    Text(
-                      _error!,
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.error,
-                      ),
-                    ),
-                ],
-              ),
-            ),
             Expanded(
               child: ListView(
+                key: const Key('learning-part-options'),
+                controller: _options,
                 children: [
+                  if (_error != null)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                      child: Text(
+                        _error!,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                      ),
+                    ),
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '加入学习清单',
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          '新增 $added · 已存在 $duplicate · 剩余容量 $remaining\n已存在任务保留进度、状态和顺序。',
+                        ),
+                        if (widget.folders.isNotEmpty)
+                          DropdownButtonFormField<String>(
+                            key: const Key('add-learning-folder'),
+                            initialValue: '',
+                            isExpanded: true,
+                            isDense: false,
+                            itemHeight: null,
+                            decoration: const InputDecoration(
+                              labelText: '新增任务的学科分组',
+                            ),
+                            items: [
+                              const DropdownMenuItem(
+                                value: '',
+                                child: Text('未分组'),
+                              ),
+                              for (final folder in widget.folders)
+                                DropdownMenuItem(
+                                  value: folder.id,
+                                  child: Text(
+                                    folder.name,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                            ],
+                            onChanged: _saving
+                                ? null
+                                : (value) => setState(
+                                    () =>
+                                        _folderId = value == '' ? null : value,
+                                  ),
+                          ),
+                        Wrap(
+                          spacing: 8,
+                          children: [
+                            TextButton(
+                              onPressed: _saving
+                                  ? null
+                                  : () => setState(_resetDefaults),
+                              child: Text(
+                                widget.currentPart != null
+                                    ? '当前 P'
+                                    : widget.recentPart != null
+                                    ? '上次观看的 P'
+                                    : '默认 P',
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: _saving
+                                  ? null
+                                  : () => setState(() {
+                                      _selected.clear();
+                                      for (final video in widget.videos) {
+                                        for (final part in video.parts) {
+                                          _selected.add(_id(video, part));
+                                        }
+                                      }
+                                    }),
+                              child: const Text('全部 P'),
+                            ),
+                            TextButton(
+                              onPressed: _saving
+                                  ? null
+                                  : () => setState(_selected.clear),
+                              child: const Text('清空选择'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
                   for (final video in widget.videos) ...[
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -366,13 +424,14 @@ class _PartSelectionState extends State<_PartSelection> {
             ),
             Padding(
               padding: const EdgeInsets.all(16),
-              child: Row(
+              child: OverflowBar(
+                alignment: MainAxisAlignment.spaceBetween,
+                overflowAlignment: OverflowBarAlignment.end,
                 children: [
                   TextButton(
                     onPressed: _saving ? null : () => Navigator.pop(context),
                     child: const Text('取消'),
                   ),
-                  const Spacer(),
                   FilledButton(
                     onPressed: _saving || _selected.isEmpty || added > remaining
                         ? null
@@ -455,9 +514,18 @@ class _CollectionSelectionState extends State<_CollectionSelection> {
     height: MediaQuery.sizeOf(context).height * .85,
     child: Column(
       children: [
-        const Padding(
-          padding: EdgeInsets.all(16),
-          child: Text('合集：先选择视频，再选择各视频的 P'),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+          child: Row(
+            children: [
+              const Expanded(child: Text('合集：先选择视频，再选择各视频的 P')),
+              IconButton(
+                onPressed: () => Navigator.pop(context),
+                tooltip: '关闭合集选择',
+                icon: const Icon(Icons.close),
+              ),
+            ],
+          ),
         ),
         Expanded(
           child: ListView(

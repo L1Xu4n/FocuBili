@@ -105,14 +105,18 @@ extension _PlayerFeedbackView on _PlayerPageState {
     final bool markedCompleted =
         currentEntry?.status == LearningListStatus.completed;
     return Center(
-      child: PlaybackCompletionOverlay(
-        markedCompleted: markedCompleted,
-        learningFinished: _completionLearningFinished,
-        processing: markingCompleted,
-        // 完成回调只更新当前学习任务，不改变播放器分P。
-        onMarkCompleted: () => unawaited(_markCurrentLearningCompleted()),
-        // 继续学习回调只在用户明确点击后按学习清单顺序打开下一条任务。
-        onContinueLearning: () => unawaited(_continueLearningAfterCompletion()),
+      child: TickerMode(
+        enabled: !_choosingLearningParts,
+        child: PlaybackCompletionOverlay(
+          markedCompleted: markedCompleted,
+          learningFinished: _completionLearningFinished,
+          processing: markingCompleted,
+          // 完成回调只更新当前学习任务，不改变播放器分P。
+          onMarkCompleted: () => unawaited(_markCurrentLearningCompleted()),
+          // 继续学习回调只在用户明确点击后按学习清单顺序打开下一条任务。
+          onContinueLearning: () =>
+              unawaited(_continueLearningAfterCompletion()),
+        ),
       ),
     );
   }

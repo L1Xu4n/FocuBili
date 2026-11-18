@@ -209,12 +209,12 @@ extension _PlayerCollectionView on _PlayerPageState {
                 child: IconButton(
                   key: Key('add-learning-player-collection-${entry.bvid}'),
                   visualDensity: VisualDensity.compact,
-                  // 合集预览加入函数查询对应完整视频并自动继承该视频观看进度。
+                  // 合集预览加入函数查询完整视频后打开统一的分 P 选择。
                   onPressed: adding
                       ? null
                       : () =>
                             unawaited(_addCollectionVideoToLearningList(entry)),
-                  icon: adding
+                  icon: adding && !_choosingLearningParts
                       ? const SizedBox.square(
                           dimension: 16,
                           child: CircularProgressIndicator(strokeWidth: 2),

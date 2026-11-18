@@ -88,6 +88,9 @@ abstract final class LearningVideoLauncher {
       ),
       bilibiliService: videoService,
       learningListService: learningListService,
+      learningContinuationScope: playlist
+          ?.map((entry) => entry.stableId)
+          .toSet(),
       initialPartCid: part.cid,
       initialPosition: entry.position > Duration.zero ? entry.position : null,
       initialPositionSource: PlayerInitialPositionSource.learning,

@@ -147,6 +147,7 @@ class PlayerPage extends StatefulWidget {
     this.playbackService,
     this.watchHistoryService,
     this.learningListService,
+    this.learningContinuationScope,
     this.deviceStatusService,
     this.playerOverlayService,
     this.bilibiliService,
@@ -175,6 +176,10 @@ class PlayerPage extends StatefulWidget {
   final PlaybackService? playbackService;
   final WatchHistoryService? watchHistoryService;
   final LearningListService? learningListService;
+
+  /// Stable IDs visible in the source learning list (folder, search or filter).
+  /// A null scope keeps the ordinary "continue through my learning list".
+  final Set<String>? learningContinuationScope;
   final DeviceStatusService? deviceStatusService;
   final PlayerOverlayService? playerOverlayService;
   final BilibiliService? bilibiliService;

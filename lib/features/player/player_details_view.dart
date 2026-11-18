@@ -763,7 +763,7 @@ extension _PlayerDetailsView on _PlayerPageState {
     return PlayerLibraryAction(
       tooltip: currentEntry == null ? '加入学习清单' : '取消加入学习清单',
       key: const Key('current-video-learning-list-button'),
-      busy: busy,
+      busy: busy && !_choosingLearningParts,
       selected: currentEntry != null,
       // 顶部学习清单按钮函数会在加入与取消加入之间切换，并在取消前要求确认。
       onPressed: busy

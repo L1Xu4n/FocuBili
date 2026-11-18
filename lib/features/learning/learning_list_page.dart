@@ -92,12 +92,33 @@ class _LearningListPageState extends State<LearningListPage> {
     setState(() {
       _query = '';
       _searching = false;
+      _pruneHiddenSelection();
     });
   }
 
   /// 更新搜索关键词；只过滤当前已读取的本机任务，不会把关键词发送到网络。
   void _updateQuery(String value) {
-    setState(() => _query = value.trim().toLowerCase());
+    setState(() {
+      _query = value.trim().toLowerCase();
+      _pruneHiddenSelection();
+    });
+  }
+
+  void _updateStatusFilter(LearningListStatus? status) {
+    setState(() {
+      _statusFilter = status;
+      _pruneHiddenSelection();
+    });
+  }
+
+  // Bulk actions apply only to the tasks the user can still see and review.
+  void _pruneHiddenSelection() {
+    if (_selected.isEmpty) return;
+    final visible = _entries
+        .where(_matchesQuery)
+        .map((e) => e.stableId)
+        .toSet();
+    _selected.retainAll(visible);
   }
 
   /// 判断一条任务是否匹配标题、UP 主、分 P 标题或 P 序号的本机搜索词。
@@ -176,7 +197,10 @@ class _LearningListPageState extends State<LearningListPage> {
       if (!mounted) {
         return;
       }
-      setState(() => _entries = updated);
+      setState(() {
+        _entries = updated;
+        _pruneHiddenSelection();
+      });
     } catch (_) {
       _showSaveError();
     } finally {
@@ -222,7 +246,10 @@ class _LearningListPageState extends State<LearningListPage> {
         partCid: entry.partCid,
       );
       if (mounted) {
-        setState(() => _entries = updated);
+        setState(() {
+          _entries = updated;
+          _pruneHiddenSelection();
+        });
       }
     } catch (_) {
       _showSaveError();
@@ -262,7 +289,10 @@ class _LearningListPageState extends State<LearningListPage> {
             withinFolder: !_allFolders,
           );
       if (mounted) {
-        setState(() => _entries = updated);
+        setState(() {
+          _entries = updated;
+          _pruneHiddenSelection();
+        });
       }
     } catch (_) {
       _showSaveError();
@@ -330,6 +360,7 @@ class _LearningListPageState extends State<LearningListPage> {
       _folderId = null;
       _allFolders = false;
     }
+    _pruneHiddenSelection();
   }
 
   String _folderName(String? id) {
@@ -374,6 +405,7 @@ class _LearningListPageState extends State<LearningListPage> {
           return PopScope(
             canPop: !saving,
             child: AlertDialog(
+              scrollable: true,
               title: Text(folder == null ? '新建学科分组' : '重命名学科分组'),
               content: TextFormField(
                 key: const Key('learning-folder-name'),
@@ -385,6 +417,7 @@ class _LearningListPageState extends State<LearningListPage> {
                   labelText: '学科名称',
                   hintText: '例如：数学、英语',
                   errorText: error,
+                  errorMaxLines: 3,
                 ),
                 onChanged: (value) => name = value,
                 onFieldSubmitted: (_) => save(),
@@ -412,6 +445,7 @@ class _LearningListPageState extends State<LearningListPage> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialog) => AlertDialog(
+        scrollable: true,
         title: const Text('删除学科分组'),
         content: Text('删除“${folder.name}”？组内学习任务会移到“未分组”，学习进度、观看记录和笔记保留。'),
         actions: [
@@ -735,78 +769,125 @@ class _LearningListPageState extends State<LearningListPage> {
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 2, 16, 0),
-            child: Row(
-              children: <Widget>[
-                Expanded(
-                  child: LinearProgressIndicator(
-                    value: progress,
-                    minHeight: 5,
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Text(
-                  '${_formatPosition(entry.position)} / ${_formatPosition(entry.duration)}',
-                  style: Theme.of(context).textTheme.labelSmall,
-                ),
-              ],
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final style = Theme.of(context).textTheme.labelSmall;
+                final time =
+                    '${_formatPosition(entry.position)} / ${_formatPosition(entry.duration)}';
+                final label = Text(time, style: style);
+                final bar = LinearProgressIndicator(
+                  value: progress,
+                  minHeight: 5,
+                  borderRadius: BorderRadius.circular(999),
+                );
+                final fontSize = style?.fontSize ?? 11;
+                final scaled = MediaQuery.textScalerOf(context).scale(fontSize);
+                // Reserve room for the bar even when each time glyph is wide.
+                if (constraints.maxWidth < 70 + time.length * scaled) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      bar,
+                      const SizedBox(height: 4),
+                      Align(
+                        alignment: AlignmentDirectional.centerEnd,
+                        child: label,
+                      ),
+                    ],
+                  );
+                }
+                return Row(
+                  children: [
+                    Expanded(child: bar),
+                    const SizedBox(width: 10),
+                    label,
+                  ],
+                );
+              },
             ),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(8, 2, 8, 6),
-            child: Row(
-              children: <Widget>[
-                Icon(
-                  Icons.circle,
-                  size: 9,
-                  color: _statusColor(context, entry.status),
-                ),
-                const SizedBox(width: 5),
-                Expanded(
-                  child: Text(
-                    '${entry.status.label} · ${_folderName(entry.folderId)}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.labelMedium,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final status = Row(
+                  children: [
+                    Icon(
+                      Icons.circle,
+                      size: 9,
+                      color: _statusColor(context, entry.status),
+                    ),
+                    const SizedBox(width: 5),
+                    Expanded(
+                      child: Text(
+                        '${entry.status.label} · ${_folderName(entry.folderId)}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.labelMedium,
+                      ),
+                    ),
+                  ],
+                );
+                final actions = <Widget>[
+                  TextButton.icon(
+                    key: Key('continue-learning-${entry.stableId}'),
+                    // 继续按钮只为未完成项目打开播放器；已完成项目仍可点击卡片回看，但不参与顺序继续学习。
+                    onPressed: opening || updating || _reordering || completed
+                        ? null
+                        : () => unawaited(_openEntry(entry)),
+                    icon: opening
+                        ? const SizedBox.square(
+                            dimension: 15,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : Icon(
+                            completed
+                                ? Icons.task_alt_rounded
+                                : Icons.play_arrow_rounded,
+                            size: 18,
+                          ),
+                    label: Text(completed ? '已完成' : '继续学习'),
                   ),
-                ),
-                TextButton.icon(
-                  key: Key('continue-learning-${entry.stableId}'),
-                  // 继续按钮只为未完成项目打开播放器；已完成项目仍可点击卡片回看，但不参与顺序继续学习。
-                  onPressed: opening || updating || _reordering || completed
-                      ? null
-                      : () => unawaited(_openEntry(entry)),
-                  icon: opening
-                      ? const SizedBox.square(
-                          dimension: 15,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : Icon(
-                          completed
-                              ? Icons.task_alt_rounded
-                              : Icons.play_arrow_rounded,
-                          size: 18,
-                        ),
-                  label: Text(completed ? '已完成' : '继续学习'),
-                ),
-                IconButton(
-                  key: Key('move-learning-${entry.stableId}'),
-                  onPressed: _folderBusy || opening || updating || _reordering
-                      ? null
-                      : () => _moveToFolder({entry.stableId}),
-                  icon: const Icon(Icons.drive_file_move_outline),
-                  tooltip: '移动到学科分组',
-                ),
-                IconButton(
-                  key: Key('remove-learning-${entry.stableId}'),
-                  // 移除按钮函数先要求确认，观看记录、笔记和其他分 P 都不会被删除。
-                  onPressed: opening || updating || _reordering
-                      ? null
-                      : () => unawaited(_confirmRemove(entry)),
-                  icon: const Icon(Icons.delete_outline_rounded),
-                  tooltip: '移出学习清单',
-                ),
-              ],
+                  IconButton(
+                    key: Key('move-learning-${entry.stableId}'),
+                    onPressed: _folderBusy || opening || updating || _reordering
+                        ? null
+                        : () => _moveToFolder({entry.stableId}),
+                    icon: const Icon(Icons.drive_file_move_outline),
+                    tooltip: '移动到学科分组',
+                  ),
+                  IconButton(
+                    key: Key('remove-learning-${entry.stableId}'),
+                    // 移除按钮函数先要求确认，观看记录、笔记和其他分 P 都不会被删除。
+                    onPressed: opening || updating || _reordering
+                        ? null
+                        : () => unawaited(_confirmRemove(entry)),
+                    icon: const Icon(Icons.delete_outline_rounded),
+                    tooltip: '移出学习清单',
+                  ),
+                ];
+                // Keep the status and all actions reachable when a longer
+                // button label no longer fits beside the two icon targets.
+                final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
+                if (constraints.maxWidth < 110 + 151 * scale) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                        child: status,
+                      ),
+                      Wrap(alignment: WrapAlignment.end, children: actions),
+                    ],
+                  );
+                }
+                return Row(
+                  children: [
+                    Expanded(child: status),
+                    ...actions,
+                  ],
+                );
+              },
             ),
           ),
         ],
@@ -830,13 +911,13 @@ class _LearningListPageState extends State<LearningListPage> {
               ChoiceChip(
                 label: const Text('全部'),
                 selected: _statusFilter == null,
-                onSelected: (_) => setState(() => _statusFilter = null),
+                onSelected: (_) => _updateStatusFilter(null),
               ),
               for (final status in LearningListStatus.values)
                 ChoiceChip(
                   label: Text(status.label),
                   selected: _statusFilter == status,
-                  onSelected: (_) => setState(() => _statusFilter = status),
+                  onSelected: (_) => _updateStatusFilter(status),
                 ),
             ],
           ),
@@ -933,13 +1014,17 @@ class _LearningListPageState extends State<LearningListPage> {
           Row(
             children: <Widget>[
               const Expanded(child: Divider()),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                child: Text(
-                  '已完成（${completedEntries.length}）',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
+              Flexible(
+                flex: 4,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  child: Text(
+                    '已完成（${completedEntries.length}）',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
                 ),
               ),
               const Expanded(child: Divider()),

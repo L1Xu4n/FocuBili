@@ -52,6 +52,8 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
   Timer? _ticker;
   Future<void>? _initialization;
   bool _ready = false;
+  bool _loadFailed = false;
+  bool _disposed = false;
   bool _finishingExpiredSession = false;
   bool _observingLifecycle = false;
   bool _backgroundInterruptionRecorded = false;
@@ -63,6 +65,9 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
 
   /// 表示本机状态是否已经读取完成。
   bool get isReady => _ready;
+
+  /// 上次读取失败时，保留磁盘记录，并允许用户重试。
+  bool get loadFailed => _loadFailed;
 
   /// 返回当前仍可继续、关联或终止的专注任务。
   FocusSession? get activeSession => _activeSession;
@@ -89,7 +94,10 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
 
   /// 读取本机专注状态并恢复计时；重复调用会复用同一个任务。
   Future<void> initialize() {
-    return _initialization ??= _loadInitialState();
+    if (_disposed || _ready) return _initialization ?? Future<void>.value();
+    return _initialization ??= _loadInitialState().whenComplete(() {
+      _initialization = null;
+    });
   }
 
   /// 加载本机记录；进程中断后的活动会话安全暂停，等待用户主动继续。
@@ -98,7 +106,18 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
       WidgetsBinding.instance.addObserver(this);
       _observingLifecycle = true;
     }
-    final FocusStoredState storedState = await _service.loadState();
+    final FocusStoredState storedState;
+    try {
+      storedState = await _service.loadState();
+    } catch (_) {
+      if (!_disposed) {
+        _loadFailed = true;
+        notifyListeners();
+      }
+      return;
+    }
+    if (_disposed) return;
+    _loadFailed = false;
     _activeSession = storedState.activeSession?.asContinuousSession();
     _history = storedState.history;
     _ready = true;
@@ -120,6 +139,7 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
       );
       await _persist();
     }
+    if (_disposed) return;
     _syncTicker();
     notifyListeners();
   }
@@ -667,6 +687,7 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
 
   /// 把当前活动任务和历史列表保存到设备。
   Future<void> _persist() async {
+    if (!_ready) return;
     await _service.saveState(activeSession: _activeSession, history: _history);
   }
 
@@ -699,6 +720,7 @@ class FocusTimerController extends ChangeNotifier with WidgetsBindingObserver {
   /// 取消计时器和生命周期监听，应用销毁后不再触发刷新。
   @override
   void dispose() {
+    _disposed = true;
     _ticker?.cancel();
     if (_observingLifecycle) {
       WidgetsBinding.instance.removeObserver(this);

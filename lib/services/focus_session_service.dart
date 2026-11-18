@@ -36,27 +36,21 @@ class FocusSessionService {
   static final Expando<Future<void>> _writeQueues = Expando('focus writes');
 
   /// 读取活动计时和历史记录，同 ID 终态历史优先；损坏项不会阻止应用启动。
+  // 读取失败表示状态未知，而非首次使用；调用方不能以空快照覆盖已有数据。
   Future<FocusStoredState> loadState() async {
-    try {
-      final SharedPreferences preferences = await _preferencesLoader();
-      final pending = _writeQueues[preferences];
-      if (pending != null) await pending;
-      await preferences.reload();
-      final active = _decodeActive(preferences.getString(_activeStorageKey));
-      final history = _decodeHistory(preferences.getString(_historyStorageKey));
-      return FocusStoredState(
-        // 归档已成功而活动键清理失败时，终态是已提交的事实，不能复活旧活动快照。
-        activeSession: history.any((item) => item.id == active?.id)
-            ? null
-            : active,
-        history: history,
-      );
-    } catch (_) {
-      return const FocusStoredState(
-        activeSession: null,
-        history: <FocusSession>[],
-      );
-    }
+    final SharedPreferences preferences = await _preferencesLoader();
+    final pending = _writeQueues[preferences];
+    if (pending != null) await pending;
+    await preferences.reload();
+    final active = _decodeActive(preferences.getString(_activeStorageKey));
+    final history = _decodeHistory(preferences.getString(_historyStorageKey));
+    return FocusStoredState(
+      // 归档已成功而活动键清理失败时，终态是已提交的事实，不能复活旧活动快照。
+      activeSession: history.any((item) => item.id == active?.id)
+          ? null
+          : active,
+      history: history,
+    );
   }
 
   /// 按可恢复顺序保存双键快照；返回 false 表示未完整保存，已有持久记录仍保留。
