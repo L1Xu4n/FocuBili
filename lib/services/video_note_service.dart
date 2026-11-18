@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/video_note.dart';
+import 'cache_lifecycle.dart';
 
 typedef VideoNotePreferencesLoader = Future<SharedPreferences> Function();
 
@@ -172,6 +173,61 @@ class VideoNoteService {
       throw ArgumentError.value(note, 'note', '笔记缺少必要信息。');
     }
     await _withNotes((prefs) => _saveNormalized(prefs, normalized));
+  }
+
+  /// Finish an editor's detached write on the same storage queue. A deleted
+  /// or newer copy is authoritative; a queued draft never recreates it.
+  Future<bool> finishPendingDraft(
+    VideoNote draft, {
+    required VideoNote? expected,
+    required int accountRevision,
+    required String accountScope,
+  }) async {
+    final normalized = VideoNote.tryParse(draft.toJson());
+    if (normalized == null) return false;
+    return _withNotes((prefs) async {
+      if (accountRevision != CacheLifecycle.account.value ||
+          accountScope != CacheLifecycle.accountScope) {
+        return false;
+      }
+      final current = _decodeNotes(
+        prefs.getString(storageKey),
+      ).where((note) => note.id == normalized.id).firstOrNull;
+      if (expected == null
+          ? current != null
+          : current == null ||
+                current.id != expected.id ||
+                current.bvid != expected.bvid ||
+                current.partCid != expected.partCid ||
+                !_matchesSavedDraft(current, expected) ||
+                expected.id != normalized.id ||
+                expected.bvid != normalized.bvid ||
+                expected.partCid != normalized.partCid) {
+        return false;
+      }
+      await _saveNormalized(prefs, normalized);
+      return true;
+    });
+  }
+
+  bool _matchesSavedDraft(VideoNote current, VideoNote expected) {
+    if (!current.updatedAt.isAtSameMomentAs(expected.updatedAt) ||
+        current.title != expected.title.trim() ||
+        current.body != expected.body ||
+        current.position.inMilliseconds != expected.position.inMilliseconds) {
+      return false;
+    }
+    final currentFrames = current.allFrames;
+    final expectedFrames = expected.allFrames;
+    if (currentFrames.length != expectedFrames.length) return false;
+    for (var index = 0; index < currentFrames.length; index++) {
+      if (currentFrames[index].path != expectedFrames[index].path.trim() ||
+          currentFrames[index].position.inMilliseconds !=
+              expectedFrames[index].position.inMilliseconds) {
+        return false;
+      }
+    }
+    return true;
   }
 
   Future<void> _saveNormalized(
