@@ -40,6 +40,9 @@ class CreatorVideo {
     required this.coverUrl,
     required this.duration,
     this.partCount = 1,
+    this.ownerMid = 0,
+    this.ownerName = '',
+    this.tags = const [],
     this.publishedAt,
     this.stats = const VideoStats(),
   });
@@ -49,6 +52,9 @@ class CreatorVideo {
   final String coverUrl;
   final Duration duration;
   final int partCount;
+  final int ownerMid;
+  final String ownerName;
+  final List<String> tags;
   final DateTime? publishedAt;
   final VideoStats stats;
 }
