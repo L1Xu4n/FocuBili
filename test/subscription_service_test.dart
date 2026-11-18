@@ -163,25 +163,29 @@ void main() {
     },
   );
   test(
-    'collection scans every page: old publication added on page2, reordering silent',
+    'collection scans page 2 for recent additions and never reannounces after reordering',
     () async {
+      final now = DateTime.utc(2026, 10, 14);
       final c = Content()
         ..pages[1] = [
           [item('a')],
           [item('b')],
         ];
-      final s = await create(c);
+      final s = await create(c, clock: () => now);
       await baseline(s, [source(1, collection: true)]);
       c.pages[1] = [
         [item('a')],
-        [item('historical', publishedAt: DateTime(2010)), item('b')],
+        [
+          item('recent', publishedAt: now.subtract(const Duration(days: 9))),
+          item('b'),
+        ],
       ];
       await s.refresh(manual: true);
-      expect(s.feed.single.bvid, 'historical');
+      expect(s.feed.single.bvid, 'recent');
       expect(s.feed.single.collectionAdded, true);
-      await s.markRead('historical');
+      await s.markRead('recent');
       c.pages[1] = [
-        [item('b'), item('historical')],
+        [item('b'), item('recent')],
         [item('a')],
       ];
       await s.refresh(manual: true);

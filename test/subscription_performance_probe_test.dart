@@ -54,8 +54,10 @@ class CountingContent extends Content {
   }
 }
 
-String feedFixture({int count = 500, int sourceCount = 20}) {
-  final now = DateTime(2026, 10, 10, 12);
+final feedFixtureClock = DateTime(2026, 10, 10, 12);
+
+String feedFixture({int count = 500, int sourceCount = 20, DateTime? at}) {
+  final now = at ?? feedFixtureClock;
   return jsonEncode({
     'version': 1,
     'enabled': true,
@@ -79,7 +81,7 @@ String feedFixture({int count = 500, int sourceCount = 20}) {
           coverUrl: '',
           sources: const {'creator:1': '学习频道'},
           discoveredAt: now.subtract(Duration(minutes: i)),
-          publishedAt: now.subtract(Duration(hours: i)),
+          publishedAt: now.subtract(Duration(minutes: i * 5)),
         ).toJson(),
     ],
     'announced': [],
@@ -110,7 +112,7 @@ void main() {
     final service = SubscriptionService(
       snapshotStore: store,
       contentService: content,
-      clock: () => DateTime(2026, 10, 10, 12),
+      clock: () => feedFixtureClock,
     );
     addTearDown(service.dispose);
     await service.initialize();
@@ -162,7 +164,10 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final store = CountingSnapshots()..value = feedFixture();
-    final service = SubscriptionService(snapshotStore: store);
+    final service = SubscriptionService(
+      snapshotStore: store,
+      clock: () => feedFixtureClock,
+    );
     addTearDown(service.dispose);
     await service.initialize();
     await tester.pumpWidget(

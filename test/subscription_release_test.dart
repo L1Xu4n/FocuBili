@@ -55,45 +55,38 @@ void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
   final now = DateTime(2026, 10, 17, 12);
   Map<String, dynamic> fixture(int count) =>
-      jsonDecode(feedFixture(count: count, sourceCount: 2))
+      jsonDecode(feedFixture(count: count, sourceCount: 2, at: now))
           as Map<String, dynamic>;
 
   test(
-    'startup and periodic cleanup use readAt exact seven-day boundary, preserving dedupe',
+    'explicit feed cleanup removes expired read and unread rows without resurrecting their IDs',
     () async {
       var time = now;
-      final data = fixture(5);
+      final data = fixture(3);
       final feed = data['feed'] as List;
-      feed[0]['readAt'] = now
-          .subtract(const Duration(days: 7))
-          .toIso8601String();
-      feed[1]['readAt'] = now
-          .subtract(const Duration(days: 7, seconds: 1))
-          .toIso8601String();
-      feed[2]['readAt'] = now
-          .subtract(
-            const Duration(days: 6, hours: 23, minutes: 59, seconds: 59),
-          )
-          .toIso8601String();
-      feed[3]['readAt'] = null;
-      feed[4]['readAt'] = now.add(const Duration(days: 1)).toIso8601String();
-      data['announced'] = [for (var i = 0; i < 5; i++) 'fixture$i'];
+      final cutoff = now.subtract(const Duration(days: 14)).toIso8601String();
+      feed[0]['publishedAt'] = cutoff;
+      feed[1]['publishedAt'] = cutoff;
+      feed[1]['readAt'] = now.toIso8601String();
       final store = AtomicSnapshots()..value = jsonEncode(data);
       final s = SubscriptionService(snapshotStore: store, clock: () => time);
       addTearDown(s.dispose);
       await s.initialize();
-      expect(s.feed.map((e) => e.bvid), ['fixture3', 'fixture2', 'fixture4']);
-      expect((jsonDecode(store.value!) as Map)['announced'], hasLength(5));
-      time = now.add(const Duration(seconds: 1));
-      await s.clearExpiredRead();
-      expect(s.feed.map((e) => e.bvid), ['fixture3', 'fixture4']);
+      expect(s.feed.map((e) => e.bvid), ['fixture0', 'fixture2', 'fixture1']);
+      time = now.add(const Duration(milliseconds: 1));
+      await s.clearExpiredFeed();
+      expect(s.feed.map((e) => e.bvid), ['fixture2']);
+      expect(
+        (jsonDecode(store.value!) as Map)['announced'],
+        unorderedEquals(['fixture0', 'fixture1']),
+      );
       final restarted = SubscriptionService(
         snapshotStore: store,
         clock: () => time,
       );
       addTearDown(restarted.dispose);
       await restarted.initialize();
-      expect(restarted.feed.map((e) => e.bvid), ['fixture3', 'fixture4']);
+      expect(restarted.feed.map((e) => e.bvid), ['fixture2']);
     },
   );
 
@@ -116,19 +109,18 @@ void main() {
     },
   );
 
-  test(
-    'message order follows arrival dates even when a collection adds an old publication',
-    () async {
-      final data = fixture(2);
-      data['feed'][0]['publishedAt'] = DateTime(2010).toIso8601String();
-      data['feed'][1]['publishedAt'] = DateTime(2027).toIso8601String();
-      final store = AtomicSnapshots()..value = jsonEncode(data);
-      final s = SubscriptionService(snapshotStore: store, clock: () => now);
-      addTearDown(s.dispose);
-      await s.initialize();
-      expect(s.feed.map((e) => e.bvid), ['fixture0', 'fixture1']);
-    },
-  );
+  test('recent messages sort by arrival, not by publication', () async {
+    final data = fixture(2);
+    data['feed'][0]['publishedAt'] = now
+        .subtract(const Duration(days: 10))
+        .toIso8601String();
+    data['feed'][1]['publishedAt'] = DateTime(2027).toIso8601String();
+    final store = AtomicSnapshots()..value = jsonEncode(data);
+    final s = SubscriptionService(snapshotStore: store, clock: () => now);
+    addTearDown(s.dispose);
+    await s.initialize();
+    expect(s.feed.map((e) => e.bvid), ['fixture0', 'fixture1']);
+  });
 
   test(
     'bulk mark read commits once and moves all selected below unread ordered by date',
@@ -273,7 +265,7 @@ void main() {
 
   test('bulk pause/resume is one persisted generation change', () async {
     final store = CountingSnapshots()..value = jsonEncode(fixture(1));
-    final s = SubscriptionService(snapshotStore: store);
+    final s = SubscriptionService(snapshotStore: store, clock: () => now);
     addTearDown(s.dispose);
     await s.initialize();
     final generation = s.notificationGeneration;
@@ -557,7 +549,7 @@ void main() {
     'batch learning saves selected tasks without changing reads and avoids duplicates',
     (tester) async {
       final store = AtomicSnapshots()..value = jsonEncode(fixture(2));
-      final s = SubscriptionService(snapshotStore: store);
+      final s = SubscriptionService(snapshotStore: store, clock: () => now);
       addTearDown(s.dispose);
       final learning = LearningListService();
       final videos = BatchVideos();
@@ -620,7 +612,7 @@ void main() {
     tester,
   ) async {
     final store = AtomicSnapshots()..value = jsonEncode(fixture(1));
-    final s = SubscriptionService(snapshotStore: store);
+    final s = SubscriptionService(snapshotStore: store, clock: () => now);
     addTearDown(s.dispose);
     await s.initialize();
     await tester.pumpWidget(

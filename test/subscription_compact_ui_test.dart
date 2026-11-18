@@ -19,7 +19,7 @@ import 'package:focubili/models/video_preview.dart';
 
 import 'subscription_service_test.dart' show Content;
 import 'subscription_performance_probe_test.dart'
-    show CountingSnapshots, feedFixture;
+    show CountingSnapshots, feedFixture, feedFixtureClock;
 import 'refactor_r3_feedback_test.dart' show video, FeedbackPlayback;
 
 class _Videos implements BilibiliService {
@@ -212,6 +212,7 @@ void main() {
       final content = Content();
       final service = SubscriptionService(
         snapshotStore: store,
+        clock: () => feedFixtureClock,
         contentService: content,
       );
       addTearDown(service.dispose);
@@ -302,6 +303,7 @@ void main() {
       final videos = _Videos();
       final service = SubscriptionService(
         snapshotStore: store,
+        clock: () => feedFixtureClock,
         contentService: content,
       );
       addTearDown(service.dispose);

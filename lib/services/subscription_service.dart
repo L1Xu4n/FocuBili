@@ -24,6 +24,7 @@ class SubscriptionService extends ChangeNotifier {
     BilibiliPublicContentService? contentService,
     Future<SharedPreferences> Function()? preferencesLoader,
     DateTime Function()? clock,
+    Timer Function(Duration, void Function())? retentionTimerFactory,
     SubscriptionSnapshotStore? snapshotStore,
     SubscriptionHistoryStore? historyStore,
     Future<void> Function(bool enabled, int generation)? backgroundScheduler,
@@ -46,6 +47,9 @@ class SubscriptionService extends ChangeNotifier {
        content = contentService ?? BilibiliHttpPublicContentService(),
        _preferencesLoader = preferencesLoader ?? SharedPreferences.getInstance,
        _clock = clock ?? DateTime.now,
+       _retentionTimerFactory =
+           retentionTimerFactory ??
+           (AppPlatformDetector.isFlutterTest ? null : Timer.new),
        _snapshotStore =
            snapshotStore ??
            (preferencesLoader == null &&
@@ -64,7 +68,7 @@ class SubscriptionService extends ChangeNotifier {
   static const storageKey = 'focubili_subscriptions_v1';
   static const backupKey = '${storageKey}_backup';
   static const displayLimit = 500;
-  static const readRetention = Duration(days: 7);
+  static const feedRetention = Duration(days: 14);
   final AppPlatform _platform;
   final NativeSubscriptionScheduler? _nativeScheduler;
   final BilibiliPublicContentService content;
@@ -90,6 +94,7 @@ class SubscriptionService extends ChangeNotifier {
 
   final Future<SharedPreferences> Function() _preferencesLoader;
   final DateTime Function() _clock;
+  final Timer Function(Duration, void Function())? _retentionTimerFactory;
   final SubscriptionSnapshotStore? _snapshotStore;
   final Future<void> Function(bool enabled, int generation)?
   _backgroundScheduler;
@@ -131,6 +136,8 @@ class SubscriptionService extends ChangeNotifier {
   Future<void>? _writes;
   Timer? _timer;
   Timer? _retentionTimer;
+  DateTime? _scheduledRetentionAt, _retentionRetryAt;
+  bool _retentionSweepRunning = false;
   Map<String, SubscriptionSource> _sources = {};
   Map<String, SourceCheckpoint> _checkpoints = {};
   Map<String, SubscriptionFeedItem> _feed = {};
@@ -138,22 +145,72 @@ class SubscriptionService extends ChangeNotifier {
   Set<String> _notificationClaims = {};
   String? _snapshotText;
   List<SubscriptionFeedItem>? _feedView;
-  int? _unreadCount;
+  int _visibleUnread = 0;
+  DateTime? _firstExpiry, _firstStoredExpiry;
+  bool _firstStoredExpiryKnown = false;
   void _invalidateFeed() {
     _feedView = null;
-    _unreadCount = null;
+    _firstExpiry = null;
+    _firstStoredExpiryKnown = false;
+  }
+
+  // A known publication date determines content age even when an old video
+  // has just been added to a collection. Unknown/future dates cannot extend
+  // retention beyond the first time this device actually discovered it.
+  DateTime _contentTime(SubscriptionFeedItem item) {
+    final published = item.publishedAt;
+    return published != null && published.isBefore(item.discoveredAt)
+        ? published
+        : item.discoveredAt;
+  }
+
+  bool _expired(SubscriptionFeedItem item, DateTime now) =>
+      _contentTime(item).isBefore(now.subtract(feedRetention));
+
+  DateTime? get _nextStoredExpiry {
+    if (_firstStoredExpiryKnown) return _firstStoredExpiry;
+    DateTime? earliest;
+    for (final item in _feed.values) {
+      final expiry = _contentTime(item).add(feedRetention);
+      if (earliest == null || expiry.isBefore(earliest)) earliest = expiry;
+    }
+    _firstStoredExpiryKnown = true;
+    return _firstStoredExpiry = earliest;
+  }
+
+  bool _hasExpiredFeed(DateTime now) {
+    final expiry = _nextStoredExpiry;
+    return expiry != null && now.isAfter(expiry);
   }
 
   List<SubscriptionSource> get sources => List.unmodifiable(_sources.values);
-  List<SubscriptionFeedItem> get feed => _feedView ??= List.unmodifiable(
-    _feed.values.toList()..sort((a, b) {
+  List<SubscriptionFeedItem> get feed {
+    final now = _clock();
+    final cached = _feedView;
+    if (cached != null &&
+        (_firstExpiry == null || !now.isAfter(_firstExpiry!))) {
+      return cached;
+    }
+    final entries = <SubscriptionFeedItem>[];
+    DateTime? first;
+    _visibleUnread = 0;
+    for (final item in _feed.values) {
+      final expiry = _contentTime(item).add(feedRetention);
+      if (now.isAfter(expiry)) continue;
+      entries.add(item);
+      if (item.readAt == null) _visibleUnread++;
+      if (first == null || expiry.isBefore(first)) first = expiry;
+    }
+    _firstExpiry = first;
+    entries.sort((a, b) {
       if ((a.readAt == null) != (b.readAt == null)) {
         return a.readAt == null ? -1 : 1;
       }
       final date = b.discoveredAt.compareTo(a.discoveredAt);
       return date != 0 ? date : a.bvid.compareTo(b.bvid);
-    }),
-  );
+    });
+    return _feedView = List.unmodifiable(entries);
+  }
 
   /// Reads only persisted opt-in flags, without initialization or content access.
   /// Missing flags default to false; malformed stored flags are never normalized.
@@ -372,8 +429,11 @@ class SubscriptionService extends ChangeNotifier {
     'collectionAdded',
   };
 
-  int get unreadCount =>
-      _unreadCount ??= _feed.values.where((e) => e.readAt == null).length;
+  int get unreadCount {
+    feed; // Refresh the cached view if its earliest entry has just expired.
+    return _visibleUnread;
+  }
+
   SourceCheckpoint? checkpoint(String key) => _checkpoints[key];
   bool Function()? suppressNotifications;
   Future<bool> Function(int count)? notifySummary;
@@ -452,17 +512,13 @@ class SubscriptionService extends ChangeNotifier {
       }
       _loaded = true;
       await _nativeScheduler?.initialize(runBackgroundCheck);
-      final cutoff = _clock().subtract(readRetention);
-      if (_feed.values.any(
-        (item) => item.readAt != null && !item.readAt!.isAfter(cutoff),
-      )) {
-        await clearExpiredRead();
+      try {
+        await _clearIfExpired();
+      } on SubscriptionStorageException {
+        // The valid snapshot is still usable; ageing-out rows stay hidden
+        // even if cleanup could not yet be committed.
       }
-      if (!_disposed && !AppPlatformDetector.isFlutterTest) {
-        _retentionTimer ??= Timer.periodic(const Duration(hours: 1), (_) {
-          unawaited(clearExpiredRead().catchError((Object _) {}));
-        });
-      }
+      _scheduleFeedExpiry();
       _schedule();
       if (!_disposed) notifyListeners();
     } catch (_) {
@@ -570,7 +626,7 @@ class SubscriptionService extends ChangeNotifier {
           // An action may partially change memory before failing. Force rollback
           // and every CAS replay to restore a fresh authoritative snapshot.
           _snapshotText = null;
-          _pruneExpiredRead();
+          _pruneExpiredFeed();
           return await action();
         } catch (error) {
           actionFailure = error;
@@ -612,6 +668,7 @@ class SubscriptionService extends ChangeNotifier {
           _snapshotText = encoded;
         }
         storageError = null;
+        _retentionRetryAt = null;
         if (!_disposed && (before != _snapshotText || hadError)) {
           notifyListeners();
         }
@@ -625,8 +682,13 @@ class SubscriptionService extends ChangeNotifier {
         _restoreRaw(previous);
         if (actionFailure != null) rethrow;
         storageError = '订阅变更未保存，请检查设备存储后重试。';
+        if (_hasExpiredFeed(_clock())) {
+          _retentionRetryAt = _clock().add(const Duration(minutes: 5));
+        }
         if (!_disposed) notifyListeners();
         throw const SubscriptionStorageException();
+      } finally {
+        _scheduleFeedExpiry();
       }
     });
     late final Future<void> barrier;
@@ -727,8 +789,9 @@ class SubscriptionService extends ChangeNotifier {
   /// Reload after headless work. No stale whole-snapshot writes on foreground resume.
   Future<void> reload() async {
     await initialize();
-    if (_snapshotStore == null || !_loaded) return;
-    await _mutate(() {}, readOnly: true);
+    if (!_loaded) return;
+    if (_snapshotStore != null) await _mutate(() {}, readOnly: true);
+    await _clearIfExpired();
   }
 
   Future<void> runBackgroundCheck(
@@ -912,24 +975,103 @@ class SubscriptionService extends ChangeNotifier {
     _invalidateFeed();
   });
 
-  void _pruneExpiredRead() {
-    final cutoff = _clock().subtract(readRetention);
+  void _pruneExpiredFeed() {
+    final now = _clock();
+    if (!_hasExpiredFeed(now)) return;
     final expired = _feed.values
-        .where((item) => item.readAt != null && !item.readAt!.isAfter(cutoff))
-        .map((e) => e.bvid)
+        .where((item) => _expired(item, now))
+        .map((item) => item.bvid)
         .toList();
     if (expired.isEmpty) return;
+    // Some legacy/imported snapshots have feed rows without dedupe IDs.
+    // Keep only the identifier, not the expired payload or source metadata.
+    _announced.addAll(expired);
+    // An in-flight notification might still hold an earlier copy of this row.
+    _notificationClaims.addAll(expired);
     for (final bvid in expired) {
       _feed.remove(bvid);
     }
-    // Keep announced/seen and learning/history records: old items must not reappear.
     _invalidateFeed();
   }
 
-  Future<void> clearExpiredRead() => _mutate(_pruneExpiredRead);
+  Future<void> _clearIfExpired() async {
+    if (_hasExpiredFeed(_clock())) await clearExpiredFeed();
+  }
+
+  Future<void> clearExpiredFeed() => _mutate(() {});
+
+  void _scheduleFeedExpiry() {
+    final schedule = _retentionTimerFactory;
+    DateTime? at;
+    if (_foreground && _loaded && !_disposed && schedule != null) {
+      final now = _clock();
+      final storedExpiry = _nextStoredExpiry;
+      if (storedExpiry != null) {
+        const timerGranularity = Duration(milliseconds: 1);
+        if (now.isAfter(storedExpiry)) {
+          // Even if a previous cleanup is waiting on disk, newly expired rows
+          // must leave the display at their own deadlines.
+          feed;
+          at = _firstExpiry?.add(timerGranularity);
+        } else {
+          at = storedExpiry.add(timerGranularity);
+        }
+        if (!_retentionSweepRunning) {
+          // Exactly fourteen days still counts. A millisecond beyond the
+          // cutoff also avoids zero-delay loops from Timer rounding.
+          var cleanup = storedExpiry.add(timerGranularity);
+          final retryAt = _retentionRetryAt;
+          if (retryAt != null && cleanup.isBefore(retryAt)) cleanup = retryAt;
+          if (at == null || cleanup.isBefore(at)) at = cleanup;
+        }
+      }
+    }
+    if (at == null || schedule == null) {
+      _retentionTimer?.cancel();
+      _retentionTimer = null;
+      _scheduledRetentionAt = null;
+      return;
+    }
+    if (_scheduledRetentionAt == at && _retentionTimer?.isActive == true) {
+      return;
+    }
+    _retentionTimer?.cancel();
+    _scheduledRetentionAt = at;
+    final delay = at.difference(_clock());
+    _retentionTimer = schedule(delay.isNegative ? Duration.zero : delay, () {
+      _retentionTimer = null;
+      _scheduledRetentionAt = null;
+      unawaited(_expireVisibleFeed());
+    });
+  }
+
+  Future<void> _expireVisibleFeed() async {
+    if (!_foreground || !_loaded || _disposed) return;
+    final now = _clock();
+    final hasExpired = _hasExpiredFeed(now);
+    final retryAt = _retentionRetryAt;
+    final sweep =
+        hasExpired &&
+        !_retentionSweepRunning &&
+        (retryAt == null || !now.isBefore(retryAt));
+    if (sweep) _retentionSweepRunning = true;
+    // Readers derive content age immediately, independently of the write.
+    if (hasExpired) notifyListeners();
+    _scheduleFeedExpiry();
+    if (!sweep) return;
+    try {
+      await clearExpiredFeed();
+    } on SubscriptionStorageException {
+      // Keep browsing non-expired rows; _mutate records a bounded retry delay.
+    } finally {
+      _retentionSweepRunning = false;
+      _scheduleFeedExpiry();
+    }
+  }
 
   void setForeground(bool value) {
     _foreground = value;
+    _scheduleFeedExpiry();
     if (!value && !_desktopBackgroundAllowed) {
       _epoch++;
       _cancelRequests();
@@ -1046,6 +1188,13 @@ class SubscriptionService extends ChangeNotifier {
     if (!_disposed) notifyListeners();
     var index = 0;
     final candidates = <String, SubscriptionFeedItem>{};
+    final publicationDates = <String, DateTime>{};
+    bool retainCandidate(SubscriptionFeedItem item, DateTime now) {
+      final observed = publicationDates[item.bvid];
+      return !_expired(item, now) &&
+          (observed == null || !observed.isBefore(now.subtract(feedRetention)));
+    }
+
     // At most two sources; pages within a source remain sequential.
     Future<void> worker() async {
       while (index < pending.length && enabled && _canRun && epoch == _epoch) {
@@ -1069,7 +1218,7 @@ class SubscriptionService extends ChangeNotifier {
             });
           }
           if (!_active(source, epoch)) continue;
-          candidates.addAll(await _scan(source, epoch));
+          candidates.addAll(await _scan(source, epoch, publicationDates));
         } catch (_) {
           // Storage failure is visible; independent sources may still be read.
         }
@@ -1093,12 +1242,17 @@ class SubscriptionService extends ChangeNotifier {
               !notificationsEnabled) {
             return <String>{};
           }
+          final now = _clock();
           final ids = candidates.keys
               .toSet()
               .difference(_notificationClaims)
               // A large burst can evict newly found unread cards at the display
               // cap. Still claim/count those events; never renotify the burst.
-              .where((id) => _feed[id]?.readAt == null)
+              .where(
+                (id) =>
+                    _feed[id]?.readAt == null &&
+                    retainCandidate(_feed[id] ?? candidates[id]!, now),
+              )
               .toSet();
           _notificationClaims.addAll(ids);
           return ids;
@@ -1121,10 +1275,12 @@ class SubscriptionService extends ChangeNotifier {
                 suppressNotifications?.call() != true) {
               // Metadata lives for this committed check, independently of the
               // 500-card display cache. Refresh read/source state when retained.
+              final now = _clock();
               final items =
                   [
                     for (final id in claimed)
-                      if (_feed[id]?.readAt == null)
+                      if (_feed[id]?.readAt == null &&
+                          retainCandidate(_feed[id] ?? candidates[id]!, now))
                         _feed[id] ?? candidates[id]!,
                   ]..sort((a, b) {
                     final date = b.discoveredAt.compareTo(a.discoveredAt);
@@ -1144,7 +1300,11 @@ class SubscriptionService extends ChangeNotifier {
                       _canRun &&
                       _epoch == deliveryEpoch &&
                       _generation == generation &&
-                      suppressNotifications?.call() != true,
+                      suppressNotifications?.call() != true &&
+                      items.every(
+                        (item) =>
+                            retainCandidate(_feed[item.bvid] ?? item, _clock()),
+                      ),
                   () async {
                     if (notifyItems != null) {
                       await notifyItems!(items);
@@ -1292,12 +1452,35 @@ class SubscriptionService extends ChangeNotifier {
   // Live event dedupe never consults historical import IDs.
   bool _mergeLive(SubscriptionFeedItem item, {required bool newEvent}) {
     final previous = _feed[item.bvid];
+    final published = item.publishedAt;
+    final firstDiscovery = previous?.discoveredAt ?? item.discoveredAt;
+    final previousPublication = previous?.publishedAt;
+    final correctedPublication =
+        published != null &&
+            !published.isAfter(firstDiscovery) &&
+            (previousPublication == null ||
+                published.isBefore(previousPublication))
+        ? published
+        : null;
+    final age = correctedPublication ?? _contentTime(previous ?? item);
+    if (age.isBefore(_clock().subtract(feedRetention))) {
+      // Scan later items even if the upstream page is not chronologically
+      // sorted. An undated repeat must not bring this old video back.
+      _announced.add(item.bvid);
+      if (_feed.remove(item.bvid) != null) {
+        _notificationClaims.add(item.bvid);
+        _invalidateFeed();
+      }
+      return false;
+    }
     if (previous != null) {
       final merged = {...previous.sources, ...item.sources};
       if (!mapEquals(merged, previous.sources) ||
-          (!previous.collectionAdded && item.collectionAdded)) {
+          (!previous.collectionAdded && item.collectionAdded) ||
+          correctedPublication != null) {
         _feed[item.bvid] = previous.copyWith(
           sources: merged,
+          publishedAt: correctedPublication,
           collectionAdded: previous.collectionAdded || item.collectionAdded,
         );
         _invalidateFeed();
@@ -1312,6 +1495,7 @@ class SubscriptionService extends ChangeNotifier {
   }
 
   void _trimFeed() {
+    if (_feed.length > displayLimit) _pruneExpiredFeed();
     if (_feed.length > displayLimit) {
       _feed = {for (final item in feed.take(displayLimit)) item.bvid: item};
       _invalidateFeed();
@@ -1354,6 +1538,7 @@ class SubscriptionService extends ChangeNotifier {
   Future<Map<String, SubscriptionFeedItem>> _scan(
     SubscriptionSource source,
     int epoch,
+    Map<String, DateTime> publicationDates,
   ) async {
     final lease = _roundLease;
     final discovered = <String, SubscriptionFeedItem>{};
@@ -1523,7 +1708,18 @@ class SubscriptionService extends ChangeNotifier {
           _trimFeed();
           return (true, complete, additions);
         });
-        discovered.addAll(result.$3);
+        if (result.$1) {
+          // Observe only committed pages. A too-old date can invalidate a
+          // candidate already evicted by the display cap or found elsewhere.
+          for (final video in page.items) {
+            final date = video.publishedAt;
+            final previous = publicationDates[video.bvid];
+            if (date != null && (previous == null || date.isBefore(previous))) {
+              publicationDates[video.bvid] = date;
+            }
+          }
+          discovered.addAll(result.$3);
+        }
         if (!result.$1 || result.$2) break;
         cp = SourceCheckpoint.fromJson(_checkpoints[source.key]!.toJson());
       }
@@ -1804,7 +2000,7 @@ class SubscriptionService extends ChangeNotifier {
     _cancelRequests();
     _timer?.cancel();
     final store = _snapshotStore;
-    _retentionTimer?.cancel();
+    _scheduleFeedExpiry();
     unawaited(_nativeScheduler?.dispose());
     if (store is SqliteSubscriptionSnapshotStore) unawaited(store.close());
     super.dispose();

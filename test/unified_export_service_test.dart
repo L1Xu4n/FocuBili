@@ -547,10 +547,11 @@ void main() {
       () async {
         final document =
             jsonDecode(feedFixture(count: 1, sourceCount: 1)) as Map;
-        // An expired read row also exercises v1.8's initialization cleanup after
-        // integration. Export must validate the original bytes before any such
-        // browsing-side normalization, including SQLite's first migration.
-        document['feed'].first['readAt'] = DateTime.utc(2020).toIso8601String();
+        // Cold export must validate the expired row's original bytes before
+        // browsing-side normalization, including cleanup and SQLite migration.
+        document['feed'].first['publishedAt'] = DateTime.utc(
+          2020,
+        ).toIso8601String();
         if (duplicate) {
           (document['feed'] as List).add(
             Map<String, dynamic>.from(document['feed'].first as Map),

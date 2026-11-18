@@ -235,8 +235,8 @@ void main() {
         (jsonDecode(store.value!) as Map)['notificationClaims'],
         hasLength(1000),
       );
-      now = now.add(const Duration(days: 8));
-      await service.clearExpiredRead();
+      now = now.add(const Duration(days: 15));
+      await service.clearExpiredFeed();
       await service.refresh(manual: true);
       expect(notifications, hasLength(999));
     },

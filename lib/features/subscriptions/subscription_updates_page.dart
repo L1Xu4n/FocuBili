@@ -393,7 +393,7 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
       key: 'retention',
       builder: (context) => const Padding(
         padding: EdgeInsets.symmetric(vertical: 20, horizontal: 12),
-        child: Text('已读记录会保留七天，到期后自动清除', textAlign: TextAlign.center),
+        child: Text('只保留最近 14 天的订阅更新，已读和未读相同', textAlign: TextAlign.center),
       ),
     ));
     return rows;
