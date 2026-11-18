@@ -6,9 +6,9 @@
 
 | 场景 | 原来 | 修改后怎么验证 |
 | --- | --- | --- |
-| 首页快甩、持续拖动、反向下拉 | 同样上甩，Beta 2 被截在半开；上拖时欢迎区反而下沉。初版重写在列表浅处下拉越过首卡后仍弹回。 | 同一 430×900 窗口、120px/2500px/s 上甩：正式 v1.8.1 停在 898px（已进入列表）、Beta 2 停在 386px、候选停在首卡 772px。上拖 280px 时搜索区由反向下移 89.6px 变为同向上移 280px。Android/iOS 滚动物理均复核从浅/深处明确越过边界可一次收起、惯性不误关；慢放中点可半开。[三版画面对照](evidence/drawer-motion/drawer-before-after.png) |
+| 首页快甩、持续拖动、反向下拉 | 同样上甩，Beta 2 被截在半开；上拖时欢迎区反而下沉。初版重写在列表浅处下拉越过首卡后仍弹回。 | 同一 430×900 窗口、120px/2500px/s 上甩：正式 v1.8.1 停在 898px（已进入列表）、Beta 2 停在 386px、候选停在首卡 772px。上拖 280px 时搜索区由反向下移 89.6px 变为同向上移 280px。双平台物理下均验证有意越过首卡 150px 可以收起；另有深列表惯性回滑不误关回归；慢放中点可半开。[Beta 2 与候选画面](evidence/drawer-motion/drawer-before-after.png) · [三版五阶段的实测数值](evidence/drawer-motion/measurements.json) |
 | 窄屏笔记预览与另存截图 | 放大文字时七列表格的末列不可读；已损坏的图片仍能写出并报成功。 | 320×640、180% 字号下实际横拖到末列、再改写/保存正文。坏图不打开保存面板；有效截图用真实临时文件逐字节比较，保存的是原图。[修复前](evidence/notes-preview/markdown-table-before-320.png) · [修复后](evidence/notes-preview/markdown-table-scrolled-320.png)。系统选择器未实点。 |
-| 收藏、关注卡片 | 本机收藏或关注分组改名后首页用旧名；远端列表超时阻塞本机配置；冷启动身份核验失败曾被当成游客，可能显示或改写游客配置。 | 按稳定 ID 和账号显示新名；已核验身份的列表请求失败仍可编辑本机入口；未知身份不可读写任何配置分区，保存前身份失效也拒写，确实未登录的访客仍能用。验证取消、重进、切号与异步返回。[断网前](evidence/collection-editor/favorites-remote-failure-before.png) · [修复后](evidence/collection-editor/favorites-remote-failure-after.png)。未用真实账号。 |
+| 收藏、关注卡片 | 本机收藏或关注分组改名后首页用旧名；远端列表超时阻塞本机配置；冷启动身份核验失败曾被当成游客，可能显示或改写游客配置。 | 按稳定 ID 和账号显示新名；已核验身份的列表请求失败仍可编辑本机入口；未知身份不可读写任何配置分区，保存前身份失效也拒写，确实未登录的访客仍能用。验证取消、重进、切号与异步返回。[同一远端故障，修复前](evidence/collection-editor/favorites-remote-failure-before.png) · [修复后](evidence/collection-editor/favorites-remote-failure-after.png)。未用真实账号。 |
 
 ## 历史 issue 对照
 
