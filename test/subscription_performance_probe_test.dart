@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/features/subscriptions/subscription_updates_page.dart';
+import 'package:focubili/features/subscriptions/subscription_timeline_tile.dart';
 import 'package:focubili/models/public_profile.dart';
 import 'package:focubili/models/subscription.dart';
 import 'package:focubili/services/subscription_service.dart';
@@ -169,15 +170,19 @@ void main() {
       MaterialApp(home: SubscriptionUpdatesPage(service: service)),
     );
     await tester.pumpAndSettle();
+    final tiles = find.byType(SubscriptionTimelineTile);
+    final mountedRows = tiles.evaluate().length;
+    expect(mountedRows, inExclusiveRange(0, 40));
     final delegate = tester
-        .widget<SliverList>(find.byType(SliverList).first)
+        .widget<SliverList>(
+          find
+              .ancestor(of: tiles.first, matching: find.byType(SliverList))
+              .first,
+        )
         .delegate;
-    final mountedRows = find.byType(Card).evaluate().length;
-    final preconstructed = delegate is SliverChildListDelegate
-        ? delegate.children.whereType<Card>().length
-        : mountedRows;
+    expect(delegate, isA<SliverChildBuilderDelegate>());
     report['500_item_feed_390x844'] = {
-      'preconstructed_card_widgets': preconstructed,
+      'mounted_timeline_tiles': mountedRows,
       'mounted_rows': mountedRows,
       'delegate': delegate.runtimeType.toString(),
     };

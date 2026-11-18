@@ -5,6 +5,7 @@ import 'package:flutter/rendering.dart' show FloatingHeaderSnapConfiguration;
 import 'package:focubili/features/common/app_network_image.dart';
 
 import '../../models/subscription.dart';
+import '../../services/image_resource_cache.dart';
 import '../../models/public_profile.dart';
 import '../../services/subscription_service.dart';
 import '../../services/bilibili_service.dart';
@@ -15,7 +16,8 @@ import '../learning/learning_add_sheet.dart';
 import '../player/player_page.dart';
 import '../profile/user_profile_page.dart';
 import '../profile/collection_detail_page.dart';
-import 'subscription_feed_tile.dart';
+import 'subscription_source_rail.dart';
+import 'subscription_timeline_tile.dart';
 import 'subscription_history_page.dart';
 
 class SubscriptionUpdatesPage extends StatefulWidget {
@@ -23,10 +25,12 @@ class SubscriptionUpdatesPage extends StatefulWidget {
     super.key,
     this.service,
     this.videoService,
+    this.coverCache,
     this.learningService,
     this.notificationService = const FocusNotificationService(),
   });
   final SubscriptionService? service;
+  final ImageResourceCache? coverCache;
   final BilibiliService? videoService;
   final LearningListService? learningService;
   final FocusNotificationService notificationService;
@@ -187,11 +191,20 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
 
   String _date(DateTime date) {
     final local = date.toLocal();
-    return '--${local.year}年${local.month.toString().padLeft(2, '0')}月${local.day.toString().padLeft(2, '0')}日--';
+    final today = DateTime.now();
+    final yesterday = DateTime(today.year, today.month, today.day - 1);
+    final prefix = DateUtils.isSameDay(local, today)
+        ? '今天 · '
+        : DateUtils.isSameDay(local, yesterday)
+        ? '昨天 · '
+        : local.year == today.year
+        ? ''
+        : '${local.year}年';
+    return '$prefix${local.month}月${local.day}日';
   }
 
   List<SubscriptionFeedItem> _itemsForFilters() {
-    final today = _date(DateTime.now());
+    final today = DateTime.now();
     // A deleted source cannot strand the feed behind an invisible filter.
     final key = _service.sources.any((s) => s.key == _sourceKey)
         ? _sourceKey
@@ -202,7 +215,10 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
           (item) =>
               (!_unreadOnly || item.readAt == null) &&
               (!_todayOnly ||
-                  _date(item.publishedAt ?? item.discoveredAt) == today) &&
+                  DateUtils.isSameDay(
+                    (item.publishedAt ?? item.discoveredAt).toLocal(),
+                    today,
+                  )) &&
               (key == null || item.sources.containsKey(key)),
         )
         .toList();
@@ -257,7 +273,7 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
     }
     return 8 +
         rows * lineHeight +
-        (_service.sources.isEmpty ? 0 : 64 + scaler.scale(14));
+        (_service.sources.isEmpty ? 0 : 40 + scaler.scale(14));
   }
 
   Widget _filters({
@@ -268,6 +284,27 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (_service.sources.isNotEmpty)
+          Expanded(
+            child: SubscriptionSourceRail(
+              sources: _service.sources,
+              retainedFeed: _service.feed,
+              actionsReady: discoveryBlocklistActionsReady,
+              visibleFeed: discoveryBlocklistReady
+                  ? _service.feed
+                        .where((item) => !_isUpdateBlocked(item))
+                        .toList()
+                  : const [],
+              selected: _sourceKey,
+              onSelect: (key) {
+                if (!mounted) return;
+                setState(() {
+                  _sourceKey = key;
+                  _selected.clear();
+                });
+              },
+            ),
+          ),
         Wrap(
           spacing: 8,
           crossAxisAlignment: WrapCrossAlignment.center,
@@ -294,75 +331,6 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
             ),
           ],
         ),
-        if (_service.sources.isNotEmpty)
-          Expanded(
-            child: ListView(
-              key: const Key('subscription-source-filters'),
-              scrollDirection: Axis.horizontal,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: ChoiceChip(
-                    label: const Text('全部来源'),
-                    selected: _sourceKey == null,
-                    onSelected: (_) => setState(() {
-                      _sourceKey = null;
-                      _selected.clear();
-                    }),
-                  ),
-                ),
-                for (final source in _service.sources)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 10),
-                    child: Semantics(
-                      selected: _sourceKey == source.key,
-                      child: InkWell(
-                        key: ValueKey('source-filter-${source.key}'),
-                        onTap: () => setState(() {
-                          _sourceKey = _sourceKey == source.key
-                              ? null
-                              : source.key;
-                          _selected.clear();
-                        }),
-                        borderRadius: BorderRadius.circular(12),
-                        child: Container(
-                          width: 96,
-                          padding: const EdgeInsets.all(4),
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(12),
-                            color: _sourceKey == source.key
-                                ? Theme.of(
-                                    context,
-                                  ).colorScheme.secondaryContainer
-                                : null,
-                          ),
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              SizedBox(
-                                height: 44,
-                                child: FittedBox(
-                                  child: SubscriptionSourceImage(
-                                    source: source,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                source.name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context).textTheme.labelSmall,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
       ],
     ),
   );
@@ -401,57 +369,39 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
           key: '${readSection ? 'read' : 'unread'}-$date',
           builder: (context) => Padding(
             padding: const EdgeInsets.symmetric(vertical: 12),
-            child: Text(
-              date,
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.labelMedium,
+            child: Semantics(
+              header: true,
+              child: Text(
+                date,
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  color: Theme.of(context).colorScheme.primary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ),
           ),
         ));
       }
       rows.add((
         key: item.bvid,
-        builder: (context) => Card(
+        builder: (context) => SubscriptionTimelineTile(
           key: ValueKey('subscription-feed-${item.bvid}'),
-          color: _selected.contains(item.bvid)
-              ? Theme.of(context).colorScheme.secondaryContainer
-              : null,
-          clipBehavior: Clip.antiAlias,
-          child: SubscriptionFeedTile(
-            item: item,
-            selected: _selecting ? _selected.contains(item.bvid) : null,
-            onLongPress: _busy || !discoveryBlocklistActionsReady
-                ? null
-                : () => _toggle(item),
-            onTap: _busy || !discoveryBlocklistActionsReady
-                ? null
-                : () => _selecting ? _toggle(item) : unawaited(_play(item)),
-            actions: _selecting
-                ? null
-                : Wrap(
-                    spacing: 8,
-                    children: [
-                      if (item.readAt == null)
-                        TextButton(
-                          onPressed: _busy || !discoveryBlocklistActionsReady
-                              ? null
-                              : () => _action(() async {
-                                  if (!_isUpdateBlocked(item)) {
-                                    await _service.markRead(item.bvid);
-                                  }
-                                }),
-                          child: const Text('标为已读'),
-                        ),
-                      TextButton.icon(
-                        onPressed: _busy || !discoveryBlocklistActionsReady
-                            ? null
-                            : () => _addLearning(item),
-                        icon: const Icon(Icons.playlist_add),
-                        label: const Text('加入学习清单'),
-                      ),
-                    ],
-                  ),
+          coverCache: widget.coverCache,
+          item: item,
+          selected: _selecting ? _selected.contains(item.bvid) : null,
+          enabled: !_busy && discoveryBlocklistActionsReady,
+          onLongPress: _busy || !discoveryBlocklistActionsReady
+              ? null
+              : () => _toggle(item),
+          onTap: _busy || !discoveryBlocklistActionsReady
+              ? null
+              : () => _selecting ? _toggle(item) : unawaited(_play(item)),
+          onRead: () => unawaited(
+            _action(() async {
+              if (!_isUpdateBlocked(item)) await _service.markRead(item.bvid);
+            }),
           ),
+          onAdd: () => unawaited(_addLearning(item)),
         ),
       ));
     }
