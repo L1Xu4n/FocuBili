@@ -71,7 +71,16 @@ class FixtureTransfer extends ResumableMediaDownload {
   ];
   List<int> payload = [
     ...box('ftyp', [105, 115, 111, 109, 0, 0, 0, 1]),
-    ...box('moov', box('trak', [])),
+    ...box('moov', [
+      for (final role in ['vide', 'soun'])
+        ...box(
+          'trak',
+          box(
+            'mdia',
+            box('hdlr', [0, 0, 0, 0, 0, 0, 0, 0, ...ascii.encode(role)]),
+          ),
+        ),
+    ]),
     ...box('mdat', utf8.encode('synthetic-media-for-testing')),
   ];
   String? fail;

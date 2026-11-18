@@ -27,6 +27,7 @@ import 'windows_dash_media_plan.dart';
 import 'windows_playback_recovery_policy.dart';
 import 'windows_playback_progress_store.dart';
 import 'cache_lifecycle.dart';
+import 'course_cache_playback_guard.dart';
 import 'bilibili_wbi_signing_service.dart';
 
 /// 使用 media_kit 与 Windows 系统能力实现 FocuBili 的桌面播放接口。
@@ -43,6 +44,7 @@ class WindowsPlaybackService
     Player? player,
     WindowsPlaybackProgressStore? progressStore,
     Future<String> Function()? bufferStateReader,
+    this.courseCacheGuard,
   }) : _sourceService = sourceService ?? BilibiliDesktopPlaybackSourceService(),
        _videoShotService = videoShotService ?? BilibiliVideoShotService(),
        _progressStore = progressStore ?? const WindowsPlaybackProgressStore(),
@@ -79,6 +81,8 @@ class WindowsPlaybackService
   final WindowsPlaybackProgressStore _progressStore;
   final Future<String> Function()? _bufferStateReader;
   final Player _player;
+  final CourseCachePlaybackGuard? courseCacheGuard;
+  Timer? _courseExpiry;
   late final VideoController _videoController;
   final ApplePlaybackSession _appleSession = ApplePlaybackSession();
   final LinuxMediaSession _linuxSession = LinuxMediaSession();
@@ -462,6 +466,17 @@ class WindowsPlaybackService
     if (audioFilePath != null && audioFilePath.trim().isEmpty) {
       throw ArgumentError('本地音频路径无效');
     }
+    // A private-cache player is scoped to exactly one lesson. Decline an
+    // unrelated request before invalidating the active account/expiry guard.
+    final scoped = courseCacheGuard;
+    if (scoped != null) {
+      await scoped.validate(
+        video,
+        part ?? video?.initialPart,
+        filePath,
+        audioFilePath,
+      );
+    }
     final generation = sourceGeneration ?? _beginSourceRequest();
     if (sourceGeneration == null) {
       _courseAccountRevision = video?.isCourse == true
@@ -475,6 +490,30 @@ class WindowsPlaybackService
     final audioFile = audioFilePath == null ? null : File(audioFilePath);
     if (audioFile != null && !await audioFile.exists()) {
       throw StateError('离线音频文件不存在');
+    }
+    final isCourse = video?.isCourse == true;
+    final guard = courseCacheGuard;
+    if (isCourse ||
+        await CourseCachePlaybackGuard.isPrivateFile(file) ||
+        audioFile != null &&
+            await CourseCachePlaybackGuard.isPrivateFile(audioFile)) {
+      if (!isCourse || guard == null) throw StateError('请从当前账号的「课程缓存」打开此章节。');
+      Future<void> verify() => guard.validate(
+        video,
+        part ?? video?.initialPart,
+        filePath,
+        audioFilePath,
+      );
+      await verify();
+      if (!_isCurrentSourceRequest(generation)) return;
+      _activeSessionValidator = verify;
+      final delay = guard.entry.until!.difference(DateTime.now());
+      if (delay <= Duration.zero) throw StateError('本次课程校验已到期。');
+      _courseExpiry?.cancel();
+      _courseExpiry = Timer(delay, () {
+        if (_isCurrentSourceRequest(generation)) _handleCourseAccountChanged();
+      });
+      await _diskCacheSession?.setDiskAllowed(false);
     }
     if (!_isCurrentSourceRequest(generation)) return;
     await _saveCurrentProgress(force: true);
@@ -877,6 +916,7 @@ class WindowsPlaybackService
   Future<void> dispose() async {
     _sleepTimer?.cancel();
     _bufferTimer?.cancel();
+    _courseExpiry?.cancel();
     if (_disposed) {
       return;
     }
@@ -1486,6 +1526,8 @@ class WindowsPlaybackService
 
   /// 开始新的播放源请求并让先前仍在等待网络的分P或清晰度请求立即失效。
   int _beginSourceRequest() {
+    _courseExpiry?.cancel();
+    _courseExpiry = null;
     _sourceGeneration += 1;
     _activeSessionValidator = null;
     _bufferedRanges = const [];

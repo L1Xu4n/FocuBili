@@ -410,6 +410,8 @@ class CourseCacheLibrary extends ChangeNotifier {
         if (!await CourseCacheContainer.clearMp4(
           await _file(dir, '$name.part'),
           c.check,
+          video: name == 'video',
+          audio: name == 'audio' || g.media.audio == null,
         )) {
           // Never retain an apparently protected or unrecognized source for resume.
           for (final rejected in [
@@ -421,7 +423,7 @@ class CourseCacheLibrary extends ChangeNotifier {
             final f = await _file(dir, rejected);
             if (await f.exists()) await f.delete();
           }
-          throw const CourseCacheFailure('实际媒体含保护标记或不是支持的完整 MP4，未创建可播放缓存。');
+          throw const CourseCacheFailure('实际媒体缺少所需音画轨、含保护标记或格式不受支持，未创建可播放缓存。');
         }
       }
       await check();

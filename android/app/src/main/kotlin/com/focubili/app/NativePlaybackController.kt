@@ -376,7 +376,7 @@ class NativePlaybackController(
                 val isPrivate = CoursePlaybackTarget.isCourseKey(bvid)
                 // Bind both absolute files to the exact app-cache account and lesson.
                 val dir = if (course != null && mid > 0 && cid > 0)
-                    File(activity.cacheDir, "private_course_v1/$mid/${course.seasonId}-${course.episodeId}-${course.aid}-$cid") else null
+                    runCatching { File(activity.cacheDir.canonicalFile, "private_course_v1/$mid/${course.seasonId}-${course.episodeId}-${course.aid}-$cid") }.getOrNull() else null
                 val audio = call.argument<String>("audioFilePath")?.trim()?.takeIf { it.isNotEmpty() }
                 val privateRoot = File(activity.cacheDir, "private_course_v1")
                 val underPrivate = listOfNotNull(filePath, audio).any { PrivateCoursePlayback.restricted(privateRoot, it) }

@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import '../../models/offline_video_download.dart';
 import '../../platform/app_platform.dart';
 import '../../services/cache_lifecycle.dart';
+import '../../services/windows_playback_service.dart';
+import '../../services/course_cache_playback_guard.dart';
 import '../../services/course_cache_library.dart';
 import '../../services/native_playback_service.dart';
 import '../../services/offline_video_service.dart';
@@ -56,7 +58,7 @@ class CourseCachePlaybackPage extends StatefulWidget {
 class _CourseCachePlaybackPageState extends State<CourseCachePlaybackPage>
     with WidgetsBindingObserver {
   late final _one = _OneChapter(widget.library, widget.entry);
-  NativePlaybackService? _native;
+  PlaybackService? _native;
   Timer? _timer;
   bool _invalid = false;
   int _seen = -1;
@@ -82,6 +84,10 @@ class _CourseCachePlaybackPageState extends State<CourseCachePlaybackPage>
       _native = NativePlaybackService(
         courseCacheMid: e.mid,
         courseCacheUntil: e.until,
+      );
+    } else if (AppPlatformDetector.current == AppPlatform.windows) {
+      _native = WindowsPlaybackService(
+        courseCacheGuard: CourseCachePlaybackGuard(widget.library, e),
       );
     }
     _timer = Timer(e.until!.difference(DateTime.now()), _revoke);
