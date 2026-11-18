@@ -287,27 +287,33 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('窄桌面窗口鼠标滚轮连续移动，亦支持按住拖动', (tester) async {
-    final scroll = await _mount(tester, size: const Size(720, 560));
-    final open = tester.getSize(_hero).height + 12;
-    final pointer = TestPointer(42, PointerDeviceKind.mouse);
-    await tester.sendEventToBinding(pointer.hover(const Offset(10, 280)));
-    await tester.sendEventToBinding(pointer.scroll(const Offset(0, 128)));
-    await tester.pumpAndSettle();
-    expect(scroll.offset, closeTo(128, 1));
-    await tester.sendEventToBinding(pointer.scroll(const Offset(0, -128)));
-    await tester.pumpAndSettle();
-    expect(scroll.offset, closeTo(0, 1));
+  testWidgets(
+    '窄桌面窗口鼠标滚轮连续移动，亦支持按住拖动',
+    _checkDesktopPointer,
+    variant: TargetPlatformVariant({TargetPlatform.windows}),
+  );
+}
 
-    final gesture = await tester.startGesture(
-      const Offset(10, 280),
-      kind: PointerDeviceKind.mouse,
-    );
-    await gesture.moveBy(const Offset(0, -100));
-    await tester.pump();
-    expect(scroll.offset, closeTo(100, 1));
-    await gesture.up();
-    await tester.pumpAndSettle();
-    expect(scroll.offset, closeTo(open, 1));
-  }, variant: TargetPlatformVariant({TargetPlatform.windows}));
+Future<void> _checkDesktopPointer(WidgetTester tester) async {
+  final scroll = await _mount(tester, size: const Size(720, 560));
+  final open = tester.getSize(_hero).height + 12;
+  final pointer = TestPointer(42, PointerDeviceKind.mouse);
+  await tester.sendEventToBinding(pointer.hover(const Offset(10, 280)));
+  await tester.sendEventToBinding(pointer.scroll(const Offset(0, 128)));
+  await tester.pumpAndSettle();
+  expect(scroll.offset, closeTo(128, 1));
+  await tester.sendEventToBinding(pointer.scroll(const Offset(0, -128)));
+  await tester.pumpAndSettle();
+  expect(scroll.offset, closeTo(0, 1));
+
+  final gesture = await tester.startGesture(
+    const Offset(10, 280),
+    kind: PointerDeviceKind.mouse,
+  );
+  await gesture.moveBy(const Offset(0, -100));
+  await tester.pump();
+  expect(scroll.offset, closeTo(100, 1));
+  await gesture.up();
+  await tester.pumpAndSettle();
+  expect(scroll.offset, closeTo(open, 1));
 }
