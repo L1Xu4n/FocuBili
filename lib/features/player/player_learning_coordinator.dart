@@ -164,6 +164,7 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
     final String? confirmed = await showDialog<String>(
       context: context,
       builder: (BuildContext dialogContext) => AlertDialog(
+        clipBehavior: Clip.antiAlias,
         scrollable: true,
         title: const Text('当前 P 已在学习清单'),
         content: Text(
