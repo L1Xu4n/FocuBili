@@ -301,6 +301,96 @@ ScrollableState _editorScroll(WidgetTester tester) =>
       find.descendant(of: _scroll, matching: find.byType(Scrollable)).first,
     );
 
+Future<void> _verifyImeScrollAndUndo(WidgetTester tester) async {
+  final playback = _PeekPlayback(startsPlaying: false);
+  await _mount(
+    tester,
+    playback,
+    VideoNoteService(),
+    landscape: const Size(542, 300),
+    scale: 2,
+  );
+  tester.view.viewPadding = const FakeViewPadding(right: 19);
+  tester.view.padding = const FakeViewPadding(right: 19);
+  addTearDown(tester.view.resetPadding);
+  addTearDown(tester.view.resetViewPadding);
+  await _paint(tester);
+  await _open(tester);
+  final draft = List.filled(10, _draft).join('\n');
+  await tester.enterText(_titleField, _title);
+  await tester.ensureVisible(_bodyField);
+  await tester.showKeyboard(_bodyField);
+  tester.view.viewInsets = const FakeViewPadding(bottom: 155);
+  addTearDown(tester.view.resetViewInsets);
+  await _paint(tester);
+  tester.testTextInput.enterText(draft);
+  await tester.pump(const Duration(milliseconds: 500));
+  tester.testTextInput.updateEditingValue(
+    TextEditingValue(
+      text: '$draft!',
+      selection: TextSelection.collapsed(offset: draft.length + 1),
+    ),
+  );
+  await tester.pump(const Duration(milliseconds: 500));
+  expect(tester.takeException(), isNull);
+  final scroller = _editorScroll(tester);
+  final beforeParkingScroll = scroller.position.pixels;
+  final field = tester.widget<EditableText>(
+    find.descendant(of: _bodyField, matching: find.byType(EditableText)),
+  );
+  await tester.tapAt(_leftEdge(tester));
+  await tester.pump();
+  expect(field.focusNode.hasFocus, isFalse);
+  tester.view.resetViewInsets();
+  await _paint(tester);
+  expect(playback.current.isPlaying, isFalse);
+  expect(_handle.hitTestable(), findsOneWidget);
+  expect(tester.getTopRight(_handle).dx, closeTo(523, .1));
+  expect(_editorScroll(tester), same(scroller));
+  expect(_editorScroll(tester).position.pixels, greaterThan(0));
+  final savedScrollOffset = scroller.position.pixels;
+
+  final body = tester.getRect(_surface);
+  final horizontal = await tester.startGesture(
+    Offset(body.left + 80, body.center.dy),
+  );
+  await horizontal.moveBy(const Offset(75, 0));
+  await tester.pump();
+  await horizontal.moveBy(const Offset(95, 0));
+  await tester.pump();
+  await horizontal.up();
+  await _paint(tester);
+  expect(playback.seeks, hasLength(1));
+  expect(playback.current.isPlaying, isFalse);
+  await tester.tap(_playPause);
+  await _paint(tester);
+  expect(playback.current.isPlaying, isTrue);
+  expect(playback.plays, 1);
+  expect(scroller.position.pixels, savedScrollOffset);
+
+  await tester.tap(_handle);
+  await _paint(tester);
+  expect(field.focusNode.hasFocus, isFalse);
+  final revealedScroll = _editorScroll(tester).position;
+  expect(
+    revealedScroll.pixels,
+    beforeParkingScroll.clamp(
+      revealedScroll.minScrollExtent,
+      revealedScroll.maxScrollExtent,
+    ),
+  );
+  expect(_controller(tester, _bodyField).text, '$draft!');
+  await tester.ensureVisible(_bodyField);
+  await tester.showKeyboard(_bodyField);
+  await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+  await tester.sendKeyEvent(LogicalKeyboardKey.keyZ);
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+  await tester.pump(const Duration(milliseconds: 450));
+  expect(_controller(tester, _bodyField).text, draft);
+  expect(tester.takeException(), isNull);
+  await tester.pumpWidget(const SizedBox.shrink());
+}
+
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
   setUpAll(_loadEvidenceFonts);
@@ -402,95 +492,7 @@ void main() {
 
   testWidgets(
     '小横屏大字和键盘时保持滚动及撤销，收起后播放按钮和横滑可用',
-    (tester) async {
-      final playback = _PeekPlayback(startsPlaying: false);
-      await _mount(
-        tester,
-        playback,
-        VideoNoteService(),
-        landscape: const Size(542, 300),
-        scale: 2,
-      );
-      tester.view.viewPadding = const FakeViewPadding(right: 19);
-      tester.view.padding = const FakeViewPadding(right: 19);
-      addTearDown(tester.view.resetPadding);
-      addTearDown(tester.view.resetViewPadding);
-      await _paint(tester);
-      await _open(tester);
-      final draft = List.filled(10, _draft).join('\n');
-      await tester.enterText(_titleField, _title);
-      await tester.ensureVisible(_bodyField);
-      await tester.showKeyboard(_bodyField);
-      tester.view.viewInsets = const FakeViewPadding(bottom: 155);
-      addTearDown(tester.view.resetViewInsets);
-      await _paint(tester);
-      tester.testTextInput.enterText(draft);
-      await tester.pump(const Duration(milliseconds: 500));
-      tester.testTextInput.updateEditingValue(
-        TextEditingValue(
-          text: '$draft!',
-          selection: TextSelection.collapsed(offset: draft.length + 1),
-        ),
-      );
-      await tester.pump(const Duration(milliseconds: 500));
-      expect(tester.takeException(), isNull);
-      final scroller = _editorScroll(tester);
-      final beforeParkingScroll = scroller.position.pixels;
-      final field = tester.widget<EditableText>(
-        find.descendant(of: _bodyField, matching: find.byType(EditableText)),
-      );
-      await tester.tapAt(_leftEdge(tester));
-      await tester.pump();
-      expect(field.focusNode.hasFocus, isFalse);
-      tester.view.resetViewInsets();
-      await _paint(tester);
-      expect(playback.current.isPlaying, isFalse);
-      expect(_handle.hitTestable(), findsOneWidget);
-      expect(tester.getTopRight(_handle).dx, closeTo(523, .1));
-      expect(_editorScroll(tester), same(scroller));
-      expect(_editorScroll(tester).position.pixels, greaterThan(0));
-      final savedScrollOffset = scroller.position.pixels;
-
-      final body = tester.getRect(_surface);
-      final horizontal = await tester.startGesture(
-        Offset(body.left + 80, body.center.dy),
-      );
-      await horizontal.moveBy(const Offset(75, 0));
-      await tester.pump();
-      await horizontal.moveBy(const Offset(95, 0));
-      await tester.pump();
-      await horizontal.up();
-      await _paint(tester);
-      expect(playback.seeks, hasLength(1));
-      expect(playback.current.isPlaying, isFalse);
-      await tester.tap(_playPause);
-      await _paint(tester);
-      expect(playback.current.isPlaying, isTrue);
-      expect(playback.plays, 1);
-      expect(scroller.position.pixels, savedScrollOffset);
-
-      await tester.tap(_handle);
-      await _paint(tester);
-      expect(field.focusNode.hasFocus, isFalse);
-      final revealedScroll = _editorScroll(tester).position;
-      expect(
-        revealedScroll.pixels,
-        beforeParkingScroll.clamp(
-          revealedScroll.minScrollExtent,
-          revealedScroll.maxScrollExtent,
-        ),
-      );
-      expect(_controller(tester, _bodyField).text, '$draft!');
-      await tester.ensureVisible(_bodyField);
-      await tester.showKeyboard(_bodyField);
-      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
-      await tester.sendKeyEvent(LogicalKeyboardKey.keyZ);
-      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
-      await tester.pump(const Duration(milliseconds: 450));
-      expect(_controller(tester, _bodyField).text, draft);
-      expect(tester.takeException(), isNull);
-      await tester.pumpWidget(const SizedBox.shrink());
-    },
+    _verifyImeScrollAndUndo,
     variant: TargetPlatformVariant.only(TargetPlatform.windows),
   );
 
