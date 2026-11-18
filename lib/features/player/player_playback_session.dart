@@ -50,6 +50,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
 
   /// 由手势协调器为真实播放暂停切换提供短暂动画。
   void _showPlaybackActionFeedback(bool playing);
+  void _clearDesktopPointerForTransition();
 
   /// Provided by the video coordinator to reclaim Android's shared native channel.
   Future<void> _restorePlaybackAfterNestedPlayer({required bool shouldResume});
@@ -60,6 +61,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     _clearAbRepeatForNavigation();
     _externalNavigationSuspended = true;
     _sourceGeneration++;
+    _clearDesktopPointerForTransition();
     await _suspendAbRepeatForSource();
     final service = _playbackService;
     if (service is! NativePlaybackService || service.ownsPlatformChannel) {
@@ -85,13 +87,14 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     VideoPreview video,
     VideoPart part, {
     bool? useLocal,
-  }) =>
-      useLocal ??
-      ('${video.bvid}:${part.cid}' == _sourceChoicePart
-          ? _sourceChoiceLocal
-          : null) ??
-      (video.fromOfflineCache ||
-          (widget.forceOffline && video.bvid == widget.video.bvid));
+  }) => widget.forceOffline && widget.video.isCourse
+      ? true
+      : useLocal ??
+            ('${video.bvid}:${part.cid}' == _sourceChoicePart
+                ? _sourceChoiceLocal
+                : null) ??
+            (video.fromOfflineCache ||
+                (widget.forceOffline && video.bvid == widget.video.bvid));
 
   /// Validates offline-only transitions before page identity or progress ownership changes.
   Future<void> _checkPlaybackPart(VideoPreview video, VideoPart part) async {
@@ -113,6 +116,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     bool? useLocal,
   }) async {
     final generation = ++_sourceGeneration;
+    _clearDesktopPointerForTransition();
     await Future.wait([
       _suspendAbRepeatForSource(),
       _settleTemporaryPlaybackSpeed(),
@@ -141,6 +145,10 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
       _sourceChoicePart = identity;
       if (useLocal != null) _sourceChoiceLocal = useLocal;
       _playingOffline = local != null;
+      if (widget.forceOffline && widget.video.isCourse) {
+        _availableQualities = const [];
+      }
+
       _offlineQuality = local?.qualityId;
       if (local != null) {
         if (service is! LocalFilePlaybackService) {
@@ -533,6 +541,11 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
       snapshot = snapshot.copyWith(currentQuality: _offlineQuality);
     }
     final PlaybackSnapshot previousSnapshot = _playbackSnapshot;
+    if (snapshot.phase == PlaybackPhase.error ||
+        snapshot.isRestoringPosition ||
+        snapshot.isInPictureInPicture) {
+      _clearDesktopPointerForTransition();
+    }
     final sleepExpired =
         previousSnapshot.sleepTimerRemaining > Duration.zero &&
         snapshot.sleepTimerRemaining == Duration.zero &&
@@ -817,6 +830,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     if (!mounted) {
       return;
     }
+    _clearDesktopPointerForTransition();
     setState(() {
       _playbackSnapshot = _playbackSnapshot.copyWith(
         phase: PlaybackPhase.error,

@@ -14,8 +14,10 @@ import 'package:path_provider/path_provider.dart';
 import 'package:volume_controller/volume_controller.dart';
 
 import '../models/video_preview.dart';
+import '../platform/app_platform.dart';
 import 'desktop_playback_source_service.dart';
 import 'flutter_video_frame_capture.dart';
+import 'live_video_frame_playback_service.dart';
 import 'media_cache_service.dart';
 import 'desktop_disk_cache_session.dart';
 import 'native_playback_service.dart';
@@ -27,6 +29,8 @@ import 'windows_dash_media_plan.dart';
 import 'windows_playback_recovery_policy.dart';
 import 'windows_playback_progress_store.dart';
 import 'cache_lifecycle.dart';
+import 'course_cache_playback_guard.dart';
+import 'course_cache_library.dart';
 import 'bilibili_wbi_signing_service.dart';
 
 /// 使用 media_kit 与 Windows 系统能力实现 FocuBili 的桌面播放接口。
@@ -34,6 +38,7 @@ class WindowsPlaybackService
     implements
         PlaybackService,
         PlaybackVideoSurface,
+        LiveVideoFramePlaybackService,
         ListeningPlaybackService,
         LocalTrackPlaybackService {
   /// 创建 Windows 播放服务并立即订阅底层播放器状态；测试可注入播放源服务。
@@ -43,7 +48,10 @@ class WindowsPlaybackService
     Player? player,
     WindowsPlaybackProgressStore? progressStore,
     Future<String> Function()? bufferStateReader,
-  }) : _sourceService = sourceService ?? BilibiliDesktopPlaybackSourceService(),
+    this.courseCacheGuard,
+    AppPlatform? appPlatform,
+  }) : _appPlatform = appPlatform ?? AppPlatformDetector.current,
+       _sourceService = sourceService ?? BilibiliDesktopPlaybackSourceService(),
        _videoShotService = videoShotService ?? BilibiliVideoShotService(),
        _progressStore = progressStore ?? const WindowsPlaybackProgressStore(),
        _bufferStateReader = bufferStateReader,
@@ -62,6 +70,8 @@ class WindowsPlaybackService
     WindowsMediaCacheRuntime.registerPlaybackSession();
     _subscribeToPlayer();
     CacheLifecycle.account.addListener(_handleCourseAccountChanged);
+    _courseLibraryVersion = courseCacheGuard?.library.listVersion;
+    courseCacheGuard?.library.addListener(_handleCourseLibraryChanged);
   }
 
   static const Duration _progressSaveInterval = Duration(seconds: 5);
@@ -74,16 +84,24 @@ class WindowsPlaybackService
     milliseconds: 100,
   );
 
+  final AppPlatform _appPlatform;
   final BilibiliDesktopPlaybackSourceService _sourceService;
   final BilibiliVideoShotService _videoShotService;
   final WindowsPlaybackProgressStore _progressStore;
   final Future<String> Function()? _bufferStateReader;
   final Player _player;
+  final CourseCachePlaybackGuard? courseCacheGuard;
+  Timer? _courseExpiry;
+  int? _courseLibraryVersion;
+  Future<CourseCacheEntry> Function()? _activeCourseReceipt;
   late final VideoController _videoController;
   final ApplePlaybackSession _appleSession = ApplePlaybackSession();
   final LinuxMediaSession _linuxSession = LinuxMediaSession();
   final LinuxMiniPlayer _linuxMiniPlayer = LinuxMiniPlayer();
   final FlutterVideoFrameCapture _frameCapture = FlutterVideoFrameCapture();
+  int _frameTimelineRevision = 0;
+  int _frameSeeksInFlight = 0;
+  final Stopwatch _sinceFrameSeek = Stopwatch()..start();
   final StreamController<PlaybackSnapshot> _stateController =
       StreamController<PlaybackSnapshot>.broadcast();
   final List<StreamSubscription<dynamic>> _subscriptions =
@@ -247,10 +265,47 @@ class WindowsPlaybackService
     }
   }
 
+  void _scheduleCourseExpiry(Duration? delay, int generation) {
+    _courseExpiry?.cancel();
+    _courseExpiry = delay == null
+        ? null
+        : Timer(delay, () {
+            if (_isCurrentSourceRequest(generation)) {
+              _handleCourseAccountChanged(message: '本次课程校验已到期，请返回课程缓存。');
+            }
+          });
+  }
+
+  void _handleCourseLibraryChanged() {
+    final library = courseCacheGuard?.library;
+    if (library == null || library.listVersion == _courseLibraryVersion) return;
+    final version = _courseLibraryVersion = library.listVersion;
+    final read = _activeCourseReceipt;
+    final generation = _sourceGeneration;
+    if (read == null || !_isCurrentSourceRequest(generation)) return;
+    unawaited(() async {
+      try {
+        final fresh = await read();
+        if (_isCurrentSourceRequest(generation) &&
+            _courseLibraryVersion == version) {
+          _scheduleCourseExpiry(library.untilExpiry(fresh), generation);
+        }
+      } catch (_) {
+        if (_isCurrentSourceRequest(generation) &&
+            _courseLibraryVersion == version) {
+          _handleCourseAccountChanged(message: '课程缓存状态已变化，请返回课程缓存。');
+        }
+      }
+    }());
+  }
+
   /// 课程媒体只属于请求时的账号；切换立即撤销候选并串行停流。
-  void _handleCourseAccountChanged() {
+  void _handleCourseAccountChanged({String message = '登录状态已变化，请重新打开课程。'}) {
     if (_disposed || _courseAccountRevision == null) return;
     final generation = ++_sourceGeneration;
+    _activeCourseReceipt = null;
+    _courseExpiry?.cancel();
+    _courseExpiry = null;
     _bufferedRanges = const [];
     _mediaAttempts = const [];
     _activeMediaHeaders = const {};
@@ -258,10 +313,7 @@ class WindowsPlaybackService
     _externalAudioNeedsReload = false;
     _shouldPlayAfterFallback = false;
     _opening = true;
-    _emitPlayerState(
-      phaseOverride: PlaybackPhase.error,
-      message: '登录状态已变化，请重新打开课程。',
-    );
+    _emitPlayerState(phaseOverride: PlaybackPhase.error, message: message);
     final pendingOpens = List<Future<void>>.of(_pendingMediaOpens);
     _accountChangeStop = _accountChangeStop
         .then((_) async {
@@ -462,9 +514,22 @@ class WindowsPlaybackService
     if (audioFilePath != null && audioFilePath.trim().isEmpty) {
       throw ArgumentError('本地音频路径无效');
     }
+    // A private-cache player is scoped to exactly one lesson. Decline an
+    // unrelated request before invalidating the active account/expiry guard.
+    final scoped = courseCacheGuard;
+    if (scoped != null) {
+      await scoped.validate(
+        video,
+        part ?? video?.initialPart,
+        filePath,
+        audioFilePath,
+      );
+    }
     final generation = sourceGeneration ?? _beginSourceRequest();
     if (sourceGeneration == null) {
-      _courseAccountRevision = null;
+      _courseAccountRevision = video?.isCourse == true
+          ? CacheLifecycle.account.value
+          : null;
       await _accountChangeStop;
       if (!_isCurrentSourceRequest(generation)) return;
     }
@@ -473,6 +538,32 @@ class WindowsPlaybackService
     final audioFile = audioFilePath == null ? null : File(audioFilePath);
     if (audioFile != null && !await audioFile.exists()) {
       throw StateError('离线音频文件不存在');
+    }
+    final isCourse = video?.isCourse == true;
+    final guard = courseCacheGuard;
+    if (isCourse ||
+        await CourseCachePlaybackGuard.isPrivateFile(file) ||
+        audioFile != null &&
+            await CourseCachePlaybackGuard.isPrivateFile(audioFile)) {
+      if (!isCourse || guard == null) throw StateError('请从当前账号的「课程缓存」打开此章节。');
+      Future<CourseCacheEntry> verify() => guard.validate(
+        video,
+        part ?? video?.initialPart,
+        filePath,
+        audioFilePath,
+      );
+      final receipt = await verify();
+      if (!_isCurrentSourceRequest(generation)) return;
+      _activeCourseReceipt = verify;
+      _activeSessionValidator = () async {
+        await verify();
+      };
+      final delay = guard.library.untilExpiry(receipt);
+      if (delay != null && delay <= Duration.zero) {
+        throw StateError('本次课程校验已到期。');
+      }
+      _scheduleCourseExpiry(delay, generation);
+      await _diskCacheSession?.setDiskAllowed(false);
     }
     if (!_isCurrentSourceRequest(generation)) return;
     await _saveCurrentProgress(force: true);
@@ -641,21 +732,30 @@ class WindowsPlaybackService
   @override
   Future<void> seekBy(Duration offset) async {
     _ensureAvailable();
-    final Duration duration = _player.state.duration;
-    int targetMilliseconds =
-        _player.state.position.inMilliseconds + offset.inMilliseconds;
-    targetMilliseconds = targetMilliseconds.clamp(
-      0,
-      duration > Duration.zero ? duration.inMilliseconds : 1 << 31,
-    );
-    _leaveEndedPhaseWhenSeekingBeforeEnd(
-      Duration(milliseconds: targetMilliseconds),
-      duration,
-    );
-    final Duration targetPosition = Duration(milliseconds: targetMilliseconds);
-    await _player.seek(targetPosition);
-    if (_pendingResumePositionAfterDecode > Duration.zero) {
-      _pendingResumePositionAfterDecode = targetPosition;
+    _frameTimelineRevision++;
+    _frameSeeksInFlight++;
+    try {
+      final Duration duration = _player.state.duration;
+      int targetMilliseconds =
+          _player.state.position.inMilliseconds + offset.inMilliseconds;
+      targetMilliseconds = targetMilliseconds.clamp(
+        0,
+        duration > Duration.zero ? duration.inMilliseconds : 1 << 31,
+      );
+      _leaveEndedPhaseWhenSeekingBeforeEnd(
+        Duration(milliseconds: targetMilliseconds),
+        duration,
+      );
+      final Duration targetPosition = Duration(
+        milliseconds: targetMilliseconds,
+      );
+      await _player.seek(targetPosition);
+      if (_pendingResumePositionAfterDecode > Duration.zero) {
+        _pendingResumePositionAfterDecode = targetPosition;
+      }
+    } finally {
+      _frameSeeksInFlight--;
+      _sinceFrameSeek.reset();
     }
   }
 
@@ -663,19 +763,28 @@ class WindowsPlaybackService
   @override
   Future<void> seekTo(Duration position) async {
     _ensureAvailable();
-    final Duration duration = _player.state.duration;
-    final int targetMilliseconds = position.inMilliseconds.clamp(
-      0,
-      duration > Duration.zero ? duration.inMilliseconds : 1 << 31,
-    );
-    _leaveEndedPhaseWhenSeekingBeforeEnd(
-      Duration(milliseconds: targetMilliseconds),
-      duration,
-    );
-    final Duration targetPosition = Duration(milliseconds: targetMilliseconds);
-    await _player.seek(targetPosition);
-    if (_pendingResumePositionAfterDecode > Duration.zero) {
-      _pendingResumePositionAfterDecode = targetPosition;
+    _frameTimelineRevision++;
+    _frameSeeksInFlight++;
+    try {
+      final Duration duration = _player.state.duration;
+      final int targetMilliseconds = position.inMilliseconds.clamp(
+        0,
+        duration > Duration.zero ? duration.inMilliseconds : 1 << 31,
+      );
+      _leaveEndedPhaseWhenSeekingBeforeEnd(
+        Duration(milliseconds: targetMilliseconds),
+        duration,
+      );
+      final Duration targetPosition = Duration(
+        milliseconds: targetMilliseconds,
+      );
+      await _player.seek(targetPosition);
+      if (_pendingResumePositionAfterDecode > Duration.zero) {
+        _pendingResumePositionAfterDecode = targetPosition;
+      }
+    } finally {
+      _frameSeeksInFlight--;
+      _sinceFrameSeek.reset();
     }
   }
 
@@ -837,6 +946,47 @@ class WindowsPlaybackService
     return rect != null && await _appleSession.startPictureInPicture(rect);
   }
 
+  /// 仅回读当前画面。Windows/macOS/Linux/iOS 均不调用可能终止进程
+  /// 的原生 screenshot，也不以 B 站近似预览图冒充实际画面。
+  @override
+  Future<LiveVideoFrame?> captureLiveVideoFrame() async {
+    final video = _currentVideo;
+    final part = _currentPart;
+    if (video == null || part == null) return null;
+    final generation = _sourceGeneration;
+    final timeline = _frameTimelineRevision;
+    bool isCurrent() =>
+        _isCurrentSourceRequest(generation) &&
+        timeline == _frameTimelineRevision &&
+        _frameSeeksInFlight == 0 &&
+        _sinceFrameSeek.elapsed >= const Duration(milliseconds: 250) &&
+        !_opening &&
+        !_audioOnly &&
+        !_player.state.buffering &&
+        _snapshot.phase == PlaybackPhase.ready &&
+        !_snapshot.isRestoringPosition;
+    final sample = await _frameCapture.captureLivePng(
+      readPosition: () => _player.state.position,
+      isCurrent: isCurrent,
+    );
+    if (sample == null || !isCurrent()) return null;
+    final output = await _persistCapturedFrame(sample.bytes);
+    if (!isCurrent()) {
+      try {
+        await File(output).delete();
+      } on FileSystemException {
+        // Best effort for an unpublished, already cancelled frame.
+      }
+      return null;
+    }
+    return LiveVideoFrame(
+      path: output,
+      position: sample.position,
+      bvid: video.bvid,
+      cid: part.cid,
+    );
+  }
+
   /// 优先读取 Flutter 已绘制画面，失败时裁切 B 站时间点雪碧图，始终绕开会终止进程的原生截图。
   @override
   Future<String?> captureCurrentFrame() async {
@@ -857,6 +1007,10 @@ class WindowsPlaybackService
     if (bytes == null || bytes.isEmpty) {
       return null;
     }
+    return _persistCapturedFrame(bytes);
+  }
+
+  Future<String> _persistCapturedFrame(List<int> bytes) async {
     final Directory supportDirectory = await getApplicationSupportDirectory();
     final Directory frameDirectory = Directory(
       '${supportDirectory.path}${Platform.pathSeparator}video_frames',
@@ -866,8 +1020,17 @@ class WindowsPlaybackService
       '${frameDirectory.path}${Platform.pathSeparator}'
       'frame_${DateTime.now().microsecondsSinceEpoch}.png',
     );
-    await output.writeAsBytes(bytes, flush: true);
-    return output.path;
+    try {
+      await output.writeAsBytes(bytes, flush: true);
+      return output.path;
+    } on FileSystemException {
+      try {
+        await output.delete();
+      } on FileSystemException {
+        // A failed write need not have created a file.
+      }
+      rethrow;
+    }
   }
 
   /// 保存最后进度、释放 media_kit 与全部订阅，不触碰 Windows 显示器亮度。
@@ -875,10 +1038,13 @@ class WindowsPlaybackService
   Future<void> dispose() async {
     _sleepTimer?.cancel();
     _bufferTimer?.cancel();
+    _courseExpiry?.cancel();
     if (_disposed) {
       return;
     }
     CacheLifecycle.account.removeListener(_handleCourseAccountChanged);
+    courseCacheGuard?.library.removeListener(_handleCourseLibraryChanged);
+    _activeCourseReceipt = null;
     await _accountChangeStop;
     try {
       try {
@@ -994,6 +1160,12 @@ class WindowsPlaybackService
           ? await _sourceService.loadCourse(
               video: video,
               part: part,
+              quality: quality,
+            )
+          : _appPlatform.isDesktop
+          ? await _sourceService.loadForVideo(
+              video: video,
+              cid: part.cid,
               quality: quality,
             )
           : await _sourceService.load(
@@ -1484,8 +1656,11 @@ class WindowsPlaybackService
 
   /// 开始新的播放源请求并让先前仍在等待网络的分P或清晰度请求立即失效。
   int _beginSourceRequest() {
+    _courseExpiry?.cancel();
+    _courseExpiry = null;
     _sourceGeneration += 1;
     _activeSessionValidator = null;
+    _activeCourseReceipt = null;
     _bufferedRanges = const [];
     _restoringPosition = false;
     _restoredPosition = Duration.zero;

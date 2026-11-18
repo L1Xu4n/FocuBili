@@ -78,6 +78,7 @@ class SubscriptionFeedItem {
   SubscriptionFeedItem copyWith({
     Map<String, String>? sources,
     DateTime? readAt,
+    DateTime? publishedAt,
     bool? collectionAdded,
   }) => SubscriptionFeedItem(
     bvid: bvid,
@@ -85,7 +86,7 @@ class SubscriptionFeedItem {
     coverUrl: coverUrl,
     sources: Map.unmodifiable(sources ?? this.sources),
     discoveredAt: discoveredAt,
-    publishedAt: publishedAt,
+    publishedAt: publishedAt ?? this.publishedAt,
     readAt: readAt ?? this.readAt,
     collectionAdded: collectionAdded ?? this.collectionAdded,
   );

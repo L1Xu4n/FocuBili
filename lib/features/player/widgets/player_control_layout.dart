@@ -71,6 +71,37 @@ class PlayerControlGroups extends StatelessWidget {
   /// 在宽屏两端对齐两组，空间不足时换行并允许组内再次安全换行。
   @override
   Widget build(BuildContext context) {
+    // At large accessibility sizes a 16:9 phone can otherwise have no
+    // tappable video left between the toolbar rows. Keep play and fullscreen
+    // in place; let secondary controls scroll without scaling down text.
+    final media = MediaQuery.of(context);
+    if (media.size.width <= 380 &&
+        media.textScaler.scale(14) > 28 &&
+        playbackControls.isNotEmpty &&
+        displayControls.isNotEmpty) {
+      return Row(
+        children: [
+          playbackControls.first,
+          Expanded(
+            child: SingleChildScrollView(
+              key: const Key('player-secondary-controls-scroll'),
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ...playbackControls.skip(1),
+                  for (final control in displayControls.take(
+                    displayControls.length - 1,
+                  ))
+                    IntrinsicWidth(child: control),
+                ],
+              ),
+            ),
+          ),
+          displayControls.last,
+        ],
+      );
+    }
     return SizedBox(
       width: double.infinity,
       child: Wrap(

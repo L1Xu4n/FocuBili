@@ -1,3 +1,4 @@
+import '../classroom/course_cache_page.dart';
 import '../../services/cache_lifecycle.dart';
 import '../learning/learning_add_sheet.dart';
 import 'dart:async';
@@ -39,6 +40,7 @@ import '../../models/learning_list_entry.dart';
 import '../../services/device_status_service.dart';
 import '../../services/external_link_service.dart';
 import '../../services/native_playback_service.dart';
+import '../../services/live_video_frame_playback_service.dart';
 import '../../services/playback_service_factory.dart';
 import '../../services/playback_video_surface.dart';
 import '../../services/player_overlay_service.dart';
@@ -115,6 +117,7 @@ part 'player_details_view.dart';
 part 'player_local_library.dart';
 part 'player_collection_view.dart';
 part 'player_page_view.dart';
+part 'player_desktop_pointer.dart';
 
 /// 标识播放器画面应保留比例、裁切填充，还是按容器比例拉伸。
 enum _VideoFitMode { contain, cover, stretch }

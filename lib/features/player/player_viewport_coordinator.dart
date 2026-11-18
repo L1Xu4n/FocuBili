@@ -272,6 +272,7 @@ mixin _PlayerViewportCoordinator
       await _rememberDesktopWindowState();
     }
     // The fullscreen key remounts the gesture surface, so it may not get up.
+    _clearDesktopPointerForTransition();
     _cancelTemporaryLongPress();
     _reanchorDanmakuForViewportChange();
     setState(() {

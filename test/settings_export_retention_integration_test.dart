@@ -56,9 +56,10 @@ void main() {
           data['enabled'] = true;
           data['notificationsEnabled'] = true;
           data['backgroundRefreshEnabled'] = true;
-          data['feed'][0]['readAt'] = now
-              .subtract(const Duration(days: 8))
+          data['feed'][0]['publishedAt'] = now
+              .subtract(const Duration(days: 15))
               .toIso8601String();
+          data['feed'][0]['readAt'] = now.toIso8601String();
           data['feed'][0]['title'] = 'EXPIRED_READ_ROW_MUST_SURVIVE_EXPORT';
           final raw = jsonEncode(data);
           final calls = <MethodCall>[];
