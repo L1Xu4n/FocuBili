@@ -84,9 +84,15 @@ class _VideoNoteBodyEditorState extends State<VideoNoteBodyEditor> {
               child: MarkdownBody(
                 data: value.text,
                 softLineBreak: true,
-                styleSheet: MarkdownStyleSheet.fromTheme(
-                  Theme.of(context),
-                ).copyWith(p: widget.field.style),
+                styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context))
+                    .copyWith(
+                      p: widget.field.style,
+                      // Wide tables scroll instead of shrinking cells until
+                      // enlarged text is clipped by the column borders.
+                      tableColumnWidth: const IntrinsicColumnWidth(),
+                      tablePadding: const EdgeInsets.only(bottom: 8),
+                      tableScrollbarThumbVisibility: true,
+                    ),
                 onTapLink: (_, href, _) => unawaited(_openLink(href)),
                 // Show alt text without fetching images or reading paths in
                 // the source. Attached screenshots have their own viewer.

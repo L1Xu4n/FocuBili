@@ -462,4 +462,35 @@ void main() {
     await _waitForFrameSave(tester, find.text('截图文件缺失或无法读取。'));
     expect(requests.length, 1);
   });
+
+  testWidgets('已损坏的截图不会另存为成功', (tester) async {
+    final frames = await _realFrames(tester);
+    final root = File(frames.first.path).parent;
+    final source = File('${root.path}/corrupt.png')
+      ..writeAsBytesSync(<int>[137, 80, 78, 71, 13, 10, 26, 10]);
+    final output = File('${root.path}/exported.png');
+    final export = LocalExportService(
+      platform: AppPlatform.linux,
+      saveDialog: (request) async {
+        await output.writeAsBytes(request.bytes);
+        return output.path;
+      },
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: VideoNoteFrameViewerPage(
+          framePath: source.path,
+          localExportService: export,
+        ),
+      ),
+    );
+    await _waitForFrameSave(tester, find.text('截图文件不存在或已损坏'));
+    await tester.tap(find.byKey(const Key('save-fullscreen-note-frame')));
+    final status = find.textContaining(RegExp(r'截图已保存|截图文件缺失或无法读取'));
+    await _waitForFrameSave(tester, status);
+    expect(find.text('截图已保存。'), findsNothing);
+    expect(find.text('截图文件缺失或无法读取。'), findsOneWidget);
+    expect(output.existsSync(), isFalse);
+    expect(source.existsSync(), isTrue);
+  });
 }
