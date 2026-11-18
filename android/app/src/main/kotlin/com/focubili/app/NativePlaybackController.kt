@@ -110,6 +110,49 @@ class NativePlaybackController(
     private var videoSurface: Surface? = null
     private var currentBvid = ""
     private var currentCourse: CoursePlaybackTarget? = null
+    // Native enforcement also applies when Flutter timers are suspended.
+    private var localCourseMid = 0L
+    private var localCourseUntil = 0L
+    private var localCourseCheckedAt = 0L
+    private var localCourseGeneration = -1L
+    private var localCourseElapsedUntil = 0L
+    private var localCourseCookieCheck = 0L
+    private fun clearLocalCourseGrant() {
+        localCourseMid = 0L
+        localCourseUntil = 0L
+        localCourseCheckedAt = 0L
+        localCourseGeneration = -1L
+        localCourseElapsedUntil = 0L
+        localCourseCookieCheck = 0L
+    }
+    private fun hasLocalCourseSession(mid: Long): Boolean {
+        val snap = BilibiliSessionGate.read { CookieManager.getInstance().getCookie(it) }
+        return snap.state == BilibiliCookiePolicy.State.SESSION && !snap.partial &&
+            snap.header.split(';').map { it.trim() }.any { it == "DedeUserID=$mid" }
+    }
+    private fun localCourseValid(): Boolean {
+        if (localCourseMid == 0L) return true
+        val elapsed = SystemClock.elapsedRealtime()
+        val now = System.currentTimeMillis()
+        if (now < localCourseCheckedAt ||
+            (localCourseUntil > 0L && (elapsed >= localCourseElapsedUntil || now >= localCourseUntil)) ||
+            !BilibiliSessionGate.isCurrent(localCourseGeneration)) return false
+        // Catch WebView/system mutations that did not go through a Dart account write.
+        if (elapsed >= localCourseCookieCheck) {
+            localCourseCookieCheck = elapsed + 5_000L
+            if (!hasLocalCourseSession(localCourseMid) || !BilibiliSessionGate.isCurrent(localCourseGeneration)) return false
+        }
+        return true
+    }
+    private fun revokeLocalCourse() {
+        if (localCourseMid == 0L) return
+        player?.stop()
+        player?.clearMediaItems()
+        localVideoPath = null; localAudioPath = null
+        localSource = false; currentBvid = ""; currentCourse = null
+        clearLocalCourseGrant()
+        reportError("课程校验已到期或账号已变化，请退出并重新验证。")
+    }
     private var localSource = false
     private var audioOnly = false
     private var localVideoPath: String? = null
@@ -252,6 +295,7 @@ class NativePlaybackController(
         /** 在播放器仍存在时保存进度、发送状态并安排下一次刷新。 */
         override fun run() {
             if (player != null) {
+                if (!localCourseValid()) revokeLocalCourse()
                 sleepTimer.check()
                 saveCurrentPlaybackProgress(force = false)
                 emitPlaybackState()
@@ -335,11 +379,38 @@ class NativePlaybackController(
                 val filePath = call.argument<String>("filePath")?.trim().orEmpty()
                 val title = call.argument<String>("title").orEmpty()
                 val initialPositionMs = call.argument<Number>("initialPositionMs")?.toLong()
-                if (filePath.isEmpty()) {
+                val bvid = call.argument<String>("bvid").orEmpty()
+                val mid = call.argument<Number>("courseCacheMid")?.toLong() ?: 0L
+                val checkedAt = call.argument<Number>("courseCacheCheckedAt")?.toLong()
+                val kind = call.argument<String>("courseCacheExpiryKind")
+                val until = call.argument<Number>("courseCacheUntil")?.toLong()
+                val course = CoursePlaybackTarget.create(bvid, call.argument<Number>("courseEpisodeId")?.toLong(), call.argument<Number>("courseAid")?.toLong())
+                val cid = call.argument<Number>("cid")?.toLong() ?: 0L
+                val isPrivate = CoursePlaybackTarget.isCourseKey(bvid)
+                // Bind both absolute files to the exact app-cache account and lesson.
+                val dir = if (course != null && mid > 0 && cid > 0)
+                    runCatching { File(activity.cacheDir.canonicalFile, "private_course_v1/$mid/${course.seasonId}-${course.episodeId}-${course.aid}-$cid") }.getOrNull() else null
+                val audio = call.argument<String>("audioFilePath")?.trim()?.takeIf { it.isNotEmpty() }
+                val privateRoot = File(activity.cacheDir, "private_course_v1")
+                val underPrivate = listOfNotNull(filePath, audio).any { PrivateCoursePlayback.restricted(privateRoot, it) }
+                val now = System.currentTimeMillis()
+                if ((isPrivate && (course == null || !PrivateCoursePlayback.acceptsWindow(now, checkedAt ?: 0L, kind, until) ||
+                        !PrivateCoursePlayback.matches(dir, filePath, "video.bin") ||
+                        (audio != null && !PrivateCoursePlayback.matches(dir, audio, "audio.bin")) || !hasLocalCourseSession(mid))) ||
+                    (!isPrivate && (mid != 0L || checkedAt != null || kind != null || until != null || underPrivate))) {
+                    result.error("invalid_course_cache", "本机课程缓存不可用或校验已到期。", null)
+                } else if (filePath.isEmpty()) {
                     result.error("invalid_path", "请选择有效的本地视频文件。", null)
                 } else if (initialPositionMs != null && initialPositionMs < 0L) {
                     result.error("invalid_position", "初始播放位置不能为负数。", null)
                 } else {
+                    localCourseMid = mid
+                    localCourseUntil = until ?: 0L
+                    localCourseCheckedAt = checkedAt ?: 0L
+                    localCourseElapsedUntil = if (isPrivate && until != null)
+                        SystemClock.elapsedRealtime() + (until - now) else 0L
+                    localCourseCookieCheck = 0L
+                    localCourseGeneration = if (isPrivate) BilibiliSessionGate.generation() else -1L
                     openLocalVideo(
                         filePath = filePath,
                         audioFilePath = call.argument<String>("audioFilePath")?.trim()?.takeIf { it.isNotEmpty() },
@@ -371,6 +442,11 @@ class NativePlaybackController(
                 }
             }
             "play" -> {
+                if (!localCourseValid()) {
+                    revokeLocalCourse()
+                    result.error("invalid_course_cache", "课程校验已到期或账号已变化。", null)
+                    return
+                }
                 resumeAfterPrepare = true
                 player?.play()
                 result.success(null)
@@ -1104,6 +1180,7 @@ class NativePlaybackController(
         player?.stop()
         player?.clearMediaItems()
         currentBvid = bvid
+        clearLocalCourseGrant()
         currentCourse = course
         canContinueAsGuest = false
         guestConsentGeneration = null
@@ -1155,6 +1232,7 @@ class NativePlaybackController(
         invalidatePlaybackRequests()
         player?.stop()
         player?.clearMediaItems()
+        if (!localCourseValid()) { revokeLocalCourse(); return }
         currentCourse = null
         ordinaryApiUserAgentAllowed = false
         ordinaryApiUserAgent = null
@@ -3086,6 +3164,7 @@ class NativePlaybackController(
 
     /** 清理播放器、系统媒体会话、纹理和未完成播放数据请求。 */
     private fun releasePlaybackResources() {
+        clearLocalCourseGrant()
         sleepTimer.configure(0L)
         ListeningMediaService.stop(activity.applicationContext)
         audioOnly = false
