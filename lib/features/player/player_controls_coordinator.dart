@@ -432,6 +432,17 @@ mixin _PlayerControlsCoordinator
   KeyEventResult _handlePlayerKeyEvent(FocusNode _, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     final LogicalKeyboardKey key = event.logicalKey;
+    if (key == LogicalKeyboardKey.escape &&
+        _notesOpen &&
+        !_notesParked &&
+        _usesSideNotes) {
+      _parkVideoNotes(focusHandle: true);
+      return KeyEventResult.handled;
+    }
+    if (_notePeekHandleFocus.hasFocus && key == LogicalKeyboardKey.space) {
+      // Run the focused button action instead of the player's Space shortcut.
+      return KeyEventResult.ignored;
+    }
     if (key == LogicalKeyboardKey.escape && _abRepeatEditorVisible) {
       _closeAbRepeatEditor();
       return KeyEventResult.handled;

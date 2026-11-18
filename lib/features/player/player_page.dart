@@ -495,6 +495,7 @@ class _PlayerPageState extends State<PlayerPage>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    _restoreNotesForPortrait();
     _bindFocusController(
       widget.focusTimerController ?? FocusTimerScope.maybeOf(context),
     );

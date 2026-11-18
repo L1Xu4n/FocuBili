@@ -21,6 +21,10 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
 
   final TextEditingController _noteTitleController = TextEditingController();
   final TextEditingController _noteBodyController = TextEditingController();
+  final ScrollController _sideNoteScrollController = ScrollController();
+  final FocusScopeNode _sideNoteFocusScope = FocusScopeNode(
+    debugLabel: 'Landscape time-point note editor',
+  );
   Timer? _notesPanelAnimationTimer;
   Timer? _noteAutoSaveTimer;
   List<VideoNote> _currentVideoNotes = const <VideoNote>[];
@@ -29,6 +33,11 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
   int _notePartCid = 0;
   bool _notesOpen = false;
   bool _notesOverlayMounted = false;
+  bool _notesParked = false;
+  double? _noteScrollOffsetBeforePark;
+  final FocusNode _notePeekHandleFocus = FocusNode(
+    debugLabel: 'Restore time-point notes',
+  );
   bool _notesLoading = false;
   bool _noteSaving = false;
   bool _noteAutoSaving = false;
@@ -115,6 +124,9 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
     _noteAutoSaveTimer?.cancel();
     _noteTitleController.dispose();
     _noteBodyController.dispose();
+    _notePeekHandleFocus.dispose();
+    _sideNoteScrollController.dispose();
+    _sideNoteFocusScope.dispose();
   }
 
   /// 读取当前 BV 的全部笔记，并按视频时间点更新播放器内列表。
@@ -148,31 +160,95 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
     }
   }
 
+  bool get _usesSideNotes =>
+      _fullscreen || MediaQuery.orientationOf(context) == Orientation.landscape;
+
+  /// A phone returning to portrait resumes the editor below the video.
+  void _restoreNotesForPortrait() {
+    if (_notesParked &&
+        MediaQuery.orientationOf(context) == Orientation.portrait) {
+      _notesParked = false;
+      _noteScrollOffsetBeforePark = null;
+    }
+  }
+
+  void _parkVideoNotes({bool focusHandle = false}) {
+    if (!_notesOpen || _notesParked || !_usesSideNotes) return;
+    final scroll = _sideNoteScrollController.hasClients
+        ? _sideNoteScrollController.position
+        : null;
+    _noteScrollOffsetBeforePark = scroll != null && scroll.hasPixels
+        ? scroll.pixels
+        : null;
+    // Hide the IME without losing the selection, undo stack or scroll offset.
+    _sideNoteFocusScope.focusedChild?.unfocus();
+    _sideNoteFocusScope.unfocus();
+    _stopSideNoteScroll();
+    setState(() {
+      _notesParked = true;
+      _showControls = true;
+    });
+    if (focusHandle) _notePeekHandleFocus.requestFocus();
+    _restartControlsAutoHideTimer();
+  }
+
+  void _restoreParkedVideoNotes() {
+    if (!_notesOpen || !_notesParked) return;
+    // A closing keyboard may adjust the hidden caret's position. Reveal the
+    // last position the editor showed, not the one it laid out offscreen.
+    _stopSideNoteScroll(offset: _noteScrollOffsetBeforePark);
+    _noteScrollOffsetBeforePark = null;
+    setState(() => _notesParked = false);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_notesOpen || _notesParked || !_usesSideNotes) return;
+      // Keep navigation inside the editor without reopening the IME.
+      _sideNoteFocusScope.requestScopeFocus();
+    });
+  }
+
+  void _stopSideNoteScroll({double? offset}) {
+    if (!_sideNoteScrollController.hasClients) return;
+    final position = _sideNoteScrollController.position;
+    if (!position.hasPixels) return;
+    // The keyboard may have changed the viewport and the maximum extent.
+    position.jumpTo(
+      offset != null && position.hasContentDimensions
+          ? offset.clamp(position.minScrollExtent, position.maxScrollExtent)
+          : position.pixels,
+    );
+  }
+
   /// 打开笔记工作区，并为新笔记锁定按钮按下时的视频位置。
   Future<void> _openVideoNotes({VideoNote? selectedNote}) async {
+    if (_notesOpen) {
+      _restoreParkedVideoNotes();
+      if (selectedNote != null && selectedNote.id != _editingVideoNote?.id) {
+        _flushVideoNoteAutoSave();
+        _selectVideoNote(selectedNote);
+      }
+      return;
+    }
     _stopControlsAutoHideTimer();
     _notesPanelAnimationTimer?.cancel();
-    if (_fullscreen) {
-      setState(() {
-        _notesOverlayMounted = true;
-        _notesOpen = false;
-        _notesLoading = true;
-        _showControls = true;
-        _fullscreenNoteListCollapsed = false;
-      });
-      // 下一帧打开函数让面板先在屏幕右侧完成布局，再平滑滑入可见区域。
+    _notesPanelAnimationTimer = null;
+    final sidePanel = _usesSideNotes;
+    setState(() {
+      _notesOverlayMounted = true;
+      _notesOpen = !sidePanel;
+      _notesParked = false;
+      _noteScrollOffsetBeforePark = null;
+      _notesLoading = true;
+      _showControls = true;
+      _fullscreenNoteListCollapsed = false;
+    });
+    if (sidePanel) {
+      // Mount offscreen before starting the entrance animation.
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _notesOverlayMounted) {
+        if (mounted &&
+            _notesOverlayMounted &&
+            _notesPanelAnimationTimer == null) {
           setState(() => _notesOpen = true);
         }
-      });
-    } else {
-      setState(() {
-        _notesOverlayMounted = false;
-        _notesOpen = true;
-        _notesLoading = true;
-        _showControls = true;
-        _fullscreenNoteListCollapsed = false;
       });
     }
     if (selectedNote == null) {
@@ -213,21 +289,28 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
     }
     _flushVideoNoteAutoSave();
     _notesPanelAnimationTimer?.cancel();
+    final animateClose =
+        _usesSideNotes && _notesOverlayMounted && !_notesParked;
+    if (_usesSideNotes && _notesOverlayMounted) {
+      FocusManager.instance.primaryFocus?.unfocus();
+    }
     setState(() {
+      if (!animateClose) _notesOverlayMounted = false;
       _notesOpen = false;
       _pendingLiveNoteFrame = null;
+      _notesParked = false;
+      _noteScrollOffsetBeforePark = null;
       _noteSaving = false;
       _showControls = true;
       _fullscreenNoteListCollapsed = false;
     });
-    if (_fullscreen && _notesOverlayMounted) {
+    if (animateClose) {
       _notesPanelAnimationTimer = Timer(_notesPanelAnimationDuration, () {
+        _notesPanelAnimationTimer = null;
         if (mounted && !_notesOpen) {
           setState(() => _notesOverlayMounted = false);
         }
       });
-    } else if (_notesOverlayMounted) {
-      setState(() => _notesOverlayMounted = false);
     }
     _restartControlsAutoHideTimer();
     _scheduleOrientationSync();
@@ -1044,105 +1127,217 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
   }
 
   /// 创建约占播放器三分之二宽度的笔记本，保留左侧视频画面供边看边记。
-  Widget _buildFullscreenVideoNotesPanel(double playerWidth) {
-    final double panelWidth = playerWidth * 0.64;
-    final double expandedListWidth = playerWidth * 0.17;
+  Widget _buildFullscreenVideoNotesPanel(
+    BuildContext context,
+    BoxConstraints bounds,
+  ) {
+    final padding = MediaQuery.paddingOf(context);
+    final right = padding.right + 10;
+    final top = padding.top + 10;
+    final height = (bounds.maxHeight - top - padding.bottom - 10).clamp(
+      0.0,
+      double.infinity,
+    );
+    // On tight landscape windows the editor needs room for its actions, and
+    // the video still needs an accessible outside area on the left.
+    final usableWidth = (bounds.maxWidth - right - padding.left - 48).clamp(
+      0.0,
+      double.infinity,
+    );
+    final double panelWidth = (bounds.maxWidth * 0.64)
+        .clamp(288.0, double.infinity)
+        .clamp(0.0, usableWidth);
+    final double expandedListWidth = (bounds.maxWidth * 0.17).clamp(
+      64.0,
+      (panelWidth * 0.40).clamp(64.0, double.infinity),
+    );
+    final expanded = _notesOpen && !_notesParked;
     return Positioned(
       key: const Key('fullscreen-video-notes-panel'),
-      top: 10,
-      right: 10,
-      bottom: 10,
+      top: top,
+      right: right,
+      height: height,
       width: panelWidth,
       child: AnimatedSlide(
         key: const Key('fullscreen-video-notes-slide'),
-        offset: _notesOpen ? Offset.zero : const Offset(1.08, 0),
+        offset: expanded
+            ? Offset.zero
+            : Offset(1.08 + right / (panelWidth > 0 ? panelWidth : 1), 0),
         duration: _notesPanelAnimationDuration,
-        curve: _notesOpen ? Curves.easeOutCubic : Curves.easeInCubic,
-        child: Material(
-          key: const Key('fullscreen-video-notes-material'),
-          elevation: 18,
-          color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.9),
-          borderRadius: BorderRadius.circular(18),
-          clipBehavior: Clip.antiAlias,
-          child: SafeArea(
-            top: false,
-            left: false,
-            right: false,
-            bottom: false,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                SizedBox(
-                  width: _fullscreenNoteListCollapsed ? 46 : expandedListWidth,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: <Widget>[
-                      if (_fullscreenNoteListCollapsed) ...<Widget>[
-                        const SizedBox(height: 6),
-                        IconButton(
-                          key: const Key('expand-fullscreen-note-list'),
-                          // 展开按钮函数恢复左侧笔记标题和时间点列表。
-                          onPressed: _toggleFullscreenNoteList,
-                          icon: const Icon(Icons.chevron_right_rounded),
-                          tooltip: '展开笔记列表',
-                        ),
-                        Text(
-                          '${_currentVideoNotes.length}',
-                          textAlign: TextAlign.center,
-                          style: Theme.of(context).textTheme.labelSmall,
-                        ),
-                      ] else ...<Widget>[
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(5, 6, 8, 3),
-                          child: Row(
-                            children: <Widget>[
-                              IconButton(
-                                key: const Key('collapse-fullscreen-note-list'),
-                                // 收起按钮函数仅保留一条窄边栏，为标题和正文增加空间。
-                                onPressed: _toggleFullscreenNoteList,
-                                visualDensity: VisualDensity.compact,
-                                constraints: const BoxConstraints.tightFor(
-                                  width: 32,
-                                  height: 32,
-                                ),
-                                padding: EdgeInsets.zero,
-                                iconSize: 20,
-                                icon: const Icon(Icons.chevron_left_rounded),
-                                tooltip: '收起笔记列表',
+        curve: expanded ? Curves.easeOutCubic : Curves.easeInCubic,
+        child: IgnorePointer(
+          ignoring: !expanded,
+          child: ExcludeFocus(
+            excluding: !expanded,
+            child: ExcludeSemantics(
+              excluding: !expanded,
+              child: FocusScope(
+                node: _sideNoteFocusScope,
+                child: _buildSideNoteEditor(
+                  showList: height >= 84 && panelWidth >= 205,
+                  expandedListWidth: expandedListWidth,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSideNoteEditor({
+    required bool showList,
+    required double expandedListWidth,
+  }) {
+    return Material(
+      key: const Key('fullscreen-video-notes-material'),
+      elevation: 18,
+      color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.9),
+      borderRadius: BorderRadius.circular(18),
+      clipBehavior: Clip.antiAlias,
+      // Blank space inside the panel must not dismiss it.
+      child: Listener(
+        behavior: HitTestBehavior.opaque,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            if (showList)
+              SizedBox(
+                width: _fullscreenNoteListCollapsed ? 46 : expandedListWidth,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    if (_fullscreenNoteListCollapsed) ...<Widget>[
+                      const SizedBox(height: 6),
+                      IconButton(
+                        key: const Key('expand-fullscreen-note-list'),
+                        // 展开按钮函数恢复左侧笔记标题和时间点列表。
+                        onPressed: _toggleFullscreenNoteList,
+                        icon: const Icon(Icons.chevron_right_rounded),
+                        tooltip: '展开笔记列表',
+                      ),
+                      Text(
+                        '${_currentVideoNotes.length}',
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.labelSmall,
+                      ),
+                    ] else ...<Widget>[
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(5, 6, 8, 3),
+                        child: Row(
+                          children: <Widget>[
+                            IconButton(
+                              key: const Key('collapse-fullscreen-note-list'),
+                              // 收起按钮函数仅保留一条窄边栏，为标题和正文增加空间。
+                              onPressed: _toggleFullscreenNoteList,
+                              visualDensity: VisualDensity.compact,
+                              constraints: const BoxConstraints.tightFor(
+                                width: 32,
+                                height: 32,
                               ),
-                              const SizedBox(width: 3),
-                              Expanded(
-                                child: Text(
-                                  '笔记',
-                                  style: Theme.of(context).textTheme.titleSmall
-                                      ?.copyWith(fontWeight: FontWeight.w800),
-                                ),
+                              padding: EdgeInsets.zero,
+                              iconSize: 20,
+                              icon: const Icon(Icons.chevron_left_rounded),
+                              tooltip: '收起笔记列表',
+                            ),
+                            const SizedBox(width: 3),
+                            Expanded(
+                              child: Text(
+                                '笔记',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.titleSmall
+                                    ?.copyWith(fontWeight: FontWeight.w800),
                               ),
-                              Text(
-                                '${_currentVideoNotes.length}',
-                                style: Theme.of(context).textTheme.labelSmall,
-                              ),
-                            ],
-                          ),
+                            ),
+                            Text(
+                              '${_currentVideoNotes.length}',
+                              style: Theme.of(context).textTheme.labelSmall,
+                            ),
+                          ],
                         ),
-                        Expanded(child: _buildFullscreenVideoNoteList()),
-                      ],
+                      ),
+                      Expanded(
+                        child: TickerMode(
+                          enabled: _notesOpen && !_notesParked,
+                          child: _buildFullscreenVideoNoteList(),
+                        ),
+                      ),
                     ],
+                  ],
+                ),
+              ),
+            if (showList)
+              VerticalDivider(
+                width: 1,
+                color: Theme.of(context).colorScheme.outlineVariant,
+              ),
+            Expanded(
+              child: SingleChildScrollView(
+                key: const Key('side-video-note-composer-scroll'),
+                controller: _sideNoteScrollController,
+                padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                child: _buildVideoNoteComposer(compact: true),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildParkedVideoNoteHandle(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final safe = MediaQuery.paddingOf(context);
+    const border = BorderRadius.horizontal(left: Radius.circular(16));
+    return Positioned(
+      top: safe.top,
+      right: safe.right,
+      bottom: safe.bottom,
+      child: Align(
+        // Leave the progress strip and bottom-row controls unobstructed.
+        alignment: const Alignment(1, -0.22),
+        child: Material(
+          color: scheme.primaryContainer,
+          elevation: 5,
+          borderRadius: border,
+          clipBehavior: Clip.antiAlias,
+          child: Semantics(
+            container: true,
+            button: true,
+            label: '继续编辑时间点笔记',
+            onTap: _restoreParkedVideoNotes,
+            child: Tooltip(
+              message: '继续编辑时间点笔记',
+              excludeFromSemantics: true,
+              child: InkWell(
+                excludeFromSemantics: true,
+                key: const Key('restore-parked-video-notes'),
+                focusNode: _notePeekHandleFocus,
+                onTap: _restoreParkedVideoNotes,
+                child: SizedBox(
+                  width: 48,
+                  height: 72,
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.chevron_left_rounded,
+                          color: scheme.onPrimaryContainer,
+                        ),
+                        Icon(
+                          Icons.edit_note_rounded,
+                          color: scheme.onPrimaryContainer,
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-                VerticalDivider(
-                  width: 1,
-                  color: Theme.of(context).colorScheme.outlineVariant,
-                ),
-                Expanded(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-                    keyboardDismissBehavior:
-                        ScrollViewKeyboardDismissBehavior.onDrag,
-                    child: _buildVideoNoteComposer(compact: true),
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         ),

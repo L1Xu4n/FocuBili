@@ -58,9 +58,7 @@ extension _PlayerPageView on _PlayerPageState {
             )
             .toDouble();
         final Widget sideContent;
-        if (_notesOpen) {
-          sideContent = _buildPortraitVideoNotesPanel();
-        } else if (_partSelectorExpanded) {
+        if (_partSelectorExpanded) {
           sideContent = _buildExpandedPartSelector();
         } else {
           sideContent = SingleChildScrollView(
@@ -238,6 +236,10 @@ extension _PlayerPageView on _PlayerPageState {
     final bool inPictureInPicture = _playbackSnapshot.isInPictureInPicture;
     final bool fullscreenLayout = _fullscreen || inPictureInPicture;
     final Size screenSize = MediaQuery.sizeOf(context);
+    final bool landscapeLayout = screenSize.width > screenSize.height;
+    final bool sideNotes =
+        !inPictureInPicture && (landscapeLayout || _fullscreen);
+    final bool expandedSideNotes = sideNotes && _notesOpen && !_notesParked;
     final bool workspaceLayout =
         !fullscreenLayout && AdaptiveLayout.usesWorkspace(screenSize);
     // Small portrait players may have no room between the two control bars
@@ -245,7 +247,7 @@ extension _PlayerPageView on _PlayerPageState {
     final bool editAbBelowVideo =
         !fullscreenLayout &&
         screenSize.width < AdaptiveLayout.tabletBreakpoint &&
-        !_notesOpen &&
+        (!_notesOpen || sideNotes) &&
         !_partSelectorExpanded;
     // 错误或选集展开时关闭画面手势，避免画面层干扰重试与选集按钮点击。
     final bool enableSurfaceGestures =
@@ -625,8 +627,6 @@ extension _PlayerPageView on _PlayerPageState {
                     !_controlsLocked &&
                     !inPictureInPicture)
                   _buildFullscreenVideoNoteButton(),
-                if (_fullscreen && _notesOverlayMounted)
-                  _buildFullscreenVideoNotesPanel(constraints.maxWidth),
                 if (inPictureInPicture && _appPlatform == AppPlatform.linux)
                   Positioned(
                     left: 0,
@@ -668,7 +668,6 @@ extension _PlayerPageView on _PlayerPageState {
     final double aspectRatio = _playbackSnapshot.videoAspectRatio > 0
         ? _playbackSnapshot.videoAspectRatio
         : 16 / 9;
-    final bool landscapeLayout = screenSize.width > screenSize.height;
     _schedulePlayerSystemUiSync(landscapeLayout: landscapeLayout);
     final extraControlRow = screenSize.width < 6 * controlSize.button
         ? controlSize.button
@@ -690,7 +689,7 @@ extension _PlayerPageView on _PlayerPageState {
       pageBody = SizedBox.expand(child: player);
     } else if (workspaceLayout) {
       pageBody = _buildWorkspacePlayerBody(player: player);
-    } else if (_notesOpen) {
+    } else if (_notesOpen && !sideNotes) {
       pageBody = Column(
         children: <Widget>[
           SizedBox(width: double.infinity, height: playerHeight, child: player),
@@ -726,7 +725,34 @@ extension _PlayerPageView on _PlayerPageState {
         left: !fullscreenLayout,
         right: !fullscreenLayout,
         bottom: false,
-        child: pageBody,
+        child: LayoutBuilder(
+          builder: (context, bounds) => Stack(
+            fit: StackFit.expand,
+            children: [
+              ExcludeFocus(
+                excluding: expandedSideNotes,
+                child: ExcludeSemantics(
+                  excluding: expandedSideNotes,
+                  child: pageBody,
+                ),
+              ),
+              if (expandedSideNotes)
+                Semantics(
+                  key: const Key('park-video-notes-barrier'),
+                  container: true,
+                  button: true,
+                  label: '收起时间点笔记',
+                  onTap: _parkVideoNotes,
+                  excludeSemantics: true,
+                  child: ModalBarrier(onDismiss: _parkVideoNotes),
+                ),
+              if (sideNotes && _notesOverlayMounted)
+                _buildFullscreenVideoNotesPanel(context, bounds),
+              if (sideNotes && _notesOpen && _notesParked)
+                _buildParkedVideoNoteHandle(context),
+            ],
+          ),
+        ),
       ),
     );
     return PopScope(
