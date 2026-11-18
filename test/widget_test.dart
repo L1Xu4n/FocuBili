@@ -48,6 +48,7 @@ import 'package:focubili/services/focus_preferences_service.dart';
 import 'package:focubili/services/watch_history_service.dart';
 import 'package:focubili/services/learning_list_service.dart';
 import 'package:focubili/services/video_shot_service.dart';
+import 'package:focubili/services/image_resource_cache.dart';
 import 'package:focubili/services/video_note_service.dart';
 import 'package:focubili/services/bilibili_player_enhancement_service.dart';
 import 'package:focubili/models/player_overlay_data.dart';
@@ -219,6 +220,17 @@ class _FakeVideoShotService implements VideoShotService {
       frameHeight: 90,
     );
   }
+}
+
+/// 保持图集传输未完成，用来区分元数据、解码和播放器 seek。
+class _PendingVideoShotCache extends ImageResourceCache {
+  final pending = Completer<CachedImageBytes>();
+
+  @override
+  Future<CachedImageBytes> load(
+    String url, {
+    Map<String, String> headers = const {},
+  }) => pending.future;
 }
 
 /// 返回固定关键词搜索 JSON，验证真实搜索结果转换不依赖外网。
@@ -4899,16 +4911,18 @@ void main() {
     expect(find.byKey(const Key('playback-completion-prompt')), findsNothing);
   });
 
-  /// 验证横向拖动无需等待长按即可预览，并只在松手时提交一次进度跳转。
-  testWidgets('横向拖动立即预览并一次性跳转进度', (WidgetTester tester) async {
+  /// 验证横向拖动不等待长按即可显示真实加载状态，只在松手时提交一次跳转。
+  testWidgets('横向拖动立即提示预览正在加载并一次性跳转进度', (WidgetTester tester) async {
     final _FakePlaybackService service = _FakePlaybackService();
     final _FakeVideoShotService videoShotService = _FakeVideoShotService();
+    final cache = _PendingVideoShotCache();
     await tester.pumpWidget(
       MaterialApp(
         home: PlayerPage(
           video: VideoPreview.placeholder(),
           playbackService: service,
           videoShotService: videoShotService,
+          videoShotImageCache: cache,
         ),
       ),
     );
@@ -4924,7 +4938,8 @@ void main() {
     expect(service._speed, 1);
     expect(find.textContaining('跳转至'), findsOneWidget);
     expect(videoShotService.requests, 1);
-    expect(find.byKey(const Key('video-shot-frame')), findsOneWidget);
+    expect(find.byKey(const Key('video-shot-loading')), findsOneWidget);
+    expect(find.byKey(const Key('video-shot-frame')), findsNothing);
 
     await gesture.up();
     await tester.pumpAndSettle();
@@ -4932,6 +4947,11 @@ void main() {
     expect(service.seekToRequests, 1);
     expect(service._position, greaterThan(Duration.zero));
     expect(service._speed, 1);
+    expect(find.byKey(const Key('video-shot-loading')), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+    cache.pending.completeError(const ImageCacheCancelled());
+    await tester.pump();
+    cache.dispose();
   });
 
   /// 验证长视频横向拖动会按时长提高速度，但单次跳转仍限制在十分钟内。
