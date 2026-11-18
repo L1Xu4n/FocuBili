@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'course_cache_validity.dart';
 import 'bilibili_course_link.dart';
 
 import 'app_behavior_preferences_service.dart';
@@ -319,6 +320,8 @@ class NativePlaybackService
     AppBehaviorPreferencesService? behaviorPreferences,
     this.courseCacheMid,
     this.courseCacheUntil,
+    this.courseCacheCheckedAt,
+    this.courseCacheExpiryKind,
     ProblemDiagnosticsService? diagnosticsService,
   }) : _diagnosticsService = diagnosticsService ?? ProblemDiagnosticsService(),
        _behaviorPreferences =
@@ -327,7 +330,8 @@ class NativePlaybackService
   }
 
   final int? courseCacheMid;
-  final DateTime? courseCacheUntil;
+  final DateTime? courseCacheUntil, courseCacheCheckedAt;
+  final CourseCacheExpiryKind? courseCacheExpiryKind;
 
   static const MethodChannel _channel = MethodChannel(
     'com.focubili.app/playback',
@@ -506,8 +510,12 @@ class NativePlaybackService
     if (video != null &&
         ((video.isCourse
                 ? (courseCacheMid ?? 0) <= 0 ||
-                      courseCacheUntil == null ||
-                      !DateTime.now().isBefore(courseCacheUntil!) ||
+                      courseCacheExpiryKind?.usableAt(
+                            DateTime.now(),
+                            courseCacheCheckedAt,
+                            courseCacheUntil,
+                          ) !=
+                          true ||
                       !BilibiliCourseLink.isStorageKey(video.bvid) ||
                       video.bvid != 'cheese:ss${video.courseSeasonId}' ||
                       (target?.courseEpisodeId ?? 0) <= 0 ||
@@ -521,7 +529,10 @@ class NativePlaybackService
       'filePath': normalizedPath,
       if (video?.isCourse == true) ...{
         'courseCacheMid': courseCacheMid,
-        'courseCacheUntil': courseCacheUntil!.millisecondsSinceEpoch,
+        'courseCacheCheckedAt': courseCacheCheckedAt!.millisecondsSinceEpoch,
+        'courseCacheExpiryKind': courseCacheExpiryKind!.name,
+        if (courseCacheUntil != null)
+          'courseCacheUntil': courseCacheUntil!.millisecondsSinceEpoch,
         'courseEpisodeId': target!.courseEpisodeId,
         'courseAid': target.courseAid,
       },

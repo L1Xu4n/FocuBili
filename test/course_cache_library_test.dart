@@ -7,6 +7,7 @@ import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/services/cache_lifecycle.dart';
 import 'package:focubili/services/course_cache_access.dart';
 import 'package:focubili/services/course_cache_library.dart';
+import 'package:focubili/services/course_cache_validity.dart';
 import 'package:focubili/services/download_control.dart';
 import 'package:focubili/services/offline_media_plan.dart';
 import 'package:focubili/services/resumable_media_download.dart';
@@ -35,6 +36,7 @@ class Access extends CourseCacheAccess {
   CourseCacheAccessException? failure;
   late DateTime now;
   Duration window = const Duration(hours: 1);
+  CourseCacheExpiryKind expiryKind = CourseCacheExpiryKind.serverDeadline;
   late OfflineMediaPlan media;
   @override
   Future<int?> currentLocalMid() async => mid;
@@ -51,7 +53,12 @@ class Access extends CourseCacheAccess {
     return CourseCacheGrant(
       mid: uid,
       checkedAt: now,
-      validUntil: now.add(window),
+      validUntil:
+          expiryKind == CourseCacheExpiryKind.explicitLongTerm ||
+              expiryKind == CourseCacheExpiryKind.noDeclaredDeadline
+          ? null
+          : now.add(window),
+      expiryKind: expiryKind,
       media: media,
       checkSession: () async {
         if (uid != mid) throw const CourseCacheAccessException('账号变化。');

@@ -20,7 +20,7 @@ class CourseCachePlaybackGuard {
       _privatePath(f.absolute.path) ||
       _privatePath(await f.resolveSymbolicLinks());
 
-  Future<void> validate(
+  Future<CourseCacheEntry> validate(
     VideoPreview? v,
     VideoPart? p,
     String file,
@@ -36,5 +36,6 @@ class CourseCachePlaybackGuard {
     if (fresh.video != file || fresh.audio != audio) {
       throw const CourseCacheFailure('本地文件与已校验章节不符。');
     }
+    return fresh.entry;
   }
 }

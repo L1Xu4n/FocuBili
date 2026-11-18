@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:focubili/services/course_cache_library.dart';
+import 'package:focubili/services/course_cache_validity.dart';
 import 'package:focubili/services/offline_media_plan.dart';
 import 'package:focubili/services/resumable_media_download.dart';
 import 'course_cache_library_test.dart' show Access, video, part;
@@ -10,7 +11,7 @@ import 'course_cache_library_test.dart' show Access, video, part;
 /// HTTP server, production transport/receipts, disconnection, then actual decode.
 void main() {
   test(
-    'generated MP4 renews with no media bytes and decodes with the server stopped',
+    'generated MP4 rechecks without media bytes and decodes offline nine days later',
     () async {
       final root = await Directory.systemTemp.createTemp(
         'classroom_media_replay',
@@ -59,6 +60,7 @@ void main() {
       });
       final a = Access()
         ..now = DateTime.now()
+        ..expiryKind = CourseCacheExpiryKind.legacyReceipt
         ..media = OfflineMediaPlan(
           video: OfflineMediaTrack(
             id: 64,
@@ -79,13 +81,17 @@ void main() {
       expect(bodyBytes, bytes.length);
       final original = (await store.entries()).single;
       a.now = original.until!;
+      a.expiryKind = CourseCacheExpiryKind.noDeclaredDeadline;
       bodyBytes = 0;
       await store.start(video, part);
       expect(store.error, isNull);
       expect(requests, ['GET', 'HEAD']);
       expect(bodyBytes, 0);
       await server.close(force: true);
-      final opened = await store.open((await store.entries()).single);
+      a.now = a.now.add(const Duration(days: 9));
+      final reopened = (await store.entries()).single;
+      expect(reopened.until, isNull);
+      final opened = await store.open(reopened);
       final dec = await Process.run('ffmpeg', [
         '-nostdin',
         '-loglevel',

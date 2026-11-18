@@ -113,12 +113,14 @@ class NativePlaybackController(
     // Native enforcement also applies when Flutter timers are suspended.
     private var localCourseMid = 0L
     private var localCourseUntil = 0L
+    private var localCourseCheckedAt = 0L
     private var localCourseGeneration = -1L
     private var localCourseElapsedUntil = 0L
     private var localCourseCookieCheck = 0L
     private fun clearLocalCourseGrant() {
         localCourseMid = 0L
         localCourseUntil = 0L
+        localCourseCheckedAt = 0L
         localCourseGeneration = -1L
         localCourseElapsedUntil = 0L
         localCourseCookieCheck = 0L
@@ -131,7 +133,9 @@ class NativePlaybackController(
     private fun localCourseValid(): Boolean {
         if (localCourseMid == 0L) return true
         val elapsed = SystemClock.elapsedRealtime()
-        if (elapsed >= localCourseElapsedUntil || System.currentTimeMillis() >= localCourseUntil ||
+        val now = System.currentTimeMillis()
+        if (now < localCourseCheckedAt ||
+            (localCourseUntil > 0L && (elapsed >= localCourseElapsedUntil || now >= localCourseUntil)) ||
             !BilibiliSessionGate.isCurrent(localCourseGeneration)) return false
         // Catch WebView/system mutations that did not go through a Dart account write.
         if (elapsed >= localCourseCookieCheck) {
@@ -370,7 +374,9 @@ class NativePlaybackController(
                 val initialPositionMs = call.argument<Number>("initialPositionMs")?.toLong()
                 val bvid = call.argument<String>("bvid").orEmpty()
                 val mid = call.argument<Number>("courseCacheMid")?.toLong() ?: 0L
-                val until = call.argument<Number>("courseCacheUntil")?.toLong() ?: 0L
+                val checkedAt = call.argument<Number>("courseCacheCheckedAt")?.toLong()
+                val kind = call.argument<String>("courseCacheExpiryKind")
+                val until = call.argument<Number>("courseCacheUntil")?.toLong()
                 val course = CoursePlaybackTarget.create(bvid, call.argument<Number>("courseEpisodeId")?.toLong(), call.argument<Number>("courseAid")?.toLong())
                 val cid = call.argument<Number>("cid")?.toLong() ?: 0L
                 val isPrivate = CoursePlaybackTarget.isCourseKey(bvid)
@@ -381,10 +387,10 @@ class NativePlaybackController(
                 val privateRoot = File(activity.cacheDir, "private_course_v1")
                 val underPrivate = listOfNotNull(filePath, audio).any { PrivateCoursePlayback.restricted(privateRoot, it) }
                 val now = System.currentTimeMillis()
-                if ((isPrivate && (course == null || !PrivateCoursePlayback.acceptsWindow(now, until) ||
+                if ((isPrivate && (course == null || !PrivateCoursePlayback.acceptsWindow(now, checkedAt ?: 0L, kind, until) ||
                         !PrivateCoursePlayback.matches(dir, filePath, "video.bin") ||
                         (audio != null && !PrivateCoursePlayback.matches(dir, audio, "audio.bin")) || !hasLocalCourseSession(mid))) ||
-                    (!isPrivate && (mid != 0L || until != 0L || underPrivate))) {
+                    (!isPrivate && (mid != 0L || checkedAt != null || kind != null || until != null || underPrivate))) {
                     result.error("invalid_course_cache", "本机课程缓存不可用或校验已到期。", null)
                 } else if (filePath.isEmpty()) {
                     result.error("invalid_path", "请选择有效的本地视频文件。", null)
@@ -392,8 +398,10 @@ class NativePlaybackController(
                     result.error("invalid_position", "初始播放位置不能为负数。", null)
                 } else {
                     localCourseMid = mid
-                    localCourseUntil = until
-                    localCourseElapsedUntil = if (isPrivate) SystemClock.elapsedRealtime() + (until - now) else 0L
+                    localCourseUntil = until ?: 0L
+                    localCourseCheckedAt = checkedAt ?: 0L
+                    localCourseElapsedUntil = if (isPrivate && until != null)
+                        SystemClock.elapsedRealtime() + (until - now) else 0L
                     localCourseCookieCheck = 0L
                     localCourseGeneration = if (isPrivate) BilibiliSessionGate.generation() else -1L
                     openLocalVideo(

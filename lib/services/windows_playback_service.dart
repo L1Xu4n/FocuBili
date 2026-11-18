@@ -28,6 +28,7 @@ import 'windows_playback_recovery_policy.dart';
 import 'windows_playback_progress_store.dart';
 import 'cache_lifecycle.dart';
 import 'course_cache_playback_guard.dart';
+import 'course_cache_library.dart';
 import 'bilibili_wbi_signing_service.dart';
 
 /// 使用 media_kit 与 Windows 系统能力实现 FocuBili 的桌面播放接口。
@@ -64,6 +65,8 @@ class WindowsPlaybackService
     WindowsMediaCacheRuntime.registerPlaybackSession();
     _subscribeToPlayer();
     CacheLifecycle.account.addListener(_handleCourseAccountChanged);
+    _courseLibraryVersion = courseCacheGuard?.library.listVersion;
+    courseCacheGuard?.library.addListener(_handleCourseLibraryChanged);
   }
 
   static const Duration _progressSaveInterval = Duration(seconds: 5);
@@ -83,6 +86,8 @@ class WindowsPlaybackService
   final Player _player;
   final CourseCachePlaybackGuard? courseCacheGuard;
   Timer? _courseExpiry;
+  int? _courseLibraryVersion;
+  Future<CourseCacheEntry> Function()? _activeCourseReceipt;
   late final VideoController _videoController;
   final ApplePlaybackSession _appleSession = ApplePlaybackSession();
   final LinuxMediaSession _linuxSession = LinuxMediaSession();
@@ -251,10 +256,47 @@ class WindowsPlaybackService
     }
   }
 
+  void _scheduleCourseExpiry(Duration? delay, int generation) {
+    _courseExpiry?.cancel();
+    _courseExpiry = delay == null
+        ? null
+        : Timer(delay, () {
+            if (_isCurrentSourceRequest(generation)) {
+              _handleCourseAccountChanged(message: '本次课程校验已到期，请返回课程缓存。');
+            }
+          });
+  }
+
+  void _handleCourseLibraryChanged() {
+    final library = courseCacheGuard?.library;
+    if (library == null || library.listVersion == _courseLibraryVersion) return;
+    final version = _courseLibraryVersion = library.listVersion;
+    final read = _activeCourseReceipt;
+    final generation = _sourceGeneration;
+    if (read == null || !_isCurrentSourceRequest(generation)) return;
+    unawaited(() async {
+      try {
+        final fresh = await read();
+        if (_isCurrentSourceRequest(generation) &&
+            _courseLibraryVersion == version) {
+          _scheduleCourseExpiry(library.untilExpiry(fresh), generation);
+        }
+      } catch (_) {
+        if (_isCurrentSourceRequest(generation) &&
+            _courseLibraryVersion == version) {
+          _handleCourseAccountChanged(message: '课程缓存状态已变化，请返回课程缓存。');
+        }
+      }
+    }());
+  }
+
   /// 课程媒体只属于请求时的账号；切换立即撤销候选并串行停流。
-  void _handleCourseAccountChanged() {
+  void _handleCourseAccountChanged({String message = '登录状态已变化，请重新打开课程。'}) {
     if (_disposed || _courseAccountRevision == null) return;
     final generation = ++_sourceGeneration;
+    _activeCourseReceipt = null;
+    _courseExpiry?.cancel();
+    _courseExpiry = null;
     _bufferedRanges = const [];
     _mediaAttempts = const [];
     _activeMediaHeaders = const {};
@@ -262,10 +304,7 @@ class WindowsPlaybackService
     _externalAudioNeedsReload = false;
     _shouldPlayAfterFallback = false;
     _opening = true;
-    _emitPlayerState(
-      phaseOverride: PlaybackPhase.error,
-      message: '登录状态已变化，请重新打开课程。',
-    );
+    _emitPlayerState(phaseOverride: PlaybackPhase.error, message: message);
     final pendingOpens = List<Future<void>>.of(_pendingMediaOpens);
     _accountChangeStop = _accountChangeStop
         .then((_) async {
@@ -498,21 +537,23 @@ class WindowsPlaybackService
         audioFile != null &&
             await CourseCachePlaybackGuard.isPrivateFile(audioFile)) {
       if (!isCourse || guard == null) throw StateError('请从当前账号的「课程缓存」打开此章节。');
-      Future<void> verify() => guard.validate(
+      Future<CourseCacheEntry> verify() => guard.validate(
         video,
         part ?? video?.initialPart,
         filePath,
         audioFilePath,
       );
-      await verify();
+      final receipt = await verify();
       if (!_isCurrentSourceRequest(generation)) return;
-      _activeSessionValidator = verify;
-      final delay = guard.entry.until!.difference(DateTime.now());
-      if (delay <= Duration.zero) throw StateError('本次课程校验已到期。');
-      _courseExpiry?.cancel();
-      _courseExpiry = Timer(delay, () {
-        if (_isCurrentSourceRequest(generation)) _handleCourseAccountChanged();
-      });
+      _activeCourseReceipt = verify;
+      _activeSessionValidator = () async {
+        await verify();
+      };
+      final delay = guard.library.untilExpiry(receipt);
+      if (delay != null && delay <= Duration.zero) {
+        throw StateError('本次课程校验已到期。');
+      }
+      _scheduleCourseExpiry(delay, generation);
       await _diskCacheSession?.setDiskAllowed(false);
     }
     if (!_isCurrentSourceRequest(generation)) return;
@@ -921,6 +962,8 @@ class WindowsPlaybackService
       return;
     }
     CacheLifecycle.account.removeListener(_handleCourseAccountChanged);
+    courseCacheGuard?.library.removeListener(_handleCourseLibraryChanged);
+    _activeCourseReceipt = null;
     await _accountChangeStop;
     try {
       try {
@@ -1530,6 +1573,7 @@ class WindowsPlaybackService
     _courseExpiry = null;
     _sourceGeneration += 1;
     _activeSessionValidator = null;
+    _activeCourseReceipt = null;
     _bufferedRanges = const [];
     _restoringPosition = false;
     _restoredPosition = Duration.zero;

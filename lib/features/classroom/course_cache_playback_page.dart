@@ -11,7 +11,7 @@ import '../../services/native_playback_service.dart';
 import '../../services/offline_video_service.dart';
 import '../player/player_page.dart';
 
-/// Re-checks file ownership and the short-lived proof every time the existing
+/// Re-checks file ownership and the locally recorded authorization every time the existing
 /// player resolves the local source. Never exposes a paid entry in the BV library.
 class _OneChapter extends OfflineVideoService {
   _OneChapter(this.store, this.entry);
@@ -47,9 +47,11 @@ class CourseCachePlaybackPage extends StatefulWidget {
     super.key,
     required this.library,
     required this.entry,
+    this.appPlatform,
   });
   final CourseCacheLibrary library;
   final CourseCacheEntry entry;
+  final AppPlatform? appPlatform;
   @override
   State<CourseCachePlaybackPage> createState() =>
       _CourseCachePlaybackPageState();
@@ -76,21 +78,26 @@ class _CourseCachePlaybackPageState extends State<CourseCachePlaybackPage>
     _seen = widget.library.listVersion;
     widget.library.addListener(_libraryChanged);
     final e = widget.entry;
-    if (!e.usableAt(DateTime.now())) {
+    if (!widget.library.isUsable(e)) {
       _invalid = true;
       return;
     }
-    if (AppPlatformDetector.current == AppPlatform.android) {
+    final platform = widget.appPlatform ?? AppPlatformDetector.current;
+    if (platform == AppPlatform.android) {
       _native = NativePlaybackService(
         courseCacheMid: e.mid,
         courseCacheUntil: e.until,
+        courseCacheCheckedAt: e.checkedAt,
+        courseCacheExpiryKind: e.expiryKind,
       );
-    } else if (AppPlatformDetector.current == AppPlatform.windows) {
+    } else if (platform == AppPlatform.windows) {
       _native = WindowsPlaybackService(
         courseCacheGuard: CourseCachePlaybackGuard(widget.library, e),
       );
     }
-    _timer = Timer(e.until!.difference(DateTime.now()), _revoke);
+    if (widget.library.untilExpiry(e) case final wait?) {
+      _timer = Timer(wait, _revoke);
+    }
   }
 
   void _revoke() {
@@ -109,7 +116,15 @@ class _CourseCachePlaybackPageState extends State<CourseCachePlaybackPage>
 
   Future<void> _check() async {
     try {
-      await widget.library.open(widget.entry);
+      final fresh = (await widget.library.open(widget.entry)).entry;
+      final originalEnd = widget.entry.until;
+      final newEnd = fresh.until;
+      // Native playback was given the original proof. Do not continue with a
+      // broader window after a recheck reports a real, tighter deadline.
+      if (newEnd != null &&
+          (originalEnd == null || newEnd.isBefore(originalEnd))) {
+        _revoke();
+      }
     } catch (_) {
       _revoke();
     }
@@ -128,7 +143,7 @@ class _CourseCachePlaybackPageState extends State<CourseCachePlaybackPage>
   Widget build(BuildContext context) => _invalid
       ? Scaffold(
           appBar: AppBar(title: const Text('离线课堂')),
-          body: const Center(child: Text('课程校验已到期或账号已变化，请返回课程缓存。')),
+          body: const Center(child: Text('课程缓存或账号状态已变化，请返回课程缓存。')),
         )
       : PlayerPage(
           video: widget.entry.video,
@@ -136,5 +151,6 @@ class _CourseCachePlaybackPageState extends State<CourseCachePlaybackPage>
           forceOffline: true,
           offlineVideoService: _one,
           playbackService: _native,
+          appPlatform: widget.appPlatform,
         );
 }

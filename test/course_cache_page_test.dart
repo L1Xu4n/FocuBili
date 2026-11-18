@@ -1,12 +1,18 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:focubili/core/theme/app_theme.dart';
 import 'package:focubili/features/classroom/course_cache_page.dart';
+import 'package:focubili/features/classroom/course_cache_playback_page.dart';
+import 'package:focubili/features/player/player_page.dart';
+import 'package:focubili/platform/app_platform.dart';
 import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/services/cache_lifecycle.dart';
 import 'package:focubili/services/course_cache_library.dart';
+import 'package:focubili/services/course_cache_validity.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'course_cache_library_test.dart' show part, video;
 import 'subscription_compact_ui_test.dart'
     show loadBetaReviewFonts, captureSubscriptionUi;
@@ -21,8 +27,8 @@ class _Library extends CourseCacheLibrary {
   bool isUsable(CourseCacheEntry e) =>
       fixedNow == null ? super.isUsable(e) : e.usableAt(fixedNow!);
   @override
-  Duration untilExpiry(CourseCacheEntry e) =>
-      fixedNow == null ? super.untilExpiry(e) : e.until!.difference(fixedNow!);
+  Duration? untilExpiry(CourseCacheEntry e) =>
+      fixedNow == null ? super.untilExpiry(e) : e.until?.difference(fixedNow!);
   @override
   int get listVersion => serial;
   @override
@@ -50,6 +56,14 @@ class _Library extends CourseCacheLibrary {
     ];
     serial++;
     notifyListeners();
+  }
+
+  @override
+  Future<({CourseCacheEntry entry, String video, String? audio})> open(
+    CourseCacheEntry e,
+  ) async {
+    if (!isUsable(e)) throw const CourseCacheFailure('缓存不可用。');
+    return (entry: e, video: '/synthetic/private/lesson.bin', audio: null);
   }
 
   @override
@@ -132,6 +146,105 @@ void main() {
       await t.pumpWidget(const SizedBox.shrink());
     },
   );
+
+  testWidgets('已核验无服务端日期的课堂两天后仍可打开离线播放器，不弹复核', (t) async {
+    SharedPreferences.setMockInitialValues({});
+    const channel = MethodChannel('com.focubili.app/playback');
+    final calls = <MethodCall>[];
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      return call.method == 'initialize' ? {'textureId': 4} : null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+
+    final now = DateTime.now();
+    final checked = now.subtract(const Duration(days: 2));
+    final library = _Library()..fixedNow = now;
+    addTearDown(library.dispose);
+    final entry = CourseCacheEntry(
+      mid: 51,
+      season: 11,
+      ep: 21,
+      aid: 55,
+      cid: 31,
+      courseTitle: video.title,
+      chapterTitle: part.title,
+      duration: part.duration,
+      quality: 64,
+      videoBytes: 5242880,
+      checkedAt: checked,
+      expiryKind: CourseCacheExpiryKind.noDeclaredDeadline,
+    );
+    library.rows = [entry];
+    final boundary = GlobalKey();
+    t.view.devicePixelRatio = 1;
+    t.view.physicalSize = const Size(390, 780);
+    addTearDown(t.view.resetDevicePixelRatio);
+    addTearDown(t.view.resetPhysicalSize);
+    await loadBetaReviewFonts(t);
+    await t.pumpWidget(
+      RepaintBoundary(
+        key: boundary,
+        child: MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: AppTheme.light().copyWith(
+            textTheme: AppTheme.light().textTheme.apply(
+              fontFamily: 'BetaReview',
+            ),
+          ),
+          home: CourseCachePage(library: library),
+        ),
+      ),
+    );
+    await t.pumpAndSettle();
+    expect(find.text('离线播放'), findsOneWidget);
+    expect(find.text('联网复核'), findsNothing);
+    expect(find.byType(AlertDialog), findsNothing);
+    await captureSubscriptionUi(
+      t,
+      boundary,
+      'course-cache-verified-no-deadline',
+    );
+
+    // Exercise the real PlayerPage → Dart Android bridge without real account
+    // credentials or video files. The library's disk and session checks have
+    // separate integration coverage.
+    await t.pumpWidget(
+      MaterialApp(
+        home: CourseCachePlaybackPage(
+          library: library,
+          entry: entry,
+          appPlatform: AppPlatform.android,
+        ),
+      ),
+    );
+    for (int i = 0; i < 8; i++) {
+      await t.pump(const Duration(milliseconds: 25));
+    }
+    expect(t.widget<PlayerPage>(find.byType(PlayerPage)).forceOffline, isTrue);
+    final open = calls.singleWhere((call) => call.method == 'openLocal');
+    expect(
+      open.arguments,
+      containsPair('courseCacheCheckedAt', checked.millisecondsSinceEpoch),
+    );
+    expect(
+      open.arguments,
+      containsPair('courseCacheExpiryKind', 'noDeclaredDeadline'),
+    );
+    expect(open.arguments, isNot(contains('courseCacheUntil')));
+    expect(calls.where((call) => call.method == 'open'), isEmpty);
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(library.starts, 0);
+    CacheLifecycle.accountChanged();
+    await t.pump();
+    await t.pump(const Duration(milliseconds: 200));
+    expect(find.byType(PlayerPage), findsNothing);
+    expect(calls.where((call) => call.method == 'dispose'), isNotEmpty);
+    expect(t.takeException(), isNull);
+    await t.pumpWidget(const SizedBox.shrink());
+  });
 
   for (final mode in [(390.0, 780.0, 1.0), (320.0, 580.0, 1.8)]) {
     testWidgets(

@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:focubili/services/cache_lifecycle.dart';
 import 'package:focubili/services/course_cache_access.dart';
 import 'package:focubili/services/course_cache_library.dart';
+import 'package:focubili/services/course_cache_validity.dart';
 import 'package:focubili/services/offline_media_plan.dart';
 import 'package:focubili/services/resumable_media_download.dart';
 
@@ -154,6 +155,147 @@ void main() {
         await File((await store.open(renewed)).video).readAsBytes(),
         bytes,
       );
+    },
+  );
+
+  test(
+    'legacy receipt keeps its old cutoff; authenticated recheck migrates matching bytes',
+    () async {
+      final old = await cache();
+      final files = await store.open(old);
+      final receipt = File.fromUri(
+        File(files.video).parent.uri.resolve('entry.json'),
+      );
+      await receipt.writeAsString(
+        jsonEncode(
+          old.toJson()
+            ..remove('authorization')
+            ..['until'] = old.until!.millisecondsSinceEpoch,
+        ),
+      );
+      var legacy = (await store.entries()).single;
+      expect(legacy.expiryKind, CourseCacheExpiryKind.legacyReceipt);
+      expect((await store.open(legacy)).video, files.video);
+      access.now = old.checkedAt!.add(const Duration(days: 4));
+      await expectLater(store.open(legacy), throwsA(isA<CourseCacheFailure>()));
+
+      access.expiryKind = CourseCacheExpiryKind.noDeclaredDeadline;
+      plan('new-signature-after-old-receipt');
+      requests.clear();
+      mediaBodyBytes = 0;
+      final converted = await cache();
+      expect(requests, ['HEAD /v.m4s', 'HEAD /a.m4s']);
+      expect(mediaBodyBytes, 0);
+      expect(converted.until, isNull);
+      expect(converted.expiryKind, CourseCacheExpiryKind.noDeclaredDeadline);
+      expect(converted.videoHash, old.videoHash);
+      expect(converted.audioHash, old.audioHash);
+      await cdn.close(force: true);
+      final calls = access.calls;
+      access.now = converted.checkedAt!.add(const Duration(days: 9));
+      legacy = (await store.entries()).single;
+      expect((await store.open(legacy)).video, files.video);
+      expect(await File(files.video).readAsBytes(), bytes);
+      expect(access.calls, calls); // No new entitlement or CDN request on open.
+      access.mid = 73;
+      CacheLifecycle.accountChanged();
+      expect(await store.entries(), isEmpty);
+      await expectLater(
+        store.open(converted),
+        throwsA(isA<CourseCacheFailure>()),
+      );
+    },
+  );
+
+  test(
+    'a real deadline seen during a failed recheck caps a previously undated receipt',
+    () async {
+      access.expiryKind = CourseCacheExpiryKind.explicitLongTerm;
+      final old = await cache();
+      access.now = access.now.add(const Duration(days: 2));
+      expect(await store.open(old), isNotNull);
+      final end = access.now.add(const Duration(days: 3));
+      access.failure = CourseCacheAccessException(
+        '后续媒体请求失败',
+        revokesReceipt: false,
+        knownUntil: end,
+      );
+      requests.clear();
+      await store.start(video, part);
+      expect(requests, isEmpty);
+      final shortened = (await store.entries()).single;
+      expect(shortened.until, end);
+      expect(shortened.expiryKind, CourseCacheExpiryKind.serverDeadline);
+      access.now = end.subtract(const Duration(milliseconds: 1));
+      expect(await store.open(old), isNotNull);
+      access.now = end;
+      await expectLater(store.open(old), throwsA(isA<CourseCacheFailure>()));
+    },
+  );
+
+  test(
+    'observed removal or refund revokes an undated receipt without deleting media',
+    () async {
+      access.expiryKind = CourseCacheExpiryKind.noDeclaredDeadline;
+      final old = await cache();
+      final files = await store.open(old);
+      access.now = access.now.add(const Duration(days: 12));
+      expect(await store.open(old), isNotNull);
+      access.denied = true;
+      requests.clear();
+      await store.start(video, part);
+      expect(requests, isEmpty);
+      final revoked = (await store.entries()).single;
+      expect(revoked.complete, isFalse);
+      expect(revoked.hasMedia, isTrue);
+      expect(await File(files.video).exists(), isTrue);
+      await expectLater(store.open(old), throwsA(isA<CourseCacheFailure>()));
+    },
+  );
+
+  test('a later missing date cannot extend a known real cutoff', () async {
+    final old = await cache();
+    final end = old.until!;
+    access.now = end.subtract(const Duration(minutes: 10));
+    access.expiryKind = CourseCacheExpiryKind.noDeclaredDeadline;
+    requests.clear();
+    final current = await cache();
+    expect(requests, ['HEAD /v.m4s', 'HEAD /a.m4s']);
+    expect(current.until, end);
+
+    access.now = end;
+    requests.clear();
+    access.expiryKind = CourseCacheExpiryKind.explicitLongTerm;
+    await store.start(video, part);
+    expect(requests, isEmpty);
+    expect((await store.entries()).single.until, end);
+    await expectLater(store.open(old), throwsA(isA<CourseCacheFailure>()));
+  });
+
+  test(
+    'a revoked receipt cannot turn an observed cutoff into no declared date',
+    () async {
+      access.expiryKind = CourseCacheExpiryKind.noDeclaredDeadline;
+      final old = await cache();
+      access.now = access.now.add(const Duration(days: 3));
+      access.failure = CourseCacheAccessException(
+        '已到期',
+        knownUntil: access.now,
+      );
+      requests.clear();
+      await store.start(video, part);
+      expect((await store.entries()).single.complete, isFalse);
+      expect(requests, isEmpty);
+
+      access.failure = null;
+      await store.start(video, part);
+      expect(requests, isEmpty);
+      await expectLater(store.open(old), throwsA(isA<CourseCacheFailure>()));
+      access.expiryKind = CourseCacheExpiryKind.serverDeadline;
+      access.window = const Duration(days: 5);
+      final newer = await cache();
+      expect(requests, ['HEAD /v.m4s', 'HEAD /a.m4s']);
+      expect(newer.until, access.now.add(const Duration(days: 5)));
     },
   );
 

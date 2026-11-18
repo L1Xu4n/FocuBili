@@ -7,6 +7,7 @@ import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/services/bilibili_auth_service.dart';
 import 'package:focubili/services/cache_lifecycle.dart';
 import 'package:focubili/services/course_cache_access.dart';
+import 'package:focubili/services/course_cache_validity.dart';
 
 const _nav = '/x/web-interface/nav';
 const _paid = '/pugv/pay/web/my/paid';
@@ -223,7 +224,7 @@ void main() {
       expect(grant.mediaHeaders.keys, isNot(contains('Authorization')));
       expect(grant.mediaHeaders.values.join(), isNot(contains(_cookie)));
       await grant.checkSession();
-      fixture.now = grant.validUntil;
+      fixture.now = grant.validUntil!;
       await expectLater(grant.checkSession(), _rejected);
       fixture.now = _now.subtract(const Duration(seconds: 1));
       await expectLater(grant.checkSession(), _rejected);
@@ -251,6 +252,22 @@ void main() {
     final grant = await fixture.service().authorize(_video, _part, 64);
     expect(grant.validUntil, purchaseEnd);
   });
+
+  test(
+    'an actual elapsed server cutoff is retained with the definitive refusal',
+    () async {
+      final end = _now.subtract(const Duration(minutes: 1));
+      fixture.accountStatus['expire_at'] = _seconds(end);
+      await expectLater(
+        fixture.service().authorize(_video, _part, 64),
+        throwsA(
+          isA<CourseCacheAccessException>()
+              .having((e) => e.revokesReceipt, 'revokes receipt', isTrue)
+              .having((e) => e.knownUntil, 'known server end', end),
+        ),
+      );
+    },
+  );
 
   test(
     'the earliest explicit purchase or offline authorization wins',
@@ -294,7 +311,7 @@ void main() {
   );
 
   test(
-    'explicit long-term purchase caps proven single MP4 at 24 hours',
+    'explicit long-term purchase imposes no synthetic deadline on verified MP4',
     () async {
       fixture.accountStatus['expire_at'] = 0;
       fixture.accountStatus['user_expiry_content'] = '长期有效';
@@ -311,7 +328,94 @@ void main() {
       final grant = await fixture.service().authorize(_video, _part, 64);
       expect(grant.media.audio, isNull);
       expect(grant.media.video.expectedBytes, 4096);
-      expect(grant.validUntil, _now.add(const Duration(hours: 24)));
+      expect(grant.validUntil, isNull);
+      expect(grant.expiryKind, CourseCacheExpiryKind.explicitLongTerm);
+      fixture.now = _now.add(const Duration(days: 5));
+      await grant.checkSession();
+    },
+  );
+
+  test(
+    'verified purchase with no server deadline remains valid beyond a day',
+    () async {
+      fixture.accountStatus.remove('expire_at');
+      final grant = await fixture.service().authorize(_video, _part, 64);
+      expect(grant.validUntil, isNull);
+      expect(grant.expiryKind, CourseCacheExpiryKind.noDeclaredDeadline);
+      fixture.now = _now.add(const Duration(days: 9));
+      await grant.checkSession();
+      expect(
+        () => grant.checkTransport!(
+          Uri.parse(grant.media.video.urls.single),
+          fixture.now,
+        ),
+        _rejected,
+      );
+      fixture.cookie = _backupCookie;
+      await expectLater(grant.checkSession(), _rejected);
+    },
+  );
+
+  test(
+    'a confirmed purchase with a later real deadline does not end after 24 hours',
+    () async {
+      final end = _now.add(const Duration(days: 5));
+      fixture.accountStatus['expire_at'] = _seconds(end);
+      final grant = await fixture.service().authorize(_video, _part, 64);
+      expect(grant.validUntil, end);
+      fixture.now = _now.add(const Duration(days: 2));
+      await grant.checkSession();
+      fixture.now = end;
+      await expectLater(grant.checkSession(), _rejected);
+    },
+  );
+
+  test(
+    'misleading, ambiguous or malformed purchase deadlines remain locked',
+    () async {
+      for (final update in <void Function(_Fixture)>[
+        (f) => f.accountStatus['expire_at'] = 0,
+        (f) => f.accountStatus['expire_at'] = 'not a date',
+        (f) => f.accountStatus['expire_at'] = null,
+        (f) {
+          f.accountStatus.remove('expire_at');
+          f.meta['expiry_day'] = 365;
+        },
+        (f) {
+          f.accountStatus.remove('expire_at');
+          f.accountStatus['user_expiry_content'] = '长期有效';
+          f.meta['expiry_day'] = 365;
+        },
+      ]) {
+        final bad = _Fixture();
+        update(bad);
+        await expectLater(
+          bad.service().authorize(_video, _part, 64),
+          _rejected,
+        );
+        expect(bad.requests.map((uri) => uri.path), isNot(contains(_media)));
+      }
+    },
+  );
+
+  test(
+    'no reported deadline does not relax purchase, watermark, DRM or preview checks',
+    () async {
+      for (final update in <void Function(_Fixture)>[
+        (f) => f.accountStatus['payed'] = 0,
+        (f) => f.accountStatus['is_expired'] = true,
+        (f) => f.meta['show_watermark'] = true,
+        (f) => f.response['is_preview'] = true,
+        (f) => f.response['is_drm'] = true,
+        (f) => f.response['allow_download'] = false,
+      ]) {
+        final restricted = _Fixture()..accountStatus.remove('expire_at');
+        update(restricted);
+        await expectLater(
+          restricted.service().authorize(_video, _part, 64),
+          _rejected,
+        );
+      }
     },
   );
 
@@ -470,7 +574,10 @@ void main() {
     'expired epoch': (f) => f.accountStatus['expire_at'] = _seconds(
       _now.subtract(const Duration(seconds: 1)),
     ),
-    'missing purchase deadline': (f) => f.accountStatus.remove('expire_at'),
+    'finite purchase metadata without an absolute deadline': (f) {
+      f.accountStatus.remove('expire_at');
+      f.meta['expiry_day'] = 30;
+    },
     'zero expiry without evidence': (f) => f.accountStatus['expire_at'] = 0,
     'watermark required': (f) => f.meta['show_watermark'] = true,
     'watermark unknown': (f) => f.meta.remove('show_watermark'),

@@ -10,6 +10,7 @@ import '../models/video_preview.dart';
 import 'cache_lifecycle.dart';
 import 'course_cache_access.dart';
 import 'course_cache_container.dart';
+import 'course_cache_validity.dart';
 import 'download_control.dart';
 import 'offline_media_plan.dart';
 import 'resumable_media_download.dart';
@@ -31,24 +32,28 @@ class CourseCacheEntry {
     this.audioBytes = 0,
     this.checkedAt,
     this.until,
+    this.expiryKind = CourseCacheExpiryKind.legacyReceipt,
+    DateTime? retainedServerDeadline,
     this.videoHash,
     this.audioHash,
     this.videoVersion,
     this.audioVersion,
-  });
+  }) : _retainedServerDeadline = retainedServerDeadline;
   final int mid, season, ep, aid, cid, quality, videoBytes, audioBytes;
   final String courseTitle, chapterTitle;
   final Duration duration;
-  final DateTime? checkedAt, until;
+  final DateTime? checkedAt, until, _retainedServerDeadline;
+  final CourseCacheExpiryKind expiryKind;
   final String? videoHash, audioHash, videoVersion, audioVersion;
   String get id => '$season-$ep-$aid-$cid';
   bool get hasMedia => videoBytes > 0;
-  bool get complete => hasMedia && until != null && checkedAt != null;
+  DateTime? get _knownServerDeadline =>
+      expiryKind == CourseCacheExpiryKind.serverDeadline
+      ? until
+      : _retainedServerDeadline;
+  bool get complete => hasMedia && expiryKind.accepts(checkedAt, until);
   bool usableAt(DateTime now) =>
-      complete &&
-      !now.isBefore(checkedAt!) &&
-      now.isBefore(until!) &&
-      until!.difference(checkedAt!) <= const Duration(hours: 24);
+      hasMedia && expiryKind.usableAt(now, checkedAt, until);
   VideoPart get part => VideoPart(
     pageNumber: 1,
     cid: cid,
@@ -79,13 +84,49 @@ class CourseCacheEntry {
     'quality': quality,
     'v': videoBytes,
     'a': audioBytes,
-    'checked': checkedAt?.millisecondsSinceEpoch,
-    'until': until?.millisecondsSinceEpoch,
+    ..._receiptFields(checkedAt, until, expiryKind),
+    if (_retainedServerDeadline != null)
+      'retainedServerDeadline': _retainedServerDeadline.millisecondsSinceEpoch,
     'videoHash': ?videoHash,
     'audioHash': ?audioHash,
     'videoVersion': ?videoVersion,
     'audioVersion': ?audioVersion,
   };
+  // New receipts explicitly say why a deadline exists or is absent. A
+  // legacy 'until' cannot be combined with these server-derived fields.
+  static Map<String, Object?> _receiptFields(
+    DateTime? checkedAt,
+    DateTime? until,
+    CourseCacheExpiryKind kind,
+  ) => {
+    'checked': checkedAt?.millisecondsSinceEpoch,
+    if (kind == CourseCacheExpiryKind.legacyReceipt)
+      'until': until?.millisecondsSinceEpoch
+    else
+      'authorization': {
+        'kind': kind.name,
+        if (until != null) 'serverUntil': until.millisecondsSinceEpoch,
+      },
+  };
+
+  CourseCacheEntry _withReceipt(
+    DateTime? checkedAt,
+    DateTime? until,
+    CourseCacheExpiryKind kind, {
+    DateTime? retainedServerDeadline,
+  }) {
+    final data = toJson()
+      ..remove('until')
+      ..remove('authorization')
+      ..remove('retainedServerDeadline');
+    return CourseCacheEntry.fromJson(mid, {
+      ...data,
+      ..._receiptFields(checkedAt, until, kind),
+      if (retainedServerDeadline != null)
+        'retainedServerDeadline': retainedServerDeadline.millisecondsSinceEpoch,
+    });
+  }
+
   factory CourseCacheEntry.fromJson(int mid, Map j) {
     int positive(String k) {
       final n = j[k];
@@ -108,6 +149,37 @@ class CourseCacheEntry {
       return value;
     }
 
+    DateTime? date(Object? value) {
+      if (value == null) return null;
+      if (value is! int || value <= 0) throw const FormatException();
+      return DateTime.fromMillisecondsSinceEpoch(value, isUtc: true);
+    }
+
+    final checked = date(j['checked']);
+    final authorization = j['authorization'];
+    var kind = CourseCacheExpiryKind.legacyReceipt;
+    DateTime? end;
+    if (j.containsKey('authorization')) {
+      if (authorization is! Map ||
+          j.containsKey('until') ||
+          j.containsKey('retainedServerDeadline')) {
+        throw const FormatException();
+      }
+      final name = authorization['kind'];
+      final serverKind = CourseCacheExpiryKind.values
+          .where((value) => value.name == name)
+          .firstOrNull;
+      if (serverKind == null ||
+          serverKind == CourseCacheExpiryKind.legacyReceipt) {
+        throw const FormatException();
+      }
+      kind = serverKind;
+      end = date(authorization['serverUntil']);
+      if (!kind.accepts(checked, end)) throw const FormatException();
+    } else {
+      end = date(j['until']);
+    }
+
     return CourseCacheEntry(
       mid: mid,
       season: positive('season'),
@@ -124,15 +196,10 @@ class CourseCacheEntry {
       audioHash: digest('audioHash'),
       videoVersion: digest('videoVersion'),
       audioVersion: digest('audioVersion'),
-      checkedAt: j['checked'] == null
-          ? null
-          : DateTime.fromMillisecondsSinceEpoch(
-              positive('checked'),
-              isUtc: true,
-            ),
-      until: j['until'] == null
-          ? null
-          : DateTime.fromMillisecondsSinceEpoch(positive('until'), isUtc: true),
+      checkedAt: checked,
+      until: end,
+      expiryKind: kind,
+      retainedServerDeadline: date(j['retainedServerDeadline']),
     );
   }
 }
@@ -173,8 +240,8 @@ class CourseCacheLibrary extends ChangeNotifier {
   bool _checking = false;
   bool get checking => _checking;
   bool isUsable(CourseCacheEntry entry) => entry.usableAt(_clock());
-  Duration untilExpiry(CourseCacheEntry entry) =>
-      entry.until!.difference(_clock());
+  Duration? untilExpiry(CourseCacheEntry entry) =>
+      entry.until?.difference(_clock());
 
   // Opening a lesson crosses several player adapters. Reuse the local digest
   // check only while the exact path's size, mtime and change time still match.
@@ -406,12 +473,22 @@ class CourseCacheLibrary extends ChangeNotifier {
     return hash;
   }
 
-  static CourseCacheEntry _withoutReceipt(CourseCacheEntry entry) =>
-      CourseCacheEntry.fromJson(entry.mid, {
-        ...entry.toJson(),
-        'checked': null,
-        'until': null,
-      });
+  static CourseCacheEntry _withoutReceipt(
+    CourseCacheEntry entry, {
+    DateTime? observed,
+  }) {
+    final retained = entry._knownServerDeadline;
+    final earliest =
+        observed != null && (retained == null || observed.isBefore(retained))
+        ? observed
+        : retained;
+    return entry._withReceipt(
+      null,
+      null,
+      CourseCacheExpiryKind.legacyReceipt,
+      retainedServerDeadline: earliest,
+    );
+  }
 
   Future<void> _commitReceipt(
     Directory dir,
@@ -518,11 +595,7 @@ class CourseCacheLibrary extends ChangeNotifier {
     }
     await _commitReceipt(
       dir,
-      CourseCacheEntry.fromJson(old.mid, {
-        ...old.toJson(),
-        'checked': grant.checkedAt.millisecondsSinceEpoch,
-        'until': grant.validUntil.millisecondsSinceEpoch,
-      }),
+      old._withReceipt(grant.checkedAt, grant.validUntil, grant.expiryKind),
       old,
       check,
     );
@@ -563,18 +636,28 @@ class CourseCacheLibrary extends ChangeNotifier {
     c.check();
     CourseCacheEntry? shortened(DateTime? until) {
       final old = previous;
-      if (old == null ||
-          !old.complete ||
-          until == null ||
-          !until.isBefore(old.until!)) {
-        return null;
+      if (old == null || until == null) return null;
+      final known = old._knownServerDeadline;
+      if (known != null && !until.isBefore(known)) return null;
+      if (!old.complete ||
+          !_clock().isBefore(until) ||
+          !until.isAfter(old.checkedAt!)) {
+        return _withoutReceipt(old, observed: until);
       }
-      return !_clock().isBefore(until)
-          ? _withoutReceipt(old)
-          : CourseCacheEntry.fromJson(mid, {
-              ...old.toJson(),
-              'until': until.millisecondsSinceEpoch,
-            });
+      if (old.until != null && !until.isBefore(old.until!)) {
+        // Preserve the older app-only window and the actual server cap.
+        return old._withReceipt(
+          old.checkedAt,
+          old.until,
+          old.expiryKind,
+          retainedServerDeadline: until,
+        );
+      }
+      return old._withReceipt(
+        old.checkedAt,
+        until,
+        CourseCacheExpiryKind.serverDeadline,
+      );
     }
 
     Future<void> stillCurrent() async {
@@ -585,10 +668,11 @@ class CourseCacheLibrary extends ChangeNotifier {
 
     final CourseCacheGrant g;
     try {
-      g = await c.guard(access.authorize(v, p, q));
+      final issued = await c.guard(access.authorize(v, p, q));
+      g = issued.retainingServerDeadline(previous?._knownServerDeadline);
     } on CourseCacheAccessException catch (error) {
       final updated = error.revokesReceipt && previous?.complete == true
-          ? _withoutReceipt(previous!)
+          ? _withoutReceipt(previous!, observed: error.knownUntil)
           : shortened(error.knownUntil);
       if (updated != null) {
         await _save(dir, updated, validate: stillCurrent);
@@ -602,9 +686,7 @@ class CourseCacheLibrary extends ChangeNotifier {
       await g.checkSession();
       c.check();
       final now = _clock();
-      if (now.isBefore(g.checkedAt) ||
-          !now.isBefore(g.validUntil) ||
-          g.validUntil.difference(g.checkedAt) > const Duration(hours: 24)) {
+      if (!g.expiryKind.usableAt(now, g.checkedAt, g.validUntil)) {
         throw const CourseCacheFailure('本次课程校验已到期，请重新联网确认。');
       }
     }
@@ -636,13 +718,15 @@ class CourseCacheLibrary extends ChangeNotifier {
     await _save(dir, pending, validate: check);
     _listVersion++;
     _emit();
-    final ttl = g.validUntil.difference(_clock());
-    final deadline = Timer(ttl, () {
-      if (!c.isInterrupted && rev == _revision && !_closed) {
-        _error = '本次课程校验已到期，请重新联网确认。';
-        c.interrupt();
-      }
-    });
+    final expiry = g.validUntil;
+    final deadline = expiry == null
+        ? null
+        : Timer(expiry.difference(_clock()), () {
+            if (!c.isInterrupted && rev == _revision && !_closed) {
+              _error = '本次课程校验已到期，请重新联网确认。';
+              c.interrupt();
+            }
+          });
     final paint = Stopwatch()..start();
     try {
       var offset = 0;
@@ -768,6 +852,7 @@ class CourseCacheLibrary extends ChangeNotifier {
           audioBytes: na,
           checkedAt: g.checkedAt,
           until: g.validUntil,
+          expiryKind: g.expiryKind,
           videoHash: videoHash,
           audioHash: audioHash,
           videoVersion: video.version,
@@ -777,7 +862,7 @@ class CourseCacheLibrary extends ChangeNotifier {
         check,
       );
     } finally {
-      deadline.cancel();
+      deadline?.cancel();
     }
   }
 
@@ -814,7 +899,15 @@ class CourseCacheLibrary extends ChangeNotifier {
       throw const CourseCacheFailure('正在检查课程缓存，请稍后再播放。');
     }
     await _same(e.mid, rev);
-    final dir = await _dirs(e.mid, e.id), fresh = await _read(dir, e.mid);
+    final dir = await _dirs(e.mid, e.id);
+    final CourseCacheEntry? fresh;
+    try {
+      fresh = await _read(dir, e.mid);
+    } on FormatException {
+      throw const CourseCacheFailure('无法确认课程缓存记录，请联网复核。', recheckNeeded: true);
+    } on TypeError {
+      throw const CourseCacheFailure('无法确认课程缓存记录，请联网复核。', recheckNeeded: true);
+    }
     if (fresh == null || fresh.id != e.id || !fresh.usableAt(_clock())) {
       throw const CourseCacheFailure('缓存不完整或校验已到期，请联网复核。', recheckNeeded: true);
     }

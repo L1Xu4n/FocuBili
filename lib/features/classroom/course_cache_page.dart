@@ -44,7 +44,7 @@ class _CourseCachePageState extends State<CourseCachePage>
     for (final row in rows) {
       if (!store.isUsable(row)) continue;
       final wait = store.untilExpiry(row);
-      if (next == null || wait < next) next = wait;
+      if (wait != null && (next == null || wait < next)) next = wait;
     }
     if (next != null && next > Duration.zero) {
       _expiry = Timer(next, () {
@@ -241,7 +241,7 @@ class _CourseCachePageState extends State<CourseCachePage>
           padding: const EdgeInsets.all(16),
           children: [
             const Text(
-              '仅在课程方允许离线时使用。缓存只供当前购买账号使用，不支持导出；试看和受保护章节不可缓存。到期后可联网复核，内容没变时不用重复下载。',
+              '仅供购买账号离线播放允许缓存的完整章节，不可导出。已核验章节按服务端期限使用，不另设期限。过期或旧凭证可联网复核，内容没变不用重复下载。',
             ),
             if (loading || suspended)
               const Padding(

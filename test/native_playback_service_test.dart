@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/services/native_playback_service.dart';
+import 'package:focubili/services/course_cache_validity.dart';
 
 /// 注册原生播放服务的倍速范围与方法通道参数回归测试。
 void main() {
@@ -150,7 +151,7 @@ void main() {
     await service.dispose();
   });
 
-  test('课堂文件只通过有期限的账号章节通道，不退回 BV 或在线接口', () async {
+  test('课堂账号通道带已核验的服务器期限状态，不退回普通缓存或在线接口', () async {
     const part = VideoPart(
       pageNumber: 1,
       cid: 31,
@@ -167,8 +168,21 @@ void main() {
       ownerName: '测试',
       parts: [part],
     );
+    final now = DateTime.now();
     for (final s in [
       NativePlaybackService(),
+      NativePlaybackService(courseCacheMid: 51, courseCacheCheckedAt: now),
+      NativePlaybackService(
+        courseCacheMid: 51,
+        courseCacheCheckedAt: now.add(const Duration(days: 1)),
+        courseCacheExpiryKind: CourseCacheExpiryKind.noDeclaredDeadline,
+      ),
+      NativePlaybackService(
+        courseCacheMid: 51,
+        courseCacheCheckedAt: now.subtract(const Duration(days: 1)),
+        courseCacheExpiryKind: CourseCacheExpiryKind.serverDeadline,
+        courseCacheUntil: now.subtract(const Duration(seconds: 1)),
+      ),
       NativePlaybackService(
         courseCacheMid: 51,
         courseCacheUntil: DateTime.fromMillisecondsSinceEpoch(1),
@@ -180,10 +194,13 @@ void main() {
       );
     }
     expect(calls, isEmpty);
-    final end = DateTime.now().add(const Duration(minutes: 5));
+    final checked = now.subtract(const Duration(days: 4));
+    final end = now.add(const Duration(days: 5));
     final allowed = NativePlaybackService(
       courseCacheMid: 51,
       courseCacheUntil: end,
+      courseCacheCheckedAt: checked,
+      courseCacheExpiryKind: CourseCacheExpiryKind.serverDeadline,
     );
     await allowed.openLocalTracks(
       videoFilePath: '/test/video.bin',
@@ -199,7 +216,41 @@ void main() {
     );
     expect(calls.single.arguments, containsPair('courseEpisodeId', 21));
     expect(calls.single.arguments, containsPair('courseAid', 55));
+    expect(
+      calls.single.arguments,
+      containsPair('courseCacheCheckedAt', checked.millisecondsSinceEpoch),
+    );
+    expect(
+      calls.single.arguments,
+      containsPair('courseCacheExpiryKind', 'serverDeadline'),
+    );
     await allowed.dispose();
+
+    calls.clear();
+    final noDeadline = NativePlaybackService(
+      courseCacheMid: 51,
+      courseCacheCheckedAt: checked,
+      courseCacheExpiryKind: CourseCacheExpiryKind.noDeclaredDeadline,
+    );
+    await noDeadline.openLocalFile(filePath: '/test/video.bin', video: course);
+    expect(calls.single.method, 'openLocal');
+    expect(
+      calls.single.arguments,
+      containsPair('courseCacheExpiryKind', 'noDeclaredDeadline'),
+    );
+    expect(calls.single.arguments, isNot(contains('courseCacheUntil')));
+    await noDeadline.dispose();
+
+    calls.clear();
+    final ordinary = NativePlaybackService();
+    await ordinary.openLocalFile(
+      filePath: '/test/ordinary.mp4',
+      video: VideoPreview.placeholder(),
+    );
+    expect(calls.single.method, 'openLocal');
+    expect(calls.single.arguments, isNot(contains('courseCacheMid')));
+    expect(calls.single.arguments, isNot(contains('courseCacheExpiryKind')));
+    await ordinary.dispose();
   });
 
   /// 验证 Flutter 的观看记录兜底位置会随打开命令交给 Android，在 prepare 前直接定位。

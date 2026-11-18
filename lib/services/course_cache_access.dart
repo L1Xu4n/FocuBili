@@ -6,6 +6,7 @@ import 'bilibili_auth_service.dart';
 import 'bilibili_course_service.dart';
 import 'cache_lifecycle.dart';
 import 'media_url_policy.dart';
+import 'course_cache_validity.dart';
 import 'offline_media_plan.dart';
 
 /// A safe error for UI; never holds responses, cookies, or temporary URLs.
@@ -25,13 +26,14 @@ class CourseCacheAccessException implements Exception {
   String toString() => message;
 }
 
-/// An in-memory, short-lived authorization for exactly one checked lesson.
+/// An in-memory authorization for exactly one checked lesson.
 class CourseCacheGrant {
   const CourseCacheGrant({
     required this.mid,
     required this.media,
     required this.checkedAt,
     required this.validUntil,
+    this.expiryKind = CourseCacheExpiryKind.serverDeadline,
     required this.checkSession,
     required this.mediaHeaders,
     this.checkTransport,
@@ -40,12 +42,29 @@ class CourseCacheGrant {
   final int mid;
   final OfflineMediaPlan media;
   final DateTime checkedAt;
-  final DateTime validUntil;
+  final DateTime? validUntil;
+  final CourseCacheExpiryKind expiryKind;
   final Future<void> Function() checkSession;
   final Map<String, String> mediaHeaders;
 
   /// A CDN signature authenticates only a request, never the offline receipt.
   final void Function(Uri, DateTime)? checkTransport;
+
+  /// A successful response without a date does not erase a previously
+  /// observed server deadline. Legacy app-only limits are not passed here.
+  CourseCacheGrant retainingServerDeadline(DateTime? observed) =>
+      observed == null || validUntil != null
+      ? this
+      : CourseCacheGrant(
+          mid: mid,
+          media: media,
+          checkedAt: checkedAt,
+          validUntil: observed,
+          expiryKind: CourseCacheExpiryKind.serverDeadline,
+          checkSession: checkSession,
+          mediaHeaders: mediaHeaders,
+          checkTransport: checkTransport,
+        );
 }
 
 class CourseCacheAccess {
@@ -122,13 +141,20 @@ class CourseCacheAccess {
 
     CourseCacheAccessException withObservedLimit(
       CourseCacheAccessException error,
-    ) => error.revokesReceipt || authorizationExpiry == null
-        ? error
-        : CourseCacheAccessException(
-            error.message,
-            revokesReceipt: false,
-            knownUntil: authorizationExpiry,
-          );
+    ) {
+      final observed = authorizationExpiry;
+      final alreadyKnown = error.knownUntil;
+      if (observed == null ||
+          (alreadyKnown != null && !observed.isBefore(alreadyKnown))) {
+        return error;
+      }
+      return CourseCacheAccessException(
+        error.message,
+        revokesReceipt: error.revokesReceipt,
+        knownUntil: observed,
+      );
+    }
+
     try {
       final season = video.courseSeasonId;
       final ep = part.courseEpisodeId;
@@ -253,7 +279,8 @@ class CourseCacheAccess {
         throw _expiry;
       }
       if (_switch(meta['show_watermark']) != false) throw _protected;
-      cap(_purchaseExpiry(meta, status));
+      final purchaseWindow = _purchaseExpiry(meta, status);
+      cap(purchaseWindow.end);
       if (authorizationExpiry case final end? when !checkedAt.isBefore(end)) {
         throw _expiry;
       }
@@ -306,11 +333,6 @@ class CourseCacheAccess {
         throw _protected;
       }
       final media = _media(mediaData, quality);
-      var validUntil = checkedAt.add(const Duration(hours: 24));
-      if (authorizationExpiry case final until?
-          when until.isBefore(validUntil)) {
-        validUntil = until;
-      }
       // Validate the address metadata, but do not fold URL expiry into
       // the offline receipt. Each network request checks its own URL again.
       for (final track in [media.video, ?media.audio]) {
@@ -321,10 +343,12 @@ class CourseCacheAccess {
         }
         if (!usable) throw _transportUnavailable;
       }
-      final expiry = validUntil;
+      final expiry = authorizationExpiry;
+      final expiryKind = expiry == null
+          ? purchaseWindow.kind
+          : CourseCacheExpiryKind.serverDeadline;
       void checkClock() {
-        final now = _clock().toUtc();
-        if (now.isBefore(checkedAt) || !now.isBefore(expiry)) {
+        if (!expiryKind.usableAt(_clock().toUtc(), checkedAt, expiry)) {
           throw _expiry;
         }
       }
@@ -341,6 +365,7 @@ class CourseCacheAccess {
         media: media,
         checkedAt: checkedAt,
         validUntil: expiry,
+        expiryKind: expiryKind,
         checkSession: checkSession,
         checkTransport: (uri, now) {
           if (uri.port != 443 || !MediaUrlPolicy.isSafe(uri.toString())) {
@@ -530,19 +555,38 @@ class CourseCacheAccess {
         : DateTime.fromMillisecondsSinceEpoch(millis, isUtc: true);
   }
 
-  static DateTime? _purchaseExpiry(Map metadata, Map user) {
+  static ({DateTime? end, CourseCacheExpiryKind kind}) _purchaseExpiry(
+    Map metadata,
+    Map user,
+  ) {
     final raw = _integer(user['expire_at']);
     final expiry = _epoch(raw);
-    if (expiry != null) return expiry;
-    // Zero is also returned for unpurchased users. It only means unbounded
-    // after the separate purchase checks and explicit long-term evidence.
-    final longTerm =
-        raw == 0 &&
-        _integer(metadata['expiry_day']) == 0 &&
-        (user['user_expiry_content'] == '长期有效' ||
-            metadata['expiry_info_content'] == '长期有效');
-    if (!longTerm) throw _expiry;
-    return null;
+    if (expiry != null) {
+      return (end: expiry, kind: CourseCacheExpiryKind.serverDeadline);
+    }
+    if (user.containsKey('expire_at') && raw != 0) throw _expiry;
+    final days = _integer(metadata['expiry_day']);
+    if (metadata.containsKey('expiry_day') && days != 0) throw _expiry;
+
+    // A zero timestamp also appears for anonymous, unpurchased courses. It
+    // is not proof by itself. Purchase and complete playback are independent
+    // checks, and only recognized provider text can disambiguate zero.
+    final notes = [
+      user['user_expiry_content'],
+      metadata['expiry_info_content'],
+    ].where((value) => value != null && value != '').toList();
+    if (notes.any((value) => value is! String || value.trim() != '长期有效')) {
+      throw _expiry;
+    }
+    if (notes.isNotEmpty) {
+      return (end: null, kind: CourseCacheExpiryKind.explicitLongTerm);
+    }
+    if (user.containsKey('expire_at') || metadata.containsKey('expiry_day')) {
+      throw _expiry;
+    }
+    // Some successful purchased responses supply no duration metadata. This
+    // is not a promise of permanent rights. Rechecks can still revoke or cap.
+    return (end: null, kind: CourseCacheExpiryKind.noDeclaredDeadline);
   }
 
   static String _canonical(String key) =>
