@@ -78,9 +78,9 @@ mixin _PlayerNoteFlagsCoordinator on State<PlayerPage>, _PlayerNotesWorkspace {
       _noteAutoSaveTimer?.cancel();
       _noteAutoSaveTimer = null;
       final revision = _noteDraftRevision;
-      await _saveVideoNote(automatic: true);
+      final saved = await _saveVideoNote(automatic: true);
       if (!mounted ||
-          !_noteLastSaveSucceeded ||
+          !saved ||
           bvid != _activeVideo.bvid ||
           cid != _currentPart.cid ||
           revision != _noteDraftRevision ||

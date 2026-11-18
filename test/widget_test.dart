@@ -33,6 +33,7 @@ import 'package:focubili/services/app_theme_mode_service.dart';
 import 'package:focubili/services/cache_lifecycle.dart';
 import 'package:focubili/services/device_status_service.dart';
 import 'package:focubili/services/danmaku_preferences_service.dart';
+import 'package:focubili/services/live_video_frame_playback_service.dart';
 import 'package:focubili/services/native_playback_service.dart';
 import 'package:focubili/services/listening_playback_service.dart';
 import 'package:focubili/services/player_overlay_service.dart';
@@ -318,7 +319,8 @@ class _FakeGuestPlaybackService extends _FakePlaybackService
 }
 
 /// 提供无 Android 平台依赖的播放器替身，让组件测试只检查 Flutter 控制层交互。
-class _FakePlaybackService implements PlaybackService {
+class _FakePlaybackService
+    implements PlaybackService, LiveVideoFramePlaybackService {
   /// 创建用于播放器组件测试的无网络服务替身。
   _FakePlaybackService({
     this.savedState,
@@ -510,6 +512,17 @@ class _FakePlaybackService implements PlaybackService {
     return frameCaptureLoader == null
         ? frameCapturePath
         : await frameCaptureLoader!();
+  }
+
+  @override
+  Future<LiveVideoFrame?> captureLiveVideoFrame() async {
+    final bvid = openedBvid;
+    final cid = openedCid;
+    final position = _position;
+    final path = await captureCurrentFrame();
+    return path == null || bvid == null || cid == null
+        ? null
+        : LiveVideoFrame(path: path, position: position, bvid: bvid, cid: cid);
   }
 
   /// 返回测试预先设置的最后观看分P和进度。
@@ -3427,105 +3440,74 @@ void main() {
     });
   }
 
-  for (final navigationDuringPause in [false, true]) {
-    testWidgets(
-      navigationDuringPause ? '追加截图暂停晚返回不操作切换后的视频' : '追加截图回包晚到时合集等待并清理撤销画面',
-      (tester) async {
-        SharedPreferences.setMockInitialValues({});
-        await tester.binding.setSurfaceSize(const Size(1080, 2400));
-        addTearDown(() => tester.binding.setSurfaceSize(null));
-        final directory = await tester.runAsync(
-          () => Directory.systemTemp.createTemp('focubili-capture-race-'),
-        );
-        addTearDown(() => directory!.delete(recursive: true));
-        final captured = File('${directory!.path}/cancelled-frame.png');
-        await tester.runAsync(() => captured.writeAsBytes([1, 2, 3]));
-        final capture = Completer<String?>();
-        final pause = Completer<void>();
-        var pauseBlocked = false;
-        final playback = _FakePlaybackService(
-          frameCaptureLoader: () => capture.future,
-          pauseGate: () async {
-            if (navigationDuringPause && !pauseBlocked) {
-              pauseBlocked = true;
-              await pause.future;
-            }
-          },
-        );
-        final notes = VideoNoteService();
-        await notes.saveNote(_flagNote('capture-race', 0));
-        await tester.pumpWidget(
-          MaterialApp(
-            home: PlayerPage(
-              video: _createCollectionVideo(),
-              interactionService: _FakePlayerInteractionService(),
-              playbackService: playback,
-              bilibiliService: _CollectionSwitchVideoService(),
-              videoNoteService: notes,
-            ),
-          ),
-        );
-        await tester.pumpAndSettle();
-        final openNext = tester
-            .widget<InkWell>(
-              find.byKey(const Key('collection-preview-BV1Q541167Qg')),
-            )
-            .onTap!;
-        await tester.tap(find.byKey(const ValueKey('player-note-flag-hit-0')));
-        await tester.pumpAndSettle();
-        await playback.seekTo(const Duration(seconds: 75));
-        await playback.play();
-        await tester.pump();
-        tester
-            .widget<OutlinedButton>(
-              find.byKey(const Key('append-video-note-frame')),
-            )
-            .onPressed!();
-        await tester.pump();
-        if (!navigationDuringPause) {
-          await tester.pump(const Duration(milliseconds: 100));
-          expect(playback.frameCaptureRequests, 1);
-        }
-        // 使用真实合集行已接受的导航回调，模拟导航与原生取帧交错完成。
-        openNext();
-        await tester.pump();
-        await tester.pump(const Duration(milliseconds: 100));
-        expect(playback.openedBvid, 'BV1GJ411x7h7');
-        expect(playback.openVideoRequests, 1);
-        if (navigationDuringPause) {
-          pause.complete();
-        } else {
-          capture.complete(captured.path);
-        }
-        for (
-          int attempt = 0;
-          attempt < 30 && playback.openedBvid != 'BV1Q541167Qg';
-          attempt++
-        ) {
-          await tester.pump(const Duration(milliseconds: 20));
-          await tester.runAsync(
-            () => Future<void>.delayed(const Duration(milliseconds: 10)),
-          );
-        }
-        await tester.pumpAndSettle();
-        expect(playback.openedBvid, 'BV1Q541167Qg');
-        expect(playback.openedCid, 137649300);
-        expect(
-          playback.seekToIdentities.where(
-            (request) => request.$1 == 'BV1Q541167Qg',
-          ),
-          isEmpty,
-        );
-        expect((await notes.loadNotes()).single.allFrames, isEmpty);
-        if (!navigationDuringPause) {
-          expect(await tester.runAsync(captured.exists), isFalse);
-        }
-        if (navigationDuringPause) expect(playback.frameCaptureRequests, 0);
-        expect(tester.takeException(), isNull);
-        await tester.pumpWidget(const SizedBox.shrink());
-      },
+  testWidgets('追加截图回包晚到时合集不等待且清理撤销画面', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final directory = await tester.runAsync(
+      () => Directory.systemTemp.createTemp('focubili-capture-race-'),
     );
-  }
+    addTearDown(() => directory!.delete(recursive: true));
+    final captured = File('${directory!.path}/cancelled-frame.png');
+    await tester.runAsync(() => captured.writeAsBytes([1, 2, 3]));
+    final capture = Completer<String?>();
+    final playback = _FakePlaybackService(
+      frameCaptureLoader: () => capture.future,
+    );
+    final notes = VideoNoteService();
+    await notes.saveNote(_flagNote('capture-race', 0));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _createCollectionVideo(),
+          interactionService: _FakePlayerInteractionService(),
+          playbackService: playback,
+          bilibiliService: _CollectionSwitchVideoService(),
+          videoNoteService: notes,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final openNext = tester
+        .widget<InkWell>(
+          find.byKey(const Key('collection-preview-BV1Q541167Qg')),
+        )
+        .onTap!;
+    await tester.tap(find.byKey(const ValueKey('player-note-flag-hit-0')));
+    await tester.pumpAndSettle();
+    await playback.seekTo(const Duration(seconds: 75));
+    await playback.play();
+    await tester.pump();
+    tester
+        .widget<OutlinedButton>(
+          find.byKey(const Key('append-video-note-frame')),
+        )
+        .onPressed!();
+    await tester.pump();
+    expect(playback.frameCaptureRequests, 1);
+
+    // User switches before PixelCopy returns. Actual storage writes can be
+    // drained, but there must be no wait for the frame read itself.
+    openNext();
+    await tester.pumpAndSettle();
+    expect(playback.openedBvid, 'BV1Q541167Qg');
+    expect(playback.openedCid, 137649300);
+    capture.complete(captured.path);
+    for (var attempt = 0; attempt < 25; attempt++) {
+      await tester.pump(const Duration(milliseconds: 20));
+      if (await tester.runAsync(captured.exists) == false) break;
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 10)),
+      );
+    }
+    expect(playback.seekToIdentities.map((request) => request.$1), [
+      'BV1GJ411x7h7',
+    ]);
+    expect((await notes.loadNotes()).single.allFrames, isEmpty);
+    expect(await tester.runAsync(captured.exists), isFalse);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 
   /// 验证竖屏笔记面板固定播放器，并保存标题、正文、时间点和可选当前画面。
   testWidgets('竖屏时间点笔记固定播放器并保存到本机', (WidgetTester tester) async {

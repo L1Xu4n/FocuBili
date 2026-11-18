@@ -37,6 +37,7 @@ import '../../models/learning_list_entry.dart';
 import '../../services/device_status_service.dart';
 import '../../services/external_link_service.dart';
 import '../../services/native_playback_service.dart';
+import '../../services/live_video_frame_playback_service.dart';
 import '../../services/playback_service_factory.dart';
 import '../../services/playback_video_surface.dart';
 import '../../services/player_overlay_service.dart';

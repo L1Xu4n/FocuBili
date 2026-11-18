@@ -60,6 +60,8 @@ import java.io.FileOutputStream
 import java.lang.ref.WeakReference
 import java.net.URL
 import java.util.Locale
+import java.util.UUID
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import javax.net.ssl.HttpsURLConnection
@@ -91,6 +93,10 @@ class NativePlaybackController(
 ) : MethodChannel.MethodCallHandler {
     private val channel = MethodChannel(messenger, CHANNEL_NAME)
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val frameCaptureExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    private var liveFrameTimelineRevision = 0L
+    private var lastFrameDiscontinuityMs = 0L
+    private var hasRenderedVideoFrame = false
     private val playbackRequestExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val overlayDataRequestExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val progressPreferences = activity.getSharedPreferences(
@@ -442,6 +448,9 @@ class NativePlaybackController(
             "captureCurrentFrame" -> {
                 captureCurrentVideoFrame(result)
             }
+            "captureLiveVideoFrame" -> {
+                captureCurrentVideoFrame(result, live = true)
+            }
             "getMediaCacheStatus" -> {
                 handleMediaCacheOperation(result, ::readMediaCacheStatus)
             }
@@ -534,6 +543,7 @@ class NativePlaybackController(
         releasePlaybackResources()
         releaseMediaCache()
         playbackRequestExecutor.shutdownNow()
+        frameCaptureExecutor.shutdown()
         overlayDataRequestExecutor.shutdownNow()
         channel.setMethodCallHandler(null)
     }
@@ -703,6 +713,18 @@ class NativePlaybackController(
         nativePlayer.setWakeMode(C.WAKE_MODE_LOCAL)
         nativePlayer.playbackParameters = PlaybackParameters(playbackSpeed)
         nativePlayer.addListener(object : Player.Listener {
+            override fun onPositionDiscontinuity(
+                oldPosition: Player.PositionInfo,
+                newPosition: Player.PositionInfo,
+                reason: Int,
+            ) {
+                invalidateLiveFrameTimeline()
+            }
+
+            override fun onRenderedFirstFrame() {
+                hasRenderedVideoFrame = true
+            }
+
             /** Intent changes also matter while buffering/ended, when isPlaying stays false. */
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                 emitPlaybackState()
@@ -1004,75 +1026,136 @@ class NativePlaybackController(
         val entry = renderer.createSurfaceTexture()
         entry.surfaceTexture().setDefaultBufferSize(DEFAULT_TEXTURE_WIDTH, DEFAULT_TEXTURE_HEIGHT)
         textureEntry = entry
+        hasRenderedVideoFrame = false
+        invalidateLiveFrameTimeline()
         videoSurface = Surface(entry.surfaceTexture())
         player?.setVideoSurface(videoSurface)
         return entry.id()
     }
 
-    /** 使用 PixelCopy 把当前视频 Surface 保存为应用私有 JPEG，供时间点笔记插入画面。 */
-    private fun captureCurrentVideoFrame(result: MethodChannel.Result) {
+    private fun invalidateLiveFrameTimeline() {
+        liveFrameTimelineRevision++
+        lastFrameDiscontinuityMs = SystemClock.elapsedRealtime()
+    }
+
+    /** Copy only the existing Surface. Live reads never issue playback commands. */
+    private fun captureCurrentVideoFrame(result: MethodChannel.Result, live: Boolean = false) {
+        fun unavailable(code: String, message: String, details: Any? = null) {
+            if (live) result.success(null) else result.error(code, message, details)
+        }
+
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
-            result.error("frame_capture_unsupported", "当前 Android 版本不支持截取视频画面。", null)
+            unavailable("frame_capture_unsupported", "当前 Android 版本不支持截取视频画面。")
             return
         }
         val surface = videoSurface
-        val videoSize = player?.videoSize
-        if (surface == null || !surface.isValid || videoSize == null ||
+        val nativePlayer = player
+        val videoSize = nativePlayer?.videoSize
+        if (surface == null || !surface.isValid || nativePlayer == null || videoSize == null ||
             videoSize.width <= 0 || videoSize.height <= 0
         ) {
-            result.error("frame_capture_unavailable", "视频画面还没有准备好，请稍后再试。", null)
+            unavailable("frame_capture_unavailable", "视频画面还没有准备好，请稍后再试。")
             return
         }
-        val maximumWidth = 1280
-        val scale = minOf(1.0, maximumWidth.toDouble() / videoSize.width.toDouble())
+        val item = nativePlayer.currentMediaItem
+        val bvid = currentBvid
+        val cid = currentCid
+        val timeline = liveFrameTimelineRevision
+        val request = playbackRequestToken
+        // Metadata and PixelCopy both respect the native protection boundary.
+        // Do not fall back to a downloaded thumbnail or decoded source.
+        fun isCurrentLiveSurface(): Boolean =
+            player === nativePlayer && videoSurface === surface && surface.isValid &&
+                currentBvid == bvid && currentCid == cid && bvid.isNotEmpty() && cid > 0 &&
+                liveFrameTimelineRevision == timeline && playbackRequestToken == request &&
+                !audioOnly && hasRenderedVideoFrame && item != null &&
+                item == nativePlayer.currentMediaItem &&
+                item.localConfiguration?.drmConfiguration == null &&
+                nativePlayer.videoFormat?.drmInitData == null &&
+                nativePlayer.playbackState == Player.STATE_READY &&
+                SystemClock.elapsedRealtime() - lastFrameDiscontinuityMs >= LiveFramePositionPolicy.SEEK_SETTLE_MS
+        if (live && !isCurrentLiveSurface()) {
+            result.success(null)
+            return
+        }
+        val referenceEdge = if (live) maxOf(videoSize.width, videoSize.height) else videoSize.width
+        val scale = minOf(1.0, 1280.0 / referenceEdge)
         val width = maxOf(2, (videoSize.width * scale).toInt())
         val height = maxOf(2, (videoSize.height * scale).toInt())
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        PixelCopy.request(
-            surface,
-            bitmap,
-            { copyResult ->
-                if (copyResult != PixelCopy.SUCCESS) {
-                    bitmap.recycle()
-                    result.error(
-                        "frame_capture_failed",
-                        "无法读取当前视频画面，请继续播放后再试。",
-                        copyResult,
-                    )
-                    return@request
-                }
-                playbackRequestExecutor.execute {
-                    try {
-                        val directory = File(activity.filesDir, "video_note_frames")
-                        if (!directory.exists() && !directory.mkdirs()) {
-                            throw IllegalStateException("无法创建笔记画面目录。")
-                        }
-                        val safeBvid = currentBvid.replace(Regex("[^0-9A-Za-z]"), "_")
-                        val output = File(
-                            directory,
-                            "${safeBvid}_${System.currentTimeMillis()}.jpg",
+        val before = nativePlayer.currentPosition
+        val requestedAt = SystemClock.elapsedRealtime()
+        try {
+            PixelCopy.request(
+                surface,
+                bitmap,
+                { copyResult ->
+                    if (copyResult != PixelCopy.SUCCESS) {
+                        bitmap.recycle()
+                        unavailable("frame_capture_failed", "无法读取当前视频画面，请继续播放后再试。", copyResult)
+                        return@request
+                    }
+                    val position = if (live && isCurrentLiveSurface()) {
+                        LiveFramePositionPolicy.estimate(
+                            before, nativePlayer.currentPosition, SystemClock.elapsedRealtime() - requestedAt,
                         )
-                        FileOutputStream(output).use { stream ->
-                            if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 90, stream)) {
-                                throw IllegalStateException("无法压缩当前视频画面。")
+                    } else null
+                    if (live && position == null) {
+                        bitmap.recycle()
+                        result.success(null)
+                        return@request
+                    }
+                    try {
+                        frameCaptureExecutor.execute {
+                            var output: File? = null
+                            try {
+                                val directory = File(activity.filesDir, "video_note_frames")
+                                if (!directory.isDirectory && !directory.mkdirs()) {
+                                    throw IllegalStateException("无法创建笔记画面目录。")
+                                }
+                                val safeBvid = bvid.replace(Regex("[^0-9A-Za-z]"), "_")
+                                val frameFile = File(directory, "${safeBvid}_${UUID.randomUUID()}.jpg")
+                                output = frameFile
+                                FileOutputStream(frameFile).use { stream ->
+                                    if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 90, stream)) {
+                                        throw IllegalStateException("无法压缩当前视频画面。")
+                                    }
+                                }
+                                mainHandler.post {
+                                    if (live && !isCurrentLiveSurface()) {
+                                        runCatching { frameFile.delete() }
+                                        result.success(null)
+                                    } else if (live) {
+                                        result.success(mapOf(
+                                            "path" to frameFile.absolutePath,
+                                            "bvid" to bvid,
+                                            "cid" to cid,
+                                            "positionMs" to position,
+                                        ))
+                                    } else {
+                                        result.success(frameFile.absolutePath)
+                                    }
+                                }
+                            } catch (error: Exception) {
+                                runCatching { output?.delete() }
+                                mainHandler.post {
+                                    unavailable("frame_capture_failed", error.message ?: "保存当前视频画面失败。")
+                                }
+                            } finally {
+                                bitmap.recycle()
                             }
                         }
+                    } catch (_: RejectedExecutionException) {
                         bitmap.recycle()
-                        mainHandler.post { result.success(output.absolutePath) }
-                    } catch (error: Throwable) {
-                        bitmap.recycle()
-                        mainHandler.post {
-                            result.error(
-                                "frame_capture_failed",
-                                error.message ?: "保存当前视频画面失败。",
-                                null,
-                            )
-                        }
+                        unavailable("frame_capture_unavailable", "播放器已关闭。")
                     }
-                }
-            },
-            mainHandler,
-        )
+                },
+                mainHandler,
+            )
+        } catch (_: IllegalArgumentException) {
+            bitmap.recycle()
+            unavailable("frame_capture_unavailable", "当前视频表面无法截取。")
+        }
     }
 
     /** 保存旧分P、重置播放器，并优先按 Flutter 兜底位置请求新分P的 DASH 地址。 */
@@ -1207,6 +1290,8 @@ class NativePlaybackController(
             sourceFactory.createMediaSource(MediaItem.fromUri(Uri.fromFile(audioFile))),
         )
         // 音视频采用同一时间轴和初始位置，避免分离音轨丢失或续播后不同步。
+        hasRenderedVideoFrame = false
+        invalidateLiveFrameTimeline()
         nativePlayer.setMediaSource(
             mediaSource,
             pendingStartPositionMs,
@@ -2783,6 +2868,8 @@ class NativePlaybackController(
         }
         playbackPhase = PHASE_LOADING
         playbackMessage = "正在准备原生播放器…"
+        hasRenderedVideoFrame = false
+        invalidateLiveFrameTimeline()
         nativePlayer.setMediaSource(finalSource)
         if (pendingStartPositionMs > 0L) {
             nativePlayer.seekTo(pendingStartPositionMs)
