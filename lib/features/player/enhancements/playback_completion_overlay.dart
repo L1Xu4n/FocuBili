@@ -38,7 +38,7 @@ class PlaybackCompletionOverlay extends StatelessWidget {
   /// 根据当前完成状态生成下一步说明，明确最后一项的继续学习结果。
   String _description() {
     if (learningFinished) {
-      return '学习清单内的全部视频都已完成。';
+      return '当前学习范围没有后续未完成的任务。';
     }
     if (markedCompleted) {
       return '可以继续学习，应用会按学习清单中的顺序打开下一项。';

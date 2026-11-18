@@ -282,6 +282,7 @@ class LearningListService {
     ]);
     if (!result.persisted) throw const LearningListStorageException();
     if (result.capacityExceeded) throw const LearningListCapacityException();
+    if (result.failedItems.isNotEmpty) throw ArgumentError('分 P 已失效');
     return result.entries;
   }
 
@@ -290,7 +291,8 @@ class LearningListService {
     List<VideoPart> parts,
   ) => addBatch([for (final part in parts) LearningPartSelection(video, part)]);
 
-  /// Atomic capacity check; duplicates never replace progress, status or order.
+  /// Validate the selection and capacity before writing any new task.
+  /// Duplicates never replace progress, status or order.
   Future<LearningBatchResult> addBatch(
     List<LearningPartSelection> selections, {
     String? folderId,
@@ -347,12 +349,13 @@ class LearningListService {
         order++;
       }
     }
-    if (entries.length + pending.length > maximumEntries) {
+    // A rejected confirmation must not save a subset behind the form.
+    if (failed.isNotEmpty || entries.length + pending.length > maximumEntries) {
       return LearningBatchResult(
         entries: entries,
         existingIds: duplicates,
         failedItems: failed,
-        capacityExceeded: true,
+        capacityExceeded: entries.length + pending.length > maximumEntries,
         persisted: true,
       );
     }

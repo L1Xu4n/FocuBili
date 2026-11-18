@@ -29,6 +29,10 @@ VideoPreview partsVideo() => VideoPreview(
 );
 
 class CollectionContent implements BilibiliPublicContentService {
+  const CollectionContent({this.paged = false});
+
+  final bool paged;
+
   @override
   Future<CreatorContentPage<CreatorVideo>> loadCollectionVideos(
     int ownerMid,
@@ -36,7 +40,7 @@ class CollectionContent implements BilibiliPublicContentService {
     int page = 1,
   }) async => CreatorContentPage(
     items: [
-      for (var i = 1; i <= 2; i++)
+      for (final i in paged ? [page] : [1, 2])
         CreatorVideo(
           bvid: 'BV$i',
           title: '课程$i',
@@ -45,7 +49,7 @@ class CollectionContent implements BilibiliPublicContentService {
         ),
     ],
     page: page,
-    hasMore: false,
+    hasMore: paged && page == 1,
     totalCount: 2,
   );
   @override
@@ -55,13 +59,21 @@ class CollectionContent implements BilibiliPublicContentService {
 class CollectionDetails implements BilibiliService {
   final hold = Completer<VideoPreview>();
   final calls = <String>[];
-  bool failSecond = false, blocked = true;
+  bool failSecond = false, blocked = true, distinct = false;
   @override
   Future<VideoPreview> lookupVideo(String input) async {
     calls.add(input);
     if (blocked) return hold.future;
     if (failSecond && input == 'BV2') throw StateError('network');
-    return partsVideo();
+    final lesson = partsVideo();
+    if (!distinct) return lesson;
+    return VideoPreview(
+      bvid: input,
+      cid: lesson.cid,
+      title: '完整课程 $input',
+      ownerName: lesson.ownerName,
+      parts: lesson.parts,
+    );
   }
 
   @override
@@ -157,8 +169,9 @@ void main() {
   Future<void> openCollection(
     WidgetTester tester,
     LearningListService learning,
-    CollectionDetails details,
-  ) async {
+    CollectionDetails details, {
+    bool paged = false,
+  }) async {
     await tester.pumpWidget(
       MaterialApp(
         home: Builder(
@@ -168,7 +181,7 @@ void main() {
                 context,
                 ownerMid: 1,
                 collectionId: 1,
-                contentService: CollectionContent(),
+                contentService: CollectionContent(paged: paged),
                 videoService: details,
                 service: learning,
               ),
@@ -180,12 +193,43 @@ void main() {
     );
     await tester.tap(find.text('批量'));
     await tester.pumpAndSettle();
+    if (paged) {
+      expect(find.text('课程1'), findsOneWidget);
+      expect(find.text('课程2'), findsNothing);
+      await tester.tap(find.text('加载下一页'));
+      await tester.pumpAndSettle();
+      expect(find.text('课程2'), findsOneWidget);
+    }
     await tester.tap(find.text('选择已加载视频'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('下一步（2 支）'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
   }
+
+  testWidgets('all parts of a complete two-page collection commit together', (
+    tester,
+  ) async {
+    final learning = await service();
+    final details = CollectionDetails()
+      ..blocked = false
+      ..distinct = true;
+    await openCollection(tester, learning, details, paged: true);
+    await tester.pumpAndSettle();
+    expect(details.calls, ['BV1', 'BV2']);
+    expect(await learning.loadEntries(), isEmpty);
+    await tester.tap(find.text('全部 P'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('新增 10 · 已存在 0'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, '确认加入'));
+    await tester.pumpAndSettle();
+    final entries = await learning.loadEntries();
+    expect(entries.map((entry) => entry.stableId), [
+      for (final bvid in ['BV1', 'BV2'])
+        for (var cid = 101; cid <= 105; cid++) '$bvid:$cid',
+    ]);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'cancel collection detail loading discards result and stops next lookup',
@@ -194,12 +238,19 @@ void main() {
       await openCollection(tester, learning, details);
       expect(find.text('读取所选视频分 P'), findsOneWidget);
       await tester.tap(find.text('取消'));
-      await tester.pumpAndSettle();
+      // Complete before the reverse animation has disposed the dialog.
       details.hold.complete(partsVideo());
       await tester.pumpAndSettle();
       expect(details.calls, ['BV1']);
       expect(await learning.loadEntries(), isEmpty);
-      expect(find.text('选择加入的分 P'), findsNothing);
+      expect(find.text('加入学习清单'), findsNothing);
+      final retry = CollectionDetails()..blocked = false;
+      await openCollection(tester, learning, retry);
+      await tester.pumpAndSettle();
+      expect(find.text('加入学习清单'), findsOneWidget);
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      expect(await learning.loadEntries(), isEmpty);
     },
   );
   testWidgets(

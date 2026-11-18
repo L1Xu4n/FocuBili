@@ -6,6 +6,7 @@ import '../../core/layout/adaptive_layout.dart';
 import '../../core/layout/adaptive_page_frame.dart';
 import '../../models/focus_session.dart';
 import '../../models/focus_statistics.dart';
+import 'focus_storage_notice.dart';
 import 'focus_timer_controller.dart';
 import 'focus_timer_scope.dart';
 import 'focus_share_preview.dart';
@@ -651,57 +652,61 @@ class _FocusStatisticsPageState extends State<FocusStatisticsPage> {
   @override
   Widget build(BuildContext context) {
     final FocusTimerController controller = _controller(context);
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('专注数据'),
-        actions: <Widget>[
-          IconButton(
-            key: const Key('share-focus-statistics'),
-            // 统计分享按钮函数按当前范围生成高清分享图预览。
-            onPressed: () => _shareStatistics(controller),
-            icon: const Icon(Icons.ios_share_rounded),
-            tooltip: '分享专注统计',
-          ),
-          IconButton(
-            key: const Key('clear-focus-history'),
-            // 清空按钮函数弹出统一管理确认框，活动计时始终保留。
-            onPressed: controller.history.isEmpty
-                ? null
-                : () => unawaited(_confirmClearHistory(controller)),
-            icon: const Icon(Icons.delete_sweep_outlined),
-            tooltip: '清空专注历史',
-          ),
-        ],
-      ),
-      body: AdaptivePageFrame(
-        maxWidth: 1180,
-        child: ListenableBuilder(
-          listenable: controller,
-          builder: (BuildContext context, Widget? child) {
-            final DateTime now = DateTime.now();
-            final FocusStatisticsSnapshot snapshot =
-                FocusStatisticsCalculator.build(
-                  history: controller.history,
-                  range: _range,
-                  now: now,
-                  activeSession: controller.activeSession,
-                );
-            final List<FocusSession> visibleHistory = _visibleHistory(
-              controller.history,
-              now,
-            );
-            return _buildResponsiveContent(
-              controller,
-              snapshot,
-              visibleHistory,
-            );
-          },
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) => Scaffold(
+        appBar: AppBar(
+          title: const Text('专注数据'),
+          actions: <Widget>[
+            IconButton(
+              key: const Key('share-focus-statistics'),
+              // 统计分享按钮函数按当前范围生成高清分享图预览。
+              onPressed: controller.isReady
+                  ? () => _shareStatistics(controller)
+                  : null,
+              icon: const Icon(Icons.ios_share_rounded),
+              tooltip: '分享专注统计',
+            ),
+            IconButton(
+              key: const Key('clear-focus-history'),
+              // 清空按钮函数弹出统一管理确认框，活动计时始终保留。
+              onPressed: controller.history.isEmpty
+                  ? null
+                  : () => unawaited(_confirmClearHistory(controller)),
+              icon: const Icon(Icons.delete_sweep_outlined),
+              tooltip: '清空专注历史',
+            ),
+          ],
+        ),
+        body: AdaptivePageFrame(
+          maxWidth: 1180,
+          child: controller.loadFailed
+              ? SingleChildScrollView(
+                  child: FocusStorageNotice(onRetry: controller.initialize),
+                )
+              : controller.isReady
+              ? _buildStatisticsBody(controller)
+              : const Center(child: CircularProgressIndicator()),
         ),
       ),
     );
   }
 
-  /// 释放搜索输入控制器，离开统计页后不再保留文字监听。
+  Widget _buildStatisticsBody(FocusTimerController controller) {
+    final DateTime now = DateTime.now();
+    final FocusStatisticsSnapshot snapshot = FocusStatisticsCalculator.build(
+      history: controller.history,
+      range: _range,
+      now: now,
+      activeSession: controller.activeSession,
+    );
+    final List<FocusSession> visibleHistory = _visibleHistory(
+      controller.history,
+      now,
+    );
+    return _buildResponsiveContent(controller, snapshot, visibleHistory);
+  }
+
   @override
   void dispose() {
     _searchController

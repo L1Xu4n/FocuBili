@@ -6,6 +6,7 @@ import '../../models/focus_session.dart';
 import 'custom_focus_duration_dialog.dart';
 import 'focus_do_not_disturb.dart';
 import 'focus_interruption_dialog.dart';
+import 'focus_storage_notice.dart';
 import 'focus_timer_controller.dart';
 
 /// 定义从播放器开始专注时可选择的计划方式。
@@ -190,6 +191,9 @@ class _PlayerFocusSheetState extends State<PlayerFocusSheet> {
 
   /// 创建没有活动专注时的目标和时长选择表单。
   Widget _buildReadyContent() {
+    if (widget.controller.loadFailed) {
+      return FocusStorageNotice(onRetry: widget.controller.initialize);
+    }
     final bool canStart =
         widget.controller.isReady && _goalController.text.trim().isNotEmpty;
     return Column(
@@ -279,11 +283,14 @@ class _PlayerFocusSheetState extends State<PlayerFocusSheet> {
         const SizedBox(height: 8),
         Text(paused ? '会话已暂停，请主动继续。' : '会话连续计时，换视频或换 P 无需重新开始。'),
         const SizedBox(height: 12),
-        Text(
-          _formatCountdown(widget.controller.remainingDuration),
-          key: const Key('player-focus-countdown'),
-          textAlign: TextAlign.center,
-          style: const TextStyle(fontSize: 38, fontWeight: FontWeight.w800),
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(
+            _formatCountdown(widget.controller.remainingDuration),
+            key: const Key('player-focus-countdown'),
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 38, fontWeight: FontWeight.w800),
+          ),
         ),
         const SizedBox(height: 8),
         LinearProgressIndicator(
@@ -367,7 +374,8 @@ class _PlayerFocusSheetState extends State<PlayerFocusSheet> {
                   children: <Widget>[
                     const Expanded(
                       child: Text(
-                        '播放器专注',
+                        '专注',
+                        semanticsLabel: '播放器专注',
                         style: TextStyle(
                           fontSize: 22,
                           fontWeight: FontWeight.w800,
@@ -382,18 +390,27 @@ class _PlayerFocusSheetState extends State<PlayerFocusSheet> {
                     ),
                   ],
                 ),
-                Text(
-                  '${widget.videoTitle} · P${widget.partPageNumber} ${widget.partTitle}',
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall,
+                Expanded(
+                  child: SingleChildScrollView(
+                    primary: false,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          '${widget.videoTitle} · P${widget.partPageNumber} ${widget.partTitle}',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        const SizedBox(height: 18),
+                        if (active == null)
+                          _buildReadyContent()
+                        else
+                          _buildActiveContent(active),
+                      ],
+                    ),
+                  ),
                 ),
-                const SizedBox(height: 18),
-                if (active == null)
-                  _buildReadyContent()
-                else
-                  _buildActiveContent(active),
-                const Spacer(),
               ],
             );
           },

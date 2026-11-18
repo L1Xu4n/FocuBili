@@ -439,7 +439,13 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
           padding: _homeCardPadding(constraints.crossAxisExtent),
           sliver: SliverList.list(
             children: <Widget>[
-              if (!widget.controller.isReady)
+              if (widget.controller.loadFailed)
+                Card(
+                  child: FocusStorageNotice(
+                    onRetry: widget.controller.initialize,
+                  ),
+                )
+              else if (!widget.controller.isReady)
                 const Card(
                   child: Padding(
                     padding: EdgeInsets.all(32),

@@ -31,9 +31,15 @@ extension _FocusDashboardHomeCards on _FocusDashboardState {
         id: 'home.focus_session',
         title: '专注任务',
         icon: Icons.timer_outlined,
-        available: ready,
+        available: ready || widget.controller.loadFailed,
         // 同一编号在准备和计时状态之间切换，不因状态变化重置布局。
-        builder: (context) => activeSession == null
+        builder: (context) => widget.controller.loadFailed
+            ? Card(
+                child: FocusStorageNotice(
+                  onRetry: widget.controller.initialize,
+                ),
+              )
+            : activeSession == null
             ? _buildReadyCard(context)
             : _buildActiveCard(context, activeSession),
       ),

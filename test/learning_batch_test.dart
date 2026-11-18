@@ -40,6 +40,32 @@ class RejectingPreferences implements SharedPreferences {
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
   test(
+    'invalid part rejects the entire pending batch before writing',
+    () async {
+      final service = LearningListService();
+      final existing = video(1);
+      final pending = video(2);
+      await service.addVideo(existing, position: const Duration(seconds: 26));
+      final before = await service.loadEntries();
+      const stalePart = VideoPart(
+        pageNumber: 3,
+        cid: 999,
+        title: '旧 P',
+        duration: Duration(minutes: 3),
+      );
+      final result = await service.addBatch([
+        LearningPartSelection(existing, existing.initialPart),
+        LearningPartSelection(pending, pending.initialPart),
+        LearningPartSelection(pending, stalePart),
+      ]);
+      expect(result.failedItems, ['BV2:999']);
+      expect(result.existingIds, ['BV1:1']);
+      expect(result.addedIds, isEmpty);
+      expect(await service.loadEntries(), before);
+    },
+  );
+
+  test(
     '98 + 5 is atomic: no clipping, then duplicate keeps progress',
     () async {
       final prefs = await SharedPreferences.getInstance();
