@@ -278,7 +278,10 @@ Widget _host(Widget child) {
 /// 验证用户主页和订阅合集页面的核心导航与信息架构。
 void main() {
   /// 用户主页的账号读取使用空内存容器，不访问 Windows 系统凭据。
-  setUp(() => FlutterSecureStorage.setMockInitialValues(<String, String>{}));
+  setUp(() {
+    FlutterSecureStorage.setMockInitialValues(<String, String>{});
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+  });
 
   /// 验证用户主页只有投稿、专栏和合集标签，不出现消息入口。
   testWidgets('用户主页显示投稿专栏合集且不显示消息', (WidgetTester tester) async {
@@ -301,10 +304,14 @@ void main() {
     final Finder profileSign = find.byKey(const Key('creator-profile-sign'));
     expect(tester.widget<Text>(profileSign).maxLines, 2);
     expect(find.text('展开简介'), findsOneWidget);
-    final SliverAppBar compactAppBar = tester.widget<SliverAppBar>(
+    final AppBar compactAppBar = tester.widget<AppBar>(
       find.byKey(const Key('creator-profile-app-bar')),
     );
-    expect(compactAppBar.expandedHeight, lessThan(380));
+    expect(compactAppBar.title, isNull);
+    expect(
+      tester.getSize(find.byKey(const Key('creator-profile-header'))).height,
+      lessThan(380),
+    );
     await tester.tap(find.byKey(const Key('toggle-creator-profile-sign')));
     await tester.pumpAndSettle();
     expect(tester.widget<Text>(profileSign).maxLines, isNull);
@@ -424,7 +431,14 @@ void main() {
 
     await tester.tap(find.byKey(const Key('add-creator-video-BV1GJ411x7h7')));
     await tester.pumpAndSettle();
-    expect(find.textContaining('已存在 1'), findsOneWidget);
+    expect(find.text('剩余容量 99'), findsOneWidget);
+    expect(find.textContaining('已存在'), findsNothing);
+    final part = VideoPreview.placeholder().initialPart;
+    final checkbox = find.descendant(
+      of: find.widgetWithText(ListTile, 'P${part.pageNumber} ${part.title}'),
+      matching: find.byType(Checkbox),
+    );
+    expect(tester.widget<Checkbox>(checkbox).value, isTrue);
     await tester.tap(find.widgetWithText(FilledButton, '确认加入'));
     await tester.pumpAndSettle();
 
@@ -635,7 +649,7 @@ void main() {
     expect(firstVideo.top, secondVideo.top);
     expect(secondVideo.left, greaterThan(firstVideo.right));
   });
-  testWidgets('UP 主页可直接确认焦点订阅且不修改关注', (tester) async {
+  testWidgets('UP 主页直接配置通知并订阅且不修改关注', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final subscriptions = SubscriptionService();
     addTearDown(subscriptions.dispose);
@@ -652,10 +666,11 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('加入焦点订阅'));
+    await tester.tap(find.byTooltip('添加订阅源'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('确认来源：测试UP主'), findsOneWidget);
-    await tester.tap(find.text('确认订阅'));
+    expect(find.text('添加通知设置'), findsOneWidget);
+    expect(find.text('确认订阅'), findsNothing);
+    await tester.tap(find.text('保存'));
     await tester.pumpAndSettle();
     expect(subscriptions.sources.single.key, 'creator:7');
     expect(interaction.writeRequests, 0);
@@ -665,7 +680,7 @@ void main() {
     await tester.tap(find.text('取消订阅'));
     await tester.pumpAndSettle();
     expect(subscriptions.sources, isEmpty);
-    expect(find.byTooltip('加入焦点订阅'), findsOneWidget);
+    expect(find.byTooltip('添加订阅源'), findsOneWidget);
     expect(interaction.writeRequests, 0);
   });
 

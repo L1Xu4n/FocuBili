@@ -23,6 +23,7 @@ import '../../services/learning_list_service.dart';
 import '../../services/multi_category_video_search.dart';
 import '../../services/problem_diagnostics_service.dart';
 import '../../services/search_history_service.dart';
+import '../../services/cache_lifecycle.dart';
 import '../profile/user_profile_page.dart';
 import '../profile/content_blocklist_page.dart';
 import 'content_block_actions.dart';
@@ -123,6 +124,7 @@ class _SearchPageState extends State<SearchPage> {
   SearchContentFilter _contentFilter = const SearchContentFilter();
   ContentBlocklist _blocklist = const ContentBlocklist();
   final Map<String, int> _knownSearchOwnerMids = {};
+  final Map<String, List<String>> _knownSearchTags = {};
   late final Future<void> _contentFilterReady;
   Timer? _suggestionDebounce;
   VideoPreview? _directResult;
@@ -164,6 +166,7 @@ class _SearchPageState extends State<SearchPage> {
         (_service is BilibiliUserSearchService
             ? _service as BilibiliUserSearchService
             : BilibiliVideoInfoService());
+    CacheLifecycle.account.addListener(_accountChanged);
     _resultScrollController.addListener(_handleResultScroll);
     _searchFocusNode.addListener(_handleSearchFocusChange);
     _loadSearchHistory();
@@ -175,6 +178,7 @@ class _SearchPageState extends State<SearchPage> {
   /// 释放输入、焦点、滚动和候选词计时器，避免页面销毁后继续请求。
   @override
   void dispose() {
+    CacheLifecycle.account.removeListener(_accountChanged);
     ContentBlocklistService.changes.removeListener(_reloadBlocklist);
     _requestGeneration++;
     _categorySearch?.close();
@@ -253,13 +257,17 @@ class _SearchPageState extends State<SearchPage> {
       )
       .toList(growable: false);
 
-  bool _blocklistIncludes(VideoSearchResult result) => !_blocklist.blocks(
-    bvid: result.bvid,
-    ownerMid: _knownSearchOwnerMids[result.bvid] ?? result.ownerMid,
+  bool _blocklistIncludes(VideoSearchResult result) => _blocklist.includes(
+    result,
+    knownOwnerMid: _knownSearchOwnerMids[result.bvid],
+    knownTags: _knownSearchTags[result.bvid] ?? const [],
   );
 
   List<UserSearchResult> get _visibleUserResults => _userResults
-      .where((result) => !_blocklist.creators.containsKey(result.mid))
+      .where(
+        (result) =>
+            !_blocklist.blocksCreator(uid: result.mid, nickname: result.name),
+      )
       .toList(growable: false);
 
   Future<void> _reloadBlocklist() async {
@@ -279,14 +287,21 @@ class _SearchPageState extends State<SearchPage> {
 
   Future<void> _blockSearchCreator(VideoSearchResult result) async {
     if (_addingBvid != null) return;
+    final generation = _requestGeneration;
     setState(() => _addingBvid = result.bvid);
     try {
       // Missing search metadata is resolved before storing a stable ID.
-      final video = result.ownerMid > 0
+      final knownMid = _knownSearchOwnerMids[result.bvid];
+      // Disagreeing list records must not turn an explicit block action into
+      // a write against an arbitrary creator. Resolve only on this user action.
+      final resolved =
+          knownMid ??
+          (result.additionalReportedOwnerMids.isEmpty ? result.ownerMid : 0);
+      final video = resolved > 0
           ? null
           : await _service.lookupVideo(result.bvid);
-      final mid = video?.ownerMid ?? result.ownerMid;
-      if (!mounted) return;
+      final mid = video?.ownerMid ?? resolved;
+      if (!mounted || generation != _requestGeneration) return;
       if (mid <= 0) {
         _showTransientMessage('暂时无法确定 UP 主 UID，请稍后重试。');
         return;
@@ -384,6 +399,7 @@ class _SearchPageState extends State<SearchPage> {
         : null;
     bool current() =>
         mounted && generation == _requestGeneration && mode == _searchMode;
+    _knownSearchTags.clear();
     _searchFocusNode.unfocus();
     _suggestionDebounce?.cancel();
     _categorySearch?.close();
@@ -404,7 +420,7 @@ class _SearchPageState extends State<SearchPage> {
           : _searchHistory;
       if (!current()) return;
       final VideoPreview? directResult = opensDirectly
-          ? await _service.lookupVideo(input)
+          ? await _lookupExplicitSearchVideo(input, generation: generation)
           : null;
       final VideoSearchPage? searchPage =
           opensDirectly || mode == _SearchMode.users || categories != null
@@ -692,6 +708,24 @@ class _SearchPageState extends State<SearchPage> {
     );
   }
 
+  void _accountChanged() {
+    // An unsubmitted draft stays in the field; it is never sent for the new
+    // account by changing tabs, and a late result cannot repopulate the view.
+    if (!mounted) return;
+    _requestGeneration++;
+    _suggestionDebounce?.cancel();
+    _categorySearch?.close();
+    _knownSearchTags.clear();
+    _knownSearchOwnerMids.clear();
+    _knownSearchInitialPartCids.clear();
+    _episodeCountLookupQueue.clear();
+    _episodeCountLookupAttemptedBvids.clear();
+    _fallbackEpisodeCountTexts.clear();
+    setState(
+      () => _resetSearchResults(query: '', loading: false, submitted: false),
+    );
+  }
+
   void _changeSearchMode(Set<_SearchMode> values) {
     if (values.isEmpty || values.first == _searchMode) return;
     final input = _activeQuery;
@@ -732,26 +766,92 @@ class _SearchPageState extends State<SearchPage> {
     Navigator.of(context).pushNamed(AppRoutes.player, arguments: video);
   }
 
+  /// Lookup tags only when the user explicitly requests this video, if it
+  /// needs checking and none are already available in the list or detail.
+  Future<VideoPreview> _lookupExplicitSearchVideo(
+    String input, {
+    required int generation,
+    bool hasKnownTags = false,
+    VideoPreview? existing,
+  }) async {
+    final service = _service;
+    final video = existing ?? await service.lookupVideo(input);
+    if (!mounted ||
+        generation != _requestGeneration ||
+        !_blocklist.hasTagRules ||
+        hasKnownTags ||
+        _knownSearchTags.containsKey(video.bvid) ||
+        video.tags.isNotEmpty ||
+        video.isCourse ||
+        video.fromOfflineCache ||
+        !_blocklist.includesPreview(video) ||
+        service is! BilibiliVideoTagSource) {
+      return video;
+    }
+    try {
+      final tags = await (service as BilibiliVideoTagSource).loadVideoTags(
+        video.bvid,
+      );
+      if (mounted && generation == _requestGeneration) {
+        _knownSearchTags[video.bvid] = tags;
+      }
+      return tags.isEmpty ? video : video.withTags(tags);
+    } catch (_) {
+      // Missing tag metadata does not block a video by itself.
+      return video;
+    }
+  }
+
   /// 点击关键词结果后查询完整分P信息，再把可播放视频交给播放器页面。
-  Future<void> _openSearchResult(VideoSearchResult result) async {
+  Future<void> _openSearchResult(
+    VideoSearchResult result, {
+    VideoPreview? direct,
+  }) async {
     if (_openingBvid != null || _addingBvid != null) {
       return;
     }
+    final generation = _requestGeneration;
     setState(() => _openingBvid = result.bvid);
+    bool isCurrent() {
+      if (!mounted) return false;
+      if (generation == _requestGeneration) return true;
+      if (_openingBvid == result.bvid) setState(() => _openingBvid = null);
+      return false;
+    }
+
     try {
-      final VideoPreview video = await _service.lookupVideo(result.bvid);
-      if (!mounted) {
-        return;
-      }
+      final VideoPreview video = await _lookupExplicitSearchVideo(
+        result.bvid,
+        generation: generation,
+        existing: direct,
+        hasKnownTags:
+            result.tags.isNotEmpty ||
+            (_knownSearchTags[result.bvid]?.isNotEmpty ?? false),
+      );
+      if (!isCurrent()) return;
       setState(() {
         _openingBvid = null;
+        if (direct != null && _directResult?.bvid == direct.bvid) {
+          _directResult = video;
+        }
         _knownSearchInitialPartCids[result.bvid] = video.initialPart.cid;
+        // Only consume tags from this already requested detail; a tagless
+        // search row never starts a new lookup just to check the blacklist.
+        if (video.tags.isNotEmpty) _knownSearchTags[result.bvid] = video.tags;
+        if (video.ownerMid > 0) {
+          _knownSearchOwnerMids[result.bvid] = video.ownerMid;
+        }
       });
+      if (!_blocklist.includesPreview(video) || !_blocklistIncludes(result)) {
+        _showTransientMessage('这条视频命中黑名单规则，未打开。');
+        _scheduleFilteredPage();
+        return;
+      }
       _openVideo(video);
     } on BilibiliLookupException catch (error) {
-      _showSearchResultError(error.message);
+      if (isCurrent()) _showSearchResultError(error.message);
     } catch (_) {
-      _showSearchResultError('无法打开这条搜索结果，请检查网络后重试。');
+      if (isCurrent()) _showSearchResultError('无法打开这条搜索结果，请检查网络后重试。');
     }
   }
 
@@ -1039,10 +1139,14 @@ class _SearchPageState extends State<SearchPage> {
   /// 请求失败会被静默保留在“已尝试”集合中：卡片仍能点击播放，且不会因
   /// 每次滚动重新发起同一条失败请求。
   Future<void> _resolveEpisodeCountFallback(VideoSearchResult result) async {
+    final generation = _requestGeneration;
     try {
       final VideoPreview video = await _service.lookupVideo(result.bvid);
       final int partCount = video.parts.length;
-      if (mounted && partCount > 1 && _isSearchResultDisplayed(result.bvid)) {
+      if (mounted &&
+          generation == _requestGeneration &&
+          partCount > 1 &&
+          _isSearchResultDisplayed(result.bvid)) {
         setState(() {
           _fallbackEpisodeCountTexts[result.bvid] = '共 $partCount P';
         });
@@ -1453,9 +1557,7 @@ class _SearchPageState extends State<SearchPage> {
     int count =
         (_contentFilter.learningOnly ? 1 : 0) +
         (_contentFilter.minimumPlayCount > 0 ? 1 : 0) +
-        (_blocklist.videos.isNotEmpty || _blocklist.creators.isNotEmpty
-            ? 1
-            : 0) +
+        (_blocklist.isNotEmpty ? 1 : 0) +
         (_contentFilter.titleKeywords.isNotEmpty ? 1 : 0) +
         (_contentFilter.ownerKeywords.isNotEmpty ? 1 : 0);
     if (_filter.publishedRange != VideoPublishedRange.any) {
@@ -2004,10 +2106,7 @@ class _SearchPageState extends State<SearchPage> {
   Widget _buildLoadedResultArea() {
     final VideoPreview? directResult = _directResult;
     if (directResult != null) {
-      if (_blocklist.blocks(
-        bvid: directResult.bvid,
-        ownerMid: directResult.ownerMid,
-      )) {
+      if (!_blocklist.includesPreview(directResult)) {
         return Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -2231,9 +2330,7 @@ class _SearchPageState extends State<SearchPage> {
       // 直达结果直接打开；轻量结果先补全 cid 与分P 再进入播放器。
       onTap: opening || changingLearningState
           ? null
-          : () => isDirectResult
-                ? _openVideo(directVideo)
-                : _openSearchResult(result),
+          : () => _openSearchResult(result, direct: directVideo),
       menu: PopupMenuButton<_SearchResultMenuAction>(
         key: Key(
           '${isDirectResult ? 'more-direct' : 'more-search'}-'

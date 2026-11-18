@@ -32,6 +32,12 @@ abstract interface class BilibiliService {
   Future<List<String>> suggestKeywords(String input);
 }
 
+/// Optional tag-only lookup for a single, explicitly selected public video.
+/// Search lists must never call this once per row.
+abstract interface class BilibiliVideoTagSource {
+  Future<List<String>> loadVideoTags(String bvid);
+}
+
 /// 定义独立的用户搜索能力，避免要求所有旧视频服务测试替身同步实现新方法。
 abstract interface class BilibiliUserSearchService {
   /// 按关键词和筛选条件读取一页公开用户资料。
@@ -44,7 +50,10 @@ abstract interface class BilibiliUserSearchService {
 
 /// 详情使用当前会话与 WBI 签名；搜索、标签仍使用公开请求。
 class BilibiliVideoInfoService
-    implements BilibiliService, BilibiliUserSearchService {
+    implements
+        BilibiliService,
+        BilibiliUserSearchService,
+        BilibiliVideoTagSource {
   /// 创建服务；测试可传入自定义请求函数，正式 App 默认使用 HTTPS 请求。
   BilibiliVideoInfoService({
     JsonRequest? requestJson,
@@ -112,36 +121,31 @@ class BilibiliVideoInfoService
     final Uri endpoint = Uri.https(_apiHost, _videoInfoPath, <String, String>{
       'bvid': bvid,
     });
-    Future<VideoPreview> parse(String text) async {
-      final video = _parseVideoInfo(text, bvid);
-      try {
-        final tags = _parseVideoTags(
-          await _requestJson(
-            Uri.https(_apiHost, _videoTagsPath, {'bvid': video.bvid}),
-          ),
-        );
-        return tags.isEmpty ? video : video.withTags(tags);
-      } catch (_) {
-        return video;
-      }
-    }
-
     final client = _metadataClient;
     if (client != null) {
       return client.load(
         bvid: bvid,
         details: true,
-        parse: parse,
+        parse: (body) => _parseVideoInfo(body, bvid),
         offlineFallback: () => _cachedVideo(bvid),
       );
     }
     try {
-      return await parse(await _requestJson(endpoint));
+      return _parseVideoInfo(await _requestJson(endpoint), bvid);
     } catch (_) {
       final cached = await _cachedVideo(bvid);
       if (cached != null) return cached;
       rethrow;
     }
+  }
+
+  @override
+  Future<List<String>> loadVideoTags(String bvid) async {
+    if (!RegExp(r'^BV[0-9A-Za-z]{10}$').hasMatch(bvid)) return const [];
+    final raw = await _requestJson(
+      Uri.https(_apiHost, _videoTagsPath, {'bvid': bvid}),
+    );
+    return _parseVideoTags(raw);
   }
 
   /// 解析视频标签接口并去重，损坏、空白或过长标签不会进入详情页。
@@ -1047,7 +1051,9 @@ class BilibiliVideoInfoService
           request.headers.set(header.key, header.value);
         }
         final HttpClientResponse response = await request.close();
-        final String responseText = await response.transform(utf8.decoder).join();
+        final String responseText = await response
+            .transform(utf8.decoder)
+            .join();
         if (response.statusCode != HttpStatus.ok) {
           throw BilibiliLookupException(
             '视频详情接口暂时不可用（HTTP ${response.statusCode}）。',
@@ -1055,6 +1061,7 @@ class BilibiliVideoInfoService
         }
         return responseText;
       }
+
       final pending = send();
       if (uri.path != _videoSearchPath) return await pending;
       return await pending.timeout(const Duration(seconds: 12));

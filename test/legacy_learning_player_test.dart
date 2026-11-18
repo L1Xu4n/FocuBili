@@ -147,8 +147,11 @@ void main() {
     expect(find.text('上次观看的 P'), findsOneWidget);
     expect(
       tester
-          .widget<CheckboxListTile>(
-            find.widgetWithText(CheckboxListTile, 'P2 Two'),
+          .widget<Checkbox>(
+            find.descendant(
+              of: find.widgetWithText(ListTile, 'P2 Two'),
+              matching: find.byType(Checkbox),
+            ),
           )
           .value,
       isTrue,

@@ -72,6 +72,8 @@ class MultiCategoryVideoSearch {
   final String _keyword;
   final VideoSearchFilter _filter;
   final Map<int, _CategoryCursor> _cursors;
+  final _firstReported = <String, VideoSearchResult>{};
+  final _duplicates = <String, _KnownSearchEvidence>{};
   bool _closed = false;
   bool _loading = false;
 
@@ -127,6 +129,12 @@ class MultiCategoryVideoSearch {
       // Keep server position before deduplication, since it breaks rank ties.
       for (var index = 0; index < result.results.length; index++) {
         final row = result.results[index];
+        final first = _firstReported.putIfAbsent(row.bvid, () => row);
+        if (!identical(row, first)) {
+          _duplicates
+              .putIfAbsent(row.bvid, () => _KnownSearchEvidence()..add(first))
+              .add(row);
+        }
         cursor.rows.putIfAbsent(
           row.bvid,
           () => (row: row, category: categoryId, page: page, index: index),
@@ -149,7 +157,8 @@ class MultiCategoryVideoSearch {
     final seen = <String>{};
     return [
       for (final rank in rows)
-        if (seen.add(rank.row.bvid)) rank.row,
+        if (seen.add(rank.row.bvid))
+          _duplicates[rank.row.bvid]?.enrich(rank.row) ?? rank.row,
     ];
   }
 
@@ -195,4 +204,39 @@ class _CategoryCursor {
   int lastPage = 1;
   bool failed = false;
   final rows = <String, _RankedRow>{};
+}
+
+class _KnownSearchEvidence {
+  final _tags = <String>{};
+  final _ownerMids = <int>{};
+  void add(VideoSearchResult row) {
+    _tags.addAll(row.tags.where((tag) => tag.isNotEmpty));
+    if (row.ownerMid > 0) _ownerMids.add(row.ownerMid);
+  }
+
+  VideoSearchResult enrich(VideoSearchResult row) {
+    final mid = row.ownerMid > 0
+        ? row.ownerMid
+        : _ownerMids.length == 1
+        ? _ownerMids.single
+        : 0;
+    return VideoSearchResult(
+      bvid: row.bvid,
+      title: row.title,
+      ownerName: row.ownerName,
+      duration: row.duration,
+      thumbnailUrl: row.thumbnailUrl,
+      publishedAt: row.publishedAt,
+      playCount: row.playCount,
+      danmakuCount: row.danmakuCount,
+      episodeCountText: row.episodeCountText,
+      favoriteCount: row.favoriteCount,
+      categoryId: row.categoryId,
+      ownerMid: mid,
+      tags: List.unmodifiable(_tags),
+      additionalReportedOwnerMids: Set.unmodifiable(
+        _ownerMids.where((id) => id != mid),
+      ),
+    );
+  }
 }

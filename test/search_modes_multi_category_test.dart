@@ -1,11 +1,15 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:focubili/features/search/search_page.dart';
 import 'package:focubili/models/user_search.dart';
+import 'package:focubili/models/content_blocklist.dart';
 import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/services/bilibili_service.dart';
+import 'package:focubili/services/cache_lifecycle.dart';
+import 'package:focubili/services/content_blocklist_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -17,6 +21,7 @@ VideoSearchPage _videoPage(
   String title, {
   int id = 1,
   int? totalPages,
+  List<String> tags = const [],
 }) => VideoSearchPage(
   results: [
     VideoSearchResult(
@@ -29,6 +34,7 @@ VideoSearchPage _videoPage(
       playCount: 100 * id,
       danmakuCount: id,
       episodeCountText: '共 2 P',
+      tags: tags,
     ),
   ],
   page: page,
@@ -129,7 +135,7 @@ final _summary = find.byKey(const Key('search-category-summary'));
 
 Future<void> _mount(
   WidgetTester t,
-  _Service service, {
+  BilibiliService service, {
   Size size = const Size(1250, 880),
   String? fontFamily,
 }) async {
@@ -189,6 +195,84 @@ Future<void> _apply(WidgetTester t) async {
 }
 
 void main() {
+  testWidgets(
+    'a tag known only from a lower-ranked duplicate hides the one actual tile; removing the rule restores it offline',
+    (t) async {
+      var online = true;
+      final ids = <int>[];
+      final s = BilibiliVideoInfoService(
+        requestJson: (u) async {
+          expect(u.path, '/x/web-interface/wbi/search/type');
+          final id = int.parse(u.queryParameters['tids']!);
+          ids.add(id);
+          if (!online) throw StateError('unexpected offline fetch');
+          return jsonEncode({
+            'code': 0,
+            'data': {
+              'page': 1,
+              'numPages': 1,
+              'result': [
+                {
+                  'bvid': 'BV1000000001',
+                  'title': '合成课例',
+                  'author': '作者',
+                  'mid': 1,
+                  'tag': id == 36 ? '数学' : '数学,合成隐藏标签',
+                  'duration': '15:00',
+                  'play': 100,
+                  'episode_count_text': '2P',
+                },
+              ],
+            },
+          });
+        },
+      );
+      await _mount(t, s);
+      await _openSheet(t);
+      await _choose(t, [36, 188]);
+      await _apply(t);
+      await _submit(t, '测试');
+      await t.pumpAndSettle();
+      expect(find.text('合成课例'), findsOneWidget);
+      expect(ids, [36, 188]);
+      online = false;
+      const rule = ContentBlockRule(ContentBlockKind.videoTag, '合成隐藏标签');
+      final manager = const ContentBlocklistService();
+      await manager.saveRule(rule);
+      await t.pumpAndSettle();
+      final after = find.text('合成课例').evaluate().length;
+      await manager.removeRule(rule);
+      await t.pumpAndSettle();
+      expect(find.text('合成课例'), findsOneWidget);
+      expect(ids, [36, 188]);
+      expect(after, 0);
+      await t.pumpWidget(const SizedBox());
+    },
+  );
+  testWidgets(
+    'a late public response cannot restore the previous account search or submit its draft',
+    (t) async {
+      SharedPreferences.setMockInitialValues({});
+      await CacheLifecycle.setAccount(101);
+      addTearDown(() => CacheLifecycle.setAccount(null));
+      final waiter = Completer<VideoSearchPage>();
+      final service = _Service(video: (_, __, ___) => waiter.future);
+      await _mount(t, service);
+      await _submit(t, 'previous committed');
+      expect(service.videoCalls, hasLength(1));
+      await t.enterText(_input, 'editor draft');
+      await CacheLifecycle.setAccount(202);
+      await t.pump();
+      waiter.complete(_videoPage(1, 'PRE_SWITCH_QA'));
+      await t.pumpAndSettle();
+      expect(find.text('PRE_SWITCH_QA'), findsNothing);
+      await t.tap(find.text('用户').first);
+      await t.pumpAndSettle();
+      expect(service.userCalls, isEmpty);
+      expect(t.widget<TextField>(_input).controller!.text, 'editor draft');
+      await t.pumpWidget(const SizedBox());
+    },
+  );
   for (final size in [const Size(390, 844), const Size(1250, 880)]) {
     testWidgets(
       'mode switches committed query immediately and preserves draft in $size',
@@ -451,6 +535,42 @@ void main() {
       expect(find.text('分区 36 恢复'), findsOneWidget);
       expect(find.text('分区 188 恢复'), findsOneWidget);
       expect(_retry, findsNothing);
+    },
+  );
+
+  testWidgets(
+    '#123 tag removal restores a previously loaded multi-category row while offline',
+    (t) async {
+      const rule = ContentBlockRule(ContentBlockKind.videoTag, '系统基础');
+      const rules = ContentBlocklistService();
+      var offline = false;
+      final service = _Service(
+        video: (_, page, filter) {
+          if (offline) throw StateError('offline');
+          return _videoPage(
+            page,
+            filter.categoryId == 36 ? '留在列表' : '屏蔽后还原',
+            id: filter.categoryId!,
+            tags: filter.categoryId == 36 ? [] : ['系统基础'],
+          );
+        },
+      );
+      await _mount(t, service);
+      await rules.saveRule(rule);
+      await t.pumpAndSettle();
+      await _openSheet(t);
+      await _choose(t, [36, 188]);
+      await _apply(t);
+      await _submit(t, 'Flutter');
+      await t.pumpAndSettle();
+      expect(find.text('留在列表'), findsOneWidget);
+      expect(find.text('屏蔽后还原'), findsNothing);
+      offline = true;
+      await rules.removeRule(rule);
+      await t.pumpAndSettle();
+      expect(find.text('屏蔽后还原'), findsOneWidget);
+      expect(service.videoCalls, [('Flutter', 1, 36), ('Flutter', 1, 188)]);
+      expect(service.directCalls, isEmpty);
     },
   );
 

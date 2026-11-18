@@ -130,6 +130,7 @@ class VideoSearchResult {
     this.favoriteCount,
     this.categoryId,
     this.tags = const [],
+    this.additionalReportedOwnerMids = const {},
   });
 
   final String bvid;
@@ -145,6 +146,8 @@ class VideoSearchResult {
   final int ownerMid;
   final int? categoryId;
   final List<String> tags;
+  // Same BV, conflicting returned identities: keep display and filtering separate.
+  final Set<int> additionalReportedOwnerMids;
 }
 
 /// 定义关键词视频搜索的排序方式。

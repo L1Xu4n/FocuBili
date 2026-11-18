@@ -10,6 +10,7 @@ import '../../services/subscription_service.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/focus_notification_service.dart';
 import '../../services/learning_list_service.dart';
+import '../common/discovery_blocklist.dart';
 import '../learning/learning_add_sheet.dart';
 import '../player/player_page.dart';
 import '../profile/user_profile_page.dart';
@@ -35,7 +36,9 @@ class SubscriptionUpdatesPage extends StatefulWidget {
 }
 
 class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
-    with TickerProviderStateMixin {
+    with
+        TickerProviderStateMixin,
+        DiscoveryBlocklistState<SubscriptionUpdatesPage> {
   late final SubscriptionService _service =
       widget.service ?? SubscriptionService.instance;
   late final BilibiliService _videos =
@@ -63,7 +66,7 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
   }
 
   Future<void> _action(Future<void> Function() action) async {
-    if (_busy) return;
+    if (_busy || !discoveryBlocklistActionsReady) return;
     setState(() => _busy = true);
     try {
       await action();
@@ -91,9 +94,16 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
     }
   }
 
+  bool _isUpdateBlocked(SubscriptionFeedItem item) =>
+      discoveryBlocklist.isNotEmpty &&
+      blocksSubscriptionUpdate(discoveryBlocklist, item);
+
   Future<void> _play(SubscriptionFeedItem item) => _action(() async {
+    if (_isUpdateBlocked(item)) return;
     final video = await _videos.lookupVideo(item.bvid);
-    if (!mounted) return;
+    if (!mounted || !discoveryBlocklistActionsReady || _isUpdateBlocked(item)) {
+      return;
+    }
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
         builder: (_) => PlayerPage(video: video, bilibiliService: _videos),
@@ -102,23 +112,35 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
   });
 
   Future<void> _addLearning(SubscriptionFeedItem item) => _action(() async {
+    if (_isUpdateBlocked(item)) return;
     final video = await _videos.lookupVideo(item.bvid);
-    if (!mounted) return;
+    if (!mounted || !discoveryBlocklistActionsReady || _isUpdateBlocked(item)) {
+      return;
+    }
     final result = await LearningAddSheet.show(
       context,
       video: video,
       service: _learning,
+      canConfirm: () =>
+          mounted && discoveryBlocklistActionsReady && !_isUpdateBlocked(item),
     );
     if (result != null) _message('已加入所选分 P。');
   });
 
   Future<void> _addSelected() => _action(() async {
-    final ids = Set<String>.of(_selected);
+    final targets = _service.feed
+        .where(
+          (item) => _selected.contains(item.bvid) && !_isUpdateBlocked(item),
+        )
+        .toList();
+    if (targets.isEmpty) return;
     final selections = <LearningPartSelection>[];
     var failed = 0;
-    for (final id in ids) {
+    for (final item in targets) {
+      if (!discoveryBlocklistActionsReady) return;
+      if (_isUpdateBlocked(item)) continue;
       try {
-        final video = await _videos.lookupVideo(id);
+        final video = await _videos.lookupVideo(item.bvid);
         // Batch selection adds the first part. Existing tasks retain all progress.
         if (video.parts.isEmpty) {
           failed++;
@@ -130,7 +152,19 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
       }
       if (!mounted) return;
     }
-    final result = await _learning.addBatch(selections);
+    if (!discoveryBlocklistActionsReady) return;
+    final stillVisible = _service.feed
+        .where((item) => !_isUpdateBlocked(item))
+        .map((item) => item.bvid)
+        .toSet();
+    final eligible = selections
+        .where((item) => stillVisible.contains(item.video.bvid))
+        .toList();
+    if (eligible.isEmpty && selections.isNotEmpty) {
+      _message('所选更新已隐藏，未加入学习清单。');
+      return;
+    }
+    final result = await _learning.addBatch(eligible);
     if (!mounted) return;
     if (!result.persisted) {
       _message('学习清单未保存，请重试。');
@@ -144,16 +178,19 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
     );
   });
 
-  void _toggle(SubscriptionFeedItem item) => setState(() {
-    if (!_selected.remove(item.bvid)) _selected.add(item.bvid);
-  });
+  void _toggle(SubscriptionFeedItem item) {
+    if (!discoveryBlocklistActionsReady || _isUpdateBlocked(item)) return;
+    setState(() {
+      if (!_selected.remove(item.bvid)) _selected.add(item.bvid);
+    });
+  }
 
   String _date(DateTime date) {
     final local = date.toLocal();
     return '--${local.year}年${local.month.toString().padLeft(2, '0')}月${local.day.toString().padLeft(2, '0')}日--';
   }
 
-  List<SubscriptionFeedItem> _visibleItems() {
+  List<SubscriptionFeedItem> _itemsForFilters() {
     final today = _date(DateTime.now());
     // A deleted source cannot strand the feed behind an invisible filter.
     final key = _service.sources.any((s) => s.key == _sourceKey)
@@ -171,13 +208,32 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
         .toList();
   }
 
-  double _filterHeight(BuildContext context) {
+  bool get _hasHiddenUnread =>
+      discoveryBlocklist.isNotEmpty &&
+      _service.feed.any(
+        (item) => item.readAt == null && _isUpdateBlocked(item),
+      );
+
+  Future<void> _markVisibleRead() => _action(() async {
+    // Re-evaluate even if this callback came from the previous frame.
+    if (!_hasHiddenUnread) {
+      await _service.markAllRead();
+      return;
+    }
+    final ids = {
+      for (final item in _itemsForFilters())
+        if (item.readAt == null && !_isUpdateBlocked(item)) item.bvid,
+    };
+    if (ids.isNotEmpty) await _service.markReadBatch(ids);
+  });
+
+  double _filterHeight(BuildContext context, String markReadLabel) {
     final available = MediaQuery.sizeOf(context).width.clamp(0.0, 900.0) - 32;
     final scaler = MediaQuery.textScalerOf(context);
     var rows = 1;
     var used = 0.0;
     var lineHeight = 48.0;
-    final labels = ['仅未读', '今日发布', '全部标为已读'];
+    final labels = ['仅未读', '今日发布', markReadLabel];
     for (var i = 0; i < labels.length; i++) {
       final painter = TextPainter(
         text: TextSpan(
@@ -204,7 +260,10 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
         (_service.sources.isEmpty ? 0 : 64 + scaler.scale(14));
   }
 
-  Widget _filters(List<SubscriptionFeedItem> items) => Padding(
+  Widget _filters({
+    required String markReadLabel,
+    required VoidCallback? markRead,
+  }) => Padding(
     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -230,8 +289,8 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
               }),
             ),
             TextButton(
-              onPressed: _busy ? null : () => _action(_service.markAllRead),
-              child: const Text('全部标为已读'),
+              onPressed: _busy ? null : markRead,
+              child: Text(markReadLabel),
             ),
           ],
         ),
@@ -361,8 +420,10 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
           child: SubscriptionFeedTile(
             item: item,
             selected: _selecting ? _selected.contains(item.bvid) : null,
-            onLongPress: _busy ? null : () => _toggle(item),
-            onTap: _busy
+            onLongPress: _busy || !discoveryBlocklistActionsReady
+                ? null
+                : () => _toggle(item),
+            onTap: _busy || !discoveryBlocklistActionsReady
                 ? null
                 : () => _selecting ? _toggle(item) : unawaited(_play(item)),
             actions: _selecting
@@ -372,14 +433,19 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
                     children: [
                       if (item.readAt == null)
                         TextButton(
-                          onPressed: _busy
+                          onPressed: _busy || !discoveryBlocklistActionsReady
                               ? null
-                              : () =>
-                                    _action(() => _service.markRead(item.bvid)),
+                              : () => _action(() async {
+                                  if (!_isUpdateBlocked(item)) {
+                                    await _service.markRead(item.bvid);
+                                  }
+                                }),
                           child: const Text('标为已读'),
                         ),
                       TextButton.icon(
-                        onPressed: _busy ? null : () => _addLearning(item),
+                        onPressed: _busy || !discoveryBlocklistActionsReady
+                            ? null
+                            : () => _addLearning(item),
                         icon: const Icon(Icons.playlist_add),
                         label: const Text('加入学习清单'),
                       ),
@@ -403,11 +469,26 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: _service,
     builder: (context, _) {
-      final items = _visibleItems();
+      final candidates = _itemsForFilters();
+      final items = !discoveryBlocklistReady
+          ? const <SubscriptionFeedItem>[]
+          : discoveryBlocklist.isNotEmpty
+          ? candidates.where((item) => !_isUpdateBlocked(item)).toList()
+          : candidates;
+      final hidden = discoveryBlocklistReady
+          ? candidates.length - items.length
+          : 0;
+      final hasHiddenUnread = _hasHiddenUnread;
+      final markReadLabel = hasHiddenUnread ? '显示项标为已读' : '全部标为已读';
+      final markRead =
+          !discoveryBlocklistActionsReady ||
+              (hasHiddenUnread && !items.any((item) => item.readAt == null))
+          ? null
+          : () => unawaited(_markVisibleRead());
       final visibleIds = items.map((e) => e.bvid).toSet();
       _selected.removeWhere((id) => !visibleIds.contains(id));
       final rows = _rows(items);
-      final height = _filterHeight(context);
+      final height = _filterHeight(context, markReadLabel);
       return PopScope(
         canPop: !_selecting,
         onPopInvokedWithResult: (didPop, _) {
@@ -427,7 +508,7 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
                 ? [
                     IconButton(
                       tooltip: _selected.length == items.length ? '取消全选' : '全选',
-                      onPressed: _busy
+                      onPressed: _busy || !discoveryBlocklistActionsReady
                           ? null
                           : () => setState(() {
                               if (_selected.length == items.length) {
@@ -440,17 +521,24 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
                     ),
                     IconButton(
                       tooltip: '标为已读',
-                      onPressed: _busy
+                      onPressed: _busy || !discoveryBlocklistActionsReady
                           ? null
                           : () => _action(() async {
-                              await _service.markReadBatch(Set.of(_selected));
+                              await _service.markReadBatch({
+                                for (final item in _service.feed)
+                                  if (_selected.contains(item.bvid) &&
+                                      !_isUpdateBlocked(item))
+                                    item.bvid,
+                              });
                               if (mounted) setState(_selected.clear);
                             }),
                       icon: const Icon(Icons.done_all),
                     ),
                     IconButton(
                       tooltip: '加入学习清单',
-                      onPressed: _busy ? null : _addSelected,
+                      onPressed: _busy || !discoveryBlocklistActionsReady
+                          ? null
+                          : _addSelected,
                       icon: const Icon(Icons.playlist_add),
                     ),
                   ]
@@ -495,6 +583,10 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
                       const SliverToBoxAdapter(
                         child: LinearProgressIndicator(),
                       ),
+                    if (!discoveryBlocklistActionsReady)
+                      SliverToBoxAdapter(
+                        child: buildDiscoveryBlocklistStatus(),
+                      ),
                     SliverPersistentHeader(
                       floating: true,
                       delegate: _SubscriptionFilterHeader(
@@ -502,11 +594,18 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
                         vsync: this,
                         child: Material(
                           color: Theme.of(context).colorScheme.surface,
-                          child: _filters(items),
+                          child: _filters(
+                            markReadLabel: markReadLabel,
+                            markRead: markRead,
+                          ),
                         ),
                       ),
                     ),
-                    if (items.isEmpty)
+                    if (hidden > 0)
+                      SliverToBoxAdapter(
+                        child: DiscoveryBlocklistNotice(hiddenCount: hidden),
+                      ),
+                    if (discoveryBlocklistReady && items.isEmpty && hidden == 0)
                       const SliverToBoxAdapter(
                         child: Padding(
                           padding: EdgeInsets.all(28),
@@ -1331,7 +1430,11 @@ class FocusSubscriptionButton extends StatefulWidget {
     super.key,
     required this.source,
     this.service,
+    this.configureCreatorNotifications = false,
+    this.notificationService = const FocusNotificationService(),
   });
+  final bool configureCreatorNotifications;
+  final FocusNotificationService notificationService;
   final SubscriptionSource source;
   final SubscriptionService? service;
   @override
@@ -1353,11 +1456,20 @@ class _FocusSubscriptionButtonState extends State<FocusSubscriptionButton> {
     if (_opening) return;
     setState(() => _opening = true);
     try {
+      await _service.initialize();
+      if (!mounted) return;
       await showDialog<void>(
         context: context,
         barrierDismissible: false,
         builder: (_) =>
-            _AddSourceDialog(service: _service, initialSource: widget.source),
+            widget.configureCreatorNotifications &&
+                widget.source.kind == SubscriptionKind.creator
+            ? _CreatorNotificationDialog(
+                service: _service,
+                source: widget.source,
+                notificationService: widget.notificationService,
+              )
+            : _AddSourceDialog(service: _service, initialSource: widget.source),
       );
     } finally {
       if (mounted) setState(() => _opening = false);
@@ -1406,7 +1518,11 @@ class _FocusSubscriptionButtonState extends State<FocusSubscriptionButton> {
       );
       return IconButton(
         key: const Key('focus-subscribe-button'),
-        tooltip: subscribed ? '取消焦点订阅' : '加入焦点订阅',
+        tooltip: subscribed
+            ? '取消焦点订阅'
+            : widget.configureCreatorNotifications
+            ? '添加订阅源'
+            : '加入焦点订阅',
         onPressed: _opening || widget.source.mid <= 0
             ? null
             : subscribed
@@ -1419,5 +1535,116 @@ class _FocusSubscriptionButtonState extends State<FocusSubscriptionButton> {
         ),
       );
     },
+  );
+}
+
+/// UP 主页快捷入口：编辑草稿，只有保存才改变全局通知/订阅状态。
+class _CreatorNotificationDialog extends StatefulWidget {
+  const _CreatorNotificationDialog({
+    required this.service,
+    required this.source,
+    required this.notificationService,
+  });
+  final SubscriptionService service;
+  final SubscriptionSource source;
+  final FocusNotificationService notificationService;
+  @override
+  State<_CreatorNotificationDialog> createState() =>
+      _CreatorNotificationDialogState();
+}
+
+class _CreatorNotificationDialogState
+    extends State<_CreatorNotificationDialog> {
+  late bool _notifications = widget.service.notificationsEnabled;
+  bool _busy = false;
+  String? _error;
+  Future<void> _save() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      if (_notifications && !widget.service.notificationsEnabled) {
+        final allowed = await widget.notificationService.requestPermission();
+        if (!mounted) return;
+        if (!allowed) {
+          setState(() {
+            _notifications = false;
+            _error = '通知未获授权。可关闭系统通知后保存，更新列表仍可使用。';
+          });
+          return;
+        }
+      }
+      await widget.service.addSource(widget.source);
+      if (_notifications != widget.service.notificationsEnabled) {
+        await widget.service.setNotificationsEnabled(_notifications);
+      }
+      if (!widget.service.enabled) await widget.service.setEnabled(true);
+      if (mounted) Navigator.pop(context);
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => _error =
+              widget.service.sources.any(
+                (source) => source.key == widget.source.key,
+              )
+              ? '订阅源已保存，但设置未全部完成，请重试。'
+              : '订阅未保存，请重试。',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => PopScope(
+    canPop: !_busy,
+    child: AlertDialog(
+      title: const Text('添加通知设置'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              widget.source.name,
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 12),
+            const Text('保存后加入焦点订阅并开启更新检查，不修改 B 站关注。'),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('系统通知'),
+              subtitle: const Text('全局设置，影响所有焦点订阅，并非仅此 UP 主。专注期间只更新角标。'),
+              value: _notifications,
+              onChanged: _busy
+                  ? null
+                  : (value) => setState(() => _notifications = value),
+            ),
+            const Text('系统通知默认关闭，仅在保存开启时申请权限。'),
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Text(
+                  _error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: _busy ? null : _save,
+          child: Text(_busy ? '处理中…' : '保存'),
+        ),
+      ],
+    ),
   );
 }
