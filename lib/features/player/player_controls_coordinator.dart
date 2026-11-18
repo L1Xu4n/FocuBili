@@ -42,6 +42,7 @@ mixin _PlayerControlsCoordinator
       _cancelTemporaryLongPress();
       _stopPendingPlaybackNavigation();
     }
+    _markAbRepeatManualFeedback(shouldPlay);
     _abRepeatPlaybackIntent(shouldPlay);
     _finishFocusSeekTransition(syncCurrentSnapshot: false);
     try {

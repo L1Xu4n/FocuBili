@@ -1,5 +1,14 @@
 part of 'player_page.dart';
 
+/// The native playing bit may bounce after the seek Future has resolved.
+class _AbRepeatFeedbackWindow {
+  _AbRepeatFeedbackWindow(this.epoch, this.range);
+  final int epoch;
+  final AbRepeatRange range;
+  bool? manualTarget;
+  bool manuallyPaused = false;
+}
+
 /// Coordinates one chapter-local loop without reopening media or focus sessions.
 mixin _PlayerAbRepeatCoordinator
     on
@@ -10,11 +19,13 @@ mixin _PlayerAbRepeatCoordinator
   AbRepeatRange? _abRepeatRange;
   bool _abRepeatEditorVisible = false;
   int _abRepeatEditorGeneration = 0;
+  Offset? _abRepeatEditorOffset;
   String? _abRepeatDraftA;
   String? _abRepeatDraftB;
   Timer? _abRepeatTimer;
   Timer? _abRepeatSeekAckTimer;
   Future<void>? _abRepeatSeek;
+  _AbRepeatFeedbackWindow? _abRepeatFeedbackWindow;
   final Set<Future<void>> _temporaryCaptureSeeks = {};
 
   /// Track commands, not the whole capture: internal chapter switches may drain safely.
@@ -130,6 +141,7 @@ mixin _PlayerAbRepeatCoordinator
 
   void _clearAbRepeat({bool notify = false}) {
     _abRepeatEpoch++;
+    _abRepeatFeedbackWindow = null;
     _abRepeatTimer?.cancel();
     _abRepeatTimer = null;
     _stopWaitingForAbRepeatPosition();
@@ -147,6 +159,7 @@ mixin _PlayerAbRepeatCoordinator
   @override
   void _clearAbRepeatForNavigation() {
     _abRepeatEditorGeneration++;
+    _abRepeatEditorOffset = null;
     _abRepeatDraftA = null;
     _abRepeatDraftB = null;
     _abRepeatEditorVisible = false;
@@ -195,6 +208,66 @@ mixin _PlayerAbRepeatCoordinator
     final range = _abRepeatRange;
     if (range != null && !range.contains(target)) _clearAbRepeat(notify: true);
     await _drainAbRepeatSeek();
+  }
+
+  /// Explicit app playback commands take priority over a still-returning seek.
+  void _markAbRepeatManualFeedback(bool shouldPlay) {
+    final range = _abRepeatRange;
+    if (range == null || !_validAbRepeat(_abRepeatEpoch, range)) return;
+    if (_abRepeatEndExpected) _ensureAbRepeatFeedbackWindow(range);
+    final window = _abRepeatFeedbackWindow;
+    if (window != null && _validAbRepeat(window.epoch, window.range)) {
+      window.manualTarget = shouldPlay;
+    }
+  }
+
+  @override
+  bool _shouldAnimatePlaybackAction(
+    PlaybackSnapshot previous,
+    PlaybackSnapshot snapshot,
+  ) {
+    final ready = snapshot.phase == PlaybackPhase.ready &&
+        !snapshot.isRestoringPosition;
+    final ordinary = ready &&
+        previous.phase == PlaybackPhase.ready &&
+        previous.isPlaying != snapshot.isPlaying;
+    final window = _abRepeatFeedbackWindow;
+    if (window == null || !_validAbRepeat(window.epoch, window.range)) {
+      _abRepeatFeedbackWindow = null;
+      // Native EOF can first announce ready/stopped, then ended. The latter
+      // will start the actual seek, but the former isn't a pause command.
+      return ordinary && !(_abRepeatEndExpected && !snapshot.isPlaying);
+    }
+    if (snapshot.phase == PlaybackPhase.error || snapshot.isRestoringPosition) {
+      _abRepeatFeedbackWindow = null;
+      return false;
+    }
+    final manual = window.manualTarget;
+    if (manual != null) {
+      if (!ready ||
+          snapshot.isPlaying != manual ||
+          (snapshot.playRequested != null && snapshot.playRequested != manual)) {
+        return false;
+      }
+      window.manualTarget = null;
+      window.manuallyPaused = !manual;
+      if (manual) _abRepeatFeedbackWindow = null;
+      return true;
+    }
+    if (snapshot.playRequested == false && !window.manuallyPaused) {
+      // An external playback command can change native intent without passing
+      // through a PlayerPage button. Keep normal feedback for that real pause.
+      _abRepeatFeedbackWindow = null;
+      return ordinary;
+    }
+    if (ready &&
+        snapshot.isPlaying &&
+        !_abRepeatAwaitingPosition &&
+        _abRepeatSeek == null &&
+        window.range.contains(snapshot.position)) {
+      _abRepeatFeedbackWindow = null;
+    }
+    return false;
   }
 
   void _abRepeatPlaybackIntent(bool playing, {bool backend = false}) {
@@ -348,6 +421,15 @@ mixin _PlayerAbRepeatCoordinator
     return false;
   }
 
+  void _ensureAbRepeatFeedbackWindow(AbRepeatRange range) {
+    final previous = _abRepeatFeedbackWindow;
+    if (previous == null ||
+        previous.epoch != _abRepeatEpoch ||
+        !identical(previous.range, range)) {
+      _abRepeatFeedbackWindow = _AbRepeatFeedbackWindow(_abRepeatEpoch, range);
+    }
+  }
+
   /// Register before issuing seek: synchronous backend snapshots cannot duplicate it.
   void _jumpToAbRepeatA(AbRepeatRange range, {bool resumeEnded = false}) {
     final epoch = _abRepeatEpoch;
@@ -357,6 +439,9 @@ mixin _PlayerAbRepeatCoordinator
     _abRepeatSeek = completion.future;
     _abRepeatAwaitingPosition = true;
     _abRepeatSeekReachedEnd = resumeEnded;
+    if (_playbackSnapshot.isPlaying || resumeEnded) {
+      _ensureAbRepeatFeedbackWindow(range);
+    }
     unawaited(() async {
       try {
         _beginFocusSeekTransition();
@@ -415,14 +500,14 @@ mixin _PlayerAbRepeatCoordinator
   }
 
   /// 标记条不创建路由或遮罩，关闭后草稿继续属于当前视频。
-  Widget _buildAbRepeatEditor() {
+  Widget _buildAbRepeatEditor({bool floating = false}) {
     final editor = _abRepeatEditorGeneration;
     // 同一视频重新打开编辑器也属于新会话，旧闭包不得覆盖新标记。
     bool isCurrent() =>
         mounted &&
         _abRepeatEditorVisible &&
         editor == _abRepeatEditorGeneration;
-    return PlayerAbRepeatSheet(
+    final sheet = PlayerAbRepeatSheet(
       key: ValueKey('ab-editor-${_activeVideo.bvid}-${_currentPart.cid}'),
       inline: true,
       bvid: _activeVideo.bvid,
@@ -459,6 +544,16 @@ mixin _PlayerAbRepeatCoordinator
         }
         unawaited(_applyAbRepeatRange(range));
       },
+    );
+    if (!floating) return sheet;
+    return PlayerAbRepeatDock(
+      offset: _abRepeatEditorOffset,
+      onMove: (offset) {
+        if (isCurrent() && _abRepeatEditorOffset != offset) {
+          setState(() => _abRepeatEditorOffset = offset);
+        }
+      },
+      child: sheet,
     );
   }
 

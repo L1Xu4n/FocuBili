@@ -19,6 +19,8 @@ class PlayerAbRepeatSheet extends StatefulWidget {
     this.onDraftChanged,
     this.onClose,
   });
+  static const inlineWidth = 360.0;
+
   final String bvid;
   final int cid;
   final Duration duration;
@@ -151,13 +153,21 @@ class _PlayerAbRepeatSheetState extends State<PlayerAbRepeatSheet> {
                 key: const Key('ab-repeat-set-A'),
                 // 标记当前点，并更新紧凑条显示。
                 onPressed: () => _mark(_a),
-                child: Text('A ${_a.text}'),
+                child: Text(
+                  'A ${_a.text}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
               TextButton(
                 key: const Key('ab-repeat-set-B'),
                 // B 点可在拖动进度或继续播放之后再记录。
                 onPressed: () => _mark(_b),
-                child: Text('B ${_b.text.isEmpty ? "标记" : _b.text}'),
+                child: Text(
+                  'B ${_b.text.isEmpty ? "标记" : _b.text}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
               IconButton(
                 tooltip: '输入时间',
@@ -168,7 +178,7 @@ class _PlayerAbRepeatSheetState extends State<PlayerAbRepeatSheet> {
                 key: const Key('ab-repeat-apply'),
                 tooltip: '启用区间循环',
                 onPressed: _apply,
-                icon: const Icon(Icons.repeat_rounded),
+                icon: const Icon(Icons.check_rounded),
               ),
               if (widget.initialRange != null)
                 IconButton(
@@ -180,10 +190,6 @@ class _PlayerAbRepeatSheetState extends State<PlayerAbRepeatSheet> {
                   },
                   icon: const Icon(Icons.delete_outline),
                 ),
-              const Tooltip(
-                message: '标记 A 后可拖动视频，再标记 B。收起保留标记，切换内容清除。',
-                child: Icon(Icons.info_outline, size: 18),
-              ),
               IconButton(
                 tooltip: '收起 A–B 设置',
                 onPressed: _close,
@@ -210,7 +216,11 @@ class _PlayerAbRepeatSheetState extends State<PlayerAbRepeatSheet> {
   /// 独立面板保留测试和复用入口，真实播放器使用紧凑内嵌模式。
   @override
   Widget build(BuildContext context) => widget.inline
-      ? _inlineEditor(context)
+      ? SizedBox(
+          key: const Key('ab-repeat-inline-editor'),
+          width: PlayerAbRepeatSheet.inlineWidth,
+          child: _inlineEditor(context),
+        )
       : SafeArea(
           child: SingleChildScrollView(
             child: Padding(

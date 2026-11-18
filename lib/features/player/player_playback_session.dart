@@ -50,6 +50,10 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
 
   /// 由手势协调器为真实播放暂停切换提供短暂动画。
   void _showPlaybackActionFeedback(bool playing);
+  bool _shouldAnimatePlaybackAction(
+    PlaybackSnapshot previous,
+    PlaybackSnapshot snapshot,
+  );
 
   /// Provided by the video coordinator to reclaim Android's shared native channel.
   Future<void> _restorePlaybackAfterNestedPlayer({required bool shouldResume});
@@ -545,10 +549,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
       snapshot,
       positionEvent: true,
     );
-    if (previousSnapshot.phase == PlaybackPhase.ready &&
-        snapshot.phase == PlaybackPhase.ready &&
-        previousSnapshot.isPlaying != snapshot.isPlaying &&
-        !snapshot.isRestoringPosition) {
+    if (_shouldAnimatePlaybackAction(previousSnapshot, snapshot)) {
       _showPlaybackActionFeedback(snapshot.isPlaying);
     }
     final bool shouldRestartDanmakuPresentation =
