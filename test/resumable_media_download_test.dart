@@ -109,6 +109,96 @@ void main() {
     },
   );
 
+  for (final damage in [false, true]) {
+    test(
+      'versioned resume checks the partial bytes before Range: corrupted=$damage',
+      () async {
+        final requests = <String>[];
+        final chunks = List<int>.generate(200000, (i) => i % 251);
+        final release = Completer<void>();
+        addTearDown(() {
+          if (!release.isCompleted) release.complete();
+        });
+        server.listen((r) async {
+          final range = r.headers.value('range');
+          requests.add('${r.method} ${range ?? '-'}');
+          r.response.headers.set('etag', '"synthetic-stable-media"');
+          r.response.headers.contentType = ContentType('video', 'mp4');
+          r.response.contentLength = chunks.length;
+          if (r.method == 'GET' && requests.length == 1) {
+            r.response.add(chunks.sublist(0, 100000));
+            await r.response.flush();
+            await release.future;
+          } else if (r.method == 'GET') {
+            if (range == null) {
+              r.response.add(chunks);
+            } else {
+              final offset = int.parse(
+                RegExp(r'bytes=(\d+)-').firstMatch(range)![1]!,
+              );
+              expect(r.headers.value('if-range'), '"synthetic-stable-media"');
+              r.response.statusCode = 206;
+              r.response.headers.set(
+                'content-range',
+                'bytes $offset-${chunks.length - 1}/${chunks.length}',
+              );
+              r.response.contentLength = chunks.length - offset;
+              r.response.add(chunks.sublist(offset));
+            }
+          }
+          try {
+            await r.response.close();
+          } on HttpException {
+            // First GET was intentionally interrupted.
+          }
+        });
+        final file = File('${root.path}/private-lesson.part');
+        final control = DownloadControl();
+        final pending = transport.download(
+          uri,
+          {},
+          file,
+          (received, _) {
+            if (received > 0) control.interrupt();
+          },
+          control: control,
+          mediaIdentity: 'lesson',
+          onCompleteVersion: (_) {},
+        );
+        await expectLater(pending, throwsA(isA<DownloadInterrupted>()));
+        release.complete();
+        final sidecar = ResumableMediaDownload.validatorFile(file);
+        final raw = await sidecar.readAsString();
+        expect(raw, contains('localHash'));
+        expect(raw, isNot(contains('synthetic-stable-media')));
+        expect(raw, isNot(contains('http')));
+        final offset = await file.length();
+        if (damage) {
+          final local = await file.readAsBytes();
+          local[0] ^= 1;
+          await file.writeAsBytes(local);
+        }
+        String? objectProof;
+        await transport.download(
+          uri,
+          {},
+          file,
+          (_, _) {},
+          mediaIdentity: 'lesson',
+          onCompleteVersion: (value) => objectProof = value,
+        );
+        expect(objectProof, isNotNull);
+        expect(
+          requests,
+          damage
+              ? ['GET -', 'GET -']
+              : ['GET -', 'HEAD -', 'GET bytes=$offset-'],
+        );
+        expect(await file.readAsBytes(), chunks);
+      },
+    );
+  }
+
   test(
     'server ignoring range replaces old bytes instead of appending',
     () async {

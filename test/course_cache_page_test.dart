@@ -16,6 +16,13 @@ class _Library extends CourseCacheLibrary {
   int serial = 0;
   int starts = 0;
   Completer<List<CourseCacheEntry>>? gate;
+  DateTime? fixedNow;
+  @override
+  bool isUsable(CourseCacheEntry e) =>
+      fixedNow == null ? super.isUsable(e) : e.usableAt(fixedNow!);
+  @override
+  Duration untilExpiry(CourseCacheEntry e) =>
+      fixedNow == null ? super.untilExpiry(e) : e.until!.difference(fixedNow!);
   @override
   int get listVersion => serial;
   @override
@@ -54,6 +61,78 @@ class _Library extends CourseCacheLibrary {
 }
 
 void main() {
+  testWidgets(
+    'expiry updates narrow large-text row and offers recheck without a dialog',
+    (t) async {
+      final now = DateTime.utc(2026, 11, 18);
+      final library = _Library()..fixedNow = now;
+      addTearDown(library.dispose);
+      library.rows = [
+        CourseCacheEntry(
+          mid: 51,
+          season: 11,
+          ep: 21,
+          aid: 55,
+          cid: 31,
+          courseTitle: video.title,
+          chapterTitle: part.title,
+          duration: part.duration,
+          quality: 64,
+          videoBytes: 100,
+          checkedAt: now,
+          until: now.add(const Duration(seconds: 1)),
+        ),
+      ];
+      t.view.devicePixelRatio = 1;
+      t.view.physicalSize = const Size(320, 580);
+      addTearDown(t.view.resetDevicePixelRatio);
+      addTearDown(t.view.resetPhysicalSize);
+      await loadBetaReviewFonts(t);
+      final key = GlobalKey();
+      final base = AppTheme.dark();
+      await t.pumpWidget(
+        RepaintBoundary(
+          key: key,
+          child: MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: base.copyWith(
+              textTheme: base.textTheme.apply(fontFamily: 'BetaReview'),
+            ),
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: const TextScaler.linear(1.8)),
+              child: child!,
+            ),
+            home: CourseCachePage(library: library),
+          ),
+        ),
+      );
+      await t.pumpAndSettle();
+      expect(find.text('离线播放'), findsOneWidget);
+      library.fixedNow = now.add(const Duration(seconds: 1));
+      await t.pump(const Duration(seconds: 1));
+      expect(find.text('离线播放'), findsNothing);
+      await t.ensureVisible(find.text('联网复核'));
+      if (const String.fromEnvironment('BETA3_CAPTURE_DIR').isNotEmpty) {
+        // Keep the whole explanatory paragraph and the action within the
+        // evidence image. The actual interaction below still uses 320×580.
+        t.view.physicalSize = const Size(320, 840);
+        await t.pumpAndSettle();
+        await captureSubscriptionUi(t, key, 'course-cache-recheck-320');
+        t.view.physicalSize = const Size(320, 580);
+        await t.pumpAndSettle();
+        await t.ensureVisible(find.text('联网复核'));
+      }
+      await t.tap(find.text('联网复核'));
+      await t.pumpAndSettle();
+      expect(library.starts, 1);
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(t.takeException(), isNull);
+      await t.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
   for (final mode in [(390.0, 780.0, 1.0), (320.0, 580.0, 1.8)]) {
     testWidgets(
       'chapter actions, cancel, delete, account-switch fence at ${mode.$1}',

@@ -33,6 +33,30 @@ class _CourseCachePageState extends State<CourseCachePage>
   bool loading = true, suspended = false, accountChanged = false;
   String? error;
   int generation = 0, version = -1;
+  Timer? _expiry;
+  String? _opening;
+  final _needsRecheck = <String, DateTime?>{};
+
+  void _watchExpiry() {
+    _expiry?.cancel();
+    if (suspended) return;
+    Duration? next;
+    for (final row in rows) {
+      if (!store.isUsable(row)) continue;
+      final wait = store.untilExpiry(row);
+      if (next == null || wait < next) next = wait;
+    }
+    if (next != null && next > Duration.zero) {
+      _expiry = Timer(next, () {
+        if (!mounted || suspended) return;
+        setState(() {});
+        _watchExpiry();
+      });
+    }
+  }
+
+  bool _usable(CourseCacheEntry entry) =>
+      store.isUsable(entry) && !_needsRecheck.containsKey(entry.id);
   @override
   void initState() {
     super.initState();
@@ -56,10 +80,13 @@ class _CourseCachePageState extends State<CourseCachePage>
     if (!mounted) return;
     setState(() {
       accountChanged = true;
+      _needsRecheck.clear();
+      _opening = null;
       rows = const [];
       error = null;
       loading = true;
     });
+    _expiry?.cancel();
     if (!suspended) unawaited(_load());
   }
 
@@ -68,8 +95,10 @@ class _CourseCachePageState extends State<CourseCachePage>
     if (state == AppLifecycleState.hidden ||
         state == AppLifecycleState.paused) {
       suspended = true;
+      _expiry?.cancel();
       generation++;
       setState(() {
+        _opening = null;
         rows = const [];
         loading = true;
         error = null;
@@ -83,6 +112,7 @@ class _CourseCachePageState extends State<CourseCachePage>
   @override
   void dispose() {
     generation++;
+    _expiry?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     CacheLifecycle.account.removeListener(_switch);
     store.removeListener(_listen);
@@ -92,11 +122,17 @@ class _CourseCachePageState extends State<CourseCachePage>
   Future<void> _load() async {
     final g = ++generation;
     version = store.listVersion;
+    _opening = null;
     try {
       final found = await store.entries();
       if (mounted && g == generation) {
         setState(() {
           rows = found;
+          _needsRecheck.removeWhere((id, checked) {
+            final next = found.where((e) => e.id == id).firstOrNull;
+            return next == null || next.checkedAt != checked;
+          });
+          _watchExpiry();
           loading = false;
           error = null;
         });
@@ -152,18 +188,35 @@ class _CourseCachePageState extends State<CourseCachePage>
   }
 
   Future<void> _open(CourseCacheEntry row) async {
+    if (_opening != null) return;
     final old = generation;
-    await _act(() async {
-      final validated = await store.open(row);
-      if (!mounted || old != generation) return;
-      await Navigator.of(context).push<void>(
-        MaterialPageRoute(
-          builder: (_) =>
-              CourseCachePlaybackPage(library: store, entry: validated.entry),
-        ),
-      );
-      if (mounted) await _load();
-    });
+    setState(() => _opening = row.id);
+    try {
+      await _act(() async {
+        final ({CourseCacheEntry entry, String video, String? audio}) validated;
+        try {
+          validated = await store.open(row);
+        } on CourseCacheFailure catch (error) {
+          if (error.recheckNeeded && mounted && old == generation) {
+            setState(() => _needsRecheck[row.id] = row.checkedAt);
+          }
+          rethrow;
+        }
+        if (!mounted || old != generation) return;
+        setState(() => _opening = null);
+        await Navigator.of(context).push<void>(
+          MaterialPageRoute(
+            builder: (_) =>
+                CourseCachePlaybackPage(library: store, entry: validated.entry),
+          ),
+        );
+        if (mounted) await _load();
+      });
+    } finally {
+      if (mounted && old == generation && _opening == row.id) {
+        setState(() => _opening = null);
+      }
+    }
   }
 
   @override
@@ -187,7 +240,9 @@ class _CourseCachePageState extends State<CourseCachePage>
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            const Text('仅在课程方允许离线时使用。缓存只供当前购买账号使用，不支持导出；试看和受保护章节不可缓存。'),
+            const Text(
+              '仅在课程方允许离线时使用。缓存只供当前购买账号使用，不支持导出；试看和受保护章节不可缓存。到期后可联网复核，内容没变时不用重复下载。',
+            ),
             if (loading || suspended)
               const Padding(
                 padding: EdgeInsets.all(20),
@@ -234,7 +289,9 @@ class _CourseCachePageState extends State<CourseCachePage>
                   onPressed: () => _act(store.pause),
                   icon: const Icon(Icons.pause),
                   label: Text(
-                    '暂停缓存 · ${(store.received / 1048576).toStringAsFixed(1)} MB',
+                    store.checking
+                        ? '取消联网复核'
+                        : '暂停缓存 · ${(store.received / 1048576).toStringAsFixed(1)} MB',
                   ),
                 ),
               ],
@@ -268,20 +325,25 @@ class _CourseCachePageState extends State<CourseCachePage>
                         ),
                         Text(row.chapterTitle),
                         Text(
-                          !row.complete
+                          !row.hasMedia
                               ? '未完成，可联网继续'
-                              : row.usableAt(DateTime.now())
+                              : _usable(row)
                               ? '已缓存 · ${((row.videoBytes + row.audioBytes) / 1048576).toStringAsFixed(1)} MB'
-                              : '校验已到期，需重新联网缓存',
+                              : '需联网复核，必要时重新下载',
                         ),
                         Wrap(
                           spacing: 8,
                           children: [
-                            if (row.usableAt(DateTime.now()))
+                            if (_usable(row))
                               TextButton.icon(
-                                onPressed: () => _open(row),
+                                onPressed:
+                                    store.activeId == row.id || _opening != null
+                                    ? null
+                                    : () => _open(row),
                                 icon: const Icon(Icons.play_arrow),
-                                label: const Text('离线播放'),
+                                label: Text(
+                                  _opening == row.id ? '正在检查本地文件' : '离线播放',
+                                ),
                               )
                             else
                               TextButton.icon(
@@ -294,8 +356,12 @@ class _CourseCachePageState extends State<CourseCachePage>
                                           quality: row.quality,
                                         ),
                                       ),
-                                icon: const Icon(Icons.download),
-                                label: Text(row.complete ? '重新缓存' : '继续缓存'),
+                                icon: Icon(
+                                  row.hasMedia
+                                      ? Icons.verified_outlined
+                                      : Icons.download,
+                                ),
+                                label: Text(row.hasMedia ? '联网复核' : '继续缓存'),
                               ),
                             TextButton(
                               onPressed: store.busy ? null : () => _remove(row),

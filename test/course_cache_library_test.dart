@@ -32,6 +32,7 @@ class Access extends CourseCacheAccess {
   int? mid = 51;
   int calls = 0;
   bool denied = false;
+  CourseCacheAccessException? failure;
   late DateTime now;
   Duration window = const Duration(hours: 1);
   late OfflineMediaPlan media;
@@ -44,6 +45,7 @@ class Access extends CourseCacheAccess {
     int quality,
   ) async {
     calls++;
+    if (failure case final error?) throw error;
     if (denied) throw const CourseCacheAccessException('无法验证购买。');
     final uid = mid!;
     return CourseCacheGrant(
@@ -94,6 +96,8 @@ class FixtureTransfer extends ResumableMediaDownload {
     void Function(int, int?) onProgress, {
     DownloadControl? control,
     String? mediaIdentity,
+    void Function(Uri)? beforeRequest,
+    void Function(String?)? onCompleteVersion,
   }) async {
     expect(headers.keys.map((x) => x.toLowerCase()), isNot(contains('cookie')));
     starts.add(uri.path);

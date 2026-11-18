@@ -10,8 +10,16 @@ import 'offline_media_plan.dart';
 
 /// A safe error for UI; never holds responses, cookies, or temporary URLs.
 class CourseCacheAccessException implements Exception {
-  const CourseCacheAccessException(this.message);
+  const CourseCacheAccessException(
+    this.message, {
+    this.revokesReceipt = true,
+    this.knownUntil,
+  });
   final String message;
+  final bool revokesReceipt;
+
+  /// An explicit earlier restriction already observed before a transient error.
+  final DateTime? knownUntil;
 
   @override
   String toString() => message;
@@ -26,6 +34,7 @@ class CourseCacheGrant {
     required this.validUntil,
     required this.checkSession,
     required this.mediaHeaders,
+    this.checkTransport,
   });
 
   final int mid;
@@ -34,6 +43,9 @@ class CourseCacheGrant {
   final DateTime validUntil;
   final Future<void> Function() checkSession;
   final Map<String, String> mediaHeaders;
+
+  /// A CDN signature authenticates only a request, never the offline receipt.
+  final void Function(Uri, DateTime)? checkTransport;
 }
 
 class CourseCacheAccess {
@@ -66,7 +78,15 @@ class CourseCacheAccess {
     '当前课程未返回可确认的完整媒体格式，无法缓存。',
   );
   static const _expiry = CourseCacheAccessException('无法确认有效期限，课程缓存不可用。');
-  static const _network = CourseCacheAccessException('无法核验课程权限，请检查登录状态和网络后重试。');
+  static const _network = CourseCacheAccessException(
+    '暂时无法联网核验课程，请检查网络后重试。',
+    revokesReceipt: false,
+  );
+
+  static const _transportUnavailable = CourseCacheAccessException(
+    '课程下载地址已到期或无法确认，请重新联网确认。',
+    revokesReceipt: false,
+  );
 
   final CourseJsonRequest _requestJson;
   final Future<String> Function()? _readCookies;
@@ -91,6 +111,24 @@ class CourseCacheAccess {
     VideoPart part,
     int quality,
   ) async {
+    DateTime? authorizationExpiry;
+    void cap(DateTime? expires) {
+      if (expires != null &&
+          (authorizationExpiry == null ||
+              expires.isBefore(authorizationExpiry!))) {
+        authorizationExpiry = expires;
+      }
+    }
+
+    CourseCacheAccessException withObservedLimit(
+      CourseCacheAccessException error,
+    ) => error.revokesReceipt || authorizationExpiry == null
+        ? error
+        : CourseCacheAccessException(
+            error.message,
+            revokesReceipt: false,
+            knownUntil: authorizationExpiry,
+          );
     try {
       final season = video.courseSeasonId;
       final ep = part.courseEpisodeId;
@@ -116,6 +154,8 @@ class CourseCacheAccess {
 
       final account = await _captureSession();
       final checkedAt = _clock().toUtc();
+      void restrictOfflineExpiry(Object? data) => cap(_offlineExpiry(data));
+
       Future<String> request(Uri uri, String cookie) async {
         if (cookie != account.header || !_isOfficial(uri)) {
           throw _sessionChanged;
@@ -127,10 +167,16 @@ class CourseCacheAccess {
             uri,
             cookie,
           ).timeout(const Duration(seconds: 30));
+        } on CourseCacheAccessException {
+          rethrow;
         } catch (_) {
           throw _network;
         }
         await account.validate();
+        final envelope = jsonDecode(response);
+        if (envelope is Map) {
+          restrictOfflineExpiry(Map.of(envelope)..remove('data'));
+        }
         if (uri.path == _paid) {
           final batch = _data(response)['data'];
           if (batch is List) {
@@ -142,6 +188,15 @@ class CourseCacheAccess {
                   throw _unavailable;
                 }
                 _checkRestrictions(row);
+                restrictOfflineExpiry(row);
+                if (row.containsKey('expire_at')) {
+                  final raw = _integer(row['expire_at']);
+                  if (raw != 0) {
+                    final end = _epoch(raw);
+                    if (end == null) throw _expiry;
+                    cap(end);
+                  }
+                }
               }
             }
           }
@@ -189,14 +244,17 @@ class CourseCacheAccess {
       }
       // Do not allow restrictions on another episode/recommended course to
       // stand in for this episode's own metadata; check the target below.
-      _checkRestrictions(
-        Map.of(meta)
-          ..remove('episodes')
-          ..remove('recommend_seasons'),
-      );
+      final relevantMeta = Map.of(meta)
+        ..remove('episodes')
+        ..remove('recommend_seasons');
+      _checkRestrictions(relevantMeta);
+      restrictOfflineExpiry(relevantMeta);
+      if (authorizationExpiry case final end? when !checkedAt.isBefore(end)) {
+        throw _expiry;
+      }
       if (_switch(meta['show_watermark']) != false) throw _protected;
-      final purchaseExpiry = _purchaseExpiry(meta, status);
-      if (purchaseExpiry != null && !checkedAt.isBefore(purchaseExpiry)) {
+      cap(_purchaseExpiry(meta, status));
+      if (authorizationExpiry case final end? when !checkedAt.isBefore(end)) {
         throw _expiry;
       }
       final episode = await _findEpisode(meta, season, ep, account, request);
@@ -209,6 +267,10 @@ class CourseCacheAccess {
         throw _unavailable;
       }
       _checkRestrictions(episode);
+      restrictOfflineExpiry(episode);
+      if (authorizationExpiry case final end? when !checkedAt.isBefore(end)) {
+        throw _expiry;
+      }
 
       final mediaData = _data(
         await request(
@@ -234,6 +296,7 @@ class CourseCacheAccess {
         throw _unavailable;
       }
       _checkRestrictions(mediaData);
+      restrictOfflineExpiry(mediaData);
       // A purchased course can still be served a preview or a protected
       // rendition. Missing evidence of a full, unprotected response is not
       // evidence that a cached copy would be equivalent.
@@ -244,16 +307,19 @@ class CourseCacheAccess {
       }
       final media = _media(mediaData, quality);
       var validUntil = checkedAt.add(const Duration(hours: 24));
-      if (purchaseExpiry != null && purchaseExpiry.isBefore(validUntil)) {
-        validUntil = purchaseExpiry;
+      if (authorizationExpiry case final until?
+          when until.isBefore(validUntil)) {
+        validUntil = until;
       }
+      // Validate the address metadata, but do not fold URL expiry into
+      // the offline receipt. Each network request checks its own URL again.
       for (final track in [media.video, ?media.audio]) {
+        var usable = false;
         for (final raw in track.urls) {
-          final expires = _mediaExpiry(Uri.parse(raw));
-          if (expires != null && expires.isBefore(validUntil)) {
-            validUntil = expires;
-          }
+          final end = _mediaExpiry(Uri.parse(raw));
+          if (end == null || _clock().isBefore(end)) usable = true;
         }
+        if (!usable) throw _transportUnavailable;
       }
       final expiry = validUntil;
       void checkClock() {
@@ -276,6 +342,15 @@ class CourseCacheAccess {
         checkedAt: checkedAt,
         validUntil: expiry,
         checkSession: checkSession,
+        checkTransport: (uri, now) {
+          if (uri.port != 443 || !MediaUrlPolicy.isSafe(uri.toString())) {
+            throw _unsupported;
+          }
+          final end = _mediaExpiry(uri);
+          if (end != null && !now.isBefore(end)) {
+            throw _transportUnavailable;
+          }
+        },
         mediaHeaders: Map.unmodifiable({
           'Accept': '*/*',
           'Accept-Encoding': 'identity',
@@ -284,10 +359,10 @@ class CourseCacheAccess {
           'User-Agent': _agent,
         }),
       );
-    } on CourseCacheAccessException {
-      rethrow;
+    } on CourseCacheAccessException catch (error) {
+      throw withObservedLimit(error);
     } catch (_) {
-      throw _network;
+      throw withObservedLimit(_network);
     }
   }
 
@@ -416,11 +491,11 @@ class CourseCacheAccess {
 
   static Map _data(String response) {
     final value = jsonDecode(response);
-    if (value is! Map ||
-        _integer(value['code']) != 0 ||
-        value['data'] is! Map) {
-      throw _unavailable;
-    }
+    if (value is! Map) throw _network;
+    final code = _integer(value['code']);
+    if (code == -101 || code == -401) throw _sessionChanged;
+    if (code == -403 || code == -404) throw _unavailable;
+    if (code != 0 || value['data'] is! Map) throw _network;
     _checkRestrictions(Map.of(value)..remove('data'));
     return value['data'] as Map;
   }
@@ -472,6 +547,39 @@ class CourseCacheAccess {
 
   static String _canonical(String key) =>
       key.toLowerCase().replaceAll(RegExp('[^a-z0-9]'), '');
+
+  static const _offlineExpiryFields = {
+    'offlineexpiresat',
+    'offlineexpireat',
+    'offlinevaliduntil',
+    'cacheexpiresat',
+    'cacheexpireat',
+    'cachevaliduntil',
+    'offlineauthorizationexpiresat',
+    'offlineauthorizationexpireat',
+  };
+
+  static DateTime? _offlineExpiry(Object? value) {
+    DateTime? earliest;
+    final pending = <Object?>[value];
+    while (pending.isNotEmpty) {
+      final node = pending.removeLast();
+      if (node is List) {
+        pending.addAll(node);
+      } else if (node is Map) {
+        for (final item in node.entries) {
+          if (_offlineExpiryFields.contains(_canonical('${item.key}'))) {
+            final end = _epoch(_integer(item.value));
+            if (end == null) throw _expiry;
+            if (earliest == null || end.isBefore(earliest)) earliest = end;
+          } else if (item.value is List || item.value is Map) {
+            pending.add(item.value);
+          }
+        }
+      }
+    }
+    return earliest;
+  }
 
   static void _checkRestrictions(Object? value) {
     final pending = <Object?>[value];
@@ -637,7 +745,7 @@ class CourseCacheAccess {
         signed = true;
       }
       if (!known) continue;
-      if (values.length != 1) throw _expiry;
+      if (values.length != 1) throw _transportUnavailable;
       final raw = values.single;
       final timestamp = switch (key) {
         'wstime' => int.tryParse(raw, radix: 16),
@@ -645,10 +753,10 @@ class CourseCacheAccess {
         _ => _integer(raw),
       };
       final next = _epoch(timestamp);
-      if (next == null) throw _expiry;
+      if (next == null) throw _transportUnavailable;
       if (expiry == null || next.isBefore(expiry)) expiry = next;
     }
-    if (signed && expiry == null) throw _expiry;
+    if (signed && expiry == null) throw _transportUnavailable;
     return expiry;
   }
 
@@ -679,6 +787,11 @@ class CourseCacheAccess {
       final response = await request.close().timeout(
         const Duration(seconds: 15),
       );
+      if (response.statusCode == HttpStatus.unauthorized) throw _sessionChanged;
+      if (response.statusCode == HttpStatus.forbidden ||
+          response.statusCode == HttpStatus.notFound) {
+        throw _unavailable;
+      }
       if (response.statusCode != HttpStatus.ok) throw _network;
       return await response
           .transform(utf8.decoder)

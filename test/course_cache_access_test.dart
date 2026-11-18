@@ -184,7 +184,7 @@ void main() {
   });
 
   test(
-    'binds complete DASH purchase and exact episode; selected URL TTL is shortest',
+    'binds exact DASH tracks; individual signed URL deadlines constrain only requests',
     () async {
       final service = fixture.service();
       final grant = await service.authorize(_video, _part, 64);
@@ -206,7 +206,17 @@ void main() {
       });
       expect(grant.mid, 51);
       expect(grant.checkedAt, _now);
-      expect(grant.validUntil, _now.add(const Duration(hours: 4)));
+      expect(grant.validUntil, _now.add(const Duration(hours: 8)));
+      final videoUrl = Uri.parse(grant.media.video.urls.single);
+      final audioUrl = Uri.parse(grant.media.audio!.urls.first);
+      final afterVideoToken = _now.add(const Duration(hours: 4));
+      expect(() => grant.checkTransport!(videoUrl, afterVideoToken), _rejected);
+      expect(
+        () => grant.checkTransport!(audioUrl, afterVideoToken),
+        returnsNormally,
+      );
+      fixture.now = afterVideoToken;
+      await grant.checkSession();
       expect(grant.media.quality, 64);
       expect(grant.media.audio!.urls, hasLength(2));
       expect(grant.mediaHeaders.keys, isNot(contains('Cookie')));
@@ -241,6 +251,47 @@ void main() {
     final grant = await fixture.service().authorize(_video, _part, 64);
     expect(grant.validUntil, purchaseEnd);
   });
+
+  test(
+    'the earliest explicit purchase or offline authorization wins',
+    () async {
+      fixture.purchases.single['expire_at'] = _seconds(
+        _now.add(const Duration(hours: 5)),
+      );
+      fixture.accountStatus['offline_expires_at'] = _seconds(
+        _now.add(const Duration(hours: 3)),
+      );
+      final earlier = _now.add(const Duration(hours: 2));
+      fixture.response['offline_valid_until'] = earlier.millisecondsSinceEpoch;
+      final grant = await fixture.service().authorize(_video, _part, 64);
+      expect(grant.validUntil, earlier);
+      fixture.now = earlier;
+      await expectLater(grant.checkSession(), _rejected);
+    },
+  );
+
+  test(
+    'an expired backup signing token cannot shorten valid media or block other URLs',
+    () async {
+      fixture.videoTrack['backupUrl'] = [
+        _url('expired.m4s', const Duration(hours: -1)),
+      ];
+      final grant = await fixture.service().authorize(_video, _part, 64);
+      expect(grant.validUntil, _now.add(const Duration(hours: 8)));
+      expect(
+        () => grant.checkTransport!(
+          Uri.parse(grant.media.video.urls.first),
+          _now,
+        ),
+        returnsNormally,
+      );
+      expect(
+        () =>
+            grant.checkTransport!(Uri.parse(grant.media.video.urls.last), _now),
+        _rejected,
+      );
+    },
+  );
 
   test(
     'explicit long-term purchase caps proven single MP4 at 24 hours',

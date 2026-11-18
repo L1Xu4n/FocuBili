@@ -31,13 +31,19 @@ class CourseCacheEntry {
     this.audioBytes = 0,
     this.checkedAt,
     this.until,
+    this.videoHash,
+    this.audioHash,
+    this.videoVersion,
+    this.audioVersion,
   });
   final int mid, season, ep, aid, cid, quality, videoBytes, audioBytes;
   final String courseTitle, chapterTitle;
   final Duration duration;
   final DateTime? checkedAt, until;
+  final String? videoHash, audioHash, videoVersion, audioVersion;
   String get id => '$season-$ep-$aid-$cid';
-  bool get complete => videoBytes > 0 && until != null && checkedAt != null;
+  bool get hasMedia => videoBytes > 0;
+  bool get complete => hasMedia && until != null && checkedAt != null;
   bool usableAt(DateTime now) =>
       complete &&
       !now.isBefore(checkedAt!) &&
@@ -75,6 +81,10 @@ class CourseCacheEntry {
     'a': audioBytes,
     'checked': checkedAt?.millisecondsSinceEpoch,
     'until': until?.millisecondsSinceEpoch,
+    'videoHash': ?videoHash,
+    'audioHash': ?audioHash,
+    'videoVersion': ?videoVersion,
+    'audioVersion': ?audioVersion,
   };
   factory CourseCacheEntry.fromJson(int mid, Map j) {
     int positive(String k) {
@@ -89,6 +99,15 @@ class CourseCacheEntry {
       return n;
     }
 
+    String? digest(String key) {
+      final value = j[key];
+      if (value == null) return null;
+      if (value is! String || !RegExp(r'^[0-9a-f]{64}$').hasMatch(value)) {
+        throw const FormatException();
+      }
+      return value;
+    }
+
     return CourseCacheEntry(
       mid: mid,
       season: positive('season'),
@@ -101,22 +120,32 @@ class CourseCacheEntry {
       quality: positive('quality'),
       videoBytes: nonnegative('v'),
       audioBytes: nonnegative('a'),
+      videoHash: digest('videoHash'),
+      audioHash: digest('audioHash'),
+      videoVersion: digest('videoVersion'),
+      audioVersion: digest('audioVersion'),
       checkedAt: j['checked'] == null
           ? null
-          : DateTime.fromMillisecondsSinceEpoch(positive('checked')),
+          : DateTime.fromMillisecondsSinceEpoch(
+              positive('checked'),
+              isUtc: true,
+            ),
       until: j['until'] == null
           ? null
-          : DateTime.fromMillisecondsSinceEpoch(positive('until')),
+          : DateTime.fromMillisecondsSinceEpoch(positive('until'), isUtc: true),
     );
   }
 }
 
 class CourseCacheFailure implements Exception {
-  const CourseCacheFailure(this.message);
+  const CourseCacheFailure(this.message, {this.recheckNeeded = false});
   final String message;
+  final bool recheckNeeded;
   @override
   String toString() => message;
 }
+
+enum _VersionProbe { matches, incompatible, unavailable }
 
 class CourseCacheLibrary extends ChangeNotifier {
   CourseCacheLibrary({
@@ -136,11 +165,20 @@ class CourseCacheLibrary extends ChangeNotifier {
   final DateTime Function() _clock;
   Future<void>? _running;
   DownloadControl? _control;
-  String? _busyKey;
+  String? _busyKey, _operationKey;
   bool _closed = false, _deleting = false;
   int _revision = 0, _received = 0, _listVersion = 0;
   int get listVersion => _listVersion;
   int? _total;
+  bool _checking = false;
+  bool get checking => _checking;
+  bool isUsable(CourseCacheEntry entry) => entry.usableAt(_clock());
+  Duration untilExpiry(CourseCacheEntry entry) =>
+      entry.until!.difference(_clock());
+
+  // Opening a lesson crosses several player adapters. Reuse the local digest
+  // check only while the exact path's size, mtime and change time still match.
+  final _verified = <String, ({FileStat stat, String hash})>{};
   String? _error;
   String? get activeId => _busyKey;
   int get received => _received;
@@ -155,6 +193,7 @@ class CourseCacheLibrary extends ChangeNotifier {
 
   void _accountChanged() {
     _revision++;
+    _verified.clear();
     _listVersion++;
     _control?.interrupt();
     _busyKey = null;
@@ -211,11 +250,21 @@ class CourseCacheLibrary extends ChangeNotifier {
     return file;
   }
 
-  Future<void> _save(Directory dir, CourseCacheEntry e) async {
+  Future<void> _save(
+    Directory dir,
+    CourseCacheEntry e, {
+    Future<void> Function()? validate,
+  }) async {
     final temp = await _file(dir, 'entry.tmp'),
         dest = await _file(dir, 'entry.json');
     await temp.writeAsString(jsonEncode(e.toJson()), flush: true);
-    await temp.rename(dest.path);
+    try {
+      if (validate != null) await validate();
+      await temp.rename(dest.path);
+    } catch (_) {
+      if (await temp.exists()) await temp.delete();
+      rethrow;
+    }
   }
 
   Future<CourseCacheEntry?> _read(Directory d, int mid) async {
@@ -277,7 +326,8 @@ class CourseCacheLibrary extends ChangeNotifier {
     _received = 0;
     _total = null;
     _error = null;
-    _busyKey =
+    _checking = true;
+    _operationKey = _busyKey =
         '${v.courseSeasonId}-${p.courseEpisodeId}-${p.courseAid}-${p.cid}';
     final run = _transfer(v, p, quality, c, revision);
     _running = run;
@@ -295,12 +345,188 @@ class CourseCacheLibrary extends ChangeNotifier {
             : '课程缓存失败，请检查网络、购买状态和剩余空间。';
       }
     } finally {
-      _busyKey = null;
+      _busyKey = _operationKey = null;
+      _checking = false;
       _control = null;
       _running = null;
       _listVersion++;
       _emit();
     }
+  }
+
+  static String _trackVersion(OfflineMediaTrack track, String object) => sha256
+      .convert(
+        utf8.encode(
+          jsonEncode([track.id, track.codec, track.bandwidth, object]),
+        ),
+      )
+      .toString();
+
+  static bool _sameStat(FileStat a, FileStat b) =>
+      a.type == b.type &&
+      a.size == b.size &&
+      a.modified == b.modified &&
+      a.changed == b.changed;
+
+  Future<String?> _hashFile(
+    File file,
+    int size,
+    void Function() check, {
+    bool useMemo = false,
+  }) async {
+    check();
+    final before = await file.stat();
+    if (size <= 0 ||
+        before.type != FileSystemEntityType.file ||
+        before.size != size) {
+      return null;
+    }
+    final memo = _verified[file.path];
+    if (useMemo && memo != null && _sameStat(before, memo.stat)) {
+      return memo.hash;
+    }
+    final Digest digest;
+    try {
+      digest = await sha256
+          .bind(
+            file.openRead().map((chunk) {
+              check();
+              return chunk;
+            }),
+          )
+          .first;
+    } on FileSystemException {
+      return null;
+    }
+    check();
+    if (!_sameStat(before, await file.stat())) return null;
+    final hash = digest.toString();
+    if (_verified.length >= 16) _verified.remove(_verified.keys.first);
+    _verified[file.path] = (stat: before, hash: hash);
+    return hash;
+  }
+
+  static CourseCacheEntry _withoutReceipt(CourseCacheEntry entry) =>
+      CourseCacheEntry.fromJson(entry.mid, {
+        ...entry.toJson(),
+        'checked': null,
+        'until': null,
+      });
+
+  Future<void> _commitReceipt(
+    Directory dir,
+    CourseCacheEntry next,
+    CourseCacheEntry fallback,
+    Future<void> Function() check,
+  ) async {
+    await _save(dir, next, validate: check);
+    try {
+      await check();
+    } catch (_) {
+      // open() fences this chapter until the operation settles, including
+      // the narrow interval between atomic rename and the final fence check.
+      await _save(dir, fallback);
+      rethrow;
+    }
+  }
+
+  Future<bool> _reuse(
+    Directory dir,
+    CourseCacheEntry old,
+    CourseCacheGrant grant,
+    DownloadControl c,
+    Future<void> Function() check,
+    void Function(Uri) beforeRequest,
+  ) async {
+    if (old.quality != grant.media.quality ||
+        old.videoHash == null ||
+        old.videoVersion == null ||
+        ((old.audioBytes > 0) != (grant.media.audio != null)) ||
+        (old.audioBytes > 0 &&
+            (old.audioHash == null || old.audioVersion == null))) {
+      return false;
+    }
+    Future<_VersionProbe> probe(
+      OfflineMediaTrack track,
+      int size,
+      String version,
+    ) async {
+      if (track.expectedBytes != null && track.expectedBytes != size) {
+        return _VersionProbe.incompatible;
+      }
+      var reached = false;
+      for (final url in track.urls) {
+        await check();
+        try {
+          final object = await downloader.probeVersion(
+            Uri.parse(url),
+            grant.mediaHeaders,
+            control: c,
+            beforeRequest: beforeRequest,
+          );
+          reached = true;
+          if (object != null && _trackVersion(track, object) == version) {
+            return _VersionProbe.matches;
+          }
+        } catch (_) {
+          c.check();
+        }
+      }
+      return reached ? _VersionProbe.incompatible : _VersionProbe.unavailable;
+    }
+
+    final vf = await _file(dir, 'video.bin');
+    if (await _hashFile(vf, old.videoBytes, c.check) != old.videoHash) {
+      return false;
+    }
+    final videoStat = _verified[vf.path]!.stat;
+    final audio = grant.media.audio;
+    File? af;
+    FileStat? audioStat;
+    if (audio != null) {
+      af = await _file(dir, 'audio.bin');
+      if (await _hashFile(af, old.audioBytes, c.check) != old.audioHash) {
+        return false;
+      }
+      audioStat = _verified[af.path]!.stat;
+    }
+
+    Future<bool> matched(
+      OfflineMediaTrack track,
+      int bytes,
+      String version,
+    ) async {
+      final result = await probe(track, bytes, version);
+      await check();
+      if (result == _VersionProbe.unavailable) {
+        throw const CourseCacheFailure('暂时无法核对媒体版本，请检查网络后重试。');
+      }
+      return result == _VersionProbe.matches;
+    }
+
+    if (!await matched(grant.media.video, old.videoBytes, old.videoVersion!) ||
+        (audio != null &&
+            !await matched(audio, old.audioBytes, old.audioVersion!))) {
+      return false;
+    }
+
+    // Detect changes while HEAD was in flight; each track was hashed before
+    // probing and both file stats must still refer to the same bytes.
+    if (!_sameStat(videoStat, await vf.stat()) ||
+        (af != null && !_sameStat(audioStat!, await af.stat()))) {
+      return false;
+    }
+    await _commitReceipt(
+      dir,
+      CourseCacheEntry.fromJson(old.mid, {
+        ...old.toJson(),
+        'checked': grant.checkedAt.millisecondsSinceEpoch,
+        'until': grant.validUntil.millisecondsSinceEpoch,
+      }),
+      old,
+      check,
+    );
+    return true;
   }
 
   Future<void> _transfer(
@@ -325,30 +551,89 @@ class CourseCacheLibrary extends ChangeNotifier {
     final dir = await _dirs(mid, pending.id);
     await _same(mid, rev);
     c.check();
-    // An interrupted renewal cannot keep using a now-denied/stale proof.
-    final previous = await _read(dir, mid);
-    if (previous != null) {
-      final revoked = Map<String, Object?>.of(previous.toJson())
-        ..['checked'] = null
-        ..['until'] = null;
-      await _save(dir, CourseCacheEntry.fromJson(mid, revoked));
-      _listVersion++;
-      _emit();
+    CourseCacheEntry? previous;
+    try {
+      previous = await _read(dir, mid);
+    } on FormatException {
+      // A new authoritative proof can replace an unreadable legacy receipt.
+    } on TypeError {
+      // Same as malformed JSON.
     }
-    final g = await c.guard(access.authorize(v, p, q));
+    if (previous?.id != pending.id) previous = null;
+    c.check();
+    CourseCacheEntry? shortened(DateTime? until) {
+      final old = previous;
+      if (old == null ||
+          !old.complete ||
+          until == null ||
+          !until.isBefore(old.until!)) {
+        return null;
+      }
+      return !_clock().isBefore(until)
+          ? _withoutReceipt(old)
+          : CourseCacheEntry.fromJson(mid, {
+              ...old.toJson(),
+              'until': until.millisecondsSinceEpoch,
+            });
+    }
+
+    Future<void> stillCurrent() async {
+      c.check();
+      await _same(mid, rev);
+      c.check();
+    }
+
+    final CourseCacheGrant g;
+    try {
+      g = await c.guard(access.authorize(v, p, q));
+    } on CourseCacheAccessException catch (error) {
+      final updated = error.revokesReceipt && previous?.complete == true
+          ? _withoutReceipt(previous!)
+          : shortened(error.knownUntil);
+      if (updated != null) {
+        await _save(dir, updated, validate: stillCurrent);
+      }
+      rethrow;
+    }
     if (g.mid != mid) throw _inactive;
     Future<void> check() async {
       c.check();
       await _same(mid, rev);
       await g.checkSession();
       c.check();
-      if (_clock().isBefore(g.checkedAt) || !_clock().isBefore(g.validUntil)) {
+      final now = _clock();
+      if (now.isBefore(g.checkedAt) ||
+          !now.isBefore(g.validUntil) ||
+          g.validUntil.difference(g.checkedAt) > const Duration(hours: 24)) {
         throw const CourseCacheFailure('本次课程校验已到期，请重新联网确认。');
       }
     }
 
+    void beforeRequest(Uri url) {
+      c.check();
+      if (rev != _revision) throw _inactive;
+      g.checkTransport?.call(url, _clock());
+    }
+
+    await stillCurrent();
+    // Even if the HEAD request fails later, never keep a longer offline
+    // window than the purchase or explicit authorization we just observed.
+    final shorter = shortened(g.validUntil);
+    if (shorter != null) {
+      await _save(dir, shorter, validate: stillCurrent);
+      previous = shorter;
+    }
     await check();
-    await _save(dir, pending);
+    final current = previous;
+    if (current != null &&
+        current.hasMedia &&
+        await _reuse(dir, current, g, c, check, beforeRequest)) {
+      return;
+    }
+    // Fresh authorization but no proof that old bytes are equivalent. Hide
+    // them before touching any files; the replacement only commits atomically.
+    _checking = false;
+    await _save(dir, pending, validate: check);
     _listVersion++;
     _emit();
     final ttl = g.validUntil.difference(_clock());
@@ -361,12 +646,16 @@ class CourseCacheLibrary extends ChangeNotifier {
     final paint = Stopwatch()..start();
     try {
       var offset = 0;
-      Future<int> track(OfflineMediaTrack t, String name) async {
+      Future<({int bytes, String? version})> track(
+        OfflineMediaTrack t,
+        String name,
+      ) async {
         final output = await _file(dir, '$name.part');
         await _file(dir, '$name.part.resume');
         for (final url in t.urls) {
           await check();
           try {
+            String? objectVersion;
             final n = await downloader.download(
               Uri.parse(url),
               g.mediaHeaders,
@@ -387,6 +676,8 @@ class CourseCacheLibrary extends ChangeNotifier {
                 }
               },
               control: c,
+              beforeRequest: beforeRequest,
+              onCompleteVersion: (value) => objectVersion = value,
               mediaIdentity: sha256
                   .convert(utf8.encode('${pending.id}:${t.identity}'))
                   .toString(),
@@ -395,7 +686,12 @@ class CourseCacheLibrary extends ChangeNotifier {
               throw const CourseCacheFailure('课程媒体接收不完整。');
             }
             offset += n;
-            return n;
+            return (
+              bytes: n,
+              version: objectVersion == null
+                  ? null
+                  : _trackVersion(t, objectVersion!),
+            );
           } catch (_) {
             c.check();
           }
@@ -403,8 +699,11 @@ class CourseCacheLibrary extends ChangeNotifier {
         throw const CourseCacheFailure('课程媒体接收不完整，请重试。');
       }
 
-      final nv = await track(g.media.video, 'video'),
-          na = g.media.audio == null ? 0 : await track(g.media.audio!, 'audio');
+      final video = await track(g.media.video, 'video');
+      final audio = g.media.audio == null
+          ? null
+          : await track(g.media.audio!, 'audio');
+      final nv = video.bytes, na = audio?.bytes ?? 0;
       await check();
       for (final name in ['video', if (na > 0) 'audio']) {
         if (!await CourseCacheContainer.clearMp4(
@@ -426,10 +725,23 @@ class CourseCacheLibrary extends ChangeNotifier {
           throw const CourseCacheFailure('实际媒体缺少所需音画轨、含保护标记或格式不受支持，未创建可播放缓存。');
         }
       }
+      final videoHash = await _hashFile(
+        await _file(dir, 'video.part'),
+        nv,
+        c.check,
+      );
+      final audioHash = na == 0
+          ? null
+          : await _hashFile(await _file(dir, 'audio.part'), na, c.check);
+      if (videoHash == null || (na > 0 && audioHash == null)) {
+        throw const CourseCacheFailure('课程媒体在校验期间发生变化，请重新缓存。');
+      }
       await check();
       final vf = await _file(dir, 'video.bin');
+      _verified.remove(vf.path);
       await (await _file(dir, 'video.part')).rename(vf.path);
       final af = await _file(dir, 'audio.bin');
+      _verified.remove(af.path);
       if (na > 0) {
         await (await _file(dir, 'audio.part')).rename(af.path);
       } else if (await af.exists()) {
@@ -440,7 +752,7 @@ class CourseCacheLibrary extends ChangeNotifier {
         if (await f.exists()) await f.delete();
       }
       await check();
-      await _save(
+      await _commitReceipt(
         dir,
         CourseCacheEntry(
           mid: mid,
@@ -456,7 +768,13 @@ class CourseCacheLibrary extends ChangeNotifier {
           audioBytes: na,
           checkedAt: g.checkedAt,
           until: g.validUntil,
+          videoHash: videoHash,
+          audioHash: audioHash,
+          videoVersion: video.version,
+          audioVersion: audio?.version,
         ),
+        pending,
+        check,
       );
     } finally {
       deadline.cancel();
@@ -491,21 +809,43 @@ class CourseCacheLibrary extends ChangeNotifier {
     CourseCacheEntry e,
   ) async {
     final rev = _revision;
+    final version = _listVersion;
+    if (_operationKey == e.id || _deleting) {
+      throw const CourseCacheFailure('正在检查课程缓存，请稍后再播放。');
+    }
     await _same(e.mid, rev);
     final dir = await _dirs(e.mid, e.id), fresh = await _read(dir, e.mid);
     if (fresh == null || fresh.id != e.id || !fresh.usableAt(_clock())) {
-      throw const CourseCacheFailure('缓存不完整或校验已到期，请联网重新确认。');
+      throw const CourseCacheFailure('缓存不完整或校验已到期，请联网复核。', recheckNeeded: true);
     }
     final v = await _file(dir, 'video.bin'), a = await _file(dir, 'audio.bin');
     if (!await v.exists() ||
         await v.length() != fresh.videoBytes ||
-        fresh.audioBytes > 0 &&
-            (!await a.exists() || await a.length() != fresh.audioBytes)) {
-      throw const CourseCacheFailure('课程缓存已被清理或损坏，请重新缓存。');
+        (fresh.videoHash != null &&
+            await _hashFile(v, fresh.videoBytes, () {}, useMemo: true) !=
+                fresh.videoHash) ||
+        (fresh.audioBytes > 0 &&
+            (!await a.exists() ||
+                await a.length() != fresh.audioBytes ||
+                (fresh.audioHash != null &&
+                    await _hashFile(
+                          a,
+                          fresh.audioBytes,
+                          () {},
+                          useMemo: true,
+                        ) !=
+                        fresh.audioHash)))) {
+      throw const CourseCacheFailure(
+        '课程缓存已被清理或损坏，联网复核时会重新缓存。',
+        recheckNeeded: true,
+      );
     }
     await _same(e.mid, rev);
+    if (_operationKey == e.id || _deleting || _listVersion != version) {
+      throw const CourseCacheFailure('课程缓存已变化，请重新打开。');
+    }
     if (!fresh.usableAt(_clock())) {
-      throw const CourseCacheFailure('本次课程校验已到期，请重新联网确认。');
+      throw const CourseCacheFailure('本次课程校验已到期，请联网复核。', recheckNeeded: true);
     }
     return (
       entry: fresh,
