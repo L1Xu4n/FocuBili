@@ -46,8 +46,15 @@ Future<void> _tapSide(
 }) async {
   final rect = tester.getRect(surface);
   final point = Offset(
-    rect.left + rect.width * (forward ? .83 : .17),
-    rect.center.dy,
+    // Keep portrait taps outside the floating settings card at all font metrics.
+    rect.left +
+        rect.width *
+            (rect.width <= 360 ? (forward ? .94 : .06) : (forward ? .83 : .17)),
+    // With Ahem at 180% the bottom bar is taller than with system CJK
+    // fonts. Target the actual gesture lane, not a button occupying mid-height.
+    surface.evaluate().single.widget.key == _surface
+        ? tester.getRect(find.byKey(_viewport)).center.dy
+        : rect.center.dy,
   );
   await tester.tapAt(point, kind: kind);
   await tester.pump(const Duration(milliseconds: 70));
