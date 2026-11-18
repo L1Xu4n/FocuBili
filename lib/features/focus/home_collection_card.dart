@@ -102,7 +102,8 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
   Map<int, Future<String>> _fallbackCoverRequests = {};
   int _folderNamesGeneration = 0;
   Map<String, String> _localGroupNames = {};
-  Map<String, String> _creatorAvatars = {};
+  Map<String, String> _groupAvatars = {};
+  Map<String, String> _verifiedFollowingAvatars = {};
   int? _followingMid;
   DateTime? _followingReadAt;
   AccountDataPage<FollowedCreator>? _followingSnapshot;
@@ -156,7 +157,8 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
       _remoteFolderCovers = {};
       _groupNamesMid = 0;
       _localGroupNames = {};
-      _creatorAvatars = {};
+      _groupAvatars = {};
+      _verifiedFollowingAvatars = {};
       _followingMid = null;
       _followingReadAt = null;
       _followingSnapshot = null;
@@ -182,7 +184,8 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
         _groupNamesGeneration++;
         _groupNamesMid = 0;
         _localGroupNames = {};
-        _creatorAvatars = {};
+        _groupAvatars = {};
+        _verifiedFollowingAvatars = {};
         _followingMid = null;
         _followingReadAt = null;
         _followingSnapshot = null;
@@ -204,7 +207,8 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
         setState(() {
           _selected = [];
           _localGroupNames = {};
-          _creatorAvatars = {};
+          _groupAvatars = {};
+          _verifiedFollowingAvatars = {};
           _followingMid = null;
           _followingReadAt = null;
           _followingSnapshot = null;
@@ -448,7 +452,8 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
     if (_groupNamesMid != mid) {
       _groupNamesMid = mid;
       _localGroupNames = {};
-      _creatorAvatars = {};
+      _groupAvatars = {};
+      _verifiedFollowingAvatars = {};
       _followingMid = null;
       _followingReadAt = null;
       _followingSnapshot = null;
@@ -460,7 +465,7 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
       if (mounted && generation == _groupNamesGeneration) {
         setState(() {
           _localGroupNames = {for (final group in groups) group.id: group.name};
-          _creatorAvatars = {
+          _groupAvatars = {
             for (final group in groups)
               for (final creator in group.members)
                 if (creator.avatarUrl.isNotEmpty)
@@ -482,7 +487,11 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
   };
 
   String _choiceImage(_HomeChoice choice) => switch (choice.kind) {
-    'creator' => _creatorAvatars[choice.id] ?? choice.imageUrl,
+    'creator' =>
+      _groupAvatars[choice.id] ??
+          (choice.imageUrl.isNotEmpty
+              ? choice.imageUrl
+              : _verifiedFollowingAvatars[choice.id] ?? ''),
     'local' => _localFolderCovers[choice.id] ?? choice.imageUrl,
     'remote' => _remoteFolderCovers[choice.id] ?? choice.imageUrl,
     _ => '',
@@ -662,7 +671,7 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
         for (final creator in page.items) {
           if (selectedIds.contains('${creator.mid}') &&
               creator.avatarUrl.isNotEmpty) {
-            _creatorAvatars['${creator.mid}'] = creator.avatarUrl;
+            _verifiedFollowingAvatars['${creator.mid}'] = creator.avatarUrl;
           }
         }
       });

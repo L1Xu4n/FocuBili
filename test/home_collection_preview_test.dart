@@ -353,6 +353,20 @@ void main() {
     await tap(t, find.text('保存'));
     expect(prefs.getString(key(api, false)), contains(avatar));
   });
+  testWidgets('其他分组变动保留当前账号已经补到的头像，不重查网络', (t) async {
+    final api = Api();
+    await seed(api, [choice('creator', '22', '旧 UP')]);
+    await mount(t, api);
+    String visibleAvatar() =>
+        t.widget<AppNetworkImage>(find.byType(AppNetworkImage)).imageUrl;
+    expect(visibleAvatar(), avatar);
+    await FollowingGroupService.instance.save(api.mid, [
+      FollowingGroup(id: 'x', name: '另一分组'),
+    ]);
+    await settle(t);
+    expect(visibleAvatar(), avatar);
+    expect(api.calls, 1);
+  });
   testWidgets('旧头像补查迟到在切号后不显示', (t) async {
     final api = Api()..pending = Completer();
     await seed(api, [choice('creator', '22', '旧 UP')]);
