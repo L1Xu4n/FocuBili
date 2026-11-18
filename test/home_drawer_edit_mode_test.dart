@@ -176,7 +176,7 @@ void main() {
     expect(find.byType(AppFavoriteDetailPage), findsNothing);
     await _tap(tester, find.byKey(const ValueKey('customize-home-favorites')));
     expect(find.text('保存'), findsOneWidget);
-    expect(find.text('自选内容'), findsOneWidget);
+    expect(find.byKey(const ValueKey('home-mode-custom')), findsOneWidget);
     await tester.pageBack();
     await _settle(tester);
     expect(prefs.getString(_favoriteKey), before);
@@ -193,7 +193,7 @@ void main() {
     await _mount(tester);
     await _tap(tester, find.text('自定义'));
     await _tap(tester, find.byKey(const ValueKey('customize-home-favorites')));
-    await tester.tap(find.text('入口'));
+    await tester.tap(find.byKey(const ValueKey('home-mode-overview')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('保存'));
     await _settle(tester);
@@ -205,7 +205,7 @@ void main() {
     expect(find.text('课程资料'), findsNothing);
     await _tap(tester, find.text('自定义'));
     await _tap(tester, find.byKey(const ValueKey('customize-home-favorites')));
-    await tester.tap(find.text('自选内容'));
+    await tester.tap(find.byKey(const ValueKey('home-mode-custom')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('保存'));
     await _settle(tester);

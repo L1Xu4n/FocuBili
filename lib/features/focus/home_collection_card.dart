@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:async';
 import 'home_favorite_cover.dart';
+import '../common/app_network_image.dart';
+import '../../services/image_resource_cache.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../models/account_collection.dart';
@@ -17,10 +19,11 @@ import '../profile/following_groups_page.dart';
 import '../profile/user_profile_page.dart';
 import 'home_favorite_source_dialog.dart';
 
-/// 首页选择项只保存稳定身份与展示名，不保存会话或远端媒体地址。
+/// 首页选择项保存稳定身份、名称及可选公开头像，不保存会话或收藏封面地址。
 class _HomeChoice {
   /// 创建可打开的收藏夹、分组或 UP 主入口。
-  const _HomeChoice(this.kind, this.id, this.label);
+  const _HomeChoice(this.kind, this.id, this.label, {this.imageUrl = ''});
+  final String imageUrl;
   final String kind;
   final String id;
   final String label;
@@ -29,14 +32,34 @@ class _HomeChoice {
   String get key => '$kind:$id';
 
   /// 序列化用户顺序与入口身份。
-  Map<String, String> toJson() => {'kind': kind, 'id': id, 'label': label};
+  Map<String, String> toJson() => {
+    'kind': kind,
+    'id': id,
+    'label': label,
+    if (kind == 'creator' && _safeAvatar(imageUrl).isNotEmpty)
+      'avatar': _safeAvatar(imageUrl),
+  };
 
   /// 读取本机配置，损坏项使本次读取失败而不覆盖原文件。
   factory _HomeChoice.fromJson(Map<String, dynamic> json) => _HomeChoice(
     json['kind'] as String,
     json['id'] as String,
     json['label'] as String,
+    imageUrl: _safeAvatar(json['avatar'] as String? ?? ''),
   );
+}
+
+/// 头像快照不接受本地文件、鉴权查询、带凭据地址或内联数据。
+String _safeAvatar(String value) {
+  final uri = Uri.tryParse(value.trim());
+  return uri != null &&
+          (uri.scheme == 'https' || uri.scheme == 'http') &&
+          uri.host.isNotEmpty &&
+          uri.userInfo.isEmpty &&
+          !uri.hasQuery &&
+          !uri.hasFragment
+      ? value.trim()
+      : '';
 }
 
 /// 可由用户主动添加的收藏/关注卡片，支持总览入口与自选内容。
@@ -46,13 +69,19 @@ class HomeCollectionCard extends StatefulWidget {
     super.key,
     required this.favorites,
     this.accountDataService,
+    this.localFavorites,
+    this.localGroups,
     this.showCustomization = false,
     this.allowNavigation = true,
+    this.imageCache,
   });
   final BilibiliAccountDataService? accountDataService;
+  final AppFavoritesService? localFavorites;
+  final FollowingGroupService? localGroups;
   final bool favorites;
   final bool showCustomization;
   final bool allowNavigation;
+  final ImageResourceCache? imageCache;
 
   /// 创建监听账号切换的卡片状态。
   @override
@@ -61,8 +90,8 @@ class HomeCollectionCard extends StatefulWidget {
 
 class _HomeCollectionCardState extends State<HomeCollectionCard> {
   late final _api = widget.accountDataService ?? BilibiliAccountDataService();
-  final _favorites = AppFavoritesService();
-  late final _groups = FollowingGroupService.instance;
+  late final _favorites = widget.localFavorites ?? AppFavoritesService();
+  late final _groups = widget.localGroups ?? FollowingGroupService.instance;
   List<_HomeChoice> _selected = [];
   Map<String, String> _localFolderNames = {};
   Map<String, String> _localFolderCovers = {};
@@ -73,6 +102,12 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
   Map<int, Future<String>> _fallbackCoverRequests = {};
   int _folderNamesGeneration = 0;
   Map<String, String> _localGroupNames = {};
+  Map<String, String> _groupAvatars = {};
+  Map<String, String> _verifiedFollowingAvatars = {};
+  int? _followingMid;
+  DateTime? _followingReadAt;
+  AccountDataPage<FollowedCreator>? _followingSnapshot;
+  Future<AccountDataPage<FollowedCreator>>? _followingPending;
   int _groupNamesGeneration = 0;
   int _groupNamesMid = 0;
   bool _choosingFavoriteSource = false;
@@ -122,6 +157,12 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
       _remoteFolderCovers = {};
       _groupNamesMid = 0;
       _localGroupNames = {};
+      _groupAvatars = {};
+      _verifiedFollowingAvatars = {};
+      _followingMid = null;
+      _followingReadAt = null;
+      _followingSnapshot = null;
+      _followingPending = null;
       _selected = [];
       _custom = false;
       _identityUnavailable = false;
@@ -140,6 +181,15 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
       final mid = await _api.currentHomeCollectionMid();
       if (!mounted || generation != _generation) return;
       if (mid != _mid) {
+        _groupNamesGeneration++;
+        _groupNamesMid = 0;
+        _localGroupNames = {};
+        _groupAvatars = {};
+        _verifiedFollowingAvatars = {};
+        _followingMid = null;
+        _followingReadAt = null;
+        _followingSnapshot = null;
+        _followingPending = null;
         _folderNamesGeneration++;
         _remoteFoldersPending = null;
         _remoteFoldersSnapshot = null;
@@ -157,6 +207,12 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
         setState(() {
           _selected = [];
           _localGroupNames = {};
+          _groupAvatars = {};
+          _verifiedFollowingAvatars = {};
+          _followingMid = null;
+          _followingReadAt = null;
+          _followingSnapshot = null;
+          _followingPending = null;
           _groupNamesMid = 0;
           _custom = false;
           _identityUnavailable = true;
@@ -173,17 +229,27 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
           .map((e) => _HomeChoice.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList();
       if (!mounted || generation != _generation) return;
-      if (!widget.favorites && mid > 0) {
+      final custom = config['custom'] == true;
+      if (!widget.favorites && custom && selected.isNotEmpty && mid > 0) {
         await _loadLocalGroupNames(mid);
       }
       if (mounted && generation == _generation) {
         setState(() {
           _mid = mid;
           _identityUnavailable = false;
-          _custom = config['custom'] == true;
+          _custom = custom;
           _selected = selected;
           _loading = false;
         });
+        if (!widget.favorites &&
+            _custom &&
+            mid > 0 &&
+            selected.any(
+              (choice) =>
+                  choice.kind == 'creator' && _choiceImage(choice).isEmpty,
+            )) {
+          unawaited(_hydrateCreatorAvatars(mid, generation));
+        }
         if (widget.favorites &&
             selected.any((choice) => choice.kind == 'local')) {
           unawaited(_loadLocalFolderNames());
@@ -204,7 +270,11 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
 
   /// 本机名称独立刷新，不取消正在编辑的配置，也不回写保存的入口快照。
   Future<void> _loadLocalFolderNames({List<_HomeChoice>? choices}) async {
-    if (!widget.favorites) return;
+    if (!widget.favorites ||
+        !_custom ||
+        !(choices ?? _selected).any((choice) => choice.kind == 'local')) {
+      return;
+    }
     final generation = ++_folderNamesGeneration;
     try {
       final folders = await _favorites.loadFolders();
@@ -368,7 +438,12 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
 
   void _onGroupsChanged() {
     final mid = _groups.changes.value?.mid;
-    if (mid != null && mid == _groupNamesMid) _loadLocalGroupNames(mid);
+    if (_custom &&
+        _selected.isNotEmpty &&
+        mid != null &&
+        mid == _groupNamesMid) {
+      _loadLocalGroupNames(mid);
+    }
   }
 
   /// 只读取当前账号的本机分组名称，忽略切号前的迟到结果。
@@ -377,6 +452,12 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
     if (_groupNamesMid != mid) {
       _groupNamesMid = mid;
       _localGroupNames = {};
+      _groupAvatars = {};
+      _verifiedFollowingAvatars = {};
+      _followingMid = null;
+      _followingReadAt = null;
+      _followingSnapshot = null;
+      _followingPending = null;
     }
     final generation = ++_groupNamesGeneration;
     try {
@@ -384,6 +465,12 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
       if (mounted && generation == _groupNamesGeneration) {
         setState(() {
           _localGroupNames = {for (final group in groups) group.id: group.name};
+          _groupAvatars = {
+            for (final group in groups)
+              for (final creator in group.members)
+                if (creator.avatarUrl.isNotEmpty)
+                  '${creator.mid}': creator.avatarUrl,
+          };
         });
       }
     } catch (_) {
@@ -398,6 +485,20 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
       _localGroupNames[choice.id] ?? choice.label,
     _ => choice.label,
   };
+
+  String _choiceImage(_HomeChoice choice) => switch (choice.kind) {
+    'creator' =>
+      _groupAvatars[choice.id] ??
+          (choice.imageUrl.isNotEmpty
+              ? choice.imageUrl
+              : _verifiedFollowingAvatars[choice.id] ?? ''),
+    'local' => _localFolderCovers[choice.id] ?? choice.imageUrl,
+    'remote' => _remoteFolderCovers[choice.id] ?? choice.imageUrl,
+    _ => '',
+  };
+
+  Future<void> _openEditorChoice(_HomeChoice choice, bool Function() valid) =>
+      _open(choice, preserveDraft: true, callerValid: valid);
 
   /// 显示短反馈，保留当前成功配置。
   void _message(String message) {
@@ -440,13 +541,41 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
   }
 
   /// 按稳定编号解析入口，已删除或失效内容只反馈，不跳到其他项目。
-  Future<void> _open(_HomeChoice choice) async {
+  bool _openingChoice = false;
+  Future<void> _open(
+    _HomeChoice choice, {
+    bool preserveDraft = false,
+    bool Function()? callerValid,
+  }) async {
+    if (_openingChoice) return;
+    _openingChoice = true;
+    final openingMid = _mid;
+    final openingGeneration = _generation;
+    final openingRevision = CacheLifecycle.account.value;
+    bool current() =>
+        mounted &&
+        openingMid == _mid &&
+        openingGeneration == _generation &&
+        openingRevision == CacheLifecycle.account.value &&
+        (callerValid?.call() ?? true);
+    Future<void> push(Widget page) async {
+      if (!current()) return;
+      if (preserveDraft) {
+        await Navigator.of(
+          context,
+        ).push<void>(MaterialPageRoute(builder: (_) => page));
+      } else {
+        await _push(page);
+      }
+    }
+
     try {
-      if (choice.kind != 'local' && await _api.currentAccountMid() != _mid) {
-        _accountChanged();
+      if (choice.kind != 'local' &&
+          await _api.currentAccountMid() != openingMid) {
+        CacheLifecycle.accountChanged();
         throw StateError('账号已变化，请重试');
       }
-      if (!mounted) return;
+      if (!current()) return;
       switch (choice.kind) {
         case 'local':
           final matches = (await _favorites.loadFolders()).where(
@@ -454,10 +583,10 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
           );
           if (matches.isEmpty) throw StateError('收藏夹已删除，请重新自定义');
           if (mounted) {
-            await _push(AppFavoriteDetailPage(folder: matches.first));
+            await push(AppFavoriteDetailPage(folder: matches.first));
           }
         case 'remote':
-          await _push(
+          await push(
             FavoriteVideosPage(
               folder: FavoriteFolder(
                 mediaId: int.parse(choice.id),
@@ -473,18 +602,90 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
             _mid,
           )).where((g) => g.id == choice.id);
           if (matches.isEmpty) throw StateError('分组已删除，请重新自定义');
-          if (mounted) await _push(FollowingGroupsPage(groupId: choice.id));
+          if (mounted) await push(FollowingGroupsPage(groupId: choice.id));
         case 'creator':
-          await _push(
+          await push(
             UserProfilePage(
               mid: int.parse(choice.id),
               initialName: choice.label,
+              initialAvatarUrl: _choiceImage(choice),
             ),
           );
       }
     } catch (e) {
-      _message('$e');
+      if (current()) _message('$e');
+    } finally {
+      _openingChoice = false;
     }
+  }
+
+  /// 旧首页仅补查关注第一页；同账号五分钟内复用含失败的结果，不逐 UP 探测。
+  Future<AccountDataPage<FollowedCreator>> _followingFirstPage(
+    int mid, {
+    bool retryFailure = false,
+  }) {
+    if (_followingMid != mid) {
+      _followingMid = mid;
+      _followingReadAt = null;
+      _followingSnapshot = null;
+      _followingPending = null;
+    }
+    if (_followingPending != null) return _followingPending!;
+    final snapshot = _followingSnapshot;
+    if (snapshot != null &&
+        _followingReadAt != null &&
+        DateTime.now().difference(_followingReadAt!) <
+            const Duration(minutes: 5) &&
+        (!retryFailure || snapshot.isSuccess)) {
+      return Future.value(snapshot);
+    }
+    late final Future<AccountDataPage<FollowedCreator>> request;
+    request = _api
+        .loadFollowedCreators(page: 1)
+        .then((page) {
+          if (_followingMid == mid && identical(_followingPending, request)) {
+            _followingSnapshot = page;
+            _followingReadAt = DateTime.now();
+          }
+          return page;
+        })
+        .whenComplete(() {
+          if (identical(_followingPending, request)) _followingPending = null;
+        });
+    _followingPending = request;
+    return request;
+  }
+
+  Future<void> _hydrateCreatorAvatars(int mid, int generation) async {
+    try {
+      final page = await _followingFirstPage(mid);
+      if (!mounted || generation != _generation || !page.isSuccess) return;
+      if (!await _sameAccount(mid) || !mounted || generation != _generation) {
+        return;
+      }
+      final selectedIds = _selected
+          .where((item) => item.kind == 'creator')
+          .map((item) => item.id)
+          .toSet();
+      setState(() {
+        for (final creator in page.items) {
+          if (selectedIds.contains('${creator.mid}') &&
+              creator.avatarUrl.isNotEmpty) {
+            _verifiedFollowingAvatars['${creator.mid}'] = creator.avatarUrl;
+          }
+        }
+      });
+    } catch (_) {
+      /* 离线保留占位，不修改已选配置。 */
+    }
+  }
+
+  Future<bool> _sameAccount(int expectedMid) async {
+    final current = await _api.currentHomeCollectionMid();
+    if (current != null && current != expectedMid && mounted) {
+      CacheLifecycle.accountChanged();
+    }
+    return current == expectedMid;
   }
 
   /// 远端候选完整才展示；失败或切换账号不影响已选快照。
@@ -492,28 +693,53 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
     bool Function() stillEditing,
   ) async {
     final choices = <_HomeChoice>[];
+    final requestMid = _mid;
     try {
+      if (!stillEditing() ||
+          !await _sameAccount(requestMid) ||
+          !stillEditing()) {
+        return null;
+      }
       if (widget.favorites) {
         final page = await _favoriteFolders();
         if (!page.isSuccess || !stillEditing()) return null;
-        if (await _api.currentHomeCollectionMid() != _mid || !stillEditing()) {
+        if (!await _sameAccount(requestMid) || !stillEditing()) {
           return null;
         }
 
         for (final folder in page.items) {
-          choices.add(_HomeChoice('remote', '${folder.mediaId}', folder.title));
+          choices.add(
+            _HomeChoice(
+              'remote',
+              '${folder.mediaId}',
+              folder.title,
+              imageUrl: folder.coverUrl,
+            ),
+          );
         }
       } else {
         final seen = <int>{};
         for (var page = 1; ; page++) {
           if (page > 1000) return null;
-          final result = await _api.loadFollowedCreators(page: page);
-          if (!result.isSuccess || !stillEditing()) return null;
+          final result = page == 1
+              ? await _followingFirstPage(requestMid, retryFailure: true)
+              : await _api.loadFollowedCreators(page: page);
+          if (!result.isSuccess ||
+              !stillEditing() ||
+              !await _sameAccount(requestMid) ||
+              !stillEditing()) {
+            return null;
+          }
           final previous = seen.length;
           for (final creator in result.items) {
             if (seen.add(creator.mid)) {
               choices.add(
-                _HomeChoice('creator', '${creator.mid}', creator.name),
+                _HomeChoice(
+                  'creator',
+                  '${creator.mid}',
+                  creator.name,
+                  imageUrl: creator.avatarUrl,
+                ),
               );
             }
           }
@@ -521,10 +747,44 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
           if (seen.length == previous) return null;
         }
       }
+      if (!stillEditing() ||
+          !await _sameAccount(requestMid) ||
+          !stillEditing()) {
+        return null;
+      }
       return choices;
     } catch (_) {
       return null;
     }
+  }
+
+  Future<List<_HomeChoice>> _loadLocalChoices(
+    int mid,
+    bool Function() valid,
+  ) async {
+    final choices = <_HomeChoice>[];
+    if (!valid() || !await _sameAccount(mid) || !valid()) return choices;
+    if (widget.favorites) {
+      for (final folder in await _favorites.loadFolders()) {
+        if (!valid()) return [];
+        var cover = '';
+        try {
+          final items = await _favorites.loadItems(folder.id);
+          final images = items.where((item) => item.coverUrl.trim().isNotEmpty);
+          if (images.isNotEmpty) cover = images.first.coverUrl;
+        } catch (_) {
+          /* 单夹缺图不阻止预览或添加。 */
+        }
+        choices.add(
+          _HomeChoice('local', folder.id, folder.name, imageUrl: cover),
+        );
+      }
+    } else if (mid > 0) {
+      for (final group in await _groups.load(mid)) {
+        choices.add(_HomeChoice('group', group.id, group.name));
+      }
+    }
+    return valid() ? choices : [];
   }
 
   /// 先开放本机编辑；远端候选独立加载，保存前仍核验账号。
@@ -543,35 +803,36 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
         throw StateError('无法确认当前账号，请稍后重试');
       }
 
-      final choices = <_HomeChoice>[];
-      if (widget.favorites) {
-        for (final folder in await _favorites.loadFolders()) {
-          choices.add(_HomeChoice('local', folder.id, folder.name));
-        }
-      } else if (mid > 0) {
-        for (final group in await _groups.load(mid)) {
-          choices.add(_HomeChoice('group', group.id, group.name));
-        }
-      }
-      if (!mounted || generation != _generation) return;
-
-      final remoteChoices = mid > 0
-          ? _loadRemoteChoices(() => editing && isCurrent())
-          : null;
+      if (!mounted || !isCurrent()) return;
       final config = await Navigator.of(context)
           .push<(bool, List<_HomeChoice>)>(
             MaterialPageRoute(
               builder: (_) => _HomeChoiceEditor(
                 title: widget.favorites ? '我的收藏' : '我的关注',
-                choices: choices,
-                remoteChoices: remoteChoices,
+                favorites: widget.favorites,
+                loadLocal: (valid) => _loadLocalChoices(
+                  mid,
+                  () => editing && isCurrent() && valid(),
+                ),
+                loadRemote: mid > 0
+                    ? (valid) => _loadRemoteChoices(
+                        () => editing && isCurrent() && valid(),
+                      )
+                    : null,
                 accountRevision: accountRevision,
                 selected: _selected
                     .map(
-                      (item) => _HomeChoice(item.kind, item.id, _label(item)),
+                      (item) => _HomeChoice(
+                        item.kind,
+                        item.id,
+                        _label(item),
+                        imageUrl: _choiceImage(item),
+                      ),
                     )
                     .toList(),
                 custom: _custom,
+                imageCache: widget.imageCache,
+                onOpen: _openEditorChoice,
               ),
             ),
           );
@@ -600,6 +861,9 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
           _selected = config.$2;
         });
         await _loadLocalFolderNames();
+        if (!widget.favorites && _custom && _selected.isNotEmpty && mid > 0) {
+          await _loadLocalGroupNames(mid);
+        }
         if (widget.favorites &&
             _custom &&
             mid > 0 &&
@@ -664,20 +928,27 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
             for (final choice in _selected)
               ListTile(
                 dense: true,
-                title: Text(_label(choice)),
+                title: Text(
+                  _label(choice),
+                  semanticsLabel: widget.favorites
+                      ? '${_label(choice)}，${choice.kind == 'local' ? '本机' : 'B 站'}收藏夹'
+                      : _label(choice),
+                ),
                 leading:
                     widget.favorites &&
                         (choice.kind == 'local' || choice.kind == 'remote')
                     ? HomeFavoriteCover(
                         key: ValueKey('home-cover-${choice.key}'),
+                        remote: choice.kind == 'remote',
+                        cache: widget.imageCache,
                         coverUrl: choice.kind == 'local'
                             ? (_localFolderCovers[choice.id] ?? '')
                             : (_remoteFolderCovers[choice.id] ?? ''),
                       )
-                    : Icon(
-                        choice.kind == 'creator'
-                            ? Icons.person_outline
-                            : Icons.folder_outlined,
+                    : _ChoiceAvatar(
+                        choice: choice,
+                        imageUrl: _choiceImage(choice),
+                        cache: widget.imageCache,
                       ),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: widget.allowNavigation ? () => _open(choice) : null,
@@ -694,18 +965,24 @@ class _HomeChoiceEditor extends StatefulWidget {
   /// 接收当前可用内容与已保存顺序，不在编辑过程中落盘。
   const _HomeChoiceEditor({
     required this.title,
-    required this.choices,
-    required this.remoteChoices,
+    required this.favorites,
+    required this.loadLocal,
+    required this.loadRemote,
     required this.accountRevision,
     required this.selected,
     required this.custom,
+    required this.onOpen,
+    this.imageCache,
   });
   final String title;
-  final List<_HomeChoice> choices;
-  final Future<List<_HomeChoice>?>? remoteChoices;
+  final bool favorites;
+  final Future<List<_HomeChoice>> Function(bool Function()) loadLocal;
+  final Future<List<_HomeChoice>?> Function(bool Function())? loadRemote;
   final int accountRevision;
   final List<_HomeChoice> selected;
   final bool custom;
+  final Future<void> Function(_HomeChoice, bool Function()) onOpen;
+  final ImageResourceCache? imageCache;
 
   /// 创建模式、选择与排序草稿。
   @override
@@ -716,6 +993,171 @@ class _HomeChoiceEditorState extends State<_HomeChoiceEditor> {
   late bool _custom = widget.custom;
   late final List<_HomeChoice> _selected = [...widget.selected];
   String _query = '';
+  final _queryController = TextEditingController();
+
+  @override
+  void dispose() {
+    _request++;
+    _queryController.dispose();
+    super.dispose();
+  }
+
+  List<_HomeChoice> _remote = [];
+  List<_HomeChoice> _local = [];
+  Future<List<_HomeChoice>?>? _remoteFuture;
+  bool _managing = false;
+  bool _localLoading = false;
+  bool _localFailed = false;
+  int _request = 0;
+
+  void _chooseCustom() {
+    final enriched = _selected.map(_enrich).toList();
+    final request = ++_request;
+    bool valid() =>
+        mounted &&
+        _managing &&
+        request == _request &&
+        CacheLifecycle.account.value == widget.accountRevision;
+    setState(() {
+      _selected
+        ..clear()
+        ..addAll(enriched);
+      _custom = true;
+      _managing = true;
+      _local = [];
+      _remote = [];
+      _localLoading = true;
+      _localFailed = false;
+      _remoteFuture = widget.loadRemote?.call(valid);
+    });
+    widget
+        .loadLocal(valid)
+        .then(
+          (items) {
+            if (valid()) {
+              setState(() {
+                _local = items;
+                _localLoading = false;
+              });
+            }
+          },
+          onError: (Object _) {
+            if (valid()) {
+              setState(() {
+                _localLoading = false;
+                _localFailed = true;
+              });
+            }
+          },
+        );
+  }
+
+  void _showModes() {
+    // Keep enriched drafts, but never display a late result from the previous step.
+    final enriched = _selected.map(_enrich).toList();
+    setState(() {
+      _selected
+        ..clear()
+        ..addAll(enriched);
+      _request++;
+      _managing = false;
+      _remoteFuture = null;
+      _remote = [];
+      _local = [];
+    });
+  }
+
+  Widget _modes() => Align(
+    alignment: Alignment.topCenter,
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 680),
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _mode(
+            false,
+            widget.favorites ? '仅显示收藏夹快捷入口' : '仅显示关注快捷入口',
+            widget.favorites ? Icons.bookmarks_outlined : Icons.people_outline,
+          ),
+          const SizedBox(height: 16),
+          _mode(
+            true,
+            widget.favorites ? '添加自选收藏夹快捷入口' : '添加自选关注快捷入口',
+            Icons.add_circle_outline,
+          ),
+        ],
+      ),
+    ),
+  );
+
+  Widget _mode(bool custom, String label, IconData icon) {
+    final compact =
+        MediaQuery.sizeOf(context).width < 400 &&
+        MediaQuery.textScalerOf(context).scale(17) >= 27;
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 112),
+      child: OutlinedButton(
+        key: ValueKey(custom ? 'home-mode-custom' : 'home-mode-overview'),
+        style: OutlinedButton.styleFrom(
+          padding: EdgeInsets.symmetric(
+            vertical: 20,
+            horizontal: compact ? 12 : 20,
+          ),
+          alignment: Alignment.centerLeft,
+          backgroundColor: _custom == custom
+              ? Theme.of(context).colorScheme.secondaryContainer
+              : null,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+        ),
+        onPressed: custom
+            ? _chooseCustom
+            : () => setState(() {
+                _custom = false;
+              }),
+        child: Semantics(
+          selected: _custom == custom,
+          child: Row(
+            children: [
+              Icon(icon),
+              SizedBox(width: compact ? 12 : 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(label, style: const TextStyle(fontSize: 17)),
+                    if (_custom == custom)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 8),
+                        child: Text('当前方式'),
+                      ),
+                  ],
+                ),
+              ),
+              if (!compact) ...[
+                const SizedBox(width: 8),
+                Icon(
+                  custom
+                      ? Icons.chevron_right
+                      : (_custom == custom ? Icons.check : null),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  _HomeChoice _enrich(_HomeChoice saved) {
+    final matches = [
+      ..._local,
+      ..._remote,
+    ].where((item) => item.key == saved.key && item.imageUrl.isNotEmpty);
+    return matches.isEmpty ? saved : matches.first;
+  }
 
   /// 修改草稿中的选择，取消后不影响已保存配置。
   void _toggle(_HomeChoice choice, bool value) => setState(() {
@@ -734,58 +1176,162 @@ class _HomeChoiceEditorState extends State<_HomeChoiceEditor> {
     valueListenable: CacheLifecycle.account,
     builder: (context, revision, _) {
       final validAccount = revision == widget.accountRevision;
-      return Scaffold(
-        appBar: AppBar(
-          title: Text(widget.title),
-          actions: [
-            if (validAccount)
-              TextButton(
-                onPressed: () {
-                  if (CacheLifecycle.account.value == widget.accountRevision) {
-                    Navigator.pop(context, (_custom, _selected));
-                  }
-                },
-                child: const Text('保存'),
-              ),
-          ],
+      return PopScope(
+        canPop: !_managing || !validAccount,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop && _managing) _showModes();
+        },
+        child: Scaffold(
+          appBar: AppBar(
+            title: Text(widget.title),
+            actions: [
+              if (validAccount)
+                TextButton(
+                  onPressed: () {
+                    if (CacheLifecycle.account.value ==
+                        widget.accountRevision) {
+                      Navigator.pop(context, (
+                        _custom,
+                        _selected.map(_enrich).toList(),
+                      ));
+                    }
+                  },
+                  child: const Text('保存'),
+                ),
+            ],
+          ),
+          body: validAccount
+              ? !_managing
+                    ? _modes()
+                    : FutureBuilder<List<_HomeChoice>?>(
+                        key: ValueKey(_request),
+                        future: _remoteFuture,
+                        builder: (context, snapshot) {
+                          _remote = snapshot.data ?? [];
+                          return Align(
+                            alignment: Alignment.topCenter,
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 680),
+                              child: _buildEditor(snapshot),
+                            ),
+                          );
+                        },
+                      )
+              : const Center(child: Text('账号已变化，请返回后重新打开')),
         ),
-        body: validAccount
-            ? FutureBuilder<List<_HomeChoice>?>(
-                future: widget.remoteChoices,
-                builder: (context, snapshot) => _buildEditor(snapshot),
-              )
-            : const Center(child: Text('账号已变化，请返回后重新打开')),
       );
     },
   );
 
+  String _description(_HomeChoice choice) => switch (choice.kind) {
+    'local' => '${choice.label}（本机收藏夹）',
+    'remote' => '${choice.label}（B 站收藏夹）',
+    _ => choice.label,
+  };
+
+  bool _opening = false;
+  Widget _preview(_HomeChoice choice) => InkWell(
+    key: ValueKey('preview-${choice.key}'),
+    onTap: choice.kind == 'group'
+        ? null
+        : () async {
+            if (_opening ||
+                CacheLifecycle.account.value != widget.accountRevision) {
+              return;
+            }
+            _opening = true;
+            final request = _request;
+            try {
+              await widget.onOpen(
+                choice,
+                () =>
+                    mounted &&
+                    _managing &&
+                    request == _request &&
+                    CacheLifecycle.account.value == widget.accountRevision &&
+                    ModalRoute.of(context)?.isCurrent == true,
+              );
+            } finally {
+              _opening = false;
+            }
+          },
+    borderRadius: BorderRadius.circular(8),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        children: [
+          _ChoiceAvatar(
+            choice: choice,
+            imageUrl: choice.imageUrl,
+            cache: widget.imageCache,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              choice.label,
+              semanticsLabel: choice.kind == 'local' || choice.kind == 'remote'
+                  ? '${choice.label}，${choice.kind == "local" ? "本机" : "B 站"}收藏夹'
+                  : choice.label,
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+
   Widget _buildEditor(AsyncSnapshot<List<_HomeChoice>?> remote) => ListView(
     children: [
-      Padding(
-        padding: const EdgeInsets.all(16),
-        child: SegmentedButton<bool>(
-          segments: const [
-            ButtonSegment(value: false, label: Text('入口')),
-            ButtonSegment(value: true, label: Text('自选内容')),
-          ],
-          selected: {_custom},
-          onSelectionChanged: (value) => setState(() => _custom = value.single),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: TextButton.icon(
+          key: const ValueKey('home-mode-back'),
+          onPressed: _showModes,
+          icon: const Icon(Icons.arrow_back),
+          label: const Text('返回显示方式'),
         ),
       ),
+      if (_localLoading)
+        const Padding(padding: EdgeInsets.all(16), child: Text('正在读取本机内容…')),
+      if (_localFailed)
+        TextButton(
+          key: const ValueKey('home-choice-retry'),
+          onPressed: _chooseCustom,
+          child: const Text('读取失败，重试'),
+        ),
       if (_custom) ...[
         ReorderableListView.builder(
+          buildDefaultDragHandles: false,
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
           onReorderItem: _reorder,
           itemCount: _selected.length,
           itemBuilder: (context, index) {
-            final choice = _selected[index];
+            final choice = _enrich(_selected[index]);
             return ListTile(
               key: ValueKey(choice.key),
-              title: Text(choice.label),
+              title: _preview(choice),
+              trailing: ReorderableDragStartListener(
+                key: ValueKey('reorder-${choice.key}'),
+                index: index,
+                child: Tooltip(
+                  message: '拖动调整${_description(choice)}的顺序',
+                  triggerMode: TooltipTriggerMode.manual,
+                  child: const ColoredBox(
+                    color: Colors.transparent,
+                    child: SizedBox(
+                      width: 48,
+                      height: 48,
+                      child: Icon(Icons.drag_handle),
+                    ),
+                  ),
+                ),
+              ),
               leading: IconButton(
                 tooltip: '移除',
-                icon: const Icon(Icons.remove_circle_outline),
+                icon: Icon(
+                  Icons.remove_circle_outline,
+                  semanticLabel: '移除${_description(choice)}',
+                ),
                 onPressed: () => _toggle(choice, false),
               ),
             );
@@ -794,6 +1340,7 @@ class _HomeChoiceEditorState extends State<_HomeChoiceEditor> {
         Padding(
           padding: const EdgeInsets.all(16),
           child: TextField(
+            controller: _queryController,
             onChanged: (value) => setState(() => _query = value),
             decoration: const InputDecoration(
               hintText: '搜索可选内容',
@@ -801,7 +1348,7 @@ class _HomeChoiceEditorState extends State<_HomeChoiceEditor> {
             ),
           ),
         ),
-        if (widget.remoteChoices != null && !remote.hasData)
+        if (widget.loadRemote != null && !remote.hasData)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Text(
@@ -810,24 +1357,76 @@ class _HomeChoiceEditorState extends State<_HomeChoiceEditor> {
                   : '正在读取 B 站内容，可先编辑本机内容。',
             ),
           ),
-        for (final choice in [...widget.choices, ...?remote.data].where(
+        if (widget.loadRemote != null &&
+            remote.connectionState == ConnectionState.done &&
+            !remote.hasData)
+          TextButton(
+            key: const ValueKey('home-remote-retry'),
+            onPressed: _chooseCustom,
+            child: const Text('重试 B 站内容'),
+          ),
+        for (final choice in [..._local, ...?remote.data].where(
           (item) =>
               !_selected.any((s) => s.key == item.key) &&
               item.label.toLowerCase().contains(_query.toLowerCase()),
         ))
           ListTile(
-            title: Text(choice.label),
-            leading: Icon(
-              choice.kind == 'creator'
-                  ? Icons.person_outline
-                  : choice.kind == 'remote'
-                  ? Icons.cloud_outlined
-                  : Icons.folder_outlined,
+            key: ValueKey('candidate-${choice.key}'),
+            title: _preview(choice),
+            trailing: IconButton(
+              key: ValueKey('add-${choice.key}'),
+              tooltip: '添加${_description(choice)}',
+              icon: const Icon(Icons.add),
+              onPressed: () => _toggle(choice, true),
             ),
-            trailing: const Icon(Icons.add),
-            onTap: () => _toggle(choice, true),
           ),
       ],
     ],
   );
+}
+
+/// 图片是名称的视觉补充，避免读屏重复朗读。
+class _ChoiceAvatar extends StatelessWidget {
+  const _ChoiceAvatar({
+    required this.choice,
+    required this.imageUrl,
+    this.cache,
+  });
+  final _HomeChoice choice;
+  final String imageUrl;
+  final ImageResourceCache? cache;
+  @override
+  Widget build(BuildContext context) {
+    if (choice.kind == 'local' || choice.kind == 'remote') {
+      return HomeFavoriteCover(
+        coverUrl: imageUrl,
+        remote: choice.kind == 'remote',
+        cache: cache,
+      );
+    }
+    final fallback = ColoredBox(
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      child: Icon(
+        choice.kind == 'creator' ? Icons.person_outline : Icons.folder_outlined,
+      ),
+    );
+    return ExcludeSemantics(
+      child: SizedBox(
+        width: 40,
+        height: 40,
+        child: ClipOval(
+          child: imageUrl.isEmpty
+              ? fallback
+              : AppNetworkImage(
+                  imageUrl: imageUrl,
+                  cache: cache,
+                  fit: BoxFit.cover,
+                  memCacheWidth: 128,
+                  placeholder: (_, _) => fallback,
+                  errorWidget: (_, _, _) => fallback,
+                ),
+        ),
+      ),
+    );
+  }
 }
