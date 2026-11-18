@@ -72,7 +72,7 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
     return height;
   }
 
-  /// 欢迎区和卡片在同一个滚动平面，不做反向位移或逐帧模糊。
+  /// 卡片按实际滚动位置移动；仅欢迎内容使用正式版的下坠、模糊及淡出。
   Widget _buildHomeHero(BuildContext context, double heroHeight, double width) {
     final ThemeData theme = Theme.of(context);
     final Color textColor = theme.colorScheme.onSurface;
@@ -85,8 +85,9 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
       compact: 24,
     );
     return SliverToBoxAdapter(
-      child: SizedBox(
+      child: HomeDrawerHeroDepth(
         key: const Key('focus-home-hero'),
+        enabled: _hasHomeDrawer && !_editingHomeCards,
         height: heroHeight,
         child: Padding(
           padding: EdgeInsets.fromLTRB(

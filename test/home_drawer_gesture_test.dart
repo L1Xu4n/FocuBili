@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -7,6 +8,7 @@ import 'package:focubili/core/widgets/editable_card_board.dart';
 import 'package:focubili/features/focus/focus_dashboard.dart';
 import 'package:focubili/features/focus/focus_timer_controller.dart';
 import 'package:focubili/features/focus/home_drawer_scroll_physics.dart';
+import 'package:focubili/features/focus/home_drawer_hero_depth.dart';
 import 'package:focubili/services/dashboard_layout_service.dart';
 import 'package:focubili/services/subscription_onboarding_service.dart';
 import 'package:focubili/services/subscription_service.dart';
@@ -22,6 +24,8 @@ Future<ScrollController> _mount(
   double cardHeight = 240,
   TextScaler textScaler = TextScaler.noScaling,
   double topInset = 0,
+  bool reduceMotion = false,
+  bool accessibleNavigation = false,
   VoidCallback? onSearch,
   VoidCallback? onBuildCard,
   Map<String, Object> preferences = const {},
@@ -44,7 +48,11 @@ Future<ScrollController> _mount(
   await tester.pumpWidget(
     MaterialApp(
       builder: (context, child) => MediaQuery(
-        data: MediaQuery.of(context).copyWith(textScaler: textScaler),
+        data: MediaQuery.of(context).copyWith(
+          textScaler: textScaler,
+          disableAnimations: reduceMotion,
+          accessibleNavigation: accessibleNavigation,
+        ),
         child: child!,
       ),
       home: Scaffold(
@@ -99,7 +107,7 @@ void main() {
   });
 
   testWidgets(
-    '慢拉可以停在中间，内容和首屏按钮始终跟手且卡片不重建',
+    '慢拉可以停在中间，卡片跟手不重建，欢迎内容按正式版下坠',
     (tester) async {
       var cardBuilds = 0;
       final scroll = await _mount(tester, onBuildCard: () => ++cardBuilds);
@@ -111,7 +119,7 @@ void main() {
       await gesture.moveBy(const Offset(0, -42));
       await tester.pump();
       expect(scroll.offset, closeTo(42, .1));
-      expect(searchTop - tester.getTopLeft(_search).dy, closeTo(42, .1));
+      expect(tester.getTopLeft(_search).dy - searchTop, closeTo(42 * .32, .1));
       expect(cardTop - tester.getTopLeft(_firstCard).dy, closeTo(42, .1));
       await gesture.moveBy(Offset(0, 42 - half + 12));
       await tester.pump();
@@ -126,6 +134,195 @@ void main() {
       TargetPlatform.iOS,
     }),
   );
+
+  testWidgets('欢迎区按 v1.8.1 的连续曲线下坠和模糊，出屏后不保留滤镜', (tester) async {
+    var builds = 0;
+    final scroll = await _mount(
+      tester,
+      cardHeight: 1500,
+      onBuildCard: () => builds++,
+    );
+    final initialBuilds = builds;
+    final restingSearch = tester.getTopLeft(_search).dy;
+    final restingCard = tester.getTopLeft(_firstCard).dy;
+    final firstSearchElement = _search.evaluate().single;
+    final subtree = find.byKey(
+      const Key('focus-home-hero'),
+      skipOffstage: false,
+    );
+    final filter = find.descendant(
+      of: subtree,
+      matching: find.byType(ImageFiltered, skipOffstage: false),
+      skipOffstage: false,
+    );
+    final opacity = find
+        .descendant(
+          of: subtree,
+          matching: find.byType(Opacity, skipOffstage: false),
+          skipOffstage: false,
+        )
+        .first;
+    expect(tester.widget<ImageFiltered>(filter).enabled, isFalse);
+    final open = tester.getSize(_hero).height + 12;
+    for (final offset in [1.0, 42.0, 140.0, 280.0, open / 2, 140.0, 42.0]) {
+      scroll.jumpTo(offset);
+      await tester.pump();
+      final p = (offset / 280).clamp(0.0, 1.0);
+      final visual = tester.widget<ImageFiltered>(filter);
+      expect(visual.enabled, isTrue);
+      expect(
+        visual.imageFilter,
+        ui.ImageFilter.blur(sigmaX: p * 7, sigmaY: p * 7),
+      );
+      expect(
+        tester.widget<Opacity>(opacity).opacity,
+        closeTo(1 - .88 * p, 1e-8),
+      );
+      expect(
+        tester.getTopLeft(_search).dy,
+        closeTo(restingSearch + offset * .32, .01),
+      );
+      expect(
+        tester.getTopLeft(_firstCard).dy,
+        closeTo(restingCard - offset, .01),
+      );
+      expect(_search.evaluate().single, same(firstSearchElement));
+    }
+    scroll.jumpTo(open);
+    await tester.pump();
+    expect(tester.widget<ImageFiltered>(filter).enabled, isFalse);
+    expect(_search.hitTestable(), findsNothing);
+    for (var i = 0; i < 20; i++) {
+      scroll.jumpTo(open + 5.0 * i);
+      await tester.pump();
+      expect(tester.widget<ImageFiltered>(filter).enabled, isFalse);
+    }
+    expect(builds, initialBuilds);
+    scroll.jumpTo(0);
+    await tester.pump();
+    expect(tester.widget<ImageFiltered>(filter).enabled, isFalse);
+    expect(tester.getTopLeft(_search).dy, closeTo(restingSearch, .01));
+    expect(_search.hitTestable(), findsOneWidget);
+  });
+
+  for (final screenReader in [false, true]) {
+    testWidgets('减少动态效果或辅助导航保留清晰、自然滚动和搜索：辅助导航=$screenReader', (tester) async {
+      var searches = 0;
+      final scroll = await _mount(
+        tester,
+        reduceMotion: !screenReader,
+        accessibleNavigation: screenReader,
+        onSearch: () => searches++,
+      );
+      final y = tester.getTopLeft(_search).dy;
+      scroll.jumpTo(85);
+      await tester.pumpAndSettle();
+      final filter = find.descendant(
+        of: _hero,
+        matching: find.byType(ImageFiltered),
+      );
+      expect(tester.widget<ImageFiltered>(filter).enabled, isFalse);
+      expect(tester.getTopLeft(_search).dy, closeTo(y - 85, .01));
+      expect(_search.hitTestable(), findsOneWidget);
+      await tester.tap(_search);
+      expect(searches, 1);
+    });
+  }
+
+  testWidgets('59 个滚动采样不重建或重绘静态欢迎子树', (t) async {
+    t.view.physicalSize = const Size(390, 844);
+    t.view.devicePixelRatio = 1;
+    addTearDown(t.view.resetPhysicalSize);
+    addTearDown(t.view.resetDevicePixelRatio);
+    final scroll = ScrollController();
+    addTearDown(scroll.dispose);
+    var builds = 0;
+    var paints = 0;
+    await t.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: CustomScrollView(
+            controller: scroll,
+            slivers: [
+              SliverToBoxAdapter(
+                child: HomeDrawerHeroDepth(
+                  height: 720,
+                  enabled: true,
+                  child: Builder(
+                    builder: (context) {
+                      builds++;
+                      return CustomPaint(painter: _PaintProbe(() => paints++));
+                    },
+                  ),
+                ),
+              ),
+              const SliverToBoxAdapter(child: SizedBox(height: 1800)),
+            ],
+          ),
+        ),
+      ),
+    );
+    await t.pumpAndSettle();
+    final initialBuilds = builds, initialPaints = paints;
+    expect(initialPaints, greaterThan(0));
+    for (var i = 1; i <= 59; i++) {
+      scroll.jumpTo(i * 16.0);
+      await t.pump(const Duration(milliseconds: 16));
+    }
+    expect(builds, initialBuilds);
+    expect(paints, initialPaints);
+  });
+
+  testWidgets('工作期间切换系统减动，不要换掉当前键盘焦点', (t) async {
+    t.view.physicalSize = const Size(390, 844);
+    t.view.devicePixelRatio = 1;
+    addTearDown(t.view.resetPhysicalSize);
+    addTearDown(t.view.resetDevicePixelRatio);
+    final reduce = ValueNotifier(false);
+    addTearDown(reduce.dispose);
+    final node = FocusNode();
+    addTearDown(node.dispose);
+    const buttonKey = ValueKey('stable-keyboard-control');
+    await t.pumpWidget(
+      MaterialApp(
+        home: ValueListenableBuilder<bool>(
+          valueListenable: reduce,
+          builder: (context, value, child) => MediaQuery(
+            data: MediaQuery.of(context).copyWith(disableAnimations: value),
+            child: child!,
+          ),
+          child: CustomScrollView(
+            slivers: [
+              SliverToBoxAdapter(
+                child: HomeDrawerHeroDepth(
+                  height: 640,
+                  enabled: true,
+                  child: Center(
+                    child: TextButton(
+                      key: buttonKey,
+                      focusNode: node,
+                      onPressed: () {},
+                      child: const Text('搜索'),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await t.pumpAndSettle();
+    node.requestFocus();
+    await t.pump();
+    final old = find.byKey(buttonKey).evaluate().single;
+    for (final update in [true, false]) {
+      reduce.value = update;
+      await t.pumpAndSettle();
+      expect(find.byKey(buttonKey).evaluate().single, same(old));
+      expect(node.hasFocus, isTrue);
+    }
+  });
 
   testWidgets('砍断仍在进行的展开吸附，反向手势从当前帧起走', (tester) async {
     final scroll = await _mount(tester);
@@ -316,4 +513,17 @@ Future<void> _checkDesktopPointer(WidgetTester tester) async {
   await gesture.up();
   await tester.pumpAndSettle();
   expect(scroll.offset, closeTo(open, 1));
+}
+
+class _PaintProbe extends CustomPainter {
+  const _PaintProbe(this.painted);
+  final VoidCallback painted;
+  @override
+  void paint(Canvas canvas, Size size) {
+    painted();
+    canvas.drawCircle(Offset(size.width / 2, size.height / 2), 30, Paint());
+  }
+
+  @override
+  bool shouldRepaint(_PaintProbe oldDelegate) => false;
 }

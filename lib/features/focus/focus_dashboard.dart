@@ -23,6 +23,7 @@ import 'focus_interruption_dialog.dart';
 import 'focus_storage_notice.dart';
 import 'focus_timer_controller.dart';
 import 'home_drawer_scroll_physics.dart';
+import 'home_drawer_hero_depth.dart';
 
 part 'focus_dashboard_home_layout.dart';
 part 'focus_dashboard_home_cards.dart';
