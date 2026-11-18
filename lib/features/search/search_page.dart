@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:collection';
 
 import 'package:focubili/features/common/app_network_image.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import '../../services/bilibili_course_link.dart';
 
@@ -134,6 +135,7 @@ class _SearchPageState extends State<SearchPage> {
   bool _hasSubmitted = false;
   int _requestGeneration = 0;
   bool _autoLoadFailed = false;
+  bool _filterSheetOpen = false;
   int _currentPage = 0;
   int _totalPages = 0;
   int _activeEpisodeCountLookups = 0;
@@ -1082,10 +1084,38 @@ class _SearchPageState extends State<SearchPage> {
 
   /// 打开高度受限且可随时关闭的筛选面板，只在应用时保存草稿并重新搜索。
   Future<void> _openFilterSheet() async {
+    if (_filterSheetOpen) return;
+    _filterSheetOpen = true;
+    try {
+      await _editFilterSheet();
+    } finally {
+      _filterSheetOpen = false;
+    }
+  }
+
+  bool _sameLocalFilter(SearchContentFilter a, SearchContentFilter b) =>
+      a.learningOnly == b.learningOnly &&
+      a.minimumPlayCount == b.minimumPlayCount &&
+      listEquals(a.titleKeywords, b.titleKeywords) &&
+      listEquals(a.ownerKeywords, b.ownerKeywords);
+
+  Future<void> _editFilterSheet() async {
     await _contentFilterReady;
     if (!mounted) return;
+    final SearchContentFilter storedContent;
+    try {
+      storedContent = await _contentFilterService.loadForEditing();
+    } catch (_) {
+      if (mounted) _showTransientMessage('筛选设置读取失败，未覆盖原设置。请重试。');
+      return;
+    }
+    if (!mounted || _searchMode != _SearchMode.videos) return;
+    if (!_sameLocalFilter(_contentFilter, storedContent)) {
+      setState(() => _contentFilter = storedContent);
+      _scheduleFilteredPage();
+    }
     VideoSearchFilter editingFilter = _filter;
-    SearchContentFilter editingContent = _contentFilter;
+    SearchContentFilter editingContent = storedContent;
     final formKey = GlobalKey<FormState>();
     final VideoSearchFilter?
     selectedFilter = await showModalBottomSheet<VideoSearchFilter>(
@@ -1221,18 +1251,33 @@ class _SearchPageState extends State<SearchPage> {
     if (!mounted || selectedFilter == null) {
       return;
     }
-    try {
-      await _contentFilterService.save(editingContent);
-    } catch (_) {
-      if (mounted) _showTransientMessage('筛选设置保存失败，请重试。');
-      return;
+    if (!_sameLocalFilter(storedContent, editingContent)) {
+      try {
+        await _contentFilterService.save(editingContent);
+      } catch (_) {
+        if (mounted) _showTransientMessage('筛选设置保存失败，请重试。');
+        return;
+      }
     }
     if (!mounted) return;
+    final serverFiltersChanged =
+        _filter.order != selectedFilter.order ||
+        _filter.publishedRange != selectedFilter.publishedRange ||
+        _filter.durationRange != selectedFilter.durationRange ||
+        _filter.categoryId != selectedFilter.categoryId;
     setState(() {
       _filter = selectedFilter;
       _contentFilter = editingContent;
     });
-    if (_controller.text.trim().isNotEmpty) {
+    final input = _controller.text.trim();
+    if (input.isEmpty) return;
+    if (input == _activeQuery &&
+        (_directResult != null ||
+            !serverFiltersChanged && (_loading || _currentPage > 0))) {
+      // Local rules only change visibility. Keep fetched pages so loosening
+      // them can reveal results even when the connection is gone.
+      _scheduleFilteredPage();
+    } else {
       unawaited(_submitSearch());
     }
   }

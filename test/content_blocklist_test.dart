@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
 import 'package:focubili/features/profile/content_blocklist_page.dart';
 import 'package:focubili/features/search/search_page.dart';
 import 'package:focubili/models/content_blocklist.dart';
@@ -34,6 +35,8 @@ VideoSearchResult row(
 
 class BlockSearchService implements BilibiliService {
   int lookups = 0;
+  int searches = 0;
+  bool offline = false;
   VideoSearchFilter? lastFilter;
   final bool missingMid;
   BlockSearchService({this.missingMid = false});
@@ -43,6 +46,8 @@ class BlockSearchService implements BilibiliService {
     int page = 1,
     VideoSearchFilter filter = const VideoSearchFilter(),
   }) async {
+    searches++;
+    if (offline) throw StateError('offline');
     lastFilter = filter;
     return VideoSearchPage(
       page: 1,
@@ -101,6 +106,42 @@ class BlockUserSearchService implements BilibiliUserSearchService {
         ),
     ],
   );
+}
+
+class RejectingBlocklistStore extends InMemorySharedPreferencesStore {
+  RejectingBlocklistStore(super.data) : super.withData();
+  bool reject = true;
+
+  @override
+  Future<bool> setValue(String valueType, String key, Object value) async {
+    if (reject && key == 'flutter.${ContentBlocklistService.storageKey}') {
+      return false;
+    }
+    return super.setValue(valueType, key, value);
+  }
+}
+
+class InterruptedFilterStore extends InMemorySharedPreferencesStore {
+  InterruptedFilterStore(super.data) : super.withData();
+  bool rejectRead = false;
+  int filterWrites = 0;
+
+  @override
+  Future<Map<String, Object>> getAll() async {
+    if (rejectRead) {
+      rejectRead = false;
+      throw StateError('storage temporarily unavailable');
+    }
+    return super.getAll();
+  }
+
+  @override
+  Future<bool> setValue(String valueType, String key, Object value) {
+    if (key == 'flutter.${SearchContentFilterService.storageKey}') {
+      filterWrites++;
+    }
+    return super.setValue(valueType, key, value);
+  }
 }
 
 Future<void> search(WidgetTester tester, BlockSearchService service) async {
@@ -224,6 +265,40 @@ void main() {
     },
   );
 
+  testWidgets(
+    'failed unblock leaves the stored and displayed block retryable',
+    (tester) async {
+      final store = RejectingBlocklistStore({
+        'flutter.${ContentBlocklistService.storageKey}': jsonEncode({
+          'version': 1,
+          'videos': {'BV1GJ411x7h7': '第一条视频'},
+          'creators': {},
+        }),
+      });
+      SharedPreferencesStorePlatform.instance = store;
+      SharedPreferences.resetStatic();
+      await tester.pumpWidget(const MaterialApp(home: ContentBlocklistPage()));
+      await tester.pumpAndSettle();
+      final unblock = find.byKey(const Key('unblock-video-BV1GJ411x7h7'));
+      expect(unblock, findsOneWidget);
+
+      await tester.tap(unblock);
+      await tester.pumpAndSettle();
+      expect(find.text('取消屏蔽失败，请重试。'), findsOneWidget);
+      expect(unblock, findsOneWidget);
+      expect(
+        (await const ContentBlocklistService().load()).videos,
+        contains('BV1GJ411x7h7'),
+      );
+
+      store.reject = false;
+      await tester.tap(unblock);
+      await tester.pumpAndSettle();
+      expect(find.text('暂无屏蔽的视频'), findsOneWidget);
+      expect((await const ContentBlocklistService().load()).videos, isEmpty);
+    },
+  );
+
   test('BV identity preserves case and does not match another identifier', () {
     const list = ContentBlocklist(videos: {'BV1GJ411x7h7': 'A'});
     expect(list.blocks(bvid: 'BV1GJ411x7h7', ownerMid: 0), isTrue);
@@ -296,6 +371,130 @@ void main() {
       expect(find.text('第二条视频'), findsOneWidget);
     },
   );
+
+  testWidgets(
+    'reopening search filters after a failed read retains all saved rules',
+    (tester) async {
+      const storageKey = 'flutter.${SearchContentFilterService.storageKey}';
+      final original = jsonEncode({
+        'learningOnly': true,
+        'minimumPlayCount': 54321,
+        'titleKeywords': ['keep-title'],
+        'ownerKeywords': ['keep-creator'],
+      });
+      final store = InterruptedFilterStore({storageKey: original})
+        ..rejectRead = true;
+      SharedPreferencesStorePlatform.instance = store;
+      SharedPreferences.resetStatic();
+
+      await tester.pumpWidget(
+        MaterialApp(home: SearchPage(service: BlockSearchService())),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('筛选'));
+      await tester.pumpAndSettle();
+      expect(find.text('keep-title'), findsOneWidget);
+      expect(find.text('keep-creator'), findsOneWidget);
+      expect(find.text('54321'), findsOneWidget);
+      await tester.tap(find.text('应用筛选'));
+      await tester.pumpAndSettle();
+      expect((await store.getAll())[storageKey], original);
+      expect(store.filterWrites, 0);
+
+      store.rejectRead = true;
+      await tester.tap(find.byTooltip('筛选'));
+      await tester.pumpAndSettle();
+      expect(find.text('筛选设置读取失败，未覆盖原设置。请重试。'), findsOneWidget);
+      expect(find.text('应用筛选'), findsNothing);
+      expect((await store.getAll())[storageKey], original);
+      expect(store.filterWrites, 0);
+
+      await tester.tap(find.byTooltip('筛选'));
+      await tester.pumpAndSettle();
+      expect(find.text('keep-title'), findsOneWidget);
+      expect(find.text('keep-creator'), findsOneWidget);
+    },
+  );
+
+  testWidgets('local filters work with already loaded videos while offline', (
+    tester,
+  ) async {
+    final service = BlockSearchService();
+    await search(tester, service);
+    expect(service.searches, 1);
+    expect(find.text('第一条视频'), findsOneWidget);
+    service.offline = true;
+
+    await tester.tap(find.byTooltip('筛选'));
+    await tester.pumpAndSettle();
+    final titles = find.byKey(const Key('search-title-keywords'));
+    await tester.ensureVisible(titles);
+    await tester.enterText(titles, '第一');
+    await tester.tap(find.text('应用筛选'));
+    await tester.pumpAndSettle();
+    expect(service.searches, 1);
+    expect(find.text('第一条视频'), findsNothing);
+    expect(find.text('第二条视频'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('筛选'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('重置'));
+    await tester.tap(find.text('应用筛选'));
+    await tester.pumpAndSettle();
+    expect(service.searches, 1);
+    expect(find.text('第一条视频'), findsOneWidget);
+    expect(find.text('第二条视频'), findsOneWidget);
+    expect(
+      (await const SearchContentFilterService().load()).titleKeywords,
+      isEmpty,
+    );
+  });
+
+  testWidgets('blocked BV and management can scroll with short large text', (
+    tester,
+  ) async {
+    await const ContentBlocklistService().blockVideo(
+      'BV1GJ411x7h7',
+      '这个长视频标题用于确认大字模式下仍能取消屏蔽并返回',
+    );
+    tester.view.physicalSize = const Size(320, 310);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: TextScaler.linear(2)),
+          child: child!,
+        ),
+        home: SearchPage(service: BlockSearchService()),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('search-input-field')),
+      'BV1GJ411x7h7',
+    );
+    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.text('管理黑名单'));
+    await tester.pumpAndSettle();
+    final unblock = find.byKey(const Key('unblock-video-BV1GJ411x7h7'));
+    for (var i = 0; i < 8 && unblock.hitTestable().evaluate().isEmpty; i++) {
+      await tester.drag(find.byType(ListView), const Offset(0, -180));
+      await tester.pumpAndSettle();
+    }
+    expect(unblock.hitTestable(), findsOneWidget);
+    await tester.tap(unblock.hitTestable());
+    await tester.pumpAndSettle();
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.text('第一条视频'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'category is unrestricted until selected and reset clears the request',

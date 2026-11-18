@@ -13,12 +13,26 @@ class ContentBlocklistService {
   static const storageKey = 'content.blocklist_v1';
   static final ValueNotifier<int> changes = ValueNotifier(0);
   static Future<void>? _pending;
+  static final _needsReload = Expando<bool>();
   static final _bvid = RegExp(r'^BV[0-9A-Za-z]{10}$');
 
   Future<ContentBlocklist> load() async {
     final pending = _pending;
     if (pending != null) await pending;
-    return _read(await preferencesLoader());
+    return _read(await _authoritativePreferences());
+  }
+
+  Future<SharedPreferences> _authoritativePreferences() async {
+    final preferences = await preferencesLoader();
+    if (_needsReload[preferences] == true) {
+      await _reloadPreferences(preferences);
+    }
+    return preferences;
+  }
+
+  Future<void> _reloadPreferences(SharedPreferences preferences) async {
+    await preferences.reload();
+    _needsReload[preferences] = null;
   }
 
   ContentBlocklist _read(SharedPreferences preferences) {
@@ -56,21 +70,33 @@ class ContentBlocklistService {
     void Function(Map<String, String>, Map<int, String>) edit,
   ) {
     final result = (_pending ?? Future<void>.value()).then((_) async {
-      final preferences = await preferencesLoader();
+      final preferences = await _authoritativePreferences();
       // Do not replace unreadable storage with an empty list during a mutation.
       final current = _read(preferences);
       final videos = Map<String, String>.from(current.videos);
       final creators = Map<int, String>.from(current.creators);
       edit(videos, creators);
-      final saved = await preferences.setString(
-        storageKey,
-        jsonEncode({
-          'version': 1,
-          'videos': videos,
-          'creators': creators.map((mid, name) => MapEntry('$mid', name)),
-        }),
-      );
-      if (!saved) throw StateError('Blocklist was not saved');
+      try {
+        final saved = await preferences.setString(
+          storageKey,
+          jsonEncode({
+            'version': 1,
+            'videos': videos,
+            'creators': creators.map((mid, name) => MapEntry('$mid', name)),
+          }),
+        );
+        if (!saved) throw StateError('Blocklist was not saved');
+      } catch (_) {
+        // SharedPreferences updates its cache before the platform write. Do
+        // not expose an uncommitted removal or include it in the next edit.
+        _needsReload[preferences] = true;
+        try {
+          await _reloadPreferences(preferences);
+        } catch (_) {
+          // Later loads and edits must retry the reload, not trust the cache.
+        }
+        rethrow;
+      }
       changes.value++;
     });
     final settled = result.catchError((Object _) {});
