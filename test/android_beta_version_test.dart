@@ -15,6 +15,8 @@ void main() {
       expect(numeric, isNotNull);
       expect(numeric!.group(1), '1.9.0');
       final build = int.parse(numeric.group(2)!);
+      expect(build, 2030);
+      expect(build, greaterThan(2029), reason: 'next after signed Beta 4');
       final archived =
           jsonDecode(
                 File('docs/beta5/apk-verification.json').readAsStringSync(),
@@ -31,12 +33,21 @@ void main() {
         ).firstMatch(pubspec)!.group(1),
         '${numeric.group(1)}.$build',
       );
+      const beta = '5';
+      expect(
+        RegExp(
+          r'^\s+output_name:\s*(\S+)',
+          multiLine: true,
+        ).firstMatch(pubspec)!.group(1),
+        'FocuBili-v${numeric.group(1)}-beta.$beta-windows-x64',
+      );
       final gradle = File('android/app/build.gradle').readAsStringSync();
+      expect(gradle, contains('applicationId "com.focubili.app"'));
       final debug = RegExp(
         r'debug\s*\{([^}]+)\}',
       ).firstMatch(gradle)!.group(1)!;
       expect(debug, contains('applicationIdSuffix ".preview"'));
-      expect(debug, contains('versionNameSuffix "-beta.4"'));
+      expect(debug, contains('versionNameSuffix "-beta.$beta"'));
       expect(debug, contains('焦点哔哩 Beta'));
       final debugManifest = File(
         'android/app/src/debug/AndroidManifest.xml',
