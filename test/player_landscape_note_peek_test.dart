@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:focubili/features/player/player_page.dart';
 import 'package:focubili/features/player/widgets/fullscreen_video_transform.dart';
+import 'package:focubili/models/video_note.dart';
 import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/platform/app_platform.dart';
 import 'package:focubili/services/native_playback_service.dart';
@@ -530,6 +531,69 @@ void main() {
     await _paint(tester);
     expect(find.byKey(const Key('portrait-video-notes-panel')), findsNothing);
     expect(playback.onlineOpens, 1);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('横屏第一次点旗标仅停靠，再点可取消或切换同秒笔记并保护草稿', (tester) async {
+    final playback = _PeekPlayback(startsPlaying: false);
+    final service = VideoNoteService();
+    final date = DateTime(2026, 11, 18);
+    for (final id in ['同秒 A', '同秒 B']) {
+      await service.saveNote(
+        VideoNote(
+          id: id,
+          bvid: _video.bvid,
+          videoTitle: _video.title,
+          ownerName: _video.ownerName,
+          partCid: _video.cid,
+          partPageNumber: 1,
+          partTitle: _video.parts.single.title,
+          title: id,
+          body: '已保存正文',
+          createdAt: date,
+          updatedAt: date,
+          position: const Duration(seconds: 15),
+        ),
+      );
+    }
+    await _mount(tester, playback, service, landscape: const Size(860, 420));
+    final flag = find.byKey(const ValueKey('player-note-flag-hit-0'));
+    final chooser = find.text('选择笔记');
+    await tester.tap(flag.hitTestable());
+    await _paint(tester);
+    await tester.tap(find.byKey(const ValueKey('choose-note-同秒 A')));
+    await _paint(tester);
+    await tester.enterText(_bodyField, _draft);
+    final target = tester.getCenter(flag);
+
+    await tester.tapAt(target);
+    await tester.pump();
+    expect(_handle.hitTestable(), findsOneWidget);
+    expect(chooser, findsNothing);
+    expect(playback.seeks, isEmpty);
+    await tester.tap(flag.hitTestable());
+    await _paint(tester);
+    expect(chooser, findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, '关闭'));
+    await _paint(tester);
+    await tester.tap(_handle.hitTestable());
+    await _paint(tester);
+    expect(_controller(tester, _titleField).text, '同秒 A');
+    expect(_controller(tester, _bodyField).text, _draft);
+
+    await tester.tapAt(target);
+    await tester.pump();
+    expect(chooser, findsNothing);
+    await tester.tap(flag.hitTestable());
+    await _paint(tester);
+    await tester.tap(find.byKey(const ValueKey('choose-note-同秒 B')));
+    await _paint(tester);
+    expect(_handle, findsNothing);
+    expect(_controller(tester, _titleField).text, '同秒 B');
+    final notes = await service.loadNotes();
+    expect(notes.singleWhere((note) => note.id == '同秒 A').body, _draft);
+    expect(playback.seeks, isEmpty);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });

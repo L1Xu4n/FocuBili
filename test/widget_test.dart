@@ -1074,6 +1074,14 @@ class _DelayedWriteNotes extends VideoNoteService {
   }
 }
 
+/// Set the view metrics the app actually sees, not just the render surface.
+void _setPlayerPortraitViewport(WidgetTester tester, Size size) {
+  tester.view.devicePixelRatio = 1;
+  tester.view.physicalSize = size;
+  addTearDown(tester.view.resetDevicePixelRatio);
+  addTearDown(tester.view.resetPhysicalSize);
+}
+
 /// 注册播放器已有功能及笔记旗标的必要回归。
 void main() {
   /// 进入时读取已有标记，点击单笔记只打开正文，跨实例增删后及时更新。
@@ -1121,8 +1129,7 @@ void main() {
     final notes = VideoNoteService();
     await notes.saveNote(_flagNote('同秒A', 42));
     await notes.saveNote(_flagNote('同秒B', 42));
-    await tester.binding.setSurfaceSize(const Size(920, 2000));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+    _setPlayerPortraitViewport(tester, const Size(920, 2000));
     await tester.pumpWidget(
       MaterialApp(
         home: PlayerPage(
@@ -1139,6 +1146,7 @@ void main() {
     expect(find.text('选择笔记'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('choose-note-同秒A')));
     await tester.pumpAndSettle();
+    expect(find.byKey(const Key('park-video-notes-barrier')), findsNothing);
     await tester.enterText(
       find.byKey(const Key('note-body-field')),
       '当前尚未保存的草稿',
@@ -3432,8 +3440,7 @@ void main() {
       navigationDuringPause ? '追加截图暂停晚返回不操作切换后的视频' : '追加截图回包晚到时合集等待并清理撤销画面',
       (tester) async {
         SharedPreferences.setMockInitialValues({});
-        await tester.binding.setSurfaceSize(const Size(1080, 2400));
-        addTearDown(() => tester.binding.setSurfaceSize(null));
+        _setPlayerPortraitViewport(tester, const Size(1080, 2400));
         final directory = await tester.runAsync(
           () => Directory.systemTemp.createTemp('focubili-capture-race-'),
         );
@@ -3473,6 +3480,7 @@ void main() {
             .onTap!;
         await tester.tap(find.byKey(const ValueKey('player-note-flag-hit-0')));
         await tester.pumpAndSettle();
+        expect(find.byKey(const Key('park-video-notes-barrier')), findsNothing);
         await playback.seekTo(const Duration(seconds: 75));
         await playback.play();
         await tester.pump();
@@ -3535,8 +3543,7 @@ void main() {
       preferencesLoader: () async => preferences,
     );
     final _FakePlaybackService playbackService = _FakePlaybackService();
-    await tester.binding.setSurfaceSize(const Size(1080, 2400));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+    _setPlayerPortraitViewport(tester, const Size(1080, 2400));
 
     await tester.pumpWidget(
       MaterialApp(
@@ -3552,6 +3559,7 @@ void main() {
 
     await tester.tap(find.byKey(const Key('portrait-note-button')));
     await tester.pumpAndSettle();
+    expect(find.byKey(const Key('park-video-notes-barrier')), findsNothing);
     expect(find.byKey(const Key('portrait-video-notes-panel')), findsOneWidget);
     expect(find.byKey(const Key('collapsing-player-scroll')), findsNothing);
     final TextField portraitTitleField = tester.widget<TextField>(
@@ -3680,8 +3688,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final service = _FakePlaybackService(frameCapturePath: null);
     final notes = VideoNoteService();
-    await tester.binding.setSurfaceSize(const Size(1080, 2400));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+    _setPlayerPortraitViewport(tester, const Size(1080, 2400));
     await tester.pumpWidget(
       MaterialApp(
         home: PlayerPage(
@@ -3695,6 +3702,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('portrait-note-button')));
     await tester.pumpAndSettle();
+    expect(find.byKey(const Key('park-video-notes-barrier')), findsNothing);
     await tester.enterText(
       find.byKey(const Key('note-title-field')),
       'Screenshot failure',
