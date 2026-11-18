@@ -552,19 +552,22 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
     }
     if (_folders.isEmpty) {
       return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            const Icon(Icons.bookmark_add_outlined, size: 56),
-            const SizedBox(height: 12),
-            const Text('还没有软件收藏夹'),
-            const SizedBox(height: 12),
-            FilledButton.icon(
-              onPressed: _transferring ? null : _createFolder,
-              icon: const Icon(Icons.add_rounded),
-              label: const Text('新建收藏夹'),
-            ),
-          ],
+        child: SingleChildScrollView(
+          key: const Key('app-favorites-empty-scroll'),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              const Icon(Icons.bookmark_add_outlined, size: 56),
+              const SizedBox(height: 12),
+              const Text('还没有软件收藏夹'),
+              const SizedBox(height: 12),
+              FilledButton.icon(
+                onPressed: _transferring ? null : _createFolder,
+                icon: const Icon(Icons.add_rounded),
+                label: const Text('新建收藏夹'),
+              ),
+            ],
+          ),
         ),
       );
     }
