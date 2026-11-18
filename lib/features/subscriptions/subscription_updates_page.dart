@@ -8,6 +8,7 @@ import '../../models/subscription.dart';
 import '../../services/image_resource_cache.dart';
 import '../../models/public_profile.dart';
 import '../../services/subscription_service.dart';
+import '../../services/subscription_source_visits.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/focus_notification_service.dart';
 import '../../services/learning_list_service.dart';
@@ -203,6 +204,37 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
     return '$prefix${local.month}月${local.day}日';
   }
 
+  bool _visibleInGlobalFilters(SubscriptionFeedItem item, DateTime today) =>
+      (!_unreadOnly || item.readAt == null) &&
+      (!_todayOnly ||
+          DateUtils.isSameDay(
+            (item.publishedAt ?? item.discoveredAt).toLocal(),
+            today,
+          ));
+
+  List<SubscriptionFeedItem> _railFeed() {
+    if (!discoveryBlocklistReady) return const [];
+    final today = DateTime.now();
+    return _service.feed
+        .where(
+          (item) =>
+              !_isUpdateBlocked(item) && _visibleInGlobalFilters(item, today),
+        )
+        .toList();
+  }
+
+  bool _canConfirmSource(SubscriptionSource source, Set<String> presented) =>
+      mounted &&
+      discoveryBlocklistActionsReady &&
+      _service.sources.any(
+        (s) => s.key == source.key && s.token == source.token,
+      ) &&
+      _railFeed()
+          .where((e) => e.sources.containsKey(source.key))
+          .map(SubscriptionSourceVisits.event)
+          .toSet()
+          .containsAll(presented);
+
   List<SubscriptionFeedItem> _itemsForFilters() {
     final today = DateTime.now();
     // A deleted source cannot strand the feed behind an invisible filter.
@@ -213,12 +245,7 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
     return _service.feed
         .where(
           (item) =>
-              (!_unreadOnly || item.readAt == null) &&
-              (!_todayOnly ||
-                  DateUtils.isSameDay(
-                    (item.publishedAt ?? item.discoveredAt).toLocal(),
-                    today,
-                  )) &&
+              _visibleInGlobalFilters(item, today) &&
               (key == null || item.sources.containsKey(key)),
         )
         .toList();
@@ -290,11 +317,8 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
               sources: _service.sources,
               retainedFeed: _service.feed,
               actionsReady: discoveryBlocklistActionsReady,
-              visibleFeed: discoveryBlocklistReady
-                  ? _service.feed
-                        .where((item) => !_isUpdateBlocked(item))
-                        .toList()
-                  : const [],
+              visibleFeed: _railFeed(),
+              canConfirm: _canConfirmSource,
               selected: _sourceKey,
               onSelect: (key) {
                 if (!mounted) return;

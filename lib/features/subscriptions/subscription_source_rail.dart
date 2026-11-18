@@ -18,11 +18,13 @@ class SubscriptionSourceRail extends StatefulWidget {
     required this.selected,
     required this.onSelect,
     required this.actionsReady,
+    this.canConfirm,
   });
   final List<SubscriptionSource> sources;
   final List<SubscriptionFeedItem> visibleFeed, retainedFeed;
   final String? selected;
   final bool actionsReady;
+  final bool Function(SubscriptionSource, Set<String>)? canConfirm;
   final ValueChanged<String?> onSelect;
   @override
   State<SubscriptionSourceRail> createState() => _SubscriptionSourceRailState();
@@ -87,6 +89,7 @@ class _SubscriptionSourceRailState extends State<SubscriptionSourceRail> {
         stillVisible: () =>
             mounted &&
             widget.actionsReady &&
+            (widget.canConfirm?.call(source, events) ?? true) &&
             widget.sources.any(
               (s) => SubscriptionSourceVisits.identity(s) == identity,
             ) &&

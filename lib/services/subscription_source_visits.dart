@@ -33,6 +33,9 @@ abstract final class SubscriptionSourceVisits {
   static Future<Map<String, Set<String>>> load(String scope) async {
     await _queue;
     final prefs = await SharedPreferences.getInstance();
+    // The legacy facade changes its memory cache before the platform accepts
+    // a write. Only reloads from authoritative storage can confirm a visit.
+    await prefs.reload();
     return _decode(prefs.getString(_key(scope)));
   }
 
@@ -48,6 +51,7 @@ abstract final class SubscriptionSourceVisits {
     // Merge taps from mounted views; queued writes retain their original scope.
     final operation = (_queue ?? Future<void>.value()).then((_) async {
       final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
       if (scope != CacheLifecycle.accountScope ||
           revision != CacheLifecycle.account.value ||
           !stillVisible()) {
