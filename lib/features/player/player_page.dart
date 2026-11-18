@@ -525,6 +525,7 @@ class _PlayerPageState extends State<PlayerPage>
   /// 离开页面前取消重试状态、订阅和计时器，释放原生资源并恢复竖屏与系统栏。
   @override
   void dispose() {
+    _playerToolsSession?.closeAfterOwnerDisposed();
     _playerToolsTriggerFocus.dispose();
     _disposePlaylist();
     final abRepeatDrain = _disposeAbRepeat();

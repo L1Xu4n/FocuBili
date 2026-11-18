@@ -88,6 +88,46 @@ Future<void> _mountTools(
 }
 
 void main() {
+  testWidgets(
+    'invalidating route-owned playback disposes its modal as well as its player',
+    (t) async {
+      SharedPreferences.setMockInitialValues({});
+      final active = ValueNotifier(true);
+      final backend = _CountPlayback();
+      await t.pumpWidget(
+        MaterialApp(
+          home: ValueListenableBuilder<bool>(
+            valueListenable: active,
+            builder: (context, allowed, _) => allowed
+                ? PlayerPage(
+                    video: abVideo,
+                    playbackService: backend,
+                    playerOverlayService: AbOverlay(),
+                    offlineVideoService: ReviewOfflineLibrary(),
+                  )
+                : const Scaffold(body: Text('授权已失效')),
+          ),
+        ),
+      );
+      await t.pumpAndSettle();
+      await t.tap(_trigger);
+      await t.pumpAndSettle();
+      expect(_panel, findsOneWidget);
+      active.value = false;
+      await t.pumpAndSettle();
+      expect(find.byType(PlayerPage), findsNothing);
+      expect(
+        _panel,
+        findsNothing,
+        reason:
+            'When its PlayerPage disappears (e.g. private course account change/expiry), an expired modal must not still offer actions',
+      );
+      expect(find.text('授权已失效').hitTestable(), findsOneWidget);
+      expect(t.takeException(), isNull);
+      await t.pumpWidget(const SizedBox.shrink());
+      active.dispose();
+    },
+  );
   for (final v in [
     (const Size(390, 844), 1.0, false, 'phone'),
     (const Size(320, 640), 2.0, true, 'compact'),

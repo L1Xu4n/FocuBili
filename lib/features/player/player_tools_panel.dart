@@ -123,6 +123,20 @@ class _PlayerToolsSession extends ValueNotifier<List<_PlayerTool>> {
   _PlayerToolsSession(this.identity, super.value);
 
   final _PlayerToolsIdentity identity;
+  DialogRoute<_PlayerMoreMenuAction>? route;
+
+  /// The enclosing page may replace the player without popping its route,
+  /// e.g. when account access expires. Remove only this player's own panel.
+  void closeAfterOwnerDisposed() {
+    final owned = route;
+    if (owned == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final navigator = owned.navigator;
+      if (navigator != null && navigator.mounted && owned.isActive) {
+        navigator.removeRoute(owned);
+      }
+    });
+  }
 }
 
 extension _PlayerToolsView on _PlayerPageState {
@@ -164,6 +178,7 @@ extension _PlayerToolsView on _PlayerPageState {
       builder: (_) =>
           _PlayerToolsPanel(session: session, desktop: _appPlatform.isDesktop),
     );
+    session.route = route;
     _PlayerMoreMenuAction? action;
     try {
       action = await navigator.push(route);
