@@ -55,6 +55,9 @@ class _FakePublicContentRequest {
                   {
                     "bvid": "BV1GJ411x7h7",
                     "title": "【全748集】公开投稿",
+                    "mid": "42",
+                    "author": "投稿示例",
+                    "tag": " 系统基础 , , 课件, 系统基础",
                     "pic": "http://i0.hdslb.com/video.jpg",
                     "duration": "2:05",
                     "created": 1704067200,
@@ -372,6 +375,30 @@ class _ProfileFallbackRequest {
 
 /// 验证公开用户主页与 UGC 合集服务的解析和分页参数。
 void main() {
+  test(
+    'extracts only present author metadata and tags from the paged response',
+    () async {
+      final api = _FakePublicContentRequest();
+      final service = BilibiliHttpPublicContentService(requestJson: api.call);
+      final page = await service.loadVideos(7);
+      final post = page.items.single;
+      expect(post.ownerMid, 42);
+      expect(post.ownerName, '投稿示例');
+      expect(post.tags, ['系统基础', '课件']);
+      expect(api.endpoints.map((uri) => uri.path), [
+        '/x/web-interface/nav',
+        '/x/space/wbi/arc/search',
+      ]);
+      final collection = (await service.loadCollectionVideos(
+        7,
+        900,
+      )).items.single;
+      expect(collection.ownerMid, 0);
+      expect(collection.ownerName, isEmpty);
+      expect(collection.tags, isEmpty);
+    },
+  );
+
   /// 验证用户公开名片不会依赖登录 Cookie，并能解析主页统计。
   test('公开用户资料解析头像认证和统计', () async {
     final _FakePublicContentRequest request = _FakePublicContentRequest();

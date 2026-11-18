@@ -158,7 +158,31 @@ class _ContentBlocklistPageState extends State<ContentBlocklistPage> {
             ContentBlockRule(kind, value),
     ];
     return Scaffold(
-      appBar: AppBar(title: const Text('黑名单')),
+      appBar: AppBar(
+        title: const Text('黑名单'),
+        actions: [
+          IconButton(
+            tooltip: '规则范围和缺失资料',
+            icon: const Icon(Icons.info_outline),
+            onPressed: () => showDialog<void>(
+              context: context,
+              builder: (dialog) => AlertDialog(
+                scrollable: true,
+                title: const Text('规则范围和缺失资料'),
+                content: const Text(
+                  '缺少标签时不匹配标签规则。UP 主投稿优先用视频作者，列表未提供作者时可用该投稿页的 UP 主资料。合集来源或有冲突的多个来源不会被当成作者。收藏、学习清单、观看记录和笔记不会被删除，B 站账号也不会被修改。',
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(dialog),
+                    child: const Text('知道了'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
       body: _failed
           ? Center(
               child: TextButton(
@@ -171,7 +195,7 @@ class _ContentBlocklistPageState extends State<ContentBlocklistPage> {
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                const Text('屏蔽只在本机搜索生效，不会删除收藏、学习清单、观看记录或笔记，也不会修改 B 站账号。'),
+                const Text('仅在本机过滤搜索、UP 主投稿和焦点订阅，不会删除已保存内容。'),
                 const SizedBox(height: 12),
                 _sectionTitle(
                   'UP 主（${list.creators.length + creatorRules.length}）',
