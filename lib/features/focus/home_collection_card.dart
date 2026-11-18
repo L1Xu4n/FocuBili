@@ -51,6 +51,8 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
   final _api = BilibiliAccountDataService();
   final _favorites = AppFavoritesService();
   List<_HomeChoice> _selected = [];
+  Map<String, String> _localFolderNames = {};
+  int _folderNamesGeneration = 0;
   bool _custom = false;
   bool _loading = true;
   int _mid = 0;
@@ -65,6 +67,7 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
   void initState() {
     super.initState();
     CacheLifecycle.account.addListener(_accountChanged);
+    AppFavoritesService.folderNamesRevision.addListener(_loadLocalFolderNames);
     _load();
   }
 
@@ -72,6 +75,10 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
   @override
   void dispose() {
     _generation++;
+    _folderNamesGeneration++;
+    AppFavoritesService.folderNamesRevision.removeListener(
+      _loadLocalFolderNames,
+    );
     CacheLifecycle.account.removeListener(_accountChanged);
     super.dispose();
   }
@@ -100,6 +107,9 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
       final selected = (config['items'] as List? ?? [])
           .map((e) => _HomeChoice.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList();
+      if (selected.any((choice) => choice.kind == 'local')) {
+        await _loadLocalFolderNames();
+      }
       if (mounted && generation == _generation) {
         setState(() {
           _mid = mid;
@@ -114,6 +124,29 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
       }
     }
   }
+
+  /// 本机名称独立刷新，不取消正在编辑的配置，也不回写保存的入口快照。
+  Future<void> _loadLocalFolderNames() async {
+    if (!widget.favorites) return;
+    final generation = ++_folderNamesGeneration;
+    try {
+      final folders = await _favorites.loadFolders();
+      if (mounted && generation == _folderNamesGeneration) {
+        setState(() {
+          _localFolderNames = {
+            for (final folder in folders) folder.id: folder.name,
+          };
+        });
+      }
+    } catch (_) {
+      // 损坏或不可读的收藏数据不应隐藏入口，继续显示最后成功名称或保存的名称。
+    }
+  }
+
+  /// 仅本机收藏夹按稳定 ID 取当前名称，其他来源及已删除入口保留快照。
+  String _label(_HomeChoice choice) => choice.kind == 'local'
+      ? _localFolderNames[choice.id] ?? choice.label
+      : choice.label;
 
   /// 显示短反馈，保留当前成功配置。
   void _message(String message) {
@@ -263,7 +296,14 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
               builder: (_) => _HomeChoiceEditor(
                 title: widget.favorites ? '我的收藏' : '我的关注',
                 choices: choices,
-                selected: mid == _mid ? _selected : [],
+                selected: mid == _mid
+                    ? _selected
+                          .map(
+                            (item) =>
+                                _HomeChoice(item.kind, item.id, _label(item)),
+                          )
+                          .toList()
+                    : [],
                 custom: mid == _mid && _custom,
               ),
             ),
@@ -325,7 +365,7 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
             for (final choice in _selected)
               ListTile(
                 dense: true,
-                title: Text(choice.label),
+                title: Text(_label(choice)),
                 leading: Icon(
                   choice.kind == 'creator'
                       ? Icons.person_outline
