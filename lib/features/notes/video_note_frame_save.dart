@@ -1,4 +1,6 @@
 import 'dart:io';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
@@ -31,8 +33,9 @@ class _VideoNoteFrameSaveState extends State<VideoNoteFrameSave> {
     try {
       final source = File(path);
       final bytes = await source.readAsBytes();
-      if (bytes.isEmpty) {
-        throw const FileSystemException('empty_frame');
+      if (!mounted || ModalRoute.of(context)?.isCurrent == false) return;
+      if (!await _canDecodeFrame(bytes)) {
+        throw const FileSystemException('invalid_frame');
       }
       if (!mounted || ModalRoute.of(context)?.isCurrent == false) return;
       final extension = source.uri.pathSegments.last
@@ -55,6 +58,28 @@ class _VideoNoteFrameSaveState extends State<VideoNoteFrameSave> {
       _notify(error.message);
     } finally {
       if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<bool> _canDecodeFrame(Uint8List bytes) async {
+    if (bytes.isEmpty) return false;
+    try {
+      // Validate a tiny decode only. The bytes sent to Save As are untouched.
+      final codec = await ui.instantiateImageCodec(
+        bytes,
+        targetWidth: 1,
+        targetHeight: 1,
+        allowUpscaling: false,
+      );
+      try {
+        final frame = await codec.getNextFrame();
+        frame.image.dispose();
+        return true;
+      } finally {
+        codec.dispose();
+      }
+    } catch (_) {
+      return false;
     }
   }
 
