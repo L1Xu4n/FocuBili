@@ -1,6 +1,7 @@
 import '../../services/cache_lifecycle.dart';
 import '../learning/learning_add_sheet.dart';
 import 'dart:async';
+import 'dart:ui' as ui;
 import '../../models/ab_repeat_range.dart';
 import '../../models/playback_queue.dart';
 import 'widgets/player_ab_repeat_sheet.dart';
@@ -60,6 +61,7 @@ import '../../services/player_route_session.dart';
 import '../profile/offline_videos_page.dart';
 import '../../services/app_favorites_service.dart';
 import '../../services/video_shot_service.dart';
+import '../../services/image_resource_cache.dart';
 import '../../services/video_note_service.dart';
 import '../../models/player_overlay_data.dart';
 import '../../models/danmaku_preferences.dart';
@@ -113,6 +115,7 @@ part 'player_details_view.dart';
 part 'player_local_library.dart';
 part 'player_collection_view.dart';
 part 'player_page_view.dart';
+part 'player_desktop_pointer.dart';
 
 /// 标识播放器画面应保留比例、裁切填充，还是按容器比例拉伸。
 enum _VideoFitMode { contain, cover, stretch }
@@ -139,6 +142,7 @@ class PlayerPage extends StatefulWidget {
     this.publicContentService,
     this.interactionService,
     this.videoShotService,
+    this.videoShotImageCache,
     this.videoNoteService,
     this.danmakuPreferencesService,
     this.playbackPreferencesService,
@@ -171,6 +175,7 @@ class PlayerPage extends StatefulWidget {
   final BilibiliPublicContentService? publicContentService;
   final BilibiliInteractionService? interactionService;
   final VideoShotService? videoShotService;
+  final ImageResourceCache? videoShotImageCache;
   final VideoNoteService? videoNoteService;
   final DanmakuPreferencesService? danmakuPreferencesService;
   final PlaybackPreferencesService? playbackPreferencesService;
@@ -398,6 +403,8 @@ class _PlayerPageState extends State<PlayerPage>
   }) {
     final partChanged = _currentPart.cid != part.cid;
     if (partChanged) {
+      _cancelHorizontalScrub();
+      _resetVideoShotPreview();
       _clearSubtitlesForPart();
       _clearDanmakuForPart();
     }

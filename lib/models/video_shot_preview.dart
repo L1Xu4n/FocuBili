@@ -18,6 +18,29 @@ class VideoShotFrame {
   final double frameHeight;
   final int sheetColumns;
   final int sheetRows;
+
+  static final _publicAtlas = RegExp(
+    r'^/videoshotpvhdboss/[0-9]+_[a-zA-Z0-9]+-[0-9]+\.jpg$',
+  );
+
+  /// 仅公开 B 站原始 JPEG 图集支持整页缩小，保留所有行列、不改签名链接。
+  String? resizedPublicAtlasUrl(int width) {
+    final uri = Uri.tryParse(imageUrl);
+    if (width < 1 ||
+        width > 2048 ||
+        uri == null ||
+        uri.scheme != 'https' ||
+        uri.host != 'bimp.hdslb.com' ||
+        uri.hasPort ||
+        uri.userInfo.isNotEmpty ||
+        uri.hasQuery ||
+        uri.hasFragment ||
+        imageUrl != 'https://bimp.hdslb.com${uri.path}' ||
+        !_publicAtlas.hasMatch(uri.path)) {
+      return null;
+    }
+    return '$imageUrl@${width}w.webp';
+  }
 }
 
 /// 保存一支视频的进度时间点与多张雪碧预览图元数据。

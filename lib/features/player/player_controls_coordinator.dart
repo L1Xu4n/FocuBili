@@ -100,6 +100,7 @@ mixin _PlayerControlsCoordinator
         !_playing ||
         _playbackSnapshot.isInPictureInPicture ||
         _isDraggingProgress ||
+        _desktopBottomHover ||
         _temporarySpeedActive ||
         _horizontalScrubbing) {
       return;
@@ -112,6 +113,7 @@ mixin _PlayerControlsCoordinator
           _playing &&
           !_playbackSnapshot.isInPictureInPicture &&
           !_isDraggingProgress &&
+          !_desktopBottomHover &&
           !_temporarySpeedActive &&
           !_horizontalScrubbing) {
         setState(() {
@@ -234,6 +236,7 @@ mixin _PlayerControlsCoordinator
     if (quality == _currentQuality || _pendingQualitySelection == quality) {
       return;
     }
+    _clearDesktopPointerForTransition();
     _showPlayerControls();
     setState(() {
       _pendingQualitySelection = quality;
@@ -319,6 +322,7 @@ mixin _PlayerControlsCoordinator
 
   /// 标记进度条正被手指拖动，并暂停自动隐藏以方便精确调整。
   void _startProgressDrag(double value) {
+    _clearDesktopPointerForTransition();
     _isDraggingProgress = true;
     _stopControlsAutoHideTimer();
   }
@@ -497,6 +501,7 @@ mixin _PlayerControlsCoordinator
       return;
     }
     _cancelTemporaryLongPress();
+    _clearDesktopPointerForTransition();
     _stopControlsAutoHideTimer();
     setState(() {
       _controlsLocked = !_controlsLocked;

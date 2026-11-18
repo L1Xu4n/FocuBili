@@ -226,9 +226,10 @@ mixin _PlayerAbRepeatCoordinator
     PlaybackSnapshot previous,
     PlaybackSnapshot snapshot,
   ) {
-    final ready = snapshot.phase == PlaybackPhase.ready &&
-        !snapshot.isRestoringPosition;
-    final ordinary = ready &&
+    final ready =
+        snapshot.phase == PlaybackPhase.ready && !snapshot.isRestoringPosition;
+    final ordinary =
+        ready &&
         previous.phase == PlaybackPhase.ready &&
         previous.isPlaying != snapshot.isPlaying;
     final window = _abRepeatFeedbackWindow;
@@ -246,7 +247,8 @@ mixin _PlayerAbRepeatCoordinator
     if (manual != null) {
       if (!ready ||
           snapshot.isPlaying != manual ||
-          (snapshot.playRequested != null && snapshot.playRequested != manual)) {
+          (snapshot.playRequested != null &&
+              snapshot.playRequested != manual)) {
         return false;
       }
       window.manualTarget = null;
