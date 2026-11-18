@@ -23,7 +23,7 @@
 ## 哪些刻意没再改
 
 - **[#50](https://github.com/L1Xu4n/FocuBili/issues/50)、[#89](https://github.com/L1Xu4n/FocuBili/issues/89)：** 保留 Beta 3 已重写的抽屉、空布局搜索、收藏/关注卡片。这轮不再改手势或重复做卡片。此前的三版对比及卡片证据详见[原验收表](beta3-acceptance.md)；真机手感、帧率及真实账号分组导入仍欠实测。
-- **[#82 Linux DEB](https://github.com/L1Xu4n/FocuBili/issues/82)：** 仍按实际 ELF 依赖打包，不硬编码库名。本地三种错误包反例与四个结果解析测试通过。三个正常打包用例因测试容器缺系统包元数据而未能完成；不要把历史上 Ubuntu 24.04 的运行或 26.04 的依赖解析写成本轮跨版本原生安装。
+- **[#82 Linux DEB](https://github.com/L1Xu4n/FocuBili/issues/82)：** 仍按实际 ELF 依赖打包，不硬编码库名。本地三种错误包反例与四个结果解析测试通过。本地三个正常打包用例因容器缺系统包元数据而未完成；在 [#107 的 Ubuntu 24.04 CI](https://github.com/L1Xu4n/FocuBili/actions/runs/44247038552) 上，打包用例、生成 DEB、APT 安装该包以及桌面启动/单实例检查均通过。该安装来自一个 PR 的构建，不是组合版在 Ubuntu 26.04 或 22.04 的实机安装；26.04 仍只有历史依赖解析证据。
 - **[#87 夜间图标](https://github.com/L1Xu4n/FocuBili/issues/87)：** 复核资源引用与五种密度 PNG 的实体像素。标志主体位于安全区，深色底上标志像素的中位对比度约 4.98:1。无证据应再画一套；未验证 ColorOS 15 桌面渲染。
 - **[#97 笔记](https://github.com/L1Xu4n/FocuBili/issues/97)、[#98 自动字幕](https://github.com/L1Xu4n/FocuBili/issues/98)：** 保留 Beta 3 笔记 Markdown/原图保存和三种自动字幕优先级，本轮只动已有字幕的列表浏览，不增加轨道、不生成字幕。
 - **范围外：** [#59](https://github.com/L1Xu4n/FocuBili/issues/59) 的自行生成字幕/评论区，以及 Beta 2 明确排除的 [#78](https://github.com/L1Xu4n/FocuBili/issues/78)、[#79](https://github.com/L1Xu4n/FocuBili/issues/79)，不在本次完成项内。新反馈 #93–#96 不挪作旧项成果，例如没有新增 #95 要求的倒序学习模式。
@@ -32,7 +32,7 @@
 
 使用锁定依赖、Linux Flutter 3.44.6 的真实控件、合成账号/媒体、可控时钟和本机存储替身；每项都标注了未复验的设备或网络。有独立审查先在旧实现跑出失败，再在候选复跑。不同专题与独立测试有重合，不能相加当成全项目总数。本轮没有做整机性能跑分；本文涉及性能的结论仅限实际检查的请求次数、持久化写入时机、分页取消与采样边界。
 
-本地将 7 个代码 PR 的实际远端分支按 #103→#109 顺序合并演练，无冲突，合并得到的 `lib/` 和 `test/` 与终验完全一致。最终全项目 Flutter 测试 **1769 通过、2 跳过、0 失败**；静态分析无问题，531 个 Dart 文件格式未变，发布工具另有 43 项通过。这不是远端所有工作流成功的证明；各工作流状态以对应 PR 的 Checks 为准。
+本地将 7 个代码 PR 的实际远端分支按 #103→#109 顺序合并演练，无冲突，合并得到的 `lib/` 和 `test/` 与终验完全一致。最终全项目 Flutter 测试 **1769 通过、2 跳过、0 失败**；静态分析无问题，531 个 Dart 文件格式未变，发布工具另有 43 项通过。另按每个代码 PR 的准确 head 核对过 GitHub Actions：#103–#109 对应的 22 个工作流最终全部成功（7 个主 CI、7 个 Linux、7 个 Apple 构建及 1 个额外 Apple 播放会话工作流）。三条 Ubuntu 作业曾在约 45 分钟被取消；日志显示区域镜像下载系统依赖占据大部分时间。只重试受影响的 Linux job，未改产品代码、断言或 PR head。该结论不包括文档和独立 CI 预算草稿的工作流，也不代表合并或发行。
 
 [learn]: https://github.com/L1Xu4n/FocuBili/pull/109
 [captions]: https://github.com/L1Xu4n/FocuBili/pull/108
