@@ -15,6 +15,9 @@ class AppFavoritesService {
   AppFavoritesService({AppFavoritesPreferencesLoader? preferencesLoader})
     : _preferencesLoader = preferencesLoader;
 
+  /// Notifies retained cover views after a complete successful local mutation.
+  static final ValueNotifier<int> contentsRevision = ValueNotifier(0);
+
   /// Notifies retained views after a folder name is successfully saved.
   static final ValueNotifier<int> folderNamesRevision = ValueNotifier(0);
 
@@ -64,8 +67,11 @@ class AppFavoritesService {
   }
 
   /// Serializes complete mutations across all service instances, including failures.
-  Future<T> _mutate<T>(Future<T> Function() operation) {
-    final next = _queue.then((_) => operation());
+  Future<T> _mutate<T>(Future<T> Function() operation, {bool notify = true}) {
+    final next = _queue.then((_) => operation()).then((result) {
+      if (notify && result != null && result != false) contentsRevision.value++;
+      return result;
+    });
     _queue = next.then<void>(
       (_) {},
       onError: (Object error, StackTrace stack) {},
@@ -226,7 +232,7 @@ class AppFavoritesService {
           items: items,
           exportedAt: DateTime.now(),
         );
-      });
+      }, notify: false);
 
   /// 同标识或同名目录合并，按目录内 BV 去重；本机名称、元数据和已有视频优先。
   Future<AppFavoritesBackupImportResult> importBackup(
