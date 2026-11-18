@@ -1256,7 +1256,9 @@ void main() {
     expect(video.collection?.title, '独立视频合集');
     expect(video.collection?.entries, hasLength(2));
     expect(video.collection?.entries.last.bvid, 'BV1Q541167Qg');
-    expect(video.tags, <String>['地理', '科普']);
+    expect(video.tags, isEmpty);
+    expect(requester.requestedUri?.path, '/x/web-interface/view');
+    expect(await service.loadVideoTags(video.bvid), <String>['地理', '科普']);
     expect(
       video.collection?.entries.last.thumbnailUrl,
       'https://i0.hdslb.com/two.jpg@320w_200h_1c.webp',

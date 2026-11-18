@@ -39,6 +39,12 @@ abstract interface class BilibiliService {
   Future<List<String>> suggestKeywords(String input);
 }
 
+/// Optional tag-only lookup for a single, explicitly selected public video.
+/// Search lists must never call this once per row.
+abstract interface class BilibiliVideoTagSource {
+  Future<List<String>> loadVideoTags(String bvid);
+}
+
 /// 定义独立的用户搜索能力，避免要求所有旧视频服务测试替身同步实现新方法。
 abstract interface class BilibiliUserSearchService {
   /// 按关键词和筛选条件读取一页公开用户资料。
@@ -51,7 +57,10 @@ abstract interface class BilibiliUserSearchService {
 
 /// 使用公开视频详情接口查询标题、UP 主和时长，不读取或保存用户 Cookie。
 class BilibiliVideoInfoService
-    implements BilibiliService, BilibiliUserSearchService {
+    implements
+        BilibiliService,
+        BilibiliUserSearchService,
+        BilibiliVideoTagSource {
   /// 创建服务；测试可传入自定义请求函数，正式 App 默认使用 HTTPS 请求。
   BilibiliVideoInfoService({
     JsonRequest? requestJson,
@@ -114,27 +123,23 @@ class BilibiliVideoInfoService
     final Uri endpoint = Uri.https(_apiHost, _videoInfoPath, <String, String>{
       'bvid': bvid,
     });
-    late VideoPreview video;
     try {
       final String responseText = await _requestJson(endpoint);
-      video = _parseVideoInfo(responseText, bvid);
+      return _parseVideoInfo(responseText, bvid);
     } catch (_) {
       final cached = await _cachedVideo(bvid);
       if (cached != null) return cached;
       rethrow;
     }
-    try {
-      final String tagResponse = await _requestJson(
-        Uri.https(_apiHost, _videoTagsPath, <String, String>{
-          'bvid': video.bvid,
-        }),
-      );
-      final List<String> tags = _parseVideoTags(tagResponse);
-      return tags.isEmpty ? video : video.withTags(tags);
-    } catch (_) {
-      // 标签属于附加资料，读取失败时仍然返回已经可播放的完整视频信息。
-      return video;
-    }
+  }
+
+  @override
+  Future<List<String>> loadVideoTags(String bvid) async {
+    if (!RegExp(r'^BV[0-9A-Za-z]{10}$').hasMatch(bvid)) return const [];
+    final raw = await _requestJson(
+      Uri.https(_apiHost, _videoTagsPath, {'bvid': bvid}),
+    );
+    return _parseVideoTags(raw);
   }
 
   /// 解析视频标签接口并去重，损坏、空白或过长标签不会进入详情页。

@@ -13,6 +13,7 @@ import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 import 'widgets/player_tap_gesture.dart';
+import 'widgets/player_video_tags.dart';
 
 import '../../core/layout/adaptive_layout.dart';
 import '../../core/layout/app_scroll_behavior.dart';
@@ -246,8 +247,16 @@ class _PlayerPageState extends State<PlayerPage>
   late final VideoNoteService _videoNoteService;
   @override
   late final ProblemDiagnosticsService _problemDiagnosticsService;
+  late VideoPreview _displayedVideo;
+  final _tagSession = PlayerTagSession();
   @override
-  late VideoPreview _activeVideo;
+  VideoPreview get _activeVideo => _displayedVideo;
+  @override
+  set _activeVideo(VideoPreview video) {
+    _displayedVideo = video;
+    _tagSession.bind(video);
+  }
+
   @override
   late VideoPart _currentPart;
   BilibiliInteractionState _interactionState = const BilibiliInteractionState();
@@ -438,6 +447,7 @@ class _PlayerPageState extends State<PlayerPage>
     _deviceStatusService =
         widget.deviceStatusService ?? const NativeDeviceStatusService();
     _bilibiliService = widget.bilibiliService ?? BilibiliVideoInfoService();
+    _tagSession.initialize(_bilibiliService);
     _publicContentService =
         widget.publicContentService ?? BilibiliHttpPublicContentService();
     _interactionService =
@@ -535,6 +545,7 @@ class _PlayerPageState extends State<PlayerPage>
   /// 离开页面前取消重试状态、订阅和计时器，释放原生资源并恢复竖屏与系统栏。
   @override
   void dispose() {
+    _tagSession.dispose();
     _disposePlaylist();
     final abRepeatDrain = _disposeAbRepeat();
     CacheLifecycle.subtitles.removeListener(_invalidateSubtitleSession);
