@@ -169,12 +169,13 @@ extension _PlayerFeedbackView on _PlayerPageState {
   }
 
   /// 让上下栏分别淡出并透传隐藏后的触摸，不影响提示可见性。
-  Widget _buildFadingControls(Widget child) {
+  Widget _buildFadingControls(Widget child, {Key? regionKey}) {
     final visible =
         _showControls &&
         !_controlsLocked &&
         !_playbackSnapshot.isInPictureInPicture;
     return IgnorePointer(
+      key: regionKey,
       ignoring: !visible,
       child: AnimatedOpacity(
         opacity: visible ? 1 : 0,

@@ -3,6 +3,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/features/player/player_page.dart';
+import 'package:focubili/platform/app_platform.dart';
 import 'package:focubili/features/player/widgets/player_action_feedback.dart';
 import 'package:focubili/services/native_playback_service.dart';
 
@@ -203,7 +204,7 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
   testWidgets(
-    'desktop mouse feedback stays at viewport edges across repeats, reversal and resize',
+    'desktop touch feedback stays at viewport edges across repeats, reversal and resize',
     (tester) async {
       tester.view.physicalSize = const Size(1600, 1000);
       tester.view.devicePixelRatio = 1;
@@ -213,7 +214,11 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(
           theme: ThemeData(platform: TargetPlatform.windows),
-          home: PlayerPage(video: video, playbackService: playback),
+          home: PlayerPage(
+            video: video,
+            playbackService: playback,
+            appPlatform: AppPlatform.windows,
+          ),
         ),
       );
       await tester.pumpAndSettle();
@@ -223,9 +228,9 @@ void main() {
           surface.left + surface.width * (forward ? .8 : .2),
           surface.center.dy,
         );
-        await tester.tapAt(point, kind: PointerDeviceKind.mouse);
+        await tester.tapAt(point, kind: PointerDeviceKind.touch);
         await tester.pump(const Duration(milliseconds: 60));
-        await tester.tapAt(point, kind: PointerDeviceKind.mouse);
+        await tester.tapAt(point, kind: PointerDeviceKind.touch);
         await tester.pump();
       }
 

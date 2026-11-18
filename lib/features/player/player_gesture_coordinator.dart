@@ -36,6 +36,10 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
   double _horizontalSeekMaximumOffsetSeconds = 0;
   VideoShotPreview? _videoShotPreview;
   bool _videoShotLoading = false;
+  final GlobalKey _desktopBottomBarKey = GlobalKey();
+  PlayerMouseTapGestureRecognizer? _desktopTapRecognizer;
+  bool _desktopBottomHover = false;
+  _DesktopTimelinePoint? _desktopTimelineHover;
   int _videoShotRequestToken = 0;
   double _brightness = 1;
   double _volume = 0.5;
@@ -352,8 +356,26 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
     });
   }
 
+  void _setDesktopTimelineHover(_DesktopTimelinePoint? point) {
+    if (mounted && _desktopTimelineHover != point) {
+      setState(() => _desktopTimelineHover = point);
+    }
+  }
+
+  /// Seek, navigation and viewport transitions drop a pending mouse click and hover.
+  @override
+  void _clearDesktopPointerForTransition() {
+    _desktopTapRecognizer?.cancelPendingTap();
+    final releaseControls = _desktopBottomHover;
+    _desktopBottomHover = false;
+    _setDesktopTimelineHover(null);
+    if (releaseControls) _restartControlsAutoHideTimer();
+  }
+
   /// 切换分 P 或视频时清除旧截图，避免把上一支视频的画面当成新进度预览。
   void _resetVideoShotPreview() {
+    _desktopTimelineHover = null;
+    _desktopBottomHover = false;
     _videoShotRequestToken += 1;
     _videoShotPreview = null;
     _videoShotLoading = false;

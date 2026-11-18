@@ -20,6 +20,7 @@ mixin _PlayerVideoCoordinator
   /// 所有切视频、切分 P 与剧情跳转共用代次，新操作撤销仍在等待的旧操作。
   int _beginVideoNavigation() {
     _navigationStopRevision = _playbackStopRevision;
+    _clearDesktopPointerForTransition();
     _cancelHorizontalScrub();
     _cancelTemporaryLongPress();
     _cancelPlaylistAdvance();
