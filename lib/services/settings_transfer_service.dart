@@ -1,3 +1,4 @@
+import 'video_tag_preferences.dart';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -30,6 +31,7 @@ class SettingsTransferService {
     'app_behavior.search_history_enabled': _SettingType.boolean,
     'app_behavior.watch_history_enabled': _SettingType.boolean,
     'app_behavior.wbi_signing_enabled': _SettingType.boolean,
+    VideoTagPreferences.key: _SettingType.text,
     'appearance.theme_mode': _SettingType.text,
     'appearance.theme_color': _SettingType.integer,
     'appearance.text_scale': _SettingType.decimal,
@@ -236,6 +238,10 @@ class SettingsTransferService {
         PreferredPlaybackQuality.fromId(value as int).id != value) {
       throw const FormatException('默认清晰度无效');
     }
+    if (key == VideoTagPreferences.key &&
+        !VideoTagMode.values.any((m) => m.name == value)) {
+      throw const FormatException('视频标签模式无效');
+    }
     if (key == 'appearance.theme_mode' &&
         !{'light', 'dark', 'system'}.contains(value)) {
       throw const FormatException('主题模式无效');
@@ -341,6 +347,9 @@ class SettingsTransferService {
         }
       }
       if (runtime.isNotEmpty) await runtimeAdapter.writeSettings(runtime);
+      if (regular.containsKey(VideoTagPreferences.key)) {
+        VideoTagPreferences.changes.value++;
+      }
     } catch (_) {
       var restored = true;
       for (final entry in old.entries) {

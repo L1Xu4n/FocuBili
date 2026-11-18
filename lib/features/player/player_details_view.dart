@@ -682,22 +682,7 @@ extension _PlayerDetailsView on _PlayerPageState {
           const SizedBox(height: 12),
           _buildExpandableDescription(),
         ],
-        if (_activeVideo.tags.isNotEmpty) ...<Widget>[
-          const SizedBox(height: 12),
-          Wrap(
-            key: const Key('video-tags'),
-            spacing: 8,
-            runSpacing: 6,
-            children: _activeVideo.tags
-                .map(
-                  (String tag) => Chip(
-                    visualDensity: VisualDensity.compact,
-                    label: Text(tag),
-                  ),
-                )
-                .toList(growable: false),
-          ),
-        ],
+        PlayerVideoTags(session: _tagSession),
         if (!_activeVideo.isCourse) ...<Widget>[
           const SizedBox(height: 18),
           Row(

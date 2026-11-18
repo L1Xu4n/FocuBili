@@ -153,6 +153,7 @@ void main() {
     cacheDirectory = Directory('${root.path}/focubili_images_v1');
     prefs = _Preferences({
       'appearance.theme_mode': 'dark',
+      'appearance.video_tag_mode': 'hidden',
       'content.blocklist_v1': '{"version":1,"videos":{}}',
       // Stale copies, including bad types, must never be read as runtime settings.
       for (final key in DeviceSettingsRuntimeAdapter.keys) key: 'STALE_VALUE',
@@ -228,6 +229,7 @@ void main() {
       expect(_values(package), {
         ..._runtimeValues,
         'appearance.theme_mode': 'dark',
+        'appearance.video_tag_mode': 'hidden',
         'content.blocklist_v1': '{"version":1,"videos":{}}',
       });
       expect(snapshots.reads, 1);
