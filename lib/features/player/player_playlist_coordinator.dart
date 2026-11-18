@@ -3,7 +3,8 @@ part of 'player_page.dart';
 /// 在同一个播放器内衔接来源列表，避免另建页面争抢媒体会话。
 mixin _PlayerPlaylistCoordinator on State<PlayerPage>, _PlayerVideoCoordinator {
   PlaybackQueue? _playlist;
-  bool _playlistMoving = false;
+  Object? _playlistMoveRequest;
+  bool _playlistMoveAutomatic = false;
   int _playlistEpoch = 0;
 
   /// 显式来源优先；单独打开的视频才使用其内置合集。
@@ -87,10 +88,17 @@ mixin _PlayerPlaylistCoordinator on State<PlayerPage>, _PlayerVideoCoordinator {
     required bool forward,
     required bool automatic,
   }) async {
-    if (_playlistMoving) return;
+    if (_playlistMoveRequest != null &&
+        (automatic || !_playlistMoveAutomatic)) {
+      return;
+    }
+    // A tap can take over a stalled automatic lookup without waiting for it.
+    // The older request must not clear the busy state owned by the new one.
+    final request = Object();
+    _playlistMoveRequest = request;
+    _playlistMoveAutomatic = automatic;
     final epoch = ++_playlistEpoch;
     final navigation = _partSwitchGeneration;
-    setState(() => _playlistMoving = true);
     try {
       final partIndex = _currentPartIndex;
       if (!_playlistUsesExactParts) {
@@ -106,8 +114,13 @@ mixin _PlayerPlaylistCoordinator on State<PlayerPage>, _PlayerVideoCoordinator {
         final index = queue.indexOf(_activeVideo.bvid, _currentPart.cid);
         if (forward) {
           item = await queue.nextAfter(_activeVideo.bvid, _currentPart.cid);
-          if (queue.error != null) {
-            if (mounted) _showPlayerNotice(queue.error!);
+          if (!mounted ||
+              epoch != _playlistEpoch ||
+              navigation != _partSwitchGeneration) {
+            return;
+          }
+          if (item == null && queue.error != null) {
+            _showPlayerNotice(queue.error!);
             return;
           }
         } else if (index > 0) {
@@ -143,9 +156,9 @@ mixin _PlayerPlaylistCoordinator on State<PlayerPage>, _PlayerVideoCoordinator {
     } catch (_) {
       if (mounted && epoch == _playlistEpoch) _showPlayerNotice('无法切换播放内容，请重试');
     } finally {
-      if (mounted) {
-        setState(() => _playlistMoving = false);
-        _prefetchPlaylist();
+      if (identical(request, _playlistMoveRequest)) {
+        _playlistMoveRequest = null;
+        if (mounted) _prefetchPlaylist();
       }
     }
   }

@@ -102,6 +102,13 @@ class _PlayerAbRepeatSheetState extends State<PlayerAbRepeatSheet> {
     }
   }
 
+  void _mark(TextEditingController point) {
+    setState(() {
+      point.text = formatAbRepeatTime(widget.readPosition());
+      _error = null;
+    });
+  }
+
   /// 显示精确时间输入与当前点标记按钮。
   Widget _point(String name, TextEditingController controller) => Row(
     children: [
@@ -121,10 +128,7 @@ class _PlayerAbRepeatSheetState extends State<PlayerAbRepeatSheet> {
       IconButton(
         key: Key('ab-repeat-set-$name'),
         tooltip: '当前点设为 $name',
-        onPressed: () => setState(() {
-          controller.text = formatAbRepeatTime(widget.readPosition());
-          _error = null;
-        }),
+        onPressed: () => _mark(controller),
         icon: const Icon(Icons.my_location_rounded),
       ),
     ],
@@ -146,17 +150,13 @@ class _PlayerAbRepeatSheetState extends State<PlayerAbRepeatSheet> {
               TextButton(
                 key: const Key('ab-repeat-set-A'),
                 // 标记当前点，并更新紧凑条显示。
-                onPressed: () => setState(
-                  () => _a.text = formatAbRepeatTime(widget.readPosition()),
-                ),
+                onPressed: () => _mark(_a),
                 child: Text('A ${_a.text}'),
               ),
               TextButton(
                 key: const Key('ab-repeat-set-B'),
                 // B 点可在拖动进度或继续播放之后再记录。
-                onPressed: () => setState(
-                  () => _b.text = formatAbRepeatTime(widget.readPosition()),
-                ),
+                onPressed: () => _mark(_b),
                 child: Text('B ${_b.text.isEmpty ? "标记" : _b.text}'),
               ),
               IconButton(
