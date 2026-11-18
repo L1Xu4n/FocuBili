@@ -313,9 +313,10 @@ class BilibiliInteractionService {
     return _parseFavoriteFolders(data['list']);
   }
 
-  /// 创建一个公开收藏夹，并返回可立即用于收藏当前视频的目录摘要。
+  /// 按用户确认的可见性创建一个收藏夹，并返回可立即用于收藏当前视频的目录摘要。
   Future<BilibiliFavoriteFolder> createFavoriteFolder({
     required String title,
+    bool isPrivate = false,
   }) async {
     final String normalizedTitle = title.trim();
     if (normalizedTitle.isEmpty) {
@@ -328,7 +329,7 @@ class BilibiliInteractionService {
       <String, String>{
         'title': normalizedTitle,
         'intro': '',
-        'privacy': '0',
+        'privacy': isPrivate ? '1' : '0',
         'cover': '',
       },
     );

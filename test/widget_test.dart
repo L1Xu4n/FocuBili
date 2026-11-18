@@ -3,6 +3,8 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'subscription_compact_ui_test.dart'
+    show captureSubscriptionUi, loadBetaReviewFonts;
 import 'package:flutter/gestures.dart' show TapGestureRecognizer;
 import 'package:flutter/services.dart';
 import 'package:flutter/rendering.dart';
@@ -21,6 +23,7 @@ import 'package:focubili/features/profile/user_profile_page.dart';
 import 'package:focubili/features/search/search_page.dart';
 import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/models/focus_session.dart';
+import 'package:focubili/core/theme/app_theme.dart';
 import 'package:focubili/models/video_note.dart';
 import 'package:focubili/models/video_shot_preview.dart';
 import 'package:focubili/models/watch_history_entry.dart';
@@ -636,6 +639,7 @@ class _FakePlayerInteractionService extends BilibiliInteractionService {
   int coinCount = 0;
   int? lastCoinMultiply;
   String? createdFolderTitle;
+  bool? createdFolderIsPrivate;
   int? lastFavoriteMediaId;
   bool? lastFavoriteValue;
   Set<int> lastAddedFavoriteMediaIds = <int>{};
@@ -696,8 +700,10 @@ class _FakePlayerInteractionService extends BilibiliInteractionService {
   @override
   Future<BilibiliFavoriteFolder> createFavoriteFolder({
     required String title,
+    bool isPrivate = false,
   }) async {
     createdFolderTitle = title;
+    createdFolderIsPrivate = isPrivate;
     return BilibiliFavoriteFolder(mediaId: 999, title: title);
   }
 
@@ -3078,8 +3084,12 @@ void main() {
 
   /// 验证收藏面板展示已有目录，并能创建新目录后直接收藏当前视频。
   testWidgets('播放器收藏弹窗支持创建新收藏夹', (WidgetTester tester) async {
-    await tester.binding.setSurfaceSize(const Size(1080, 2400));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final imageKey = GlobalKey();
+    await loadBetaReviewFonts(tester);
     final _FakePlayerInteractionService interactionService =
         _FakePlayerInteractionService();
     final VideoPreview video = VideoPreview(
@@ -3100,11 +3110,22 @@ void main() {
       ],
     );
     await tester.pumpWidget(
-      MaterialApp(
-        home: PlayerPage(
-          video: video,
-          playbackService: _FakePlaybackService(),
-          interactionService: interactionService,
+      RepaintBoundary(
+        key: imageKey,
+        child: MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: const String.fromEnvironment('BETA3_CAPTURE_DIR').isEmpty
+              ? AppTheme.light()
+              : AppTheme.light().copyWith(
+                  textTheme: AppTheme.light().textTheme.apply(
+                    fontFamily: 'BetaReview',
+                  ),
+                ),
+          home: PlayerPage(
+            video: video,
+            playbackService: _FakePlaybackService(),
+            interactionService: interactionService,
+          ),
         ),
       ),
     );
@@ -3115,6 +3136,33 @@ void main() {
     expect(find.text('学习收藏'), findsOneWidget);
     await tester.tap(find.byKey(const Key('create-favorite-folder')));
     await tester.pumpAndSettle();
+    expect(find.text('公开，其他人可见'), findsOneWidget);
+    await captureSubscriptionUi(
+      tester,
+      imageKey,
+      'remote-folder-public',
+      settle: false,
+    );
+    await tester.tap(find.byKey(const Key('favorite-folder-private')));
+    await tester.pumpAndSettle();
+    expect(find.text('仅自己可见'), findsOneWidget);
+    await captureSubscriptionUi(
+      tester,
+      imageKey,
+      'remote-folder-private',
+      settle: false,
+    );
+    // Cancel does not create a folder or carry a privacy choice to the next one.
+    await tester.tap(find.widgetWithText(TextButton, '取消'));
+    await tester.pumpAndSettle();
+    expect(interactionService.createdFolderTitle, isNull);
+    await tester.tap(find.byKey(const Key('video-favorite-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('create-favorite-folder')));
+    await tester.pumpAndSettle();
+    expect(find.text('公开，其他人可见'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('favorite-folder-private')));
+    await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const Key('favorite-folder-name')),
       '新建目录',
@@ -3124,8 +3172,24 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(interactionService.createdFolderTitle, '新建目录');
+    expect(interactionService.createdFolderIsPrivate, isTrue);
     expect(interactionService.lastAddedFavoriteMediaIds, <int>{999});
     expect(interactionService.lastDeletedFavoriteMediaIds, isEmpty);
+    // An account change after editing is not consent to create in the next account.
+    await tester.tap(find.byKey(const Key('video-favorite-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('create-favorite-folder')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('favorite-folder-name')),
+      '切号前草稿',
+    );
+    await tester.pump();
+    CacheLifecycle.accountChanged();
+    await tester.tap(find.widgetWithText(FilledButton, '创建'));
+    await tester.pumpAndSettle();
+    expect(interactionService.createdFolderTitle, '新建目录');
+
     expect(find.text('68'), findsOneWidget);
   });
 

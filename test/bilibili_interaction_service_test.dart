@@ -383,6 +383,41 @@ void main() {
     );
   });
 
+  test(
+    'private remote folder encodes privacy=1 once; errors never fall back to public',
+    () async {
+      for (final code in [0, -400]) {
+        final request = _RecordedInteractionRequest(
+          responses: {
+            '/x/v3/fav/folder/add': '{"code":$code,"data":{"id":333}}',
+          },
+        );
+        final service = _createInteractionService(request: request);
+        final action = service.createFavoriteFolder(
+          title: '私密 & 资料',
+          isPrivate: true,
+        );
+        if (code == 0) {
+          expect((await action).mediaId, 333);
+        } else {
+          await expectLater(
+            action,
+            throwsA(isA<BilibiliInteractionException>()),
+          );
+        }
+        expect(request.endpoints.single.path, '/x/v3/fav/folder/add');
+        expect(
+          _formFields(request.bodies.single),
+          containsPair('privacy', '1'),
+        );
+        expect(
+          _formFields(request.bodies.single),
+          containsPair('title', '私密 & 资料'),
+        );
+      }
+    },
+  );
+
   /// 验证多个新增和移除目录会被编码到同一次收藏请求中。
   test('收藏夹批量更新同时提交新增和移除编号', () async {
     final _RecordedInteractionRequest request = _RecordedInteractionRequest();
