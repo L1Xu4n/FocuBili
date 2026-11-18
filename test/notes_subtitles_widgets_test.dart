@@ -200,6 +200,123 @@ void main() {
     },
   );
 
+  testWidgets('同轨刷新保留筛选，新开轨道清空；无结果能一键恢复完整列表', (tester) async {
+    var reads = 0;
+    await tester.pumpWidget(
+      host(
+        PlayerSubtitleSheet(
+          videoLabel: '合成课程',
+          offValue: 'off',
+          fontSize: 16,
+          initialResult: tracks,
+          isCurrentVideo: () => true,
+          reloadTracks: () async => tracks,
+          onPreviewFontSize: (_) {},
+          onCommitFontSize: (value) async => value,
+          loadCues: (_) async {
+            reads++;
+            return cues;
+          },
+        ),
+      ),
+    );
+    final browse = find.byKey(const ValueKey('browse-subtitle-zh'));
+    final search = find.byKey(const Key('subtitle-search'));
+    await tester.tap(browse);
+    await tester.pumpAndSettle();
+    await tester.enterText(search, 'ALpHa');
+    await tester.tap(find.byKey(const Key('refresh-subtitle-tracks')));
+    await tester.pumpAndSettle();
+    expect(reads, 2);
+    expect(tester.widget<TextField>(search).controller!.text, 'ALpHa');
+    expect(find.text('Alpha 已有字幕'), findsOneWidget);
+    expect(find.textContaining('1/2 条'), findsOneWidget);
+    await tester.enterText(search, 'zzz');
+    await tester.pump();
+    expect(find.text('没有匹配的字幕'), findsOneWidget);
+    await tester.tap(find.byTooltip('清除字幕搜索'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('2/2 条'), findsOneWidget);
+    expect(reads, 2, reason: '清除筛选不应重新请求字幕');
+    await tester.enterText(search, 'alpha');
+    await tester.tap(find.byKey(const Key('back-to-subtitle-tracks')));
+    await tester.pumpAndSettle();
+    await tester.tap(browse);
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(search).controller!.text, isEmpty);
+    expect(find.textContaining('2/2 条'), findsOneWidget);
+  });
+
+  testWidgets('大字和键盘下可滚到失败提示并重试，继续保留筛选', (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(320, 480);
+    addTearDown(tester.view.resetViewInsets);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    var loads = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: TextScaler.linear(2.4)),
+          child: child!,
+        ),
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => showModalBottomSheet<void>(
+                context: context,
+                isScrollControlled: true,
+                builder: (_) => PlayerSubtitleSheet(
+                  videoLabel: '合成课程',
+                  offValue: 'off',
+                  fontSize: 16,
+                  initialResult: tracks,
+                  isCurrentVideo: () => true,
+                  reloadTracks: () async => tracks,
+                  onPreviewFontSize: (_) {},
+                  onCommitFontSize: (value) async => value,
+                  loadCues: (_) async => ++loads == 2
+                      ? const SubtitleCueLoadResult.unavailable()
+                      : cues,
+                ),
+              ),
+              child: const Text('打开'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('打开'));
+    await tester.pumpAndSettle();
+    final browse = find.byKey(const ValueKey('browse-subtitle-zh'));
+    await tester.ensureVisible(browse);
+    await tester.tap(browse);
+    await tester.pumpAndSettle();
+    final search = find.byKey(const Key('subtitle-search'));
+    await tester.enterText(search, 'Alpha');
+    tester.view.viewInsets = const FakeViewPadding(bottom: 185);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('刷新字幕列表'));
+    await tester.pumpAndSettle();
+    expect(loads, 2);
+    final retry = find.text('重试');
+    await tester.dragUntilVisible(
+      retry,
+      find.byKey(const Key('subtitle-cue-list')),
+      const Offset(0, -48),
+    );
+    await tester.pumpAndSettle();
+    expect(retry.hitTestable(), findsOneWidget);
+    await tester.tap(retry);
+    await tester.pumpAndSettle();
+    expect(loads, 3);
+    expect(tester.widget<TextField>(search).controller!.text, 'Alpha');
+    expect(find.byTooltip('清除字幕搜索').hitTestable(), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'unavailable subtitle result can retry without synthesizing text',
     (tester) async {
