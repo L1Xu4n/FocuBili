@@ -256,7 +256,7 @@ void main() {
       await CacheLifecycle.setAccount(101);
       addTearDown(() => CacheLifecycle.setAccount(null));
       final waiter = Completer<VideoSearchPage>();
-      final service = _Service(video: (_, __, ___) => waiter.future);
+      final service = _Service(video: (_, _, _) => waiter.future);
       await _mount(t, service);
       await _submit(t, 'previous committed');
       expect(service.videoCalls, hasLength(1));
