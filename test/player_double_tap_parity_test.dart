@@ -111,6 +111,7 @@ void main() {
 
   for (final (name, size, platform, textScale, forward) in [
     ('portrait-180pct', const Size(320, 760), AppPlatform.android, 1.8, false),
+    ('portrait-240pct', const Size(320, 760), AppPlatform.android, 2.4, true),
     ('landscape', const Size(820, 390), AppPlatform.android, 1.0, true),
     ('desktop', const Size(1280, 900), AppPlatform.linux, 1.0, true),
   ]) {
@@ -165,6 +166,21 @@ void main() {
           await tester.tap(find.byTooltip('进入全屏'));
           await tester.pumpAndSettle();
           expect(tester.getSize(surface), size);
+        }
+        if (name == 'portrait-240pct') {
+          expect(
+            tester.getSize(find.byKey(_viewport)).height,
+            greaterThanOrEqualTo(44),
+          );
+          final strip = find.byKey(
+            const Key('player-secondary-controls-scroll'),
+          );
+          expect(strip, findsOneWidget);
+          // All actions stay reachable without sacrificing tap room or font size.
+          await tester.drag(strip, const Offset(-450, 0));
+          await tester.pumpAndSettle();
+          expect(find.byTooltip('播放倍速').hitTestable(), findsOneWidget);
+          expect(find.byTooltip('进入全屏').hitTestable(), findsOneWidget);
         }
         await _tapSide(tester, surface: surface, forward: forward, kind: kind);
         await captureSubscriptionUi(
