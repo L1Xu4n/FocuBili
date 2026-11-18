@@ -22,7 +22,9 @@ concurrency:
 jobs:
   linux:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # Ubuntu mirrors have taken 38–42 minutes before Flutter even starts.
+    # Keep the native build, install and runtime checks within the job budget.
+    timeout-minutes: 75
     env:
       BETA_NUMBER: ${{ inputs.beta_number }}
     steps:
