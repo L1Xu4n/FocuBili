@@ -202,6 +202,50 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
+  testWidgets(
+    'adding first tag rule after direct BV was resolved must guard its later tap',
+    (t) async {
+      SharedPreferences.setMockInitialValues({
+        'appearance.video_tag_mode': 'hidden',
+      });
+      _viewport(t, const Size(920, 1200));
+      final fixture = _PublicSearchFixture(),
+          rules = const ContentBlocklistService();
+      final bili = BilibiliVideoInfoService(requestJson: fixture.call);
+      await t.pumpWidget(
+        MaterialApp(
+          routes: {
+            AppRoutes.player: (_) =>
+                const Scaffold(body: Text('reached player')),
+          },
+          home: SearchPage(service: bili),
+        ),
+      );
+      await t.pumpAndSettle();
+      await _submit(t, _bvid(7));
+      final card = find.byKey(ValueKey('direct-${_bvid(7)}'));
+      expect(card, findsOneWidget);
+      expect(fixture.requests.map((u) => u.path), ['/x/web-interface/view']);
+      await rules.saveRule(
+        const ContentBlockRule(ContentBlockKind.videoTag, '系统基础'),
+      );
+      await t.pumpAndSettle();
+      if (card.evaluate().isNotEmpty) {
+        await t.tap(card);
+        await t.pumpAndSettle();
+      }
+      expect(fixture.requests.map((u) => u.path), [
+        '/x/web-interface/view',
+        '/x/tag/archive/tags',
+      ]);
+      expect(
+        find.text('reached player'),
+        findsNothing,
+        reason: 'current exact rule must take effect without resubmitting BV',
+      );
+    },
+  );
+
   test(
     'legacy UID and BV blocks survive atomic rule edits and reloads',
     () async {

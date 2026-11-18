@@ -676,13 +676,15 @@ class _SearchPageState extends State<SearchPage> {
     String input, {
     required int generation,
     bool hasKnownTags = false,
+    VideoPreview? existing,
   }) async {
     final service = _service;
-    final video = await service.lookupVideo(input);
+    final video = existing ?? await service.lookupVideo(input);
     if (!mounted ||
         generation != _requestGeneration ||
         !_blocklist.hasTagRules ||
         hasKnownTags ||
+        _knownSearchTags.containsKey(video.bvid) ||
         video.tags.isNotEmpty ||
         video.isCourse ||
         video.fromOfflineCache ||
@@ -694,6 +696,9 @@ class _SearchPageState extends State<SearchPage> {
       final tags = await (service as BilibiliVideoTagSource).loadVideoTags(
         video.bvid,
       );
+      if (mounted && generation == _requestGeneration) {
+        _knownSearchTags[video.bvid] = tags;
+      }
       return tags.isEmpty ? video : video.withTags(tags);
     } catch (_) {
       // Missing tag metadata does not block a video by itself.
@@ -702,7 +707,10 @@ class _SearchPageState extends State<SearchPage> {
   }
 
   /// 点击关键词结果后查询完整分P信息，再把可播放视频交给播放器页面。
-  Future<void> _openSearchResult(VideoSearchResult result) async {
+  Future<void> _openSearchResult(
+    VideoSearchResult result, {
+    VideoPreview? direct,
+  }) async {
     if (_openingBvid != null || _addingBvid != null) {
       return;
     }
@@ -719,6 +727,7 @@ class _SearchPageState extends State<SearchPage> {
       final VideoPreview video = await _lookupExplicitSearchVideo(
         result.bvid,
         generation: generation,
+        existing: direct,
         hasKnownTags:
             result.tags.isNotEmpty ||
             (_knownSearchTags[result.bvid]?.isNotEmpty ?? false),
@@ -726,6 +735,9 @@ class _SearchPageState extends State<SearchPage> {
       if (!isCurrent()) return;
       setState(() {
         _openingBvid = null;
+        if (direct != null && _directResult?.bvid == direct.bvid) {
+          _directResult = video;
+        }
         _knownSearchInitialPartCids[result.bvid] = video.initialPart.cid;
         // Only consume tags from this already requested detail; a tagless
         // search row never starts a new lookup just to check the blacklist.
@@ -2176,9 +2188,7 @@ class _SearchPageState extends State<SearchPage> {
       // 直达结果直接打开；轻量结果先补全 cid 与分P 再进入播放器。
       onTap: opening || changingLearningState
           ? null
-          : () => isDirectResult
-                ? _openVideo(directVideo)
-                : _openSearchResult(result),
+          : () => _openSearchResult(result, direct: directVideo),
       menu: PopupMenuButton<_SearchResultMenuAction>(
         key: Key(
           '${isDirectResult ? 'more-direct' : 'more-search'}-'

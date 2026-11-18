@@ -16,6 +16,7 @@ import 'subscription_service.dart';
 import 'settings_runtime_adapter.dart';
 import 'video_note_export_service.dart';
 import 'video_note_service.dart';
+import 'video_tag_preferences.dart';
 
 enum UnifiedExportSection {
   settings('设置与筛选规则'),
@@ -90,6 +91,7 @@ class UnifiedExportService {
 
   static const _settingsKeys = <String>{
     'appearance.theme_mode',
+    VideoTagPreferences.key,
     'appearance.theme_color',
     'appearance.layout_orientation',
     'playback_preferences.enable_double_tap_seek',
