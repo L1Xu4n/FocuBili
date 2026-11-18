@@ -203,8 +203,11 @@ void main() {
     expect(_grip, findsOneWidget);
     final before = t.getRect(_editor);
     final semantics = t.ensureSemantics();
-    addTearDown(semantics.dispose);
-    expect(find.bySemanticsLabel('移动 A–B 控件'), findsOneWidget);
+    try {
+      expect(find.bySemanticsLabel('移动 A–B 控件'), findsOneWidget);
+    } finally {
+      semantics.dispose();
+    }
     await t.tap(_grip);
     await t.pump();
     await t.sendKeyEvent(LogicalKeyboardKey.arrowRight);
