@@ -261,6 +261,17 @@ Future<void> unmountAb(WidgetTester tester) async {
   await tester.pump();
 }
 
+// Drive the complete Slider contract when a race test needs an exact relative
+// position while native playback is deliberately held at an async boundary.
+void commitTimelineGesture(WidgetTester tester, double value) {
+  final slider = tester.widget<Slider>(
+    find.byKey(const Key('player-progress-slider')),
+  );
+  slider.onChangeStart!(slider.value);
+  slider.onChanged!(value);
+  slider.onChangeEnd!(value);
+}
+
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
   testWidgets('replacing a loop does not wait for the previous A snapshot', (
@@ -458,8 +469,7 @@ void main() {
     final p = AbPlayback();
     await mountAb(tester, p);
     await configureAb(tester);
-    final slider = tester.widget<Slider>(find.byType(Slider).first);
-    slider.onChangeEnd!(0.75);
+    commitTimelineGesture(tester, 0.75);
     await tester.pumpAndSettle();
     expect(p.seeks.last, const Duration(seconds: 90));
     expect(find.byKey(const Key('ab-repeat-marker-A')), findsNothing);

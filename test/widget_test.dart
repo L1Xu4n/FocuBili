@@ -4924,7 +4924,8 @@ void main() {
     expect(service._speed, 1);
     expect(find.textContaining('跳转至'), findsOneWidget);
     expect(videoShotService.requests, 1);
-    expect(find.byKey(const Key('video-shot-frame')), findsOneWidget);
+    // This metadata stub has no decoded image, therefore only time is shown.
+    expect(find.byKey(const Key('video-shot-frame')), findsNothing);
 
     await gesture.up();
     await tester.pumpAndSettle();

@@ -21,6 +21,8 @@ mixin _PlayerVideoCoordinator
   int _beginVideoNavigation() {
     _navigationStopRevision = _playbackStopRevision;
     _cancelTemporaryLongPress();
+    _cancelProgressDrag();
+    _cancelHorizontalScrub();
     _cancelPlaylistAdvance();
     _clearAbRepeatForNavigation();
     final generation = ++_partSwitchGeneration;

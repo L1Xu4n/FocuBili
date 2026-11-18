@@ -2,54 +2,72 @@ part of 'player_page.dart';
 
 /// 组合播放器的拖动预览、学习完播和互动剧情选择反馈。
 extension _PlayerFeedbackView on _PlayerPageState {
-  /// 裁切雪碧图中的一格并按统一宽度缩放，避免下载大量独立截图。
+  /// Paint a cell only after the shared cache has decoded the sheet. A failure
+  /// or an incomplete final row leaves just the seek time, not an empty card.
   Widget _buildVideoShotFrame(VideoShotFrame frame) {
-    const double displayWidth = 176;
-    final double scale = displayWidth / frame.frameWidth;
-    final double displayHeight = frame.frameHeight * scale;
-    final double sheetWidth = frame.frameWidth * frame.sheetColumns * scale;
-    final double sheetHeight = frame.frameHeight * frame.sheetRows * scale;
-    return ClipRRect(
-      key: const Key('video-shot-frame'),
-      borderRadius: BorderRadius.circular(8),
-      child: ClipRect(
-        child: SizedBox(
-          width: displayWidth,
-          height: displayHeight,
-          child: Stack(
-            clipBehavior: Clip.hardEdge,
-            children: <Widget>[
-              Positioned(
-                left: -frame.column * frame.frameWidth * scale,
-                top: -frame.row * frame.frameHeight * scale,
-                width: sheetWidth,
-                height: sheetHeight,
-                child: AppNetworkImage(
-                  imageUrl: frame.imageUrl,
-                  width: sheetWidth,
-                  height: sheetHeight,
-                  fit: BoxFit.fill,
-                  errorWidget:
-                      (BuildContext context, String url, Object error) =>
-                          const ColoredBox(color: Colors.black26),
-                ),
+    const displayWidth = 176.0;
+    final displayHeight = displayWidth * frame.frameHeight / frame.frameWidth;
+    final atlasWidth = frame.frameWidth * frame.sheetColumns;
+    final decodedWidth =
+        (displayWidth *
+                frame.sheetColumns *
+                MediaQuery.devicePixelRatioOf(context))
+            .ceil()
+            .clamp(1, 2048);
+    return AppNetworkImage(
+      key: ValueKey(frame.imageUrl),
+      imageUrl: frame.imageUrl,
+      cache: widget.videoShotImageCache,
+      memCacheWidth: decodedWidth,
+      excludeFromSemantics: true,
+      errorWidget: (_, _, _) => const SizedBox.shrink(),
+      frameBuilder: (context, child, frameNumber, _) {
+        if (frameNumber == null || child is! RawImage || child.image == null) {
+          return const SizedBox.shrink();
+        }
+        final image = child.image!;
+        final scale = image.width / atlasWidth;
+        final rowHeight = frame.frameHeight * scale;
+        final rows = (image.height / rowHeight).round();
+        // A final sheet can have fewer full rows; a changed aspect ratio or
+        // missing row must not stretch unrelated pixels into a thumbnail.
+        if (rows > frame.sheetRows ||
+            frame.row >= rows ||
+            (rows * rowHeight - image.height).abs() > 1) {
+          return const SizedBox.shrink();
+        }
+        final cellWidth = image.width / frame.sheetColumns;
+        final cellHeight = image.height / rows;
+        return ClipRRect(
+          key: const Key('video-shot-frame'),
+          borderRadius: BorderRadius.circular(8),
+          child: CustomPaint(
+            size: Size(displayWidth, displayHeight),
+            painter: _VideoShotCellPainter(
+              image,
+              Rect.fromLTWH(
+                frame.column * cellWidth,
+                frame.row * cellHeight,
+                cellWidth,
+                cellHeight,
               ),
-            ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
   /// 创建由统一提示区排列的拖动卡；无截图时仍显示准确目标时间。
   Widget _buildSeekFeedback() {
     if (_seekFeedback == null) return const SizedBox.shrink();
-    final Duration target = Duration(
-      milliseconds:
-          (_displayDuration.inMilliseconds * _horizontalScrubTargetProgress)
-              .round(),
+    final progress = _isDraggingProgress
+        ? _progress
+        : _horizontalScrubTargetProgress;
+    final target = Duration(
+      milliseconds: (_displayDuration.inMilliseconds * progress).round(),
     );
-    final VideoShotFrame? frame = _horizontalScrubbing
+    final frame = _isDraggingProgress || _horizontalScrubbing
         ? _videoShotPreview?.frameFor(target)
         : null;
     return Center(
@@ -70,19 +88,10 @@ extension _PlayerFeedbackView on _PlayerPageState {
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
                     if (frame != null) _buildVideoShotFrame(frame),
-                    if (_horizontalScrubbing && _videoShotLoading) ...<Widget>[
-                      const SizedBox(
-                        width: 22,
-                        height: 22,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                    ],
                     Text(
-                      _seekFeedback ?? '',
+                      _isDraggingProgress
+                          ? _progressDragText(_progress)
+                          : _seekFeedback ?? '',
                       style: const TextStyle(color: Colors.white),
                     ),
                   ],
@@ -264,4 +273,20 @@ extension _PlayerFeedbackView on _PlayerPageState {
       },
     );
   }
+}
+
+class _VideoShotCellPainter extends CustomPainter {
+  const _VideoShotCellPainter(this.image, this.source);
+
+  final ui.Image image;
+  final Rect source;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawImageRect(image, source, Offset.zero & size, Paint());
+  }
+
+  @override
+  bool shouldRepaint(_VideoShotCellPainter previous) =>
+      image != previous.image || source != previous.source;
 }

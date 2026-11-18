@@ -88,6 +88,39 @@ void main() {
     expect(secondSheetFrame?.row, 0);
   });
 
+  test('重复时间、不可用中间页和越过页容量均不改变原始槽位', () async {
+    final service = BilibiliVideoShotService(
+      requestJson: (_) async => '''
+        {"code":0,"data":{"img_x_len":2,"img_y_len":1,"img_x_size":160,
+          "img_y_size":90,"image":["//i0.hdslb.com/1.jpg",
+          "https://untrusted.invalid/lost.jpg","//i0.hdslb.com/3.jpg"],
+          "index":[0,0,8,16,24,32,40]}}
+      ''',
+    );
+    final preview = (await service.loadPreview(bvid: 'BV1GJ411x7h7', cid: 1))!;
+    expect(preview.frameFor(Duration.zero)?.column, 1);
+    expect(preview.frameFor(const Duration(seconds: 8)), isNull);
+    expect(
+      preview.frameFor(const Duration(seconds: 24))?.imageUrl,
+      'https://i0.hdslb.com/3.jpg',
+    );
+    expect(preview.frameFor(const Duration(seconds: 32))?.column, 1);
+    expect(preview.frameFor(const Duration(seconds: 40)), isNull);
+  });
+
+  test('损坏或乱序索引不重排成错帧', () async {
+    for (final index in ['[0,12,8]', '[0,null,8]', '[0,-2,8]']) {
+      final service = BilibiliVideoShotService(
+        requestJson: (_) async =>
+            '''
+          {"code":0,"data":{"img_x_len":2,"img_y_len":2,"img_x_size":160,
+            "img_y_size":90,"image":["//i0.hdslb.com/1.jpg"],"index":$index}}
+        ''',
+      );
+      expect(await service.loadPreview(bvid: 'BV1GJ411x7h7', cid: 1), isNull);
+    }
+  });
+
   /// 验证时间点保存会下载对应雪碧图并裁出第二格蓝色画面。
   test('裁切时间点雪碧图为独立 PNG', () async {
     final Uint8List spriteBytes = await _buildSpritePng();

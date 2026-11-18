@@ -22,6 +22,8 @@ mixin _PlayerControlsCoordinator
     reverseCurve: Curves.easeIn,
   );
   static const double _expandedPartItemHeight = 76;
+  ({String bvid, int cid, int navigation, int source})? _progressDragSource;
+  double _progressBeforeDrag = 0;
 
   /// 说明控制层已经安排自动隐藏，供播放快照协调器避免重复创建计时器。
   @override
@@ -313,21 +315,72 @@ mixin _PlayerControlsCoordinator
     if (mounted) _playerNotices.show(message, duration: _transientHintDuration);
   }
 
-  /// 标记进度条正被手指拖动，并暂停自动隐藏以方便精确调整。
+  /// A slider interaction shares the existing gesture preview lane but owns
+  /// its own start position and source identity.
   void _startProgressDrag(double value) {
-    _isDraggingProgress = true;
+    if (_displayDuration <= Duration.zero || _externalNavigationSuspended) {
+      return;
+    }
+    _cancelHorizontalScrub();
     _stopControlsAutoHideTimer();
+    _seekFeedbackTimer?.cancel();
+    _progressBeforeDrag = _progress;
+    _progressDragSource = (
+      bvid: _activeVideo.bvid,
+      cid: _currentPart.cid,
+      navigation: _partSwitchGeneration,
+      source: _sourceGeneration,
+    );
+    setState(() {
+      _isDraggingProgress = true;
+      _seekFeedback = _progressDragText(value);
+    });
+    unawaited(_loadVideoShotPreview());
   }
 
-  /// 只更新拖动过程中的本地显示，避免每一像素都向原生播放器发网络无关的命令。
+  String _progressDragText(double value) =>
+      '跳转至 ${_formatSeconds((_displayDuration.inMilliseconds * value / 1000).round())}';
+
+  /// Local display only: each update can crop another cell without seeking.
   void _updateProgressDrag(double value) {
-    setState(() => _progress = value);
+    if (!_isDraggingProgress) return;
+    setState(() {
+      _progress = value;
+      _seekFeedback = _progressDragText(value);
+    });
   }
 
-  /// 结束进度条拖动后把最终位置发送给原生播放器，并恢复自动隐藏策略。
+  /// Slider calls onChangeEnd for cancellations too. A raw pointer cancel
+  /// or video navigation clears the session before that callback can seek.
+  void _cancelProgressDrag() {
+    if (!_isDraggingProgress) return;
+    _progressDragSource = null;
+    setState(() {
+      _isDraggingProgress = false;
+      _progress = _progressBeforeDrag;
+      _seekFeedback = null;
+    });
+    _restartControlsAutoHideTimer();
+  }
+
+  /// Commit exactly one final seek, only if the dragged source is still current.
   void _finishProgressDrag(double value) {
-    _isDraggingProgress = false;
-    setState(() => _progress = value);
+    final source = _progressDragSource;
+    if (!_isDraggingProgress || source == null) return;
+    if (source.bvid != _activeVideo.bvid ||
+        source.cid != _currentPart.cid ||
+        source.navigation != _partSwitchGeneration ||
+        source.source != _sourceGeneration ||
+        _externalNavigationSuspended) {
+      _cancelProgressDrag();
+      return;
+    }
+    _progressDragSource = null;
+    setState(() {
+      _isDraggingProgress = false;
+      _progress = value;
+      _seekFeedback = null;
+    });
     unawaited(_seekToProgress(value));
     _restartControlsAutoHideTimer();
   }

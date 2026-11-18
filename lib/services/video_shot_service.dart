@@ -77,7 +77,7 @@ class BilibiliVideoShotService implements VideoShotService {
       final int rows = _readPositiveInt(data['img_y_len']);
       final int width = _readPositiveInt(data['img_x_size']);
       final int height = _readPositiveInt(data['img_y_size']);
-      if (imageUrls.isEmpty ||
+      if (imageUrls.every((url) => url.isEmpty) ||
           sampleSeconds.isEmpty ||
           columns <= 0 ||
           rows <= 0 ||
@@ -188,22 +188,19 @@ class BilibiliVideoShotService implements VideoShotService {
     return number == null || number <= 0 ? 0 : number;
   }
 
-  /// 读取并升序整理截图时间点，负数和损坏项会被忽略。
+  /// 保留时间索引的原始槽位；排序、去重或跳过坏项都会错位。
   List<int> _readIndexes(Object? value) {
-    if (value is! List) {
-      return const <int>[];
+    if (value is! List) return const <int>[];
+    final indexes = <int>[];
+    for (final item in value) {
+      final index = item is int ? item : int.tryParse('$item');
+      if (index == null ||
+          index < 0 ||
+          (indexes.isNotEmpty && index < indexes.last)) {
+        return const <int>[];
+      }
+      indexes.add(index);
     }
-    final List<int> indexes =
-        value
-            .map(
-              (Object? item) => item is num
-                  ? item.toInt()
-                  : int.tryParse(item?.toString() ?? ''),
-            )
-            .whereType<int>()
-            .where((int item) => item >= 0)
-            .toList(growable: true)
-          ..sort();
     return indexes;
   }
 
@@ -219,9 +216,15 @@ class BilibiliVideoShotService implements VideoShotService {
       final Uri? uri = Uri.tryParse(normalized);
       if (uri != null &&
           uri.scheme == 'https' &&
+          uri.userInfo.isEmpty &&
+          uri.port == 443 &&
           (uri.host.endsWith('.hdslb.com') ||
               uri.host.endsWith('.biliimg.com'))) {
         urls.add(uri.toString());
+      } else {
+        // Invalid sheets are unavailable, not removed: later sheet ordinals
+        // must still match their original timeline slots.
+        urls.add('');
       }
     }
     return urls;

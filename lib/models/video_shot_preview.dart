@@ -45,6 +45,8 @@ class VideoShotPreview {
         sampleSeconds.isEmpty ||
         columns <= 0 ||
         rows <= 0 ||
+        !frameWidth.isFinite ||
+        !frameHeight.isFinite ||
         frameWidth <= 0 ||
         frameHeight <= 0) {
       return null;
@@ -60,12 +62,13 @@ class VideoShotPreview {
         upper = middle;
       }
     }
-    final int frameIndex = (lower - 1).clamp(0, sampleSeconds.length - 1);
+    final int frameIndex = lower - 1;
+    if (frameIndex < 0) return null;
     final int cellsPerSheet = columns * rows;
-    final int sheetIndex = (frameIndex ~/ cellsPerSheet).clamp(
-      0,
-      imageUrls.length - 1,
-    );
+    final int sheetIndex = frameIndex ~/ cellsPerSheet;
+    if (sheetIndex >= imageUrls.length || imageUrls[sheetIndex].isEmpty) {
+      return null;
+    }
     final int cellIndex = frameIndex % cellsPerSheet;
     return VideoShotFrame(
       imageUrl: imageUrls[sheetIndex],

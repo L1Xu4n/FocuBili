@@ -297,6 +297,7 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
             details.localPosition.dy >=
                 playerSize.height - protectedBottomHeight);
     if (_temporarySpeedActive ||
+        _isDraggingProgress ||
         startsInFullscreenSafetyZone ||
         durationSeconds <= 0 ||
         playerSize.width <= 0) {
@@ -325,23 +326,33 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
     unawaited(_loadVideoShotPreview());
   }
 
-  /// 首次横向拖动时按需读取当前分 P 预览图，并忽略切视频后的晚到结果。
+  /// 按需读取当前分 P 雪碧图，旧分 P 或视频的返回不回填。
   Future<void> _loadVideoShotPreview() async {
-    if (_videoShotPreview != null || _videoShotLoading) {
+    final bvid = _activeVideo.bvid;
+    final cid = _currentPart.cid;
+    if (_videoShotPreview != null ||
+        _videoShotLoading ||
+        _activeVideo.isCourse ||
+        !RegExp(r'^BV[0-9A-Za-z]{10}$').hasMatch(bvid) ||
+        cid <= 0) {
       return;
     }
-    final int requestToken = ++_videoShotRequestToken;
-    setState(() => _videoShotLoading = true);
-    final VideoShotPreview? preview = await _videoShotService.loadPreview(
-      bvid: _activeVideo.bvid,
-      cid: _currentPart.cid,
-    );
-    if (!mounted || requestToken != _videoShotRequestToken) {
-      return;
+    final requestToken = ++_videoShotRequestToken;
+    _videoShotLoading = true;
+    VideoShotPreview? preview;
+    try {
+      preview = await _videoShotService
+          .loadPreview(bvid: bvid, cid: cid)
+          .timeout(const Duration(seconds: 8));
+    } catch (_) {
+      // Screenshots are optional; a service error never interrupts scrubbing.
     }
+    if (!mounted || requestToken != _videoShotRequestToken) return;
     setState(() {
       _videoShotLoading = false;
-      _videoShotPreview = preview;
+      if (bvid == _activeVideo.bvid && cid == _currentPart.cid) {
+        _videoShotPreview = preview;
+      }
     });
   }
 
