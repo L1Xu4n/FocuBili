@@ -88,6 +88,8 @@ class _PersonalizationSettingsPageState
   bool _windowsClipboardDetectionEnabled = false;
   bool _savingWindowsClipboardPreference = false;
   bool _accountReadOnly = true;
+  final _lineMenuKey =
+      GlobalKey<PopupMenuButtonState<PlaybackLinePreference>>();
   bool _searchHistoryEnabled = true;
   bool _watchHistoryEnabled = true;
   bool _wbiSigningEnabled = false;
@@ -1106,28 +1108,49 @@ class _PersonalizationSettingsPageState
           key: const Key('playback-line-preference'),
           leading: const Icon(Icons.alt_route_rounded),
           title: const Text('默认播放线路'),
-          subtitle: const Text('下次加载视频时生效'),
+          enabled: !_saving,
+          onTap: _saving
+              ? null
+              : () => _lineMenuKey.currentState?.showButtonMenu(),
+          subtitle: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_preferences.linePreference.label),
+                const Text('下次加载生效 · 不可用时自动尝试其他线路'),
+              ],
+            ),
+          ),
           trailing: PopupMenuButton<PlaybackLinePreference>(
+            key: _lineMenuKey,
             enabled: !_saving,
             tooltip: '选择默认播放线路',
+            icon: const Icon(Icons.arrow_drop_down),
             initialValue: _preferences.linePreference,
-            // 菜单选择后保存到本机，下一次媒体请求读取最新策略。
             onSelected: (value) => _setPlaybackRoute(line: value),
-            // 使用相同枚举生成菜单，避免显示名称与持久化值脱节。
             itemBuilder: (context) => [
               for (final line in PlaybackLinePreference.values)
-                PopupMenuItem(value: line, child: Text(line.label)),
+                PopupMenuItem(
+                  value: line,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(line.label),
+                        Text(switch (line) {
+                          PlaybackLinePreference.smart => '优先尝试 B 站提供的镜像线路',
+                          PlaybackLinePreference.primary => '先试主线路，必要时切到备用线路',
+                          PlaybackLinePreference.backup => '先试备用线路，主线路仍可回退',
+                        }, style: Theme.of(context).textTheme.bodySmall),
+                      ],
+                    ),
+                  ),
+                ),
             ],
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(minHeight: 48),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(_preferences.linePreference.label),
-                  const Icon(Icons.arrow_drop_down, size: 20),
-                ],
-              ),
-            ),
           ),
         ),
         SwitchListTile.adaptive(
@@ -1139,7 +1162,7 @@ class _PersonalizationSettingsPageState
               : (value) => _setPlaybackRoute(preferNonPcdn: value),
           secondary: const Icon(Icons.route_outlined),
           title: const Text('优先避开 PCDN'),
-          subtitle: const Text('优先尝试其他线路，不可用时仍会回退'),
+          subtitle: const Text('同一编码优先尝试其他线路，仍保留 PCDN 回退'),
         ),
         SwitchListTile.adaptive(
           key: const Key('enable-wbi-signing'),

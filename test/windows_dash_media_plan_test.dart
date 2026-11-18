@@ -48,6 +48,73 @@ void main() {
     expect(attempts[3].audioUrl, contains('audio-main'));
   });
 
+  test('前方线路都失败后也能尝试不同序号的备用音视频', () {
+    const video = [
+      'https://test.bilivideo.com/video-main?sign=a%2Fb',
+      'https://test.bilivideo.com/video-backup-1?sign=a%2Fb',
+      'https://test.bilivideo.com/video-backup-2?sign=a%2Fb',
+    ];
+    const audio = [
+      'https://test.bilivideo.com/audio-main?sign=c%2Fd',
+      'https://test.bilivideo.com/audio-backup-1?sign=c%2Fd',
+      'https://test.bilivideo.com/audio-backup-2?sign=c%2Fd',
+    ];
+    final attempts = WindowsDashMediaPlan.build(
+      DesktopPlaybackSources(
+        videoUrls: video,
+        audioUrls: audio,
+        audioCodecByUrl: {audio[2]: 'ec-3'},
+        referer: '',
+        cookieHeader: '',
+        actualQuality: 64,
+        qualities: [],
+        videoCodec: 'avc1.64001F',
+        audioCodec: 'mp4a.40.2',
+      ),
+    );
+    expect(attempts.map((item) => (item.videoUrl, item.audioUrl)), [
+      (video[0], audio[0]),
+      (video[1], audio[1]),
+      (video[2], audio[2]),
+      (video[0], audio[1]),
+      (video[0], audio[2]),
+      (video[1], audio[0]),
+      (video[2], audio[0]),
+      (video[1], audio[2]),
+      (video[2], audio[1]),
+    ]);
+    expect(attempts[7].audioCodec, 'ec-3');
+  });
+
+  test('保留原有线路优先级、去重且最多额外尝试四个跨序号组合', () {
+    final video = List.generate(
+      50,
+      (i) => 'https://test.bilivideo.com/video-$i.m4s',
+    );
+    final audio = List.generate(
+      100,
+      (i) => 'https://test.bilivideo.com/audio-$i.m4s',
+    );
+    final attempts = WindowsDashMediaPlan.build(
+      DesktopPlaybackSources(
+        videoUrls: [video.first, ...video],
+        audioUrls: [...audio, audio.last],
+        referer: '',
+        cookieHeader: '',
+        actualQuality: 64,
+        qualities: [],
+        videoCodec: 'avc1.64001F',
+        audioCodec: 'mp4a.40.2',
+      ),
+    );
+    final pairs = attempts.map((item) => (item.videoUrl, item.audioUrl));
+    final legacyAttempts = video.length + audio.length + video.length - 2;
+    expect(pairs.length, legacyAttempts + 4);
+    expect(pairs.toSet().length, pairs.length);
+    expect(pairs.first, (video[0], audio[0]));
+    expect(pairs.skip(legacyAttempts).first, (video[1], audio[2]));
+  });
+
   test('视频与外部音轨都能从 Media 缓存取得同一组安全请求头', () {
     final DesktopPlaybackSources sources = _createSources();
     final WindowsDashMediaAttempt attempt = WindowsDashMediaPlan.build(

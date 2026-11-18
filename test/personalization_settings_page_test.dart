@@ -86,6 +86,36 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('窄屏大字可点击整项线路设置，查看切换后保留其他线路', (tester) async {
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: const TextScaler.linear(2)),
+          child: child!,
+        ),
+        home: const PersonalizationSettingsPage(
+          appPlatform: AppPlatform.windows,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('settings-search')), '线路');
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('默认播放线路'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('主线路仍可回退'), findsOneWidget);
+    await tester.tap(find.text('备用线路优先').last);
+    await tester.pumpAndSettle();
+    expect(find.text('备用线路优先'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   /// 笔记开关可以搜索、即时保存；失败后保留原值。
   for (final fail in [false, true]) {
     testWidgets('笔记标记开关搜索并${fail ? '失败回滚' : '立即保存'}', (tester) async {
