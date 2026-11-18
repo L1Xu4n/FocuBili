@@ -276,10 +276,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
     final seek = tester.getRect(
-      find.descendant(
-        of: find.byType(PlayerSeekFeedback),
-        matching: find.byType(DecoratedBox),
-      ),
+      find.byKey(const Key('double-tap-seek-glyphs')),
     );
     final hint = tester.getRect(find.text('缓冲回归测试'));
     expect(seek.bottom, lessThanOrEqualTo(hint.top));

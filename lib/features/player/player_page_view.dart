@@ -285,6 +285,10 @@ extension _PlayerPageView on _PlayerPageState {
                     _playbackSnapshot.phase != PlaybackPhase.error &&
                     _playbackSnapshot.phase != PlaybackPhase.loading)
                   IgnorePointer(child: _buildListeningSurface()),
+                if (_doubleTapSeekSeconds != 0 &&
+                    _seekFeedback == null &&
+                    !inPictureInPicture)
+                  PlayerSeekBackdrop(seconds: _doubleTapSeekSeconds),
                 Align(
                   alignment: Alignment.bottomCenter,
                   child: IgnorePointer(
@@ -735,7 +739,10 @@ extension _PlayerPageView on _PlayerPageState {
         child: MouseRegion(
           key: const Key('player-mouse-region'),
           cursor: _playerMouseCursor,
-          child: pageScaffold,
+          child: PlayerSeekFeedbackClock(
+            sequence: _doubleTapFeedbackSequence,
+            child: pageScaffold,
+          ),
         ),
       ),
     );

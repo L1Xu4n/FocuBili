@@ -61,6 +61,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('more-settings-menu')));
     await tester.pumpAndSettle();
+    expect(find.byKey(const Key('player-tools-panel')), findsOneWidget);
+    expect(find.byKey(const Key('listening-menu-item')), findsOneWidget);
     expect(find.byKey(const Key('player-block-video')), findsNothing);
     expect(find.byKey(const Key('player-manage-blocklist')), findsOneWidget);
     await tester.tap(find.text('字幕').last);

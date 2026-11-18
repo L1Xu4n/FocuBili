@@ -22,6 +22,7 @@ mixin _PlayerControlsCoordinator
     reverseCurve: Curves.easeIn,
   );
   static const double _expandedPartItemHeight = 76;
+  bool get _playerToolsOpen;
 
   /// 说明控制层已经安排自动隐藏，供播放快照协调器避免重复创建计时器。
   @override
@@ -93,6 +94,7 @@ mixin _PlayerControlsCoordinator
   void _restartControlsAutoHideTimer() {
     _stopControlsAutoHideTimer();
     if (!_showControls ||
+        _playerToolsOpen ||
         _abRepeatEditorVisible ||
         !_playing ||
         _playbackSnapshot.isInPictureInPicture ||
@@ -105,6 +107,7 @@ mixin _PlayerControlsCoordinator
     _controlsTimer = Timer(_controlsAutoHideDelay, () {
       if (mounted &&
           _showControls &&
+          !_playerToolsOpen &&
           !_abRepeatEditorVisible &&
           _playing &&
           !_playbackSnapshot.isInPictureInPicture &&
@@ -642,7 +645,7 @@ mixin _PlayerControlsCoordinator
         unawaited(_showDanmakuSettings());
         return;
       case _PlayerMoreMenuAction.playbackLoop:
-        _togglePlaybackLoop();
+        unawaited(_togglePlaybackLoop());
         return;
       case _PlayerMoreMenuAction.playlist:
         unawaited(_showPlaylist());
@@ -692,13 +695,19 @@ mixin _PlayerControlsCoordinator
   /// 持久保存模式后应用到当前播放会话。
   Future<void> _selectPlaybackMode(PlaybackMode mode);
 
-  /// 旧循环快捷入口映射到统一的单项循环模式。
-  void _togglePlaybackLoop() {
-    unawaited(
-      _selectPlaybackMode(
+  bool _savingPlayerToolsLoop = false;
+
+  /// 旧循环快捷入口映射到单项循环，保存期间不提交第二次切换。
+  Future<void> _togglePlaybackLoop() async {
+    if (_savingPlayerToolsLoop) return;
+    setState(() => _savingPlayerToolsLoop = true);
+    try {
+      await _selectPlaybackMode(
         _playbackLoopEnabled ? PlaybackMode.order : PlaybackMode.single,
-      ),
-    );
+      );
+    } finally {
+      if (mounted) setState(() => _savingPlayerToolsLoop = false);
+    }
   }
 
   /// 保存用户选择的画面比例，并用三秒提示确认该设置只作用于渲染层。

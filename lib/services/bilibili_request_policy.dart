@@ -52,6 +52,7 @@ abstract final class BilibiliRequestPolicy {
       return _searchReferer;
     }
     if (endpoint.path == '/x/web-interface/view' ||
+        endpoint.path == '/x/web-interface/wbi/view' ||
         endpoint.path == '/x/tag/archive/tags') {
       final String bvid = endpoint.queryParameters['bvid']?.trim() ?? '';
       if (_bvidPattern.hasMatch(bvid)) {
