@@ -1275,7 +1275,7 @@ void main() {
     expect(video.collection?.entries, hasLength(2));
     expect(video.collection?.entries.last.bvid, 'BV1Q541167Qg');
     expect(video.tags, isEmpty);
-    expect(requester.requestedUri?.path, '/x/web-interface/view');
+    expect(requester.requestedUri?.path, '/x/web-interface/wbi/view');
     expect(await service.loadVideoTags(video.bvid), <String>['地理', '科普']);
     expect(
       video.collection?.entries.last.thumbnailUrl,
