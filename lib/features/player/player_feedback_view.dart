@@ -210,14 +210,18 @@ extension _PlayerFeedbackView on _PlayerPageState {
                   _seekFeedback != null ||
                   _doubleTapSeekSeconds != 0 ||
                   _playbackActionPlaying != null;
+              final doubleTap =
+                  _seekFeedback == null && _doubleTapSeekSeconds != 0;
+              Widget seek({bool fillWidth = false}) => PlayerSeekFeedback(
+                key: ValueKey('seek-$_doubleTapFeedbackSequence'),
+                seconds: _doubleTapSeekSeconds,
+                foregroundOnly: true,
+                fillWidth: fillWidth,
+              );
               final Widget gesture = _seekFeedback != null
                   ? _buildSeekFeedback()
-                  : _doubleTapSeekSeconds != 0
-                  ? PlayerSeekFeedback(
-                      key: ValueKey('seek-$_doubleTapFeedbackSequence'),
-                      seconds: _doubleTapSeekSeconds,
-                      compact: true,
-                    )
+                  : doubleTap
+                  ? seek()
                   : _playbackActionPlaying != null
                   ? PlayerActionFeedback(
                       key: ValueKey('playback-action-$_playbackActionSequence'),
@@ -231,6 +235,58 @@ extension _PlayerFeedbackView on _PlayerPageState {
               );
               if (!playbackHintVisible) return gesture;
               if (!hasGesture) return hint;
+              if (doubleTap) {
+                // A blocking error needs all the remaining height for Retry;
+                // the noninteractive picture band can continue to fade below.
+                if (phase == PlaybackPhase.error) return hint;
+                if (constraints.maxHeight < 124) {
+                  if (constraints.maxWidth < 56) return hint;
+                  // In a short viewport, share width rather than splitting a
+                  // single readable line into two too-short rows.
+                  final direction = SizedBox(
+                    width:
+                        constraints.maxWidth *
+                        PlayerSeekFeedback.bandWidthFactor,
+                    child: seek(fillWidth: true),
+                  );
+                  final compactHint = Expanded(
+                    child: IgnorePointer(
+                      child: Center(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const SizedBox.square(
+                                dimension: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Flexible(
+                                child: Text(
+                                  _playbackSnapshot.message ?? '正在准备播放…',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(color: Colors.white),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: _doubleTapSeekSeconds > 0
+                        ? [compactHint, direction]
+                        : [direction, compactHint],
+                  );
+                }
+              }
               // Native seek may temporarily enter loading. Its spinner/retry
               // row must not paint over the still-running direction animation.
               final height = (constraints.maxHeight * .45).clamp(0.0, 72.0);
