@@ -345,67 +345,76 @@ class _PlayerAbRepeatSheetState extends State<PlayerAbRepeatSheet> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        SizedBox(
-          height: PlayerAbRepeatSheet.floatingToolbarHeight(context),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final minWidth =
-                  actionWidth +
-                  12 +
-                  MediaQuery.textScalerOf(context).scale(14) * 7;
-              return SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: SizedBox(
-                  width: constraints.maxWidth < minWidth
-                      ? minWidth
-                      : constraints.maxWidth,
-                  child: Padding(
-                    padding: const EdgeInsets.only(left: 6),
-                    child: Row(
-                      children: [
-                        _floatingPoint(context, 'A', _a),
-                        const SizedBox(width: 4),
-                        _floatingPoint(context, 'B', _b),
-                        _floatingIcon(
-                          context,
-                          tooltip: '输入时间',
-                          icon: Icons.edit_outlined,
-                          selected: _editingTimes,
-                          onPressed: () =>
-                              setState(() => _editingTimes = !_editingTimes),
-                        ),
-                        _floatingIcon(
-                          context,
-                          key: const Key('ab-repeat-apply'),
-                          tooltip: '启用区间循环',
-                          icon: Icons.check_rounded,
-                          onPressed: _apply,
-                          primary: true,
-                        ),
-                        if (hasClear)
-                          _floatingIcon(
-                            context,
-                            key: const Key('ab-repeat-clear'),
-                            tooltip: '清除区间',
-                            icon: Icons.delete_outline,
-                            onPressed: () {
-                              widget.onClear();
-                              _close();
-                            },
-                          ),
-                        _floatingIcon(
-                          context,
-                          tooltip: '收起 A–B 设置',
-                          icon: Icons.close,
-                          onPressed: _close,
-                        ),
-                      ],
-                    ),
-                  ),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final minWidth =
+                actionWidth +
+                12 +
+                MediaQuery.textScalerOf(context).scale(14) * 7;
+            final points = [
+              _floatingPoint(context, 'A', _a),
+              const SizedBox(width: 4),
+              _floatingPoint(context, 'B', _b),
+            ];
+            final actions = [
+              _floatingIcon(
+                context,
+                tooltip: '输入时间',
+                icon: Icons.edit_outlined,
+                selected: _editingTimes,
+                onPressed: () => setState(() => _editingTimes = !_editingTimes),
+              ),
+              _floatingIcon(
+                context,
+                key: const Key('ab-repeat-apply'),
+                tooltip: '启用区间循环',
+                icon: Icons.check_rounded,
+                onPressed: _apply,
+                primary: true,
+              ),
+              if (hasClear)
+                _floatingIcon(
+                  context,
+                  key: const Key('ab-repeat-clear'),
+                  tooltip: '清除区间',
+                  icon: Icons.delete_outline,
+                  onPressed: () {
+                    widget.onClear();
+                    _close();
+                  },
                 ),
+              _floatingIcon(
+                context,
+                tooltip: '收起 A–B 设置',
+                icon: Icons.close,
+                onPressed: _close,
+              ),
+            ];
+            final toolbarHeight = PlayerAbRepeatSheet.floatingToolbarHeight(
+              context,
+            );
+            if (constraints.maxWidth < minWidth) {
+              // In a portrait fullscreen pane (or another extremely narrow
+              // lane), do not hide essential actions behind the drag grip.
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    height: toolbarHeight,
+                    child: Row(children: points),
+                  ),
+                  Wrap(alignment: WrapAlignment.center, children: actions),
+                ],
               );
-            },
-          ),
+            }
+            return SizedBox(
+              height: toolbarHeight,
+              child: Padding(
+                padding: const EdgeInsets.only(left: 6),
+                child: Row(children: [...points, ...actions]),
+              ),
+            );
+          },
         ),
         if (_editingTimes || _error != null)
           Padding(
