@@ -99,7 +99,7 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
   Future<AccountDataPage<FavoriteFolder>>? _remoteFoldersPending;
   AccountDataPage<FavoriteFolder>? _remoteFoldersSnapshot;
   DateTime? _remoteFoldersLoadedAt;
-  Map<int, Future<String>> _fallbackCoverRequests = {};
+  Map<int, Future<String?>> _fallbackCoverRequests = {};
   int _folderNamesGeneration = 0;
   Map<String, String> _localGroupNames = {};
   Map<String, String> _groupAvatars = {};
@@ -348,7 +348,7 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
     return request;
   }
 
-  /// 账号和页面读取代次都匹配时才采用封面；失败清空而不覆盖选择配置。
+  /// 仅同账号和读取代次采用封面；暂时断网不清空已知封面。
   Future<void> _loadRemoteCovers(int mid, int generation) async {
     try {
       final page = await _favoriteFolders();
@@ -358,17 +358,34 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
         _accountChanged();
         return;
       }
-      setState(() {
-        _remoteFolderCovers = page.isSuccess
-            ? {
-                for (final folder in page.items)
-                  if (folder.isAvailable) '${folder.mediaId}': folder.coverUrl,
-              }
-            : {};
-      });
-      if (page.isSuccess) {
-        await _backfillSelectedCovers(page.items, mid, generation);
+      if (!page.isSuccess) {
+        if (page.status != AccountDataLoadStatus.networkError) {
+          setState(() => _remoteFolderCovers = {});
+        }
+        return;
       }
+      final selectedIds = _selected
+          .where((choice) => choice.kind == 'remote')
+          .map((choice) => choice.id)
+          .toSet();
+      final covers = <String, String>{};
+      final missing = <FavoriteFolder>[];
+      for (final folder in page.items) {
+        if (!folder.isAvailable) continue;
+        final id = '${folder.mediaId}';
+        if (selectedIds.contains(id) &&
+            folder.mediaCount > 0 &&
+            folder.coverUrl.trim().isEmpty) {
+          missing.add(folder);
+          // The blank metadata cover is not a change to the fallback cover.
+          // Keep the mounted image until the new first-page lookup resolves.
+          covers[id] = _remoteFolderCovers[id] ?? '';
+        } else {
+          covers[id] = folder.coverUrl;
+        }
+      }
+      setState(() => _remoteFolderCovers = covers);
+      await _backfillSelectedCovers(missing, mid, generation);
     } catch (_) {
       if (mounted && generation == _generation && mid == _mid) {
         setState(() => _remoteFolderCovers = {});
@@ -378,23 +395,10 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
 
   /// 只为已选且有视频的缺图收藏夹补查第一页，每批最多三项。
   Future<void> _backfillSelectedCovers(
-    List<FavoriteFolder> folders,
+    List<FavoriteFolder> missing,
     int mid,
     int generation,
   ) async {
-    final ids = _selected
-        .where((choice) => choice.kind == 'remote')
-        .map((choice) => choice.id)
-        .toSet();
-    final missing = folders
-        .where(
-          (folder) =>
-              ids.contains('${folder.mediaId}') &&
-              folder.isAvailable &&
-              folder.mediaCount > 0 &&
-              folder.coverUrl.trim().isEmpty,
-        )
-        .toList();
     for (var offset = 0; offset < missing.length; offset += 3) {
       if (!mounted || generation != _generation || mid != _mid) return;
       final batch = missing.skip(offset).take(3);
@@ -405,6 +409,9 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
             () async {
               try {
                 final videos = await _api.loadFavoriteVideos(folder.mediaId);
+                if (videos.status == AccountDataLoadStatus.networkError) {
+                  return null;
+                }
                 if (videos.isSuccess) {
                   for (final video in videos.items) {
                     if (video.isAvailable && video.coverUrl.trim().isNotEmpty) {
@@ -419,11 +426,12 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
             },
           );
           final cover = await request;
-          if (cover.isEmpty &&
+          if ((cover == null || cover.isEmpty) &&
               identical(_fallbackCoverRequests[folder.mediaId], request)) {
             _fallbackCoverRequests.remove(folder.mediaId);
           }
-          return MapEntry('${folder.mediaId}', cover);
+          // Null is a transient failure, not an authoritative empty result.
+          return cover == null ? null : MapEntry('${folder.mediaId}', cover);
         }),
       );
       if (!mounted || generation != _generation || mid != _mid) return;
@@ -432,7 +440,11 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
         return;
       }
       if (!mounted || generation != _generation || mid != _mid) return;
-      setState(() => _remoteFolderCovers.addEntries(covers));
+      setState(
+        () => _remoteFolderCovers.addEntries(
+          covers.whereType<MapEntry<String, String>>(),
+        ),
+      );
     }
   }
 
