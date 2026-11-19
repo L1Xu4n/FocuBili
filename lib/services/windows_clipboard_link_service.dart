@@ -123,6 +123,11 @@ class WindowsClipboardLinkMonitor implements ClipboardLinkMonitor {
           text == _lastObservedText) {
         return;
       }
+      // JSON 备份不是分享链接。不要缓存其原文，也不要展开其中的 URL。
+      if (text.startsWith('{')) {
+        _lastObservedText = null;
+        return;
+      }
       _lastObservedText = text;
       _handler?.call(text);
     } catch (_) {

@@ -96,9 +96,15 @@ class SettingsTransferService {
     });
   }
 
+  /// 在将较大文本放进编辑框或 JSON 解码器前检查与文件相同的 UTF-8 上限。
+  static bool fitsTransferLimit(String source) =>
+      source.length <= maximumBytes &&
+      (source.length <= maximumBytes ~/ 3 ||
+          utf8.encode(source).length <= maximumBytes);
+
   /// 完整验证导入文件后返回待确认设置，未知键和错误类型不写入磁盘。
   Map<String, Object> parseSettings(String source) {
-    if (utf8.encode(source).length > maximumBytes) {
+    if (!fitsTransferLimit(source)) {
       throw const FormatException('设置文件过大');
     }
     final root = jsonDecode(source);
