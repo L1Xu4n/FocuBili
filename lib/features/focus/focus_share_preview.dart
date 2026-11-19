@@ -1,18 +1,21 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
 import '../../models/focus_session.dart';
 import '../../models/focus_statistics.dart';
 import '../../services/focus_share_service.dart';
+import 'focus_ruler_share_cards.dart';
 import 'focus_timer_controller.dart';
 import 'focus_timer_scope.dart';
 
 /// 打开单次专注分享预览，用户确认后才调用系统分享面板。
 Future<void> showFocusSessionSharePreview(
   BuildContext context,
-  FocusSession session,
-) {
+  FocusSession session, {
+  FocusShareService shareService = const FocusShareService(),
+}) {
   final FocusTimerController? controller = FocusTimerScope.maybeOf(context);
   final Duration fallbackDuration =
       session.accumulatedFocusDuration > Duration.zero
@@ -26,18 +29,24 @@ Future<void> showFocusSessionSharePreview(
           now: DateTime.now(),
           activeSession: controller.activeSession,
         );
+  final Duration? today = controller?.todayFocusedDuration();
+  final Duration? cumulative = completeSnapshot?.totalFocusedDuration;
   return showDialog<void>(
     context: context,
     // 分享预览构建函数使用固定设计卡片，保证不同手机生成相同画面比例。
     builder: (BuildContext dialogContext) => _FocusSharePreviewDialog(
       fileName: 'focubili_focus_${session.id}',
       shareText: '我在焦点哔哩完成了“${session.goal}”专注任务。',
-      card: FocusSessionShareCard(
+      shareService: shareService,
+      classicCard: FocusSessionShareCard(
         session: session,
-        todayFocusedDuration:
-            controller?.todayFocusedDuration() ?? fallbackDuration,
-        cumulativeFocusedDuration:
-            completeSnapshot?.totalFocusedDuration ?? fallbackDuration,
+        todayFocusedDuration: today ?? fallbackDuration,
+        cumulativeFocusedDuration: cumulative ?? fallbackDuration,
+      ),
+      rulerCard: FocusRulerSessionCard(
+        session: session,
+        todayFocusedDuration: today,
+        cumulativeFocusedDuration: cumulative,
       ),
     ),
   );
@@ -46,15 +55,18 @@ Future<void> showFocusSessionSharePreview(
 /// 打开专注统计分享预览，分享内容只使用调用时生成的本地快照。
 Future<void> showFocusStatisticsSharePreview(
   BuildContext context,
-  FocusStatisticsSnapshot snapshot,
-) {
+  FocusStatisticsSnapshot snapshot, {
+  FocusShareService shareService = const FocusShareService(),
+}) {
   return showDialog<void>(
     context: context,
     // 统计预览构建函数冻结当前范围数据，分享过程中记录变化不会改变画面。
     builder: (BuildContext dialogContext) => _FocusSharePreviewDialog(
       fileName: 'focubili_focus_statistics',
       shareText: '这是我在焦点哔哩的专注统计。',
-      card: FocusStatisticsShareCard(snapshot: snapshot),
+      shareService: shareService,
+      classicCard: FocusStatisticsShareCard(snapshot: snapshot),
+      rulerCard: FocusRulerStatisticsCard(snapshot: snapshot),
     ),
   );
 }
@@ -63,12 +75,16 @@ Future<void> showFocusStatisticsSharePreview(
 class _FocusSharePreviewDialog extends StatefulWidget {
   /// 创建一张不会直接上传的本地分享预览。
   const _FocusSharePreviewDialog({
-    required this.card,
+    required this.classicCard,
+    required this.rulerCard,
+    required this.shareService,
     required this.fileName,
     required this.shareText,
   });
 
-  final Widget card;
+  final Widget classicCard;
+  final Widget rulerCard;
+  final FocusShareService shareService;
   final String fileName;
   final String shareText;
 
@@ -79,9 +95,12 @@ class _FocusSharePreviewDialog extends StatefulWidget {
 }
 
 /// 管理 RepaintBoundary、分享进度和错误提示。
+enum _FocusShareStyle { classic, ruler }
+
 class _FocusSharePreviewDialogState extends State<_FocusSharePreviewDialog> {
   final GlobalKey _boundaryKey = GlobalKey();
-  final FocusShareService _shareService = const FocusShareService();
+  FocusShareService get _shareService => widget.shareService;
+  _FocusShareStyle _style = _FocusShareStyle.classic;
   bool _sharing = false;
 
   /// 捕获卡片并打开系统分享；异常会保留预览并提示重试。
@@ -91,13 +110,20 @@ class _FocusSharePreviewDialogState extends State<_FocusSharePreviewDialog> {
     }
     setState(() => _sharing = true);
     try {
+      await precacheImage(
+        const AssetImage('assets/icon/focubili_icon.png'),
+        context,
+      );
+      if (!mounted) return;
       final RenderBox? box = context.findRenderObject() as RenderBox?;
       final Rect? origin = box == null
           ? null
           : box.localToGlobal(Offset.zero) & box.size;
       await _shareService.shareBoundary(
         boundaryKey: _boundaryKey,
-        fileName: widget.fileName,
+        fileName: _style == _FocusShareStyle.ruler
+            ? '${widget.fileName}_ruler'
+            : widget.fileName,
         text: widget.shareText,
         sharePositionOrigin: origin,
       );
@@ -122,71 +148,110 @@ class _FocusSharePreviewDialogState extends State<_FocusSharePreviewDialog> {
   /// 创建带高清捕获边界的预览，屏幕较小时只缩放显示而不降低输出尺寸。
   @override
   Widget build(BuildContext context) {
-    return Dialog(
-      insetPadding: const EdgeInsets.all(16),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: 460,
-          maxHeight: MediaQuery.sizeOf(context).height * 0.92,
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              Row(
-                children: <Widget>[
-                  Text('分享预览', style: Theme.of(context).textTheme.titleLarge),
-                  const Spacer(),
-                  IconButton(
-                    // 关闭按钮函数只移除预览，不保存或分享图片。
-                    onPressed: _sharing
-                        ? null
-                        : () => Navigator.of(context).pop(),
-                    icon: const Icon(Icons.close_rounded),
-                    tooltip: '关闭',
-                  ),
-                ],
-              ),
-              Flexible(
-                child: SingleChildScrollView(
-                  child: FittedBox(
-                    fit: BoxFit.scaleDown,
-                    alignment: Alignment.topCenter,
-                    child: RepaintBoundary(
-                      key: _boundaryKey,
-                      child: widget.card,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  key: const Key('share-focus-card'),
-                  // 分享按钮函数把预览渲染为 PNG 后打开系统 App 列表。
-                  onPressed: _sharing ? null : () => unawaited(_share()),
-                  icon: _sharing
-                      ? const SizedBox.square(
-                          dimension: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : Icon(
-                          _shareService.copiesToClipboard
-                              ? Icons.copy_rounded
-                              : Icons.ios_share_rounded,
+    return PopScope(
+      canPop: !_sharing,
+      child: Dialog(
+        insetPadding: const EdgeInsets.all(16),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: 460,
+            maxHeight: MediaQuery.sizeOf(context).height * 0.92,
+          ),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final card = _style == _FocusShareStyle.classic
+                  ? widget.classicCard
+                  : widget.rulerCard;
+              final logicalHeight = _style == _FocusShareStyle.ruler
+                  ? 480.0
+                  : card is FocusSessionShareCard
+                  ? 520.0
+                  : 660.0;
+              final previewHeight = math.min(
+                (math.max(0, constraints.maxWidth - 28) / 360) * logicalHeight,
+                math.max(88.0, constraints.maxHeight - 172),
+              );
+              return SingleChildScrollView(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '分享预览',
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
                         ),
-                  label: Text(
-                    _sharing
-                        ? '正在生成…'
-                        : _shareService.copiesToClipboard
-                        ? '复制图片'
-                        : '分享到其他 App',
-                  ),
+                        IconButton(
+                          onPressed: _sharing
+                              ? null
+                              : () => Navigator.of(context).pop(),
+                          icon: const Icon(Icons.close_rounded),
+                          tooltip: '关闭',
+                        ),
+                      ],
+                    ),
+                    Wrap(
+                      alignment: WrapAlignment.center,
+                      spacing: 8,
+                      children: [
+                        for (final style in _FocusShareStyle.values)
+                          ChoiceChip(
+                            key: ValueKey('focus-share-style-${style.name}'),
+                            label: Text(
+                              style == _FocusShareStyle.classic ? '经典' : '专注刻度',
+                            ),
+                            selected: _style == style,
+                            onSelected: _sharing
+                                ? null
+                                : (selected) {
+                                    if (selected && !_sharing) {
+                                      setState(() => _style = style);
+                                    }
+                                  },
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      height: previewHeight,
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: RepaintBoundary(
+                          key: _boundaryKey,
+                          child: MediaQuery.withNoTextScaling(child: card),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    FilledButton.icon(
+                      key: const Key('share-focus-card'),
+                      onPressed: _sharing ? null : () => unawaited(_share()),
+                      icon: _sharing
+                          ? const SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Icon(
+                              _shareService.copiesToClipboard
+                                  ? Icons.copy_rounded
+                                  : Icons.ios_share_rounded,
+                            ),
+                      label: Text(
+                        _sharing
+                            ? '正在生成…'
+                            : _shareService.copiesToClipboard
+                            ? '复制图片'
+                            : '分享到其他 App',
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-            ],
+              );
+            },
           ),
         ),
       ),
