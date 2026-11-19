@@ -205,9 +205,25 @@ class CourseCacheEntry {
 }
 
 class CourseCacheFailure implements Exception {
-  const CourseCacheFailure(this.message, {this.recheckNeeded = false});
+  const CourseCacheFailure(
+    this.message, {
+    this.recheckNeeded = false,
+    this.diagnosticStage,
+    this.diagnosticReason,
+  });
   final String message;
   final bool recheckNeeded;
+  final CourseCacheStage? diagnosticStage;
+  final CourseCacheReason? diagnosticReason;
+
+  String? get diagnosticCode {
+    final stage = diagnosticStage;
+    final reason = diagnosticReason;
+    return stage == null || reason == null
+        ? null
+        : 'course-cache/v1/${stage.name}/${reason.name}';
+  }
+
   @override
   String toString() => message;
 }
@@ -246,14 +262,24 @@ class CourseCacheLibrary extends ChangeNotifier {
   // Opening a lesson crosses several player adapters. Reuse the local digest
   // check only while the exact path's size, mtime and change time still match.
   final _verified = <String, ({FileStat stat, String hash})>{};
-  String? _error;
+  String? _error, _diagnosticCode;
   String? get activeId => _busyKey;
   int get received => _received;
   int? get total => _total;
   String? get error => _error;
+  String? get diagnosticCode => _diagnosticCode;
   bool get busy => _running != null || _deleting;
   Future<void> get settled => _running ?? Future.value();
-  static const _inactive = CourseCacheFailure('请登录缓存该课程的账号，再打开离线课堂。');
+  static const _inactive = CourseCacheFailure(
+    '请登录缓存该课程的账号，再打开离线课堂。',
+    diagnosticStage: CourseCacheStage.account,
+    diagnosticReason: CourseCacheReason.sessionChanged,
+  );
+  static const _validationExpired = CourseCacheFailure(
+    '本次课程校验已到期，请重新联网确认。',
+    diagnosticStage: CourseCacheStage.media,
+    diagnosticReason: CourseCacheReason.invalidDeadline,
+  );
   void _emit() {
     if (!_closed) notifyListeners();
   }
@@ -265,6 +291,7 @@ class CourseCacheLibrary extends ChangeNotifier {
     _control?.interrupt();
     _busyKey = null;
     _error = null;
+    _diagnosticCode = null;
     _received = 0;
     _total = null;
     _emit();
@@ -393,6 +420,7 @@ class CourseCacheLibrary extends ChangeNotifier {
     _received = 0;
     _total = null;
     _error = null;
+    _diagnosticCode = null;
     _checking = true;
     _operationKey = _busyKey =
         '${v.courseSeasonId}-${p.courseEpisodeId}-${p.courseAid}-${p.cid}';
@@ -410,6 +438,11 @@ class CourseCacheLibrary extends ChangeNotifier {
             : e is CourseCacheAccessException
             ? e.message
             : '课程缓存失败，请检查网络、购买状态和剩余空间。';
+        _diagnosticCode = switch (e) {
+          CourseCacheAccessException() => e.diagnosticCode,
+          CourseCacheFailure() => e.diagnosticCode,
+          _ => null,
+        };
       }
     } finally {
       _busyKey = _operationKey = null;
@@ -688,7 +721,7 @@ class CourseCacheLibrary extends ChangeNotifier {
       c.check();
       final now = _clock();
       if (!g.expiryKind.usableAt(now, g.checkedAt, g.validUntil)) {
-        throw const CourseCacheFailure('本次课程校验已到期，请重新联网确认。');
+        throw _validationExpired;
       }
     }
 
@@ -727,7 +760,8 @@ class CourseCacheLibrary extends ChangeNotifier {
         ? null
         : Timer(expiry.difference(_clock()), () {
             if (!c.isInterrupted && rev == _revision && !_closed) {
-              _error = '本次课程校验已到期，请重新联网确认。';
+              _error = _validationExpired.message;
+              _diagnosticCode = _validationExpired.diagnosticCode;
               c.interrupt();
             }
           });
@@ -784,7 +818,11 @@ class CourseCacheLibrary extends ChangeNotifier {
             c.check();
           }
         }
-        throw const CourseCacheFailure('课程媒体接收不完整，请重试。');
+        throw const CourseCacheFailure(
+          '课程媒体接收不完整，请重试。',
+          diagnosticStage: CourseCacheStage.transport,
+          diagnosticReason: CourseCacheReason.incompleteMedia,
+        );
       }
 
       final video = await track(g.media.video, 'video');
@@ -810,7 +848,11 @@ class CourseCacheLibrary extends ChangeNotifier {
             final f = await _file(dir, rejected);
             if (await f.exists()) await f.delete();
           }
-          throw const CourseCacheFailure('实际媒体缺少所需音画轨、含保护标记或格式不受支持，未创建可播放缓存。');
+          throw const CourseCacheFailure(
+            '实际媒体缺少所需音画轨、含保护标记或格式不受支持，未创建可播放缓存。',
+            diagnosticStage: CourseCacheStage.media,
+            diagnosticReason: CourseCacheReason.containerUnverified,
+          );
         }
       }
       final videoHash = await _hashFile(

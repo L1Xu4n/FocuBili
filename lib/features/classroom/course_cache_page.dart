@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../models/video_preview.dart';
 import '../../platform/app_platform.dart';
@@ -163,6 +164,26 @@ class _CourseCachePageState extends State<CourseCachePage>
     }
   }
 
+  Future<void> _copyDiagnostic(String code) async {
+    final revision = CacheLifecycle.account.value;
+    var message = '已复制诊断代码';
+    try {
+      await Clipboard.setData(ClipboardData(text: code));
+    } catch (_) {
+      message = '复制失败，请重试。';
+    }
+    if (!mounted ||
+        suspended ||
+        revision != CacheLifecycle.account.value ||
+        store.diagnosticCode != code ||
+        ModalRoute.of(context)?.isCurrent == false) {
+      return;
+    }
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
   Future<void> _remove(CourseCacheEntry e) async {
     final old = generation;
     final yes = await showDialog<bool>(
@@ -225,6 +246,7 @@ class _CourseCachePageState extends State<CourseCachePage>
     final key =
         '${video?.courseSeasonId}-${part?.courseEpisodeId}-${part?.courseAid}-${part?.cid}';
     final selected = rows.where((e) => e.id == key).firstOrNull;
+    final diagnostic = store.diagnosticCode;
     return Scaffold(
       appBar: AppBar(
         title: const Text('课程缓存'),
@@ -294,11 +316,23 @@ class _CourseCachePageState extends State<CourseCachePage>
               if (store.error != null)
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 12),
-                  child: Text(
-                    store.error!,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.error,
-                    ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          store.error!,
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
+                      ),
+                      if (diagnostic != null)
+                        IconButton(
+                          tooltip: '复制诊断代码',
+                          onPressed: () => _copyDiagnostic(diagnostic),
+                          icon: const Icon(Icons.copy_outlined, size: 18),
+                        ),
+                    ],
                   ),
                 ),
               const SizedBox(height: 20),

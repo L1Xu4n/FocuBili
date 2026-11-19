@@ -74,6 +74,23 @@ class _Library extends CourseCacheLibrary {
   }
 }
 
+class _FailedLibrary extends _Library {
+  bool showFailure = false;
+
+  @override
+  String? get error => showFailure ? '当前无法确认本章能否离线缓存。' : null;
+
+  @override
+  String? get diagnosticCode =>
+      showFailure ? 'course-cache/v1/playback/drmUnknown' : null;
+
+  @override
+  Future<void> start(VideoPreview v, VideoPart p, {int quality = 64}) async {
+    showFailure = true;
+    notifyListeners();
+  }
+}
+
 void main() {
   testWidgets(
     'expiry updates narrow large-text row and offers recheck without a dialog',
@@ -255,6 +272,43 @@ void main() {
     expect(find.text('暂无缓存，可在课程播放器中缓存章节。'), findsOneWidget);
     expect(find.textContaining('仅供购买账号'), findsNothing);
     expect(find.text('缓存本章'), findsNothing);
+    await t.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('failed cache action copies only a fixed diagnostic code', (
+    t,
+  ) async {
+    final library = _FailedLibrary();
+    addTearDown(library.dispose);
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    final clipboardValues = <Object?>[];
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.setData') {
+        clipboardValues.add(call.arguments);
+      }
+      return null;
+    });
+    addTearDown(
+      () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+    );
+
+    await t.pumpWidget(
+      MaterialApp(
+        home: CourseCachePage(video: video, part: part, library: library),
+      ),
+    );
+    await t.pumpAndSettle();
+    expect(find.byTooltip('复制诊断代码'), findsNothing);
+    await t.tap(find.text('缓存本章'));
+    await t.pumpAndSettle();
+    expect(find.text('当前无法确认本章能否离线缓存。'), findsOneWidget);
+    await t.tap(find.byTooltip('复制诊断代码'));
+    await t.pumpAndSettle();
+    expect(clipboardValues, [
+      {'text': 'course-cache/v1/playback/drmUnknown'},
+    ]);
+    expect(find.text('已复制诊断代码'), findsOneWidget);
     await t.pumpWidget(const SizedBox.shrink());
   });
 

@@ -231,40 +231,70 @@ void main() {
     },
   );
 
-  for (final scenario in <(String, void Function(_Fixture), bool, String)>[
-    (
-      'absent watermark metadata',
-      (f) => f.meta.remove('show_watermark'),
-      false,
-      '当前无法确认本章能否离线缓存。',
-    ),
-    (
-      'missing preview field despite enabled download hint',
-      (f) => f.response
-        ..remove('is_preview')
-        ..['allow_download'] = true,
-      true,
-      '当前无法确认本章能否离线缓存。',
-    ),
-    (
-      'unknown nested DRM metadata',
-      (f) => f.videoTrack['drm_unknown'] = 'future',
-      true,
-      '当前无法确认本章能否离线缓存。',
-    ),
-    (
-      'explicit download denial',
-      (f) => f.videoTrack['download_allowed'] = false,
-      true,
-      '本章有播放保护、试看或下载限制，无法缓存。',
-    ),
-    (
-      'explicit DRM',
-      (f) => f.response['is_drm'] = true,
-      true,
-      '本章有播放保护、试看或下载限制，无法缓存。',
-    ),
-  ]) {
+  for (final scenario
+      in <(String, void Function(_Fixture), bool, String, String)>[
+        (
+          'absent watermark metadata',
+          (f) => f.meta.remove('show_watermark'),
+          false,
+          '当前无法确认本章能否离线缓存。',
+          'course-cache/v1/course/watermarkUnknown',
+        ),
+        (
+          'missing preview field despite enabled download hint',
+          (f) => f.response
+            ..remove('is_preview')
+            ..['allow_download'] = true,
+          true,
+          '当前无法确认本章能否离线缓存。',
+          'course-cache/v1/playback/previewUnknown',
+        ),
+        (
+          'unknown nested DRM metadata',
+          (f) => f.videoTrack['drm_unknown'] = 'future',
+          true,
+          '当前无法确认本章能否离线缓存。',
+          'course-cache/v1/playback/policyUnknown',
+        ),
+        (
+          'explicit download denial',
+          (f) => f.videoTrack['download_allowed'] = false,
+          true,
+          '本章有播放保护、试看或下载限制，无法缓存。',
+          'course-cache/v1/playback/restrictionReported',
+        ),
+        (
+          'absent DRM metadata',
+          (f) => f.response.remove('is_drm'),
+          true,
+          '当前无法确认本章能否离线缓存。',
+          'course-cache/v1/playback/drmUnknown',
+        ),
+        (
+          'unavailable media format',
+          (f) => f.videoTrack['codecs'] = 'unknown',
+          true,
+          '当前课程未返回可确认的完整媒体格式，无法缓存。',
+          'course-cache/v1/media/unsupportedMedia',
+        ),
+        (
+          'expired media address',
+          (f) => f.videoTrack['baseUrl'] = _url(
+            'v.m4s',
+            const Duration(seconds: -1),
+          ),
+          true,
+          '课程下载地址已到期或无法确认，请重新联网确认。',
+          'course-cache/v1/transport/addressUnavailable',
+        ),
+        (
+          'explicit DRM',
+          (f) => f.response['is_drm'] = true,
+          true,
+          '本章有播放保护、试看或下载限制，无法缓存。',
+          'course-cache/v1/playback/restrictionReported',
+        ),
+      ]) {
     test('reports ${scenario.$1} without authorizing a cache', () async {
       scenario.$2(fixture);
       await expectLater(
@@ -272,7 +302,12 @@ void main() {
         throwsA(
           isA<CourseCacheAccessException>()
               .having((e) => e.message, 'message', scenario.$4)
-              .having((e) => e.revokesReceipt, 'revokesReceipt', isTrue),
+              .having((e) => e.diagnosticCode, 'sanitized code', scenario.$5)
+              .having(
+                (e) => e.revokesReceipt,
+                'revokesReceipt',
+                scenario.$1 != 'expired media address',
+              ),
         ),
       );
       expect(fixture.requests.map((u) => u.path), [
@@ -283,6 +318,78 @@ void main() {
       ]);
     });
   }
+
+  test('authorized DASH selects a compatible lower quality and AAC', () async {
+    fixture.response['allow_download'] = true;
+    final dash = Map.of(fixture.response['dash'] as Map);
+    fixture.response['dash'] = dash;
+    final firstVideo = fixture.videoTrack;
+    final firstAudio = (dash['audio'] as List).single as Map;
+    dash['video'] = [
+      {...firstVideo, 'codecs': 'av01.0.05M.08'},
+      {...firstVideo, 'id': 32},
+    ];
+    dash['audio'] = [
+      {...firstAudio, 'codecs': 'opus', 'bandwidth': 1000000},
+      firstAudio,
+    ];
+    final grant = await fixture.service().authorize(_video, _part, 64);
+    expect(grant.media.quality, 32);
+    expect(grant.media.video.codec, 'avc1.640028');
+    expect(grant.media.audio?.codec, 'mp4a.40.2');
+    expect(fixture.requests.map((u) => u.path), [_nav, _paid, _season, _media]);
+
+    // Too high is still rejected, even when the representation is compatible.
+    await expectLater(
+      fixture.service().authorize(_video, _part, 16),
+      _rejected,
+    );
+  });
+
+  test(
+    'compatible fallback cannot override an explicit download restriction',
+    () async {
+      final dash = Map.of(fixture.response['dash'] as Map);
+      fixture.response['dash'] = dash;
+      final compatible = fixture.videoTrack;
+      dash['video'] = [
+        {...compatible, 'codecs': 'av01.0.05M.08', 'download_allowed': false},
+        {...compatible, 'id': 32},
+      ];
+      await expectLater(
+        fixture.service().authorize(_video, _part, 64),
+        throwsA(
+          isA<CourseCacheAccessException>().having(
+            (e) => e.diagnosticCode,
+            'sanitized code',
+            'course-cache/v1/playback/restrictionReported',
+          ),
+        ),
+      );
+      expect(fixture.requests.map((u) => u.path), [
+        _nav,
+        _paid,
+        _season,
+        _media,
+      ]);
+    },
+  );
+
+  test(
+    'authorized DASH with only incompatible audio remains unsupported',
+    () async {
+      final dash = Map.of(fixture.response['dash'] as Map);
+      fixture.response['dash'] = dash;
+      final oldAudio = (dash['audio'] as List).single as Map;
+      dash['audio'] = [
+        {...oldAudio, 'codecs': 'opus'},
+      ];
+      await expectLater(
+        fixture.service().authorize(_video, _part, 64),
+        _rejected,
+      );
+    },
+  );
 
   for (final invalid in [
     {'isLogin': true, 'mid': 52},
