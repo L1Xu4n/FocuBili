@@ -655,7 +655,7 @@ void main() {
     expect(firstVideo.top, secondVideo.top);
     expect(secondVideo.left, greaterThan(firstVideo.right));
   });
-  testWidgets('UP 主页直接配置通知并订阅且不修改关注', (tester) async {
+  testWidgets('UP 主页一键加入焦点订阅且不修改通知或关注', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final subscriptions = SubscriptionService();
     addTearDown(subscriptions.dispose);
@@ -674,11 +674,10 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('添加订阅源'));
     await tester.pumpAndSettle();
-    expect(find.text('添加通知设置'), findsOneWidget);
-    expect(find.text('确认订阅'), findsNothing);
-    await tester.tap(find.text('保存'));
-    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.text('已添加到焦点订阅'), findsOneWidget);
     expect(subscriptions.sources.single.key, 'creator:7');
+    expect(subscriptions.notificationsEnabled, isFalse);
     expect(interaction.writeRequests, 0);
     expect(find.byTooltip('取消焦点订阅'), findsOneWidget);
     await tester.tap(find.byTooltip('取消焦点订阅'));

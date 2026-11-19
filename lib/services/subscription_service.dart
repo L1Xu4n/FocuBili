@@ -947,21 +947,30 @@ class SubscriptionService extends ChangeNotifier {
       : _platform == AppPlatform.android
       ? '使用 Android 系统任务。建议省电设为无限制、多任务加锁并开启自启动。系统可能延后执行。'
       : '当前平台仅在启动、回到前台及前台运行时检查。';
-  Future<void> addSource(SubscriptionSource source) async {
+
+  /// Optionally enable focus in the same transaction that saves the source.
+  /// System notification settings are not changed.
+  Future<void> addSource(
+    SubscriptionSource source, {
+    bool enableFocus = false,
+  }) async {
     try {
       await _suspendNativeBackground();
       await _mutate(() {
-        if (!_sources.containsKey(source.key) &&
-            _sources.length >= maxSources) {
+        final isNew = !_sources.containsKey(source.key);
+        if (isNew && _sources.length >= maxSources) {
           throw StateError('最多 $maxSources 个订阅源，这是本测试版的请求保护值。');
         }
-        if (!_sources.containsKey(source.key)) {
+        if (isNew) {
           _sources[source.key] = source;
           _checkpoints[source.key] = SourceCheckpoint(baselineAt: _clock());
-          _generation++;
         }
+        final enabling = enableFocus && !enabled;
+        if (enabling) enabled = true;
+        if (isNew || enabling) _generation++;
       });
     } finally {
+      if (enableFocus) _schedule();
       await reconcileBackgroundSchedule();
       if (enabled && _foreground) unawaited(refresh());
     }
