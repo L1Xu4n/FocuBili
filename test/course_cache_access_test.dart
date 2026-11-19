@@ -170,6 +170,8 @@ class _NativeSession extends Fake
     implements BilibiliCookieStore, BilibiliPlaybackSessionStore {
   int generation = 1;
   final paths = <String>[];
+  final headers = <String, String>{};
+  final generations = <String, int>{};
 
   @override
   Future<BilibiliPlaybackCookieSnapshot> readPlaybackSession(
@@ -177,9 +179,9 @@ class _NativeSession extends Fake
   ) async {
     paths.add(path);
     return BilibiliPlaybackCookieSnapshot(
-      header: _cookie,
+      header: headers[path] ?? _cookie,
       state: 'session',
-      generation: generation,
+      generation: generations[path] ?? generation,
     );
   }
 
@@ -188,6 +190,11 @@ class _NativeSession extends Fake
     paths.add(path);
     return snapshot == generation;
   }
+}
+
+class _UnscopedSession extends Fake implements BilibiliCookieStore {
+  @override
+  Future<String> readCookies() async => _cookie;
 }
 
 void main() {
@@ -826,6 +833,91 @@ void main() {
   );
 
   test(
+    'native course authorization forwards each exact endpoint scoped header',
+    () async {
+      final other = _lesson(ep: 7);
+      final native = _NativeSession();
+      final headers = {
+        _nav: '$_cookie; buvid3=nav-only',
+        _paid: '$_cookie; buvid3=paid-only',
+        _season: '$_cookie; buvid3=season-only',
+        _list: '$_cookie; buvid3=chapter-only',
+        _media: '$_cookie; buvid3=playview-only',
+      };
+      native.headers.addAll(headers);
+      fixture.meta['episodes'] = [other];
+      fixture.meta['episode_page'] = {'next': true, 'total': 2};
+      fixture.episodesPage = {
+        'season_id': 145,
+        'items': [other, _lesson()],
+        'page': {'next': false, 'total': 2},
+      };
+      final forwarded = <String, String>{};
+      final service = CourseCacheAccess(
+        authService: BilibiliAuthService(cookieStore: native),
+        clock: () => _now,
+        requestJson: (uri, header) {
+          forwarded[uri.path] = header;
+          return fixture.fetch(uri, _cookie);
+        },
+      );
+      final grant = await service.authorize(_video, _part, 64);
+      expect(grant.mid, 51);
+      expect(fixture.requests.map((u) => u.path), headers.keys);
+      expect(forwarded, headers);
+      expect(grant.mediaHeaders.keys, isNot(contains('Cookie')));
+      expect(
+        grant.mediaHeaders.values.join(),
+        isNot(contains('playview-only')),
+      );
+    },
+  );
+
+  for (final (label, header, generation) in [
+    ('different signed-in credential', _backupCookie, 1),
+    (
+      'different signed-in MID',
+      'SESSDATA=synthetic-session-header; DedeUserID=52',
+      1,
+    ),
+    ('no scoped credential', '', 1),
+    ('new native generation', _cookie, 2),
+  ]) {
+    test('does not send requests with $label on the metadata path', () async {
+      final native = _NativeSession()
+        ..headers[_paid] = header
+        ..generations[_paid] = generation;
+      final service = CourseCacheAccess(
+        authService: BilibiliAuthService(cookieStore: native),
+        clock: () => _now,
+        requestJson: fixture.fetch,
+      );
+      await expectLater(
+        service.authorize(_video, _part, 64),
+        throwsA(
+          isA<CourseCacheAccessException>().having(
+            (error) => error.reason,
+            'reason',
+            CourseCacheReason.sessionChanged,
+          ),
+        ),
+      );
+      expect(fixture.requests.map((u) => u.path), [_nav]);
+    });
+  }
+
+  test('unscoped platforms keep stable secure-store forwarding', () async {
+    final service = CourseCacheAccess(
+      authService: BilibiliAuthService(cookieStore: _UnscopedSession()),
+      clock: () => _now,
+      requestJson: fixture.fetch,
+    );
+    final grant = await service.authorize(_video, _part, 64);
+    expect(grant.mid, 51);
+    expect(fixture.requests.map((u) => u.path), [_nav, _paid, _season, _media]);
+  });
+
+  test(
     'native generation invalidates a grant even if cookie text stays the same',
     () async {
       final native = _NativeSession();
@@ -838,7 +930,7 @@ void main() {
       final grant = await service.authorize(_video, _part, 64);
       native.generation++;
       await expectLater(grant.checkSession(), _rejected);
-      expect(native.paths.toSet(), {_media});
+      expect(native.paths.toSet(), {_nav, _paid, _season, _media});
     },
   );
 

@@ -236,12 +236,12 @@ class CourseCacheAccess {
         if (cookie != account.header || !_isOfficial(uri)) {
           throw _sessionChanged;
         }
-        await account.validate();
+        final scopedHeader = await account.headerFor(uri.path);
         final String response;
         try {
           response = await _requestJson(
             uri,
-            cookie,
+            scopedHeader,
           ).timeout(const Duration(seconds: 30));
         } on CourseCacheAccessException {
           rethrow;
@@ -512,6 +512,7 @@ class CourseCacheAccess {
     if (expected == null) throw _sessionChanged;
     try {
       final Future<String> Function() read;
+      Future<String> Function(String)? readScopedHeader;
       if (_readCookies case final injected?) {
         read = injected;
       } else {
@@ -520,6 +521,9 @@ class CourseCacheAccess {
         final native = await _auth
             .capturePlaybackSession(_play)
             .timeout(const Duration(seconds: 10));
+        if (native.hasScopedCookieHeaders) {
+          readScopedHeader = native.headerFor;
+        }
         read = () async {
           await native.validate();
           // Non-Apple snapshots fence Dart account writes but can otherwise
@@ -530,20 +534,27 @@ class CourseCacheAccess {
         };
       }
       final header = await read().timeout(const Duration(seconds: 10));
-      final mid = _cookieMid(header);
-      if (mid == null ||
-          '$mid' != expected ||
+      final identity = _cookieIdentity(header);
+      if (identity == null ||
+          '${identity.mid}' != expected ||
           scope != CacheLifecycle.accountScope ||
           revision != CacheLifecycle.account.value) {
         throw _sessionChanged;
       }
-      return _CourseCacheSession(mid, header, read, scope, revision);
+      return _CourseCacheSession(
+        identity,
+        header,
+        read,
+        readScopedHeader,
+        scope,
+        revision,
+      );
     } catch (_) {
       throw _sessionChanged;
     }
   }
 
-  static int? _cookieMid(String header) {
+  static ({int mid, String token})? _cookieIdentity(String header) {
     if (RegExp(r'[\x00-\x1f\x7f]').hasMatch(header)) return null;
     String? session;
     String? uid;
@@ -567,7 +578,8 @@ class CourseCacheAccess {
         uid = value;
       }
     }
-    return session == null ? null : int.tryParse(uid ?? '');
+    final mid = int.tryParse(uid ?? '');
+    return session == null || mid == null ? null : (mid: mid, token: session);
   }
 
   static Future<Map> _findEpisode(
@@ -1007,22 +1019,42 @@ class CourseCacheAccess {
 
 class _CourseCacheSession {
   const _CourseCacheSession(
-    this.mid,
+    this._identity,
     this.header,
     this._read,
+    this._readScopedHeader,
     this._scope,
     this._revision,
   );
 
-  final int mid;
+  final ({int mid, String token}) _identity;
+  int get mid => _identity.mid;
   final String header;
   final Future<String> Function() _read;
+  final Future<String> Function(String)? _readScopedHeader;
   final String _scope;
   final int _revision;
 
   bool get _current =>
       _revision == CacheLifecycle.account.value &&
       _scope == CacheLifecycle.accountScope;
+
+  Future<String> headerFor(String path) async {
+    await validate();
+    final read = _readScopedHeader;
+    if (read == null) return header;
+    try {
+      final scoped = await read(path).timeout(const Duration(seconds: 10));
+      // Device cookies may differ per API path. The authenticated subject
+      // and credential must not. Never fall back to the playback header.
+      if (!_current || CourseCacheAccess._cookieIdentity(scoped) != _identity) {
+        throw CourseCacheAccess._sessionChanged;
+      }
+      return scoped;
+    } catch (_) {
+      throw CourseCacheAccess._sessionChanged;
+    }
+  }
 
   Future<void> validate() async {
     if (!_current) throw CourseCacheAccess._sessionChanged;
