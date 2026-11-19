@@ -37,20 +37,21 @@
 
 ## 3. 笔记导出与分享格式
 
-无截图时直接保存 `.md` 或 `.json`。存在可读取截图时，系统保存 `.zip`：
+Markdown 始终保存为 ZIP，解压后每个视频在同一个 `notes/` 目录内有一份 Markdown。按 BV 分组，同一视频的不同分 P 和不同时间点留在一份文件内：
 
 ```text
 focubili_notes_时间戳.zip
-├─ focubili_notes.md（或 focubili_notes.json）
-├─ README.txt
-└─ images/
-   └─ 笔记ID.png
+└─ notes/
+   ├─ BV1GJ411x7h7.md
+   ├─ BV1Q541167Qg.md
+   └─ images/（有可读取的截图时）
 ```
 
-Markdown 使用相对图片路径。JSON 根对象包含：
+Markdown 使用相对图片路径。独立导出 JSON 时，无可读取的截图则保存为 `.json`，否则保存为包含 `focubili_notes.json`、`images/` 和 `README.txt` 的 ZIP。统一导出仍在同一个资料包的 `notes/focubili_notes.json` 中保留结构化笔记（无笔记时保留原有空文件格式）。
+JSON 根对象包含：
 
 - `format: "focubili.video_notes"`
-- `version: 1`
+- `version: 2`
 - `exportedAt`
 - `notes`
 

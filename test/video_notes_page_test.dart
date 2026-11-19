@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:archive/archive.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -139,6 +140,7 @@ void main() {
     ) async {
       final service = await _createPageNoteService();
       await service.saveNote(_createPageNote());
+      LocalExportRequest? request;
       await tester.pumpWidget(
         MaterialApp(
           home: VideoNotesPage(
@@ -146,7 +148,8 @@ void main() {
             videoService: _FakeNoteVideoService(),
             localExportService: LocalExportService(
               platform: AppPlatform.macos,
-              saveDialog: (_) async {
+              saveDialog: (value) async {
+                request = value;
                 if (cancel) return null;
                 throw PlatformException(
                   code: 'permission_denied',
@@ -172,6 +175,9 @@ void main() {
         find.byKey(const Key('save-selected-video-notes')),
         findsOneWidget,
       );
+      expect(request?.extension, 'zip');
+      final archive = ZipDecoder().decodeBytes(request!.bytes);
+      expect(archive.files.map((file) => file.name), ['notes/BV1GJ411x7h7.md']);
       expect(find.textContaining('已导出'), findsNothing);
       if (!cancel) {
         expect(
