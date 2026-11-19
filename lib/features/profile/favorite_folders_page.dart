@@ -7,6 +7,7 @@ import '../../core/layout/adaptive_two_column_list.dart';
 import '../../models/account_collection.dart';
 import '../../services/bilibili_account_data_service.dart';
 import '../../services/bilibili_service.dart';
+import '../../services/cache_lifecycle.dart';
 import 'favorite_videos_page.dart';
 import 'favorite_folder_card.dart';
 
@@ -30,12 +31,47 @@ class FavoriteFoldersPage extends StatefulWidget {
   State<FavoriteFoldersPage> createState() => _FavoriteFoldersPageState();
 }
 
+/// Route-local cache keys use the same process account revision as image bytes.
+class _FavoriteFolderSnapshot {
+  int _revision = -1;
+  AccountDataPage<FavoriteFolder>? page;
+  DateTime? fetchedAt;
+  final covers = <int, ({String url, int count, DateTime readAt})>{};
+
+  void forRevision(int revision) {
+    if (_revision == revision) return;
+    _revision = revision;
+    page = null;
+    fetchedAt = null;
+    covers.clear();
+  }
+}
+
 /// 管理收藏夹列表的只读加载、失败重试和打开内容页行为。
 class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
   late final BilibiliAccountDataService _accountDataService;
   late final BilibiliService _bilibiliService;
   final TextEditingController _searchController = TextEditingController();
-  final Map<int, String> _fallbackCoverUrls = <int, String>{};
+  static const _freshList = Duration(seconds: 30);
+  static const _keepList = Duration(minutes: 5);
+  static const _freshCover = Duration(minutes: 2);
+  static final _defaultSnapshot = _FavoriteFolderSnapshot();
+  static final _injectedSnapshots = Expando<_FavoriteFolderSnapshot>(
+    'favorite folder snapshots',
+  );
+  late final _FavoriteFolderSnapshot _snapshot;
+  int _request = 0;
+
+  bool _fresh(DateTime? time, Duration duration) {
+    if (time == null) return false;
+    final age = DateTime.now().difference(time);
+    return !age.isNegative && age < duration;
+  }
+
+  bool _needsFallback(FavoriteFolder folder) =>
+      folder.isAvailable &&
+      folder.coverUrl.trim().isEmpty &&
+      folder.mediaCount > 0;
   AccountDataPage<FavoriteFolder>? _page;
   bool _isLoading = true;
   String _searchQuery = '';
@@ -47,80 +83,145 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
     _accountDataService =
         widget.accountDataService ?? BilibiliAccountDataService();
     _bilibiliService = widget.bilibiliService ?? BilibiliVideoInfoService();
-    unawaited(_loadFolders());
+    final injected = widget.accountDataService;
+    _snapshot = injected == null
+        ? _defaultSnapshot
+        : (_injectedSnapshots[injected] ??= _FavoriteFolderSnapshot());
+    final revision = CacheLifecycle.account.value;
+    _snapshot.forRevision(revision);
+    if (_fresh(_snapshot.fetchedAt, _keepList)) {
+      _page = _snapshot.page;
+      _isLoading = !_fresh(_snapshot.fetchedAt, _freshList);
+    }
+    CacheLifecycle.account.addListener(_accountChanged);
+    if (_isLoading) {
+      unawaited(_loadFolders(force: false));
+    } else if (_page case final cached?) {
+      final request = _request;
+      unawaited(
+        _backfillMissingFolderCovers(
+          cached.items,
+          () =>
+              mounted &&
+              request == _request &&
+              revision == CacheLifecycle.account.value,
+          false,
+        ),
+      );
+    }
+  }
+
+  void _accountChanged() {
+    _request++;
+    _snapshot.forRevision(CacheLifecycle.account.value);
+    setState(() {
+      _isLoading = true;
+      _page = null;
+    });
+    final request = _request;
+    scheduleMicrotask(() {
+      if (mounted && _request == request) {
+        unawaited(_loadFolders(force: false));
+      }
+    });
   }
 
   /// 释放收藏夹搜索输入控制器。
   @override
   void dispose() {
+    CacheLifecycle.account.removeListener(_accountChanged);
     _searchController.dispose();
     super.dispose();
   }
 
   /// 读取当前账号收藏夹列表；刷新失败时保留已成功显示的收藏夹。
-  Future<void> _loadFolders() async {
-    if (mounted) {
-      setState(() => _isLoading = true);
-    }
+  Future<void> _loadFolders({bool force = true}) async {
+    final int request = ++_request;
+    final int revision = CacheLifecycle.account.value;
+    bool current() =>
+        mounted &&
+        request == _request &&
+        revision == CacheLifecycle.account.value;
+
+    if (!_isLoading) setState(() => _isLoading = true);
     final AccountDataPage<FavoriteFolder> result = await _accountDataService
         .loadFavoriteFolders();
-    if (!mounted) {
-      return;
-    }
-    final bool keepPreviousList = !result.isSuccess && _page?.isSuccess == true;
+    if (!current()) return;
+
+    final sessionRejected =
+        result.status == AccountDataLoadStatus.signedOut ||
+        result.status == AccountDataLoadStatus.expired;
+    final keepPreviousList =
+        !result.isSuccess && !sessionRejected && _page?.isSuccess == true;
     setState(() {
       _isLoading = false;
-      if (result.isSuccess || !keepPreviousList) {
-        _page = result;
+      if (!keepPreviousList) _page = result;
+      if (result.isSuccess) {
+        _snapshot.page = result;
+        _snapshot.fetchedAt = DateTime.now();
+        final eligible = result.items
+            .where(_needsFallback)
+            .map((folder) => folder.mediaId)
+            .toSet();
+        _snapshot.covers.removeWhere((id, _) => !eligible.contains(id));
+      } else if (sessionRejected) {
+        _snapshot.page = null;
+        _snapshot.fetchedAt = null;
+        _snapshot.covers.clear();
       }
     });
     if (keepPreviousList) {
-      _showMessage(result.message ?? '刷新收藏夹失败，请稍后重试。');
+      if (force) _showMessage(result.message ?? '刷新收藏夹失败，请稍后重试。');
     } else if (result.isSuccess) {
-      unawaited(_backfillMissingFolderCovers(result.items));
+      unawaited(_backfillMissingFolderCovers(result.items, current, force));
     }
   }
 
-  /// 从每个无封面收藏夹的首个视频补出列表封面，并限制每批三个账号请求。
+  /// Reuse fallback URLs until expiry or a changed folder count. A transient
+  /// failure leaves the last cover visible; an authoritative empty result clears it.
   Future<void> _backfillMissingFolderCovers(
     List<FavoriteFolder> folders,
+    bool Function() current,
+    bool force,
   ) async {
-    final List<FavoriteFolder> missing = folders
-        .where(
-          (FavoriteFolder folder) =>
-              folder.coverUrl.isEmpty &&
-              folder.mediaCount > 0 &&
-              !_fallbackCoverUrls.containsKey(folder.mediaId),
-        )
+    final missing = folders
+        .where((folder) {
+          if (!_needsFallback(folder)) return false;
+          final cover = _snapshot.covers[folder.mediaId];
+          return force ||
+              cover?.count != folder.mediaCount ||
+              !_fresh(cover?.readAt, _freshCover);
+        })
         .toList(growable: false);
-    for (int offset = 0; offset < missing.length; offset += 3) {
+
+    for (int offset = 0; offset < missing.length && current(); offset += 3) {
       final int end = (offset + 3).clamp(0, missing.length).toInt();
-      final List<MapEntry<int, String>?> covers = await Future.wait(
-        missing.sublist(offset, end).map(
-          // 首视频封面查询函数只读取收藏夹第一页，不改变账号收藏数据。
-          (FavoriteFolder folder) async {
-            final AccountDataPage<FavoriteVideo> page =
-                await _accountDataService.loadFavoriteVideos(folder.mediaId);
-            if (!page.isSuccess) {
-              return null;
-            }
-            for (final FavoriteVideo video in page.items) {
-              if (video.coverUrl.isNotEmpty) {
-                return MapEntry<int, String>(folder.mediaId, video.coverUrl);
-              }
-            }
-            return null;
-          },
-        ),
+      final results = await Future.wait(
+        missing.sublist(offset, end).map((folder) async {
+          final page = await _accountDataService.loadFavoriteVideos(
+            folder.mediaId,
+          );
+          if (!page.isSuccess) return null;
+          final cover =
+              page.items
+                  .where(
+                    (video) =>
+                        video.isAvailable && video.coverUrl.trim().isNotEmpty,
+                  )
+                  .firstOrNull
+                  ?.coverUrl ??
+              '';
+          return (id: folder.mediaId, count: folder.mediaCount, url: cover);
+        }),
       );
-      if (!mounted) {
-        return;
-      }
+      if (!current()) return;
       setState(() {
-        for (final MapEntry<int, String>? cover in covers) {
-          if (cover != null) {
-            _fallbackCoverUrls[cover.key] = cover.value;
-          }
+        for (final result in results.nonNulls) {
+          _snapshot.covers[result.id] = (
+            url: result.url,
+            count: result.count,
+            readAt: DateTime.now(),
+          );
         }
       });
     }
@@ -269,7 +370,7 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
             available: folder.isAvailable,
             coverUrl: folder.coverUrl.isNotEmpty
                 ? folder.coverUrl
-                : (_fallbackCoverUrls[folder.mediaId] ?? ''),
+                : (_snapshot.covers[folder.mediaId]?.url ?? ''),
             onTap: () => _openFolder(folder),
           );
         },
