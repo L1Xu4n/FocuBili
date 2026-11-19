@@ -47,6 +47,8 @@
                 <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
             </intent-filter>
         </receiver>
+        <!-- The Flutter host has no input-qualified Android resources. Handle input
+             configuration changes in place so they do not discard the page stack. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -54,7 +56,7 @@
             android:supportsPictureInPicture="true"
             android:resizeableActivity="true"
             android:theme="@style/LaunchTheme"
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:configChanges="orientation|keyboardHidden|keyboard|navigation|touchscreen|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
             android:windowSoftInputMode="adjustResize">
             <!-- Specifies an Android theme to apply to this Activity as soon as

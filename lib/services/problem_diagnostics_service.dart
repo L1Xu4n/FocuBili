@@ -62,6 +62,20 @@ class DiagnosticDeviceInfo {
     final String release = (values['androidRelease'] as String? ?? '').trim();
     final int? apiLevel = (values['apiLevel'] as num?)?.toInt();
     final String model = (values['model'] as String? ?? '').trim();
+
+    String? eventTime(String key) {
+      final value = values[key];
+      if (value is! int || value <= 0 || value > 4102444800000) return null;
+      return formatDiagnosticDateTime(
+        DateTime.fromMillisecondsSinceEpoch(value),
+      );
+    }
+
+    final activityStart = eventTime('activityStartedAtMs');
+    final inputChange = eventTime('lastInputConfigurationChangeAtMs');
+    final activityCount = values['activityCreatesInProcess'];
+    final restoredState = values['restoredActivityState'];
+    final previousConfigChange = values['previousActivityChangedConfiguration'];
     return DiagnosticDeviceInfo(
       platformName: 'Android',
       systemVersion: release.isEmpty ? '未知' : release,
@@ -81,6 +95,13 @@ class DiagnosticDeviceInfo {
                 .toString()
                 .replaceAll(RegExp(r'[\r\n]'), ' ')
                 .substring(0, values[key].toString().length.clamp(0, 120)),
+        '当前 Android 界面创建时间': ?activityStart,
+        if (activityCount is int && activityCount > 0)
+          '本进程 Android 界面创建次数': '$activityCount',
+        if (restoredState is bool) '系统曾提供界面恢复状态': restoredState ? '是' : '否',
+        if (previousConfigChange is bool)
+          '上一界面因配置变更销毁': previousConfigChange ? '是' : '否',
+        '最近输入配置变更': ?inputChange,
       },
     );
   }
