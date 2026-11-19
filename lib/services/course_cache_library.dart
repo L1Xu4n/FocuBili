@@ -216,13 +216,15 @@ class CourseCacheFailure implements Exception {
   final CourseCacheStage? diagnosticStage;
   final CourseCacheReason? diagnosticReason;
 
-  String? get diagnosticCode {
+  CourseCacheDiagnostic? get diagnostic {
     final stage = diagnosticStage;
     final reason = diagnosticReason;
     return stage == null || reason == null
         ? null
-        : 'course-cache/v1/${stage.name}/${reason.name}';
+        : CourseCacheDiagnostic(stage, reason);
   }
+
+  String? get diagnosticCode => diagnostic?.code;
 
   @override
   String toString() => message;

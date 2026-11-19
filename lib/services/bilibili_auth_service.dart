@@ -642,6 +642,9 @@ class BilibiliPlaybackSession {
   /// Opaque request identity; never exported or persisted.
   Object get scopeKey => (_localGeneration, snapshot.generation);
 
+  /// A native playback store selects cookies against each exact request path.
+  bool get hasScopedCookieHeaders => _native != null;
+
   Future<String> headerFor(String path) async {
     await _checkLocal();
     if (_native case final native?) {

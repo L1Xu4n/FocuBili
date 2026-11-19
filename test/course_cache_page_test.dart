@@ -1,15 +1,19 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:focubili/features/profile/download_queue_view.dart';
 import 'package:focubili/features/profile/offline_videos_page.dart';
+import 'package:focubili/models/offline_download_task.dart';
 import 'package:focubili/services/cache_lifecycle.dart';
 import 'package:focubili/services/course_cache_library.dart';
 import 'package:focubili/services/offline_download_queue.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'course_cache_library_test.dart' show Access, part, video;
-import 'offline_download_queue_test.dart' show QueueLibrary;
+import 'offline_download_queue_test.dart' show QueueLibrary, fixture;
 import 'review_pr24_regression_test.dart' show ReviewOfflineLibrary;
 
 class _CourseFixtures extends CourseCacheLibrary {
@@ -54,6 +58,87 @@ CourseCacheEntry _record(DateTime now, {int mid = 51}) => CourseCacheEntry(
 
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  testWidgets(
+    'shared queue copies only a failed course task’s fixed diagnostic code',
+    (tester) async {
+      final courses = _CourseFixtures(Access());
+      final queue = OfflineDownloadQueue(
+        library: QueueLibrary(),
+        courseLibrary: courses,
+      );
+      const allowed = 'course-cache/v1/playback/drmUnknown';
+      final lesson = OfflineDownloadTask(
+        video: video,
+        part: part,
+        quality: 64,
+        createdAt: DateTime.utc(2026),
+        courseMid: 51,
+        status: DownloadTaskStatus.failed,
+        error: '当前无法确认本章能否离线缓存。',
+      ).toJson();
+      final forgedLesson = {
+        ...lesson,
+        'cid': 999,
+        'courseEpisodeId': 999,
+        'courseDiagnostic': 'course-cache/v1/playback/SESSDATA=unexpected',
+      };
+      final ordinary = fixture(171);
+      SharedPreferences.setMockInitialValues({
+        OfflineDownloadQueue.storageKey: jsonEncode([
+          {...lesson, 'courseDiagnostic': allowed},
+          forgedLesson,
+          {
+            ...OfflineDownloadTask(
+              video: ordinary,
+              part: ordinary.initialPart,
+              quality: 32,
+              createdAt: DateTime.utc(2026),
+              status: DownloadTaskStatus.failed,
+              error: '旧任务',
+            ).toJson(),
+            'courseDiagnostic': allowed,
+          },
+        ]),
+      });
+      final clipboard = <String>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            clipboard.add((call.arguments as Map)['text'] as String);
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
+      await queue.initialize();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: DownloadQueueView(queue: queue)),
+        ),
+      );
+      final copy = find.byTooltip('复制故障编号');
+      expect(queue.tasks, hasLength(3));
+      expect(
+        queue.tasks.where((task) => task.courseDiagnostic != null),
+        hasLength(1),
+      );
+      expect(copy, findsOneWidget);
+      await tester.tap(copy);
+      await tester.pumpAndSettle();
+      expect(clipboard, [allowed]);
+      expect(find.text('已复制故障编号，不含账号或下载地址。'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await queue.close();
+      courses.dispose();
+    },
+  );
 
   testWidgets(
     'mixed inventory shares search, size, delete and expiring course status',
