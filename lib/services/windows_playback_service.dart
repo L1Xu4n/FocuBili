@@ -271,7 +271,7 @@ class WindowsPlaybackService
         ? null
         : Timer(delay, () {
             if (_isCurrentSourceRequest(generation)) {
-              _handleCourseAccountChanged(message: '本次课程校验已到期，请返回课程缓存。');
+              _handleCourseAccountChanged(message: '本次课程校验已到期，请返回离线缓存。');
             }
           });
   }
@@ -293,7 +293,7 @@ class WindowsPlaybackService
       } catch (_) {
         if (_isCurrentSourceRequest(generation) &&
             _courseLibraryVersion == version) {
-          _handleCourseAccountChanged(message: '课程缓存状态已变化，请返回课程缓存。');
+          _handleCourseAccountChanged(message: '课程缓存状态已变化，请返回离线缓存。');
         }
       }
     }());
@@ -545,7 +545,7 @@ class WindowsPlaybackService
         await CourseCachePlaybackGuard.isPrivateFile(file) ||
         audioFile != null &&
             await CourseCachePlaybackGuard.isPrivateFile(audioFile)) {
-      if (!isCourse || guard == null) throw StateError('请从当前账号的「课程缓存」打开此章节。');
+      if (!isCourse || guard == null) throw StateError('请从当前账号的「离线缓存」打开此章节。');
       Future<CourseCacheEntry> verify() => guard.validate(
         video,
         part ?? video?.initialPart,

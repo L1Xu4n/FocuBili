@@ -1,6 +1,8 @@
 import 'dart:async';
 import '../../platform/app_platform.dart';
-import '../classroom/course_cache_page.dart';
+import '../../services/cache_lifecycle.dart';
+import '../../services/course_cache_library.dart';
+import '../classroom/course_cache_playback_page.dart';
 
 import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/material.dart';
@@ -22,9 +24,11 @@ class OfflineVideosPage extends StatefulWidget {
     this.offlineVideoService,
     this.downloadQueue,
     this.initialQueue = false,
+    this.includeCourses,
   });
   final OfflineDownloadQueue? downloadQueue;
   final bool initialQueue;
+  final bool? includeCourses;
 
   /// 可选的离线下载服务，未传入时使用设备默认实现。
   final OfflineVideoService? offlineVideoService;
@@ -35,7 +39,8 @@ class OfflineVideosPage extends StatefulWidget {
 }
 
 /// 管理离线视频列表、占用空间统计和单条删除行为。
-class _OfflineVideosPageState extends State<OfflineVideosPage> {
+class _OfflineVideosPageState extends State<OfflineVideosPage>
+    with WidgetsBindingObserver {
   late final OfflineVideoService _offlineVideoService;
   List<OfflineVideoDownload> _downloads = const <OfflineVideoDownload>[];
   bool _isLoading = true;
@@ -43,6 +48,17 @@ class _OfflineVideosPageState extends State<OfflineVideosPage> {
   late final OfflineDownloadQueue _queue;
   String _query = '';
   String _completedIds = '';
+  late final CourseCacheLibrary _courses;
+  late final bool _includeCourses;
+  List<CourseCacheEntry> _courseEntries = const [];
+  int _courseGeneration = 0, _courseListVersion = -1;
+  bool _courseSuspended = false;
+  String? _openingCourse;
+  Timer? _expiry;
+  final _needsRecheck = <String, DateTime?>{};
+  int get _itemCount => _downloads.length + _courseEntries.length;
+  int get _courseSize =>
+      _courseEntries.fold(0, (sum, e) => sum + e.videoBytes + e.audioBytes);
 
   /// 创建页面服务并在首次进入时读取一次本机离线列表。
   @override
@@ -50,6 +66,17 @@ class _OfflineVideosPageState extends State<OfflineVideosPage> {
     super.initState();
     _offlineVideoService = widget.offlineVideoService ?? OfflineVideoService();
     _queue = widget.downloadQueue ?? OfflineDownloadQueue.instance;
+    final platform = AppPlatformDetector.current;
+    _includeCourses =
+        widget.includeCourses ??
+        (platform == AppPlatform.android || platform == AppPlatform.windows);
+    if (_includeCourses) {
+      _courses = _queue.courses;
+      WidgetsBinding.instance.addObserver(this);
+      CacheLifecycle.account.addListener(_courseAccountChanged);
+      _courses.addListener(_courseChanged);
+      unawaited(_loadCourses());
+    }
     _queue.addListener(_queueChanged);
     unawaited(_initializeQueue());
     unawaited(_loadDownloads());
@@ -79,9 +106,183 @@ class _OfflineVideosPageState extends State<OfflineVideosPage> {
   /// Releases page listeners but deliberately leaves the shared queue running.
   @override
   void dispose() {
+    if (_includeCourses) {
+      WidgetsBinding.instance.removeObserver(this);
+      CacheLifecycle.account.removeListener(_courseAccountChanged);
+      _courses.removeListener(_courseChanged);
+    }
+    _expiry?.cancel();
     _queue.removeListener(_queueChanged);
     super.dispose();
   }
+
+  void _courseChanged() {
+    if (!_courseSuspended && _courseListVersion != _courses.listVersion) {
+      unawaited(_loadCourses());
+    }
+  }
+
+  void _hideCourses() {
+    _courseGeneration++;
+    _expiry?.cancel();
+    setState(() {
+      _courseEntries = const [];
+      _needsRecheck.clear();
+      _openingCourse = null;
+    });
+  }
+
+  void _courseAccountChanged() {
+    _hideCourses();
+    if (!_courseSuspended) unawaited(_loadCourses());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.paused) {
+      _courseSuspended = true;
+      _hideCourses();
+    } else if (state == AppLifecycleState.resumed && _courseSuspended) {
+      _courseSuspended = false;
+      unawaited(_loadCourses());
+    }
+  }
+
+  void _scheduleExpiry() {
+    _expiry?.cancel();
+    final waits =
+        _courseEntries
+            .where(_courses.isUsable)
+            .map(_courses.untilExpiry)
+            .whereType<Duration>()
+            .where((wait) => wait > Duration.zero)
+            .toList()
+          ..sort();
+    if (waits.isEmpty) return;
+    _expiry = Timer(waits.first, () {
+      if (!mounted || _courseSuspended) return;
+      setState(() {});
+      _scheduleExpiry();
+    });
+  }
+
+  Future<void> _loadCourses() async {
+    if (!_includeCourses || _courseSuspended) return;
+    final generation = ++_courseGeneration;
+    _courseListVersion = _courses.listVersion;
+    try {
+      if (await _courses.access.currentLocalMid() == null) return;
+      final rows = (await _courses.entries()).where((e) => e.hasMedia).toList();
+      if (!mounted || generation != _courseGeneration) return;
+      setState(() {
+        _courseEntries = rows;
+        _needsRecheck.removeWhere(
+          (id, checked) =>
+              rows.where((e) => e.id == id).firstOrNull?.checkedAt != checked,
+        );
+      });
+      _scheduleExpiry();
+    } catch (_) {
+      if (mounted && generation == _courseGeneration) {
+        setState(() => _courseEntries = const []);
+        _showMessage('无法读取本账号的部分离线缓存，请下拉重试。');
+      }
+    }
+  }
+
+  Future<void> _refresh() =>
+      Future.wait<void>([_loadDownloads(), _loadCourses()]);
+
+  Future<void> _openCourse(CourseCacheEntry entry) async {
+    if (_openingCourse != null) return;
+    final rev = CacheLifecycle.account.value;
+    bool valid() =>
+        mounted && !_courseSuspended && rev == CacheLifecycle.account.value;
+    setState(() => _openingCourse = entry.id);
+    try {
+      if (!_courses.isUsable(entry) || _needsRecheck.containsKey(entry.id)) {
+        final task = await _queue.enqueue(
+          entry.video,
+          part: entry.part,
+          quality: entry.quality,
+          expectedAccountRevision: rev,
+          revalidateCourse: true,
+        );
+        if (task.status == DownloadTaskStatus.failed ||
+            task.status == DownloadTaskStatus.paused) {
+          await _queue.resume(task.id);
+        }
+        if (valid()) _showMessage('已加入下载队列');
+        return;
+      }
+      final opened = await _courses.open(entry);
+      if (!mounted || !valid()) return;
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (_) =>
+              CourseCachePlaybackPage(library: _courses, entry: opened.entry),
+        ),
+      );
+    } on CourseCacheFailure catch (error) {
+      if (valid()) {
+        if (error.recheckNeeded) {
+          setState(() => _needsRecheck[entry.id] = entry.checkedAt);
+        }
+        _showMessage(error.message);
+      }
+    } catch (_) {
+      if (valid()) _showMessage('离线操作失败，请稍后重试。');
+    } finally {
+      if (valid()) setState(() => _openingCourse = null);
+    }
+  }
+
+  Future<void> _deleteCourse(CourseCacheEntry entry) async {
+    final rev = CacheLifecycle.account.value;
+    if (!await _confirmDelete(entry.courseTitle) ||
+        !mounted ||
+        _courseSuspended ||
+        rev != CacheLifecycle.account.value) {
+      return;
+    }
+    try {
+      await _courses.remove(entry);
+      await _loadCourses();
+      await _queue.reconcileCompleted();
+      if (mounted && rev == CacheLifecycle.account.value) {
+        _showMessage('已删除离线缓存');
+      }
+    } on CourseCacheFailure catch (error) {
+      if (mounted && rev == CacheLifecycle.account.value) {
+        _showMessage(error.message);
+      }
+    } catch (_) {
+      if (mounted && rev == CacheLifecycle.account.value) {
+        _showMessage('删除失败，请稍后重试。');
+      }
+    }
+  }
+
+  Future<bool> _confirmDelete(String title) async =>
+      await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('删除离线视频'),
+          content: Text('将删除“$title”的离线缓存，且无法恢复。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('删除'),
+            ),
+          ],
+        ),
+      ) ==
+      true;
 
   /// 读取离线列表并统计占用空间，失败时保留上一次成功显示的数据。
   Future<void> _loadDownloads() async {
@@ -123,26 +324,7 @@ class _OfflineVideosPageState extends State<OfflineVideosPage> {
   /// 确认后删除一条离线视频。
   Future<void> _deleteDownload(OfflineVideoDownload download) async {
     try {
-      final bool? confirmed = await showDialog<bool>(
-        context: context,
-        builder: (BuildContext dialogContext) => AlertDialog(
-          title: const Text('删除离线视频'),
-          content: Text('将删除“${download.title}”的离线缓存，且无法恢复。'),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('删除'),
-            ),
-          ],
-        ),
-      );
-      if (confirmed != true || !mounted) {
-        return;
-      }
+      if (!await _confirmDelete(download.title) || !mounted) return;
       final bool deleted = await _offlineVideoService.delete(
         download.bvid,
         cid: download.cid,
@@ -168,14 +350,15 @@ class _OfflineVideosPageState extends State<OfflineVideosPage> {
   /// 确认后清空全部离线缓存。
   Future<void> _clearAll() async {
     try {
-      if (_downloads.isEmpty) {
-        return;
-      }
+      if (_itemCount == 0) return;
+      final revision = CacheLifecycle.account.value;
+      final courses = List<CourseCacheEntry>.of(_courseEntries);
+      final hadVideos = _downloads.isNotEmpty;
       final bool? confirmed = await showDialog<bool>(
         context: context,
         builder: (BuildContext dialogContext) => AlertDialog(
           title: const Text('清空离线缓存'),
-          content: Text('将删除全部 ${_downloads.length} 条离线视频，且无法恢复。'),
+          content: Text('将删除当前列表的 $_itemCount 条离线缓存，且无法恢复。'),
           actions: <Widget>[
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(false),
@@ -191,7 +374,23 @@ class _OfflineVideosPageState extends State<OfflineVideosPage> {
       if (confirmed != true || !mounted) {
         return;
       }
-      final bool cleared = await _offlineVideoService.clearAll();
+      if (courses.isNotEmpty &&
+          (revision != CacheLifecycle.account.value || _courseSuspended)) {
+        return;
+      }
+      if (courses.isNotEmpty && _courses.busy) {
+        _showMessage('下载还在进行，请暂停后再清空。');
+        return;
+      }
+      final bool cleared = !hadVideos || await _offlineVideoService.clearAll();
+      if (cleared) {
+        for (final course in courses) {
+          if (revision != CacheLifecycle.account.value || _courseSuspended) {
+            break;
+          }
+          await _courses.remove(course);
+        }
+      }
       await _queue.reconcileCompleted();
       if (!mounted) {
         return;
@@ -200,8 +399,10 @@ class _OfflineVideosPageState extends State<OfflineVideosPage> {
         _showMessage('清空失败，请稍后重试。');
         return;
       }
-      await _loadDownloads();
-      _showMessage('已清空离线缓存');
+      await _refresh();
+      if (mounted && revision == CacheLifecycle.account.value) {
+        _showMessage('已清空离线缓存');
+      }
     } catch (_) {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -234,19 +435,19 @@ class _OfflineVideosPageState extends State<OfflineVideosPage> {
   }
 
   /// 创建封面缩略图，失败时显示固定占位图标。
-  Widget _buildThumbnail(OfflineVideoDownload download) {
+  Widget _buildThumbnail(String coverUrl) {
     return SizedBox(
       width: 112,
       height: 70,
       child: ClipRRect(
         borderRadius: BorderRadius.circular(10),
-        child: download.coverUrl.isEmpty
+        child: coverUrl.isEmpty
             ? ColoredBox(
                 color: Theme.of(context).colorScheme.surfaceContainerHighest,
                 child: const Icon(Icons.offline_pin_rounded),
               )
             : AppNetworkImage(
-                imageUrl: download.coverUrl,
+                imageUrl: coverUrl,
                 httpHeaders: const <String, String>{
                   'Referer': 'https://www.bilibili.com/',
                 },
@@ -268,54 +469,79 @@ class _OfflineVideosPageState extends State<OfflineVideosPage> {
   }
 
   /// 创建单个离线视频卡片，点击进入播放器并提供删除入口。
-  Widget _buildDownloadCard(OfflineVideoDownload download) {
+  Widget _buildDownloadCard(OfflineVideoDownload video) => _buildCacheCard(
+    id: '${video.bvid}-${video.cid}',
+    title: video.title,
+    subtitle: video.ownerName,
+    detail: video.partLabel,
+    summary: '${video.qualityLabel} · ${_formatBytes(video.sizeBytes)}',
+    coverUrl: video.coverUrl,
+    open: () => unawaited(_playDownload(video)),
+    remove: () => unawaited(_deleteDownload(video)),
+  );
+
+  Widget _buildCourseCard(CourseCacheEntry entry) => _buildCacheCard(
+    id: 'course-${entry.id}',
+    title: entry.courseTitle,
+    subtitle: '课程',
+    detail: entry.chapterTitle,
+    summary: _courses.isUsable(entry) && !_needsRecheck.containsKey(entry.id)
+        ? _formatBytes(entry.videoBytes + entry.audioBytes)
+        : '需联网复核',
+    coverUrl: '',
+    open: _openingCourse == null ? () => unawaited(_openCourse(entry)) : null,
+    remove: () => unawaited(_deleteCourse(entry)),
+  );
+
+  Widget _buildCacheCard({
+    required String id,
+    required String title,
+    required String subtitle,
+    required String detail,
+    required String summary,
+    required String coverUrl,
+    required VoidCallback? open,
+    required VoidCallback remove,
+  }) {
     return Card(
-      key: Key('offline-video-${download.bvid}-${download.cid}'),
+      key: Key('offline-video-$id'),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
-        onTap: () => _playDownload(download),
+        onTap: open,
         child: Padding(
           padding: const EdgeInsets.all(10),
           child: Row(
             children: <Widget>[
-              _buildThumbnail(download),
+              _buildThumbnail(coverUrl),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
                     Text(
-                      download.title,
+                      title,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontWeight: FontWeight.w700),
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      download.ownerName,
+                      subtitle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                     const SizedBox(height: 2),
-                    Text(
-                      download.partLabel,
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                    Text(
-                      '${download.qualityLabel} · ${_formatBytes(download.sizeBytes)}',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
+                    Text(detail, style: Theme.of(context).textTheme.bodySmall),
+                    Text(summary, style: Theme.of(context).textTheme.bodySmall),
                   ],
                 ),
               ),
               IconButton(
-                key: Key(
-                  'delete-offline-video-${download.bvid}-${download.cid}',
-                ),
+                key: Key('delete-offline-video-$id'),
                 tooltip: '删除',
                 icon: const Icon(Icons.delete_outline_rounded),
-                onPressed: () => unawaited(_deleteDownload(download)),
+                onPressed: remove,
               ),
             ],
           ),
@@ -329,7 +555,7 @@ class _OfflineVideosPageState extends State<OfflineVideosPage> {
     if (_isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
-    if (_downloads.isEmpty) {
+    if (_itemCount == 0) {
       return const Center(
         key: Key('offline-videos-empty'),
         child: SingleChildScrollView(
@@ -357,17 +583,28 @@ class _OfflineVideosPageState extends State<OfflineVideosPage> {
           ),
         )
         .toList();
-    if (visible.isEmpty) return const Center(child: Text('没有匹配的离线视频'));
+    final visibleCourses = _courseEntries
+        .where(
+          (e) => '${e.courseTitle} ${e.chapterTitle}'.toLowerCase().contains(
+            needle,
+          ),
+        )
+        .toList();
+    if (visible.isEmpty && visibleCourses.isEmpty) {
+      return const Center(child: Text('没有匹配的离线视频'));
+    }
     return RefreshIndicator(
-      onRefresh: _loadDownloads,
+      onRefresh: _refresh,
       child: AdaptiveTwoColumnList(
         key: const Key('offline-videos-list'),
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-        itemCount: visible.length,
+        itemCount: visible.length + visibleCourses.length,
         mainAxisSpacing: 8,
         itemBuilder: (BuildContext context, int index) {
-          return _buildDownloadCard(visible[index]);
+          return index < visible.length
+              ? _buildDownloadCard(visible[index])
+              : _buildCourseCard(visibleCourses[index - visible.length]);
         },
       ),
     );
@@ -389,15 +626,7 @@ class _OfflineVideosPageState extends State<OfflineVideosPage> {
             ],
           ),
           actions: <Widget>[
-            if (CourseCachePage.supported(AppPlatformDetector.current))
-              IconButton(
-                tooltip: '课程缓存',
-                icon: const Icon(Icons.school_outlined),
-                onPressed: () => Navigator.of(context).push<void>(
-                  MaterialPageRoute(builder: (_) => const CourseCachePage()),
-                ),
-              ),
-            if (_downloads.isNotEmpty)
+            if (_itemCount != 0)
               IconButton(
                 key: const Key('clear-offline-videos'),
                 tooltip: '清空全部',
@@ -481,7 +710,7 @@ class _OfflineVideosPageState extends State<OfflineVideosPage> {
             const SizedBox(width: 8),
             Flexible(
               child: Text(
-                '共 ${_downloads.length} 条 · ${_formatBytes(_totalSizeBytes)}',
+                '共 $_itemCount 条 · ${_formatBytes(_totalSizeBytes + _courseSize)}',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ),
