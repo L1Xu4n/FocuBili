@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -84,7 +85,7 @@ void main() {
     var fail = false;
     final api = _RecordingAccountDataApi((endpoint) async {
       if (endpoint.path == '/x/relation/tags') {
-        return _ok('{"code":0,"data":[{"tagid":12,"name":"学习"}]}');
+        return _ok('{"code":0,"data":[{"tagid":12,"name":"学习","count":1}]}');
       }
       expect(endpoint.path, '/x/relation/tag');
       expect(endpoint.queryParameters['mid'], '42');
@@ -100,8 +101,111 @@ void main() {
     fail = true;
     await expectLater(
       _service(session, api).loadFollowingGroups(),
-      throwsStateError,
+      throwsA(
+        isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          contains('登录已过期'),
+        ),
+      ),
     );
+  });
+
+  test('空分组和 null 末页不会中断其他组，分组成员使用每页 20 个', () async {
+    final session = _FakeSessionProvider(state: _activeSession());
+    final api = _RecordingAccountDataApi((endpoint) async {
+      if (endpoint.path == '/x/relation/tags') {
+        return _ok('''
+          {"code":0,"data":[
+            {"tagid":-10,"name":"特别关注","count":0},
+            {"tagid":0,"name":"默认分组","count":99},
+            {"tagid":-20,"name":"全部关注","count":130},
+            {"tagid":12,"name":"学习","count":27},
+            {"tagid":13,"name":"没有总数"},
+            {"tagid":14,"name":"空分组","count":0}
+          ]}
+        ''');
+      }
+      expect(endpoint.path, '/x/relation/tag');
+      expect(endpoint.queryParameters['ps'], '20');
+      final id = endpoint.queryParameters['tagid'];
+      final page = int.parse(endpoint.queryParameters['pn']!);
+      if (id == '13') {
+        return _ok(
+          page == 1
+              ? '{"code":0,"data":[{"mid":101,"uname":"UP"}]}'
+              : '{"code":0,"data":null}',
+        );
+      }
+      expect(id, '12');
+      final ids = page == 1
+          ? List.generate(20, (index) => index + 1)
+          : List.generate(7, (index) => index + 21);
+      return _ok(
+        jsonEncode({
+          'code': 0,
+          'data': [
+            for (final uid in ids) {'mid': uid, 'uname': 'UP $uid'},
+          ],
+        }),
+      );
+    });
+    final snapshot = await _service(session, api).loadFollowingGroups();
+
+    expect(snapshot.groups.map((g) => g.remoteId), [-10, 12, 13, 14]);
+    expect(snapshot.groups.map((g) => g.members.length), [0, 27, 1, 0]);
+    expect(snapshot.groups[1].members.last.mid, 27);
+    expect(api.endpoints.skip(1).map((u) => u.queryParameters['pn']), [
+      '1',
+      '2',
+      '1',
+      '2',
+    ]);
+  });
+
+  test('总数未达到时拒绝提前结束或重复分页', () async {
+    final session = _FakeSessionProvider(state: _activeSession());
+    for (final secondPage in [
+      '{"code":0,"data":null}',
+      '{"code":0,"data":[]}',
+      '{"code":0,"data":[{"mid":9}]}',
+      '{"code":0}',
+    ]) {
+      final api = _RecordingAccountDataApi((endpoint) async {
+        if (endpoint.path == '/x/relation/tags') {
+          return _ok('{"code":0,"data":[{"tagid":12,"count":2}]}');
+        }
+        return _ok(
+          endpoint.queryParameters['pn'] == '1'
+              ? '{"code":0,"data":[{"mid":9}]}'
+              : secondPage,
+        );
+      });
+      await expectLater(
+        _service(session, api).loadFollowingGroups(),
+        throwsStateError,
+      );
+      expect(api.endpoints, hasLength(3));
+    }
+  });
+
+  test('完成远端读取后再次检查账号，不返回其他账号的分组', () async {
+    final session = _FakeSessionProvider(state: _activeSession());
+    final api = _RecordingAccountDataApi((endpoint) async {
+      session.state = _activeSession(mid: 43);
+      return _ok('{"code":0,"data":[{"tagid":12,"count":0}]}');
+    });
+    await expectLater(
+      _service(session, api).loadFollowingGroups(),
+      throwsA(
+        isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          contains('账号已变化'),
+        ),
+      ),
+    );
+    expect(session.loadCalls, 2);
   });
 
   /// 验证未登录时服务不会读取 Cookie 或执行收藏夹网络请求。
