@@ -16,6 +16,7 @@ import 'package:focubili/app.dart';
 import 'package:focubili/features/focus/focus_timer_controller.dart';
 import 'package:focubili/features/player/player_page.dart';
 import 'package:focubili/features/player/widgets/player_subtitle_caption.dart';
+import 'package:focubili/features/player/widgets/player_subtitle_preview.dart';
 import 'package:focubili/features/player/widgets/player_timeline.dart';
 import 'package:focubili/features/player/widgets/player_action_feedback.dart';
 import 'package:focubili/features/profile/login_page.dart';
@@ -6666,6 +6667,8 @@ void main() {
   /// 验证字幕可选择、同分 P 列表稳定复用，字号实时更新且保存到本机。
   testWidgets('播放器可以选择并显示字幕', (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues({});
+    final notes = VideoNoteService();
+    await notes.saveNote(_flagNote('字幕预览旗标', 42));
     await const PlaybackPreferencesService().saveControlScale(2);
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -6700,6 +6703,7 @@ void main() {
           video: VideoPreview.placeholder(),
           playbackService: playback,
           playerOverlayService: overlayService,
+          videoNoteService: notes,
         ),
       ),
     );
@@ -6724,6 +6728,17 @@ void main() {
     expect(overlayService.subtitleTrackRequests, hasLength(1));
     await tester.tap(find.byTooltip('调整字幕外观'));
     await tester.pumpAndSettle();
+    PlayerSubtitlePreview preview() => tester.widget<PlayerSubtitlePreview>(
+      find.byType(PlayerSubtitlePreview),
+    );
+    final strip = tester.getSize(
+      find.byKey(const Key('player-timeline-annotations')),
+    );
+    expect(strip.height, greaterThan(0));
+    expect(preview().viewport.bottomOverlayHeight, strip.height + 4);
+    await notes.deleteNote('字幕预览旗标');
+    await tester.pumpAndSettle();
+    expect(preview().viewport.bottomOverlayHeight, 0);
     final slider = tester.widget<Slider>(
       find.byKey(const Key('subtitle-font-size-slider')),
     );

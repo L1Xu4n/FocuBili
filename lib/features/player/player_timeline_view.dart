@@ -21,8 +21,8 @@ extension _PlayerTimelineView on _PlayerPageState {
     if (!showChapters && !showFlags && range == null) {
       return const SizedBox.shrink();
     }
-    return KeyedSubtree(
-      key: _timelineAnnotationsKey,
+    return _MeasureAnnotationHeight(
+      onLayout: (height) => _subtitleAnnotationHeight = height,
       child: Column(
         key: const Key('player-timeline-annotations'),
         mainAxisSize: MainAxisSize.min,
@@ -86,5 +86,39 @@ extension _PlayerTimelineView on _PlayerPageState {
       ),
       child: _buildTimelineAnnotations(collapsed: true),
     );
+  }
+}
+
+/// Measurement is passive: expanded and collapsed strips stay in their own
+/// element trees when a note is opened or player controls fade.
+class _MeasureAnnotationHeight extends SingleChildRenderObjectWidget {
+  const _MeasureAnnotationHeight({
+    required this.onLayout,
+    required super.child,
+  });
+  final ValueChanged<double> onLayout;
+
+  @override
+  _RenderAnnotationHeight createRenderObject(BuildContext context) =>
+      _RenderAnnotationHeight(onLayout);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderAnnotationHeight renderObject,
+  ) {
+    renderObject.onLayout = onLayout;
+  }
+}
+
+class _RenderAnnotationHeight extends RenderProxyBox {
+  _RenderAnnotationHeight(this.onLayout);
+  ValueChanged<double> onLayout;
+
+  @override
+  void performLayout() {
+    super.performLayout();
+    // Record only a number; notifications to the sheet happen after layout.
+    onLayout(size.height);
   }
 }

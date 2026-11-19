@@ -21,8 +21,9 @@ mixin _PlayerOverlayCoordinator
   bool _danmakuPersistenceWarningShown = false;
   SubtitleTrackLoadResult? _subtitleTrackResult;
   _VideoFitMode get _videoFitMode;
-  final _subtitleSurfaceKey = GlobalKey();
-  final _timelineAnnotationsKey = GlobalKey();
+  Size _subtitleSurfaceSize = Size.zero;
+  EdgeInsets _subtitleSurfaceInsets = EdgeInsets.zero;
+  double? _subtitleAnnotationHeight;
   final _subtitlePreviewViewport = ValueNotifier<SubtitlePreviewViewport?>(
     null,
   );
@@ -31,20 +32,12 @@ mixin _PlayerOverlayCoordinator
   // The preview models watching with controls dismissed, while retaining any
   // persistent A/B, chapter, or note annotation strip.
   void _measureSubtitlePreviewViewport() {
-    final surfaceContext = _subtitleSurfaceKey.currentContext;
-    final box = surfaceContext?.findRenderObject();
-    if (surfaceContext == null ||
-        box is! RenderBox ||
-        !box.hasSize ||
-        !box.size.isFinite ||
-        box.size.isEmpty) {
-      return;
-    }
-    final annotations = _timelineAnnotationsKey.currentContext
-        ?.findRenderObject();
-    final edges = MediaQuery.paddingOf(surfaceContext);
+    final size = _subtitleSurfaceSize;
+    if (!size.isFinite || size.isEmpty) return;
+    final edges = _subtitleSurfaceInsets;
+    final annotations = _subtitleAnnotationHeight;
     _subtitlePreviewViewport.value = SubtitlePreviewViewport(
-      size: box.size,
+      size: size,
       edgeInsets: edges,
       videoAspectRatio: _playbackSnapshot.videoAspectRatio > 0
           ? _playbackSnapshot.videoAspectRatio
@@ -54,9 +47,8 @@ mixin _PlayerOverlayCoordinator
         _VideoFitMode.cover => BoxFit.cover,
         _VideoFitMode.stretch => BoxFit.fill,
       },
-      bottomOverlayHeight: annotations is RenderBox && annotations.hasSize
-          ? annotations.size.height +
-                _collapsedTimelineBottomPadding(_fullscreen, edges)
+      bottomOverlayHeight: annotations != null
+          ? annotations + _collapsedTimelineBottomPadding(_fullscreen, edges)
           : 0,
     );
   }

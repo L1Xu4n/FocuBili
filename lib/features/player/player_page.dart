@@ -13,7 +13,7 @@ import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show ScrollCacheExtent;
+import 'package:flutter/rendering.dart' show RenderProxyBox, ScrollCacheExtent;
 import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 import 'widgets/player_tap_gesture.dart';

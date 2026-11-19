@@ -267,6 +267,15 @@ extension _PlayerPageView on _PlayerPageState {
             ? 16 + 48 * controlSize.scale
             : 16.0;
         final edgeInsets = MediaQuery.paddingOf(context);
+        // Capture the actual pane without moving its feedback/semantics subtree
+        // between the collapsing player and the notes workspace.
+        _subtitleSurfaceSize = constraints.biggest;
+        _subtitleSurfaceInsets = edgeInsets;
+        if (!_showTimelineChapters &&
+            !_showTimelineFlags &&
+            _abRepeatRange == null) {
+          _subtitleAnnotationHeight = null;
+        }
         if (_subtitleSelectorOpen) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted && _subtitleSelectorOpen) {
@@ -339,7 +348,6 @@ extension _PlayerPageView on _PlayerPageState {
                   ),
                 ),
                 PlayerFeedbackViewport(
-                  key: _subtitleSurfaceKey,
                   controlsVisible:
                       _showControls && !_controlsLocked && !inPictureInPicture,
                   edgeInsets: edgeInsets,
