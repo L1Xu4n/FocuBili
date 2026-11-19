@@ -554,6 +554,32 @@ void main() {
     expect(t.takeException(), isNull);
   });
 
+  testWidgets('批量收藏长列表可一屏看到更多项，滚动不移动底部按钮', (t) async {
+    final x = _Fixture(local: _MemoryFavorites());
+    for (var index = 1; index <= 14; index++) {
+      await x.local.createFolder('收藏夹 $index');
+    }
+    await x.host(t, page: false);
+    await t.tap(find.text('保存两支'));
+    await t.pumpAndSettle();
+
+    final list = find.byKey(const Key('batch-favorite-folder-list'));
+    expect(t.getSize(list).height, greaterThan(450));
+    expect(find.text('收藏夹 8').hitTestable(), findsOneWidget);
+    final submit = find.widgetWithText(FilledButton, '加入收藏夹');
+    final initialPosition = t.getCenter(submit);
+    expect(submit.hitTestable(), findsOneWidget);
+
+    await t.drag(list, const Offset(0, -720));
+    await t.pumpAndSettle();
+    expect(find.text('收藏夹 14').hitTestable(), findsOneWidget);
+    await t.tap(find.text('收藏夹 14'));
+    await t.pumpAndSettle();
+    expect(t.widget<FilledButton>(submit).onPressed, isNotNull);
+    expect(t.getCenter(submit), initialPosition);
+    expect(t.takeException(), isNull);
+  });
+
   testWidgets('B站多选按视频与收藏夹跟踪，重试不追加已完成组合', (t) async {
     final x = _Fixture();
     x.remote.existing.add((1001, 1));
