@@ -19,6 +19,7 @@ import '../../models/watch_history_entry.dart';
 import '../../services/bilibili_public_content_service.dart';
 import '../../services/bilibili_interaction_service.dart';
 import '../../services/bilibili_service.dart';
+import '../../services/cache_lifecycle.dart';
 import '../../services/learning_list_service.dart';
 import '../../services/subscription_service.dart';
 import '../common/discovery_blocklist.dart';
@@ -67,12 +68,57 @@ class UserProfilePage extends StatefulWidget {
 /// 标识用户主页下方三类公开内容。
 enum _CreatorTab { videos, articles, collections }
 
+/// Retain only the avatar URL. AppNetworkImage owns the shared image bytes.
+class _CreatorAvatarSnapshot {
+  static const _lifetime = Duration(minutes: 10);
+  static const _maximumEntries = 120;
+
+  final _entries = <int, (String, DateTime, int)>{};
+  int _nextRequest = 0;
+  int? _accountRevision;
+
+  void _checkAccount() {
+    final revision = CacheLifecycle.account.value;
+    if (_accountRevision == revision) return;
+    _accountRevision = revision;
+    _entries.clear();
+  }
+
+  String read(int mid) {
+    _checkAccount();
+    final entry = _entries.remove(mid);
+    if (entry == null || !DateTime.now().isBefore(entry.$2.add(_lifetime))) {
+      return '';
+    }
+    _entries[mid] = entry;
+    return entry.$1;
+  }
+
+  int beginRequest() => ++_nextRequest;
+
+  void write(int mid, String url, int request) {
+    _checkAccount();
+    if ((_entries[mid]?.$3 ?? 0) > request) return;
+    _entries.remove(mid);
+    _entries[mid] = (url, DateTime.now(), request);
+    if (_entries.length > _maximumEntries) {
+      _entries.remove(_entries.keys.first);
+    }
+  }
+}
+
 /// 管理用户主页资料读取、标签切换、分页以及内容导航。
 class _UserProfilePageState extends State<UserProfilePage>
     with
         SingleTickerProviderStateMixin,
         DiscoveryBlocklistState<UserProfilePage> {
   static const int _maximumPartCountLookupConcurrency = 2;
+  static final _defaultAvatarSnapshots = _CreatorAvatarSnapshot();
+  static final _injectedAvatarSnapshots = Expando<_CreatorAvatarSnapshot>();
+  late final _CreatorAvatarSnapshot _avatarSnapshots;
+  late final int _initialAccountRevision;
+  int _profileGeneration = 0;
+  String _cachedAvatarUrl = '';
   late final BilibiliPublicContentService _publicContentService;
   late final BilibiliService _videoService;
   late final LearningListService _learningListService;
@@ -119,6 +165,13 @@ class _UserProfilePageState extends State<UserProfilePage>
     super.initState();
     _publicContentService =
         widget.publicContentService ?? BilibiliHttpPublicContentService();
+    _avatarSnapshots = widget.publicContentService == null
+        ? _defaultAvatarSnapshots
+        : (_injectedAvatarSnapshots[_publicContentService] ??=
+              _CreatorAvatarSnapshot());
+    _initialAccountRevision = CacheLifecycle.account.value;
+    _cachedAvatarUrl = _avatarSnapshots.read(widget.mid);
+    CacheLifecycle.account.addListener(_profileAccountChanged);
     _videoService = widget.videoService ?? BilibiliVideoInfoService();
     _learningListService = widget.learningListService ?? LearningListService();
     _watchHistoryService = widget.watchHistoryService ?? WatchHistoryService();
@@ -205,9 +258,37 @@ class _UserProfilePageState extends State<UserProfilePage>
     });
   }
 
+  String get _profileAvatarUrl {
+    final fresh = _profile?.mid == widget.mid ? _profile?.avatarUrl ?? '' : '';
+    if (fresh.isNotEmpty) return fresh;
+    if (_cachedAvatarUrl.isNotEmpty) return _cachedAvatarUrl;
+    return CacheLifecycle.account.value == _initialAccountRevision
+        ? widget.initialAvatarUrl
+        : '';
+  }
+
+  void _profileAccountChanged() {
+    if (!mounted) return;
+    setState(() {
+      _profile = null;
+      _cachedAvatarUrl = _avatarSnapshots.read(widget.mid);
+    });
+    unawaited(_loadProfile());
+  }
+
+  @override
+  void didUpdateWidget(covariant UserProfilePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.mid == widget.mid) return;
+    _profile = null;
+    _cachedAvatarUrl = _avatarSnapshots.read(widget.mid);
+    unawaited(_loadProfile());
+  }
+
   /// 移除监听并释放标签与滚动控制器。
   @override
   void dispose() {
+    CacheLifecycle.account.removeListener(_profileAccountChanged);
     _tabController
       ..removeListener(_handleTabChanged)
       ..dispose();
@@ -244,29 +325,37 @@ class _UserProfilePageState extends State<UserProfilePage>
 
   /// 读取 UP 主公开名片；失败时保留从视频页带来的昵称和头像。
   Future<void> _loadProfile() async {
-    if (mounted) {
-      setState(() {
-        _loadingProfile = true;
-        _profileError = null;
-      });
-    }
+    final generation = ++_profileGeneration;
+    final avatarRequest = _avatarSnapshots.beginRequest();
+    final accountRevision = CacheLifecycle.account.value;
+    final mid = widget.mid;
+    bool isCurrent() =>
+        mounted &&
+        generation == _profileGeneration &&
+        accountRevision == CacheLifecycle.account.value &&
+        mid == widget.mid;
+    setState(() {
+      _loadingProfile = true;
+      _profileError = null;
+    });
     try {
       final CreatorProfile profile = await _publicContentService.loadProfile(
-        widget.mid,
+        mid,
       );
-      if (!mounted) {
-        return;
+      if (!isCurrent()) return;
+      if (profile.mid != mid) {
+        throw const BilibiliLookupException('UP 主名片与请求不匹配。');
       }
+      _avatarSnapshots.write(mid, profile.avatarUrl, avatarRequest);
       setState(() {
         final oldName = _profile?.name ?? widget.initialName;
         _profile = profile;
+        _cachedAvatarUrl = profile.avatarUrl;
         if (oldName != profile.name) _reconcileDiscoverySelection();
         _loadingProfile = false;
       });
     } catch (error) {
-      if (!mounted) {
-        return;
-      }
+      if (!isCurrent()) return;
       setState(() {
         _profileError = error.toString();
         _loadingProfile = false;
@@ -898,7 +987,7 @@ class _UserProfilePageState extends State<UserProfilePage>
       kind: SubscriptionKind.creator,
       mid: widget.mid,
       name: _profile?.name ?? widget.initialName,
-      imageUrl: _profile?.avatarUrl ?? widget.initialAvatarUrl,
+      imageUrl: _profileAvatarUrl,
       token: DateTime.now().microsecondsSinceEpoch.toString(),
     ),
   );
@@ -1021,9 +1110,7 @@ class _UserProfilePageState extends State<UserProfilePage>
     final String name = profile?.name.isNotEmpty == true
         ? profile!.name
         : (widget.initialName.isEmpty ? 'UP 主主页' : widget.initialName);
-    final String avatarUrl = profile?.avatarUrl.isNotEmpty == true
-        ? profile!.avatarUrl
-        : widget.initialAvatarUrl;
+    final String avatarUrl = _profileAvatarUrl;
     final String officialDescription =
         profile?.officialDescription.isNotEmpty == true
         ? profile!.officialDescription
