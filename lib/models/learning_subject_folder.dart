@@ -15,13 +15,16 @@ class LearningSubjectFolder {
   final String iconId;
   final String colorId;
 
-  LearningSubjectFolder rename(String name, {String? iconId, String? colorId}) =>
-      LearningSubjectFolder(
-        id: id,
-        name: name,
-        iconId: iconId ?? this.iconId,
-        colorId: colorId ?? this.colorId,
-      );
+  LearningSubjectFolder rename(
+    String name, {
+    String? iconId,
+    String? colorId,
+  }) => LearningSubjectFolder(
+    id: id,
+    name: name,
+    iconId: iconId ?? this.iconId,
+    colorId: colorId ?? this.colorId,
+  );
 
   Map<String, Object> toJson() => {
     'id': id,

@@ -48,15 +48,17 @@ const learningFolderColors = <LearningFolderColor>[
   LearningFolderColor('orange', '橙色', Color(0xffff9366)),
 ];
 
-LearningFolderIcon learningFolderIcon(String id) => learningFolderIcons.firstWhere(
-  (item) => item.id == id,
-  orElse: () => learningFolderIcons.first,
-);
+LearningFolderIcon learningFolderIcon(String id) =>
+    learningFolderIcons.firstWhere(
+      (item) => item.id == id,
+      orElse: () => learningFolderIcons.first,
+    );
 
-LearningFolderColor learningFolderColor(String id) => learningFolderColors.firstWhere(
-  (item) => item.id == id,
-  orElse: () => learningFolderColors.first,
-);
+LearningFolderColor learningFolderColor(String id) =>
+    learningFolderColors.firstWhere(
+      (item) => item.id == id,
+      orElse: () => learningFolderColors.first,
+    );
 
 /// Only the small glyph backing changes with the effective app theme.
 class LearningFolderBadge extends StatelessWidget {
@@ -75,7 +77,11 @@ class LearningFolderBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final color = learningFolderColor(colorId).color;
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final background = Color.lerp(dark ? Colors.black : Colors.white, color, 0.18)!;
+    final background = Color.lerp(
+      dark ? Colors.black : Colors.white,
+      color,
+      0.18,
+    )!;
     final foreground = dark ? color : Color.lerp(Colors.black, color, 0.52)!;
     return Container(
       width: size,
@@ -85,13 +91,22 @@ class LearningFolderBadge extends StatelessWidget {
         color: background,
         borderRadius: BorderRadius.circular(size * 0.27),
       ),
-      child: LearningFolderGlyph(iconId: iconId, size: size * 0.56, color: foreground),
+      child: LearningFolderGlyph(
+        iconId: iconId,
+        size: size * 0.56,
+        color: foreground,
+      ),
     );
   }
 }
 
 class LearningFolderGlyph extends StatelessWidget {
-  const LearningFolderGlyph({super.key, required this.iconId, required this.size, this.color});
+  const LearningFolderGlyph({
+    super.key,
+    required this.iconId,
+    required this.size,
+    this.color,
+  });
   final String iconId;
   final double size;
   final Color? color;
@@ -101,7 +116,10 @@ class LearningFolderGlyph extends StatelessWidget {
     if (iconId == 'sigma' || iconId == 'atom') {
       return CustomPaint(
         size: Size.square(size),
-        painter: _LearningGlyphPainter(iconId, color ?? IconTheme.of(context).color ?? Colors.black),
+        painter: _LearningGlyphPainter(
+          iconId,
+          color ?? IconTheme.of(context).color ?? Colors.black,
+        ),
       );
     }
     return Icon(learningFolderIcon(iconId).icon, size: size, color: color);
@@ -136,14 +154,22 @@ class _LearningGlyphPainter extends CustomPainter {
       for (var i = 0; i < 3; i++) {
         canvas.save();
         canvas.rotate(i * 1.0471975512);
-        canvas.drawOval(Rect.fromCenter(center: Offset.zero, width: w * .85, height: w * .3), paint);
+        canvas.drawOval(
+          Rect.fromCenter(center: Offset.zero, width: w * .85, height: w * .3),
+          paint,
+        );
         canvas.restore();
       }
-      canvas.drawCircle(Offset.zero, w * .07, paint..style = PaintingStyle.fill);
+      canvas.drawCircle(
+        Offset.zero,
+        w * .07,
+        paint..style = PaintingStyle.fill,
+      );
       canvas.restore();
     }
   }
 
   @override
-  bool shouldRepaint(_LearningGlyphPainter oldDelegate) => id != oldDelegate.id || color != oldDelegate.color;
+  bool shouldRepaint(_LearningGlyphPainter oldDelegate) =>
+      id != oldDelegate.id || color != oldDelegate.color;
 }
