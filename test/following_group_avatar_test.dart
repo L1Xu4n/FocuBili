@@ -155,7 +155,12 @@ void main() {
       _group('empty', '总览空组', const []),
     ]);
     await tester.pumpWidget(
-      MaterialApp(home: FollowingGroupsPage(accountDataService: api)),
+      MaterialApp(
+        home: FollowingGroupsPage(
+          accountDataService: api,
+          groupService: FollowingGroupService(),
+        ),
+      ),
     );
     await settle(tester);
     final group = find.byKey(const ValueKey('with'));
@@ -173,8 +178,32 @@ void main() {
       findsOneWidget,
     );
     await tap(tester, find.text('总览分组'));
-    expect(find.text('成员 1'), findsOneWidget);
+    expect(_renderedImages(tester, _homeRow('成员 1')), [_first]);
+    expect(_renderedImages(tester, _homeRow('成员 2')), [_second]);
     expect(api.calls, 0);
+
+    await tap(
+      tester,
+      find.descendant(
+        of: group,
+        matching: find.byType(PopupMenuButton<String>),
+      ),
+    );
+    await tap(tester, find.text('调整成员'));
+    final editMember = find.widgetWithText(CheckboxListTile, '成员 1');
+    expect(_renderedImages(tester, editMember), [_first]);
+    final candidate = find.widgetWithText(CheckboxListTile, '候选 UP');
+    expect(_renderedImages(tester, candidate), isEmpty);
+    expect(
+      find.descendant(
+        of: candidate,
+        matching: find.byIcon(Icons.person_outline),
+      ),
+      findsOneWidget,
+    );
+    await tester.pageBack();
+    await settle(tester);
+
     CacheLifecycle.accountChanged();
     await settle(tester);
     expect(find.byType(FollowingGroupAvatar), findsNothing);

@@ -36,23 +36,40 @@ class FollowingGroupService {
   }
 
   /// 等待已提交操作后返回不可变分组快照。
-  Future<List<FollowingGroup>> load(int mid) async {
+  Future<List<FollowingGroup>> load(int mid) async =>
+      (await loadState(mid)).groups;
+
+  /// 打开页面时同时读取分组和开关，旧文档默认关闭。
+  Future<({List<FollowingGroup> groups, bool autoSync})> loadState(
+    int mid,
+  ) async {
     await _pending;
     final data = await _read(mid);
-    return (data['groups'] as List)
-        .map(
-          (e) => FollowingGroup.fromJson(Map<String, dynamic>.from(e as Map)),
-        )
-        .toList();
+    return (
+      groups: (data['groups'] as List)
+          .map(
+            (e) => FollowingGroup.fromJson(Map<String, dynamic>.from(e as Map)),
+          )
+          .toList(),
+      autoSync: data['autoSync'] == true,
+    );
   }
 
+  Future<void> saveAutoSync(int mid, bool enabled) =>
+      _change(mid, (data) => data['autoSync'] = enabled);
+
   /// 排队执行一项本地变更；底层失败时回退缓存，不写远端。
-  Future<void> _change(int mid, void Function(Map<String, dynamic>) change) {
+  Future<void> _change(
+    int mid,
+    void Function(Map<String, dynamic>) change, {
+    bool Function()? isCurrent,
+  }) {
     final result = _pending.then((_) async {
       final data = await _read(mid);
       final previous = jsonEncode(data);
       change(data);
       final prefs = await _loader();
+      if (isCurrent?.call() == false) throw StateError('同步已取消');
       try {
         if (!await prefs.setString(storageKey(mid), jsonEncode(data))) {
           throw StateError('保存分组失败');
@@ -89,7 +106,10 @@ class FollowingGroupService {
       });
 
   /// 一次合并完整导入结果，保留本地名称、顺序、删除记录与成员改动。
-  Future<List<FollowingGroup>> merge(FollowingGroupImport snapshot) async {
+  Future<List<FollowingGroup>> merge(
+    FollowingGroupImport snapshot, {
+    bool Function()? isCurrent,
+  }) async {
     late List<FollowingGroup> saved;
     await _change(snapshot.mid, (data) {
       final groups = (data['groups'] as List)
@@ -118,7 +138,7 @@ class FollowingGroupService {
       }
       data['groups'] = groups.map((g) => g.toJson()).toList();
       saved = List.unmodifiable(groups);
-    });
+    }, isCurrent: isCurrent);
     return saved;
   }
 }
