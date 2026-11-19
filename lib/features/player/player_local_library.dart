@@ -5,15 +5,18 @@ extension _PlayerLocalLibrary on _PlayerPageState {
   /// Loads offline membership for the exact part and discards stale lookup results.
   Future<void> _loadOfflineState() async {
     final generation = ++_offlineStateGeneration;
-    final bvid = _activeVideo.bvid;
-    final cid = _currentPart.cid;
+    final video = _activeVideo;
+    final part = _currentPart;
+    final revision = CacheLifecycle.account.value;
+    final bvid = video.bvid;
+    final cid = part.cid;
     try {
-      final downloaded = await _offlineVideoService.isDownloaded(
-        bvid,
-        cid: cid,
-      );
+      final downloaded = video.isCourse
+          ? await _downloadQueue.courseEntry(video, part) != null
+          : await _offlineVideoService.isDownloaded(bvid, cid: cid);
       if (mounted &&
           generation == _offlineStateGeneration &&
+          revision == CacheLifecycle.account.value &&
           _activeVideo.bvid == bvid &&
           _currentPart.cid == cid) {
         _updatePlayerState(() => _currentVideoDownloaded = downloaded);
@@ -25,26 +28,29 @@ extension _PlayerLocalLibrary on _PlayerPageState {
 
   /// Selects an available quality before queuing a captured part, with a timed shortcut.
   Future<void> _toggleOfflineDownload() async {
-    if (_activeVideo.isCourse) {
-      _showTransientSnackBar('请通过「缓存本章」使用课程专属缓存。');
-      return;
-    }
     if (_offlineDownloading) return;
     final video = _activeVideo;
     final part = _currentPart;
+    final revision = CacheLifecycle.account.value;
+    bool currentAccount() =>
+        !video.isCourse || revision == CacheLifecycle.account.value;
     _updatePlayerState(() => _offlineDownloading = true);
     try {
-      final downloaded = await _offlineVideoService.isDownloaded(
-        video.bvid,
-        cid: part.cid,
-      );
-      if (!mounted) return;
+      final lesson = video.isCourse
+          ? await _downloadQueue.courseEntry(video, part)
+          : null;
+      final downloaded = video.isCourse
+          ? lesson != null
+          : await _offlineVideoService.isDownloaded(video.bvid, cid: part.cid);
+      if (!mounted || !currentAccount()) return;
       if (downloaded) {
         final confirmed = await showDialog<bool>(
           context: context,
           builder: (dialogContext) => AlertDialog(
             title: const Text('删除离线缓存'),
-            content: Text('删除 P${part.pageNumber} 的离线文件？'),
+            content: Text(
+              video.isCourse ? '删除本章的离线文件？' : '删除 P${part.pageNumber} 的离线文件？',
+            ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(dialogContext, false),
@@ -57,16 +63,35 @@ extension _PlayerLocalLibrary on _PlayerPageState {
             ],
           ),
         );
-        if (confirmed != true || !mounted) return;
-        await _offlineVideoService.delete(video.bvid, cid: part.cid);
+        if (confirmed != true || !mounted || !currentAccount()) return;
+        if (lesson != null) {
+          await _downloadQueue.courses.remove(lesson);
+        } else {
+          await _offlineVideoService.delete(video.bvid, cid: part.cid);
+        }
         await _downloadQueue.reconcileCompleted();
-        if (mounted) _showTransientSnackBar('已删除该分 P 的离线缓存');
+        if (mounted && currentAccount()) _showTransientSnackBar('已删除离线缓存');
       } else {
-        final qualities = await _offlineVideoService.availableQualities(
-          video,
-          part,
-        );
-        if (!mounted) return;
+        final List<PreferredPlaybackQuality> qualities;
+        if (video.isCourse) {
+          final grant = await _downloadQueue.courses.access.authorize(
+            video,
+            part,
+            _currentQuality > 0 ? _currentQuality : 64,
+          );
+          qualities = PreferredPlaybackQuality.values
+              .where((option) => option.id == grant.media.quality)
+              .toList();
+        } else {
+          qualities = await _offlineVideoService.availableQualities(
+            video,
+            part,
+          );
+        }
+        if (!mounted || !currentAccount()) return;
+        if (qualities.isEmpty) {
+          throw const OfflineVideoException('当前视频没有可用的离线清晰度。');
+        }
         final quality = await showDialog<int>(
           context: context,
           builder: (context) => SimpleDialog(
@@ -89,11 +114,12 @@ extension _PlayerLocalLibrary on _PlayerPageState {
             ],
           ),
         );
-        if (quality == null || !mounted) return;
+        if (quality == null || !mounted || !currentAccount()) return;
         final task = await _downloadQueue.enqueue(
           video,
           part: part,
           quality: quality,
+          expectedAccountRevision: video.isCourse ? revision : null,
         );
         unawaited(DownloadNotificationService.instance.requestPermission());
         if (mounted) {
@@ -128,10 +154,13 @@ extension _PlayerLocalLibrary on _PlayerPageState {
       }
       if (mounted) await _loadOfflineState();
     } catch (error) {
-      if (mounted) {
-        _showTransientSnackBar(
-          error is OfflineVideoException ? error.message : '离线操作失败，请重试。',
-        );
+      if (mounted && currentAccount()) {
+        _showTransientSnackBar(switch (error) {
+          OfflineVideoException() => error.message,
+          CourseCacheAccessException() => error.message,
+          CourseCacheFailure() => error.message,
+          _ => '离线操作失败，请重试。',
+        });
       }
     } finally {
       if (mounted) _updatePlayerState(() => _offlineDownloading = false);
@@ -162,32 +191,11 @@ extension _PlayerLocalLibrary on _PlayerPageState {
 
   /// 创建“离线缓存”按钮，并根据下载状态切换图标与文字。
   Widget _buildOfflineDownloadButton() {
-    if (_activeVideo.isCourse) {
-      if (widget.forceOffline || !CourseCachePage.supported(_appPlatform)) {
-        return const SizedBox.shrink();
-      }
-      return PlayerLibraryAction(
-        key: const Key('course-cache-manager'),
-        tooltip: '缓存本章或管理课程缓存',
-        label: '缓存本章',
-        icon: Icons.download_for_offline_outlined,
-        onPressed: () async {
-          final video = _activeVideo, part = _currentPart;
-          final quality = _currentQuality > 0 ? _currentQuality : 64;
-          await _pauseForExternalNavigation();
-          if (!mounted) return;
-          try {
-            await Navigator.of(context).push<void>(
-              MaterialPageRoute(
-                builder: (_) =>
-                    CourseCachePage(video: video, part: part, quality: quality),
-              ),
-            );
-          } finally {
-            if (mounted) await _restoreFromExternalNavigation();
-          }
-        },
-      );
+    if (_activeVideo.isCourse &&
+        (widget.forceOffline ||
+            (_appPlatform != AppPlatform.android &&
+                _appPlatform != AppPlatform.windows))) {
+      return const SizedBox.shrink();
     }
     return PlayerLibraryAction(
       tooltip: _currentVideoDownloaded ? '删除离线缓存' : '下载离线缓存',

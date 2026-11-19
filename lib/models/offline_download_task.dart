@@ -11,6 +11,7 @@ class OfflineDownloadTask {
     required this.part,
     required this.quality,
     required this.createdAt,
+    this.courseMid,
     this.status = DownloadTaskStatus.queued,
     this.receivedBytes = 0,
     this.totalBytes,
@@ -21,6 +22,7 @@ class OfflineDownloadTask {
   final VideoPreview video;
   final VideoPart part;
   final int quality;
+  final int? courseMid;
   final DateTime createdAt;
   final DownloadTaskStatus status;
   final int receivedBytes;
@@ -35,7 +37,12 @@ class OfflineDownloadTask {
       : '${(bytesPerSecond / 1024).toStringAsFixed(1)} KB/s';
 
   /// Deduplicates the same BV/CID even when it is submitted from another page.
-  String get id => '${video.bvid}:${part.cid}';
+  String get id => courseMid == null
+      ? '${video.bvid}:${part.cid}'
+      : 'course:$courseMid:$courseEntryId';
+
+  String get courseEntryId =>
+      '${video.courseSeasonId}-${part.courseEpisodeId}-${part.courseAid}-${part.cid}';
 
   /// Returns bounded progress or null while the server has not supplied a size.
   double? get progress => totalBytes == null || totalBytes! <= 0
@@ -48,11 +55,13 @@ class OfflineDownloadTask {
     int? receivedBytes,
     int? totalBytes,
     String? error,
+    bool clearError = false,
     double? bytesPerSecond,
   }) => OfflineDownloadTask(
     video: video,
     part: part,
     quality: quality,
+    courseMid: courseMid,
     createdAt: createdAt,
     status: status ?? this.status,
     receivedBytes: receivedBytes ?? this.receivedBytes,
@@ -73,6 +82,12 @@ class OfflineDownloadTask {
     'pageNumber': part.pageNumber,
     'partTitle': part.title,
     'durationMs': part.duration.inMilliseconds,
+    if (courseMid != null) ...{
+      'courseMid': courseMid,
+      'courseSeasonId': video.courseSeasonId,
+      'courseEpisodeId': part.courseEpisodeId,
+      'courseAid': part.courseAid,
+    },
     'quality': quality,
     'createdAt': createdAt.toIso8601String(),
     'status': status.name,
@@ -88,7 +103,23 @@ class OfflineDownloadTask {
     final quality = (json['quality'] as num).toInt();
     final received = (json['receivedBytes'] as num).toInt();
     final total = (json['totalBytes'] as num?)?.toInt();
-    if (!RegExp(r'^BV[0-9A-Za-z]{10}$').hasMatch(bvid) ||
+    final courseMid = json['courseMid'] as int?;
+    final season = json['courseSeasonId'] as int?;
+    final episode = json['courseEpisodeId'] as int?;
+    final aid = json['courseAid'] as int?;
+    final ordinary =
+        courseMid == null &&
+        season == null &&
+        episode == null &&
+        aid == null &&
+        RegExp(r'^BV[0-9A-Za-z]{10}$').hasMatch(bvid);
+    final course =
+        (courseMid ?? 0) > 0 &&
+        (season ?? 0) > 0 &&
+        (episode ?? 0) > 0 &&
+        (aid ?? 0) > 0 &&
+        bvid == 'cheese:ss$season';
+    if ((!ordinary && !course) ||
         cid <= 0 ||
         quality <= 0 ||
         received < 0 ||
@@ -96,6 +127,8 @@ class OfflineDownloadTask {
       throw const FormatException('Invalid download task');
     }
     final part = VideoPart(
+      courseAid: aid,
+      courseEpisodeId: episode,
       pageNumber: (json['pageNumber'] as num).toInt(),
       cid: cid,
       title: json['partTitle'] as String,
@@ -104,6 +137,7 @@ class OfflineDownloadTask {
     return OfflineDownloadTask(
       video: VideoPreview(
         bvid: bvid,
+        courseSeasonId: season,
         cid: cid,
         title: json['title'] as String,
         ownerName: json['ownerName'] as String,
@@ -113,6 +147,7 @@ class OfflineDownloadTask {
       ),
       part: part,
       quality: quality,
+      courseMid: courseMid,
       createdAt: DateTime.parse(json['createdAt'] as String),
       status: DownloadTaskStatus.values.byName(json['status'] as String),
       receivedBytes: received,
