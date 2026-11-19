@@ -35,6 +35,16 @@ class _Videos implements BilibiliService {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
+class _HeldVideo extends _Videos {
+  final result = Completer<VideoPreview>();
+
+  @override
+  Future<VideoPreview> lookupVideo(String input) {
+    calls.add(input);
+    return result.future;
+  }
+}
+
 const titles = ['用几何直觉理解矩阵', '从零写一个番茄钟', '把知识连起来', '为什么天空是蓝色的？', '一周学习回顾'];
 
 String uiFixture() {
@@ -324,6 +334,84 @@ void main() {
     },
   );
 
+  for (final home in [false, true]) {
+    testWidgets(
+      '${home ? 'home card' : 'timeline'} marks only the opened video before lookup completes',
+      (tester) async {
+        final store = CountingSnapshots()
+          ..value = feedFixture(count: 3, sourceCount: 1);
+        final videos = _HeldVideo();
+        final service = SubscriptionService(
+          snapshotStore: store,
+          clock: () => feedFixtureClock,
+        );
+        addTearDown(service.dispose);
+        await service.initialize();
+        await tester.pumpWidget(
+          MaterialApp(
+            home: home
+                ? Scaffold(
+                    body: SubscriptionHomeCard(
+                      service: service,
+                      videoService: videos,
+                    ),
+                  )
+                : SubscriptionUpdatesPage(
+                    service: service,
+                    videoService: videos,
+                  ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final first = home
+            ? find.byType(SubscriptionFeedTile).first
+            : find.byKey(const ValueKey('subscription-feed-fixture0'));
+        if (!home) {
+          await tester.longPress(first);
+          await tester.pumpAndSettle();
+          await tester.tap(
+            find.byKey(const ValueKey('subscription-feed-fixture1')),
+          );
+          await tester.pumpAndSettle();
+          expect(service.unreadCount, 3);
+          expect(videos.calls, isEmpty);
+          await tester.tap(find.byTooltip('退出多选'));
+          await tester.pumpAndSettle();
+        }
+
+        await tester.tap(first);
+        await tester.pump();
+        expect(videos.result.isCompleted, isFalse);
+        expect(videos.calls, ['fixture0']);
+        expect(service.unreadCount, 2);
+        expect(
+          service.feed
+              .where((item) => item.readAt != null)
+              .map((item) => item.bvid),
+          ['fixture0'],
+        );
+
+        videos.result.completeError(StateError('lookup failed'));
+        await tester.pumpAndSettle();
+        expect(service.unreadCount, 2);
+        final reopened = SubscriptionService(
+          snapshotStore: store,
+          clock: () => feedFixtureClock,
+        );
+        addTearDown(reopened.dispose);
+        await reopened.initialize();
+        expect(
+          reopened.feed
+              .where((item) => item.readAt != null)
+              .map((item) => item.bvid),
+          ['fixture0'],
+        );
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+
   testWidgets(
     'home card shares updates, refresh, read state and navigation; empty state is usable',
     (tester) async {
@@ -364,7 +452,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(videos.calls, ['fixture1']);
       expect(find.byType(PlayerPage), findsOneWidget);
-      expect(service.unreadCount, 4);
+      expect(service.unreadCount, 3);
       Navigator.of(tester.element(find.byType(PlayerPage))).pop();
       await tester.pumpAndSettle();
       service.setForeground(true);
