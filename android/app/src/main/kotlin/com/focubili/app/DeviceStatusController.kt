@@ -22,6 +22,7 @@ import io.flutter.plugin.common.MethodChannel
 class DeviceStatusController(
     activity: Activity,
     messenger: BinaryMessenger,
+    private val activityDiagnostics: () -> Map<String, Any>,
 ) : MethodChannel.MethodCallHandler {
     private val applicationContext = activity.applicationContext
     private val channel = MethodChannel(messenger, CHANNEL_NAME)
@@ -110,7 +111,7 @@ class DeviceStatusController(
             "batteryPercent" to (readBatteryPercent() ?: -1),
             "totalMemoryMiB" to memory.totalMem / (1024 * 1024),
             "availableMemoryMiB" to memory.availMem / (1024 * 1024),
-        )
+        ) + activityDiagnostics()
     }
 
     /** 查询系统选定的内核包和版本，不实例化 WebView，不读取 UA 或 Cookie。 */

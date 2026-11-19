@@ -1,6 +1,7 @@
 package com.focubili.app
 
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
@@ -18,8 +19,28 @@ class MainActivity : FlutterActivity() {
     private var deepLinkController: DeepLinkController? = null
     private var deferredDeepLink: String? = null
 
+    // Local diagnostics only: no device ID, input events/names or route contents.
+    private var activityStartedAt: Long = 0
+    private var restoredActivityState = false
+    private var previousActivityChangedConfiguration: Boolean? = null
+    private var lastInputConfigurationChangeAt: Long? = null
+    private var observedConfiguration: Configuration? = null
+
+    private companion object {
+        var activityCreatesInProcess = 0
+        var lastDestroyWasConfigurationChange: Boolean? = null
+        val INPUT_CONFIGURATION_CHANGES = ActivityInfo.CONFIG_KEYBOARD or
+            ActivityInfo.CONFIG_KEYBOARD_HIDDEN or ActivityInfo.CONFIG_NAVIGATION or
+            ActivityInfo.CONFIG_TOUCHSCREEN
+    }
+
     /** Activity 创建时先确定平板方向，再允许横屏内容延伸到刘海短边。 */
     override fun onCreate(savedInstanceState: Bundle?) {
+        activityCreatesInProcess++
+        activityStartedAt = System.currentTimeMillis()
+        restoredActivityState = savedInstanceState != null
+        previousActivityChangedConfiguration = lastDestroyWasConfigurationChange
+        observedConfiguration = Configuration(resources.configuration)
         requestedOrientation = LargeScreenOrientationPolicy.preferredOrientation(
             resources.configuration.smallestScreenWidthDp,
             getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
@@ -49,6 +70,7 @@ class MainActivity : FlutterActivity() {
         deviceStatusController = DeviceStatusController(
             activity = this,
             messenger = flutterEngine.dartExecutor.binaryMessenger,
+            activityDiagnostics = ::inputActivityDiagnostics,
         )
         focusNotificationController = FocusNotificationController(
             activity = this,
@@ -101,6 +123,25 @@ class MainActivity : FlutterActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
     }
 
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        val changes = observedConfiguration?.diff(newConfig) ?: 0
+        if ((changes and INPUT_CONFIGURATION_CHANGES) != 0) {
+            lastInputConfigurationChangeAt = System.currentTimeMillis()
+        }
+        observedConfiguration = Configuration(newConfig)
+        super.onConfigurationChanged(newConfig)
+    }
+
+    private fun inputActivityDiagnostics(): Map<String, Any> = buildMap {
+        put("activityStartedAtMs", activityStartedAt)
+        put("activityCreatesInProcess", activityCreatesInProcess)
+        put("restoredActivityState", restoredActivityState)
+        previousActivityChangedConfiguration?.let {
+            put("previousActivityChangedConfiguration", it)
+        }
+        lastInputConfigurationChangeAt?.let { put("lastInputConfigurationChangeAtMs", it) }
+    }
+
     /** App 回到前台时恢复此前主动播放的原生视频。 */
     override fun onResume() {
         super.onResume()
@@ -126,6 +167,7 @@ class MainActivity : FlutterActivity() {
 
     /** Activity 销毁时释放播放器、视频纹理和后台播放请求，避免资源泄漏。 */
     override fun onDestroy() {
+        lastDestroyWasConfigurationChange = isChangingConfigurations
         nativePlaybackController?.onHostDestroy()
         nativePlaybackController = null
         deviceStatusController?.dispose()
