@@ -288,8 +288,6 @@ void main() {
       expect(manage.hitTestable(), findsOneWidget);
       await tester.tap(manage.hitTestable());
       await tester.pumpAndSettle();
-      await tester.tap(find.text('重命名分组'));
-      await tester.pumpAndSettle();
     }
 
     await rename();
@@ -298,7 +296,10 @@ void main() {
     tester.view.viewInsets = const FakeViewPadding(bottom: 185);
     await tester.pumpAndSettle();
     final save = find.byKey(const Key('save-learning-folder'));
-    await tester.tap(save);
+    await tester.ensureVisible(save);
+    await tester.pumpAndSettle();
+    expect(save.hitTestable(), findsOneWidget);
+    await tester.tap(save.hitTestable());
     await tester.pumpAndSettle();
     final duplicateName = find.text('已存在同名学科分组');
     expect(duplicateName, findsOneWidget);
@@ -306,14 +307,17 @@ void main() {
     await tester.pumpAndSettle();
     await _capture(tester, key, '07-duplicate-folder-keyboard');
     expect(tester.takeException(), isNull);
-    await tester.tap(find.text('取消'));
+    await tester.tap(find.byTooltip('关闭'));
     tester.view.resetViewInsets();
     await tester.pumpAndSettle();
     expect((await learning.loadState()).folders.first.name, '数学');
 
     await rename();
     await tester.enterText(name, '高等数学');
-    await tester.tap(save);
+    await tester.ensureVisible(save);
+    await tester.pumpAndSettle();
+    expect(save.hitTestable(), findsOneWidget);
+    await tester.tap(save.hitTestable());
     await tester.pumpAndSettle();
     final state = await learning.loadState();
     expect(state.folders.first.name, '高等数学');

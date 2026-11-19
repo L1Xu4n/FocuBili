@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/features/learning/learning_list_page.dart';
+import 'package:focubili/features/learning/learning_folder_appearance.dart';
+import 'package:focubili/models/learning_subject_folder.dart';
 import 'package:focubili/features/learning/learning_add_sheet.dart';
 import 'package:focubili/models/learning_list_entry.dart';
 import 'package:focubili/services/learning_list_service.dart';
@@ -169,6 +171,89 @@ void main() {
     expect(recovered.every((entry) => entry.folderId == null), true);
   });
 
+  test('分组外观兼容旧数据和未知值，重命名保留元数据', () async {
+    final prefs = await SharedPreferences.getInstance();
+    final service = LearningListService(preferencesLoader: () async => prefs);
+    await prefs.setString('focubili_learning_list_v2', jsonEncode({
+      'schemaVersion': 3,
+      'entries': [],
+      'folders': [
+        {'id': 'old', 'name': '旧分组'},
+        {'id': 'bad', 'name': '损坏外观', 'iconId': 17, 'colorId': null},
+        {'id': 'future', 'name': '未来外观', 'iconId': 'future-icon', 'colorId': 'future-color'},
+      ],
+    }));
+    final loaded = await service.loadState();
+    expect(loaded.folders[0].iconId, LearningSubjectFolder.defaultIconId);
+    expect(loaded.folders[1].colorId, LearningSubjectFolder.defaultColorId);
+    expect(learningFolderIcon(loaded.folders[2].iconId).id, 'folder');
+    expect(learningFolderColor(loaded.folders[2].colorId).id, 'blue');
+    await service.renameFolder('future', '重命名');
+    final restarted = LearningListService(preferencesLoader: () async => prefs);
+    final future = (await restarted.loadState()).folders.last;
+    expect(future.iconId, 'future-icon');
+    expect(future.colorId, 'future-color');
+  });
+
+  testWidgets('分组外观创建、编辑、取消和重启持久化，并跟随主题', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final prefs = await SharedPreferences.getInstance();
+    final service = LearningListService(preferencesLoader: () async => prefs);
+    await service.addVideo(video(1));
+    final brightness = ValueNotifier(Brightness.light);
+    addTearDown(brightness.dispose);
+    await tester.pumpWidget(ValueListenableBuilder<Brightness>(
+      valueListenable: brightness,
+      builder: (context, value, _) => MaterialApp(
+        theme: ThemeData(brightness: value, useMaterial3: true),
+        home: LearningListPage(learningListService: service),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('create-learning-folder')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('learning-folder-name')), '物理');
+    await tester.tap(find.byKey(const Key('learning-folder-icon-atom')));
+    await tester.tap(find.byKey(const Key('learning-folder-color-pink')));
+    await tester.pumpAndSettle();
+    var preview = tester.widget<LearningFolderBadge>(find.byKey(const Key('learning-folder-preview')));
+    expect(preview.iconId, 'atom');
+    expect(preview.colorId, 'pink');
+    final previewContainer = find.descendant(
+      of: find.byKey(const Key('learning-folder-preview')),
+      matching: find.byType(Container),
+    ).first;
+    final lightColor = (tester.widget<Container>(previewContainer).decoration! as BoxDecoration).color;
+    brightness.value = Brightness.dark;
+    await tester.pumpAndSettle();
+    final darkColor = (tester.widget<Container>(previewContainer).decoration! as BoxDecoration).color;
+    expect(darkColor!.computeLuminance(), lessThan(lightColor!.computeLuminance()));
+    await tapVisible(tester, find.byKey(const Key('save-learning-folder')));
+    final folder = (await service.loadState()).folders.single;
+    expect(folder.iconId, 'atom');
+    expect(folder.colorId, 'pink');
+    expect((await LearningListService(preferencesLoader: () async => prefs).loadState()).folders.single.iconId, 'atom');
+    await tapVisible(tester, find.byKey(Key('manage-learning-folder-${folder.id}')));
+    preview = tester.widget<LearningFolderBadge>(find.byKey(const Key('learning-folder-preview')));
+    expect(preview.iconId, 'atom');
+    expect(preview.colorId, 'pink');
+    await tester.tap(find.byKey(const Key('learning-folder-icon-book')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('关闭'));
+    await tester.pumpAndSettle();
+    expect((await service.loadState()).folders.single.iconId, 'atom');
+    await tapVisible(tester, find.byKey(Key('manage-learning-folder-${folder.id}')));
+    await tester.tap(find.byKey(const Key('learning-folder-icon-book')));
+    await tester.tap(find.byKey(const Key('learning-folder-color-green')));
+    await tapVisible(tester, find.byKey(const Key('save-learning-folder')));
+    final saved = (await service.loadState()).folders.single;
+    expect(saved.iconId, 'book');
+    expect(saved.colorId, 'green');
+    expect((await service.loadEntries()).single.folderId, isNull);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('清单支持新建、移动、筛选、重命名与删除分组保留任务', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 1400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -182,8 +267,7 @@ void main() {
     await tester.tap(find.byKey(const Key('create-learning-folder')));
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const Key('learning-folder-name')), '数学');
-    await tester.tap(find.byKey(const Key('save-learning-folder')));
-    await tester.pumpAndSettle();
+    await tapVisible(tester, find.byKey(const Key('save-learning-folder')));
     final folder = (await service.loadState()).folders.single;
     await tester.tap(find.byKey(const Key('learning-status-BV1:1')));
     await tester.pumpAndSettle();
@@ -197,21 +281,17 @@ void main() {
       tester,
       find.byKey(Key('manage-learning-folder-${folder.id}')),
     );
-    await tester.tap(find.text('重命名分组'));
-    await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const Key('learning-folder-name')),
       '高等数学',
     );
-    await tester.tap(find.byKey(const Key('save-learning-folder')));
-    await tester.pumpAndSettle();
+    await tapVisible(tester, find.byKey(const Key('save-learning-folder')));
     expect(find.text('高等数学（1）'), findsOneWidget);
     await tapVisible(
       tester,
       find.byKey(Key('manage-learning-folder-${folder.id}')),
     );
-    await tester.tap(find.text('删除分组'));
-    await tester.pumpAndSettle();
+    await tapVisible(tester, find.byKey(const Key('delete-learning-folder')));
     await tester.tap(find.byKey(const Key('confirm-delete-learning-folder')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('learning-list-BV1:1')), findsOneWidget);
@@ -245,11 +325,8 @@ void main() {
     await tapVisible(tester, find.byKey(Key('learning-folder-${first.id}')));
     final secondMenu = find.byKey(Key('manage-learning-folder-${second.id}'));
     await tapVisible(tester, secondMenu);
-    await tester.tap(find.text('重命名分组'));
-    await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const Key('learning-folder-name')), '物理');
-    await tester.tap(find.byKey(const Key('save-learning-folder')));
-    await tester.pumpAndSettle();
+    await tapVisible(tester, find.byKey(const Key('save-learning-folder')));
     expect((await service.loadState()).folders.last.name, '物理');
     expect(
       tester
@@ -261,15 +338,12 @@ void main() {
     expect(find.byKey(const Key('learning-list-BV1:1')), findsNothing);
 
     await tapVisible(tester, secondMenu);
-    await tester.tap(find.text('删除分组'));
-    await tester.pumpAndSettle();
+    await tapVisible(tester, find.byKey(const Key('delete-learning-folder')));
     expect(find.textContaining('删除“物理”'), findsOneWidget);
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
     expect((await service.loadState()).folders, hasLength(2));
-    await tapVisible(tester, secondMenu);
-    await tester.tap(find.text('删除分组'));
-    await tester.pumpAndSettle();
+    await tapVisible(tester, find.byKey(const Key('delete-learning-folder')));
     await tester.tap(find.byKey(const Key('confirm-delete-learning-folder')));
     await tester.pumpAndSettle();
     expect((await service.loadState()).folders.single.id, first.id);
@@ -319,12 +393,9 @@ void main() {
     );
     final menu = find.byKey(Key('manage-learning-folder-${target.id}'));
     await tapVisible(tester, menu);
-    expect(find.text('重命名分组'), findsOneWidget);
-    await tester.tap(find.text('重命名分组'));
-    await tester.pumpAndSettle();
+    expect(find.text('编辑分组'), findsOneWidget);
     await tester.enterText(find.byKey(const Key('learning-folder-name')), '物理');
-    await tester.tap(find.byKey(const Key('save-learning-folder')));
-    await tester.pumpAndSettle();
+    await tapVisible(tester, find.byKey(const Key('save-learning-folder')));
     final state = await service.loadState();
     expect(state.folders.first.name, '数学');
     expect(state.folders.last.name, '物理');
