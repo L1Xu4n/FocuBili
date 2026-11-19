@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="icon_bg">#E3EEFC</color>
+    <color name="icon_bg">@color/launcher_icon_bg_light</color>
+    <color name="launcher_icon_bg_light">#E3EEFC</color>
+    <color name="launcher_icon_bg_dark">#101827</color>
 </resources>

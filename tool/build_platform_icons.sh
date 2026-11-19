@@ -9,7 +9,7 @@ for spec in mdpi:48:108 hdpi:72:162 xhdpi:96:216 xxhdpi:144:324 xxxhdpi:192:432;
     convert assets/icon/source/focubili_rounded_light.png -resize "${legacy}x${legacy}" "android/app/src/main/res/mipmap-$density/$name.png"
     convert assets/icon/source/focubili_rounded_dark.png -resize "${legacy}x${legacy}" "android/app/src/main/res/mipmap-night-$density/$name.png"
   done
-  convert assets/icon/source/focubili_dark_foreground.png -resize "${foreground}x${foreground}" "android/app/src/main/res/mipmap-night-$density/ic_launcher_foreground.png"
+  convert assets/icon/source/focubili_dark_foreground.png -resize "${foreground}x${foreground}" "android/app/src/main/res/mipmap-$density/ic_launcher_foreground_dark.png"
 done
 convert assets/icon/source/focubili_dark_square.png -resize 1024x1024 -alpha off ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-dark-1024.png
 # Shared in-app logo and traditional macOS icon slots use authored rounded art.
