@@ -34,9 +34,11 @@ void main() {
     tester,
   ) async {
     String? copied;
+    var fail = false;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(SystemChannels.platform, (call) async {
           if (call.method == 'Clipboard.setData') {
+            if (fail) throw PlatformException(code: 'fixture_unavailable');
             copied = (call.arguments as Map)['text'] as String;
           }
           return null;
@@ -73,6 +75,12 @@ void main() {
     await tester.tap(copy);
     await tester.pumpAndSettle();
     expect(copied, 'sanitized fixture provenance');
+    expect(find.text('已复制到剪贴板'), findsOneWidget);
+    fail = true;
+    await tester.tap(copy);
+    await tester.pumpAndSettle();
+    expect(find.text('已复制到剪贴板'), findsNothing);
+    expect(find.text('复制失败，请重试。'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

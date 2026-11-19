@@ -44,6 +44,11 @@ class _UnifiedExportPageState extends State<UnifiedExportPage> {
             ? '已取消保存。'
             : '已导出 ${package.sections.length} 类资料。${package.warnings.isEmpty ? '' : '\n${package.warnings.join('\n')}'}',
       );
+      if (path != null) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(const SnackBar(content: Text('已导出文件')));
+      }
     } on LocalExportException catch (error) {
       if (mounted) {
         setState(

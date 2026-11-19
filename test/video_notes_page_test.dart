@@ -14,6 +14,7 @@ import 'package:focubili/models/video_note.dart';
 import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/services/bilibili_service.dart';
 import 'package:focubili/services/video_note_service.dart';
+import 'package:focubili/services/video_note_share_service.dart';
 import 'package:focubili/services/local_export_service.dart';
 import 'package:focubili/platform/app_platform.dart';
 
@@ -180,6 +181,43 @@ void main() {
         );
         expect(find.textContaining('session-cookie'), findsNothing);
       }
+    });
+  }
+
+  for (final saved in [true, false]) {
+    testWidgets('Linux 笔记分享另存为：保存成功才提示 ($saved)', (tester) async {
+      final service = await _createPageNoteService();
+      await service.saveNote(_createPageNote());
+      await tester.pumpWidget(
+        MaterialApp(
+          home: VideoNotesPage(
+            noteService: service,
+            videoService: _FakeNoteVideoService(),
+            shareService: VideoNoteShareService(
+              platform: AppPlatform.linux,
+              localExportService: LocalExportService(
+                platform: AppPlatform.linux,
+                saveDialog: (_) async => saved ? '/fixture/notes.json' : null,
+                verifyFile: (_, _) async {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('select-video-notes')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('managed-video-note-managed-note')),
+      );
+      await tester.pumpAndSettle();
+      final share = find.byKey(const Key('share-selected-video-notes'));
+      await tester.tap(share);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('导出为 JSON'));
+      await tester.pumpAndSettle();
+      expect(find.text('已导出 1 条笔记。'), saved ? findsOneWidget : findsNothing);
+      expect(share, saved ? findsNothing : findsOneWidget);
     });
   }
 

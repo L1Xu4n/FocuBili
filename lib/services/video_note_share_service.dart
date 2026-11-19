@@ -36,13 +36,17 @@ class VideoNoteShareService {
     AppPlatform.linux,
   }.contains(platform ?? AppPlatformDetector.current);
 
+  /// Linux 没有文件分享面板，改为直接另存为。
+  bool get savesExportPackageLocally =>
+      shareLauncher == null &&
+      (platform ?? AppPlatformDetector.current) == AppPlatform.linux;
+
   /// 把批量导出包写成临时文件并分享，文件名和 MIME 类型与实际格式保持一致。
   Future<bool> shareExportPackage(
     VideoNoteExportPackage package, {
     Rect? sharePositionOrigin,
   }) async {
-    if (shareLauncher == null &&
-        (platform ?? AppPlatformDetector.current) == AppPlatform.linux) {
+    if (savesExportPackageLocally) {
       final path = await localExportService.save(
         dialogTitle: '保存笔记导出包',
         fileName: _safeFileName(package.fileName),
