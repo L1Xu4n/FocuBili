@@ -99,7 +99,8 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
   Future<AccountDataPage<FavoriteFolder>>? _remoteFoldersPending;
   AccountDataPage<FavoriteFolder>? _remoteFoldersSnapshot;
   DateTime? _remoteFoldersLoadedAt;
-  Map<int, Future<String?>> _fallbackCoverRequests = {};
+  Map<int, Future<({String? cover, AccountDataLoadStatus status})>>
+  _fallbackCoverRequests = {};
   int _folderNamesGeneration = 0;
   Map<String, String> _localGroupNames = {};
   Map<String, String> _groupAvatars = {};
@@ -114,6 +115,8 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
   bool _custom = false;
   bool _loading = true;
   bool _identityUnavailable = false;
+  int? _verifiedDisplayRevision;
+  bool _displayUnverified = false;
   int _mid = 0;
   int _generation = 0;
 
@@ -152,6 +155,8 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
     _remoteFoldersSnapshot = null;
     _remoteFoldersLoadedAt = null;
     _fallbackCoverRequests = {};
+    _verifiedDisplayRevision = null;
+    _displayUnverified = false;
     setState(() {
       _localFolderCovers = {};
       _remoteFolderCovers = {};
@@ -174,13 +179,18 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
   /// 只接受最后一次账号读取的结果，避免旧请求覆盖新账号。
   Future<void> _load() async {
     final generation = ++_generation;
+    final revision = CacheLifecycle.account.value;
     _remoteFoldersSnapshot = null;
     _remoteFoldersLoadedAt = null;
     _fallbackCoverRequests = {};
     try {
-      final mid = await _api.currentHomeCollectionMid();
+      final identity = await _api.checkHomeCollectionIdentity();
       if (!mounted || generation != _generation) return;
+      if (_keepFavoritesDisplay(identity, revision)) return;
+      final mid = identity.mid;
       if (mid != _mid) {
+        _verifiedDisplayRevision = null;
+        _displayUnverified = false;
         _groupNamesGeneration++;
         _groupNamesMid = 0;
         _localGroupNames = {};
@@ -236,6 +246,8 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
       if (mounted && generation == _generation) {
         setState(() {
           _mid = mid;
+          _verifiedDisplayRevision = revision;
+          _displayUnverified = false;
           _identityUnavailable = false;
           _custom = custom;
           _selected = selected;
@@ -268,10 +280,29 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
     }
   }
 
+  bool _keepFavoritesDisplay(
+    ({int? mid, bool transientNetworkError}) identity,
+    int revision,
+  ) {
+    if (!widget.favorites ||
+        !identity.transientNetworkError ||
+        _loading ||
+        _mid <= 0 ||
+        _verifiedDisplayRevision != revision ||
+        CacheLifecycle.account.value != revision) {
+      return false;
+    }
+    // No new reads, updates or unverified local shortcut navigation.
+    _displayUnverified = true;
+    _folderNamesGeneration++;
+    return true;
+  }
+
   /// 本机名称独立刷新，不取消正在编辑的配置，也不回写保存的入口快照。
   Future<void> _loadLocalFolderNames({List<_HomeChoice>? choices}) async {
     if (!widget.favorites ||
         !_custom ||
+        _displayUnverified ||
         !(choices ?? _selected).any((choice) => choice.kind == 'local')) {
       return;
     }
@@ -350,11 +381,14 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
 
   /// 仅同账号和读取代次采用封面；暂时断网不清空已知封面。
   Future<void> _loadRemoteCovers(int mid, int generation) async {
+    final revision = CacheLifecycle.account.value;
     try {
       final page = await _favoriteFolders();
-      final currentMid = await _api.currentHomeCollectionMid();
+      final identity = await _api.checkHomeCollectionIdentity();
       if (!mounted || generation != _generation || mid != _mid) return;
-      if (currentMid != mid) {
+      final rejected = _coverAccessRejected(page.status);
+      if (!rejected && _keepFavoritesDisplay(identity, revision)) return;
+      if (identity.mid != mid) {
         _accountChanged();
         return;
       }
@@ -393,12 +427,21 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
     }
   }
 
+  bool _coverSessionEnded(AccountDataLoadStatus status) =>
+      status == AccountDataLoadStatus.signedOut ||
+      status == AccountDataLoadStatus.expired;
+
+  bool _coverAccessRejected(AccountDataLoadStatus status) =>
+      _coverSessionEnded(status) ||
+      status == AccountDataLoadStatus.permissionDenied;
+
   /// 只为已选且有视频的缺图收藏夹补查第一页，每批最多三项。
   Future<void> _backfillSelectedCovers(
     List<FavoriteFolder> missing,
     int mid,
     int generation,
   ) async {
+    final revision = CacheLifecycle.account.value;
     for (var offset = 0; offset < missing.length; offset += 3) {
       if (!mounted || generation != _generation || mid != _mid) return;
       final batch = missing.skip(offset).take(3);
@@ -410,40 +453,62 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
               try {
                 final videos = await _api.loadFavoriteVideos(folder.mediaId);
                 if (videos.status == AccountDataLoadStatus.networkError) {
-                  return null;
+                  return (cover: null, status: videos.status);
+                }
+                if (_coverAccessRejected(videos.status)) {
+                  return (cover: '', status: videos.status);
                 }
                 if (videos.isSuccess) {
                   for (final video in videos.items) {
                     if (video.isAvailable && video.coverUrl.trim().isNotEmpty) {
-                      return video.coverUrl;
+                      return (cover: video.coverUrl, status: videos.status);
                     }
                   }
                 }
               } catch (_) {
                 /* 单夹失败不影响其余来源。 */
               }
-              return '';
+              return (cover: '', status: AccountDataLoadStatus.unavailable);
             },
           );
-          final cover = await request;
+          final result = await request;
+          final cover = result.cover;
           if ((cover == null || cover.isEmpty) &&
               identical(_fallbackCoverRequests[folder.mediaId], request)) {
             _fallbackCoverRequests.remove(folder.mediaId);
           }
           // Null is a transient failure, not an authoritative empty result.
-          return cover == null ? null : MapEntry('${folder.mediaId}', cover);
+          return (id: '${folder.mediaId}', cover: cover, status: result.status);
         }),
       );
       if (!mounted || generation != _generation || mid != _mid) return;
-      if (await _api.currentHomeCollectionMid() != mid) {
-        if (mounted && generation == _generation) _accountChanged();
+      final identity = await _api.checkHomeCollectionIdentity();
+      if (!mounted || generation != _generation || mid != _mid) return;
+      if (_keepFavoritesDisplay(identity, revision)) {
+        if (covers.any((entry) => _coverSessionEnded(entry.status))) {
+          _accountChanged();
+          return;
+        }
+        // Drop unverified results. Explicit rejection may still clear a cover.
+        setState(
+          () => _remoteFolderCovers.addEntries(
+            covers
+                .where((entry) => _coverAccessRejected(entry.status))
+                .map((entry) => MapEntry(entry.id, '')),
+          ),
+        );
+        return;
+      }
+      if (identity.mid != mid) {
+        _accountChanged();
         return;
       }
       if (!mounted || generation != _generation || mid != _mid) return;
       setState(
-        () => _remoteFolderCovers.addEntries(
-          covers.whereType<MapEntry<String, String>>(),
-        ),
+        () => _remoteFolderCovers.addEntries([
+          for (final entry in covers)
+            if (entry.cover case final String cover) MapEntry(entry.id, cover),
+        ]),
       );
     }
   }
@@ -590,6 +655,10 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
       if (!current()) return;
       switch (choice.kind) {
         case 'local':
+          if (_displayUnverified &&
+              (!await _sameAccount(openingMid) || !current())) {
+            return;
+          }
           final matches = (await _favorites.loadFolders()).where(
             (f) => f.id == choice.id,
           );

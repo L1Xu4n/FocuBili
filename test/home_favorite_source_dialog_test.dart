@@ -15,6 +15,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 class _Guest extends BilibiliAccountDataService {
   @override
   Future<int?> currentHomeCollectionMid() async => 0;
+  @override
+  Future<({int? mid, bool transientNetworkError})>
+  checkHomeCollectionIdentity() async =>
+      (mid: await currentHomeCollectionMid(), transientNetworkError: false);
 }
 
 final _local = find.byKey(const Key('home-favorite-source-local'));

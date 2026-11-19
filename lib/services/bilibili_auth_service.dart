@@ -43,37 +43,42 @@ enum BilibiliSessionStatus {
 /// 保存一次会话检查的结果，避免页面把“未登录”和“暂时不可用”混为一谈。
 class BilibiliSessionState {
   /// 创建携带状态、可选账号资料和可展示说明的会话检查结果。
-  const BilibiliSessionState({
-    required this.status,
-    this.account,
-    this.message,
-  });
+  const BilibiliSessionState({required this.status, this.account, this.message})
+    : transientTransportFailure = false;
 
   /// 创建本机没有登录 Cookie 时使用的未登录结果。
   const BilibiliSessionState.signedOut()
     : status = BilibiliSessionStatus.signedOut,
       account = null,
-      message = null;
+      message = null,
+      transientTransportFailure = false;
 
   /// 创建官方接口已经确认登录成功时使用的结果。
   const BilibiliSessionState.active(this.account)
     : status = BilibiliSessionStatus.active,
-      message = null;
+      message = null,
+      transientTransportFailure = false;
 
   /// 创建 Cookie 存在但官方接口明确拒绝登录时使用的过期结果。
   const BilibiliSessionState.expired({this.message = '登录已过期，请重新登录。'})
     : status = BilibiliSessionStatus.expired,
-      account = null;
+      account = null,
+      transientTransportFailure = false;
 
   /// 创建暂时无法验证会话时使用的结果，保留 Cookie 供稍后重试。
   const BilibiliSessionState.networkError({
     this.message = '暂时无法读取登录状态，请检查网络后重试。',
+    this.transientTransportFailure = false,
   }) : status = BilibiliSessionStatus.networkError,
        account = null;
 
   final BilibiliSessionStatus status;
   final BilibiliAccount? account;
   final String? message;
+
+  /// The remote check hit a transport fault, not a local identity/read fault.
+  /// This is only suitable for retaining an already-visible, read-only view.
+  final bool transientTransportFailure;
 
   /// 判断该结果是否包含已被官方确认的账号资料。
   bool get isActive =>
@@ -179,6 +184,7 @@ class BilibiliAuthService {
   };
   String? _checkedWebSession;
   BilibiliSessionState? _checkedWebSessionState;
+  bool _checkedWebSessionWasActive = false;
 
   /// 正常页面每次都验证当前会话，保留现有账号读取接口。
   Future<BilibiliSessionState> loadCurrentSession() =>
@@ -259,6 +265,7 @@ class BilibiliAuthService {
       if (!_containsSessionCookie(cookieHeader)) {
         _checkedWebSession = null;
         _checkedWebSessionState = null;
+        _checkedWebSessionWasActive = false;
         return const BilibiliSessionState.signedOut();
       }
       final token = _sessionCookieValue(cookieHeader);
@@ -270,11 +277,23 @@ class BilibiliAuthService {
       final state = await _requestCurrentSession(cookieHeader);
       if (state.isActive) onVerifiedCookie?.call(cookieHeader);
       if (state.status == BilibiliSessionStatus.networkError) {
-        _checkedWebSession = null;
         _checkedWebSessionState = null;
+        // A transport failure cannot establish identity. Retain only the
+        // existing token equality signal, never a reusable active result.
+        if (state.transientTransportFailure &&
+            _checkedWebSessionWasActive &&
+            token == _checkedWebSession) {
+          return state;
+        }
+        _checkedWebSession = null;
+        _checkedWebSessionWasActive = false;
+        return BilibiliSessionState.networkError(
+          message: state.message ?? '暂时无法读取登录状态，请检查网络后重试。',
+        );
       } else {
         _checkedWebSession = token;
         _checkedWebSessionState = state;
+        _checkedWebSessionWasActive = state.isActive;
       }
       return state;
     } on PlatformException {
@@ -450,6 +469,7 @@ class BilibiliAuthService {
         await write();
         _checkedWebSession = null;
         _checkedWebSessionState = null;
+        _checkedWebSessionWasActive = false;
       } finally {
         CacheLifecycle.accountChanged();
       }
@@ -505,20 +525,25 @@ class BilibiliAuthService {
       if (response.statusCode != HttpStatus.ok) {
         return BilibiliSessionState.networkError(
           message: '登录状态服务暂时不可用（HTTP ${response.statusCode}）。',
+          transientTransportFailure:
+              response.statusCode >= 500 && response.statusCode < 600,
         );
       }
       return _parseCurrentSession(response.body);
     } on SocketException {
       return const BilibiliSessionState.networkError(
         message: '无法连接到登录状态服务，请检查网络。',
+        transientTransportFailure: true,
       );
     } on HttpException {
       return const BilibiliSessionState.networkError(
         message: '登录状态网络响应异常，请稍后重试。',
+        transientTransportFailure: true,
       );
     } on TimeoutException {
       return const BilibiliSessionState.networkError(
         message: '验证登录状态超时，请检查网络后重试。',
+        transientTransportFailure: true,
       );
     } on FormatException {
       return const BilibiliSessionState.networkError(

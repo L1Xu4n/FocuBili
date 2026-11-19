@@ -34,6 +34,10 @@ class _AccountData extends BilibiliAccountDataService {
 
   @override
   Future<int?> currentHomeCollectionMid() async => mid ?? 0;
+  @override
+  Future<({int? mid, bool transientNetworkError})>
+  checkHomeCollectionIdentity() async =>
+      (mid: await currentHomeCollectionMid(), transientNetworkError: false);
 
   @override
   Future<AccountDataPage<FavoriteFolder>> loadFavoriteFolders() {

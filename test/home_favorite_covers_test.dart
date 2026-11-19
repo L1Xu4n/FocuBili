@@ -13,6 +13,7 @@ import 'package:focubili/models/app_favorite.dart';
 import 'package:focubili/services/app_favorites_service.dart';
 import 'package:focubili/services/bilibili_account_data_service.dart';
 import 'package:focubili/services/cache_lifecycle.dart';
+import 'package:focubili/services/image_resource_cache.dart';
 
 class CoverAccount extends BilibiliAccountDataService {
   int? mid = 101;
@@ -33,6 +34,11 @@ class CoverAccount extends BilibiliAccountDataService {
   Future<AccountDataPage<FavoriteFolder>> Function()? next;
   @override
   Future<int?> currentHomeCollectionMid() async => mid;
+  @override
+  Future<({int? mid, bool transientNetworkError})>
+  checkHomeCollectionIdentity() async =>
+      (mid: await currentHomeCollectionMid(), transientNetworkError: false);
+
   @override
   Future<int?> currentAccountMid() async => mid;
   @override
@@ -71,25 +77,29 @@ Future<String> seed(int mid, List<Map<String, String>> choices) async {
   return raw;
 }
 
-Widget host(CoverAccount api, {double scale = 1, bool dark = false}) =>
-    MaterialApp(
-      theme: ThemeData(brightness: dark ? Brightness.dark : Brightness.light),
-      builder: (context, child) => MediaQuery(
-        data: MediaQuery.of(
-          context,
-        ).copyWith(textScaler: TextScaler.linear(scale)),
-        child: child!,
+Widget host(
+  BilibiliAccountDataService api, {
+  double scale = 1,
+  bool dark = false,
+  ImageResourceCache? imageCache,
+}) => MaterialApp(
+  theme: ThemeData(brightness: dark ? Brightness.dark : Brightness.light),
+  builder: (context, child) => MediaQuery(
+    data: MediaQuery.of(context).copyWith(textScaler: TextScaler.linear(scale)),
+    child: child!,
+  ),
+  home: Scaffold(
+    body: SingleChildScrollView(
+      child: HomeCollectionCard(
+        showCustomization: true,
+        favorites: true,
+        accountDataService: api,
+        imageCache: imageCache,
       ),
-      home: Scaffold(
-        body: SingleChildScrollView(
-          child: HomeCollectionCard(
-            showCustomization: true,
-            favorites: true,
-            accountDataService: api,
-          ),
-        ),
-      ),
-    );
+    ),
+  ),
+);
+
 Future<void> settle(WidgetTester tester) async {
   await tester.runAsync(
     () => Future<void>.delayed(const Duration(milliseconds: 40)),

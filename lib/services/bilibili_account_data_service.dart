@@ -134,13 +134,21 @@ class BilibiliAccountDataService {
       (await _openReadSession()).account?.mid;
 
   /// 首页配置使用已验证 UID，明确未登录才使用访客键 0；未知状态不读写。
-  Future<int?> currentHomeCollectionMid() async {
+  Future<int?> currentHomeCollectionMid() async =>
+      (await checkHomeCollectionIdentity()).mid;
+
+  /// Exposes transport failures without converting them into verified identity.
+  Future<({int? mid, bool transientNetworkError})>
+  checkHomeCollectionIdentity() async {
     final session = await _openReadSession();
-    return switch (session.status) {
-      _AccountReadSessionStatus.ready => session.account!.mid,
-      _AccountReadSessionStatus.signedOut => 0,
-      _ => null,
-    };
+    return (
+      mid: switch (session.status) {
+        _AccountReadSessionStatus.ready => session.account!.mid,
+        _AccountReadSessionStatus.signedOut => 0,
+        _ => null,
+      },
+      transientNetworkError: session.transientTransportFailure,
+    );
   }
 
   /// 在同一个只读会话内完整读取远端分组及成员，任何失败都不返回半份导入资料。
@@ -411,7 +419,9 @@ class BilibiliAccountDataService {
         case BilibiliSessionStatus.expired:
           return const _AccountReadSession.expired();
         case BilibiliSessionStatus.networkError:
-          return const _AccountReadSession.networkError();
+          return _AccountReadSession.networkError(
+            transientTransportFailure: state.transientTransportFailure,
+          );
         case BilibiliSessionStatus.active:
           final BilibiliAccount? account = state.account;
           if (account == null || account.mid <= 0) {
@@ -721,35 +731,41 @@ class _AccountReadSession {
     required this.account,
     required this.cookieHeader,
   }) : status = _AccountReadSessionStatus.ready,
+       transientTransportFailure = false,
        assert(account != null),
        assert(cookieHeader != null);
 
   /// 创建没有登录会话时的私有上下文。
   const _AccountReadSession.signedOut()
     : status = _AccountReadSessionStatus.signedOut,
+      transientTransportFailure = false,
       account = null,
       cookieHeader = null;
 
   /// 创建会话已过期时的私有上下文。
   const _AccountReadSession.expired()
     : status = _AccountReadSessionStatus.expired,
+      transientTransportFailure = false,
       account = null,
       cookieHeader = null;
 
   /// 创建读取登录状态失败时的私有上下文。
-  const _AccountReadSession.networkError()
-    : status = _AccountReadSessionStatus.networkError,
-      account = null,
-      cookieHeader = null;
+  const _AccountReadSession.networkError({
+    this.transientTransportFailure = false,
+  }) : status = _AccountReadSessionStatus.networkError,
+       account = null,
+       cookieHeader = null;
 
   /// 创建账号资料不完整时的私有上下文，阻止任何网络请求。
   const _AccountReadSession.unavailable()
     : status = _AccountReadSessionStatus.unavailable,
+      transientTransportFailure = false,
       account = null,
       cookieHeader = null;
 
   /// 当前会话是否能够继续发起固定的只读账号数据请求。
   final _AccountReadSessionStatus status;
+  final bool transientTransportFailure;
 
   /// 已验证账号资料，只在 status 为 ready 时存在。
   final BilibiliAccount? account;
