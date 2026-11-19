@@ -153,6 +153,33 @@ void main() {
           expect(control.hitTestable(), findsOneWidget);
           expect(t.getCenter(control).dy, closeTo(dock.center.dy, 1));
         }
+        final tiles = [
+          for (final control in [controls[0], controls[1], _apply])
+            find.descendant(
+              of: control,
+              matching: find.byWidgetPredicate(
+                (widget) =>
+                    widget is Container &&
+                    widget.decoration is BoxDecoration &&
+                    (widget.decoration as BoxDecoration).border != null,
+              ),
+            ),
+        ];
+        final checkTile = t.getRect(tiles.last);
+        for (var i = 0; i < tiles.length; i++) {
+          final decoration =
+              t.widget<Container>(tiles[i]).decoration! as BoxDecoration;
+          final applyDecoration =
+              t.widget<Container>(tiles.last).decoration! as BoxDecoration;
+          expect(decoration.border, applyDecoration.border);
+          expect(decoration.borderRadius, applyDecoration.borderRadius);
+          final tile = t.getRect(tiles[i]);
+          final hit = t.getRect(i == 2 ? _apply : controls[i]);
+          expect(tile.height, checkTile.height);
+          expect(tile.top, closeTo(checkTile.top, .1));
+          expect(tile.left - hit.left, closeTo(5, .1));
+          expect(hit.right - tile.right, closeTo(5, .1));
+        }
         expect(
           controls.map((c) => t.getCenter(c).dx).toList(),
           orderedEquals(

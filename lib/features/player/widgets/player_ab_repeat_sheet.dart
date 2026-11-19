@@ -226,7 +226,24 @@ class _PlayerAbRepeatSheetState extends State<PlayerAbRepeatSheet> {
     ),
   );
 
-  Widget _floatingPoint(String point, TextEditingController controller) {
+  // Time chips and the check tile share visible geometry; their button hit
+  // targets stay larger, and timestamps still use a wider tile than an icon.
+  double _floatingTileHeight(BuildContext context) =>
+      (MediaQuery.textScalerOf(context).scale(14) * 1.2 + 6)
+          .clamp(34.0, 82.0)
+          .toDouble();
+
+  BoxDecoration _floatingTile(Color color) => BoxDecoration(
+    color: color,
+    borderRadius: BorderRadius.circular(10),
+    border: Border.all(color: const Color(0x22C2D9FF)),
+  );
+
+  Widget _floatingPoint(
+    BuildContext context,
+    String point,
+    TextEditingController controller,
+  ) {
     final time = controller.text;
     final label = time.isEmpty ? '标记' : time;
     const accent = Color(0xFFBDDAFF);
@@ -239,40 +256,50 @@ class _PlayerAbRepeatSheetState extends State<PlayerAbRepeatSheet> {
           onPressed: () => _mark(controller),
           style: TextButton.styleFrom(
             foregroundColor: accent,
-            padding: const EdgeInsets.symmetric(horizontal: 6),
-            minimumSize: const Size(0, 44),
+            padding: const EdgeInsets.symmetric(horizontal: 5),
+            minimumSize: Size(
+              0,
+              PlayerAbRepeatSheet.floatingToolbarHeight(context) - 4,
+            ),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(11),
             ),
-            backgroundColor: time.isEmpty
-                ? const Color(0x12BFD6FE)
-                : const Color(0x2199BAFF),
-            side: const BorderSide(color: Color(0x19C2D9FF)),
             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           ),
-          child: Row(
-            children: [
-              Text(point, style: const TextStyle(fontWeight: FontWeight.w800)),
-              const SizedBox(width: 5),
-              Expanded(
-                child: Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Color(0xFFF2F6FF),
-                    fontFeatures: [FontFeature.tabularFigures()],
+          child: Container(
+            height: _floatingTileHeight(context),
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            decoration: _floatingTile(
+              time.isEmpty ? const Color(0x12BFD6FE) : const Color(0x2199BAFF),
+            ),
+            child: Row(
+              children: [
+                Text(
+                  point,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Color(0xFFF2F6FF),
+                      fontFeatures: [FontFeature.tabularFigures()],
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
     );
   }
 
-  Widget _floatingIcon({
+  Widget _floatingIcon(
+    BuildContext context, {
     Key? key,
     required String tooltip,
     required IconData icon,
@@ -281,21 +308,17 @@ class _PlayerAbRepeatSheetState extends State<PlayerAbRepeatSheet> {
     bool primary = false,
   }) => SizedBox(
     width: PlayerAbRepeatSheet._floatingActionWidth,
-    height: 48,
+    height: PlayerAbRepeatSheet.floatingToolbarHeight(context) - 4,
     child: IconButton(
       key: key,
       tooltip: tooltip,
       icon: primary || selected
           ? Container(
               width: 34,
-              height: 34,
+              height: _floatingTileHeight(context),
               alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: primary
-                    ? const Color(0x2A8FB8FF)
-                    : const Color(0x1EBCD3FF),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0x22C2D9FF)),
+              decoration: _floatingTile(
+                primary ? const Color(0x2A8FB8FF) : const Color(0x1EBCD3FF),
               ),
               child: Icon(icon),
             )
@@ -340,10 +363,11 @@ class _PlayerAbRepeatSheetState extends State<PlayerAbRepeatSheet> {
                     padding: const EdgeInsets.only(left: 6),
                     child: Row(
                       children: [
-                        _floatingPoint('A', _a),
+                        _floatingPoint(context, 'A', _a),
                         const SizedBox(width: 4),
-                        _floatingPoint('B', _b),
+                        _floatingPoint(context, 'B', _b),
                         _floatingIcon(
+                          context,
                           tooltip: '输入时间',
                           icon: Icons.edit_outlined,
                           selected: _editingTimes,
@@ -351,6 +375,7 @@ class _PlayerAbRepeatSheetState extends State<PlayerAbRepeatSheet> {
                               setState(() => _editingTimes = !_editingTimes),
                         ),
                         _floatingIcon(
+                          context,
                           key: const Key('ab-repeat-apply'),
                           tooltip: '启用区间循环',
                           icon: Icons.check_rounded,
@@ -359,6 +384,7 @@ class _PlayerAbRepeatSheetState extends State<PlayerAbRepeatSheet> {
                         ),
                         if (hasClear)
                           _floatingIcon(
+                            context,
                             key: const Key('ab-repeat-clear'),
                             tooltip: '清除区间',
                             icon: Icons.delete_outline,
@@ -368,6 +394,7 @@ class _PlayerAbRepeatSheetState extends State<PlayerAbRepeatSheet> {
                             },
                           ),
                         _floatingIcon(
+                          context,
                           tooltip: '收起 A–B 设置',
                           icon: Icons.close,
                           onPressed: _close,
