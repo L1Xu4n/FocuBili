@@ -44,6 +44,12 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
   bool get _editingBlocked =>
       _busy || _activeAutoSync || _savingAutoSync || _invalidated;
 
+  bool _isCurrentAccount(int mid, int revision) =>
+      mounted &&
+      !_invalidated &&
+      _mid == mid &&
+      CacheLifecycle.account.value == revision;
+
   /// 进入页面时检查身份并加载本机分组。
   @override
   void initState() {
@@ -152,12 +158,9 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
     final revision = _syncRevision;
     final accountRevision = CacheLifecycle.account.value;
     bool isCurrent() =>
-        mounted &&
+        _isCurrentAccount(mid, accountRevision) &&
         _autoSync &&
-        !_invalidated &&
-        _mid == mid &&
-        revision == _syncRevision &&
-        accountRevision == CacheLifecycle.account.value;
+        revision == _syncRevision;
 
     setState(() => _autoSyncRunning = true);
     try {
@@ -167,8 +170,8 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
       if (snapshot.groups.isEmpty) return;
       final groups = await _store.merge(snapshot, isCurrent: isCurrent);
       if (isCurrent()) setState(() => _groups = groups);
-    } catch (_) {
-      if (isCurrent()) _message('自动同步失败，本机分组未改变');
+    } catch (e) {
+      if (isCurrent()) _showImportFailure(e, automatic: true);
     } finally {
       if (mounted) setState(() => _autoSyncRunning = false);
       // If re-enabled while the previous request was pending, wait for that
@@ -197,6 +200,12 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
     }
+  }
+
+  void _showImportFailure(Object error, {required bool automatic}) {
+    final action = automatic ? '自动同步失败' : '导入失败';
+    final detail = error is StateError ? '：${error.message}' : '';
+    _message('$action，本机分组未改变$detail');
   }
 
   /// 新建或重命名本机分组，不修改 B 站原分组。
@@ -246,51 +255,69 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
 
   /// 展示远端完整快照，用户确认后合并，任何失败都保持本地资料。
   Future<void> _import() async {
+    final mid = _mid;
+    if (_editingBlocked || mid == null) return;
+    final revision = CacheLifecycle.account.value;
+    bool isCurrent() => _isCurrentAccount(mid, revision);
     setState(() => _busy = true);
     try {
-      final mid = await _checkAccount();
       final snapshot = await _api.loadFollowingGroups();
-      if (!mounted || snapshot.mid != mid) return;
+      if (!mounted || !isCurrent()) return;
+      if (snapshot.mid != mid) throw StateError('账号已变化，请重新导入');
       final confirmed = await showDialog<bool>(
         context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('从 B 站导入分组'),
-          content: SizedBox(
-            width: 420,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (snapshot.groups.isEmpty) const Text('没有可导入的分组'),
-                  for (final group in snapshot.groups)
-                    ListTile(
-                      title: Text(group.name),
-                      trailing: Text('${group.members.length} 位'),
-                    ),
-                ],
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: snapshot.groups.isEmpty
-                  ? null
-                  : () => Navigator.pop(context, true),
-              child: const Text('合并到本机'),
-            ),
-          ],
+        builder: (context) => ValueListenableBuilder(
+          valueListenable: CacheLifecycle.account,
+          builder: (context, _, _) {
+            final current = isCurrent();
+            return AlertDialog(
+              title: const Text('从 B 站导入分组'),
+              content: current
+                  ? SizedBox(
+                      width: 420,
+                      child: SingleChildScrollView(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (snapshot.groups.isEmpty) const Text('没有可导入的分组'),
+                            for (final group in snapshot.groups)
+                              ListTile(
+                                title: Text(group.name),
+                                trailing: Text('${group.members.length} 位'),
+                              ),
+                          ],
+                        ),
+                      ),
+                    )
+                  : const Text('账号已变化，请重新导入'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('取消'),
+                ),
+                FilledButton(
+                  onPressed: !current || snapshot.groups.isEmpty
+                      ? null
+                      : () => Navigator.pop(context, true),
+                  child: const Text('合并到本机'),
+                ),
+              ],
+            );
+          },
         ),
       );
-      if (confirmed != true) return;
-      if (await _checkAccount() != snapshot.mid) throw StateError('账号已变化');
-      final groups = await _store.merge(snapshot);
-      if (mounted && !_invalidated) setState(() => _groups = groups);
+      if (confirmed != true || !isCurrent()) return;
+      final currentMid = await _api.currentAccountMid();
+      if (!isCurrent()) return;
+      if (currentMid == null) throw StateError('暂时无法确认当前账号，请重试');
+      if (currentMid != mid) {
+        _accountChanged();
+        return;
+      }
+      final groups = await _store.merge(snapshot, isCurrent: isCurrent);
+      if (isCurrent()) setState(() => _groups = groups);
     } catch (e) {
-      _message('$e');
+      if (isCurrent()) _showImportFailure(e, automatic: false);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
