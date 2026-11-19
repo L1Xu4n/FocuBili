@@ -523,6 +523,8 @@ void main() {
 
     expect(find.text('笔记分享预览'), findsOneWidget);
     expect(find.byType(VideoNoteShareCard), findsOneWidget);
+    await tester.tap(find.byKey(const Key('video-note-share-style-classic')));
+    await tester.pumpAndSettle();
     expect(find.text('BV · BV1GJ411x7h7'), findsOneWidget);
     expect(find.text('时间点 · 01:02'), findsOneWidget);
     expect(find.text('统一管理测试视频'), findsWidgets);
