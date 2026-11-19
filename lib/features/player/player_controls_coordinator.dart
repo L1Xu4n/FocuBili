@@ -905,7 +905,6 @@ mixin _PlayerControlsCoordinator
   set _partsAscending(bool value);
 
   /// 由页面状态类提供当前画面比例模式。
-  _VideoFitMode get _videoFitMode;
   set _videoFitMode(_VideoFitMode value);
 
   /// 由页面状态类提供展开选集的滚动控制器。

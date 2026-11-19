@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -7,7 +8,7 @@ import '../../../models/playback_preferences.dart';
 import '../../../models/player_overlay_data.dart';
 import '../../../services/local_export_service.dart';
 import '../../../services/subtitle_export_service.dart';
-import 'player_subtitle_caption.dart';
+import 'player_subtitle_preview.dart';
 
 /// 在播放器内选择字幕、浏览正文和调整字幕外观。
 class PlayerSubtitleSheet extends StatefulWidget {
@@ -21,6 +22,8 @@ class PlayerSubtitleSheet extends StatefulWidget {
     required this.reloadTracks,
     required this.onPreviewFontSize,
     required this.onCommitFontSize,
+    this.previewViewport,
+    this.previewText,
     this.initialResult,
     this.position = PlaybackPreferences.defaultSubtitlePosition,
     this.opacity = PlaybackPreferences.defaultSubtitleOpacity,
@@ -35,6 +38,8 @@ class PlayerSubtitleSheet extends StatefulWidget {
     this.exportService = const LocalExportService(),
   });
 
+  final ValueListenable<SubtitlePreviewViewport?>? previewViewport;
+  final String? previewText;
   final String videoLabel;
   final String offValue;
   final double fontSize;
@@ -449,33 +454,94 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
   }
 
   Widget _buildAppearance() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+    final theme = Theme.of(context);
+    Widget preview(double maxHeight) {
+      Widget frame(SubtitlePreviewViewport? viewport) {
+        // Standalone sheets have no attached video surface.
+        final width = MediaQuery.sizeOf(context).width;
+        return PlayerSubtitlePreview(
+          viewport:
+              viewport ??
+              SubtitlePreviewViewport(size: Size(width, width * 9 / 16)),
+          text: widget.previewText ?? '这是字幕预览',
+          fontSize: _appearance.subtitleFontSize,
+          opacity: _appearance.subtitleOpacity,
+          position: _appearance.subtitlePosition,
+        );
+      }
+
+      final source = widget.previewViewport;
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            height: 100,
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Align(
-              alignment: Alignment(0, _appearance.subtitlePosition * 2 - 1),
-              child: PlayerSubtitleCaption(
-                key: const Key('subtitle-appearance-preview'),
-                text: '这是字幕预览',
-                fontSize: _appearance.subtitleFontSize,
-                opacity: _appearance.subtitleOpacity,
-              ),
+          Text(
+            '播放预览',
+            style: theme.textTheme.labelLarge?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
             ),
           ),
-          const SizedBox(height: 12),
-          for (final setting in _appearanceSettings)
-            _buildAppearanceSlider(setting),
+          const SizedBox(height: 8),
+          ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: maxHeight),
+            child: source == null
+                ? frame(null)
+                : ValueListenableBuilder(
+                    valueListenable: source,
+                    builder: (context, viewport, _) => frame(viewport),
+                  ),
+          ),
         ],
-      ),
+      );
+    }
+
+    final controls = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final setting in _appearanceSettings)
+          _buildAppearanceSlider(setting),
+      ],
+    );
+    return LayoutBuilder(
+      builder: (context, bounds) {
+        final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
+        // On short, wide viewports, keep the scaled frame in view while adjusting.
+        final split = bounds.maxWidth >= 580 && scale <= 1.45;
+        if (split) {
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  flex: 6,
+                  child: SingleChildScrollView(
+                    primary: false,
+                    child: preview((bounds.maxHeight - 64).clamp(70.0, 280.0)),
+                  ),
+                ),
+                const SizedBox(width: 24),
+                Expanded(
+                  flex: 5,
+                  child: SingleChildScrollView(primary: false, child: controls),
+                ),
+              ],
+            ),
+          );
+        }
+        return SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              preview((bounds.maxHeight * .48).clamp(80.0, 250.0)),
+              const SizedBox(height: 16),
+              controls,
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -508,8 +574,20 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
       children: [
         Row(
           children: [
-            Expanded(child: Text(setting.label)),
-            Text(label),
+            Expanded(
+              child: Text(switch (setting) {
+                SubtitleAppearanceSetting.fontSize => '字号',
+                SubtitleAppearanceSetting.position => '垂直位置',
+                SubtitleAppearanceSetting.opacity => '不透明度',
+              }, style: Theme.of(context).textTheme.titleSmall),
+            ),
+            Text(
+              label,
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
           ],
         ),
         Semantics(
@@ -519,6 +597,7 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
             value: value,
             min: min,
             max: max,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
             divisions: divisions,
             label: label,
             semanticFormatterCallback: switch (setting) {
@@ -674,8 +753,6 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
                               // 关闭只撤销当前视频的字幕显示。
                               onTap: () => _chooseTrack(widget.offValue),
                             ),
-                            if (widget.diagnosticReport != null)
-                              _buildDiagnostics(),
                             for (final track
                                 in result?.tracks ?? const <SubtitleTrack>[])
                               ListTile(
@@ -753,6 +830,8 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
                                     ? null
                                     : () => _chooseTrack(track.id),
                               ),
+                            if (widget.diagnosticReport != null)
+                              _buildDiagnostics(),
                           ],
                         ),
                       ),
