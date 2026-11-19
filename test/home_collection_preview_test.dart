@@ -34,6 +34,11 @@ class Api extends BilibiliAccountDataService {
   @override
   Future<int?> currentHomeCollectionMid() async => mid;
   @override
+  Future<({int? mid, bool transientNetworkError})>
+  checkHomeCollectionIdentity() async =>
+      (mid: await currentHomeCollectionMid(), transientNetworkError: false);
+
+  @override
   Future<AccountDataPage<FollowedCreator>> loadFollowedCreators({
     int page = 1,
   }) async {

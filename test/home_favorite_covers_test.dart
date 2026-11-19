@@ -3,13 +3,17 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:focubili/features/common/app_network_image.dart';
 import 'package:focubili/features/focus/home_collection_card.dart';
 import 'package:focubili/features/focus/home_favorite_cover.dart';
+import 'package:focubili/features/profile/app_favorite_detail_page.dart';
+import 'package:focubili/features/profile/favorite_videos_page.dart';
 import 'package:focubili/models/account_collection.dart';
 import 'package:focubili/models/app_favorite.dart';
 import 'package:focubili/services/app_favorites_service.dart';
 import 'package:focubili/services/bilibili_account_data_service.dart';
 import 'package:focubili/services/cache_lifecycle.dart';
+import 'package:focubili/services/image_resource_cache.dart';
 
 class CoverAccount extends BilibiliAccountDataService {
   int? mid = 101;
@@ -30,6 +34,11 @@ class CoverAccount extends BilibiliAccountDataService {
   Future<AccountDataPage<FavoriteFolder>> Function()? next;
   @override
   Future<int?> currentHomeCollectionMid() async => mid;
+  @override
+  Future<({int? mid, bool transientNetworkError})>
+  checkHomeCollectionIdentity() async =>
+      (mid: await currentHomeCollectionMid(), transientNetworkError: false);
+
   @override
   Future<int?> currentAccountMid() async => mid;
   @override
@@ -68,25 +77,29 @@ Future<String> seed(int mid, List<Map<String, String>> choices) async {
   return raw;
 }
 
-Widget host(CoverAccount api, {double scale = 1, bool dark = false}) =>
-    MaterialApp(
-      theme: ThemeData(brightness: dark ? Brightness.dark : Brightness.light),
-      builder: (context, child) => MediaQuery(
-        data: MediaQuery.of(
-          context,
-        ).copyWith(textScaler: TextScaler.linear(scale)),
-        child: child!,
+Widget host(
+  BilibiliAccountDataService api, {
+  double scale = 1,
+  bool dark = false,
+  ImageResourceCache? imageCache,
+}) => MaterialApp(
+  theme: ThemeData(brightness: dark ? Brightness.dark : Brightness.light),
+  builder: (context, child) => MediaQuery(
+    data: MediaQuery.of(context).copyWith(textScaler: TextScaler.linear(scale)),
+    child: child!,
+  ),
+  home: Scaffold(
+    body: SingleChildScrollView(
+      child: HomeCollectionCard(
+        showCustomization: true,
+        favorites: true,
+        accountDataService: api,
+        imageCache: imageCache,
       ),
-      home: Scaffold(
-        body: SingleChildScrollView(
-          child: HomeCollectionCard(
-            showCustomization: true,
-            favorites: true,
-            accountDataService: api,
-          ),
-        ),
-      ),
-    );
+    ),
+  ),
+);
+
 Future<void> settle(WidgetTester tester) async {
   await tester.runAsync(
     () => Future<void>.delayed(const Duration(milliseconds: 40)),
@@ -419,6 +432,115 @@ void main() {
     await settle(tester);
     expect(api.calls, 2);
     expect(cover(tester, 'remote', '7'), 'https://fixture.invalid/updated');
+  });
+  testWidgets('返回远端收藏夹时保留已显示的封面，实际变化才替换', (tester) async {
+    final api = CoverAccount();
+    api.next = () async =>
+        AccountDataPage.success(items: [folder('')], page: 1, hasMore: false);
+    AccountDataPage<FavoriteVideo> videos(String image) =>
+        AccountDataPage.success(
+          items: [
+            FavoriteVideo(
+              bvid: 'BV1',
+              title: '课程',
+              coverUrl: image,
+              ownerName: 'UP',
+              duration: Duration.zero,
+              partCount: 1,
+              favoritedAt: null,
+              playCount: 0,
+              danmakuCount: 0,
+              isAvailable: true,
+            ),
+          ],
+          page: 1,
+          hasMore: false,
+        );
+    const old = 'https://fixture.invalid/before';
+    const updated = 'https://fixture.invalid/after';
+    api.videos = (_) async => videos(old);
+    await seed(101, [choice('remote', '7', '远端课程')]);
+    await tester.pumpWidget(host(api));
+    await settle(tester);
+    final image = find.descendant(
+      of: find.byKey(const ValueKey('home-cover-remote:7')),
+      matching: find.byType(AppNetworkImage),
+    );
+    final imageState = tester.state(image);
+    expect(cover(tester, 'remote', '7'), old);
+
+    for (final next in [old, null, updated]) {
+      await tester.tap(find.text('远端课程'));
+      await settle(tester);
+      expect(find.byType(FavoriteVideosPage), findsOneWidget);
+      final pending = Completer<AccountDataPage<FavoriteVideo>>();
+      api.videos = (_) => pending.future;
+      await tester.pageBack();
+      await settle(tester);
+
+      // The folder list (with empty cover metadata) has completed, but the
+      // new first video has not. Never unmount and recreate the old image.
+      expect(cover(tester, 'remote', '7'), old);
+      expect(tester.state(image), same(imageState));
+      pending.complete(
+        next == null ? AccountDataPage.networkError() : videos(next),
+      );
+      await settle(tester);
+      expect(cover(tester, 'remote', '7'), next ?? old);
+      expect(tester.state(image), same(imageState));
+    }
+
+    await tester.tap(find.text('远端课程'));
+    await settle(tester);
+    api.next = () async => AccountDataPage.networkError();
+    await tester.pageBack();
+    await settle(tester);
+    expect(cover(tester, 'remote', '7'), updated);
+    expect(tester.state(image), same(imageState));
+
+    await tester.tap(find.text('远端课程'));
+    await settle(tester);
+    api.next = () async =>
+        AccountDataPage.success(items: [], page: 1, hasMore: false);
+    await tester.pageBack();
+    await settle(tester);
+    expect(cover(tester, 'remote', '7'), '');
+    expect(image, findsNothing);
+    expect(api.calls, 6);
+    expect(api.videoCalls, [7, 7, 7, 7]);
+  });
+  testWidgets('浏览本机收藏夹再返回保留封面，之后的收藏变更仍更新', (tester) async {
+    final api = CoverAccount()..mid = 0;
+    final service = AppFavoritesService();
+    final local = (await tester.runAsync(() => service.createFolder('本机课程')))!;
+    const old = 'https://fixture.invalid/before-local';
+    const updated = 'https://fixture.invalid/after-local';
+    await tester.runAsync(() => service.addItem(item(local.id, 'BV1', old, 1)));
+    await seed(0, [choice('local', local.id, '本机课程')]);
+    await tester.pumpWidget(host(api));
+    await settle(tester);
+    final image = find.descendant(
+      of: find.byKey(ValueKey('home-cover-local:${local.id}')),
+      matching: find.byType(AppNetworkImage),
+    );
+    final imageState = tester.state(image);
+    await tester.runAsync(() async {
+      await tester.tap(find.text('本机课程'));
+      await Future<void>.delayed(Duration.zero);
+    });
+    await settle(tester);
+    expect(find.byType(AppFavoriteDetailPage), findsOneWidget);
+    await tester.pageBack();
+    await settle(tester);
+    expect(cover(tester, 'local', local.id), old);
+    expect(tester.state(image), same(imageState));
+
+    await tester.runAsync(
+      () => service.addItem(item(local.id, 'BV2', updated, 2)),
+    );
+    await settle(tester);
+    expect(cover(tester, 'local', local.id), updated);
+    expect(api.calls, 0);
   });
   testWidgets('缺图批次最多三个请求，未选择的夹不探测', (tester) async {
     final api = CoverAccount();
