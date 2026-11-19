@@ -12,20 +12,27 @@ import 'package:focubili/platform/app_platform.dart';
 import 'package:share_plus/share_plus.dart';
 
 /// 创建一条固定笔记，测试可选择是否附带本机截图。
-VideoNote _note({String? framePath}) {
+VideoNote _note({
+  String? framePath,
+  String id = 'note-1',
+  String bvid = 'BV1GJ411x7h7',
+  int page = 6,
+  String title = '德摩根律',
+  Duration position = const Duration(minutes: 12, seconds: 34),
+}) {
   return VideoNote(
-    id: 'note-1',
-    bvid: 'BV1GJ411x7h7',
+    id: id,
+    bvid: bvid,
     videoTitle: '集合的三种常见运算',
     ownerName: '数学老师',
-    partCid: 1001,
-    partPageNumber: 6,
+    partCid: 995 + page,
+    partPageNumber: page,
     partTitle: '交并补运算',
-    title: '德摩根律',
+    title: title,
     body: '交集和并集的补集关系。',
     createdAt: DateTime(2026, 7, 19, 8),
     updatedAt: DateTime(2026, 7, 19, 8, 5),
-    position: const Duration(minutes: 12, seconds: 34),
+    position: position,
     framePath: framePath,
   );
 }
@@ -64,18 +71,100 @@ void main() {
     expect(await file.readAsBytes(), package.bytes);
   });
 
-  /// 验证无截图时直接生成可读取的 Markdown 文件。
-  test('无图片笔记直接导出Markdown', () async {
+  test('无图片也导出一个含 notes/ 的 Markdown ZIP', () async {
     final VideoNoteExportPackage package = await const VideoNoteExportService()
         .buildPackage(<VideoNote>[_note()], VideoNoteExportFormat.markdown);
 
-    expect(package.extension, 'md');
+    expect(package.extension, 'zip');
     expect(package.imageCount, 0);
-    final String markdown = utf8.decode(package.bytes);
+    final archive = ZipDecoder().decodeBytes(package.bytes);
+    const entryName = 'notes/BV1GJ411x7h7.md';
+    expect(archive.files.map((file) => file.name), [entryName]);
+    final String markdown = utf8.decode(archive.find(entryName)!.content);
     expect(markdown, contains('# 焦点哔哩时间点笔记'));
     expect(markdown, contains('`12:34`'));
     expect(markdown, contains('德摩根律'));
   });
+
+  test('groups by BV rather than by title, part, or timestamp', () async {
+    final notes = [
+      _note(title: '第一条'),
+      _note(id: 'other-video', bvid: 'BV1Q541167Qg', page: 1, title: '另一视频'),
+      _note(
+        id: 'other-part',
+        page: 7,
+        title: '第二条',
+        position: const Duration(seconds: 18, milliseconds: 50),
+      ),
+    ];
+    final package = await const VideoNoteExportService().buildPackage(
+      notes,
+      VideoNoteExportFormat.markdown,
+    );
+    final archive = ZipDecoder().decodeBytes(package.bytes);
+    expect(
+      archive.files.map((file) => file.name),
+      unorderedEquals(['notes/BV1GJ411x7h7.md', 'notes/BV1Q541167Qg.md']),
+    );
+    final first = utf8.decode(archive.find('notes/BV1GJ411x7h7.md')!.content);
+    final second = utf8.decode(archive.find('notes/BV1Q541167Qg.md')!.content);
+    expect(first, allOf(contains('第一条'), contains('P6'), contains('12:34')));
+    expect(
+      first,
+      allOf(contains('第二条'), contains('P7'), contains('00:18.050')),
+    );
+    expect(first, isNot(contains('另一视频')));
+    expect(second, contains('另一视频'));
+    expect(second, isNot(contains('第一条')));
+    expect(package.noteCount, 3);
+  });
+
+  test(
+    'malformed and case-colliding BV identifiers cannot collide or escape notes/',
+    () async {
+      final notes = [
+        _note(id: 'a', bvid: '../intro', title: '一'),
+        _note(id: 'b', bvid: 'BV1GJ411x7h7', title: '二'),
+        _note(id: 'c', bvid: 'BV1gj411x7h7', title: '三'),
+      ];
+      final service = const VideoNoteExportService();
+      final archive = ZipDecoder().decodeBytes(
+        (await service.buildPackage(
+          notes,
+          VideoNoteExportFormat.markdown,
+        )).bytes,
+      );
+      final reordered = ZipDecoder().decodeBytes(
+        (await service.buildPackage(
+          notes.reversed.toList(),
+          VideoNoteExportFormat.markdown,
+        )).bytes,
+      );
+      final names = archive.files.map((file) => file.name);
+      expect(names.toSet(), hasLength(3));
+      expect(names, everyElement(matches(r'^notes/video-[a-f0-9]{64}\.md$')));
+      expect(names, unorderedEquals(reordered.files.map((file) => file.name)));
+    },
+  );
+
+  test(
+    'standalone no-image JSON keeps v2 shape and round-trips a note',
+    () async {
+      final source = _note();
+      final package = await const VideoNoteExportService().buildPackage([
+        source,
+      ], VideoNoteExportFormat.json);
+      expect(package.extension, 'json');
+      final json =
+          jsonDecode(utf8.decode(package.bytes)) as Map<String, dynamic>;
+      expect(json.keys, ['format', 'version', 'exportedAt', 'notes']);
+      expect(json['format'], 'focubili.video_notes');
+      expect(json['version'], 2);
+      final row = (json['notes'] as List).single as Map<String, dynamic>;
+      expect(row, {...source.toJson(), 'framePath': null, 'frames': []});
+      expect(VideoNote.tryParse(row)!.toJson(), source.toJson());
+    },
+  );
 
   /// 验证带截图时生成 ZIP，JSON 使用包内相对图片路径。
   test('带图片笔记导出JSON和images压缩包', () async {
@@ -159,12 +248,18 @@ void main() {
         [note],
         VideoNoteExportFormat.markdown,
       );
+      final markdownArchive = ZipDecoder().decodeBytes(markdownPackage.bytes);
+      expect(markdownPackage.imageCount, 2);
+      expect(markdownPackage.missingImageCount, 1);
       final markdown = utf8.decode(
-        ZipDecoder()
-            .decodeBytes(markdownPackage.bytes)
-            .find('focubili_notes.md')!
-            .content,
+        markdownArchive.find('notes/BV1GJ411x7h7.md')!.content,
       );
+      final links = RegExp(
+        r'!\[[^\]]*\]\(([^)]+)\)',
+      ).allMatches(markdown).map((match) => match.group(1)!);
+      expect(links, ['images/1_note-1_1.jpg', 'images/1_note-1_3.png']);
+      expect(markdownArchive.find('notes/${links.first}')!.content, [3, 4]);
+      expect(markdownArchive.find('notes/${links.last}')!.content, [1, 2]);
       expect(markdown, contains(source));
       expect(
         markdown.indexOf('00:20.015'),
@@ -200,7 +295,7 @@ void main() {
 
     expect(sharedParams, isNotNull);
     expect(sharedParams!.fileNameOverrides, <String>[package.fileName]);
-    expect(sharedParams!.files!.single.mimeType, 'text/markdown');
+    expect(sharedParams!.files!.single.mimeType, 'application/zip');
     final File sharedFile = File(sharedParams!.files!.single.path);
     expect(await sharedFile.readAsBytes(), package.bytes);
   });

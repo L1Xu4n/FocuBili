@@ -211,34 +211,10 @@ class UnifiedExportService {
           _addJson(archive, 'notes/notes.json', {'notes': <Object>[]});
           continue;
         }
-        // Both human-readable and structured exports reuse the same image
-        // handling as the standalone note export, including multi-frame notes.
-        var missingFrames = 0;
-        for (final format in VideoNoteExportFormat.values) {
-          final package = await noteExporter.buildPackage(notes, format);
-          if (package.missingImageCount > missingFrames) {
-            missingFrames = package.missingImageCount;
-          }
-          if (package.extension == 'zip') {
-            final inner = ZipDecoder().decodeBytes(package.bytes);
-            for (final entry in inner.files.where((file) => file.isFile)) {
-              final name = 'notes/${entry.name}';
-              if (!archive.files.any((file) => file.name == name)) {
-                archive.add(ArchiveFile.bytes(name, entry.content));
-              }
-            }
-          } else {
-            final extension = format == VideoNoteExportFormat.json
-                ? 'json'
-                : 'md';
-            archive.add(
-              ArchiveFile.bytes(
-                'notes/focubili_notes.$extension',
-                package.bytes,
-              ),
-            );
-          }
-        }
+        final missingFrames = await noteExporter.addToUnifiedArchive(
+          archive,
+          notes,
+        );
         if (missingFrames > 0) {
           warnings.add('有 $missingFrames 张笔记截图无法读取，文字、时间点和缺图位置已保留。');
         }

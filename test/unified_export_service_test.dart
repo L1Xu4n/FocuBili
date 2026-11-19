@@ -9,6 +9,7 @@ import 'package:focubili/models/video_note.dart';
 import 'package:focubili/services/cached_player_overlay_service.dart';
 import 'package:focubili/services/unified_export_service.dart';
 import 'package:focubili/services/video_note_service.dart';
+import 'package:focubili/services/video_note_export_service.dart';
 import 'package:focubili/services/windows_playback_progress_store.dart';
 import 'package:focubili/services/subscription_service.dart';
 import 'package:focubili/models/subscription.dart';
@@ -133,37 +134,78 @@ void main() {
       addTearDown(() => directory.delete(recursive: true));
       final frame = File('${directory.path}/frame.png');
       await frame.writeAsBytes([137, 80, 78, 71]);
-      await VideoNoteService().saveNote(
-        VideoNote(
-          id: 'n1',
-          bvid: 'BV1GJ411x7h7',
-          videoTitle: 'Fixture video',
-          ownerName: 'Fixture owner',
-          partCid: 100,
-          partPageNumber: 1,
-          partTitle: 'part',
-          title: 'Fixture note',
-          body: 'contents',
-          createdAt: DateTime(2026),
-          updatedAt: DateTime(2026),
-          position: const Duration(seconds: 5),
-          framePath: frame.path,
-        ),
+      VideoNote note(
+        String id,
+        String bvid,
+        int page,
+        String title, {
+        String? framePath,
+      }) => VideoNote(
+        id: id,
+        bvid: bvid,
+        videoTitle: 'Fixture video',
+        ownerName: 'Fixture owner',
+        partCid: 100 + page,
+        partPageNumber: page,
+        partTitle: 'part',
+        title: title,
+        body: 'contents',
+        createdAt: DateTime(2026),
+        updatedAt: DateTime(2026),
+        position: Duration(seconds: page * 5),
+        framePath: framePath,
       );
+      final service = VideoNoteService();
+      await service.saveNote(
+        note('n1', 'BV1GJ411x7h7', 1, '截图标题', framePath: frame.path),
+      );
+      await service.saveNote(note('n2', 'BV1GJ411x7h7', 2, '同视频 P2'));
+      await service.saveNote(note('n3', 'BV1Q541167Qg', 1, '另一个视频'));
       final package = await UnifiedExportService().buildPackage(
         sections: {UnifiedExportSection.notes},
       );
       final archive = ZipDecoder().decodeBytes(package.bytes);
-      expect(archive.find('notes/focubili_notes.json'), isNotNull);
-      expect(archive.find('notes/focubili_notes.md'), isNotNull);
       expect(
-        archive.files.where((file) => file.name.startsWith('notes/images/')),
-        hasLength(1),
+        archive.files
+            .where((file) => file.name.endsWith('.md'))
+            .map((file) => file.name),
+        unorderedEquals(['notes/BV1GJ411x7h7.md', 'notes/BV1Q541167Qg.md']),
+      );
+      final first = utf8.decode(archive.find('notes/BV1GJ411x7h7.md')!.content);
+      final second = utf8.decode(
+        archive.find('notes/BV1Q541167Qg.md')!.content,
       );
       expect(
-        _document(archive, 'notes/focubili_notes.json')['notes'],
-        hasLength(1),
+        first,
+        allOf(
+          contains('截图标题'),
+          contains('同视频 P2'),
+          contains('00:05'),
+          contains('00:10'),
+        ),
       );
+      expect(first, isNot(contains('另一个视频')));
+      expect(second, contains('另一个视频'));
+      final images = archive.files.where(
+        (file) => file.name.startsWith('notes/images/'),
+      );
+      expect(images, hasLength(1));
+      final document = _document(archive, 'notes/focubili_notes.json');
+      final jsonNotes = document['notes'] as List;
+      expect(jsonNotes, hasLength(3));
+      final imagePath = jsonNotes.firstWhere(
+        (note) => note['id'] == 'n1',
+      )['framePath'];
+      expect(first, contains('![截图标题]($imagePath)'));
+      expect(archive.find('notes/$imagePath')!.content, [137, 80, 78, 71]);
+      final sameOrder = await service.loadNotes();
+      final standalonePackage = await const VideoNoteExportService()
+          .buildPackage(sameOrder, VideoNoteExportFormat.json);
+      final standalone = _document(
+        ZipDecoder().decodeBytes(standalonePackage.bytes),
+        'focubili_notes.json',
+      );
+      expect(document..remove('exportedAt'), standalone..remove('exportedAt'));
       expect(await frame.exists(), isTrue);
     },
   );
@@ -325,6 +367,10 @@ void main() {
           _document(archive, 'notes/focubili_notes.json')['notes'] as List;
       expect(notes.single['body'], 'contents');
       expect(notes.single['frames'].single['path'], isNull);
+      final markdown = utf8.decode(
+        archive.find('notes/BV1GJ411x7h7.md')!.content,
+      );
+      expect(markdown, contains('画面文件缺失或无法读取'));
     },
   );
 

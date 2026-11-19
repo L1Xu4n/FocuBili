@@ -244,7 +244,7 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
                   ListTile(
                     leading: const Icon(Icons.description_outlined),
                     title: const Text('导出为 Markdown'),
-                    subtitle: const Text('适合 Obsidian、Notion 等笔记软件读取'),
+                    subtitle: const Text('每个视频一个 Markdown 文件，与截图一起打包'),
                     // Markdown 选择函数只返回格式，生成和保存由外层统一处理。
                     onTap: () => Navigator.of(
                       context,
