@@ -9,7 +9,7 @@ import '../../services/data_transfer_file_service.dart';
 import '../../services/settings_transfer_service.dart';
 import 'settings_transfer_dialogs.dart';
 
-/// 提供用户主动操作的设置与登录迁移入口，敏感内容不进入剪贴板或诊断。
+/// 提供用户主动操作的设置与登录迁移入口，登录备份仅在明确确认后导出，凭据不回显或写入诊断。
 class DataTransferPage extends StatefulWidget {
   /// 创建迁移页面，测试可以注入只使用合成数据的服务。
   const DataTransferPage({
@@ -61,8 +61,8 @@ class _DataTransferPageState extends State<DataTransferPage> {
       await operation();
     } on FormatException {
       _message('文件格式不支持或内容损坏，未导入。');
-    } on BilibiliAuthException catch (error) {
-      _message(error.message);
+    } on BilibiliAuthException {
+      _message('登录信息不可用或验证失败，请检查登录状态和网络后重试。');
     } catch (_) {
       _message('操作未完成，请检查文件、网络或存储权限后重试。');
     } finally {
@@ -108,14 +108,11 @@ class _DataTransferPageState extends State<DataTransferPage> {
 
   /// 文件和剪贴板都使用同一份设置白名单 JSON。
   Future<void> _exportSettings() => _run(() async {
-    final method = await chooseSettingsTransferMethod(
-      context,
-      importing: false,
-    );
+    final method = await chooseDataTransferMethod(context, importing: false);
     if (!mounted || method == null || !_current) return;
     final source = await widget.settingsService.exportSettings();
     if (!_current) return;
-    if (method == SettingsTransferMethod.file) {
+    if (method == DataTransferMethod.file) {
       await _save('FocuBili-settings.json', source);
     } else {
       try {
@@ -132,10 +129,10 @@ class _DataTransferPageState extends State<DataTransferPage> {
 
   /// 两种来源都经过同一个解析器，经现有确认流程后才写入设置。
   Future<void> _importSettings() => _run(() async {
-    final method = await chooseSettingsTransferMethod(context, importing: true);
+    final method = await chooseDataTransferMethod(context, importing: true);
     if (!mounted || method == null || !_current) return;
     final Map<String, Object>? values;
-    if (method == SettingsTransferMethod.file) {
+    if (method == DataTransferMethod.file) {
       final source = await _pick();
       if (source == null || !_current) return;
       values = widget.settingsService.parseSettings(source);
@@ -158,47 +155,108 @@ class _DataTransferPageState extends State<DataTransferPage> {
     if (_current) _message('设置已导入，请重启 APP 以应用设置。');
   });
 
-  /// 说明明文登录文件的敏感性，用户确认后才读取稳定会话并写入自选位置。
+  /// 只在确认具体的明文文件/剪贴板目的地后读取当前稳定会话。
   Future<void> _exportLogin() => _run(() async {
-    if (!await _confirm(
-      '导出登录信息？',
-      '文件包含可用于登录账号的明文 Cookie。请只保存在你信任的位置，不要分享、上传或发送给他人。',
-      '我已了解，导出',
-    )) {
+    final method = await chooseDataTransferMethod(
+      context,
+      importing: false,
+      login: true,
+    );
+    if (!mounted || method == null || !_current) return;
+    final copying = method == DataTransferMethod.text;
+    final confirmed = await _confirm(
+      copying ? '复制登录信息？' : '导出登录信息？',
+      copying
+          ? '明文 Cookie 可用于登录你的账号。剪贴板历史或云同步可能保留副本，请只在可信设备间迁移，不要分享给他人。'
+          : '文件包含可用于登录账号的明文 Cookie。请只保存在你信任的位置，不要分享、上传或发送给他人。',
+      copying ? '我已了解，复制' : '我已了解，导出',
+    );
+    if (!confirmed || !_current || (copying && !_foreground)) return;
+    final cookie = await _auth.readCookieForExport();
+    if (!_current || (copying && !_foreground)) return;
+    final source = jsonEncode({
+      'format': 'focubili-login',
+      'schemaVersion': 1,
+      'cookie': cookie,
+    });
+    if (!copying) {
+      await _save('FocuBili-login-private.json', source);
       return;
     }
-    final cookie = await _auth.readCookieForExport();
-    await _save(
-      'FocuBili-login-private.json',
-      jsonEncode({
-        'format': 'focubili-login',
-        'schemaVersion': 1,
-        'cookie': cookie,
-      }),
-    );
+    try {
+      await Clipboard.setData(ClipboardData(text: source));
+    } catch (_) {
+      if (_current) _message('无法写入剪贴板，请重试或导出为文件。');
+      return;
+    }
+    if (_current) _message('登录备份已复制到剪贴板。');
   });
 
-  /// 验证登录文件并明确确认切换账号，官方校验成功后才复用现有会话事务写入。
-  Future<void> _importLogin() => _run(() async {
-    final source = await _pick();
-    if (source == null || !mounted) return;
+  bool get _foreground =>
+      WidgetsBinding.instance.lifecycleState == null ||
+      WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+
+  /// 两种载体只接受现有登录 JSON 格式，不把原文传给 UI 或日志。
+  static String _parseLogin(String source) {
+    if (!SettingsTransferService.fitsTransferLimit(source)) {
+      throw const FormatException();
+    }
     final root = jsonDecode(source);
     if (root is! Map ||
         root['format'] != 'focubili-login' ||
         root['schemaVersion'] != 1 ||
-        root['cookie'] is! String ||
-        (root['cookie'] as String).length > 65536) {
+        root['cookie'] is! String) {
       throw const FormatException();
     }
-    if (!await _confirm(
-      '导入登录信息？',
-      '请仅导入你自己的登录文件。应用将连接 B 站验证，成功后替换当前登录账号；失效文件或网络验证失败不会切换账号。',
-      '验证并导入',
-    )) {
+    final cookie = root['cookie'] as String;
+    if (cookie.isEmpty || cookie.length > 65536) throw const FormatException();
+    return cookie;
+  }
+
+  /// 仅显式粘贴时读取文本，不把登录备份交给输入法或建立草稿。
+  Future<void> _importLogin() => _run(() async {
+    final method = await chooseDataTransferMethod(
+      context,
+      importing: true,
+      login: true,
+    );
+    if (!mounted || method == null || !_current) return;
+    final String? source;
+    final pasting = method == DataTransferMethod.text;
+    if (pasting) {
+      if (!_foreground) return;
+      try {
+        source = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
+      } catch (_) {
+        if (_current) _message('无法读取剪贴板，请重试或从文件导入。');
+        return;
+      }
+      if (!_current || !_foreground) return;
+      if (source == null || source.isEmpty) {
+        _message('剪贴板没有登录备份文本。');
+        return;
+      }
+    } else {
+      source = await _pick();
+    }
+    if (source == null || !_current) return;
+    final String cookie;
+    try {
+      cookie = _parseLogin(source);
+    } on FormatException {
+      _message(pasting ? '剪贴板内容不是有效的登录备份。' : '文件格式不支持或内容损坏，未导入。');
       return;
     }
-    await _auth.loginWithCookie(root['cookie'] as String);
-    _message('登录信息已导入，请返回“我的”页面刷新账号。');
+    final confirmed = await _confirm(
+      '导入登录信息？',
+      pasting
+          ? '请仅导入你自己的登录备份。应用将连接 B 站验证，成功后替换当前登录账号；失效备份或网络验证失败不会切换账号。'
+          : '请仅导入你自己的登录文件。应用将连接 B 站验证，成功后替换当前登录账号；失效文件或网络验证失败不会切换账号。',
+      '验证并导入',
+    );
+    if (!confirmed || !_current || (pasting && !_foreground)) return;
+    await _auth.loginWithCookie(cookie);
+    if (_current) _message('登录信息已导入，请返回“我的”页面刷新账号。');
   });
 
   /// 确认后仅重置设置白名单，保留用户内容与协议记录。
@@ -247,7 +305,7 @@ class _DataTransferPageState extends State<DataTransferPage> {
               children: [
                 ListTile(
                   title: const Text('导出登录信息'),
-                  subtitle: const Text('敏感明文文件，请妥善保管'),
+                  subtitle: const Text('通过文件或剪贴板迁移，请妥善保管'),
                   leading: const Icon(Icons.key_outlined),
                   onTap: _busy ? null : _exportLogin,
                 ),

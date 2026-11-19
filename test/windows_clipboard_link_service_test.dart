@@ -49,6 +49,31 @@ void main() {
     expect(observed, <String>['https://www.bilibili.com/video/BV1GJ411x7h7']);
   });
 
+  test('主动复制的登录备份不作为短链或 BV 分享处理，正常复制链接仍工作', () async {
+    SharedPreferences.setMockInitialValues({
+      'windows_clipboard_link_detection.enabled': true,
+    });
+    const link = 'https://www.bilibili.com/video/BV1GJ411x7h7';
+    var text = link;
+    final seen = <String>[];
+    final monitor = WindowsClipboardLinkMonitor(
+      platform: AppPlatform.android,
+      allowInFlutterTest: true,
+      clipboardTextReader: () async => text,
+    );
+    addTearDown(monitor.dispose);
+    monitor.start(seen.add);
+    await Future<void>.delayed(Duration.zero);
+    text =
+        '  {"format":"focubili-login","schemaVersion":1,"cookie":"synthetic https://b23.tv/fixture"}';
+    monitor.setForeground(true);
+    await Future<void>.delayed(Duration.zero);
+    text = link;
+    monitor.setForeground(true);
+    await Future<void>.delayed(Duration.zero);
+    expect(seen, [link, link]);
+  });
+
   /// 验证偏好读取期间退到后台后不会继续访问系统剪贴板。
   test('Android 读取准备期间进入后台会取消本次检查', () async {
     SharedPreferences.setMockInitialValues(<String, Object>{

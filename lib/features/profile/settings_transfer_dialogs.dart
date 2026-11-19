@@ -3,26 +3,28 @@ import 'package:flutter/services.dart';
 
 import '../../services/settings_transfer_service.dart';
 
-/// 仅用于迁移应用偏好，不处理账号或其他用户数据。
-enum SettingsTransferMethod { file, text }
+/// 只选择载体，不在选择面板读取文件、剪贴板或会话。
+enum DataTransferMethod { file, text }
 
-Future<SettingsTransferMethod?> chooseSettingsTransferMethod(
+Future<DataTransferMethod?> chooseDataTransferMethod(
   BuildContext context, {
   required bool importing,
-}) => showDialog<SettingsTransferMethod>(
+  bool login = false,
+}) => showDialog<DataTransferMethod>(
   context: context,
   builder: (context) => SimpleDialog(
-    title: Text(importing ? '选择设置导入方式' : '选择设置导出方式'),
+    title: Text('选择${login ? '登录信息' : '设置'}${importing ? '导入' : '导出'}方式'),
     children: [
       ListTile(
         leading: const Icon(Icons.insert_drive_file_outlined),
         title: Text(importing ? '从文件导入' : '保存为文件'),
-        onTap: () => Navigator.pop(context, SettingsTransferMethod.file),
+        onTap: () => Navigator.pop(context, DataTransferMethod.file),
       ),
       ListTile(
         leading: Icon(importing ? Icons.content_paste : Icons.copy_rounded),
-        title: Text(importing ? '从文本导入' : '复制到剪贴板'),
-        onTap: () => Navigator.pop(context, SettingsTransferMethod.text),
+        title: Text(importing ? (login ? '从剪贴板粘贴' : '从文本导入') : '复制到剪贴板'),
+        subtitle: login && importing ? const Text('只粘贴你自己的登录备份') : null,
+        onTap: () => Navigator.pop(context, DataTransferMethod.text),
       ),
       Align(
         alignment: AlignmentDirectional.centerEnd,

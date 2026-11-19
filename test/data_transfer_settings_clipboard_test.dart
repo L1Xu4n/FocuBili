@@ -178,7 +178,7 @@ void main() {
     expect(prefs.getString('focubili_notes_v1'), 'synthetic-note-marker');
   });
 
-  testWidgets('设置导入保留实际文件读取和确认；原登录导入导出没有文本方式', (t) async {
+  testWidgets('设置及登录文件导入保留实际文件读取和确认，文件路径不用剪贴板', (t) async {
     final directory = Directory.systemTemp.createTempSync(
       'settings-transfer-test-',
     );
@@ -212,6 +212,7 @@ void main() {
     });
     expect(picker.calls, 1);
     await _tap(t, '导出登录信息');
+    await _tap(t, '保存为文件');
     expect(find.textContaining('明文 Cookie'), findsOneWidget);
     expect(find.text('复制到剪贴板'), findsNothing);
     await _tap(t, '取消');
@@ -223,6 +224,7 @@ void main() {
       }),
     );
     await _tap(t, '导入登录信息');
+    await _tap(t, '从文件导入');
     await waitFor('验证并导入');
     expect(picker.calls, 2);
     expect(find.text('从文本导入'), findsNothing);
