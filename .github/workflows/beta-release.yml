@@ -12,6 +12,10 @@ on:
         required: true
         default: '1'
         type: string
+      android_only:
+        description: Build only a signed Android preview artifact (cannot publish)
+        default: false
+        type: boolean
       publish:
         description: Publish the verified candidate as a prerelease; false only uploads CI artifacts
         default: false
@@ -34,8 +38,13 @@ jobs:
         env:
           REQUESTED_SHA: ${{ inputs.source_sha }}
           BETA_NUMBER: ${{ inputs.beta_number }}
+          ANDROID_ONLY: ${{ inputs.android_only }}
+          PUBLISH: ${{ inputs.publish }}
         shell: bash
         run: |
+          if [[ "$ANDROID_ONLY" == true && "$PUBLISH" == true ]]; then
+            echo 'Android-only builds cannot publish'; exit 1
+          fi
           test "$GITHUB_REPOSITORY" = 'L1Xu4n/FocuBili'
           test "$GITHUB_EVENT_NAME" = 'workflow_dispatch'
           case "$GITHUB_REF" in refs/heads/dev|refs/heads/master) ;; *) exit 1 ;; esac
@@ -60,10 +69,39 @@ jobs:
           build_tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
           python3 tool/beta_release.py inventory --plan beta-plan.json --aapt "$build_tools/aapt" --output inventory-before.json
       - name: Wait for successful CI on the exact source SHA
+        if: ${{ !inputs.android_only }}
         env:
           GH_TOKEN: ${{ github.token }}
           REQUESTED_SHA: ${{ inputs.source_sha }}
         run: python3 tool/beta_release.py wait-ci --source-sha "$REQUESTED_SHA" --output ci-verification.json
+      - name: Require successful Android CI for this exact source
+        if: inputs.android_only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_SHA: ${{ inputs.source_sha }}
+          SOURCE_BRANCH: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch "$SOURCE_BRANCH" \
+            --commit "$REQUESTED_SHA" --event push --limit 100 \
+            --json databaseId,headSha,headBranch,event,status,conclusion > exact-ci-runs.json
+          python3 - <<'PYCODE'
+          import json, os
+          from pathlib import Path
+          source = os.environ["REQUESTED_SHA"]
+          branch = os.environ["SOURCE_BRANCH"]
+          runs = json.loads(Path("exact-ci-runs.json").read_text())
+          exact = next((item for item in runs if item.get("headSha") == source
+                        and item.get("headBranch") == branch and item.get("event") == "push"), None)
+          if not exact or exact.get("status") != "completed" or exact.get("conclusion") != "success":
+              raise SystemExit("Android-only builds require successful push CI on the exact source SHA")
+          ci_id = exact.get("databaseId")
+          if type(ci_id) is not int or ci_id <= 0:
+              raise SystemExit("Invalid CI run identity")
+          Path("ci-verification.json").write_text(json.dumps(
+              {"sourceSha": source, "runs": {"ci.yml": ci_id}, "androidOnly": True}, indent=2) + "\n")
+          PYCODE
       - uses: actions/upload-artifact@v4
         with:
           name: focubili-beta-metadata
@@ -80,6 +118,7 @@ jobs:
     with:
       source_sha: ${{ inputs.source_sha }}
       beta_number: ${{ inputs.beta_number }}
+      android_only: ${{ inputs.android_only }}
     secrets:
       ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
       ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
@@ -87,6 +126,7 @@ jobs:
       ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
 
   apple:
+    if: ${{ !inputs.android_only }}
     needs: prepare
     uses: ./.github/workflows/apple-build.yml
     with:
@@ -94,6 +134,7 @@ jobs:
       beta_number: ${{ inputs.beta_number }}
 
   linux:
+    if: ${{ !inputs.android_only }}
     needs: prepare
     uses: ./.github/workflows/linux-build.yml
     with:
@@ -101,6 +142,7 @@ jobs:
       beta_number: ${{ inputs.beta_number }}
 
   assemble:
+    if: ${{ !inputs.android_only }}
     needs: [prepare, android-windows, apple, linux]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -148,7 +190,7 @@ jobs:
           retention-days: 14
 
   publish:
-    if: inputs.publish
+    if: inputs.publish && !inputs.android_only
     needs: [prepare, assemble]
     runs-on: ubuntu-latest
     timeout-minutes: 30
