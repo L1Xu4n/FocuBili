@@ -289,6 +289,9 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
         return;
       }
       _leaveSelectionMode();
+      if (widget.shareService.savesExportPackageLocally) {
+        _showExportedNotes(package);
+      }
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -327,17 +330,7 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
         return;
       }
       _leaveSelectionMode();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            package.missingImageCount > 0
-                ? '已导出 ${package.noteCount} 条笔记和 ${package.imageCount} 张图片；${package.missingImageCount} 张画面缺失或无法读取。'
-                : package.imageCount > 0
-                ? '已导出 ${package.noteCount} 条笔记和 ${package.imageCount} 张图片。'
-                : '已导出 ${package.noteCount} 条笔记。',
-          ),
-        ),
-      );
+      _showExportedNotes(package);
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -353,6 +346,20 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
         setState(() => _exporting = false);
       }
     }
+  }
+
+  void _showExportedNotes(VideoNoteExportPackage package) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          package.missingImageCount > 0
+              ? '已导出 ${package.noteCount} 条笔记和 ${package.imageCount} 张图片；${package.missingImageCount} 张画面缺失或无法读取。'
+              : package.imageCount > 0
+              ? '已导出 ${package.noteCount} 条笔记和 ${package.imageCount} 张图片。'
+              : '已导出 ${package.noteCount} 条笔记。',
+        ),
+      ),
+    );
   }
 
   /// 把用户带到独立笔记详情页，并在返回后重新读取可能修改的数据。

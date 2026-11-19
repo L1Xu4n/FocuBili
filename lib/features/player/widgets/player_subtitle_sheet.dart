@@ -317,6 +317,23 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
     );
   }
 
+  Future<void> _copyDiagnostics() async {
+    final report = widget.diagnosticReport;
+    if (report == null) return;
+    try {
+      await Clipboard.setData(ClipboardData(text: report()));
+      if (!mounted || ModalRoute.of(context)?.isCurrent == false) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('已复制到剪贴板')));
+    } catch (_) {
+      if (!mounted || ModalRoute.of(context)?.isCurrent == false) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('复制失败，请重试。')));
+    }
+  }
+
   Widget _buildDiagnostics() => ExpansionTile(
     title: const Text('字幕来源诊断'),
     subtitle: const Text('仅标识与哈希，不含正文或登录信息'),
@@ -332,8 +349,7 @@ class _PlayerSubtitleSheetState extends State<PlayerSubtitleSheet> {
         key: const Key('copy-subtitle-diagnostics'),
         icon: const Icon(Icons.copy_rounded),
         label: const Text('复制字幕诊断'),
-        onPressed: () =>
-            Clipboard.setData(ClipboardData(text: widget.diagnosticReport!())),
+        onPressed: _copyDiagnostics,
       ),
     ],
   );

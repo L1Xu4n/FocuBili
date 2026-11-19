@@ -64,6 +64,29 @@ void main() {
     expect(find.textContaining('已导出'), findsNothing);
   });
 
+  testWidgets('a saved package shows both the toast and export details', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: UnifiedExportPage(
+          service: service(),
+          saveService: LocalExportService(
+            platform: AppPlatform.android,
+            saveDialog: (_) async => 'content://fixture/export',
+          ),
+        ),
+      ),
+    );
+    final save = find.byKey(const Key('unified-export-save'));
+    await tester.scrollUntilVisible(save, 300);
+    await tester.pumpAndSettle();
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    expect(find.text('已导出文件'), findsOneWidget);
+    expect(find.textContaining(RegExp(r'已导出 \d+ 类资料')), findsOneWidget);
+  });
+
   testWidgets('save failures display safe platform diagnostics', (
     tester,
   ) async {
