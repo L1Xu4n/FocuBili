@@ -15,8 +15,8 @@ void main() {
       expect(numeric, isNotNull);
       expect(numeric!.group(1), '1.9.0');
       final build = int.parse(numeric.group(2)!);
-      expect(build, 2030);
-      expect(build, greaterThan(2029), reason: 'next after signed Beta 4');
+      expect(build, 2031);
+      expect(build, greaterThan(2030), reason: 'next after signed Beta 5');
       final archived =
           jsonDecode(
                 File('docs/beta5/apk-verification.json').readAsStringSync(),
@@ -33,7 +33,7 @@ void main() {
         ).firstMatch(pubspec)!.group(1),
         '${numeric.group(1)}.$build',
       );
-      const beta = '5';
+      const beta = '6';
       expect(
         RegExp(
           r'^\s+output_name:\s*(\S+)',
