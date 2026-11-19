@@ -301,9 +301,9 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         builder: (context, child) => MediaQuery(
-          data: MediaQuery.of(context).copyWith(
-            textScaler: const TextScaler.linear(2),
-          ),
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: const TextScaler.linear(2)),
           child: child!,
         ),
         home: LearningListPage(learningListService: service),
@@ -313,7 +313,10 @@ void main() {
     await tapVisible(tester, find.byKey(Key('learning-folder-${selected.id}')));
     final targetSelection = find.byKey(Key('learning-folder-${target.id}'));
     expect(tester.widget<Semantics>(targetSelection).properties.button, isTrue);
-    expect(tester.widget<Semantics>(targetSelection).properties.selected, isFalse);
+    expect(
+      tester.widget<Semantics>(targetSelection).properties.selected,
+      isFalse,
+    );
     final menu = find.byKey(Key('manage-learning-folder-${target.id}'));
     await tapVisible(tester, menu);
     expect(find.text('重命名分组'), findsOneWidget);
@@ -349,15 +352,24 @@ void main() {
     final card = find.byKey(const Key('learning-list-BV1:1'));
     expect(find.byKey(const Key('continue-learning-BV1:1')), findsOneWidget);
     expect(
-      find.descendant(of: card, matching: find.byIcon(Icons.drag_handle_rounded)),
+      find.descendant(
+        of: card,
+        matching: find.byIcon(Icons.drag_handle_rounded),
+      ),
       findsOneWidget,
     );
     expect(
-      find.descendant(of: card, matching: find.byIcon(Icons.drive_file_move_outline)),
+      find.descendant(
+        of: card,
+        matching: find.byIcon(Icons.drive_file_move_outline),
+      ),
       findsNothing,
     );
     expect(
-      find.descendant(of: card, matching: find.byIcon(Icons.delete_outline_rounded)),
+      find.descendant(
+        of: card,
+        matching: find.byIcon(Icons.delete_outline_rounded),
+      ),
       findsNothing,
     );
 
@@ -422,14 +434,7 @@ void main() {
           ? (foreground + 0.05) / (background + 0.05)
           : (background + 0.05) / (foreground + 0.05);
       expect(contrast, greaterThanOrEqualTo(4.5));
-      final labels = [
-        '选择当前结果',
-        '移除所选（0）',
-        '移动所选',
-        '标为未开始',
-        '标为学习中',
-        '标为已完成',
-      ];
+      final labels = ['选择当前结果', '移除所选（0）', '移动所选', '标为未开始', '标为学习中', '标为已完成'];
       final buttons = labels
           .map(
             (label) => find.ancestor(
@@ -452,7 +457,9 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('移除所选（1）'), findsOneWidget);
       expect(
-        tester.widget<TextButton>(find.byKey(const Key('move-selected-learning'))).onPressed,
+        tester
+            .widget<TextButton>(find.byKey(const Key('move-selected-learning')))
+            .onPressed,
         isNotNull,
       );
       expect(tester.takeException(), isNull);

@@ -813,7 +813,10 @@ class _LearningListPageState extends State<LearningListPage> {
                         key: Key('move-learning-${entry.stableId}'),
                         value: 'move',
                         enabled:
-                            !_folderBusy && !opening && !updating && !_reordering,
+                            !_folderBusy &&
+                            !opening &&
+                            !updating &&
+                            !_reordering,
                         child: const Text('移动到学科分组'),
                       ),
                       PopupMenuItem<Object>(
