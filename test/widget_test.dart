@@ -6757,6 +6757,8 @@ void main() {
     );
     expect(activeCaption.opacity, .55);
     expect(sampleCaption.opacity, .55);
+    expect(sampleCaption.text, activeCaption.text);
+    expect(sampleCaption.fontSize, activeCaption.fontSize);
     position.onChangeEnd!(0);
     opacity.onChangeEnd!(.55);
     await tester.pumpAndSettle();
@@ -6764,6 +6766,17 @@ void main() {
     expect(preferences.subtitleFontSize, 28);
     expect(preferences.subtitlePosition, 0);
     expect(preferences.subtitleOpacity, .55);
+    // Resizing/rotating while the sheet is open keeps playback geometry live.
+    await tester.binding.setSurfaceSize(const Size(640, 360));
+    await tester.pumpAndSettle();
+    final frame = tester.getRect(
+      find.byKey(const Key('subtitle-preview-frame')),
+    );
+    final surface = tester.getRect(find.byKey(const Key('player-surface')));
+    expect(
+      frame.width / frame.height,
+      closeTo(surface.width / surface.height, .001),
+    );
     await tester.tap(find.byTooltip('关闭字幕设置'));
     await tester.pumpAndSettle();
     await tester.binding.setSurfaceSize(const Size(640, 360));

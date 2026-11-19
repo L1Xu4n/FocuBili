@@ -20,6 +20,47 @@ mixin _PlayerOverlayCoordinator
   bool _danmakuPreferencesChangedByUser = false;
   bool _danmakuPersistenceWarningShown = false;
   SubtitleTrackLoadResult? _subtitleTrackResult;
+  _VideoFitMode get _videoFitMode;
+  final _subtitleSurfaceKey = GlobalKey();
+  final _timelineAnnotationsKey = GlobalKey();
+  final _subtitlePreviewViewport = ValueNotifier<SubtitlePreviewViewport?>(
+    null,
+  );
+
+  // Read the rendered pane (including split desktop layouts), not the window.
+  // The preview models watching with controls dismissed, while retaining any
+  // persistent A/B, chapter, or note annotation strip.
+  void _measureSubtitlePreviewViewport() {
+    final surfaceContext = _subtitleSurfaceKey.currentContext;
+    final box = surfaceContext?.findRenderObject();
+    if (surfaceContext == null ||
+        box is! RenderBox ||
+        !box.hasSize ||
+        !box.size.isFinite ||
+        box.size.isEmpty) {
+      return;
+    }
+    final annotations = _timelineAnnotationsKey.currentContext
+        ?.findRenderObject();
+    final edges = MediaQuery.paddingOf(surfaceContext);
+    _subtitlePreviewViewport.value = SubtitlePreviewViewport(
+      size: box.size,
+      edgeInsets: edges,
+      videoAspectRatio: _playbackSnapshot.videoAspectRatio > 0
+          ? _playbackSnapshot.videoAspectRatio
+          : 16 / 9,
+      videoFit: switch (_videoFitMode) {
+        _VideoFitMode.contain => BoxFit.contain,
+        _VideoFitMode.cover => BoxFit.cover,
+        _VideoFitMode.stretch => BoxFit.fill,
+      },
+      bottomOverlayHeight: annotations is RenderBox && annotations.hasSize
+          ? annotations.size.height +
+                _collapsedTimelineBottomPadding(_fullscreen, edges)
+          : 0,
+    );
+  }
+
   final _subtitleSelection = ValueNotifier<SubtitleTrack?>(null);
   SubtitleTrack? get _selectedSubtitleTrack => _subtitleSelection.value;
   List<SubtitleCue> _subtitleCues = const <SubtitleCue>[];
@@ -73,6 +114,7 @@ mixin _PlayerOverlayCoordinator
   /// 释放弹幕帧时钟，供播放器 dispose 统一调用。
   void _disposePlayerOverlayCoordinator() {
     _subtitleSelection.dispose();
+    _subtitlePreviewViewport.dispose();
     _danmakuFrameController.dispose();
   }
 
@@ -636,6 +678,8 @@ mixin _PlayerOverlayCoordinator
         selectorToken == _subtitleRequestToken &&
         bvid == _activeVideo.bvid &&
         cid == _currentPart.cid;
+    _measureSubtitlePreviewViewport();
+    final sample = _activeSubtitleCue()?.content.trim();
     _subtitleSelectorOpen = true;
     String? selectedTrackId;
     try {
@@ -647,6 +691,8 @@ mixin _PlayerOverlayCoordinator
           valueListenable: _subtitleSelection,
           builder: (context, selectedTrack, _) => PlayerSubtitleSheet(
             videoLabel: videoLabel,
+            previewViewport: _subtitlePreviewViewport,
+            previewText: sample != null && sample.isNotEmpty ? sample : null,
             offValue: _subtitleOffValue,
             initialResult: initialResult,
             selectedTrackId: selectedTrack?.id,

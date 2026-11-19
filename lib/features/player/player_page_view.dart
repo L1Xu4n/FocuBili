@@ -267,6 +267,13 @@ extension _PlayerPageView on _PlayerPageState {
             ? 16 + 48 * controlSize.scale
             : 16.0;
         final edgeInsets = MediaQuery.paddingOf(context);
+        if (_subtitleSelectorOpen) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && _subtitleSelectorOpen) {
+              _measureSubtitlePreviewViewport();
+            }
+          });
+        }
         final playerSurface = Listener(
           // 指针被系统取消时优先撤销预览，避免取消事件被拖动识别器当作普通松手。
           onPointerCancel: _handlePlayerPointerCancel,
@@ -332,6 +339,7 @@ extension _PlayerPageView on _PlayerPageState {
                   ),
                 ),
                 PlayerFeedbackViewport(
+                  key: _subtitleSurfaceKey,
                   controlsVisible:
                       _showControls && !_controlsLocked && !inPictureInPicture,
                   edgeInsets: edgeInsets,

@@ -89,6 +89,7 @@ import 'widgets/player_note_tile.dart';
 import 'widgets/fullscreen_video_transform.dart';
 import 'widgets/player_timeline.dart';
 import 'widgets/player_subtitle_sheet.dart';
+import 'widgets/player_subtitle_preview.dart';
 import 'widgets/player_subtitle_caption.dart';
 import 'widgets/player_action_feedback.dart';
 import 'widgets/player_feedback_layout.dart';
