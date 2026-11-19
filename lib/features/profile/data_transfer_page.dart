@@ -2,10 +2,12 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../core/layout/adaptive_page_frame.dart';
 import '../../services/bilibili_auth_service.dart';
 import '../../services/data_transfer_file_service.dart';
 import '../../services/settings_transfer_service.dart';
+import 'settings_transfer_dialogs.dart';
 
 /// 提供用户主动操作的设置与登录迁移入口，敏感内容不进入剪贴板或诊断。
 class DataTransferPage extends StatefulWidget {
@@ -104,28 +106,56 @@ class _DataTransferPageState extends State<DataTransferPage> {
     return file.readAsString();
   }
 
-  /// 导出设置白名单，账号、协议状态和学习数据由各自功能管理。
+  /// 文件和剪贴板都使用同一份设置白名单 JSON。
   Future<void> _exportSettings() => _run(() async {
-    await _save(
-      'FocuBili-settings.json',
-      await widget.settingsService.exportSettings(),
+    final method = await chooseSettingsTransferMethod(
+      context,
+      importing: false,
     );
+    if (!mounted || method == null || !_current) return;
+    final source = await widget.settingsService.exportSettings();
+    if (!_current) return;
+    if (method == SettingsTransferMethod.file) {
+      await _save('FocuBili-settings.json', source);
+    } else {
+      try {
+        await Clipboard.setData(ClipboardData(text: source));
+      } catch (_) {
+        if (_current) _message('无法写入剪贴板，请重试或导出为文件。');
+        return;
+      }
+      if (_current) _message('设置文本已复制到剪贴板。');
+    }
   });
 
-  /// 完整验证文件并展示影响范围，确认后合并设置，提示重启应用。
+  bool get _current => mounted && ModalRoute.of(context)?.isCurrent != false;
+
+  /// 两种来源都经过同一个解析器，经现有确认流程后才写入设置。
   Future<void> _importSettings() => _run(() async {
-    final source = await _pick();
-    if (source == null || !mounted) return;
-    final values = widget.settingsService.parseSettings(source);
-    if (!await _confirm(
-      '导入设置？',
-      '将替换文件中的 ${values.length} 项设置，包括账号只读、焦点订阅和后台检查等开关（如文件包含）。未列出的设置保持原值。登录状态、订阅源、笔记、学习清单和历史记录保留。导入后请重启 APP。',
-      '确认导入',
-    )) {
-      return;
+    final method = await chooseSettingsTransferMethod(context, importing: true);
+    if (!mounted || method == null || !_current) return;
+    final Map<String, Object>? values;
+    if (method == SettingsTransferMethod.file) {
+      final source = await _pick();
+      if (source == null || !_current) return;
+      values = widget.settingsService.parseSettings(source);
+    } else {
+      values = await showDialog<Map<String, Object>>(
+        context: context,
+        builder: (_) => SettingsTextImportDialog(
+          parse: widget.settingsService.parseSettings,
+        ),
+      );
     }
+    if (!_current || values == null) return;
+    final confirmed = await _confirm(
+      '导入设置？',
+      '将替换备份中的 ${values.length} 项设置，包括账号只读、焦点订阅和后台检查等开关（如备份包含）。未列出的设置保持原值。登录状态、订阅源、笔记、学习清单和历史记录保留。导入后请重启 APP。',
+      '确认导入',
+    );
+    if (!confirmed || !_current) return;
     await widget.settingsService.importSettings(values);
-    _message('设置已导入，请重启 APP 以应用设置。');
+    if (_current) _message('设置已导入，请重启 APP 以应用设置。');
   });
 
   /// 说明明文登录文件的敏感性，用户确认后才读取稳定会话并写入自选位置。
@@ -205,7 +235,7 @@ class _DataTransferPageState extends State<DataTransferPage> {
                 ),
                 ListTile(
                   title: const Text('导入设置'),
-                  subtitle: const Text('先检查文件，确认后合并；重启生效'),
+                  subtitle: const Text('从文件或文本导入，确认后合并；重启生效'),
                   leading: const Icon(Icons.download_outlined),
                   onTap: _busy ? null : _importSettings,
                 ),
