@@ -121,6 +121,7 @@ class _VideoNoteSharePreviewDialogState
         child: Padding(
           padding: const EdgeInsets.all(14),
           child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: <Widget>[
               Row(
                 children: <Widget>[
@@ -157,7 +158,7 @@ class _VideoNoteSharePreviewDialogState
                 ),
               ),
               const SizedBox(height: 8),
-              Expanded(
+              Flexible(
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(12),
                   child: SingleChildScrollView(
