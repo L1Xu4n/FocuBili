@@ -247,6 +247,27 @@ void main() {
     s.end();
     expect(s.active, isFalse);
   });
+  testWidgets('合集顶部只保留订阅，支持下拉刷新和显式多选', (t) async {
+    final x = _Fixture();
+    await x.host(t, size: const Size(390, 844));
+    expect(find.byTooltip('批量加入学习清单'), findsNothing);
+    expect(find.byTooltip('刷新合集'), findsNothing);
+    expect(find.byType(AppBar), findsOneWidget);
+    expect(find.text('合集'), findsOneWidget);
+    expect(find.text('40 支视频'), findsOneWidget);
+    expect(x.content.requests, [1]);
+
+    await t.drag(find.byType(AdaptiveTwoColumnList), const Offset(0, 380));
+    await t.pumpAndSettle();
+    expect(x.content.requests, [1, 1]);
+
+    await t.tap(find.byKey(const Key('select-collection-videos')));
+    await t.pumpAndSettle();
+    expect(check(1), findsOneWidget);
+    expect(find.textContaining('按住勾选框'), findsNothing);
+    expect(t.takeException(), isNull);
+  });
+
   testWidgets('长按不播放、不写；两个正方形目标可达，取消后仍选中，返回只退出选择', (t) async {
     final x = _Fixture();
     await x.host(t, size: const Size(320, 600), scale: 2);

@@ -366,62 +366,77 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
 
   /// 创建合集封面、标题、简介和真实视频数量头部。
   Widget _buildHeader() {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-      child: Row(
+      padding: const EdgeInsets.fromLTRB(0, 4, 0, 8),
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          ClipRRect(
-            borderRadius: BorderRadius.circular(14),
-            child: _buildCover(
-              widget.collection.coverUrl,
-              width: _largeTypeOnPhone ? 76 : 132,
-              height: _largeTypeOnPhone ? 48 : 84,
-            ),
-          ),
-          SizedBox(width: _largeTypeOnPhone ? 10 : 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  widget.collection.title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+        children: [
+          Row(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: _buildCover(
+                  widget.collection.coverUrl,
+                  width: _largeTypeOnPhone ? 78 : 122,
+                  height: _largeTypeOnPhone ? 52 : 76,
                 ),
-                const SizedBox(height: 6),
-                Text(
-                  '共 ${widget.collection.totalCount} 支独立视频',
-                  style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.collection.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${widget.collection.totalCount} 支视频',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: colors.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
                 ),
-                if (_videos.isNotEmpty && !_selection.active)
-                  TextButton.icon(
-                    key: const Key('select-collection-videos'),
-                    onPressed: _addingBvid != null || _openingBvid != null
-                        ? null
-                        : () => setState(() => _selection.start()),
-                    icon: const Icon(Icons.checklist_rounded),
-                    label: const Text('选择视频'),
-                  ),
-                if (_selection.active)
-                  Text(
-                    '按住勾选框滑动，可连续选择。',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                if (widget.collection.description.isNotEmpty) ...<Widget>[
-                  const SizedBox(height: 6),
-                  Text(
-                    widget.collection.description,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ],
-            ),
+              ),
+            ],
           ),
+          if (widget.collection.description.trim().isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text(
+              widget.collection.description,
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: colors.onSurfaceVariant,
+              ),
+            ),
+          ],
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(child: Text('视频列表', style: theme.textTheme.titleSmall)),
+              if (_selection.active)
+                const SizedBox(height: 48)
+              else
+                TextButton.icon(
+                  key: const Key('select-collection-videos'),
+                  onPressed: _addingBvid != null || _openingBvid != null
+                      ? null
+                      : () => setState(() => _selection.start()),
+                  icon: const Icon(Icons.checklist_rounded, size: 20),
+                  label: const Text('多选'),
+                ),
+            ],
+          ),
+          Divider(height: 1, color: colors.outlineVariant),
         ],
       ),
     );
@@ -480,12 +495,14 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
     final bool opening = _openingBvid == item.bvid;
     final bool adding = _addingBvid == item.bvid;
     final bool added = _learningListBvids.contains(item.bvid);
-    return Card(
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    return Material(
       key: Key('collection-video-${item.bvid}'),
       color: _selection.ids.contains(item.bvid)
-          ? Theme.of(context).colorScheme.secondaryContainer
-          : null,
-      margin: EdgeInsets.zero,
+          ? colors.secondaryContainer
+          : Colors.transparent,
+      borderRadius: BorderRadius.circular(12),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         // 合集视频点击函数查询完整详情后进入播放器。
@@ -498,90 +515,101 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
             _selection.active || _addingBvid != null || _openingBvid != null
             ? null
             : () => setState(() => _selection.start(item.bvid)),
-        child: Row(
-          children: <Widget>[
-            Stack(
-              alignment: Alignment.bottomRight,
-              children: <Widget>[
-                _buildCover(
-                  item.coverUrl,
-                  width: _largeTypeOnPhone ? 74 : 150,
-                  height: _largeTypeOnPhone ? 68 : 92,
-                ),
-                Container(
-                  margin: const EdgeInsets.all(6),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 5,
-                    vertical: 2,
-                  ),
-                  color: Colors.black54,
-                  child: Text(
-                    _formatDuration(item.duration),
-                    style: const TextStyle(color: Colors.white, fontSize: 11),
-                  ),
-                ),
-              ],
-            ),
-            SizedBox(width: _largeTypeOnPhone ? 8 : 12),
-            Expanded(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(minHeight: 92),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 7),
-                  child: Text(
-                    item.title,
-                    maxLines: _largeTypeOnPhone ? 3 : 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                ),
-              ),
-            ),
-            if (_selection.active)
-              SizedBox(
-                key: handleKey,
-                width: 48,
-                height: 48,
-                child: Checkbox(
-                  key: ValueKey('check-collection-${item.bvid}'),
-                  semanticLabel: '选择 ${item.title}',
-                  value: _selection.ids.contains(item.bvid),
-                  onChanged: _batchBusy
-                      ? null
-                      : (_) => setState(() => _selection.toggle(item.bvid)),
-                ),
-              )
-            else if (opening)
-              const Padding(
-                padding: EdgeInsets.all(12),
-                child: SizedBox.square(
-                  dimension: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-              )
-            else
-              Padding(
-                padding: const EdgeInsets.all(6),
-                child: IconButton(
-                  key: Key('add-learning-collection-${item.bvid}'),
-                  tooltip: added ? '选择更多分 P' : '加入学习清单',
-                  // 右侧学习清单图标函数替代播放三角，并独立处理加入或确认取消。
-                  onPressed: adding
-                      ? null
-                      : () => unawaited(_toggleVideoLearningList(item)),
-                  icon: adding
-                      ? const SizedBox.square(
-                          dimension: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : Icon(
-                          added
-                              ? Icons.playlist_add_check_rounded
-                              : Icons.playlist_add_rounded,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 5),
+          child: Row(
+            children: <Widget>[
+              ClipRRect(
+                borderRadius: BorderRadius.circular(9),
+                child: Stack(
+                  alignment: Alignment.bottomRight,
+                  children: [
+                    _buildCover(
+                      item.coverUrl,
+                      width: _largeTypeOnPhone ? 76 : 128,
+                      height: _largeTypeOnPhone ? 54 : 72,
+                    ),
+                    if (item.duration > Duration.zero)
+                      Container(
+                        margin: const EdgeInsets.all(4),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 4,
+                          vertical: 2,
                         ),
+                        decoration: BoxDecoration(
+                          color: Colors.black87,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          _formatDuration(item.duration),
+                          maxLines: 1,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
               ),
-          ],
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  item.title,
+                  maxLines: _largeTypeOnPhone ? 3 : 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    height: 1.3,
+                  ),
+                ),
+              ),
+              if (_selection.active)
+                SizedBox(
+                  key: handleKey,
+                  width: 48,
+                  height: 48,
+                  child: Checkbox(
+                    key: ValueKey('check-collection-${item.bvid}'),
+                    semanticLabel: '选择 ${item.title}',
+                    value: _selection.ids.contains(item.bvid),
+                    onChanged: _batchBusy
+                        ? null
+                        : (_) => setState(() => _selection.toggle(item.bvid)),
+                  ),
+                )
+              else if (opening)
+                const Padding(
+                  padding: EdgeInsets.all(12),
+                  child: SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                )
+              else
+                Padding(
+                  padding: const EdgeInsets.all(6),
+                  child: IconButton(
+                    key: Key('add-learning-collection-${item.bvid}'),
+                    tooltip: added ? '选择更多分 P' : '加入学习清单',
+                    // 右侧学习清单图标函数替代播放三角，并独立处理加入或确认取消。
+                    onPressed: adding
+                        ? null
+                        : () => unawaited(_toggleVideoLearningList(item)),
+                    icon: adding
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : Icon(
+                            added
+                                ? Icons.playlist_add_check_rounded
+                                : Icons.playlist_add_rounded,
+                          ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -650,7 +678,7 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
                   ),
                 )
               : const SizedBox(height: 8),
-          mainAxisSpacing: 10,
+          mainAxisSpacing: 4,
           itemBuilder: (BuildContext context, int index) {
             return DragSelectionTarget(
               index: index,
@@ -699,11 +727,7 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
                 ],
               )
             : AppBar(
-                title: Text(
-                  widget.collection.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
+                title: const Text('合集详情'),
                 actions: <Widget>[
                   FocusSubscriptionButton(
                     service: widget.subscriptionService,
@@ -715,29 +739,6 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
                       imageUrl: widget.collection.coverUrl,
                       token: DateTime.now().microsecondsSinceEpoch.toString(),
                     ),
-                  ),
-                  IconButton(
-                    tooltip: '批量加入学习清单',
-                    icon: const Icon(Icons.playlist_add),
-                    onPressed: () async {
-                      await LearningAddSheet.showCollection(
-                        context,
-                        ownerMid: widget.collection.ownerMid,
-                        collectionId: widget.collection.id,
-                        contentService: _publicContentService,
-                        videoService: _videoService,
-                        service: _learningListService,
-                      );
-                      if (mounted) await _loadLearningListMembership();
-                    },
-                  ),
-                  IconButton(
-                    // 顶部刷新函数重新读取合集第一页。
-                    onPressed: _loading
-                        ? null
-                        : () => unawaited(_loadFirstPage()),
-                    icon: const Icon(Icons.refresh_rounded),
-                    tooltip: '刷新合集',
                   ),
                 ],
               ),
