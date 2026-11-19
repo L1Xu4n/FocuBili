@@ -251,13 +251,19 @@ class _FocusDashboardState extends State<FocusDashboard> {
   int _selectedMinutes = 25;
   double? _homeScrollStartOffset;
   double _homeDrawerExtent = 0;
-  double _homeWindowHeight = 0;
+  double _homeViewportHeight = 0;
+
+  bool _fitsHomeDrawer(double viewportHeight) =>
+      !_editingHomeCards && _homeDrawerExtent <= viewportHeight;
 
   bool get _canSnapHomeDrawer {
-    if (_editingHomeCards || !_scrollController.hasClients) return false;
+    // A responsive switch can briefly have both scroll views attached.
+    if (_editingHomeCards || _scrollController.positions.length != 1) {
+      return false;
+    }
     final position = _scrollController.position;
     return position.hasViewportDimension &&
-        _homeDrawerExtent <= position.viewportDimension;
+        _fitsHomeDrawer(position.viewportDimension);
   }
 
   Widget _buildSubscriptionButton() => ListenableBuilder(
@@ -849,83 +855,100 @@ class _FocusDashboardState extends State<FocusDashboard> {
             finishedSession,
           );
         }
-        final viewport = MediaQuery.sizeOf(context);
-        final heroHeight = useHomeHero
-            ? _homeHeroHeight(context, viewport)
-            : 0.0;
-        final hasDrawer = useHomeHero && _hasHomeDrawer;
-        final drawerExtent = heroHeight + _homeCardTopPadding;
-        if (_homeDrawerExtent != drawerExtent ||
-            _homeWindowHeight != viewport.height ||
-            !hasDrawer) {
-          _homeScrollStartOffset = null;
-        }
-        _homeDrawerExtent = drawerExtent;
-        _homeWindowHeight = viewport.height;
-        final behavior = ScrollConfiguration.of(context);
-        return NotificationListener<ScrollNotification>(
-          onNotification: _handleHomeScrollNotification,
-          child: CustomScrollView(
-            controller: _scrollController,
-            dragStartBehavior: hasDrawer
-                ? DragStartBehavior.down
-                : DragStartBehavior.start,
-            // Only this scroll view adds mouse dragging. Native wheel and
-            // nested scrollables keep their existing behavior.
-            scrollBehavior: hasDrawer
-                ? behavior.copyWith(
-                    dragDevices: {
-                      ...behavior.dragDevices,
-                      PointerDeviceKind.mouse,
-                    },
-                  )
-                : null,
-            physics: hasDrawer
-                ? HomeDrawerScrollPhysics(
-                    cardOffset: () => _homeDrawerExtent,
-                    gestureStart: () => _homeScrollStartOffset,
-                    enabled: () => _canSnapHomeDrawer,
-                  )
-                : null,
-            slivers: <Widget>[
-              if (useHomeHero)
-                _buildHomeHero(context, heroHeight, viewport.width),
-              if (hasDrawer)
-                _buildHomeCardsSliver(context, activeSession, finishedSession)
-              else if (!useHomeHero) ...<Widget>[
-                SliverAppBar.large(
-                  title: const Text('焦点哔哩'),
-                  actions: <Widget>[
-                    _buildSubscriptionButton(),
-                    if (widget.onOpenLearningList != null)
-                      IconButton(
-                        key: const Key('open-learning-list'),
-                        // 学习清单按钮函数由首页打开完整任务管理页面。
-                        onPressed: widget.onOpenLearningList,
-                        icon: const Icon(Icons.menu_book_rounded),
-                        tooltip: '学习清单',
-                      ),
-                    IconButton(
-                      key: const Key('open-focus-statistics'),
-                      // 统计按钮函数打开本机专注看板与统一记录管理页。
-                      onPressed: widget.onOpenStatistics,
-                      icon: const Icon(Icons.insights_rounded),
-                      tooltip: '专注数据',
-                    ),
-                    IconButton(
-                      // 顶部打开视频函数直接切换到搜索页。
-                      onPressed: widget.onOpenVideo,
-                      icon: const Icon(Icons.search_rounded),
-                      tooltip: '打开视频',
-                    ),
-                  ],
-                ),
-                _buildCardsSliver(context, activeSession, finishedSession),
-              ],
-            ],
+        return LayoutBuilder(
+          builder: (context, constraints) => _buildScrollDashboard(
+            context,
+            constraints.biggest,
+            useHomeHero,
+            activeSession,
+            finishedSession,
           ),
         );
       },
+    );
+  }
+
+  Widget _buildScrollDashboard(
+    BuildContext context,
+    Size viewport,
+    bool useHomeHero,
+    FocusSession? activeSession,
+    FocusSession? finishedSession,
+  ) {
+    final heroHeight = useHomeHero ? _homeHeroHeight(context, viewport) : 0.0;
+    final hasDrawer = useHomeHero && _hasHomeDrawer;
+    final drawerExtent = heroHeight + _homeCardTopPadding;
+    if (_homeDrawerExtent != drawerExtent ||
+        _homeViewportHeight != viewport.height ||
+        !hasDrawer) {
+      _homeScrollStartOffset = null;
+    }
+    _homeDrawerExtent = drawerExtent;
+    _homeViewportHeight = viewport.height;
+    final behavior = ScrollConfiguration.of(context);
+    return NotificationListener<ScrollNotification>(
+      onNotification: _handleHomeScrollNotification,
+      child: CustomScrollView(
+        controller: _scrollController,
+        dragStartBehavior: hasDrawer
+            ? DragStartBehavior.down
+            : DragStartBehavior.start,
+        // Only this scroll view adds mouse dragging. Native wheel and
+        // nested scrollables keep their existing behavior.
+        scrollBehavior: hasDrawer
+            ? behavior.copyWith(
+                dragDevices: {...behavior.dragDevices, PointerDeviceKind.mouse},
+              )
+            : null,
+        physics: hasDrawer
+            ? HomeDrawerScrollPhysics(
+                cardOffset: () => _homeDrawerExtent,
+                gestureStart: () => _homeScrollStartOffset,
+                enabled: () => _canSnapHomeDrawer,
+              )
+            : null,
+        slivers: <Widget>[
+          if (useHomeHero)
+            _buildHomeHero(
+              context,
+              heroHeight,
+              viewport.width,
+              animateDepth: hasDrawer && _fitsHomeDrawer(viewport.height),
+            ),
+          if (hasDrawer)
+            _buildHomeCardsSliver(context, activeSession, finishedSession)
+          else if (!useHomeHero) ...<Widget>[
+            SliverAppBar.large(
+              title: const Text('焦点哔哩'),
+              actions: <Widget>[
+                _buildSubscriptionButton(),
+                if (widget.onOpenLearningList != null)
+                  IconButton(
+                    key: const Key('open-learning-list'),
+                    // 学习清单按钮函数由首页打开完整任务管理页面。
+                    onPressed: widget.onOpenLearningList,
+                    icon: const Icon(Icons.menu_book_rounded),
+                    tooltip: '学习清单',
+                  ),
+                IconButton(
+                  key: const Key('open-focus-statistics'),
+                  // 统计按钮函数打开本机专注看板与统一记录管理页。
+                  onPressed: widget.onOpenStatistics,
+                  icon: const Icon(Icons.insights_rounded),
+                  tooltip: '专注数据',
+                ),
+                IconButton(
+                  // 顶部打开视频函数直接切换到搜索页。
+                  onPressed: widget.onOpenVideo,
+                  icon: const Icon(Icons.search_rounded),
+                  tooltip: '打开视频',
+                ),
+              ],
+            ),
+            _buildCardsSliver(context, activeSession, finishedSession),
+          ],
+        ],
+      ),
     );
   }
 
