@@ -249,6 +249,26 @@ void main() {
       336,
     );
     expect(find.text('开始搜索'), findsOneWidget);
+    expect(find.bySemanticsLabel('开始搜索'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    final search = find.byKey(const Key('home-start-search'));
+    final searchTop = tester.getTopLeft(search).dy;
+    final filter = find.descendant(
+      of: find.byKey(const Key('focus-home-hero')),
+      matching: find.byType(ImageFiltered),
+    );
+    final drag = await tester.startGesture(const Offset(10, 300));
+    await drag.moveBy(const Offset(0, -65));
+    await tester.pump();
+    expect(tester.widget<ImageFiltered>(filter).enabled, isTrue);
+    expect(tester.getTopLeft(search).dy, closeTo(searchTop + 65 * .32, .1));
+
+    await drag.moveBy(const Offset(0, 65));
+    await drag.up();
+    await tester.pumpAndSettle();
+    expect(tester.widget<ImageFiltered>(filter).enabled, isFalse);
+    expect(search.hitTestable(), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

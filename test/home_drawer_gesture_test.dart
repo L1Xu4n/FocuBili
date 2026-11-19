@@ -324,6 +324,71 @@ void main() {
     }
   });
 
+  testWidgets('紧凑窗口保留安全区、上拉模糊下坠，返回后重开仍跟手', (tester) async {
+    final scroll = await _mount(
+      tester,
+      size: const Size(350, 480),
+      topInset: 84,
+      cardHeight: 250,
+    );
+    final filter = find.descendant(
+      of: _hero,
+      matching: find.byType(ImageFiltered),
+    );
+    final searchTop = tester.getTopLeft(_search).dy;
+    for (var index = 0; index < 3; index++) {
+      final drag = await tester.startGesture(const Offset(10, 300));
+      await drag.moveBy(const Offset(0, -65));
+      await tester.pump();
+      expect(scroll.offset, closeTo(65, .1));
+      expect(tester.widget<ImageFiltered>(filter).enabled, isTrue);
+      expect(tester.getTopLeft(_search).dy, closeTo(searchTop + 65 * .32, .1));
+      await drag.moveBy(const Offset(0, 65));
+      await tester.pump();
+      expect(tester.widget<ImageFiltered>(filter).enabled, isFalse);
+      await drag.up();
+      await tester.pumpAndSettle();
+      expect(scroll.offset, closeTo(0, 1));
+      expect(_search.hitTestable(), findsOneWidget);
+
+      final navigator = tester.state<NavigatorState>(find.byType(Navigator));
+      navigator.push<void>(
+        MaterialPageRoute(builder: (_) => const Scaffold(body: Text('详情'))),
+      );
+      await tester.pumpAndSettle();
+      navigator.pop();
+      await tester.pumpAndSettle();
+    }
+  });
+
+  testWidgets('紧凑窗口变高或变低，中间帧不会丢失深度效果', (tester) async {
+    final scroll = await _mount(
+      tester,
+      size: const Size(350, 640),
+      topInset: 84,
+      cardHeight: 600,
+    );
+    final filter = find.descendant(
+      of: _hero,
+      matching: find.byType(ImageFiltered),
+    );
+    scroll.jumpTo(65);
+    await tester.pump();
+    expect(tester.widget<ImageFiltered>(filter).enabled, isTrue);
+
+    for (final height in [480.0, 640.0]) {
+      tester.view.physicalSize = Size(350, height);
+      await tester.pumpAndSettle();
+      expect(scroll.offset, closeTo(65, .1));
+      expect(tester.widget<ImageFiltered>(filter).enabled, isTrue);
+      expect(
+        tester.getSize(_hero).height + 12,
+        lessThanOrEqualTo(scroll.position.viewportDimension),
+      );
+      expect(tester.takeException(), isNull);
+    }
+  });
+
   testWidgets('砍断仍在进行的展开吸附，反向手势从当前帧起走', (tester) async {
     final scroll = await _mount(tester);
     final open = tester.getSize(_hero).height + 12;

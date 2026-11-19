@@ -73,30 +73,39 @@ class _SubscriptionIntroductionState extends State<SubscriptionIntroduction>
   Future<void> _open() async {
     if (_busy) return;
     setState(() => _busy = true);
+    Future<bool?>? modalDismissed;
     final choice = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (dialog) => AlertDialog(
-        title: const Text('开启焦点订阅？'),
-        content: const SingleChildScrollView(
-          child: Text(
-            '焦点订阅功能允许你在焦点哔哩内订阅一些UP主和订阅合集，APP将检查订阅源并通过系统通知或首页卡片推送给你，如果你不需要，点击下面的按钮，你的首页会像往常一样简洁。当你需要焦点订阅时，在“我的页面”仍然能够再次开启',
+      builder: (dialog) {
+        final route = ModalRoute.of<bool>(dialog);
+        if (route is DialogRoute<bool>) modalDismissed = route.completed;
+        return AlertDialog(
+          title: const Text('开启焦点订阅？'),
+          content: const SingleChildScrollView(
+            child: Text(
+              '焦点订阅功能允许你在焦点哔哩内订阅一些UP主和订阅合集，APP将检查订阅源并通过系统通知或首页卡片推送给你，如果你不需要，点击下面的按钮，你的首页会像往常一样简洁。当你需要焦点订阅时，在“我的页面”仍然能够再次开启',
+            ),
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialog, false),
-            child: const Text('我不需要焦点订阅'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialog, true),
-            child: const Text('好，开启焦点订阅'),
-          ),
-        ],
-      ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialog, false),
+              child: const Text('我不需要焦点订阅'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialog, true),
+              child: const Text('好，开启焦点订阅'),
+            ),
+          ],
+        );
+      },
     );
     try {
       if (choice == null) return;
+      // pop completes before the modal barrier is removed. Changing the
+      // hero's layout behind that barrier can invalidate Flutter semantics
+      // geometry (https://github.com/flutter/flutter/issues/195316).
+      await modalDismissed;
       if (choice) {
         await _onboarding.accept();
       } else {
