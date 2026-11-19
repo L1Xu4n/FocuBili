@@ -242,11 +242,12 @@ class _PlayerAbRepeatSheetState extends State<PlayerAbRepeatSheet> {
             padding: const EdgeInsets.symmetric(horizontal: 6),
             minimumSize: const Size(0, 44),
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(9),
+              borderRadius: BorderRadius.circular(11),
             ),
             backgroundColor: time.isEmpty
-                ? const Color(0x17BFD6FE)
-                : const Color(0x2A99BAFF),
+                ? const Color(0x12BFD6FE)
+                : const Color(0x2199BAFF),
+            side: const BorderSide(color: Color(0x19C2D9FF)),
             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           ),
           child: Row(
@@ -284,7 +285,21 @@ class _PlayerAbRepeatSheetState extends State<PlayerAbRepeatSheet> {
     child: IconButton(
       key: key,
       tooltip: tooltip,
-      icon: Icon(icon),
+      icon: primary || selected
+          ? Container(
+              width: 34,
+              height: 34,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: primary
+                    ? const Color(0x2A8FB8FF)
+                    : const Color(0x1EBCD3FF),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0x22C2D9FF)),
+              ),
+              child: Icon(icon),
+            )
+          : Icon(icon),
       iconSize: 19,
       isSelected: selected,
       onPressed: onPressed,
@@ -292,9 +307,8 @@ class _PlayerAbRepeatSheetState extends State<PlayerAbRepeatSheet> {
         foregroundColor: primary
             ? const Color(0xFFABD0FF)
             : const Color(0xE6ECF2FF),
-        backgroundColor: selected || primary ? const Color(0x29A9C6FF) : null,
         padding: EdgeInsets.zero,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(11)),
       ),
     ),
   );
