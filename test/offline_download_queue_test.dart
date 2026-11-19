@@ -12,6 +12,8 @@ import 'package:focubili/services/offline_video_service.dart';
 
 /// Provides controllable transfers for testing queue lifecycle races.
 class QueueLibrary extends OfflineVideoService {
+  QueueLibrary({super.cacheLocations});
+
   final started = <int>[];
   final discarded = <int>[];
   final ready = <OfflineVideoDownload>[];
@@ -30,6 +32,7 @@ class QueueLibrary extends OfflineVideoService {
     int quality = 32,
     void Function(int, int?)? onProgress,
     DownloadControl? control,
+    String? cacheLocationId,
   }) {
     started.add((part ?? video.initialPart).cid);
     progress = onProgress;
@@ -45,7 +48,12 @@ class QueueLibrary extends OfflineVideoService {
 
   /// Records cleanup without touching real media files.
   @override
-  Future<void> discardPartial(String bvid, int cid, int quality) async {
+  Future<void> discardPartial(
+    String bvid,
+    int cid,
+    int quality, {
+    String? cacheLocationId,
+  }) async {
     discarded.add(cid);
   }
 }

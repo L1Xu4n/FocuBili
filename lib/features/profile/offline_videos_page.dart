@@ -15,6 +15,7 @@ import '../../services/offline_download_queue.dart';
 import '../../models/offline_download_task.dart';
 import '../player/player_page.dart';
 import 'download_queue_view.dart';
+import 'offline_cache_location_dialog.dart';
 
 /// 展示已下载到本机的离线视频，并提供播放、删除和清空管理。
 class OfflineVideosPage extends StatefulWidget {
@@ -626,6 +627,22 @@ class _OfflineVideosPageState extends State<OfflineVideosPage>
             ],
           ),
           actions: <Widget>[
+            if (_queue.library.cacheLocations.supported)
+              IconButton(
+                key: const Key('offline-cache-location'),
+                tooltip: '离线缓存位置',
+                onPressed: () => unawaited(
+                  showOfflineCacheLocationDialog(
+                    context,
+                    _queue.library.cacheLocations,
+                  ).then((_) {
+                    if (!mounted) return;
+                    unawaited(_loadDownloads());
+                    if (_includeCourses) unawaited(_loadCourses());
+                  }),
+                ),
+                icon: const Icon(Icons.folder_open_outlined),
+              ),
             if (_itemCount != 0)
               IconButton(
                 key: const Key('clear-offline-videos'),

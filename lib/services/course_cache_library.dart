@@ -12,6 +12,7 @@ import 'course_cache_access.dart';
 import 'course_cache_container.dart';
 import 'course_cache_validity.dart';
 import 'download_control.dart';
+import 'offline_cache_locations.dart';
 import 'offline_media_plan.dart';
 import 'resumable_media_download.dart';
 
@@ -38,6 +39,7 @@ class CourseCacheEntry {
     this.audioHash,
     this.videoVersion,
     this.audioVersion,
+    this.cacheLocationId,
   }) : _retainedServerDeadline = retainedServerDeadline;
   final int mid, season, ep, aid, cid, quality, videoBytes, audioBytes;
   final String courseTitle, chapterTitle;
@@ -45,6 +47,8 @@ class CourseCacheEntry {
   final DateTime? checkedAt, until, _retainedServerDeadline;
   final CourseCacheExpiryKind expiryKind;
   final String? videoHash, audioHash, videoVersion, audioVersion;
+  // Derived from the verified containing location, never trusted from a receipt.
+  final String? cacheLocationId;
   String get id => '$season-$ep-$aid-$cid';
   bool get hasMedia => videoBytes > 0;
   DateTime? get _knownServerDeadline =>
@@ -124,10 +128,10 @@ class CourseCacheEntry {
       ..._receiptFields(checkedAt, until, kind),
       if (retainedServerDeadline != null)
         'retainedServerDeadline': retainedServerDeadline.millisecondsSinceEpoch,
-    });
+    }, cacheLocationId: cacheLocationId);
   }
 
-  factory CourseCacheEntry.fromJson(int mid, Map j) {
+  factory CourseCacheEntry.fromJson(int mid, Map j, {String? cacheLocationId}) {
     int positive(String k) {
       final n = j[k];
       if (n is! int || n <= 0) throw const FormatException();
@@ -182,6 +186,7 @@ class CourseCacheEntry {
 
     return CourseCacheEntry(
       mid: mid,
+      cacheLocationId: cacheLocationId,
       season: positive('season'),
       ep: positive('ep'),
       aid: positive('aid'),
@@ -234,16 +239,24 @@ class CourseCacheLibrary extends ChangeNotifier {
   CourseCacheLibrary({
     CourseCacheAccess? access,
     Future<Directory> Function()? root,
+    OfflineCacheLocations? cacheLocations,
     this.downloader = const ResumableMediaDownload(),
     DateTime Function()? clock,
   }) : access = access ?? CourseCacheAccess(),
        _root = root ?? getApplicationCacheDirectory,
+       cacheLocations =
+           cacheLocations ??
+           (root == null
+               ? OfflineCacheLocations.instance
+               : OfflineCacheLocations.systemOnly),
        _clock = clock ?? DateTime.now {
     CacheLifecycle.account.addListener(_accountChanged);
   }
   static final instance = CourseCacheLibrary();
+  static final _chapterIdPattern = RegExp(r'^[1-9][0-9]*(?:-[1-9][0-9]*){3}$');
   final CourseCacheAccess access;
   final Future<Directory> Function() _root;
+  final OfflineCacheLocations cacheLocations;
   final ResumableMediaDownload downloader;
   final DateTime Function() _clock;
   Future<void>? _running;
@@ -314,24 +327,24 @@ class CourseCacheLibrary extends ChangeNotifier {
 
   // Only generated positive numeric path components. Refuse links, including
   // parent directories and partial-file sidecars, before touching bytes.
-  Future<Directory> _dirs(int mid, [String? key]) async {
-    if (mid <= 0 ||
-        key != null &&
-            !RegExp(r'^[1-9][0-9]*(?:-[1-9][0-9]*){3}$').hasMatch(key)) {
+  Future<Directory?> _dirs(
+    int mid, {
+    String? key,
+    String? cacheLocationId,
+    bool create = false,
+  }) async {
+    if (mid <= 0 || key != null && !_chapterIdPattern.hasMatch(key)) {
       throw const FormatException();
     }
-    var d = await _root();
-    if (!await d.exists()) await d.create(recursive: true);
-    for (final name in ['private_course_v1', '$mid', ?key]) {
-      d = Directory.fromUri(d.absolute.uri.resolve('$name/'));
-      final type = await FileSystemEntity.type(d.path, followLinks: false);
-      if (type == FileSystemEntityType.notFound) {
-        await d.create();
-      } else if (type != FileSystemEntityType.directory) {
-        throw const CourseCacheFailure('课程缓存目录不可用。');
-      }
-    }
-    return d;
+    final root = cacheLocationId == null
+        ? await _root()
+        : await cacheLocations.requireRoot(cacheLocationId);
+    return OfflineCacheLocations.childDirectory(
+      root,
+      ['private_course_v1', '$mid', ?key],
+      create: create,
+      createRoot: cacheLocationId == null,
+    );
   }
 
   Future<File> _file(Directory d, String basename) async {
@@ -361,34 +374,57 @@ class CourseCacheLibrary extends ChangeNotifier {
     }
   }
 
-  Future<CourseCacheEntry?> _read(Directory d, int mid) async {
+  Future<CourseCacheEntry?> _read(
+    Directory d,
+    int mid,
+    String? cacheLocationId,
+  ) async {
     final f = await _file(d, 'entry.json');
     if (!await f.exists()) return null;
     if (await f.length() > 65536) throw const FormatException();
     return CourseCacheEntry.fromJson(
       mid,
       jsonDecode(await f.readAsString()) as Map,
+      cacheLocationId: cacheLocationId,
     );
   }
 
   Future<List<CourseCacheEntry>> entries() async {
     final revision = _revision;
-    final mid = await _mid(), root = await _dirs(mid);
+    final mid = await _mid();
     final list = <CourseCacheEntry>[];
-    await for (final d in root.list(followLinks: false)) {
-      if (d is! Directory) continue;
-      final CourseCacheEntry? entry;
+    final seen = <String>{};
+    for (final locationId in [null, ...await cacheLocations.registeredIds()]) {
       try {
-        entry = await _read(d, mid);
-      } on FormatException {
-        continue; // A broken receipt cannot authorize media or hide other lessons.
-      } on TypeError {
-        continue;
-      }
-      if (entry != null &&
-          d.absolute.uri.pathSegments.where((s) => s.isNotEmpty).last ==
-              entry.id) {
-        list.add(entry);
+        final root = await _dirs(mid, cacheLocationId: locationId);
+        if (root == null) continue;
+        await for (final d in root.list(followLinks: false)) {
+          if (d is! Directory) continue;
+          final id = d.uri.pathSegments.where((s) => s.isNotEmpty).last;
+          if (seen.contains(id) || !_chapterIdPattern.hasMatch(id)) {
+            continue;
+          }
+          final CourseCacheEntry? entry;
+          try {
+            final directory = await OfflineCacheLocations.childDirectory(root, [
+              id,
+            ], create: false);
+            if (directory == null) continue;
+            entry = await _read(directory, mid, locationId);
+          } on FormatException {
+            continue; // A broken receipt cannot authorize media or hide other lessons.
+          } on TypeError {
+            continue;
+          }
+          if (entry != null && entry.id == id) {
+            seen.add(id);
+            list.add(entry);
+          }
+        }
+      } on OfflineCacheLocationUnavailable {
+        if (locationId == null) rethrow;
+      } on FileSystemException {
+        if (locationId == null) rethrow;
       }
     }
     await _same(mid, revision);
@@ -408,12 +444,14 @@ class CourseCacheLibrary extends ChangeNotifier {
     required int quality,
     required DownloadControl control,
     required int expectedMid,
+    String? cacheLocationId,
   }) => _start(
     video,
     part,
     quality: quality,
     control: control,
     expectedMid: expectedMid,
+    cacheLocationId: cacheLocationId,
     reportFailure: true,
   );
 
@@ -423,6 +461,7 @@ class CourseCacheLibrary extends ChangeNotifier {
     int quality = 64,
     DownloadControl? control,
     int? expectedMid,
+    String? cacheLocationId,
     bool reportFailure = false,
   }) async {
     if (busy) throw const CourseCacheFailure('已有章节正在缓存，请先暂停或等它完成。');
@@ -449,7 +488,15 @@ class CourseCacheLibrary extends ChangeNotifier {
     _checking = true;
     _operationKey = _busyKey =
         '${v.courseSeasonId}-${p.courseEpisodeId}-${p.courseAid}-${p.cid}';
-    final run = _transfer(v, p, quality, c, revision, expectedMid);
+    final run = _transfer(
+      v,
+      p,
+      quality,
+      c,
+      revision,
+      expectedMid,
+      cacheLocationId,
+    );
     _running = run;
     _emit();
     try {
@@ -669,6 +716,7 @@ class CourseCacheLibrary extends ChangeNotifier {
     DownloadControl c,
     int rev,
     int? expectedMid,
+    String? cacheLocationId,
   ) async {
     final mid = await c.guard(_mid());
     if (expectedMid != null && mid != expectedMid) throw _inactive;
@@ -683,12 +731,18 @@ class CourseCacheLibrary extends ChangeNotifier {
       duration: p.duration,
       quality: q,
     );
-    final dir = await _dirs(mid, pending.id);
+    final dir = await _dirs(
+      mid,
+      key: pending.id,
+      cacheLocationId: cacheLocationId,
+      create: true,
+    );
+    if (dir == null) throw OfflineCacheLocationException.unavailable;
     await _same(mid, rev);
     c.check();
     CourseCacheEntry? previous;
     try {
-      previous = await _read(dir, mid);
+      previous = await _read(dir, mid, cacheLocationId);
     } on FormatException {
       // A new authoritative proof can replace an unreadable legacy receipt.
     } on TypeError {
@@ -950,14 +1004,19 @@ class CourseCacheLibrary extends ChangeNotifier {
   }
 
   /// Removes only incomplete files from this account's matching lesson.
-  Future<void> discardPartial(int mid, String id) async {
-    if (!RegExp(r'^\d+-\d+-\d+-\d+$').hasMatch(id)) return;
+  Future<void> discardPartial(
+    int mid,
+    String id, {
+    String? cacheLocationId,
+  }) async {
+    if (!_chapterIdPattern.hasMatch(id)) return;
     if (busy) throw const CourseCacheFailure('请先暂停进行中的缓存。');
     _deleting = true;
     try {
       final revision = _revision;
       await _same(mid, revision);
-      final dir = await _dirs(mid, id);
+      final dir = await _dirs(mid, key: id, cacheLocationId: cacheLocationId);
+      if (dir == null) return;
       for (final name in [
         'video.part',
         'audio.part',
@@ -982,9 +1041,33 @@ class CourseCacheLibrary extends ChangeNotifier {
     try {
       final rev = _revision;
       await _same(e.mid, rev);
-      final dir = await _dirs(e.mid, e.id);
-      await _same(e.mid, rev);
-      await dir.delete(recursive: true);
+      final dir = await _dirs(
+        e.mid,
+        key: e.id,
+        cacheLocationId: e.cacheLocationId,
+      );
+      if (dir == null) return;
+      // Delete the receipt first, then only known cache files. Links at
+      // these exact paths are removed as links, never followed.
+      for (final name in [
+        'entry.json',
+        'entry.tmp',
+        'video.bin',
+        'audio.bin',
+        'video.part',
+        'audio.part',
+        'video.part.resume',
+        'audio.part.resume',
+      ]) {
+        final file = File.fromUri(dir.uri.resolve(name));
+        final type = await FileSystemEntity.type(file.path, followLinks: false);
+        await _same(e.mid, rev);
+        if (type == FileSystemEntityType.link) {
+          await Link(file.path).delete();
+        } else if (type == FileSystemEntityType.file) {
+          await file.delete();
+        }
+      }
     } finally {
       _deleting = false;
       _listVersion++;
@@ -1001,10 +1084,17 @@ class CourseCacheLibrary extends ChangeNotifier {
       throw const CourseCacheFailure('正在检查课程缓存，请稍后再播放。');
     }
     await _same(e.mid, rev);
-    final dir = await _dirs(e.mid, e.id);
+    final dir = await _dirs(
+      e.mid,
+      key: e.id,
+      cacheLocationId: e.cacheLocationId,
+    );
+    if (dir == null) {
+      throw const CourseCacheFailure('缓存不完整或校验已到期，请联网复核。', recheckNeeded: true);
+    }
     final CourseCacheEntry? fresh;
     try {
-      fresh = await _read(dir, e.mid);
+      fresh = await _read(dir, e.mid, e.cacheLocationId);
     } on FormatException {
       throw const CourseCacheFailure('无法确认课程缓存记录，请联网复核。', recheckNeeded: true);
     } on TypeError {
