@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../../models/app_favorite.dart';
 import '../../models/public_profile.dart';
@@ -363,12 +362,13 @@ class _VideoFavoritesBatchDialogState extends State<VideoFavoritesBatchDialog> {
               if (choices.isNotEmpty || showDraft)
                 ConstrainedBox(
                   constraints: BoxConstraints(
-                    maxHeight: math.max(
-                      76,
-                      MediaQuery.sizeOf(context).height * .4,
+                    maxHeight: (MediaQuery.sizeOf(context).height * .58).clamp(
+                      76.0,
+                      520.0,
                     ),
                   ),
                   child: SingleChildScrollView(
+                    key: const Key('batch-favorite-folder-list'),
                     primary: false,
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
