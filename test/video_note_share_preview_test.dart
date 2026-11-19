@@ -7,7 +7,11 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:focubili/features/notes/video_note_share_preview.dart';
 import 'package:focubili/models/video_note.dart';
+import 'package:focubili/platform/app_platform.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:focubili/services/video_note_share_service.dart';
+import 'package:flutter/services.dart';
+import 'package:focubili/services/windows_experience_service.dart';
 
 class _CaptureShareBoundary extends VideoNoteShareService {
   GlobalKey? boundary;
@@ -101,12 +105,13 @@ void main() {
       tester
           .widget<Container>(find.byKey(const Key('video-note-share-card')))
           .color,
-      const Color(0xFFF8FAFE),
+      const Color(0xFFFFFEFA),
     );
     final body = tester.widget<Text>(find.text(note.body, skipOffstage: false));
     expect(body.maxLines, isNull);
-    expect(find.text('12:38'), findsOneWidget);
-    expect(find.text('画面 2 · 15:12', skipOffstage: false), findsOneWidget);
+    expect(find.text('12:38'), findsNWidgets(2));
+    expect(find.text('画面 2', skipOffstage: false), findsOneWidget);
+    expect(find.text('15:12', skipOffstage: false), findsOneWidget);
     final scroll = tester.widget<SingleChildScrollView>(
       find.byType(SingleChildScrollView),
     );
@@ -164,5 +169,124 @@ void main() {
     expect(pixels.rgba[2], greaterThan(pixels.rgba[0]));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
+  });
+  testWidgets('纸页按笔记、画面、出处排序，导出与屏幕上的卡片像素一致', (tester) async {
+    final note = exampleNote().copyWith(
+      title: '导数 / derivative',
+      body: 'x → 0 时，比较两点的斜率。',
+    );
+    final folder = Directory.systemTemp.createTempSync('approved-paper-share-');
+    addTearDown(() => folder.deleteSync(recursive: true));
+    String? exported;
+    final service = VideoNoteShareService(
+      platform: AppPlatform.android,
+      temporaryDirectoryLoader: () async => folder,
+      shareLauncher: (params) async {
+        exported = params.files!.single.path;
+        return const ShareResult('mock', ShareResultStatus.success);
+      },
+    );
+    await showPreview(tester, note, service: service);
+    await tester.tap(find.byKey(const Key('video-note-share-style-classic')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('video-note-share-style-paper')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('video-note-share-frame')), findsNothing);
+    expect(
+      tester.getTopLeft(find.text(note.title)).dy,
+      lessThan(tester.getTopLeft(find.text(note.body)).dy),
+    );
+    expect(
+      tester.getTopLeft(find.text(note.body)).dy,
+      lessThan(tester.getTopLeft(find.text(note.videoTitle)).dy),
+    );
+    for (final toolbar in ['笔记分享预览', '经典', '纸页', '分享图片']) {
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('video-note-share-card')),
+          matching: find.text(toolbar),
+        ),
+        findsNothing,
+      );
+    }
+    final boundary = tester.renderObject<RenderRepaintBoundary>(
+      find
+          .ancestor(
+            of: find.byKey(const Key('video-note-share-card')),
+            matching: find.byType(RepaintBoundary),
+          )
+          .first,
+    );
+    late Uint8List expected;
+    await tester.runAsync(() async {
+      final image = await boundary.toImage(pixelRatio: 3);
+      try {
+        expected = (await image.toByteData(
+          format: ui.ImageByteFormat.png,
+        ))!.buffer.asUint8List();
+      } finally {
+        image.dispose();
+      }
+    });
+    await tester.tap(find.byKey(const Key('share-video-note-card')));
+    // Pump Flutter callbacks while the real renderer and local PNG writer work.
+    final deadline = Stopwatch()..start();
+    while (exported == null && deadline.elapsed < const Duration(seconds: 10)) {
+      await tester.pump(const Duration(milliseconds: 16));
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 8)),
+      );
+    }
+    expect(exported, isNotNull);
+    expect(File(exported!).readAsBytesSync(), orderedEquals(expected));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('关闭'));
+    await tester.pumpAndSettle();
+    expect(find.byType(VideoNoteShareCard), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+  testWidgets('桌面复制纸页 PNG 和像素，不调用系统分享', (tester) async {
+    const channel = MethodChannel('test/paper-clipboard');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    MethodCall? copied;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      copied = call;
+      return null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    final service = VideoNoteShareService(
+      platform: AppPlatform.linux,
+      windowsExperience: const WindowsExperienceService(channel: channel),
+      shareLauncher: (_) => throw StateError('Unexpected share'),
+    );
+    await showPreview(tester, exampleNote(), service: service);
+    await tester.tap(find.text('复制图片'));
+    final deadline = Stopwatch()..start();
+    while (copied == null && deadline.elapsed < const Duration(seconds: 10)) {
+      await tester.pump(const Duration(milliseconds: 16));
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 8)),
+      );
+    }
+    expect(copied?.method, 'copyImage');
+    final args = copied!.arguments as Map;
+    expect(args['width'], 1170);
+    expect((args['png'] as Uint8List).take(8), [
+      137,
+      80,
+      78,
+      71,
+      13,
+      10,
+      26,
+      10,
+    ]);
+    expect(
+      (args['rgba'] as Uint8List).length,
+      (args['width'] as int) * (args['height'] as int) * 4,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('图片已复制到剪贴板'), findsOneWidget);
   });
 }

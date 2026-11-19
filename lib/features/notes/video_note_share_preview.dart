@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../../core/theme/app_theme.dart';
 import '../../models/video_note.dart';
 import '../../services/video_note_share_service.dart';
 import 'video_note_composer.dart';
@@ -111,56 +112,68 @@ class _VideoNoteSharePreviewDialogState
   /// 用可滚动缩放预览承载任意高度的笔记卡，不裁掉长正文或截图。
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final dark = theme.brightness == Brightness.dark;
+    final seed = theme.extension<AppThemeAccent>()?.seedColor;
+    final defaultBlue =
+        !dark && (seed == null || seed == const Color(0xFF1677FF));
+    final accent = defaultBlue ? _PaperNoteShareCard.blue : colors.primary;
+    final shell = dark ? colors.surfaceContainer : const Color(0xFFF0F3F7);
     return Dialog(
-      insetPadding: const EdgeInsets.all(16),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+      backgroundColor: shell,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
       child: ConstrainedBox(
         constraints: BoxConstraints(
           maxWidth: 500,
-          maxHeight: MediaQuery.sizeOf(context).height * 0.92,
+          maxHeight: MediaQuery.sizeOf(context).height * .92,
         ),
         child: Padding(
-          padding: const EdgeInsets.all(14),
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 14),
           child: Column(
             mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              Row(
-                children: <Widget>[
-                  Expanded(
-                    child: Text(
-                      '笔记分享预览',
-                      style: Theme.of(context).textTheme.titleLarge,
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: _sharing
-                        ? null
-                        : () => Navigator.of(context).pop(),
-                    icon: const Icon(Icons.close_rounded),
-                    tooltip: '关闭',
-                  ),
-                ],
-              ),
-              Align(
-                alignment: AlignmentDirectional.centerStart,
-                child: Wrap(
-                  spacing: 8,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(left: 5),
+                child: Row(
                   children: [
-                    for (final style in VideoNoteShareStyle.values)
-                      ChoiceChip(
-                        key: ValueKey('video-note-share-style-${style.name}'),
-                        label: Text(style.label),
-                        selected: _style == style,
-                        onSelected: _sharing
-                            ? null
-                            : (_) => _selectStyle(style),
+                    Expanded(
+                      child: Text(
+                        '笔记分享预览',
+                        style: theme.textTheme.titleLarge?.copyWith(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
+                    ),
+                    IconButton(
+                      onPressed: _sharing
+                          ? null
+                          : () => Navigator.of(context).pop(),
+                      icon: const Icon(Icons.close_rounded, size: 21),
+                      tooltip: '关闭',
+                    ),
                   ],
                 ),
               ),
-              const SizedBox(height: 8),
+              _NoteStylePicker(
+                selected: _style,
+                accent: accent,
+                onChanged: _sharing ? null : _selectStyle,
+              ),
+              const SizedBox(height: 12),
               Flexible(
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  clipBehavior: Clip.antiAlias,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: dark
+                          ? colors.outlineVariant
+                          : const Color(0xFFD8DFE6),
+                    ),
+                  ),
                   child: SingleChildScrollView(
                     controller: _scroll,
                     child: FittedBox(
@@ -185,6 +198,20 @@ class _VideoNoteSharePreviewDialogState
                 child: FilledButton.icon(
                   key: const Key('share-video-note-card'),
                   onPressed: _sharing ? null : () => unawaited(_share()),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: accent,
+                    foregroundColor: defaultBlue
+                        ? Colors.white
+                        : colors.onPrimary,
+                    minimumSize: const Size(0, 45),
+                    textStyle: theme.textTheme.labelLarge?.copyWith(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(13),
+                    ),
+                  ),
                   icon: _sharing
                       ? const SizedBox.square(
                           dimension: 18,
@@ -205,6 +232,74 @@ class _VideoNoteSharePreviewDialogState
                 ),
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NoteStylePicker extends StatelessWidget {
+  const _NoteStylePicker({
+    required this.selected,
+    required this.accent,
+    required this.onChanged,
+  });
+  final VideoNoteShareStyle selected;
+  final Color accent;
+  final ValueChanged<VideoNoteShareStyle>? onChanged;
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final dark = colors.brightness == Brightness.dark;
+    final track = dark
+        ? colors.surfaceContainerHighest
+        : const Color(0xFFE2E8EF);
+    return Align(
+      alignment: AlignmentDirectional.centerStart,
+      child: Padding(
+        padding: const EdgeInsets.only(left: 4),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: track,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(3),
+            child: Wrap(
+              children: [
+                for (final style in VideoNoteShareStyle.values)
+                  ChoiceChip(
+                    key: ValueKey('video-note-share-style-${style.name}'),
+                    label: Text(style.label),
+                    selected: selected == style,
+                    onSelected: onChanged == null
+                        ? null
+                        : (_) => onChanged!(style),
+                    labelStyle: TextStyle(
+                      fontSize: 13,
+                      color: selected == style
+                          ? accent
+                          : colors.onSurfaceVariant,
+                      fontWeight: selected == style
+                          ? FontWeight.w600
+                          : FontWeight.w400,
+                    ),
+                    checkmarkColor: accent,
+                    selectedColor: dark
+                        ? colors.surfaceContainerLow
+                        : Colors.white,
+                    backgroundColor: track,
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    labelPadding: const EdgeInsets.symmetric(horizontal: 5),
+                    side: BorderSide.none,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+              ],
+            ),
           ),
         ),
       ),
@@ -391,126 +486,88 @@ class _PaperNoteShareCard extends StatelessWidget {
   final String body;
   final List<VideoNoteFrame> frames;
 
-  static const _paper = Color(0xFFF8FAFE);
-  static const _ink = Color(0xFF18243C);
-  static const _muted = Color(0xFF526078);
-  static const _blue = Color(0xFF244F9D);
-  static const _line = Color(0xFFDCE5F4);
+  static const _paper = Color(0xFFFFFEFA);
+  static const _ink = Color(0xFF192B41);
+  static const _muted = Color(0xFF5C6978);
+  static const blue = Color(0xFF185BB2);
+  static const _line = Color(0xFFDAE1E9);
 
   @override
   Widget build(BuildContext context) {
     final title = note.title.trim();
     final partTitle = note.partTitle.trim();
     final sourceId = note.bvid.trim();
+    final sourceMeta = [
+      if (partTitle.isNotEmpty) 'P${note.partPageNumber} · $partTitle',
+      if (sourceId.isNotEmpty) sourceId,
+    ].join('  /  ');
     return Container(
       key: const Key('video-note-share-card'),
-      width: 420,
+      width: 390,
       color: _paper,
-      padding: const EdgeInsets.fromLTRB(28, 27, 28, 25),
+      padding: const EdgeInsets.fromLTRB(26, 0, 26, 22),
       child: DefaultTextStyle.merge(
-        style: const TextStyle(color: _ink, fontSize: 14, height: 1.4),
+        style: const TextStyle(
+          color: _ink,
+          fontSize: 14,
+          height: 1.35,
+          letterSpacing: 0,
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Row(
               children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(7),
-                  child: Image.asset(
-                    'assets/icon/focubili_icon.png',
-                    width: 26,
-                    height: 26,
-                  ),
+                const CustomPaint(
+                  painter: _BookmarkPainter(),
+                  size: Size(16, 34),
                 ),
                 const SizedBox(width: 9),
-                const Expanded(
-                  child: Text(
-                    '焦点哔哩',
-                    style: TextStyle(fontWeight: FontWeight.w700),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 12),
+                    child: Text(
+                      formatVideoNotePosition(note.position),
+                      style: const TextStyle(
+                        color: blue,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -.65,
+                      ),
+                    ),
                   ),
                 ),
-                const Text(
-                  '时间点笔记',
-                  style: TextStyle(color: _muted, fontSize: 12),
+                const Padding(
+                  padding: EdgeInsets.only(top: 12),
+                  child: Text(
+                    '时间点笔记',
+                    style: TextStyle(color: _muted, fontSize: 12),
+                  ),
                 ),
               ],
             ),
-            const SizedBox(height: 18),
-            const Divider(height: 1, color: _line),
-            const SizedBox(height: 22),
+            const SizedBox(height: 24),
             Text(
               title.isEmpty ? '未命名笔记' : title,
               style: const TextStyle(
-                fontSize: 32,
-                height: 1.22,
+                fontSize: 31,
+                height: 1.28,
                 fontWeight: FontWeight.w800,
-              ),
-            ),
-            const SizedBox(height: 18),
-            Container(
-              padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-              decoration: BoxDecoration(
-                color: const Color(0xFFEAF1FD),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Icon(
-                        Icons.schedule_rounded,
-                        size: 15,
-                        color: _blue,
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          formatVideoNotePosition(note.position),
-                          style: const TextStyle(
-                            color: _blue,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
-                    note.videoTitle,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 15,
-                    ),
-                  ),
-                  if (partTitle.isNotEmpty || sourceId.isNotEmpty) ...[
-                    const SizedBox(height: 3),
-                    Wrap(
-                      spacing: 12,
-                      runSpacing: 2,
-                      children: [
-                        if (partTitle.isNotEmpty)
-                          Text(
-                            'P${note.partPageNumber} · $partTitle',
-                            style: const TextStyle(color: _muted, fontSize: 12),
-                          ),
-                        if (sourceId.isNotEmpty)
-                          Text(
-                            sourceId,
-                            style: const TextStyle(color: _muted, fontSize: 12),
-                          ),
-                      ],
-                    ),
-                  ],
-                ],
+                letterSpacing: -1.1,
               ),
             ),
             if (body.isNotEmpty) ...[
-              const SizedBox(height: 24),
-              Text(body, style: const TextStyle(fontSize: 17, height: 1.72)),
+              const SizedBox(height: 14),
+              Text(
+                body,
+                style: const TextStyle(
+                  fontSize: 16,
+                  height: 1.72,
+                  color: Color(0xFF324152),
+                ),
+              ),
             ] else if (frames.isEmpty) ...[
-              const SizedBox(height: 24),
+              const SizedBox(height: 14),
               const Text('这条笔记还没有正文。', style: TextStyle(color: _muted)),
             ],
             for (final (index, frame) in frames.indexed)
@@ -520,18 +577,89 @@ class _PaperNoteShareCard extends StatelessWidget {
                 captionColor: _muted,
                 placeholderColor: const Color(0xFFEAF1FD),
               ),
-            const SizedBox(height: 24),
-            const Divider(height: 1, color: _line),
+            const SizedBox(height: 18),
+            const Divider(height: 1, thickness: 1, color: _line),
             const SizedBox(height: 13),
-            Text(
-              formatVideoNoteDateTime(note.createdAt),
-              style: const TextStyle(color: _muted, fontSize: 12),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.only(top: 2),
+                  child: Icon(
+                    Icons.ondemand_video_rounded,
+                    color: _muted,
+                    size: 17,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        note.videoTitle,
+                        style: const TextStyle(
+                          fontSize: 15.5,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      if (sourceMeta.isNotEmpty) ...[
+                        const SizedBox(height: 3),
+                        Text(
+                          sourceMeta,
+                          style: const TextStyle(fontSize: 12, color: _muted),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 19),
+            Row(
+              children: [
+                Image.asset(
+                  'assets/icon/focubili_icon.png',
+                  width: 18,
+                  height: 18,
+                ),
+                const SizedBox(width: 6),
+                const Expanded(
+                  child: Text(
+                    '焦点哔哩',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                  ),
+                ),
+                Text(
+                  formatVideoNoteDateTime(note.createdAt),
+                  style: const TextStyle(color: _muted, fontSize: 11.5),
+                ),
+              ],
             ),
           ],
         ),
       ),
     );
   }
+}
+
+/// The paper bookmark aligns the note's timestamp with its first line of text.
+class _BookmarkPainter extends CustomPainter {
+  const _BookmarkPainter();
+  @override
+  void paint(Canvas canvas, Size size) {
+    final path = Path()
+      ..moveTo(0, 0)
+      ..lineTo(size.width, 0)
+      ..lineTo(size.width, size.height)
+      ..lineTo(size.width / 2, size.height - 5)
+      ..lineTo(0, size.height)
+      ..close();
+    canvas.drawPath(path, Paint()..color = _PaperNoteShareCard.blue);
+  }
+
+  @override
+  bool shouldRepaint(_BookmarkPainter oldDelegate) => false;
 }
 
 class _NoteShareFrame extends StatelessWidget {
@@ -551,17 +679,19 @@ class _NoteShareFrame extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: EdgeInsets.only(top: classic ? 28 : 24),
+    padding: EdgeInsets.only(top: classic ? 28 : 21),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          '画面 ${index + 1} · ${formatVideoNoteFramePosition(frame.position)}',
-          style: TextStyle(color: captionColor, fontSize: classic ? null : 12),
-        ),
-        const SizedBox(height: 8),
+        if (classic) ...[
+          Text(
+            '画面 ${index + 1} · ${formatVideoNoteFramePosition(frame.position)}',
+            style: TextStyle(color: captionColor),
+          ),
+          const SizedBox(height: 8),
+        ],
         ClipRRect(
-          borderRadius: BorderRadius.circular(classic ? 18 : 12),
+          borderRadius: BorderRadius.circular(classic ? 18 : 7),
           child: Image.file(
             File(frame.path),
             key: index == 0
@@ -585,6 +715,20 @@ class _NoteShareFrame extends StatelessWidget {
             ),
           ),
         ),
+        if (!classic) ...[
+          const SizedBox(height: 7),
+          DefaultTextStyle.merge(
+            style: TextStyle(color: captionColor, fontSize: 11.5),
+            child: Row(
+              children: [
+                Expanded(child: Text('画面 ${index + 1}')),
+                Icon(Icons.schedule_rounded, size: 13, color: captionColor),
+                const SizedBox(width: 4),
+                Text(formatVideoNoteFramePosition(frame.position)),
+              ],
+            ),
+          ),
+        ],
       ],
     ),
   );
