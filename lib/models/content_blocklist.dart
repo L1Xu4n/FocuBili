@@ -104,13 +104,16 @@ class ContentBlocklist {
     VideoSearchResult result, {
     int? knownOwnerMid,
     Iterable<String> knownTags = const [],
-  }) => !blocks(
-    bvid: result.bvid,
-    ownerMid: knownOwnerMid ?? result.ownerMid,
-    ownerName: result.ownerName,
-    title: result.title,
-    tags: result.tags.followedBy(knownTags),
-  );
+  }) =>
+      !((knownOwnerMid == null || knownOwnerMid <= 0) &&
+          result.additionalReportedOwnerMids.any(creators.containsKey)) &&
+      !blocks(
+        bvid: result.bvid,
+        ownerMid: knownOwnerMid ?? result.ownerMid,
+        ownerName: result.ownerName,
+        title: result.title,
+        tags: result.tags.followedBy(knownTags),
+      );
 
   bool includesPreview(VideoPreview video) => !blocks(
     bvid: video.bvid,
