@@ -117,6 +117,13 @@ class _Account extends BilibiliAccountDataService {
             mediaCount: 4,
             isAvailable: true,
           ),
+          FavoriteFolder(
+            mediaId: 2,
+            title: '线上笔记',
+            coverUrl: '',
+            mediaCount: 3,
+            isAvailable: true,
+          ),
         ],
         page: 1,
         hasMore: false,
@@ -125,8 +132,10 @@ class _Account extends BilibiliAccountDataService {
 
 class _Remote extends BilibiliInteractionService {
   final writes = <int>[];
-  final existing = <int>{};
+  final existing = <(int, int)>{};
+  final attempts = <(int, int)>[];
   int? fail;
+  (int, int)? failPair;
   @override
   Future<bool> addToVerifiedFavoriteFolder({
     required int aid,
@@ -134,22 +143,62 @@ class _Remote extends BilibiliInteractionService {
     required int expectedMid,
     required bool Function() isCurrent,
   }) async {
-    expect(mediaId, 1);
+    expect(mediaId, isIn([1, 2]));
     expect(expectedMid, 13);
     if (!isCurrent()) throw StateError('account');
-    if (fail == aid) throw StateError('offline');
-    if (!existing.add(aid)) return false;
+    final pair = (aid, mediaId);
+    attempts.add(pair);
+    if (fail == aid || failPair == pair) throw StateError('offline');
+    if (!existing.add(pair)) return false;
     writes.add(aid);
     return true;
   }
 }
 
+class _MemoryFavorites extends AppFavoritesService {
+  final folders = <AppFavoriteFolder>[];
+  final contents = <String, Map<String, AppFavoriteItem>>{};
+
+  @override
+  Future<AppFavoriteFolder> createFolder(String name) async {
+    final now = DateTime(2026);
+    final folder = AppFavoriteFolder(
+      id: 'folder-${folders.length}',
+      name: name,
+      createdAt: now,
+      updatedAt: now,
+    );
+    folders.add(folder);
+    return folder;
+  }
+
+  @override
+  Future<List<AppFavoriteFolder>> loadFolders() async => List.of(folders);
+
+  @override
+  Future<List<AppFavoriteItem>> loadItems(String folderId) async =>
+      contents[folderId]?.values.toList() ?? [];
+
+  @override
+  Future<int> addItems(String folderId, List<AppFavoriteItem> incoming) async {
+    final saved = contents.putIfAbsent(folderId, () => {});
+    final before = saved.length;
+    for (final item in incoming) {
+      saved.putIfAbsent(item.bvid, () => item);
+    }
+    return saved.length - before;
+  }
+}
+
 class _Fixture {
+  _Fixture({AppFavoritesService? local})
+    : local = local ?? AppFavoritesService();
+
+  final AppFavoritesService local;
   final content = _Content(),
       videos = _Videos(),
       account = _Account(),
       remote = _Remote(),
-      local = AppFavoritesService(),
       learn = LearningListService();
   late final actions = VideoBatchActions(
     learningService: learn,
@@ -479,6 +528,65 @@ void main() {
     expect(x.videos.calls, isEmpty);
     expect(x.remote.writes, isEmpty);
   });
+  testWidgets('本机多选、取消某一项并在窄屏大字确认', (t) async {
+    final x = _Fixture(local: _MemoryFavorites());
+    final first = (await t.runAsync(() => x.local.createFolder('先保存')))!;
+    final second = (await t.runAsync(() => x.local.createFolder('也保存')))!;
+    final skipped = (await t.runAsync(() => x.local.createFolder('不保存')))!;
+    await x.host(t, size: const Size(320, 640), scale: 1.7, page: false);
+    await t.tap(find.text('保存两支'));
+    await t.pumpAndSettle();
+    for (final title in ['先保存', '也保存', '不保存', '不保存']) {
+      final option = find.text(title);
+      await t.ensureVisible(option);
+      await t.tap(option);
+      await t.pumpAndSettle();
+    }
+    expect(find.text('2 支视频 · 已选 2 个'), findsOneWidget);
+    expect(await t.runAsync(() => x.local.loadItems(first.id)), isEmpty);
+    await t.tap(find.text('加入收藏夹'));
+    await t.pumpAndSettle();
+    for (final folder in [first, second]) {
+      final saved = (await t.runAsync(() => x.local.loadItems(folder.id)))!;
+      expect(saved.map((item) => item.bvid).toSet(), {'BV1', 'BV2'});
+    }
+    expect(await t.runAsync(() => x.local.loadItems(skipped.id)), isEmpty);
+    expect(t.takeException(), isNull);
+  });
+
+  testWidgets('B站多选按视频与收藏夹跟踪，重试不追加已完成组合', (t) async {
+    final x = _Fixture();
+    x.remote.existing.add((1001, 1));
+    x.remote.failPair = (1002, 2);
+    await x.host(t, page: false);
+    await t.tap(find.text('保存两支'));
+    await t.pumpAndSettle();
+    await t.tap(find.text('B 站'));
+    await t.pumpAndSettle();
+    await t.tap(find.text('线上物理'));
+    await t.pumpAndSettle();
+    await t.tap(find.text('线上笔记'));
+    await t.pumpAndSettle();
+    await t.tap(find.text('加入收藏夹'));
+    await t.pumpAndSettle();
+    expect(x.remote.attempts, [(1001, 1), (1001, 2), (1002, 1), (1002, 2)]);
+    expect(x.videos.calls, ['BV1', 'BV2']);
+    expect(find.textContaining('新增 2 项、已有 1 项、剩余 1 项'), findsOneWidget);
+    x.remote.failPair = null;
+    await t.tap(find.text('继续剩余项'));
+    await t.pumpAndSettle();
+    expect(x.remote.attempts, [
+      (1001, 1),
+      (1001, 2),
+      (1002, 1),
+      (1002, 2),
+      (1002, 2),
+    ]);
+    expect(x.remote.writes, [1001, 1002, 1002]);
+    expect(x.videos.calls, ['BV1', 'BV2', 'BV2']);
+    expect(find.textContaining('新增 3 项、已有 1 项'), findsOneWidget);
+  });
+
   testWidgets('新建夹仅为草稿，取消不会产生空文件夹', (t) async {
     final x = _Fixture();
     await x.host(t, page: false);

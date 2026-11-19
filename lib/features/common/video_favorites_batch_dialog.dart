@@ -39,9 +39,19 @@ class _VideoFavoritesBatchDialogState extends State<VideoFavoritesBatchDialog> {
   int _loadId = 0, _added = 0, _existing = 0;
   List<AppFavoriteFolder> _locals = [];
   List<FavoriteFolder> _remotes = [];
-  String? _localId, _newName, _message;
-  int? _remoteId, _mid;
-  final _done = <String>{};
+  String? _newName, _message;
+  int? _mid;
+  final _localIds = <String>{};
+  final _remoteIds = <int>{};
+  final _localDone = <String>{};
+  final _remoteDone = <(String, int)>{};
+
+  int get _doneCount =>
+      _remote ? _remoteDone.length : _localDone.length * widget.items.length;
+  int get _targetCount => _remote
+      ? _remoteIds.length
+      : _localIds.length + (_newName == null ? 0 : 1);
+  int get _totalCount => _targetCount * widget.items.length;
   @override
   void initState() {
     super.initState();
@@ -62,7 +72,6 @@ class _VideoFavoritesBatchDialogState extends State<VideoFavoritesBatchDialog> {
     setState(() {
       _stop = true;
       _mid = null;
-      _remoteId = null;
       _remotes = [];
       _loading = false;
       _message = '账号已变化。请退出并重新选择收藏夹。';
@@ -74,9 +83,9 @@ class _VideoFavoritesBatchDialogState extends State<VideoFavoritesBatchDialog> {
     setState(() {
       _loading = true;
       _message = null;
-      _localId = null;
+      _localIds.clear();
       _newName = null;
-      _remoteId = null;
+      _remoteIds.clear();
       _mid = null;
       _remotes = [];
     });
@@ -125,7 +134,6 @@ class _VideoFavoritesBatchDialogState extends State<VideoFavoritesBatchDialog> {
     if (name != null && mounted) {
       setState(() {
         _newName = name;
-        _localId = null;
         _message = null;
       });
     }
@@ -139,24 +147,41 @@ class _VideoFavoritesBatchDialogState extends State<VideoFavoritesBatchDialog> {
         : '${d.inHours}:${m.toString().padLeft(2, "0")}:$s';
   }
 
-  void _success(int added, int existing) {
+  String _counts(int added, int existing) {
+    final unit = _targetCount == 1 ? '支' : '项';
+    return '新增 $added $unit、已有 $existing $unit';
+  }
+
+  void _success() {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          '已加入${_remote ? "B 站" : "本机"}收藏夹：新增 $added 支、已有 $existing 支。',
+          '已加入 $_targetCount 个${_remote ? "B 站" : "本机"}收藏夹：'
+          '${_counts(_added, _existing)}。',
         ),
       ),
     );
     Navigator.pop(context, true);
   }
 
+  bool _sourceCurrent() => mounted && widget.sourceIsCurrent?.call() != false;
+
+  void _unfinished(String heading, int total) {
+    final unit = _targetCount == 1 ? '支' : '项';
+    setState(
+      () => _message =
+          '$heading：${_counts(_added, _existing)}、剩余 ${total - _doneCount} $unit。',
+    );
+  }
+
   Future<void> _save() async {
-    if (_saving || _loading) return;
-    if (widget.sourceIsCurrent?.call() == false) {
+    if (_saving || _loading || _totalCount == 0) return;
+    if (!_sourceCurrent()) {
       setState(() => _message = '投稿筛选已变化，请取消并重新选择。');
       return;
     }
+    final total = _totalCount;
     setState(() {
       _saving = true;
       _stop = false;
@@ -164,54 +189,66 @@ class _VideoFavoritesBatchDialogState extends State<VideoFavoritesBatchDialog> {
     });
     try {
       if (!_remote) {
-        var folderId = _localId;
-        if (folderId == null && _newName != null) {
-          final folder = await widget.local.createFolder(_newName!);
+        if (_newName case final String name) {
+          final folder = await widget.local.createFolder(name);
           if (folder == null) throw StateError('new folder failed');
-          folderId = folder.id;
           if (!mounted) return;
           setState(() {
-            _localId = folder.id;
+            _localIds.add(folder.id);
             _newName = null;
             _locals = [..._locals, folder];
           });
         }
-        if (folderId == null || !mounted) return;
-        if (widget.sourceIsCurrent?.call() == false) {
-          setState(() => _message = '投稿筛选已变化，未继续添加视频。');
-          return;
-        }
         final now = DateTime.now();
-        final items = [
-          for (final (i, v) in widget.items.indexed)
-            AppFavoriteItem(
-              folderId: folderId,
-              bvid: v.bvid,
-              title: v.title,
-              coverUrl: v.coverUrl,
-              ownerName: widget.ownerName,
-              durationText: _duration(v.duration),
-              addedAt: now.subtract(Duration(microseconds: i)),
-              partCount: v.partCount > 1 ? v.partCount : null,
-            ),
-        ];
-        final n = await widget.local.addItems(folderId, items);
-        if (n == null) throw StateError('folder or save unavailable');
-        _success(n, items.length - n);
+        for (final id in _localIds) {
+          if (_localDone.contains(id)) continue;
+          if (!_sourceCurrent() || _stop) break;
+          final items = [
+            for (final (i, v) in widget.items.indexed)
+              AppFavoriteItem(
+                folderId: id,
+                bvid: v.bvid,
+                title: v.title,
+                coverUrl: v.coverUrl,
+                ownerName: widget.ownerName,
+                durationText: _duration(v.duration),
+                addedAt: now.subtract(Duration(microseconds: i)),
+                partCount: v.partCount > 1 ? v.partCount : null,
+              ),
+          ];
+          final count = await widget.local.addItems(id, items);
+          if (count == null) throw StateError('folder or save unavailable');
+          if (!mounted) return;
+          setState(() {
+            _localDone.add(id);
+            _added += count;
+            _existing += items.length - count;
+          });
+        }
+        if (!mounted) return;
+        if (_doneCount == total) {
+          _success();
+        } else {
+          _unfinished('已停止', total);
+        }
         return;
       }
-      final mid = _mid,
-          folder = _remoteId,
-          revision = CacheLifecycle.account.value;
+
+      final mid = _mid;
+      final revision = CacheLifecycle.account.value;
       bool valid() =>
-          mounted &&
+          _sourceCurrent() &&
           !_stop &&
-          widget.sourceIsCurrent?.call() != false &&
           _mid == mid &&
           CacheLifecycle.account.value == revision;
-      if (mid == null || folder == null) return;
+      if (mid == null) return;
+      final folders = _remoteIds.toList(growable: false);
+      videos:
       for (final item in widget.items) {
-        if (_done.contains(item.bvid)) continue;
+        final remaining = folders.where(
+          (folder) => !_remoteDone.contains((item.bvid, folder)),
+        );
+        if (remaining.isEmpty) continue;
         if (!valid()) break;
         if (await widget.account.currentAccountMid() != mid) {
           if (mounted) _accountChanged();
@@ -226,39 +263,33 @@ class _VideoFavoritesBatchDialogState extends State<VideoFavoritesBatchDialog> {
             video.bvid.toLowerCase() != item.bvid.toLowerCase()) {
           throw StateError('mismatched or unavailable video');
         }
-        final added = await widget.interactions.addToVerifiedFavoriteFolder(
-          aid: video.aid,
-          mediaId: folder,
-          expectedMid: mid,
-          isCurrent: valid,
-        );
-        if (!mounted) return;
-        setState(() {
-          _done.add(item.bvid);
-          if (added) {
-            _added++;
-          } else {
-            _existing++;
-          }
-        });
+        for (final folder in remaining) {
+          if (!valid()) break videos;
+          final added = await widget.interactions.addToVerifiedFavoriteFolder(
+            aid: video.aid,
+            mediaId: folder,
+            expectedMid: mid,
+            isCurrent: valid,
+          );
+          if (!mounted) return;
+          setState(() {
+            _remoteDone.add((item.bvid, folder));
+            if (added) {
+              _added++;
+            } else {
+              _existing++;
+            }
+          });
+        }
       }
       if (!mounted) return;
-      if (valid() && _done.length == widget.items.length) {
-        _success(_added, _existing);
-        return;
+      if (valid() && _doneCount == total) {
+        _success();
+      } else {
+        _unfinished('已停止', total);
       }
-      setState(
-        () => _message =
-            '已停止：新增 $_added 支、已有 $_existing 支、剩余 ${widget.items.length - _done.length} 支。',
-      );
     } catch (_) {
-      if (mounted) {
-        setState(
-          () => _message = _remote
-              ? '未全部完成：新增 $_added 支、已有 $_existing 支、剩余 ${widget.items.length - _done.length} 支。确认账号和网络后可重试剩余项。'
-              : '未能加入本机收藏，请检查收藏夹是否仍存在后重试。',
-        );
-      }
+      if (mounted) _unfinished(_stop ? '已停止' : '未全部完成', total);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -266,103 +297,133 @@ class _VideoFavoritesBatchDialogState extends State<VideoFavoritesBatchDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final blocked = _loading || _saving;
-    final hasTarget = _remote
-        ? _mid != null && _remoteId != null
-        : _localId != null || _newName != null;
+    final colors = Theme.of(context).colorScheme;
+    final selectionLocked = _saving || _doneCount > 0;
+    final hasTarget = _targetCount > 0 && (!_remote || _mid != null);
     final choices = _remote
         ? [for (final f in _remotes) (f.mediaId.toString(), f.title)]
         : [for (final f in _locals) (f.id, f.name)];
+    final showDraft = !_remote && _newName != null;
     return PopScope(
       canPop: !_saving,
       child: AlertDialog(
         title: const Text('选择收藏夹'),
+        titlePadding: const EdgeInsetsDirectional.fromSTEB(20, 18, 20, 8),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 20),
+        actionsPadding: const EdgeInsetsDirectional.fromSTEB(20, 10, 20, 14),
         scrollable: true,
         content: SizedBox(
-          width: 380,
+          width: 350,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text('将 ${widget.items.length} 支视频加入同一个收藏夹。'),
-              const SizedBox(height: 10),
               Wrap(
-                spacing: 8,
-                runSpacing: 6,
+                spacing: 6,
+                runSpacing: 4,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   for (final src in [false, true])
                     ChoiceChip(
+                      avatar: Icon(
+                        src ? Icons.cloud_outlined : Icons.folder_outlined,
+                        size: 16,
+                      ),
+                      showCheckmark: false,
+                      side: BorderSide.none,
+                      backgroundColor: colors.surfaceContainerHigh,
+                      selectedColor: colors.primaryContainer,
                       label: Text(src ? 'B 站' : '本机'),
                       selected: _remote == src,
-                      onSelected: _saving || _done.isNotEmpty
+                      onSelected: selectionLocked
                           ? null
-                          : (_) {
-                              if (src != _remote) {
+                          : (selected) {
+                              if (selected && src != _remote) {
                                 setState(() => _remote = src);
                                 unawaited(_load());
                               }
                             },
                     ),
+                  Text(
+                    '${widget.items.length} 支视频 · 已选 $_targetCount 个',
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
                 ],
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 6),
               if (_loading) const LinearProgressIndicator(),
-              if (!_loading && choices.isEmpty && _message == null)
-                Text(_remote ? '没有可用的 B 站收藏夹。' : '还没有本机收藏夹。'),
-              if (choices.isNotEmpty)
-                SizedBox(
-                  width: double.maxFinite,
-                  height: math.min(
-                    MediaQuery.sizeOf(context).height * .28,
-                    choices.length *
-                        math.max(
-                          56.0,
-                          MediaQuery.textScalerOf(context).scale(18) + 30,
-                        ),
+              if (!_loading &&
+                  choices.isEmpty &&
+                  !showDraft &&
+                  _message == null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Text(_remote ? '没有可用收藏夹' : '还没有本机收藏夹'),
+                ),
+              if (choices.isNotEmpty || showDraft)
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: math.max(
+                      76,
+                      MediaQuery.sizeOf(context).height * .4,
+                    ),
                   ),
-                  child: ListView.builder(
+                  child: SingleChildScrollView(
                     primary: false,
-                    itemCount: choices.length,
-                    itemBuilder: (context, i) {
-                      final c = choices[i],
-                          selected = _remote
-                              ? _remoteId.toString() == c.$1
-                              : _localId == c.$1;
-                      return ListTile(
-                        selected: selected,
-                        leading: Icon(
-                          selected
-                              ? Icons.radio_button_checked
-                              : Icons.radio_button_unchecked,
-                        ),
-                        title: Text(c.$2),
-                        onTap: _saving || _done.isNotEmpty
-                            ? null
-                            : () => setState(() {
-                                _message = null;
-                                if (_remote) {
-                                  _remoteId = int.tryParse(c.$1);
-                                } else {
-                                  _localId = c.$1;
-                                  _newName = null;
-                                }
-                              }),
-                      );
-                    },
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        for (final (id, title) in choices)
+                          _folderOption(
+                            context,
+                            title: title,
+                            selected: _remote
+                                ? _remoteIds.contains(int.parse(id))
+                                : _localIds.contains(id),
+                            onChanged: selectionLocked
+                                ? null
+                                : (checked) => setState(() {
+                                    _message = null;
+                                    if (_remote) {
+                                      final folder = int.parse(id);
+                                      checked
+                                          ? _remoteIds.add(folder)
+                                          : _remoteIds.remove(folder);
+                                    } else {
+                                      checked
+                                          ? _localIds.add(id)
+                                          : _localIds.remove(id);
+                                    }
+                                  }),
+                          ),
+                        if (showDraft)
+                          _folderOption(
+                            context,
+                            title: '新建：$_newName',
+                            selected: true,
+                            onChanged: selectionLocked
+                                ? null
+                                : (_) => setState(() => _newName = null),
+                          ),
+                      ],
+                    ),
                   ),
                 ),
               if (!_remote && !_loading)
-                TextButton.icon(
-                  onPressed: _saving ? null : _stageNewFolder,
-                  icon: const Icon(Icons.create_new_folder_outlined),
-                  label: Text(_newName == null ? '新建本机收藏夹' : '新建：$_newName'),
+                Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: TextButton.icon(
+                    onPressed: selectionLocked ? null : _stageNewFolder,
+                    icon: const Icon(Icons.create_new_folder_outlined),
+                    label: const Text('新建本机收藏夹'),
+                  ),
                 ),
-              if (_message != null) ...[
-                Text(
-                  _message!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+              if (_message case final message?) ...[
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(message, style: TextStyle(color: colors.error)),
                 ),
-                if (!_saving && !hasTarget && _done.isEmpty)
+                if (!selectionLocked && !hasTarget)
                   Align(
                     alignment: AlignmentDirectional.centerStart,
                     child: TextButton(
@@ -371,11 +432,10 @@ class _VideoFavoritesBatchDialogState extends State<VideoFavoritesBatchDialog> {
                     ),
                   ),
               ],
-              if (_saving && _remote) ...[
-                LinearProgressIndicator(
-                  value: _done.length / widget.items.length,
-                ),
-                Text('已处理 ${_done.length} / ${widget.items.length}'),
+              if (_saving && _totalCount > 0) ...[
+                const SizedBox(height: 8),
+                LinearProgressIndicator(value: _doneCount / _totalCount),
+                Text('已处理 $_doneCount / $_totalCount'),
               ],
             ],
           ),
@@ -383,23 +443,59 @@ class _VideoFavoritesBatchDialogState extends State<VideoFavoritesBatchDialog> {
         actions: [
           TextButton(
             onPressed: _saving
-                ? (_remote && !_stop
-                      ? () => setState(() => _stop = true)
-                      : null)
+                ? (_stop ? null : () => setState(() => _stop = true))
                 : () => Navigator.pop(context, false),
-            child: Text(_saving && _remote ? '停止后续' : '取消'),
+            child: Text(_saving ? '停止后续' : '取消'),
           ),
           FilledButton(
-            onPressed: blocked || !hasTarget ? null : _save,
+            onPressed: _loading || _saving || !hasTarget ? null : _save,
             child: Text(
               _saving
                   ? '正在加入…'
-                  : _done.isNotEmpty
+                  : _doneCount > 0
                   ? '继续剩余项'
                   : '加入收藏夹',
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _folderOption(
+    BuildContext context, {
+    required String title,
+    required bool selected,
+    required ValueChanged<bool>? onChanged,
+  }) {
+    final colors = Theme.of(context).colorScheme;
+    final shape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(12),
+    );
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Material(
+        color: selected ? colors.primaryContainer : colors.surfaceContainerLow,
+        shape: shape,
+        clipBehavior: Clip.antiAlias,
+        child: CheckboxListTile(
+          shape: shape,
+          dense: true,
+          controlAffinity: ListTileControlAffinity.trailing,
+          contentPadding: const EdgeInsetsDirectional.only(start: 10, end: 6),
+          value: selected,
+          title: Text(title, maxLines: 2, overflow: TextOverflow.ellipsis),
+          secondary: Icon(
+            _remote ? Icons.cloud_outlined : Icons.folder_outlined,
+            size: 18,
+            color: selected
+                ? colors.onPrimaryContainer
+                : colors.onSurfaceVariant,
+          ),
+          onChanged: onChanged == null
+              ? null
+              : (value) => onChanged(value ?? false),
+        ),
       ),
     );
   }
