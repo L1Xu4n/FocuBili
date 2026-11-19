@@ -11,6 +11,7 @@ import 'package:focubili/models/app_favorite.dart';
 import 'package:focubili/models/app_favorites_backup.dart';
 import 'package:focubili/services/app_favorites_file_service.dart';
 import 'package:focubili/services/app_favorites_service.dart';
+import 'package:focubili/services/bilibili_course_link.dart';
 
 final collectedAt = DateTime.utc(2026, 9, 1, 12, 30);
 
@@ -176,6 +177,48 @@ void main() {
 
   TestWidgetsFlutterBinding.ensureInitialized();
   setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  test('含课程的收藏夹可导出、导入并保留可打开的课程编号', () async {
+    final service = AppFavoritesService();
+    final source = (await service.createFolder('学习'))!;
+    final course = item(source.id, 'cheese:ss12345', title: '课程视频');
+    expect(await service.addItem(course), isTrue);
+    expect(await service.addItem(item(source.id, 'BV1GJ411x7h7')), isTrue);
+    final backup = await service.exportBackup(folderId: source.id);
+    final decoded = AppFavoritesBackup.fromBytes(backup.toBytes());
+
+    SharedPreferences.setMockInitialValues({});
+    final restored = AppFavoritesService();
+    expect((await restored.importBackup(decoded)).importedItems, 2);
+    final entries = await restored.loadItems(source.id);
+    final entry = entries.singleWhere((e) => e.bvid == course.bvid);
+    expect(entry.toJson(), course.toJson());
+    expect(
+      BilibiliCourseLink.fromInput(entry.bvid)?.path,
+      '/cheese/play/ss12345',
+    );
+    expect((await restored.importBackup(decoded)).duplicates, 2);
+  });
+
+  test('备份仍拒绝不合法的课程标识和课程外链', () {
+    final root = jsonDecode(utf8.decode(sample().toBytes())) as Map;
+    final folder = (root['folders'] as List).first as Map;
+    final row = (folder['items'] as List).first as Map;
+    for (final id in [
+      'cheese:ss0',
+      'cheese:ss01',
+      'cheese:ss9223372036854775808',
+      'cheese:ep12345',
+      'https://www.bilibili.com/cheese/play/ss12345',
+    ]) {
+      row['bvid'] = id;
+      expect(
+        () => AppFavoritesBackup.fromBytes(utf8.encode(jsonEncode(root))),
+        throwsFormatException,
+        reason: id,
+      );
+    }
+  });
 
   test('UTF-8 备份完整往返，保留空目录、顺序、时间、多 P 和跨目录收藏', () async {
     final original = sample();
