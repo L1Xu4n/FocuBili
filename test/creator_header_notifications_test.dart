@@ -8,6 +8,8 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:focubili/features/profile/user_profile_page.dart';
+import 'package:focubili/features/common/app_network_image.dart';
+import 'package:focubili/services/cache_lifecycle.dart';
 import 'package:focubili/models/public_profile.dart';
 import 'package:focubili/services/subscription_service.dart';
 import 'package:focubili/models/video_preview.dart';
@@ -197,6 +199,30 @@ class _TrackingContent extends _FakePublicContentService {
   }
 }
 
+class _HeldAvatarProfiles extends _FakePublicContentService {
+  final requests = <(int, Completer<CreatorProfile>)>[];
+
+  @override
+  Future<CreatorProfile> loadProfile(int mid) {
+    final pending = Completer<CreatorProfile>();
+    requests.add((mid, pending));
+    return pending.future;
+  }
+
+  void complete(int request, {int? returnedMid, String suffix = 'first'}) {
+    final (mid, pending) = requests[request];
+    pending.complete(
+      CreatorProfile(
+        mid: returnedMid ?? mid,
+        name: '测试 UP',
+        avatarUrl: 'https://i0.hdslb.com/bfs/face/$suffix.png',
+        sign: '',
+        officialDescription: '',
+      ),
+    );
+  }
+}
+
 class _PendingFollow extends _FakeInteractionService {
   Completer<void>? pending;
   bool fail = false;
@@ -331,6 +357,78 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     FlutterSecureStorage.setMockInitialValues({});
   });
+  testWidgets('重开同一 UP 主先显示旧头像，再换成最新头像', (tester) async {
+    final content = _HeldAvatarProfiles();
+    Widget page(int mid) => _host(
+      UserProfilePage(
+        mid: mid,
+        key: ValueKey(mid),
+        publicContentService: content,
+        interactionService: _FakeInteractionService(),
+        videoService: _FakeVideoService(),
+      ),
+    );
+    List<String> urls() => tester
+        .widgetList<AppNetworkImage>(find.byType(AppNetworkImage))
+        .map((image) => image.imageUrl)
+        .toList();
+    await tester.pumpWidget(page(7));
+    await tester.pump();
+    content.complete(0);
+    await tester.pumpAndSettle();
+    expect(urls(), contains('https://i0.hdslb.com/bfs/face/first.png'));
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpWidget(page(7));
+    await tester.pump();
+    expect(content.requests, hasLength(2));
+    expect(urls(), contains('https://i0.hdslb.com/bfs/face/first.png'));
+    content.complete(1, suffix: 'second');
+    await tester.pumpAndSettle();
+    expect(urls(), contains('https://i0.hdslb.com/bfs/face/second.png'));
+
+    await tester.pumpWidget(page(21));
+    await tester.pump();
+    expect(urls(), isEmpty);
+    content.complete(2, returnedMid: 7, suffix: 'wrong');
+    await tester.pumpAndSettle();
+    expect(urls(), isEmpty);
+  });
+
+  testWidgets('切换账号立即去掉旧头像，忽略旧请求的迟到结果', (tester) async {
+    final content = _HeldAvatarProfiles();
+    Widget page() => _host(
+      UserProfilePage(
+        mid: 7,
+        publicContentService: content,
+        interactionService: _FakeInteractionService(),
+        videoService: _FakeVideoService(),
+      ),
+    );
+    await tester.pumpWidget(page());
+    await tester.pump();
+    content.complete(0);
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpWidget(page());
+    await tester.pump();
+    expect(find.byType(AppNetworkImage), findsOneWidget);
+
+    CacheLifecycle.accountChanged();
+    await tester.pump();
+    expect(find.byType(AppNetworkImage), findsNothing);
+    expect(content.requests, hasLength(3));
+    content.complete(1, suffix: 'old-account');
+    await tester.pump();
+    expect(find.byType(AppNetworkImage), findsNothing);
+    content.complete(2, suffix: 'new-account');
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<AppNetworkImage>(find.byType(AppNetworkImage)).imageUrl,
+      'https://i0.hdslb.com/bfs/face/new-account.png',
+    );
+  });
+
   testWidgets('顶栏不重复作者名称，搜索按需展开、键盘提交、收起保留筛选', (tester) async {
     final content = _TrackingContent();
     final service = _Subscriptions();
