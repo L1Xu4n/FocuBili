@@ -73,17 +73,27 @@ class _DataTransferPageState extends State<DataTransferPage> {
   /// 显示结果而不包含导入导出文件的内容或完整路径。
   void _message(String message) {
     if (mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
+      ScaffoldMessenger.of(context)
+        ..removeCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(message)));
     }
   }
 
   /// 通过系统保存窗口写入 JSON，取消选择时不提示导出成功。
   Future<void> _save(String name, String content) async {
-    if (await widget.fileService.saveJson(name, content)) {
-      _message('导出完成，请妥善保存文件。');
+    if (await widget.fileService.saveJson(name, content) && _current) {
+      _message('已导出文件');
     }
+  }
+
+  Future<void> _copy(String content) async {
+    try {
+      await Clipboard.setData(ClipboardData(text: content));
+    } catch (_) {
+      if (_current) _message('无法写入剪贴板，请重试或导出为文件。');
+      return;
+    }
+    if (_current) _message('已复制到剪贴板');
   }
 
   /// 仅在用户选择单个本地文件后读取，先检查大小以避免无界加载。
@@ -115,13 +125,7 @@ class _DataTransferPageState extends State<DataTransferPage> {
     if (method == DataTransferMethod.file) {
       await _save('FocuBili-settings.json', source);
     } else {
-      try {
-        await Clipboard.setData(ClipboardData(text: source));
-      } catch (_) {
-        if (_current) _message('无法写入剪贴板，请重试或导出为文件。');
-        return;
-      }
-      if (_current) _message('设置文本已复制到剪贴板。');
+      await _copy(source);
     }
   });
 
@@ -183,13 +187,7 @@ class _DataTransferPageState extends State<DataTransferPage> {
       await _save('FocuBili-login-private.json', source);
       return;
     }
-    try {
-      await Clipboard.setData(ClipboardData(text: source));
-    } catch (_) {
-      if (_current) _message('无法写入剪贴板，请重试或导出为文件。');
-      return;
-    }
-    if (_current) _message('登录备份已复制到剪贴板。');
+    await _copy(source);
   });
 
   bool get _foreground =>

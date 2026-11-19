@@ -146,6 +146,7 @@ void main() {
     await _tap(t, '我已了解，导出');
     expect(files.files['FocuBili-login-private.json'], backup);
     expect(writes, 0);
+    expect(find.text('已导出文件'), findsOneWidget);
     final pending = Completer<void>();
     setClipboard = (s) async {
       await pending.future;
@@ -156,10 +157,11 @@ void main() {
     await _tap(t, '我已了解，复制');
     expect(writes, 1);
     expect(copied, isNull);
-    expect(find.text('登录备份已复制到剪贴板。'), findsNothing);
+    expect(find.text('已复制到剪贴板'), findsNothing);
     pending.complete();
     await _frame(t);
     expect(copied, files.files['FocuBili-login-private.json']);
+    expect(find.text('已复制到剪贴板'), findsOneWidget);
     expect(controlled.reads, 2);
     expect(reads, 0);
     expect(find.textContaining(_fixture), findsNothing);
@@ -187,7 +189,7 @@ void main() {
     await _tap(t, '复制到剪贴板');
     await _tap(t, '我已了解，复制');
     expect(find.textContaining('无法写入剪贴板'), findsOneWidget);
-    expect(find.text('登录备份已复制到剪贴板。'), findsNothing);
+    expect(find.text('已复制到剪贴板'), findsNothing);
     expect(find.textContaining(_fixture), findsNothing);
   });
 

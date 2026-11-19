@@ -36,8 +36,10 @@ class _RecordingSettings extends SettingsTransferService {
 
 class _FileSave extends DataTransferFileService {
   final records = <String, String>{};
+  Future<bool> Function()? save;
   @override
   Future<bool> saveJson(String name, String content) async {
+    if (await save?.call() == false) return false;
     records[name] = content;
     return true;
   }
@@ -264,6 +266,33 @@ void main() {
       'appearance.theme_mode': 'light',
     });
     expect(writes + reads, 0);
+  });
+
+  testWidgets('文件实际保存后才显示提示；取消和异常不显示成功', (t) async {
+    final pending = Completer<bool>();
+    files.save = () => pending.future;
+    await page(t);
+    await _tap(t, '导出设置');
+    await _tap(t, '保存为文件');
+    expect(find.text('已导出文件'), findsNothing);
+    pending.complete(true);
+    await _advance(t);
+    expect(find.text('已导出文件'), findsOneWidget);
+    ScaffoldMessenger.of(
+      t.element(find.byType(DataTransferPage)),
+    ).removeCurrentSnackBar();
+    await _advance(t);
+
+    files.save = () async => false;
+    await _tap(t, '导出设置');
+    await _tap(t, '保存为文件');
+    expect(find.byType(SnackBar), findsNothing);
+
+    files.save = () async => throw FileSystemException('failed');
+    await _tap(t, '导出设置');
+    await _tap(t, '保存为文件');
+    expect(find.textContaining('操作未完成'), findsOneWidget);
+    expect(find.text('已导出文件'), findsNothing);
   });
 
   testWidgets('剪贴板写入返回才报告成功；被系统拒绝不误报；取消选择不读写', (t) async {
