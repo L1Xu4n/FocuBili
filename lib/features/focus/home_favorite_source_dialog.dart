@@ -117,16 +117,16 @@ class _SourceButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    return OutlinedButton(
-      style: OutlinedButton.styleFrom(
+    return FilledButton(
+      style: FilledButton.styleFrom(
         minimumSize: const Size(0, 80),
         padding: EdgeInsets.symmetric(
           horizontal: compact ? 8 : 16,
           vertical: 12,
         ),
         foregroundColor: colors.onSurface,
-        backgroundColor: colors.surface,
-        side: BorderSide(color: colors.outlineVariant),
+        backgroundColor: colors.surfaceContainerHighest,
+        side: BorderSide.none,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
       onPressed: onPressed,

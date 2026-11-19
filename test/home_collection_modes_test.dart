@@ -122,8 +122,23 @@ void main() {
       await open(t, api);
       void check(bool customized) {
         for (final entry in [(overview, !customized), (custom, customized)]) {
+          final card = find.byKey(entry.$1);
+          final button = t.widget<FilledButton>(card);
+          final colors = Theme.of(t.element(card)).colorScheme;
+          expect(button.style?.side?.resolve({}), BorderSide.none);
           expect(
-            t.getSemantics(find.byKey(entry.$1)),
+            button.style?.backgroundColor?.resolve({}),
+            entry.$2 ? colors.primaryContainer : colors.surfaceContainerHigh,
+          );
+          expect(
+            find.descendant(
+              of: card,
+              matching: find.byIcon(Icons.check_rounded),
+            ),
+            entry.$2 ? findsOneWidget : findsNothing,
+          );
+          expect(
+            t.getSemantics(card),
             isSemantics(
               isButton: true,
               hasSelectedState: true,

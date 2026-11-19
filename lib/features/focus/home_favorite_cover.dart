@@ -43,22 +43,14 @@ class HomeFavoriteCover extends StatelessWidget {
                       errorWidget: (_, _, _) => placeholder,
                     ),
               Positioned(
-                right: 2,
-                bottom: 2,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: colors.surface,
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: colors.outline),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(2),
-                    child: Icon(
-                      remote ? Icons.cloud_outlined : Icons.bookmark_outline,
-                      size: 14,
-                      color: colors.onSurface,
-                    ),
-                  ),
+                right: 4,
+                bottom: 4,
+                child: Icon(
+                  remote ? Icons.cloud_outlined : Icons.bookmark_outline,
+                  size: 14,
+                  color: Colors.white,
+                  // Keep the glyph visible against bright covers without a badge plate.
+                  shadows: const [Shadow(color: Colors.black87, blurRadius: 3)],
                 ),
               ),
             ],
