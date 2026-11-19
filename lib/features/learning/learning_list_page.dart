@@ -569,26 +569,6 @@ class _LearningListPageState extends State<LearningListPage> {
             onPressed: _folderBusy ? null : () => _editFolder(),
             icon: const Icon(Icons.create_new_folder_outlined),
           ),
-          if (!_allFolders && _folderId != null)
-            PopupMenuButton<String>(
-              key: const Key('manage-learning-folder'),
-              tooltip: '管理当前分组',
-              enabled: !_folderBusy,
-              onSelected: (action) {
-                final folder = _folders.firstWhere(
-                  (folder) => folder.id == _folderId,
-                );
-                if (action == 'rename') {
-                  unawaited(_editFolder(folder));
-                } else {
-                  unawaited(_deleteFolder(folder));
-                }
-              },
-              itemBuilder: (_) => const [
-                PopupMenuItem(value: 'rename', child: Text('重命名分组')),
-                PopupMenuItem(value: 'delete', child: Text('删除分组')),
-              ],
-            ),
         ],
       ),
       SingleChildScrollView(
@@ -627,8 +607,35 @@ class _LearningListPageState extends State<LearningListPage> {
                 padding: const EdgeInsets.only(right: 8),
                 child: ChoiceChip(
                   key: Key('learning-folder-${folder.id}'),
-                  label: Text(
-                    '${folder.name}（${_entries.where((entry) => entry.folderId == folder.id).length}）',
+                  label: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '${folder.name}（${_entries.where((entry) => entry.folderId == folder.id).length}）',
+                      ),
+                      PopupMenuButton<String>(
+                        key: Key('manage-learning-folder-${folder.id}'),
+                        tooltip: '管理${folder.name}分组',
+                        enabled: !_folderBusy,
+                        padding: EdgeInsets.zero,
+                        child: const SizedBox(
+                          width: 40,
+                          height: 40,
+                          child: Icon(Icons.more_vert, size: 20),
+                        ),
+                        onSelected: (action) {
+                          if (action == 'rename') {
+                            unawaited(_editFolder(folder));
+                          } else if (action == 'delete') {
+                            unawaited(_deleteFolder(folder));
+                          }
+                        },
+                        itemBuilder: (_) => const [
+                          PopupMenuItem(value: 'rename', child: Text('重命名分组')),
+                          PopupMenuItem(value: 'delete', child: Text('删除分组')),
+                        ],
+                      ),
+                    ],
                   ),
                   selected: !_allFolders && _folderId == folder.id,
                   onSelected: (_) => setState(() {
@@ -756,34 +763,51 @@ class _LearningListPageState extends State<LearningListPage> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 else
-                  PopupMenuButton<LearningListStatus>(
+                  PopupMenuButton<Object>(
                     key: Key('learning-status-${entry.stableId}'),
-                    tooltip: '修改学习状态',
-                    // 状态选择函数只改变本机清单状态，不会开始或停止播放器。
-                    onSelected: (LearningListStatus status) =>
-                        unawaited(_changeStatus(entry, status)),
-                    itemBuilder: (BuildContext context) => LearningListStatus
-                        .values
-                        .map(
-                          (LearningListStatus status) =>
-                              PopupMenuItem<LearningListStatus>(
-                                value: status,
-                                child: Row(
-                                  children: <Widget>[
-                                    Icon(
-                                      status == entry.status
-                                          ? Icons.check_circle_rounded
-                                          : Icons.circle_outlined,
-                                      color: _statusColor(context, status),
-                                      size: 18,
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Text(status.label),
-                                  ],
-                                ),
+                    tooltip: '管理学习任务',
+                    onSelected: (action) {
+                      if (action is LearningListStatus) {
+                        unawaited(_changeStatus(entry, action));
+                      } else if (action == 'move') {
+                        unawaited(_moveToFolder({entry.stableId}));
+                      } else if (action == 'remove') {
+                        unawaited(_confirmRemove(entry));
+                      }
+                    },
+                    itemBuilder: (BuildContext context) => [
+                      for (final status in LearningListStatus.values)
+                        PopupMenuItem<Object>(
+                          value: status,
+                          child: Row(
+                            children: <Widget>[
+                              Icon(
+                                status == entry.status
+                                    ? Icons.check_circle_rounded
+                                    : Icons.circle_outlined,
+                                color: _statusColor(context, status),
+                                size: 18,
                               ),
-                        )
-                        .toList(growable: false),
+                              const SizedBox(width: 8),
+                              Text(status.label),
+                            ],
+                          ),
+                        ),
+                      const PopupMenuDivider(),
+                      PopupMenuItem<Object>(
+                        key: Key('move-learning-${entry.stableId}'),
+                        value: 'move',
+                        enabled:
+                            !_folderBusy && !opening && !updating && !_reordering,
+                        child: const Text('移动到学科分组'),
+                      ),
+                      PopupMenuItem<Object>(
+                        key: Key('remove-learning-${entry.stableId}'),
+                        value: 'remove',
+                        enabled: !opening && !updating && !_reordering,
+                        child: const Text('移出学习清单'),
+                      ),
+                    ],
                   ),
                 if (reorderIndex != null) ...<Widget>[
                   const SizedBox(width: 2),
@@ -883,26 +907,8 @@ class _LearningListPageState extends State<LearningListPage> {
                           ),
                     label: Text(completed ? '已完成' : '继续学习'),
                   ),
-                  IconButton(
-                    key: Key('move-learning-${entry.stableId}'),
-                    onPressed: _folderBusy || opening || updating || _reordering
-                        ? null
-                        : () => _moveToFolder({entry.stableId}),
-                    icon: const Icon(Icons.drive_file_move_outline),
-                    tooltip: '移动到学科分组',
-                  ),
-                  IconButton(
-                    key: Key('remove-learning-${entry.stableId}'),
-                    // 移除按钮函数先要求确认，观看记录、笔记和其他分 P 都不会被删除。
-                    onPressed: opening || updating || _reordering
-                        ? null
-                        : () => unawaited(_confirmRemove(entry)),
-                    icon: const Icon(Icons.delete_outline_rounded),
-                    tooltip: '移出学习清单',
-                  ),
                 ];
-                // Keep the status and all actions reachable when a longer
-                // button label no longer fits beside the two icon targets.
+                // Keep the status and continue button reachable at narrow widths.
                 final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
                 if (constraints.maxWidth < 110 + 151 * scale) {
                   return Column(
@@ -926,6 +932,94 @@ class _LearningListPageState extends State<LearningListPage> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildBulkActions() {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final background = Color.alphaBlend(
+      Colors.black.withValues(
+        alpha: theme.brightness == Brightness.dark ? 0.75 : 0.10,
+      ),
+      colors.surface,
+    );
+    final actions = <Widget>[
+      TextButton(
+        onPressed: () => setState(() {
+          _selected.addAll(
+            [..._activeEntries, ..._completedEntries].map((e) => e.stableId),
+          );
+        }),
+        child: const Text('选择当前结果'),
+      ),
+      TextButton(
+        onPressed: _selected.isEmpty ? null : _removeSelected,
+        child: Text('移除所选（${_selected.length}）'),
+      ),
+      TextButton(
+        key: const Key('move-selected-learning'),
+        onPressed: _selected.isEmpty || _folderBusy
+            ? null
+            : () => _moveToFolder(Set.of(_selected)),
+        child: const Text('移动所选'),
+      ),
+      for (final status in LearningListStatus.values)
+        TextButton(
+          onPressed: _selected.isEmpty ? null : () => _changeSelected(status),
+          child: Text('标为${status.label}'),
+        ),
+    ];
+    return Container(
+      key: const Key('learning-bulk-actions'),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
+          final columns = (constraints.maxWidth / (100 * scale)).floor().clamp(
+            1,
+            3,
+          );
+          return TextButtonTheme(
+            data: TextButtonThemeData(
+              style: TextButton.styleFrom(
+                foregroundColor: colors.onSurface,
+                disabledForegroundColor: colors.onSurface.withValues(
+                  alpha: 0.55,
+                ),
+                minimumSize: const Size(0, 48),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+              ),
+            ),
+            child: Column(
+              children: [
+                for (var row = 0; row * columns < actions.length; row++)
+                  Row(
+                    children: [
+                      for (var column = 0; column < columns; column++)
+                        Expanded(
+                          child: Align(
+                            alignment: column == 0
+                                ? Alignment.centerLeft
+                                : column == columns - 1
+                                ? Alignment.centerRight
+                                : Alignment.center,
+                            child: row * columns + column < actions.length
+                                ? actions[row * columns + column]
+                                : null,
+                          ),
+                        ),
+                    ],
+                  ),
+              ],
+            ),
+          );
+        },
       ),
     );
   }
@@ -956,41 +1050,7 @@ class _LearningListPageState extends State<LearningListPage> {
                 ),
             ],
           ),
-          if (_selecting)
-            Wrap(
-              spacing: 8,
-              children: [
-                TextButton(
-                  onPressed: () => setState(() {
-                    _selected.addAll(
-                      [
-                        ..._activeEntries,
-                        ..._completedEntries,
-                      ].map((e) => e.stableId),
-                    );
-                  }),
-                  child: const Text('选择当前结果'),
-                ),
-                TextButton(
-                  onPressed: _selected.isEmpty ? null : _removeSelected,
-                  child: Text('移除所选（${_selected.length}）'),
-                ),
-                TextButton(
-                  key: const Key('move-selected-learning'),
-                  onPressed: _selected.isEmpty || _folderBusy
-                      ? null
-                      : () => _moveToFolder(Set.of(_selected)),
-                  child: const Text('移动所选'),
-                ),
-                for (final status in LearningListStatus.values)
-                  TextButton(
-                    onPressed: _selected.isEmpty
-                        ? null
-                        : () => _changeSelected(status),
-                    child: Text('标为${status.label}'),
-                  ),
-              ],
-            ),
+          if (_selecting) _buildBulkActions(),
           Row(
             children: [
               Expanded(

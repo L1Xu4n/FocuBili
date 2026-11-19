@@ -177,6 +177,8 @@ void main() {
     await tester.tap(find.byKey(const Key('save-learning-folder')));
     await tester.pumpAndSettle();
     final folder = (await service.loadState()).folders.single;
+    await tester.tap(find.byKey(const Key('learning-status-BV1:1')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('move-learning-BV1:1')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(Key('move-folder-${folder.id}')));
@@ -184,7 +186,7 @@ void main() {
     await tester.tap(find.byKey(Key('learning-folder-${folder.id}')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('learning-list-BV1:1')), findsOneWidget);
-    await tester.tap(find.byKey(const Key('manage-learning-folder')));
+    await tester.tap(find.byKey(Key('manage-learning-folder-${folder.id}')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('重命名分组'));
     await tester.pumpAndSettle();
@@ -195,7 +197,7 @@ void main() {
     await tester.tap(find.byKey(const Key('save-learning-folder')));
     await tester.pumpAndSettle();
     expect(find.text('高等数学（1）'), findsOneWidget);
-    await tester.tap(find.byKey(const Key('manage-learning-folder')));
+    await tester.tap(find.byKey(Key('manage-learning-folder-${folder.id}')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('删除分组'));
     await tester.pumpAndSettle();
@@ -206,6 +208,241 @@ void main() {
     expect((await service.loadEntries()).single.folderId, null);
     expect(tester.takeException(), null);
   });
+  testWidgets('未选中分组的菜单操作该分组且不改变当前筛选', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final prefs = await SharedPreferences.getInstance();
+    final service = LearningListService(preferencesLoader: () async => prefs);
+    await service.addVideo(video(1));
+    final first = (await service.createFolder('数学')).folders.single;
+    final second = (await service.createFolder('英语')).folders.last;
+    await service.moveEntries({'BV1:1'}, second.id);
+    await tester.pumpWidget(
+      MaterialApp(home: LearningListPage(learningListService: service)),
+    );
+    await tester.pumpAndSettle();
+
+    for (final key in ['learning-folder-all', 'learning-folder-ungrouped']) {
+      expect(
+        find.descendant(
+          of: find.byKey(Key(key)),
+          matching: find.byType(PopupMenuButton<String>),
+        ),
+        findsNothing,
+      );
+    }
+    await tester.tap(find.byKey(Key('learning-folder-${first.id}')));
+    await tester.pumpAndSettle();
+    final secondMenu = find.byKey(Key('manage-learning-folder-${second.id}'));
+    await tester.tap(secondMenu);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('重命名分组'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('learning-folder-name')), '物理');
+    await tester.tap(find.byKey(const Key('save-learning-folder')));
+    await tester.pumpAndSettle();
+    expect((await service.loadState()).folders.last.name, '物理');
+    expect(
+      tester.widget<ChoiceChip>(find.byKey(Key('learning-folder-${first.id}'))).selected,
+      isTrue,
+    );
+    expect(find.byKey(const Key('learning-list-BV1:1')), findsNothing);
+
+    await tester.tap(secondMenu);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('删除分组'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('删除“物理”'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect((await service.loadState()).folders, hasLength(2));
+    await tester.tap(secondMenu);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('删除分组'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('confirm-delete-learning-folder')));
+    await tester.pumpAndSettle();
+    expect((await service.loadState()).folders.single.id, first.id);
+    expect((await service.loadEntries()).single.folderId, isNull);
+    expect(
+      tester.widget<ChoiceChip>(find.byKey(Key('learning-folder-${first.id}'))).selected,
+      isTrue,
+    );
+    await tester.tap(find.byKey(const Key('learning-folder-ungrouped')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('learning-list-BV1:1')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('learning-folder-all')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('learning-list-BV1:1')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('视频菜单保留状态操作并提供移动和确认移除，多选仍可用', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final prefs = await SharedPreferences.getInstance();
+    final service = LearningListService(preferencesLoader: () async => prefs);
+    await service.addVideo(video(1));
+    final folder = (await service.createFolder('数学')).folders.single;
+    await tester.pumpWidget(
+      MaterialApp(home: LearningListPage(learningListService: service)),
+    );
+    await tester.pumpAndSettle();
+    final card = find.byKey(const Key('learning-list-BV1:1'));
+    expect(find.byKey(const Key('continue-learning-BV1:1')), findsOneWidget);
+    expect(
+      find.descendant(of: card, matching: find.byIcon(Icons.drag_handle_rounded)),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: card, matching: find.byIcon(Icons.drive_file_move_outline)),
+      findsNothing,
+    );
+    expect(
+      find.descendant(of: card, matching: find.byIcon(Icons.delete_outline_rounded)),
+      findsNothing,
+    );
+
+    Future<void> openMenu() async {
+      await tester.tap(find.byKey(const Key('learning-status-BV1:1')));
+      await tester.pumpAndSettle();
+    }
+
+    await openMenu();
+    expect(find.text('学习中'), findsWidgets);
+    await tester.tap(find.byKey(const Key('move-learning-BV1:1')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(Key('move-folder-${folder.id}')));
+    await tester.pumpAndSettle();
+    expect((await service.loadEntries()).single.folderId, folder.id);
+    await tester.tap(find.byTooltip('多选管理'));
+    await tester.pumpAndSettle();
+    expect(find.byType(Checkbox), findsOneWidget);
+    expect(find.byIcon(Icons.drag_handle_rounded), findsNothing);
+    await openMenu();
+    await tester.tap(find.byKey(const Key('remove-learning-BV1:1')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('观看记录和笔记不会被删除'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(await service.loadEntries(), hasLength(1));
+    await openMenu();
+    await tester.tap(find.byKey(const Key('remove-learning-BV1:1')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('移除'));
+    await tester.pumpAndSettle();
+    expect(await service.loadEntries(), isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final brightness in [Brightness.light, Brightness.dark]) {
+    testWidgets('批量操作面板在 $brightness 下保持三列与文字对比', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1080, 1400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final service = LearningListService();
+      await service.addVideo(video(1));
+      final theme = ThemeData(brightness: brightness, useMaterial3: true);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: theme,
+          home: LearningListPage(learningListService: service),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('多选管理'));
+      await tester.pumpAndSettle();
+      final panel = find.byKey(const Key('learning-bulk-actions'));
+      final decoration =
+          tester.widget<Container>(panel).decoration! as BoxDecoration;
+      expect(
+        decoration.color!.computeLuminance(),
+        lessThan(theme.colorScheme.surface.computeLuminance()),
+      );
+      final foreground = theme.colorScheme.onSurface.computeLuminance();
+      final background = decoration.color!.computeLuminance();
+      final contrast = (foreground > background)
+          ? (foreground + 0.05) / (background + 0.05)
+          : (background + 0.05) / (foreground + 0.05);
+      expect(contrast, greaterThanOrEqualTo(4.5));
+      final labels = [
+        '选择当前结果',
+        '移除所选（0）',
+        '移动所选',
+        '标为未开始',
+        '标为学习中',
+        '标为已完成',
+      ];
+      final buttons = labels
+          .map(
+            (label) => find.ancestor(
+              of: find.text(label),
+              matching: find.byType(TextButton),
+            ),
+          )
+          .toList();
+      final rects = buttons.map(tester.getRect).toList();
+      expect(rects[0].center.dy, rects[1].center.dy);
+      expect(rects[1].center.dy, rects[2].center.dy);
+      expect(rects[3].center.dy, rects[4].center.dy);
+      expect(rects[4].center.dy, rects[5].center.dy);
+      expect(rects[0].left, rects[3].left);
+      expect(rects[1].center.dx, rects[4].center.dx);
+      expect(rects[2].right, rects[5].right);
+      expect(rects.every((rect) => rect.height >= 48), isTrue);
+      expect(tester.widget<TextButton>(buttons[1]).onPressed, isNull);
+      await tester.tap(buttons[0]);
+      await tester.pumpAndSettle();
+      expect(find.text('移除所选（1）'), findsOneWidget);
+      expect(
+        tester.widget<TextButton>(find.byKey(const Key('move-selected-learning'))).onPressed,
+        isNotNull,
+      );
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('批量操作面板在窄屏大字下自适应', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(320, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final service = LearningListService();
+    await service.addVideo(video(1));
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: const TextScaler.linear(1.8)),
+          child: child!,
+        ),
+        home: LearningListPage(learningListService: service),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('多选管理'));
+    await tester.pumpAndSettle();
+    final panel = find.byKey(const Key('learning-bulk-actions'));
+    expect(panel, findsOneWidget);
+    final panelRect = tester.getRect(panel);
+    for (final label in [
+      '选择当前结果',
+      '移除所选（0）',
+      '移动所选',
+      '标为未开始',
+      '标为学习中',
+      '标为已完成',
+    ]) {
+      final button = find.ancestor(
+        of: find.text(label),
+        matching: find.byType(TextButton),
+      );
+      final rect = tester.getRect(button);
+      expect(rect.left, greaterThanOrEqualTo(panelRect.left));
+      expect(rect.right, lessThanOrEqualTo(panelRect.right));
+      expect(rect.height, greaterThanOrEqualTo(48));
+    }
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('多选移动到分组并可批量退回未分组', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 1400));
     addTearDown(() => tester.binding.setSurfaceSize(null));

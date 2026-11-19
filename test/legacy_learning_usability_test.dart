@@ -281,7 +281,7 @@ void main() {
     await tester.pumpAndSettle();
 
     Future<void> rename() async {
-      final manage = find.byKey(const Key('manage-learning-folder'));
+      final manage = find.byKey(Key('manage-learning-folder-${folder.id}'));
       await tester.ensureVisible(manage);
       await tester.pumpAndSettle();
       await tester.tap(manage);
