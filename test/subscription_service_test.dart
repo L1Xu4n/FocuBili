@@ -99,6 +99,36 @@ void main() {
   }
 
   test(
+    'source and focus opt-in are saved atomically without notifications',
+    () async {
+      var reject = false;
+      final prefs = await SharedPreferences.getInstance();
+      final service = SubscriptionService(
+        contentService: Content(),
+        preferencesLoader: () async => reject
+            ? RejectingPreferences(prefs, SubscriptionService.storageKey)
+            : prefs,
+      );
+      addTearDown(service.dispose);
+      await service.initialize();
+      reject = true;
+      await expectLater(
+        service.addSource(source(1), enableFocus: true),
+        throwsA(isA<SubscriptionStorageException>()),
+      );
+      expect(service.sources, isEmpty);
+      expect(service.enabled, isFalse);
+
+      reject = false;
+      await service.addSource(source(1), enableFocus: true);
+      final reopened = await create(Content());
+      expect(reopened.sources.single.key, 'creator:1');
+      expect(reopened.enabled, isTrue);
+      expect(reopened.notificationsEnabled, isFalse);
+    },
+  );
+
+  test(
     'off by default, no network until explicit enabled + foreground',
     () async {
       final c = Content()

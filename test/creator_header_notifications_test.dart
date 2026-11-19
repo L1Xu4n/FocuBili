@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:focubili/features/subscriptions/subscription_updates_page.dart';
-import 'package:focubili/services/focus_notification_service.dart';
 import 'package:focubili/models/subscription.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -209,37 +208,21 @@ class _PendingFollow extends _FakeInteractionService {
   }
 }
 
-class _Permission extends FocusNotificationService {
-  int calls = 0;
-  bool allowed = false;
-  bool fail = false;
-  @override
-  Future<bool> requestPermission() async {
-    calls++;
-    if (fail) throw StateError('permission unavailable');
-    return allowed;
-  }
-}
-
 class _Subscriptions extends SubscriptionService {
   bool failAdd = false;
-  bool failEnable = false;
   int adds = 0;
-  int enables = 0;
   int notificationWrites = 0;
+  Completer<void>? pendingAdd;
   _Subscriptions() : super(contentService: _FakePublicContentService());
   @override
-  Future<void> addSource(SubscriptionSource source) async {
+  Future<void> addSource(
+    SubscriptionSource source, {
+    bool enableFocus = false,
+  }) async {
     adds++;
-    if (failAdd) throw StateError('disk');
-    await super.addSource(source);
-  }
-
-  @override
-  Future<void> setEnabled(bool value) async {
-    enables++;
-    if (failEnable) throw StateError('disk');
-    await super.setEnabled(value);
+    await pendingAdd?.future;
+    if (failAdd) throw StateError('订阅未保存，请重试。');
+    await super.addSource(source, enableFocus: enableFocus);
   }
 
   @override
@@ -255,11 +238,10 @@ const _source = SubscriptionSource(
   name: '测试UP主',
   token: 'qa',
 );
-Future<void> _openNotification(
+Future<void> _showSubscriptionButton(
   WidgetTester tester,
-  _Subscriptions service,
-  _Permission permission, {
-  bool creator = true,
+  _Subscriptions service, {
+  bool direct = true,
 }) async {
   await service.initialize();
   await tester.pumpWidget(
@@ -268,16 +250,15 @@ Future<void> _openNotification(
         body: FocusSubscriptionButton(
           source: _source,
           service: service,
-          notificationService: permission,
-          configureCreatorNotifications: creator,
+          addDirectly: direct,
         ),
       ),
     ),
   );
   await tester.pumpAndSettle();
-  await tester.tap(find.byKey(const Key('focus-subscribe-button')));
-  await tester.pumpAndSettle();
 }
+
+final _subscribeButton = find.byKey(const Key('focus-subscribe-button'));
 
 class _RetryContent extends _TrackingContent {
   bool failing = true;
@@ -428,111 +409,68 @@ void main() {
     expect(find.text('取消关注'), findsOneWidget);
     expect(interaction.writeRequests, 2);
   });
-  testWidgets('主页添加直接到通知设置，取消与系统返回零写入零授权', (tester) async {
+  testWidgets('点一次直接订阅，成功提示自动消失，不修改系统通知开关', (tester) async {
     final service = _Subscriptions();
-    final permission = _Permission();
     addTearDown(service.dispose);
-    await _openNotification(tester, service, permission);
-    expect(find.text('添加通知设置'), findsOneWidget);
-    expect(find.text('确认订阅'), findsNothing);
+    await _showSubscriptionButton(tester, service);
+    await tester.tap(_subscribeButton);
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.text('已添加到焦点订阅'), findsOneWidget);
+    expect(find.byTooltip('取消焦点订阅'), findsOneWidget);
+    expect(service.sources.single.key, _source.key);
+    expect(service.enabled, isTrue);
+    expect(service.notificationsEnabled, isFalse);
+    expect(service.notificationWrites, 0);
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+    expect(find.text('已添加到焦点订阅'), findsNothing);
+  });
+
+  testWidgets('添加未完成时禁止重复操作，不提前报成功；失败可重试', (tester) async {
+    final service = _Subscriptions()
+      ..failAdd = true
+      ..pendingAdd = Completer<void>();
+    addTearDown(service.dispose);
+    await _showSubscriptionButton(tester, service);
+    await tester.tap(_subscribeButton);
+    await tester.pump();
+    await tester.tap(_subscribeButton);
+    await tester.pump();
+    expect(service.adds, 1);
+    expect(find.text('已添加到焦点订阅'), findsNothing);
+    service.pendingAdd!.complete();
+    await tester.pumpAndSettle();
+    expect(find.text('订阅未保存，请重试。'), findsOneWidget);
     expect(service.sources, isEmpty);
     expect(service.enabled, isFalse);
-    expect(permission.calls, 0);
-    await tester.tap(find.byType(SwitchListTile));
+    service.failAdd = false;
+    await tester.tap(_subscribeButton);
     await tester.pumpAndSettle();
-    expect(permission.calls, 0);
-    await tester.tap(find.text('取消'));
-    await tester.pumpAndSettle();
-    expect(service.sources, isEmpty);
-    expect(service.notificationWrites, 0);
-    expect(service.enables, 0);
-    await tester.tap(find.byKey(const Key('focus-subscribe-button')));
-    await tester.pumpAndSettle();
-    await tester.binding.handlePopRoute();
-    await tester.pumpAndSettle();
-    expect(service.adds, 0);
+    expect(service.adds, 2);
+    expect(service.sources, hasLength(1));
+    expect(find.text('已添加到焦点订阅'), findsOneWidget);
   });
-  testWidgets('关闭通知保存只订阅；原非主页入口仍是确认订阅', (tester) async {
+
+  testWidgets('非主页的添加确认和已订阅的取消确认保持不变', (tester) async {
     final service = _Subscriptions();
-    final permission = _Permission();
     addTearDown(service.dispose);
-    await _openNotification(tester, service, permission, creator: false);
+    await _showSubscriptionButton(tester, service, direct: false);
+    await tester.tap(_subscribeButton);
+    await tester.pumpAndSettle();
     expect(find.text('确认订阅'), findsOneWidget);
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
-    await _openNotification(tester, service, permission);
-    await tester.tap(find.text('保存'));
+    expect(service.adds, 0);
+    await _showSubscriptionButton(tester, service);
+    await tester.tap(_subscribeButton);
     await tester.pumpAndSettle();
-    expect(service.sources, hasLength(1));
-    expect(service.enabled, isTrue);
-    expect(service.notificationsEnabled, isFalse);
-    expect(permission.calls, 0);
-    await tester.tap(find.byKey(const Key('focus-subscribe-button')));
+    await tester.tap(_subscribeButton);
     await tester.pumpAndSettle();
     expect(find.text('取消焦点订阅'), findsOneWidget);
     await tester.tap(find.text('保留'));
     await tester.pumpAndSettle();
     expect(service.sources, hasLength(1));
-  });
-  testWidgets('权限拒绝不写入，关闭通知后可保存', (tester) async {
-    final service = _Subscriptions();
-    final permission = _Permission();
-    addTearDown(service.dispose);
-    await _openNotification(tester, service, permission);
-    await tester.tap(find.byType(SwitchListTile));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('保存'));
-    await tester.pumpAndSettle();
-    expect(permission.calls, 1);
-    expect(service.adds, 0);
-    expect(find.textContaining('通知未获授权'), findsOneWidget);
-    expect(service.notificationsEnabled, isFalse);
-    await tester.tap(find.text('保存'));
-    await tester.pumpAndSettle();
-    expect(service.sources, hasLength(1));
-    expect(service.notificationsEnabled, isFalse);
-  });
-  testWidgets('允许权限才保存全局通知，失败保持可重试', (tester) async {
-    final service = _Subscriptions()..failAdd = true;
-    final permission = _Permission()..allowed = true;
-    addTearDown(service.dispose);
-    await _openNotification(tester, service, permission);
-    await tester.tap(find.byType(SwitchListTile));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('保存'));
-    await tester.pumpAndSettle();
-    expect(find.text('订阅未保存，请重试。'), findsOneWidget);
-    expect(service.notificationWrites, 0);
-    service.failAdd = false;
-    await tester.tap(find.text('保存'));
-    await tester.pumpAndSettle();
-    expect(service.sources, hasLength(1));
-    expect(service.notificationsEnabled, isTrue);
-    expect(service.enabled, isTrue);
-  });
-  testWidgets('权限桥接失败可取消，部分保存失败明确并可重试', (tester) async {
-    final service = _Subscriptions();
-    final permission = _Permission()..fail = true;
-    addTearDown(service.dispose);
-    await _openNotification(tester, service, permission);
-    await tester.tap(find.byType(SwitchListTile));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('保存'));
-    await tester.pumpAndSettle();
-    expect(find.text('订阅未保存，请重试。'), findsOneWidget);
-    expect(service.sources, isEmpty);
-    await tester.tap(find.byType(SwitchListTile));
-    await tester.pumpAndSettle();
-    service.failEnable = true;
-    await tester.tap(find.text('保存'));
-    await tester.pumpAndSettle();
-    expect(find.text('订阅源已保存，但设置未全部完成，请重试。'), findsOneWidget);
-    expect(service.sources, hasLength(1));
-    service.failEnable = false;
-    await tester.tap(find.text('保存'));
-    await tester.pumpAndSettle();
-    expect(service.sources, hasLength(1));
-    expect(service.enabled, isTrue);
   });
   testWidgets('快速 A 到 B 到空词时只采用最新结果', (tester) async {
     final content = _DelayedContent();
@@ -577,11 +515,12 @@ void main() {
     expect(find.text('全部投稿结果'), findsOneWidget);
     expect(find.text('过时筛选'), findsNothing);
   });
-  testWidgets('窄屏大字、键盘和深色桌面保持可滚动资料与通知取消', (tester) async {
+  testWidgets('窄屏大字、键盘和深色桌面保持可滚动资料与订阅提示', (tester) async {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     addTearDown(tester.view.resetViewInsets);
     for (final size in [const Size(320, 740), const Size(1100, 800)]) {
+      SharedPreferences.setMockInitialValues({});
       tester.view.physicalSize = size;
       tester.view.devicePixelRatio = 1;
       final service = _Subscriptions();
@@ -607,10 +546,9 @@ void main() {
       expect(tester.takeException(), isNull);
       await tester.tap(find.byTooltip('添加订阅源'));
       await tester.pumpAndSettle();
-      expect(find.text('添加通知设置'), findsOneWidget);
+      expect(find.text('已添加到焦点订阅'), findsOneWidget);
+      expect(find.byType(AlertDialog), findsNothing);
       expect(tester.takeException(), isNull);
-      await tester.tap(find.text('取消'));
-      await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('搜索投稿'));
       await tester.pumpAndSettle();
       tester.view.viewInsets = const FakeViewPadding(bottom: 280);

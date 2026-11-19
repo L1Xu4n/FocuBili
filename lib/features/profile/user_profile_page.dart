@@ -892,7 +892,7 @@ class _UserProfilePageState extends State<UserProfilePage>
   }
 
   Widget _buildSubscriptionButton() => FocusSubscriptionButton(
-    configureCreatorNotifications: true,
+    addDirectly: true,
     service: widget.subscriptionService,
     source: SubscriptionSource(
       kind: SubscriptionKind.creator,
