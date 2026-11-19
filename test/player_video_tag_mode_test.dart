@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/core/theme/app_theme.dart';
@@ -193,6 +194,22 @@ void main() {
         expect(source.calls, isEmpty);
         await t.ensureVisible(button);
         await t.pumpAndSettle();
+        final toggle = t.widget<TextButton>(button);
+        expect(toggle.style!.side!.resolve({}), BorderSide.none);
+        expect(toggle.style!.backgroundColor!.resolve({}), Colors.transparent);
+        expect(t.getSize(button).height, greaterThanOrEqualTo(48));
+        expect(t.getSize(button).width, lessThan(180));
+        expect(
+          find.descendant(of: button, matching: find.text('展开标签')),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: button,
+            matching: find.byIcon(Icons.sell_outlined),
+          ),
+          findsNothing,
+        );
         await captureSubscriptionUi(
           t,
           key,
@@ -219,6 +236,46 @@ void main() {
       },
     );
   }
+  testWidgets('compact reveal is accessible with the keyboard', (t) async {
+    final source = _Source();
+    final session = PlayerTagSession()
+      ..bind(a)
+      ..initialize(source);
+    addTearDown(session.dispose);
+    await t.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: PlayerVideoTags(session: session)),
+      ),
+    );
+    await t.pumpAndSettle();
+    final button = find.byKey(const Key('reveal-video-tags'));
+    final semantics = t.ensureSemantics();
+    try {
+      await t.pump();
+      expect(
+        t.getSemantics(button),
+        matchesSemantics(
+          label: '展开标签',
+          isButton: true,
+          hasEnabledState: true,
+          isEnabled: true,
+          isFocusable: true,
+          hasTapAction: true,
+          hasFocusAction: true,
+        ),
+      );
+    } finally {
+      semantics.dispose();
+    }
+    await t.sendKeyEvent(LogicalKeyboardKey.tab);
+    await t.pumpAndSettle();
+    await t.sendKeyEvent(LogicalKeyboardKey.enter);
+    await t.pumpAndSettle();
+    expect(button, findsNothing);
+    expect(find.text('物理'), findsOneWidget);
+    expect(source.calls, [a.bvid]);
+  });
+
   testWidgets('personalization search lets users save and reopen each mode', (
     t,
   ) async {

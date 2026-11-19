@@ -110,25 +110,25 @@ class PlayerVideoTags extends StatelessWidget {
       final theme = Theme.of(context);
       final Widget child;
       if (!session.expanded) {
-        child = SizedBox(
-          width: double.infinity,
-          child: OutlinedButton(
+        child = Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: TextButton(
             key: const Key('reveal-video-tags'),
             onPressed: session.reveal,
-            style: OutlinedButton.styleFrom(
-              alignment: AlignmentDirectional.centerStart,
-              minimumSize: const Size(0, 48),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
+            style: TextButton.styleFrom(
+              foregroundColor: theme.colorScheme.onSurfaceVariant,
+              backgroundColor: Colors.transparent,
+              minimumSize: const Size(48, 48),
+              visualDensity: VisualDensity.standard,
+              padding: const EdgeInsetsDirectional.only(end: 8),
+              textStyle: theme.textTheme.labelMedium,
+            ).copyWith(side: const WidgetStatePropertyAll(BorderSide.none)),
             child: const Row(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.sell_outlined, size: 18),
-                SizedBox(width: 10),
-                Expanded(child: Text('展开视频标签')),
-                Icon(Icons.keyboard_arrow_down_rounded),
+                Flexible(child: Text('展开标签')),
+                SizedBox(width: 2),
+                Icon(Icons.keyboard_arrow_down_rounded, size: 16),
               ],
             ),
           ),
@@ -157,7 +157,10 @@ class PlayerVideoTags extends StatelessWidget {
           ],
         );
       }
-      return Padding(padding: const EdgeInsets.only(top: 12), child: child);
+      return Padding(
+        padding: EdgeInsets.only(top: session.expanded ? 12 : 4),
+        child: child,
+      );
     },
   );
 }
