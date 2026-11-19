@@ -22,6 +22,7 @@ class LearningListService {
        _watchHistoryService = watchHistoryService ?? WatchHistoryService();
 
   static const String _storageKey = 'focubili_learning_list_v2';
+  static const String _newestFirstKey = 'focubili_learning_list_newest_first';
   static const String _legacyStorageKey = 'focubili_learning_list_v1';
 
   /// 限制本机最多保存的任务数，避免长期使用后偏好设置无限增长。
@@ -49,6 +50,22 @@ class LearningListService {
       }
     }
   }
+
+  /// 排序偏好独立于任务数据，不覆盖用户手动排列。
+  Future<bool> loadNewestFirst() async =>
+      (await _preferencesLoader()).getBool(_newestFirstKey) ?? false;
+
+  Future<void> saveNewestFirst(bool value) => _serialized(() async {
+    final preferences = await _preferencesLoader();
+    try {
+      if (!await preferences.setBool(_newestFirstKey, value)) {
+        throw const LearningListStorageException();
+      }
+    } catch (_) {
+      await preferences.reload();
+      rethrow;
+    }
+  });
 
   /// 一次读取分组与条目，损坏数据不覆盖磁盘原值。
   Future<LearningListState> loadState() =>
