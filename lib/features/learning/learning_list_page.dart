@@ -35,6 +35,8 @@ class _LearningListPageState extends State<LearningListPage> {
   List<LearningListEntry> _entries = const <LearningListEntry>[];
   List<LearningSubjectFolder> _folders = const [];
   bool _allFolders = true;
+  bool _newestFirst = false;
+  bool _sortSaving = false;
   String? _folderId;
   bool _folderBusy = false;
   String _query = '';
@@ -42,7 +44,12 @@ class _LearningListPageState extends State<LearningListPage> {
   bool _selecting = false;
   final Set<String> _selected = {};
   bool get _canReorder =>
-      _query.isEmpty && _statusFilter == null && !_selecting && !_folderBusy;
+      !_newestFirst &&
+      !_sortSaving &&
+      _query.isEmpty &&
+      _statusFilter == null &&
+      !_selecting &&
+      !_folderBusy;
   bool _searching = false;
   bool _loading = true;
   bool _reordering = false;
@@ -56,7 +63,7 @@ class _LearningListPageState extends State<LearningListPage> {
     _learningListService = widget.learningListService ?? LearningListService();
     _videoService = widget.videoService ?? BilibiliVideoInfoService();
     _searchController = TextEditingController();
-    unawaited(_reloadEntries());
+    unawaited(_reloadEntries(loadSort: true));
   }
 
   /// 页面销毁时释放搜索控制器，避免输入资源残留在内存中。
@@ -67,18 +74,37 @@ class _LearningListPageState extends State<LearningListPage> {
   }
 
   /// 重新读取本机任务；刷新期间保留旧列表，避免界面突然跳为空白。
-  Future<void> _reloadEntries() async {
+  Future<void> _reloadEntries({bool loadSort = false}) async {
     if (mounted) {
       setState(() => _loading = true);
     }
     final state = await _learningListService.loadState();
+    final newestFirst = loadSort
+        ? await _learningListService.loadNewestFirst().catchError(
+            (Object _) => false,
+          )
+        : null;
     if (!mounted) {
       return;
     }
     setState(() {
       if (!_learningListService.readFailed) _applyState(state);
+      if (newestFirst != null) _newestFirst = newestFirst;
       _loading = false;
     });
+  }
+
+  Future<void> _setNewestFirst(bool value) async {
+    if (_sortSaving || _reordering || value == _newestFirst) return;
+    setState(() => _sortSaving = true);
+    try {
+      await _learningListService.saveNewestFirst(value);
+      if (mounted) setState(() => _newestFirst = value);
+    } catch (_) {
+      _showSaveError();
+    } finally {
+      if (mounted) setState(() => _sortSaving = false);
+    }
   }
 
   /// 打开 AppBar 内的搜索输入框，并让软键盘立即聚焦到学习清单关键词。
@@ -138,23 +164,32 @@ class _LearningListPageState extends State<LearningListPage> {
     return haystack.contains(_query);
   }
 
-  /// 返回搜索结果中的未完成任务；服务已保证其为用户手动设定的顺序。
-  List<LearningListEntry> get _activeEntries => _entries
-      .where(
-        (LearningListEntry entry) =>
-            entry.status != LearningListStatus.completed &&
-            _matchesQuery(entry),
-      )
-      .toList(growable: false);
+  // Keep completed tasks in their own section. In newest-first mode the
+  // playlist follows the same visible order, without rewriting manual ranks.
+  List<LearningListEntry> _visibleEntries({required bool completed}) {
+    final entries = _entries
+        .where(
+          (entry) =>
+              (entry.status == LearningListStatus.completed) == completed &&
+              _matchesQuery(entry),
+        )
+        .toList(growable: false);
+    if (_newestFirst) {
+      entries.sort((a, b) {
+        final newest = b.addedAt.compareTo(a.addedAt);
+        if (newest != 0) return newest;
+        final manual = a.sortOrder.compareTo(b.sortOrder);
+        return manual == 0 ? a.stableId.compareTo(b.stableId) : manual;
+      });
+    }
+    return entries;
+  }
 
-  /// 返回搜索结果中的已完成任务；它们始终在页面底部独立分区显示。
-  List<LearningListEntry> get _completedEntries => _entries
-      .where(
-        (LearningListEntry entry) =>
-            entry.status == LearningListStatus.completed &&
-            _matchesQuery(entry),
-      )
-      .toList(growable: false);
+  List<LearningListEntry> get _activeEntries =>
+      _visibleEntries(completed: false);
+
+  List<LearningListEntry> get _completedEntries =>
+      _visibleEntries(completed: true);
 
   /// 查询任务视频详情并打开播放器，返回后刷新可能由播放器更新的学习进度。
   Future<void> _openEntry(LearningListEntry entry) async {
@@ -956,19 +991,46 @@ class _LearningListPageState extends State<LearningListPage> {
                   ),
               ],
             ),
-          Text(
-            _query.isEmpty ? '待学习' : '搜索结果',
-            style: Theme.of(
-              context,
-            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _query.isEmpty ? '待学习' : '搜索结果',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+                ),
+              ),
+              PopupMenuButton<bool>(
+                key: const Key('learning-list-sort'),
+                tooltip: '学习清单排序：${_newestFirst ? '最近加入优先' : '手动顺序'}',
+                enabled: !_sortSaving && !_reordering && !_loading,
+                onSelected: _setNewestFirst,
+                itemBuilder: (_) => [
+                  CheckedPopupMenuItem(
+                    value: false,
+                    checked: !_newestFirst,
+                    child: const Text('手动顺序'),
+                  ),
+                  CheckedPopupMenuItem(
+                    value: true,
+                    checked: _newestFirst,
+                    child: const Text('最近加入优先'),
+                  ),
+                ],
+                icon: Icon(_newestFirst ? Icons.schedule : Icons.sort),
+              ),
+            ],
           ),
-          const SizedBox(height: 4),
-          Text(
-            _canReorder
-                ? '拖动右侧图标调整学习顺序；完成后会自动移到列表末尾。'
-                : '筛选或多选时不能拖拽，恢复全部后可调整顺序。',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
+          if (!_newestFirst && !_sortSaving) ...[
+            Text(
+              _canReorder
+                  ? '拖动右侧图标调整学习顺序；完成后会自动移到列表末尾。'
+                  : '筛选或多选时不能拖拽，恢复全部后可调整顺序。',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 4),
+          ],
           if (_reordering) ...<Widget>[
             const SizedBox(height: 8),
             const LinearProgressIndicator(),
