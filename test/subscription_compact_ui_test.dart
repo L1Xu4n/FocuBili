@@ -366,12 +366,13 @@ void main() {
         final first = home
             ? find.byType(SubscriptionFeedTile).first
             : find.byKey(const ValueKey('subscription-feed-fixture0'));
+        final second = home
+            ? find.byType(SubscriptionFeedTile).at(1)
+            : find.byKey(const ValueKey('subscription-feed-fixture1'));
         if (!home) {
           await tester.longPress(first);
           await tester.pumpAndSettle();
-          await tester.tap(
-            find.byKey(const ValueKey('subscription-feed-fixture1')),
-          );
+          await tester.tap(second);
           await tester.pumpAndSettle();
           expect(service.unreadCount, 3);
           expect(videos.calls, isEmpty);
@@ -382,6 +383,10 @@ void main() {
         await tester.tap(first);
         await tester.pump();
         expect(videos.result.isCompleted, isFalse);
+        // A double tap onto another row while the first lookup is in flight
+        // is rejected by both entry points and must never mark that row read.
+        await tester.tap(second);
+        await tester.pump();
         expect(videos.calls, ['fixture0']);
         expect(service.unreadCount, 2);
         expect(

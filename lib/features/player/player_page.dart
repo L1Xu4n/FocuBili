@@ -1,4 +1,5 @@
-import '../classroom/course_cache_page.dart';
+import '../../services/course_cache_access.dart';
+import '../../services/course_cache_library.dart';
 import '../../services/cache_lifecycle.dart';
 import '../learning/learning_add_sheet.dart';
 import 'dart:async';
@@ -466,6 +467,7 @@ class _PlayerPageState extends State<PlayerPage>
     _offlineVideoService = widget.offlineVideoService ?? OfflineVideoService();
     _downloadQueue = widget.downloadQueue ?? OfflineDownloadQueue.instance;
     OfflineVideoService.revision.addListener(_refreshOfflinePartState);
+    CacheLifecycle.account.addListener(_refreshOfflinePartState);
     _downloadCompletionSubscription = _downloadQueue.completions.listen((_) {
       if (mounted) unawaited(_loadOfflineState());
     });
@@ -553,6 +555,7 @@ class _PlayerPageState extends State<PlayerPage>
     final abRepeatDrain = _disposeAbRepeat();
     CacheLifecycle.subtitles.removeListener(_invalidateSubtitleSession);
     OfflineVideoService.revision.removeListener(_refreshOfflinePartState);
+    CacheLifecycle.account.removeListener(_refreshOfflinePartState);
     unawaited(_downloadCompletionSubscription?.cancel());
     _routeSession.detach();
     WidgetsBinding.instance.removeObserver(this);

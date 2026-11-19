@@ -143,7 +143,7 @@ class _CourseCachePlaybackPageState extends State<CourseCachePlaybackPage>
   Widget build(BuildContext context) => _invalid
       ? Scaffold(
           appBar: AppBar(title: const Text('离线课堂')),
-          body: const Center(child: Text('课程缓存或账号状态已变化，请返回课程缓存。')),
+          body: const Center(child: Text('课程缓存或账号状态已变化，请返回离线缓存。')),
         )
       : PlayerPage(
           video: widget.entry.video,

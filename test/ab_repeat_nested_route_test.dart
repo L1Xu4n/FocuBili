@@ -68,6 +68,8 @@ class NestedDownloadQueue extends ChangeNotifier
     VideoPreview video, {
     VideoPart? part,
     int quality = 32,
+    int? expectedAccountRevision,
+    bool revalidateCourse = false,
   }) async {
     final task = OfflineDownloadTask(
       video: video,

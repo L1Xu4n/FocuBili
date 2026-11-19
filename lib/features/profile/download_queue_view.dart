@@ -116,7 +116,9 @@ class DownloadQueueView extends StatelessWidget {
                         style: const TextStyle(fontWeight: FontWeight.w600),
                       ),
                       Text(
-                        'P${task.part.pageNumber} ${task.part.title}',
+                        task.courseMid == null
+                            ? 'P${task.part.pageNumber} ${task.part.title}'
+                            : '课程 · ${task.part.title}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),

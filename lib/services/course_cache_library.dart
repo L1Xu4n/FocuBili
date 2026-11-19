@@ -399,7 +399,32 @@ class CourseCacheLibrary extends ChangeNotifier {
     );
   }
 
-  Future<void> start(VideoPreview v, VideoPart p, {int quality = 64}) async {
+  Future<void> start(VideoPreview v, VideoPart p, {int quality = 64}) =>
+      _start(v, p, quality: quality);
+
+  Future<void> startQueued(
+    VideoPreview video,
+    VideoPart part, {
+    required int quality,
+    required DownloadControl control,
+    required int expectedMid,
+  }) => _start(
+    video,
+    part,
+    quality: quality,
+    control: control,
+    expectedMid: expectedMid,
+    reportFailure: true,
+  );
+
+  Future<void> _start(
+    VideoPreview v,
+    VideoPart p, {
+    int quality = 64,
+    DownloadControl? control,
+    int? expectedMid,
+    bool reportFailure = false,
+  }) async {
     if (busy) throw const CourseCacheFailure('已有章节正在缓存，请先暂停或等它完成。');
     if (v.courseSeasonId == null ||
         v.bvid != 'cheese:ss${v.courseSeasonId}' ||
@@ -415,7 +440,7 @@ class CourseCacheLibrary extends ChangeNotifier {
         )) {
       throw const CourseCacheFailure('课程章节无效，请重新打开。');
     }
-    final revision = _revision, c = DownloadControl();
+    final revision = _revision, c = control ?? DownloadControl();
     _control = c;
     _received = 0;
     _total = null;
@@ -424,12 +449,13 @@ class CourseCacheLibrary extends ChangeNotifier {
     _checking = true;
     _operationKey = _busyKey =
         '${v.courseSeasonId}-${p.courseEpisodeId}-${p.courseAid}-${p.cid}';
-    final run = _transfer(v, p, quality, c, revision);
+    final run = _transfer(v, p, quality, c, revision, expectedMid);
     _running = run;
     _emit();
     try {
       await run;
     } on DownloadInterrupted {
+      if (reportFailure) rethrow;
       // No completion is published. A partial can be resumed after a fresh check.
     } catch (e) {
       if (revision == _revision && !c.isInterrupted) {
@@ -444,6 +470,7 @@ class CourseCacheLibrary extends ChangeNotifier {
           _ => null,
         };
       }
+      if (reportFailure) rethrow;
     } finally {
       _busyKey = _operationKey = null;
       _checking = false;
@@ -641,8 +668,10 @@ class CourseCacheLibrary extends ChangeNotifier {
     int q,
     DownloadControl c,
     int rev,
+    int? expectedMid,
   ) async {
     final mid = await c.guard(_mid());
+    if (expectedMid != null && mid != expectedMid) throw _inactive;
     final pending = CourseCacheEntry(
       mid: mid,
       season: v.courseSeasonId!,
@@ -918,6 +947,33 @@ class CourseCacheLibrary extends ChangeNotifier {
     try {
       await r;
     } catch (_) {}
+  }
+
+  /// Removes only incomplete files from this account's matching lesson.
+  Future<void> discardPartial(int mid, String id) async {
+    if (!RegExp(r'^\d+-\d+-\d+-\d+$').hasMatch(id)) return;
+    if (busy) throw const CourseCacheFailure('请先暂停进行中的缓存。');
+    _deleting = true;
+    try {
+      final revision = _revision;
+      await _same(mid, revision);
+      final dir = await _dirs(mid, id);
+      for (final name in [
+        'video.part',
+        'audio.part',
+        'video.part.resume',
+        'audio.part.resume',
+      ]) {
+        final file = await _file(dir, name);
+        await _same(mid, revision);
+        if (await file.exists()) {
+          await _same(mid, revision);
+          await file.delete();
+        }
+      }
+    } finally {
+      _deleting = false;
+    }
   }
 
   Future<void> remove(CourseCacheEntry e) async {
