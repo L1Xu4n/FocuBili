@@ -4,6 +4,7 @@ import '../../models/following_group.dart';
 import '../../services/bilibili_account_data_service.dart';
 import '../../services/following_group_service.dart';
 import '../../services/cache_lifecycle.dart';
+import '../common/following_group_avatar.dart';
 import 'user_profile_page.dart';
 
 /// 当前账号的本机分组编辑与只读导入入口。
@@ -76,8 +77,17 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
     });
     try {
       final mid = await _checkAccount();
+      final revision = CacheLifecycle.account.value;
       final groups = await _store.load(mid);
       if (mounted && !_invalidated) {
+        if (revision != CacheLifecycle.account.value) {
+          setState(() {
+            _invalidated = true;
+            _groups = [];
+            _error = '账号已变化，请返回后重新打开';
+          });
+          return;
+        }
         setState(() {
           _mid = mid;
           _groups = groups;
@@ -331,10 +341,19 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
                             initiallyExpanded: widget.groupId == group.id,
                             title: Text(group.name),
                             subtitle: Text('${group.members.length} 位 UP 主'),
-                            leading: ReorderableDragStartListener(
-                              index: index,
-                              enabled: !_busy,
-                              child: const Icon(Icons.drag_handle),
+                            leading: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                ReorderableDragStartListener(
+                                  index: index,
+                                  enabled: !_busy,
+                                  child: const Icon(Icons.drag_handle),
+                                ),
+                                const SizedBox(width: 8),
+                                FollowingGroupAvatar(
+                                  urls: followingGroupAvatarUrls(group.members),
+                                ),
+                              ],
                             ),
                             trailing: PopupMenuButton<String>(
                               enabled: !_busy,

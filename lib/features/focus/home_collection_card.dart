@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:async';
 import 'home_favorite_cover.dart';
 import '../common/app_network_image.dart';
+import '../common/following_group_avatar.dart';
 import '../../services/image_resource_cache.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -22,8 +23,15 @@ import 'home_favorite_source_dialog.dart';
 /// 首页选择项保存稳定身份、名称及可选公开头像，不保存会话或收藏封面地址。
 class _HomeChoice {
   /// 创建可打开的收藏夹、分组或 UP 主入口。
-  const _HomeChoice(this.kind, this.id, this.label, {this.imageUrl = ''});
+  const _HomeChoice(
+    this.kind,
+    this.id,
+    this.label, {
+    this.imageUrl = '',
+    this.groupAvatarUrls = const [],
+  });
   final String imageUrl;
+  final List<String> groupAvatarUrls;
   final String kind;
   final String id;
   final String label;
@@ -104,6 +112,7 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
   int _folderNamesGeneration = 0;
   Map<String, String> _localGroupNames = {};
   Map<String, String> _groupAvatars = {};
+  Map<String, List<String>> _groupPreviews = {};
   Map<String, String> _verifiedFollowingAvatars = {};
   int? _followingMid;
   DateTime? _followingReadAt;
@@ -163,6 +172,7 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
       _groupNamesMid = 0;
       _localGroupNames = {};
       _groupAvatars = {};
+      _groupPreviews = {};
       _verifiedFollowingAvatars = {};
       _followingMid = null;
       _followingReadAt = null;
@@ -195,6 +205,7 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
         _groupNamesMid = 0;
         _localGroupNames = {};
         _groupAvatars = {};
+        _groupPreviews = {};
         _verifiedFollowingAvatars = {};
         _followingMid = null;
         _followingReadAt = null;
@@ -218,6 +229,7 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
           _selected = [];
           _localGroupNames = {};
           _groupAvatars = {};
+          _groupPreviews = {};
           _verifiedFollowingAvatars = {};
           _followingMid = null;
           _followingReadAt = null;
@@ -530,6 +542,7 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
       _groupNamesMid = mid;
       _localGroupNames = {};
       _groupAvatars = {};
+      _groupPreviews = {};
       _verifiedFollowingAvatars = {};
       _followingMid = null;
       _followingReadAt = null;
@@ -542,6 +555,10 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
       if (mounted && generation == _groupNamesGeneration) {
         setState(() {
           _localGroupNames = {for (final group in groups) group.id: group.name};
+          _groupPreviews = {
+            for (final group in groups)
+              group.id: followingGroupAvatarUrls(group.members),
+          };
           _groupAvatars = {
             for (final group in groups)
               for (final creator in group.members)
@@ -562,6 +579,11 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
       _localGroupNames[choice.id] ?? choice.label,
     _ => choice.label,
   };
+
+  List<String> _choiceGroupPreview(_HomeChoice choice) =>
+      choice.kind == 'group' && _groupNamesMid == _mid
+      ? _groupPreviews[choice.id] ?? const []
+      : const [];
 
   String _choiceImage(_HomeChoice choice) => switch (choice.kind) {
     'creator' =>
@@ -862,7 +884,14 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
       }
     } else if (mid > 0) {
       for (final group in await _groups.load(mid)) {
-        choices.add(_HomeChoice('group', group.id, group.name));
+        choices.add(
+          _HomeChoice(
+            'group',
+            group.id,
+            group.name,
+            groupAvatarUrls: followingGroupAvatarUrls(group.members),
+          ),
+        );
       }
     }
     return valid() ? choices : [];
@@ -908,6 +937,7 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
                         item.id,
                         _label(item),
                         imageUrl: _choiceImage(item),
+                        groupAvatarUrls: _choiceGroupPreview(item),
                       ),
                     )
                     .toList(),
@@ -1029,6 +1059,7 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
                     : _ChoiceAvatar(
                         choice: choice,
                         imageUrl: _choiceImage(choice),
+                        groupAvatarUrls: _choiceGroupPreview(choice),
                         cache: widget.imageCache,
                       ),
                 trailing: const Icon(Icons.chevron_right),
@@ -1265,10 +1296,11 @@ class _HomeChoiceEditorState extends State<_HomeChoiceEditor> {
   }
 
   _HomeChoice _enrich(_HomeChoice saved) {
-    final matches = [
-      ..._local,
-      ..._remote,
-    ].where((item) => item.key == saved.key && item.imageUrl.isNotEmpty);
+    final matches = [..._local, ..._remote].where(
+      (item) =>
+          item.key == saved.key &&
+          (item.kind == 'group' || item.imageUrl.isNotEmpty),
+    );
     return matches.isEmpty ? saved : matches.first;
   }
 
@@ -1376,6 +1408,7 @@ class _HomeChoiceEditorState extends State<_HomeChoiceEditor> {
           _ChoiceAvatar(
             choice: choice,
             imageUrl: choice.imageUrl,
+            groupAvatarUrls: choice.groupAvatarUrls,
             cache: widget.imageCache,
           ),
           const SizedBox(width: 12),
@@ -1503,10 +1536,12 @@ class _ChoiceAvatar extends StatelessWidget {
   const _ChoiceAvatar({
     required this.choice,
     required this.imageUrl,
+    this.groupAvatarUrls = const [],
     this.cache,
   });
   final _HomeChoice choice;
   final String imageUrl;
+  final List<String> groupAvatarUrls;
   final ImageResourceCache? cache;
   @override
   Widget build(BuildContext context) {
@@ -1516,6 +1551,9 @@ class _ChoiceAvatar extends StatelessWidget {
         remote: choice.kind == 'remote',
         cache: cache,
       );
+    }
+    if (choice.kind == 'group') {
+      return FollowingGroupAvatar(urls: groupAvatarUrls, cache: cache);
     }
     final fallback = ColoredBox(
       color: Theme.of(context).colorScheme.surfaceContainerHighest,
