@@ -44,6 +44,33 @@ void main() {
       expect(await service.load(7), isEmpty);
     },
   );
+  test(
+    'setting is isolated per UID and survives group edits and merge',
+    () async {
+      final service = FollowingGroupService();
+      expect((await service.loadState(7)).autoSync, isFalse);
+      await service.saveAutoSync(7, true);
+      await service.save(7, [FollowingGroup(id: 'local_a', name: '本地')]);
+      await service.merge(FollowingGroupImport(7, []));
+      final reopened = FollowingGroupService();
+      expect((await reopened.loadState(7)).autoSync, isTrue);
+      expect((await reopened.loadState(8)).autoSync, isFalse);
+      expect((await reopened.load(7)).single.name, '本地');
+    },
+  );
+
+  test('invalidated auto sync never writes its queued snapshot', () async {
+    final service = FollowingGroupService();
+    final change = service.merge(
+      FollowingGroupImport(7, [
+        FollowingGroup(id: 'remote_1', name: '远端', remoteId: 1),
+      ]),
+      isCurrent: () => false,
+    );
+    await expectLater(change, throwsStateError);
+    expect(await service.load(7), isEmpty);
+  });
+
   test('malformed storage is never replaced by an import', () async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(FollowingGroupService.storageKey(7), 'broken');

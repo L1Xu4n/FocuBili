@@ -85,3 +85,43 @@ class FollowingGroupAvatar extends StatelessWidget {
     );
   }
 }
+
+/// A member row uses the saved CDN avatar without another profile request.
+class FollowingGroupMemberAvatar extends StatelessWidget {
+  const FollowingGroupMemberAvatar({super.key, required this.member});
+
+  final FollowedCreator member;
+
+  @override
+  Widget build(BuildContext context) {
+    final urls = followingGroupAvatarUrls([member]);
+    final colors = Theme.of(context).colorScheme;
+    final fallback = ColoredBox(
+      color: colors.surfaceContainerHighest,
+      child: Center(
+        child: Icon(
+          Icons.person_outline,
+          size: 19,
+          color: colors.onSurfaceVariant,
+        ),
+      ),
+    );
+    return ExcludeSemantics(
+      child: SizedBox.square(
+        dimension: 32,
+        child: ClipOval(
+          child: urls.isEmpty
+              ? fallback
+              : AppNetworkImage(
+                  imageUrl: urls.first,
+                  fit: BoxFit.cover,
+                  memCacheWidth: 96,
+                  excludeFromSemantics: true,
+                  placeholder: (_, _) => fallback,
+                  errorWidget: (_, _, _) => fallback,
+                ),
+        ),
+      ),
+    );
+  }
+}

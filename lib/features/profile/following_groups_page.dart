@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../../models/account_collection.dart';
 import '../../models/following_group.dart';
@@ -10,9 +12,15 @@ import 'user_profile_page.dart';
 /// 当前账号的本机分组编辑与只读导入入口。
 class FollowingGroupsPage extends StatefulWidget {
   /// 可指定直接打开的分组，首页自选卡片复用此入口。
-  const FollowingGroupsPage({super.key, this.accountDataService, this.groupId});
+  const FollowingGroupsPage({
+    super.key,
+    this.accountDataService,
+    this.groupId,
+    this.groupService,
+  });
   final BilibiliAccountDataService? accountDataService;
   final String? groupId;
+  final FollowingGroupService? groupService;
 
   /// 创建维护本机编辑快照的页面状态。
   @override
@@ -21,12 +29,20 @@ class FollowingGroupsPage extends StatefulWidget {
 
 class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
   late final _api = widget.accountDataService ?? BilibiliAccountDataService();
-  final _store = FollowingGroupService.instance;
+  late final _store = widget.groupService ?? FollowingGroupService.instance;
   List<FollowingGroup> _groups = [];
   int? _mid;
   bool _busy = true;
   String? _error;
   bool _invalidated = false;
+  bool _autoSync = false;
+  bool _savingAutoSync = false;
+  bool _autoSyncRunning = false;
+  int _syncRevision = 0;
+
+  bool get _activeAutoSync => _autoSync && _autoSyncRunning;
+  bool get _editingBlocked =>
+      _busy || _activeAutoSync || _savingAutoSync || _invalidated;
 
   /// 进入页面时检查身份并加载本机分组。
   @override
@@ -41,6 +57,7 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
     if (mounted && _mid != null) {
       setState(() {
         _invalidated = true;
+        _syncRevision++;
         _groups = [];
         _error = '账号已变化，请返回后重新打开';
       });
@@ -76,9 +93,9 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
       _error = null;
     });
     try {
-      final mid = await _checkAccount();
       final revision = CacheLifecycle.account.value;
-      final groups = await _store.load(mid);
+      final mid = await _checkAccount();
+      final (:groups, :autoSync) = await _store.loadState(mid);
       if (mounted && !_invalidated) {
         if (revision != CacheLifecycle.account.value) {
           setState(() {
@@ -91,6 +108,7 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
         setState(() {
           _mid = mid;
           _groups = groups;
+          _autoSync = autoSync;
         });
       }
     } catch (e) {
@@ -98,11 +116,70 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+    if (_error == null) unawaited(_syncAutomatically());
+  }
+
+  Future<void> _setAutoSync(bool enabled) async {
+    if (_savingAutoSync || _busy || _invalidated || _mid == null) return;
+    final mid = _mid!;
+    setState(() {
+      _savingAutoSync = true;
+      if (!enabled) _syncRevision++;
+    });
+    try {
+      // Saving the preference is local; B 站 need not be reachable to turn it off.
+      await _store.saveAutoSync(mid, enabled);
+      if (mounted && !_invalidated) setState(() => _autoSync = enabled);
+    } catch (_) {
+      _message('没能保存自动同步设置，请重试');
+    } finally {
+      if (mounted) setState(() => _savingAutoSync = false);
+    }
+    if (enabled) unawaited(_syncAutomatically());
+  }
+
+  Future<void> _syncAutomatically() async {
+    if (!mounted ||
+        !_autoSync ||
+        _invalidated ||
+        _busy ||
+        _savingAutoSync ||
+        _autoSyncRunning ||
+        _mid == null) {
+      return;
+    }
+    final mid = _mid!;
+    final revision = _syncRevision;
+    final accountRevision = CacheLifecycle.account.value;
+    bool isCurrent() =>
+        mounted &&
+        _autoSync &&
+        !_invalidated &&
+        _mid == mid &&
+        revision == _syncRevision &&
+        accountRevision == CacheLifecycle.account.value;
+
+    setState(() => _autoSyncRunning = true);
+    try {
+      final snapshot = await _api.loadFollowingGroups();
+      if (!isCurrent()) return;
+      if (snapshot.mid != mid) throw StateError('账号已变化');
+      if (snapshot.groups.isEmpty) return;
+      final groups = await _store.merge(snapshot, isCurrent: isCurrent);
+      if (isCurrent()) setState(() => _groups = groups);
+    } catch (_) {
+      if (isCurrent()) _message('自动同步失败，本机分组未改变');
+    } finally {
+      if (mounted) setState(() => _autoSyncRunning = false);
+      // If re-enabled while the previous request was pending, wait for that
+      // request to finish before starting a fresh read.
+      if (revision != _syncRevision) unawaited(_syncAutomatically());
+    }
   }
 
   /// 提交一个完整本机快照，保存成功后才更新界面。
   Future<void> _save(List<FollowingGroup> groups) async {
-    if (_busy) return;
+    if (_editingBlocked) return;
     setState(() => _busy = true);
     try {
       final mid = await _checkAccount();
@@ -290,7 +367,7 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
 
   /// 调整本机分组顺序，保留其他分组与成员。
   void _reorder(int oldIndex, int newIndex) {
-    if (_busy) return;
+    if (_editingBlocked) return;
     final next = [..._groups];
     next.insert(newIndex, next.removeAt(oldIndex));
     _save(next);
@@ -304,12 +381,12 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
       actions: [
         IconButton(
           tooltip: '从 B 站导入分组',
-          onPressed: _busy || _mid == null ? null : _import,
+          onPressed: _editingBlocked || _mid == null ? null : _import,
           icon: const Icon(Icons.download_outlined),
         ),
         IconButton(
           tooltip: '新建分组',
-          onPressed: _busy || _mid == null ? null : _rename,
+          onPressed: _editingBlocked || _mid == null ? null : _rename,
           icon: const Icon(Icons.add),
         ),
       ],
@@ -326,7 +403,14 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
           )
         : Column(
             children: [
-              if (_busy) const LinearProgressIndicator(),
+              if (_mid != null)
+                SwitchListTile(
+                  title: const Text('自动同步 B 站分组'),
+                  subtitle: const Text('进入此页时从 B 站合并到本机'),
+                  value: _autoSync,
+                  onChanged: _busy || _savingAutoSync ? null : _setAutoSync,
+                ),
+              if (_busy || _activeAutoSync) const LinearProgressIndicator(),
               Expanded(
                 child: _groups.isEmpty
                     ? const Center(child: Text('还没有本机分组'))
@@ -346,7 +430,7 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
                               children: [
                                 ReorderableDragStartListener(
                                   index: index,
-                                  enabled: !_busy,
+                                  enabled: !_editingBlocked,
                                   child: const Icon(Icons.drag_handle),
                                 ),
                                 const SizedBox(width: 8),
@@ -356,7 +440,7 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
                               ],
                             ),
                             trailing: PopupMenuButton<String>(
-                              enabled: !_busy,
+                              enabled: !_editingBlocked,
                               onSelected: (value) {
                                 switch (value) {
                                   case 'name':
@@ -385,6 +469,9 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
                             children: [
                               for (final member in group.members)
                                 ListTile(
+                                  leading: FollowingGroupMemberAvatar(
+                                    member: member,
+                                  ),
                                   title: Text(member.name),
                                   onTap: () => Navigator.of(context).push<void>(
                                     MaterialPageRoute(
@@ -458,6 +545,7 @@ class _GroupMembersPickerState extends State<_GroupMembersPicker> {
               itemBuilder: (_, index) {
                 final member = visible[index];
                 return CheckboxListTile(
+                  secondary: FollowingGroupMemberAvatar(member: member),
                   title: Text(member.name),
                   value: _selected.contains(member.mid),
                   onChanged: (value) => setState(() {
