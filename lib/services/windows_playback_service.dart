@@ -52,7 +52,7 @@ class WindowsPlaybackService
     AppPlatform? appPlatform,
   }) : _appPlatform = appPlatform ?? AppPlatformDetector.current,
        _sourceService = sourceService ?? BilibiliDesktopPlaybackSourceService(),
-       _videoShotService = videoShotService ?? BilibiliVideoShotService(),
+       _videoShotService = videoShotService ?? BilibiliVideoShotService.shared,
        _progressStore = progressStore ?? const WindowsPlaybackProgressStore(),
        _bufferStateReader = bufferStateReader,
        _player =

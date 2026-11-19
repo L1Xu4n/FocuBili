@@ -455,7 +455,7 @@ class _PlayerPageState extends State<PlayerPage>
     _videoShotService =
         widget.videoShotService ??
         (widget.playbackService == null
-            ? BilibiliVideoShotService()
+            ? BilibiliVideoShotService.shared
             : const EmptyVideoShotService());
     _videoNoteService = widget.videoNoteService ?? VideoNoteService();
     _initializePlayerNoteFlags();
