@@ -14,12 +14,24 @@ class PlayerAbRepeatSheet extends StatefulWidget {
     this.initialRange,
     this.resumeFullLoop = false,
     this.inline = false,
+    this.floating = false,
     this.draftA,
     this.draftB,
     this.onDraftChanged,
     this.onClose,
   });
   static const inlineWidth = 360.0;
+  static const _floatingActionWidth = 44.0;
+
+  static double floatingToolbarHeight(BuildContext context) =>
+      (MediaQuery.textScalerOf(context).scale(14) * 1.4 + 16)
+          .clamp(52.0, 96.0)
+          .toDouble();
+
+  static double floatingContentWidth(
+    double numberSize, {
+    required bool hasClearAction,
+  }) => (hasClearAction ? 4 : 3) * _floatingActionWidth + 14 + numberSize * 13;
 
   final String bvid;
   final int cid;
@@ -30,6 +42,7 @@ class PlayerAbRepeatSheet extends StatefulWidget {
   final ValueChanged<AbRepeatRange> onApply;
   final VoidCallback onClear;
   final bool inline;
+  final bool floating;
   final String? draftA;
   final String? draftB;
   final void Function(String a, String b)? onDraftChanged;
@@ -213,9 +226,238 @@ class _PlayerAbRepeatSheetState extends State<PlayerAbRepeatSheet> {
     ),
   );
 
+  // Time chips and the check tile share visible geometry; their button hit
+  // targets stay larger, and timestamps still use a wider tile than an icon.
+  double _floatingTileHeight(BuildContext context) =>
+      (MediaQuery.textScalerOf(context).scale(14) * 1.2 + 6)
+          .clamp(34.0, 82.0)
+          .toDouble();
+
+  BoxDecoration _floatingTile(Color color) => BoxDecoration(
+    color: color,
+    borderRadius: BorderRadius.circular(10),
+    border: Border.all(color: const Color(0x22C2D9FF)),
+  );
+
+  Widget _floatingPoint(
+    BuildContext context,
+    String point,
+    TextEditingController controller,
+  ) {
+    final time = controller.text;
+    final label = time.isEmpty ? '标记' : time;
+    const accent = Color(0xFFBDDAFF);
+    return Expanded(
+      child: Tooltip(
+        message: '$point · $label',
+        excludeFromSemantics: true,
+        child: TextButton(
+          key: Key('ab-repeat-set-$point'),
+          onPressed: () => _mark(controller),
+          style: TextButton.styleFrom(
+            foregroundColor: accent,
+            padding: const EdgeInsets.symmetric(horizontal: 5),
+            minimumSize: Size(
+              0,
+              PlayerAbRepeatSheet.floatingToolbarHeight(context) - 4,
+            ),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(11),
+            ),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          child: Container(
+            height: _floatingTileHeight(context),
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            decoration: _floatingTile(
+              time.isEmpty ? const Color(0x12BFD6FE) : const Color(0x2199BAFF),
+            ),
+            child: Row(
+              children: [
+                Text(
+                  point,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Color(0xFFF2F6FF),
+                      fontFeatures: [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _floatingIcon(
+    BuildContext context, {
+    Key? key,
+    required String tooltip,
+    required IconData icon,
+    required VoidCallback onPressed,
+    bool selected = false,
+    bool primary = false,
+  }) => SizedBox(
+    width: PlayerAbRepeatSheet._floatingActionWidth,
+    height: PlayerAbRepeatSheet.floatingToolbarHeight(context) - 4,
+    child: IconButton(
+      key: key,
+      tooltip: tooltip,
+      icon: primary || selected
+          ? Container(
+              width: 34,
+              height: _floatingTileHeight(context),
+              alignment: Alignment.center,
+              decoration: _floatingTile(
+                primary ? const Color(0x2A8FB8FF) : const Color(0x1EBCD3FF),
+              ),
+              child: Icon(icon),
+            )
+          : Icon(icon),
+      iconSize: 19,
+      isSelected: selected,
+      onPressed: onPressed,
+      style: IconButton.styleFrom(
+        foregroundColor: primary
+            ? const Color(0xFFABD0FF)
+            : const Color(0xE6ECF2FF),
+        padding: EdgeInsets.zero,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(11)),
+      ),
+    ),
+  );
+
+  Widget _floatingEditor(BuildContext context) {
+    final hasClear = widget.initialRange != null;
+    final actionWidth =
+        (hasClear ? 4 : 3) * PlayerAbRepeatSheet._floatingActionWidth;
+    return Column(
+      key: const Key('ab-repeat-inline-editor'),
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final minWidth =
+                actionWidth +
+                12 +
+                MediaQuery.textScalerOf(context).scale(14) * 7;
+            final points = [
+              _floatingPoint(context, 'A', _a),
+              const SizedBox(width: 4),
+              _floatingPoint(context, 'B', _b),
+            ];
+            final actions = [
+              _floatingIcon(
+                context,
+                tooltip: '输入时间',
+                icon: Icons.edit_outlined,
+                selected: _editingTimes,
+                onPressed: () => setState(() => _editingTimes = !_editingTimes),
+              ),
+              _floatingIcon(
+                context,
+                key: const Key('ab-repeat-apply'),
+                tooltip: '启用区间循环',
+                icon: Icons.check_rounded,
+                onPressed: _apply,
+                primary: true,
+              ),
+              if (hasClear)
+                _floatingIcon(
+                  context,
+                  key: const Key('ab-repeat-clear'),
+                  tooltip: '清除区间',
+                  icon: Icons.delete_outline,
+                  onPressed: () {
+                    widget.onClear();
+                    _close();
+                  },
+                ),
+              _floatingIcon(
+                context,
+                tooltip: '收起 A–B 设置',
+                icon: Icons.close,
+                onPressed: _close,
+              ),
+            ];
+            final toolbarHeight = PlayerAbRepeatSheet.floatingToolbarHeight(
+              context,
+            );
+            if (constraints.maxWidth < minWidth) {
+              // In a portrait fullscreen pane (or another extremely narrow
+              // lane), do not hide essential actions behind the drag grip.
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    height: toolbarHeight,
+                    child: Row(children: points),
+                  ),
+                  Wrap(alignment: WrapAlignment.center, children: actions),
+                ],
+              );
+            }
+            return SizedBox(
+              height: toolbarHeight,
+              child: Padding(
+                padding: const EdgeInsets.only(left: 6),
+                child: Row(children: [...points, ...actions]),
+              ),
+            );
+          },
+        ),
+        if (_editingTimes || _error != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 0, 4, 7),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Divider(color: Color(0x39D6E5FF), height: 8),
+                if (_editingTimes) ...[
+                  _point('A', _a),
+                  const SizedBox(height: 5),
+                  _point('B', _b),
+                ],
+                if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 5),
+                    child: Text(
+                      _error!,
+                      key: const Key('ab-repeat-error'),
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
   /// 独立面板保留测试和复用入口，真实播放器使用紧凑内嵌模式。
   @override
-  Widget build(BuildContext context) => widget.inline
+  Widget build(BuildContext context) => widget.floating
+      ? Theme(
+          data: ThemeData.dark(useMaterial3: true).copyWith(
+            textTheme: ThemeData.dark().textTheme.apply(
+              fontFamily: Theme.of(context).textTheme.bodyMedium?.fontFamily,
+            ),
+          ),
+          child: Builder(builder: _floatingEditor),
+        )
+      : widget.inline
       ? SizedBox(
           key: const Key('ab-repeat-inline-editor'),
           width: PlayerAbRepeatSheet.inlineWidth,

@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart' show kPrimaryButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:flutter/services.dart';
@@ -13,11 +14,13 @@ class PlayerAbRepeatDock extends StatefulWidget {
     required this.offset,
     required this.onMove,
     required this.child,
+    this.hasClearAction = false,
   });
 
   final Offset? offset;
   final ValueChanged<Offset> onMove;
   final Widget child;
+  final bool hasClearAction;
 
   @override
   State<PlayerAbRepeatDock> createState() => _PlayerAbRepeatDockState();
@@ -26,10 +29,13 @@ class PlayerAbRepeatDock extends StatefulWidget {
 class _PlayerAbRepeatDockState extends State<PlayerAbRepeatDock> {
   static const _step = 24.0;
   static const _gripWidth = 44.0;
-  static const _compactHeight = 96.0;
+  // Leave room to open the timestamp editor below the pinned grip.
+  static const _editorHeadroom = 176.0;
   final _cardKey = GlobalKey();
   final _handleFocus = FocusNode(debugLabel: 'Move A–B editor');
   Offset? _dragStart;
+  Offset? _pointerStart;
+  int? _dragPointer;
   Offset? _actionOffset;
   double _heightAtPress = 0;
   bool _focusHighlighted = false;
@@ -54,14 +60,24 @@ class _PlayerAbRepeatDockState extends State<PlayerAbRepeatDock> {
         offset.dy.clamp(0.0, math.max(0, lane.height - keepHeight)),
       );
 
-  void _finishDrag() {
-    if (_dragStart != null) setState(() => _dragStart = null);
+  double _headroom(Size lane) => math.max(
+    PlayerAbRepeatSheet.floatingToolbarHeight(context),
+    math.min(_editorHeadroom, lane.height * .7),
+  );
+
+  void _finishDrag(PointerEvent event) {
+    if (_dragPointer != event.pointer) return;
+    setState(() {
+      _dragPointer = null;
+      _dragStart = null;
+      _pointerStart = null;
+    });
   }
 
   Widget _handle(Offset offset, Size lane, double width) {
     void move(Offset delta) {
       final height = math.max(
-        _compactHeight,
+        _headroom(lane),
         _cardKey.currentContext?.size?.height ?? 0,
       );
       final next = _bounded(
@@ -105,7 +121,7 @@ class _PlayerAbRepeatDockState extends State<PlayerAbRepeatDock> {
       },
       child: Semantics(
         label: '移动 A–B 控件',
-        hint: '长按拖动，也可使用方向键',
+        hint: '直接拖动，也可使用方向键',
         customSemanticsActions: {
           const CustomSemanticsAction(label: '左移'): () =>
               move(const Offset(-_step, 0)),
@@ -117,43 +133,56 @@ class _PlayerAbRepeatDockState extends State<PlayerAbRepeatDock> {
               move(const Offset(0, _step)),
         },
         child: Tooltip(
-          message: '长按拖动 A–B 控件（也可用方向键）',
+          message: '拖动 A–B 控件（也可用方向键）',
           excludeFromSemantics: true,
-          child: GestureDetector(
+          // The grip is hit-tested above the player surface. Track its captured
+          // pointer from down so there is neither a long-press nor a pan threshold.
+          child: Listener(
             key: const Key('ab-repeat-move-handle'),
             behavior: HitTestBehavior.opaque,
-            onTap: _handleFocus.requestFocus,
-            onLongPressStart: (_) {
+            onPointerDown: (event) {
+              if (_dragPointer != null || event.buttons != kPrimaryButton) {
+                return;
+              }
               _handleFocus.requestFocus();
               _actionOffset = null;
               _heightAtPress = math.max(
-                _compactHeight,
+                _headroom(lane),
                 _cardKey.currentContext?.size?.height ?? 0,
               );
-              setState(() => _dragStart = offset);
+              setState(() {
+                _dragPointer = event.pointer;
+                _dragStart = offset;
+                _pointerStart = event.position;
+              });
             },
-            onLongPressMoveUpdate: (details) {
-              final origin = _dragStart;
-              if (origin == null) return;
+            onPointerMove: (event) {
+              if (_dragPointer != event.pointer) return;
               widget.onMove(
                 _bounded(
-                  origin + details.offsetFromOrigin,
+                  _dragStart! + event.position - _pointerStart!,
                   lane,
                   width,
                   _heightAtPress,
                 ),
               );
             },
-            onLongPressEnd: (_) => _finishDrag(),
-            onLongPressCancel: _finishDrag,
+            onPointerUp: _finishDrag,
+            onPointerCancel: _finishDrag,
             child: DecoratedBox(
               decoration: BoxDecoration(
                 color: _focusHighlighted || _dragStart != null
-                    ? Theme.of(context).colorScheme.secondaryContainer
+                    ? const Color(0x29A9C6FF)
                     : Colors.transparent,
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: const Center(child: Icon(Icons.drag_indicator_rounded)),
+              child: const Center(
+                child: Icon(
+                  Icons.drag_indicator_rounded,
+                  size: 19,
+                  color: Color(0xBBDCE7FB),
+                ),
+              ),
             ),
           ),
         ),
@@ -166,12 +195,22 @@ class _PlayerAbRepeatDockState extends State<PlayerAbRepeatDock> {
     builder: (context, constraints) {
       final lane = constraints.biggest;
       if (lane.isEmpty) return const SizedBox.shrink();
-      final width = math.min(lane.width, PlayerAbRepeatSheet.inlineWidth);
+      final numberWidth = MediaQuery.textScalerOf(
+        context,
+      ).scale(14).clamp(14.0, 26.0).toDouble();
+      final width = math.min(
+        lane.width,
+        PlayerAbRepeatSheet.floatingContentWidth(
+              numberWidth,
+              hasClearAction: widget.hasClearAction,
+            ) +
+            _gripWidth,
+      );
       final pos = _bounded(
         widget.offset ?? Offset((lane.width - width) / 2, 0),
         lane,
         width,
-        _compactHeight,
+        _headroom(lane),
       );
       final availableHeight = lane.height - pos.dy;
       return Stack(
@@ -185,8 +224,11 @@ class _PlayerAbRepeatDockState extends State<PlayerAbRepeatDock> {
               constraints: BoxConstraints(maxHeight: availableHeight),
               child: Material(
                 key: const Key('ab-repeat-floating-editor'),
-                color: Theme.of(context).colorScheme.surface,
-                borderRadius: BorderRadius.circular(12),
+                color: const Color(0xDE111827),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(15),
+                  side: const BorderSide(color: Color(0x3DE3EDFF)),
+                ),
                 clipBehavior: Clip.antiAlias,
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -194,7 +236,10 @@ class _PlayerAbRepeatDockState extends State<PlayerAbRepeatDock> {
                     Expanded(child: SingleChildScrollView(child: widget.child)),
                     SizedBox(
                       width: math.min(_gripWidth, width / 3),
-                      height: math.min(_gripWidth, availableHeight),
+                      height: math.min(
+                        PlayerAbRepeatSheet.floatingToolbarHeight(context),
+                        availableHeight,
+                      ),
                       child: _handle(pos, lane, width),
                     ),
                   ],

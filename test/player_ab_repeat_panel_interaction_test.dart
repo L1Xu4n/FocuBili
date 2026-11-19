@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 import 'package:focubili/features/player/player_page.dart';
 import 'package:focubili/features/player/widgets/player_ab_repeat_sheet.dart';
 import 'package:focubili/platform/app_platform.dart';
+import 'package:focubili/services/playback_video_surface.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -25,6 +26,22 @@ final _b = find.byKey(const Key('ab-repeat-B-input'));
 final _edit = find.byTooltip('输入时间');
 final _apply = find.byKey(const Key('ab-repeat-apply'));
 
+class _PreviewPlayback extends AbPlayback implements PlaybackVideoSurface {
+  @override
+  Widget buildVideoSurface() => const DecoratedBox(
+    decoration: BoxDecoration(
+      gradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [Color(0xFFCFDCE2), Color(0xFF8CA9BA), Color(0xFF405C73)],
+      ),
+    ),
+    child: Center(
+      child: Icon(Icons.landscape_rounded, size: 150, color: Color(0x3090D7FF)),
+    ),
+  );
+}
+
 Future<void> _mount(
   WidgetTester t,
   AbPlayback p, {
@@ -32,6 +49,7 @@ Future<void> _mount(
   Size screen = const Size(1152, 720),
   double textScale = 1,
   String? font,
+  Duration? startAt = const Duration(seconds: 20),
 }) async {
   t.view.devicePixelRatio = 1;
   t.view.physicalSize = screen;
@@ -55,7 +73,7 @@ Future<void> _mount(
           video: abVideo,
           playbackService: p,
           appPlatform: platform,
-          initialPosition: const Duration(seconds: 20),
+          initialPosition: startAt,
           offlineVideoService: ReviewOfflineLibrary(),
           playerOverlayService: AbOverlay(),
         ),
@@ -84,7 +102,6 @@ Future<void> _drag(
   required PointerDeviceKind kind,
 }) async {
   final g = await t.startGesture(t.getCenter(_grip), kind: kind);
-  await t.pump(kLongPressTimeout + const Duration(milliseconds: 50));
   await g.moveBy(delta);
   await t.pump();
   await g.up();
@@ -100,6 +117,113 @@ void _fits(Rect inside, Rect outside) {
 
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  for (final (screen, textScale) in [
+    (const Size(850, 380), 1.0),
+    (const Size(568, 320), 1.8),
+  ]) {
+    testWidgets(
+      'fullscreen toolbar stays on one row on $screen at ${textScale}x',
+      (t) async {
+        await _mount(
+          t,
+          AbPlayback(),
+          platform: AppPlatform.android,
+          screen: screen,
+          textScale: textScale,
+        );
+        await _fullscreen(t);
+        await _open(t);
+        final dock = t.getRect(_editor);
+        final lane = t.getRect(_viewport);
+        _fits(dock, lane);
+        expect(dock.height, lessThanOrEqualTo(56));
+        final panel = t.widget<Material>(_editor);
+        expect(panel.color!.a, lessThan(1));
+        expect(panel.color!.computeLuminance(), lessThan(.1));
+        final controls = [
+          find.byKey(const Key('ab-repeat-set-A')),
+          find.byKey(const Key('ab-repeat-set-B')),
+          _edit,
+          _apply,
+          find.byTooltip('收起 A–B 设置'),
+          _grip,
+        ];
+        for (final control in controls) {
+          expect(control.hitTestable(), findsOneWidget);
+          expect(t.getCenter(control).dy, closeTo(dock.center.dy, 1));
+        }
+        final tiles = [
+          for (final control in [controls[0], controls[1], _apply])
+            find.descendant(
+              of: control,
+              matching: find.byWidgetPredicate(
+                (widget) =>
+                    widget is Container &&
+                    widget.decoration is BoxDecoration &&
+                    (widget.decoration as BoxDecoration).border != null,
+              ),
+            ),
+        ];
+        final checkTile = t.getRect(tiles.last);
+        for (var i = 0; i < tiles.length; i++) {
+          final decoration =
+              t.widget<Container>(tiles[i]).decoration! as BoxDecoration;
+          final applyDecoration =
+              t.widget<Container>(tiles.last).decoration! as BoxDecoration;
+          expect(decoration.border, applyDecoration.border);
+          expect(decoration.borderRadius, applyDecoration.borderRadius);
+          final tile = t.getRect(tiles[i]);
+          final hit = t.getRect(i == 2 ? _apply : controls[i]);
+          expect(tile.height, checkTile.height);
+          expect(tile.top, closeTo(checkTile.top, .1));
+          expect(tile.left - hit.left, closeTo(5, .1));
+          expect(hit.right - tile.right, closeTo(5, .1));
+        }
+        expect(
+          controls.map((c) => t.getCenter(c).dx).toList(),
+          orderedEquals(
+            controls.map((c) => t.getCenter(c).dx).toList()..sort(),
+          ),
+        );
+        expect(t.takeException(), isNull);
+        await unmountAb(t);
+      },
+    );
+  }
+
+  testWidgets('active range still keeps delete and close in the row', (
+    t,
+  ) async {
+    final playback = AbPlayback();
+    await _mount(
+      t,
+      playback,
+      platform: AppPlatform.android,
+      screen: const Size(568, 320),
+      textScale: 1.8,
+    );
+    await _fullscreen(t);
+    await _open(t);
+    playback.at(35);
+    await t.pump();
+    final setB = find.byKey(const Key('ab-repeat-set-B'));
+    await t.tap(setB);
+    await t.tap(_apply);
+    await t.pumpAndSettle();
+    await _open(t);
+    final dock = t.getRect(_editor);
+    for (final control in [
+      find.byKey(const Key('ab-repeat-clear')),
+      find.byTooltip('收起 A–B 设置'),
+      _grip,
+    ]) {
+      expect(control.hitTestable(), findsOneWidget);
+      expect(t.getCenter(control).dy, closeTo(dock.center.dy, 1));
+    }
+    expect(t.takeException(), isNull);
+    await unmountAb(t);
+  });
 
   testWidgets(
     'time fields expand down, keeping the narrow toolbar width and top',
@@ -149,12 +273,14 @@ void main() {
         final before = t.getRect(_editor);
         expect(t.getCenter(_grip).dx, greaterThan(before.center.dx));
 
-        // Moving before a long press does not accidentally move the editor.
-        final short = await t.startGesture(t.getCenter(_grip), kind: kind);
-        await short.moveBy(const Offset(60, 35));
-        await short.up();
+        // A tiny first movement on the grip moves the dock immediately,
+        // before either a long-press timeout or a pan slop threshold.
+        final direct = await t.startGesture(t.getCenter(_grip), kind: kind);
+        await direct.moveBy(const Offset(4, 3));
+        await t.pump();
+        expect(t.getRect(_editor).topLeft, before.topLeft + const Offset(4, 3));
+        await direct.up();
         await t.pumpAndSettle();
-        expect(t.getRect(_editor).topLeft, before.topLeft);
 
         await _drag(t, const Offset(-1000, 800), kind: kind);
         final moved = t.getRect(_editor);
@@ -283,7 +409,14 @@ void main() {
         });
       }
 
-      await _mount(t, AbPlayback(), font: font == null ? null : 'AbEvidence');
+      await _mount(
+        t,
+        _PreviewPlayback(),
+        platform: AppPlatform.android,
+        screen: const Size(900, 405),
+        font: font == null ? null : 'AbEvidence',
+        startAt: null,
+      );
       await _fullscreen(t);
       await _open(t);
       await capture('compact');

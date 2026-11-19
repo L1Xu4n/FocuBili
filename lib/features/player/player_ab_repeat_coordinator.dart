@@ -512,6 +512,7 @@ mixin _PlayerAbRepeatCoordinator
     final sheet = PlayerAbRepeatSheet(
       key: ValueKey('ab-editor-${_activeVideo.bvid}-${_currentPart.cid}'),
       inline: true,
+      floating: floating,
       bvid: _activeVideo.bvid,
       cid: _currentPart.cid,
       draftA: _abRepeatDraftA,
@@ -550,6 +551,7 @@ mixin _PlayerAbRepeatCoordinator
     if (!floating) return sheet;
     return PlayerAbRepeatDock(
       offset: _abRepeatEditorOffset,
+      hasClearAction: _abRepeatRange != null,
       onMove: (offset) {
         if (isCurrent() && _abRepeatEditorOffset != offset) {
           setState(() => _abRepeatEditorOffset = offset);
