@@ -124,7 +124,11 @@ class LearningListService {
   static const int maximumFolders = 30;
 
   /// 新建一级分组，拒绝空名称、重复名称和超出容量的分组。
-  Future<LearningListState> createFolder(String name) => _serialized(() async {
+  Future<LearningListState> createFolder(
+    String name, {
+    String iconId = LearningSubjectFolder.defaultIconId,
+    String colorId = LearningSubjectFolder.defaultColorId,
+  }) => _serialized(() async {
     final state = await _loadStateStrict();
     final normalized = _validateFolderName(name, state.folders);
     if (state.folders.length >= maximumFolders) {
@@ -139,7 +143,12 @@ class LearningListService {
       entries: state.entries,
       folders: [
         ...state.folders,
-        LearningSubjectFolder(id: id, name: normalized),
+        LearningSubjectFolder(
+          id: id,
+          name: normalized,
+          iconId: iconId,
+          colorId: colorId,
+        ),
       ],
     );
     await _writeState(updated);
@@ -147,27 +156,33 @@ class LearningListService {
   });
 
   /// 重命名仅修改分组显示名称，条目的 BV/CID、状态、进度和顺序不变。
-  Future<LearningListState> renameFolder(String id, String name) =>
-      _serialized(() async {
-        final state = await _loadStateStrict();
-        if (!state.folders.any((folder) => folder.id == id)) {
-          throw ArgumentError('学科分组已不存在，请刷新后重试');
-        }
-        final normalized = _validateFolderName(
-          name,
-          state.folders,
-          excludingId: id,
-        );
-        final updated = LearningListState(
-          entries: state.entries,
-          folders: [
-            for (final folder in state.folders)
-              folder.id == id ? folder.rename(normalized) : folder,
-          ],
-        );
-        await _writeState(updated);
-        return updated;
-      });
+  Future<LearningListState> renameFolder(
+    String id,
+    String name, {
+    String? iconId,
+    String? colorId,
+  }) => _serialized(() async {
+    final state = await _loadStateStrict();
+    if (!state.folders.any((folder) => folder.id == id)) {
+      throw ArgumentError('学科分组已不存在，请刷新后重试');
+    }
+    final normalized = _validateFolderName(
+      name,
+      state.folders,
+      excludingId: id,
+    );
+    final updated = LearningListState(
+      entries: state.entries,
+      folders: [
+        for (final folder in state.folders)
+          folder.id == id
+              ? folder.rename(normalized, iconId: iconId, colorId: colorId)
+              : folder,
+      ],
+    );
+    await _writeState(updated);
+    return updated;
+  });
 
   /// 删除分组与条目退回未分组使用同一写入；学习记录不受影响。
   Future<LearningListState> deleteFolder(String id) => _serialized(() async {

@@ -9,6 +9,7 @@ import '../../models/learning_subject_folder.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/learning_list_service.dart';
 import 'learning_video_launcher.dart';
+import 'learning_folder_appearance.dart';
 
 /// 展示并管理保存在当前设备上的学习任务，不包含账号或云端同步功能。
 class LearningListPage extends StatefulWidget {
@@ -408,26 +409,39 @@ class _LearningListPageState extends State<LearningListPage> {
   Future<void> _editFolder([LearningSubjectFolder? folder]) async {
     if (_folderBusy) return;
     var name = folder?.name ?? '';
+    var iconId = learningFolderIcon(folder?.iconId ?? '').id;
+    var colorId = learningFolderColor(folder?.colorId ?? '').id;
     String? error;
     var saving = false;
-    final result = await showDialog<LearningListState>(
+    final result = await showModalBottomSheet<LearningListState>(
       context: context,
-      builder: (dialog) => StatefulBuilder(
-        builder: (dialog, updateDialog) {
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (sheet) => StatefulBuilder(
+        builder: (sheet, updateSheet) {
           Future<void> save() async {
             if (saving) return;
-            updateDialog(() {
+            updateSheet(() {
               saving = true;
               error = null;
             });
             try {
               final result = folder == null
-                  ? await _learningListService.createFolder(name)
-                  : await _learningListService.renameFolder(folder.id, name);
-              if (dialog.mounted) Navigator.pop(dialog, result);
+                  ? await _learningListService.createFolder(
+                      name,
+                      iconId: iconId,
+                      colorId: colorId,
+                    )
+                  : await _learningListService.renameFolder(
+                      folder.id,
+                      name,
+                      iconId: iconId,
+                      colorId: colorId,
+                    );
+              if (sheet.mounted) Navigator.pop(sheet, result);
             } catch (exception) {
-              if (dialog.mounted) {
-                updateDialog(() {
+              if (sheet.mounted) {
+                updateSheet(() {
                   saving = false;
                   error = exception is ArgumentError
                       ? exception.message.toString()
@@ -437,37 +451,292 @@ class _LearningListPageState extends State<LearningListPage> {
             }
           }
 
+          Future<void> delete() async {
+            if (saving || folder == null) return;
+            updateSheet(() => saving = true);
+            final deleted = await _deleteFolder(folder);
+            if (!sheet.mounted) return;
+            if (deleted) {
+              Navigator.pop(sheet);
+            } else {
+              updateSheet(() => saving = false);
+            }
+          }
+
+          final colors = Theme.of(sheet).colorScheme;
+          final inset = MediaQuery.viewInsetsOf(sheet).bottom;
+          final maxHeight = (MediaQuery.sizeOf(sheet).height * 0.92 - inset)
+              .clamp(120.0, double.infinity);
           return PopScope(
             canPop: !saving,
-            child: AlertDialog(
-              scrollable: true,
-              title: Text(folder == null ? '新建学科分组' : '重命名学科分组'),
-              content: TextFormField(
-                key: const Key('learning-folder-name'),
-                initialValue: name,
-                autofocus: true,
-                maxLength: LearningSubjectFolder.maximumNameCharacters,
-                enabled: !saving,
-                decoration: InputDecoration(
-                  labelText: '学科名称',
-                  hintText: '例如：数学、英语',
-                  errorText: error,
-                  errorMaxLines: 3,
+            child: Padding(
+              padding: EdgeInsets.only(bottom: inset),
+              child: Center(
+                heightFactor: 1,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: 600,
+                    maxHeight: maxHeight,
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(24, 12, 12, 0),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                folder == null ? '新建分组' : '编辑分组',
+                                style: Theme.of(sheet).textTheme.titleLarge,
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: '关闭',
+                              onPressed: saving
+                                  ? null
+                                  : () => Navigator.pop(sheet),
+                              icon: const Icon(Icons.close),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Flexible(
+                        child: SingleChildScrollView(
+                          padding: const EdgeInsets.symmetric(horizontal: 24),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  LearningFolderBadge(
+                                    key: const Key('learning-folder-preview'),
+                                    iconId: iconId,
+                                    colorId: colorId,
+                                    size: 36,
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: TextFormField(
+                                      key: const Key('learning-folder-name'),
+                                      initialValue: name,
+                                      maxLength: LearningSubjectFolder
+                                          .maximumNameCharacters,
+                                      enabled: !saving,
+                                      decoration: InputDecoration(
+                                        labelText: '分组名称',
+                                        hintText: '例如：数学、英语',
+                                        counterText: '',
+                                        filled: true,
+                                        fillColor: colors.surfaceContainerLow,
+                                        border: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                          borderSide: BorderSide.none,
+                                        ),
+                                        errorText: error,
+                                        errorMaxLines: 3,
+                                      ),
+                                      onChanged: (value) => name = value,
+                                      onFieldSubmitted: (_) => save(),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                '分组图标',
+                                style: Theme.of(sheet).textTheme.titleSmall,
+                              ),
+                              const SizedBox(height: 8),
+                              LayoutBuilder(
+                                builder: (context, constraints) {
+                                  final columns = (constraints.maxWidth / 48)
+                                      .floor()
+                                      .clamp(1, 6);
+                                  return GridView.count(
+                                    crossAxisCount: columns,
+                                    shrinkWrap: true,
+                                    physics:
+                                        const NeverScrollableScrollPhysics(),
+                                    children: [
+                                      for (final item in learningFolderIcons)
+                                        Semantics(
+                                          label: item.label,
+                                          button: true,
+                                          selected: item.id == iconId,
+                                          child: Tooltip(
+                                            message: item.label,
+                                            child: InkWell(
+                                              key: Key(
+                                                'learning-folder-icon-${item.id}',
+                                              ),
+                                              borderRadius:
+                                                  BorderRadius.circular(10),
+                                              onTap: saving
+                                                  ? null
+                                                  : () => updateSheet(
+                                                      () => iconId = item.id,
+                                                    ),
+                                              child: Container(
+                                                margin: const EdgeInsets.all(3),
+                                                decoration: BoxDecoration(
+                                                  borderRadius:
+                                                      BorderRadius.circular(10),
+                                                  color: item.id == iconId
+                                                      ? colors.primaryContainer
+                                                      : colors
+                                                            .surfaceContainerLow,
+                                                  border: Border.all(
+                                                    color: item.id == iconId
+                                                        ? Theme.of(
+                                                            sheet,
+                                                          ).colorScheme.primary
+                                                        : Colors.transparent,
+                                                    width: 2,
+                                                  ),
+                                                ),
+                                                child: Center(
+                                                  child: LearningFolderGlyph(
+                                                    iconId: item.id,
+                                                    size: 22,
+                                                    color: item.id == iconId
+                                                        ? colors
+                                                              .onPrimaryContainer
+                                                        : colors
+                                                              .onSurfaceVariant,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                    ],
+                                  );
+                                },
+                              ),
+                              const SizedBox(height: 16),
+                              Text(
+                                '颜色',
+                                style: Theme.of(sheet).textTheme.titleSmall,
+                              ),
+                              const SizedBox(height: 8),
+                              Wrap(
+                                children: [
+                                  for (final item in learningFolderColors)
+                                    Semantics(
+                                      label: item.label,
+                                      button: true,
+                                      selected: item.id == colorId,
+                                      child: Tooltip(
+                                        message: item.label,
+                                        child: InkWell(
+                                          key: Key(
+                                            'learning-folder-color-${item.id}',
+                                          ),
+                                          borderRadius: BorderRadius.circular(
+                                            24,
+                                          ),
+                                          onTap: saving
+                                              ? null
+                                              : () => updateSheet(
+                                                  () => colorId = item.id,
+                                                ),
+                                          child: SizedBox.square(
+                                            dimension: 48,
+                                            child: Center(
+                                              child: Container(
+                                                width: 28,
+                                                height: 28,
+                                                decoration: BoxDecoration(
+                                                  color: item.color,
+                                                  shape: BoxShape.circle,
+                                                  border: Border.all(
+                                                    color: item.id == colorId
+                                                        ? Theme.of(sheet)
+                                                              .colorScheme
+                                                              .onSurface
+                                                        : Colors.transparent,
+                                                    width: 2,
+                                                  ),
+                                                ),
+                                                child: item.id == colorId
+                                                    ? const Icon(
+                                                        Icons.check,
+                                                        size: 17,
+                                                        color: Colors.black,
+                                                      )
+                                                    : null,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(24, 8, 24, 12),
+                        child: SafeArea(
+                          top: false,
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              final saveButton = FilledButton(
+                                key: const Key('save-learning-folder'),
+                                onPressed: saving ? null : save,
+                                child: Text(
+                                  saving
+                                      ? '保存中'
+                                      : folder == null
+                                      ? '创建分组'
+                                      : '保存',
+                                ),
+                              );
+                              if (folder == null) {
+                                return SizedBox(
+                                  width: double.infinity,
+                                  child: saveButton,
+                                );
+                              }
+                              final deleteButton = TextButton(
+                                key: const Key('delete-learning-folder'),
+                                onPressed: saving ? null : delete,
+                                style: TextButton.styleFrom(
+                                  foregroundColor: colors.error,
+                                ),
+                                child: const Text('删除分组'),
+                              );
+                              final scale =
+                                  MediaQuery.textScalerOf(context).scale(14) /
+                                  14;
+                              if (constraints.maxWidth < 180 * scale) {
+                                return Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [deleteButton, saveButton],
+                                );
+                              }
+                              return Row(
+                                children: [
+                                  deleteButton,
+                                  const SizedBox(width: 12),
+                                  Expanded(child: saveButton),
+                                ],
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-                onChanged: (value) => name = value,
-                onFieldSubmitted: (_) => save(),
               ),
-              actions: [
-                TextButton(
-                  onPressed: saving ? null : () => Navigator.pop(dialog),
-                  child: const Text('取消'),
-                ),
-                FilledButton(
-                  key: const Key('save-learning-folder'),
-                  onPressed: saving ? null : save,
-                  child: Text(saving ? '保存中' : '保存'),
-                ),
-              ],
             ),
           );
         },
@@ -476,7 +745,7 @@ class _LearningListPageState extends State<LearningListPage> {
     if (result != null && mounted) setState(() => _applyState(result));
   }
 
-  Future<void> _deleteFolder(LearningSubjectFolder folder) async {
+  Future<bool> _deleteFolder(LearningSubjectFolder folder) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialog) => AlertDialog(
@@ -496,14 +765,14 @@ class _LearningListPageState extends State<LearningListPage> {
         ],
       ),
     );
-    if (confirmed != true || !mounted || _folderBusy) return;
-    await _changeFolders(() => _learningListService.deleteFolder(folder.id));
+    if (confirmed != true || !mounted || _folderBusy) return false;
+    return _changeFolders(() => _learningListService.deleteFolder(folder.id));
   }
 
-  Future<void> _changeFolders(
+  Future<bool> _changeFolders(
     Future<LearningListState> Function() action,
   ) async {
-    if (_folderBusy) return;
+    if (_folderBusy) return false;
     setState(() => _folderBusy = true);
     try {
       final state = await action();
@@ -513,8 +782,10 @@ class _LearningListPageState extends State<LearningListPage> {
           _selected.clear();
         });
       }
+      return true;
     } catch (_) {
       _showSaveError();
+      return false;
     } finally {
       if (mounted) setState(() => _folderBusy = false);
     }
@@ -569,26 +840,6 @@ class _LearningListPageState extends State<LearningListPage> {
             onPressed: _folderBusy ? null : () => _editFolder(),
             icon: const Icon(Icons.create_new_folder_outlined),
           ),
-          if (!_allFolders && _folderId != null)
-            PopupMenuButton<String>(
-              key: const Key('manage-learning-folder'),
-              tooltip: '管理当前分组',
-              enabled: !_folderBusy,
-              onSelected: (action) {
-                final folder = _folders.firstWhere(
-                  (folder) => folder.id == _folderId,
-                );
-                if (action == 'rename') {
-                  unawaited(_editFolder(folder));
-                } else {
-                  unawaited(_deleteFolder(folder));
-                }
-              },
-              itemBuilder: (_) => const [
-                PopupMenuItem(value: 'rename', child: Text('重命名分组')),
-                PopupMenuItem(value: 'delete', child: Text('删除分组')),
-              ],
-            ),
         ],
       ),
       SingleChildScrollView(
@@ -622,22 +873,7 @@ class _LearningListPageState extends State<LearningListPage> {
                 }),
               ),
             ),
-            for (final folder in _folders)
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: ChoiceChip(
-                  key: Key('learning-folder-${folder.id}'),
-                  label: Text(
-                    '${folder.name}（${_entries.where((entry) => entry.folderId == folder.id).length}）',
-                  ),
-                  selected: !_allFolders && _folderId == folder.id,
-                  onSelected: (_) => setState(() {
-                    _allFolders = false;
-                    _folderId = folder.id;
-                    _selected.clear();
-                  }),
-                ),
-              ),
+            for (final folder in _folders) _buildFolderChip(folder),
           ],
         ),
       ),
@@ -645,6 +881,61 @@ class _LearningListPageState extends State<LearningListPage> {
       const SizedBox(height: 8),
     ],
   );
+
+  Widget _buildFolderChip(LearningSubjectFolder folder) {
+    final selected = !_allFolders && _folderId == folder.id;
+    final colors = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: Material(
+        color: selected ? colors.secondaryContainer : colors.surface,
+        shape: StadiumBorder(side: BorderSide(color: colors.outlineVariant)),
+        clipBehavior: Clip.antiAlias,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Semantics(
+              key: Key('learning-folder-${folder.id}'),
+              selected: selected,
+              button: true,
+              child: InkWell(
+                onTap: () => setState(() {
+                  _allFolders = false;
+                  _folderId = folder.id;
+                  _selected.clear();
+                }),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 48),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        LearningFolderBadge(
+                          iconId: folder.iconId,
+                          colorId: folder.colorId,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          '${folder.name}（${_entries.where((entry) => entry.folderId == folder.id).length}）',
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            IconButton(
+              key: Key('manage-learning-folder-${folder.id}'),
+              tooltip: '管理${folder.name}分组',
+              onPressed: _folderBusy ? null : () => _editFolder(folder),
+              icon: const Icon(Icons.more_vert),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   void _showSaveError() {
     if (mounted) {
@@ -756,34 +1047,54 @@ class _LearningListPageState extends State<LearningListPage> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 else
-                  PopupMenuButton<LearningListStatus>(
+                  PopupMenuButton<Object>(
                     key: Key('learning-status-${entry.stableId}'),
-                    tooltip: '修改学习状态',
-                    // 状态选择函数只改变本机清单状态，不会开始或停止播放器。
-                    onSelected: (LearningListStatus status) =>
-                        unawaited(_changeStatus(entry, status)),
-                    itemBuilder: (BuildContext context) => LearningListStatus
-                        .values
-                        .map(
-                          (LearningListStatus status) =>
-                              PopupMenuItem<LearningListStatus>(
-                                value: status,
-                                child: Row(
-                                  children: <Widget>[
-                                    Icon(
-                                      status == entry.status
-                                          ? Icons.check_circle_rounded
-                                          : Icons.circle_outlined,
-                                      color: _statusColor(context, status),
-                                      size: 18,
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Text(status.label),
-                                  ],
-                                ),
+                    tooltip: '管理学习任务',
+                    onSelected: (action) {
+                      if (action is LearningListStatus) {
+                        unawaited(_changeStatus(entry, action));
+                      } else if (action == 'move') {
+                        unawaited(_moveToFolder({entry.stableId}));
+                      } else if (action == 'remove') {
+                        unawaited(_confirmRemove(entry));
+                      }
+                    },
+                    itemBuilder: (BuildContext context) => [
+                      for (final status in LearningListStatus.values)
+                        PopupMenuItem<Object>(
+                          value: status,
+                          child: Row(
+                            children: <Widget>[
+                              Icon(
+                                status == entry.status
+                                    ? Icons.check_circle_rounded
+                                    : Icons.circle_outlined,
+                                color: _statusColor(context, status),
+                                size: 18,
                               ),
-                        )
-                        .toList(growable: false),
+                              const SizedBox(width: 8),
+                              Text(status.label),
+                            ],
+                          ),
+                        ),
+                      const PopupMenuDivider(),
+                      PopupMenuItem<Object>(
+                        key: Key('move-learning-${entry.stableId}'),
+                        value: 'move',
+                        enabled:
+                            !_folderBusy &&
+                            !opening &&
+                            !updating &&
+                            !_reordering,
+                        child: const Text('移动到学科分组'),
+                      ),
+                      PopupMenuItem<Object>(
+                        key: Key('remove-learning-${entry.stableId}'),
+                        value: 'remove',
+                        enabled: !opening && !updating && !_reordering,
+                        child: const Text('移出学习清单'),
+                      ),
+                    ],
                   ),
                 if (reorderIndex != null) ...<Widget>[
                   const SizedBox(width: 2),
@@ -883,26 +1194,8 @@ class _LearningListPageState extends State<LearningListPage> {
                           ),
                     label: Text(completed ? '已完成' : '继续学习'),
                   ),
-                  IconButton(
-                    key: Key('move-learning-${entry.stableId}'),
-                    onPressed: _folderBusy || opening || updating || _reordering
-                        ? null
-                        : () => _moveToFolder({entry.stableId}),
-                    icon: const Icon(Icons.drive_file_move_outline),
-                    tooltip: '移动到学科分组',
-                  ),
-                  IconButton(
-                    key: Key('remove-learning-${entry.stableId}'),
-                    // 移除按钮函数先要求确认，观看记录、笔记和其他分 P 都不会被删除。
-                    onPressed: opening || updating || _reordering
-                        ? null
-                        : () => unawaited(_confirmRemove(entry)),
-                    icon: const Icon(Icons.delete_outline_rounded),
-                    tooltip: '移出学习清单',
-                  ),
                 ];
-                // Keep the status and all actions reachable when a longer
-                // button label no longer fits beside the two icon targets.
+                // Keep the status and continue button reachable at narrow widths.
                 final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
                 if (constraints.maxWidth < 110 + 151 * scale) {
                   return Column(
@@ -926,6 +1219,94 @@ class _LearningListPageState extends State<LearningListPage> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildBulkActions() {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final background = Color.alphaBlend(
+      Colors.black.withValues(
+        alpha: theme.brightness == Brightness.dark ? 0.75 : 0.10,
+      ),
+      colors.surface,
+    );
+    final actions = <Widget>[
+      TextButton(
+        onPressed: () => setState(() {
+          _selected.addAll(
+            [..._activeEntries, ..._completedEntries].map((e) => e.stableId),
+          );
+        }),
+        child: const Text('选择当前结果'),
+      ),
+      TextButton(
+        onPressed: _selected.isEmpty ? null : _removeSelected,
+        child: Text('移除所选（${_selected.length}）'),
+      ),
+      TextButton(
+        key: const Key('move-selected-learning'),
+        onPressed: _selected.isEmpty || _folderBusy
+            ? null
+            : () => _moveToFolder(Set.of(_selected)),
+        child: const Text('移动所选'),
+      ),
+      for (final status in LearningListStatus.values)
+        TextButton(
+          onPressed: _selected.isEmpty ? null : () => _changeSelected(status),
+          child: Text('标为${status.label}'),
+        ),
+    ];
+    return Container(
+      key: const Key('learning-bulk-actions'),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
+          final columns = (constraints.maxWidth / (100 * scale)).floor().clamp(
+            1,
+            3,
+          );
+          return TextButtonTheme(
+            data: TextButtonThemeData(
+              style: TextButton.styleFrom(
+                foregroundColor: colors.onSurface,
+                disabledForegroundColor: colors.onSurface.withValues(
+                  alpha: 0.55,
+                ),
+                minimumSize: const Size(0, 48),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+              ),
+            ),
+            child: Column(
+              children: [
+                for (var row = 0; row * columns < actions.length; row++)
+                  Row(
+                    children: [
+                      for (var column = 0; column < columns; column++)
+                        Expanded(
+                          child: Align(
+                            alignment: column == 0
+                                ? Alignment.centerLeft
+                                : column == columns - 1
+                                ? Alignment.centerRight
+                                : Alignment.center,
+                            child: row * columns + column < actions.length
+                                ? actions[row * columns + column]
+                                : null,
+                          ),
+                        ),
+                    ],
+                  ),
+              ],
+            ),
+          );
+        },
       ),
     );
   }
@@ -956,41 +1337,7 @@ class _LearningListPageState extends State<LearningListPage> {
                 ),
             ],
           ),
-          if (_selecting)
-            Wrap(
-              spacing: 8,
-              children: [
-                TextButton(
-                  onPressed: () => setState(() {
-                    _selected.addAll(
-                      [
-                        ..._activeEntries,
-                        ..._completedEntries,
-                      ].map((e) => e.stableId),
-                    );
-                  }),
-                  child: const Text('选择当前结果'),
-                ),
-                TextButton(
-                  onPressed: _selected.isEmpty ? null : _removeSelected,
-                  child: Text('移除所选（${_selected.length}）'),
-                ),
-                TextButton(
-                  key: const Key('move-selected-learning'),
-                  onPressed: _selected.isEmpty || _folderBusy
-                      ? null
-                      : () => _moveToFolder(Set.of(_selected)),
-                  child: const Text('移动所选'),
-                ),
-                for (final status in LearningListStatus.values)
-                  TextButton(
-                    onPressed: _selected.isEmpty
-                        ? null
-                        : () => _changeSelected(status),
-                    child: Text('标为${status.label}'),
-                  ),
-              ],
-            ),
+          if (_selecting) _buildBulkActions(),
           Row(
             children: [
               Expanded(
