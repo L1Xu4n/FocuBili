@@ -66,12 +66,12 @@ class _OfflineVideosPageState extends State<OfflineVideosPage>
     super.initState();
     _offlineVideoService = widget.offlineVideoService ?? OfflineVideoService();
     _queue = widget.downloadQueue ?? OfflineDownloadQueue.instance;
-    _courses = _queue.courses;
     final platform = AppPlatformDetector.current;
     _includeCourses =
         widget.includeCourses ??
         (platform == AppPlatform.android || platform == AppPlatform.windows);
     if (_includeCourses) {
+      _courses = _queue.courses;
       WidgetsBinding.instance.addObserver(this);
       CacheLifecycle.account.addListener(_courseAccountChanged);
       _courses.addListener(_courseChanged);
