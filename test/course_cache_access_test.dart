@@ -13,9 +13,10 @@ const _nav = '/x/web-interface/nav';
 const _paid = '/pugv/pay/web/my/paid';
 const _season = '/pugv/view/web/season';
 const _list = '/pugv/view/web/ep/list';
-const _media = '/pugv/player/web/playurl';
+const _media = '/ogv/player/playview';
 const _cookie = 'SESSDATA=synthetic-session-header; DedeUserID=51';
 const _backupCookie = 'SESSDATA=new-synthetic-session-header; DedeUserID=51';
+const _bvid = 'BV1xx411c7Xr';
 final _now = DateTime.utc(2026, 11, 18, 12);
 int _seconds(DateTime time) => time.millisecondsSinceEpoch ~/ 1000;
 
@@ -66,6 +67,7 @@ class _Fixture {
     response = {
       'is_preview': 0,
       'is_drm': 0,
+      'allow_download': true,
       'season_id': 145,
       'ep_id': 168,
       'cid': 243,
@@ -93,13 +95,24 @@ class _Fixture {
     };
   }
 
-  Map<String, Object?> identity = {'isLogin': true, 'mid': 51};
+  Map<String, Object?> identity = {
+    'isLogin': true,
+    'mid': 51,
+    'wbi_img': {
+      'img_url':
+          'https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png',
+      'sub_url':
+          'https://i0.hdslb.com/bfs/wbi/4932caff0ff746eab6f01bf08b70ac45.png',
+    },
+  };
   String cookie = _cookie;
   DateTime now = _now;
   late List<Map<String, Object?>> purchases;
   late Map<String, Object?> accountStatus;
   late Map<String, Object?> meta;
   late Map<String, Object?> response;
+  Map<String, Object?> playviewFields = {};
+  int playviewCode = 0;
   Map<String, Object?>? episodesPage;
   final requests = <Uri>[];
   String? hang;
@@ -121,12 +134,19 @@ class _Fixture {
       _nav => identity,
       _paid => {'total': purchases.length, 'data': purchases},
       _season => meta,
-      _media => response,
+      _media => playview,
       _list => episodesPage!,
       _ => throw StateError('unexpected endpoint'),
     };
-    return _body(data);
+    return uri.path == _media
+        ? jsonEncode({'code': playviewCode, 'data': data})
+        : _body(data);
   }
+
+  Map<String, Object?> get playview => {
+    'video_info': response,
+    ...playviewFields,
+  };
 
   Map<String, Object?> get videoTrack =>
       ((response['dash'] as Map)['video'] as List).single
@@ -185,7 +205,7 @@ void main() {
   });
 
   test(
-    'binds exact DASH tracks; individual signed URL deadlines constrain only requests',
+    'signed PUGV playview selects exact DASH tracks without conflating URL and receipt deadlines',
     () async {
       final service = fixture.service();
       final grant = await service.authorize(_video, _part, 64);
@@ -198,12 +218,21 @@ void main() {
       expect(fixture.requests[2].queryParameters, {'ep_id': '168'});
       expect(fixture.requests.last.queryParameters, {
         'avid': '297',
+        'bvid': _bvid,
         'ep_id': '168',
+        'season_id': '145',
         'cid': '243',
         'qn': '64',
         'fnver': '0',
-        'fnval': '16',
+        'fnval': '4048',
         'fourk': '1',
+        'biz_type': 'pugv',
+        'scene': 'normal',
+        'from_client': 'BROWSER',
+        'app_id': '100',
+        'wts': '1795003200',
+        // Computed independently from the fixed public signing inputs.
+        'w_rid': '3203b50a360daf904c1457f82f4e4a62',
       });
       expect(grant.mid, 51);
       expect(grant.checkedAt, _now);
@@ -228,6 +257,107 @@ void main() {
       await expectLater(grant.checkSession(), _rejected);
       fixture.now = _now.subtract(const Duration(seconds: 1));
       await expectLater(grant.checkSession(), _rejected);
+    },
+  );
+
+  test(
+    'OGV arc and exact episode supply clear and offline-authorized facts',
+    () async {
+      fixture.response
+        ..remove('is_drm')
+        ..remove('allow_download');
+      fixture.meta['episodes'] = [
+        {..._lesson(), 'offline_allowed': true},
+      ];
+      fixture.playviewFields['arc'] = {
+        'aid': 297,
+        'cid': 243,
+        'bvid': _bvid,
+        'is_drm': false,
+      };
+      final grant = await fixture.service().authorize(_video, _part, 64);
+      expect(grant.mid, 51);
+      expect(grant.media.video.urls, [fixture.videoTrack['baseUrl']]);
+      expect(grant.media.audio?.urls, hasLength(2));
+    },
+  );
+
+  test(
+    'successful online playback is not positive offline authorization',
+    () async {
+      fixture.response
+        ..remove('allow_download')
+        ..['paid_access'] = true;
+      fixture.playviewFields['watch_progress'] = {'allow_download': true};
+      await expectLater(
+        fixture.service().authorize(_video, _part, 64),
+        throwsA(
+          isA<CourseCacheAccessException>().having(
+            (e) => e.diagnosticCode,
+            'diagnostic code',
+            'course-cache/v1/playback/offlinePermissionUnknown',
+          ),
+        ),
+      );
+      expect(fixture.requests.map((u) => u.path), [
+        _nav,
+        _paid,
+        _season,
+        _media,
+      ]);
+    },
+  );
+
+  for (final reason in <String, void Function(_Fixture)>{
+    'DRM on outer arc even with a clear rendition': (f) =>
+        f.playviewFields['arc'] = {'is_drm': true},
+    'DRM fallback trigger without video information': (f) => f.playviewFields
+      ..['arc'] = {'is_drm': true}
+      ..remove('video_info')
+      ..['video_info'] = null,
+    'explicit not playable reason with a usable-looking rendition': (f) =>
+        f.playviewFields['not_playable_reason'] = {
+          'code': -403,
+          'message': 'denied',
+        },
+    'preview on outer result despite inner full marker': (f) =>
+        f.playviewFields['is_preview'] = true,
+    'outer offline denial despite inner grant': (f) =>
+        f.playviewFields['allow_download'] = false,
+    'unrelated chapter identities': (f) =>
+        f.playviewFields['arc'] = {'cid': 244, 'is_drm': false},
+    'legacy flat response': (f) => f.playviewFields
+      ..addAll(f.response)
+      ..['video_info'] = null,
+    'provider API refusal': (f) => f.playviewCode = -403,
+  }.entries) {
+    test(
+      'rejects ${reason.key} without making a second media request',
+      () async {
+        reason.value(fixture);
+        await expectLater(
+          fixture.service().authorize(_video, _part, 64),
+          _rejected,
+        );
+        expect(fixture.requests.map((u) => u.path), [
+          _nav,
+          _paid,
+          _season,
+          _media,
+        ]);
+      },
+    );
+  }
+
+  test(
+    'absent WBI material never falls back to an unsigned media request',
+    () async {
+      fixture.identity.remove('wbi_img');
+      await expectLater(
+        fixture.service().authorize(_video, _part, 64),
+        _rejected,
+      );
+      expect(fixture.requests.map((u) => u.path), [_nav, _paid, _season]);
     },
   );
 
@@ -450,11 +580,11 @@ void main() {
   test(
     'an expired backup signing token cannot shorten valid media or block other URLs',
     () async {
-      fixture.videoTrack['backupUrl'] = [
-        _url('expired.m4s', const Duration(hours: -1)),
-      ];
+      final expired = _url('expired.m4s', const Duration(hours: -1));
+      fixture.videoTrack['backupUrl'] = [expired];
       final grant = await fixture.service().authorize(_video, _part, 64);
       expect(grant.validUntil, _now.add(const Duration(hours: 8)));
+      expect(grant.media.video.urls, [fixture.videoTrack['baseUrl']]);
       expect(
         () => grant.checkTransport!(
           Uri.parse(grant.media.video.urls.first),
@@ -462,10 +592,55 @@ void main() {
         ),
         returnsNormally,
       );
+      expect(() => grant.checkTransport!(Uri.parse(expired), _now), _rejected);
+    },
+  );
+
+  test(
+    'malformed backup cannot reject an otherwise authorized video track',
+    () async {
+      const malformed = 'https://cdn.bilivideo.com/malformed.m4s?upsig=opaque';
+      final fresh = _url('fresh.m4s', const Duration(hours: 5));
+      fixture.response['allow_download'] = true;
+      fixture.videoTrack['backupUrl'] = [malformed, fresh];
+      final grant = await fixture.service().authorize(_video, _part, 64);
+      expect(grant.media.video.urls, [fixture.videoTrack['baseUrl'], fresh]);
+      expect(grant.validUntil, _now.add(const Duration(hours: 8)));
       expect(
-        () =>
-            grant.checkTransport!(Uri.parse(grant.media.video.urls.last), _now),
+        () => grant.checkTransport!(Uri.parse(malformed), _now),
         _rejected,
+      );
+      expect(fixture.requests.map((uri) => uri.path), [
+        _nav,
+        _paid,
+        _season,
+        _media,
+      ]);
+    },
+  );
+
+  test(
+    'ignores a malformed primary only if a valid same-track backup exists',
+    () async {
+      final fresh = _url('fresh.m4s', const Duration(hours: 5));
+      fixture.videoTrack
+        ..['baseUrl'] =
+            'https://cdn.bilivideo.com/v.m4s?deadline=1795017600&deadline=broken'
+        ..['backupUrl'] = [fresh];
+      fixture.response['allow_download'] = true;
+      final grant = await fixture.service().authorize(_video, _part, 64);
+      expect(grant.media.video.urls, [fresh]);
+      expect(grant.validUntil, _now.add(const Duration(hours: 8)));
+      fixture.response['allow_download'] = false;
+      await expectLater(
+        fixture.service().authorize(_video, _part, 64),
+        throwsA(
+          isA<CourseCacheAccessException>().having(
+            (error) => error.diagnosticCode,
+            'diagnostic code',
+            'course-cache/v1/playback/restrictionReported',
+          ),
+        ),
       );
     },
   );
@@ -684,7 +859,7 @@ void main() {
       final result = fixture.service().authorize(_video, _part, 64);
       await fixture.started.future;
       CacheLifecycle.accountChanged();
-      fixture.pending!.complete(_body(fixture.response));
+      fixture.pending!.complete(_body(fixture.playview));
       await expectLater(result, _rejected);
     },
   );
@@ -816,7 +991,7 @@ void main() {
     fixture.pending!.complete(
       jsonEncode({
         'code': 0,
-        'data': fixture.response,
+        'data': fixture.playview,
         'envelope': {'show_watermark': true},
       }),
     );

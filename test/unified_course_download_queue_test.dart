@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:focubili/models/offline_download_task.dart';
 import 'package:focubili/services/cache_lifecycle.dart';
+import 'package:focubili/services/course_cache_access.dart';
 import 'package:focubili/services/course_cache_library.dart';
 import 'package:focubili/services/offline_download_queue.dart';
 import 'package:focubili/services/offline_media_plan.dart';
@@ -127,19 +128,37 @@ void main() {
   test(
     'explicitly denied course fails without network media; retry re-authorizes',
     () async {
-      access.denied = true;
+      access.failure = const CourseCacheAccessException(
+        '无法验证购买。',
+        stage: CourseCacheStage.purchase,
+        reason: CourseCacheReason.entitlementNotConfirmed,
+      );
       final lesson = await queue.enqueue(video, part: part, quality: 64);
       await _waitFor(
         () => queue.tasks.single.status == DownloadTaskStatus.failed,
       );
       expect(queue.tasks.single.error, '无法验证购买。');
+      const code = 'course-cache/v1/purchase/entitlementNotConfirmed';
+      expect(queue.tasks.single.courseDiagnostic?.code, code);
       expect(transfer.starts, isEmpty);
-      access.denied = false;
+      await queue.close();
+      access.mid = 99;
+      queue = OfflineDownloadQueue(library: ordinary, courseLibrary: courses);
+      await queue.initialize();
+      expect(queue.tasks, isEmpty);
+      access.mid = 51;
+      CacheLifecycle.accountChanged();
+      await _waitFor(
+        () => queue.tasks.singleOrNull?.status == DownloadTaskStatus.failed,
+      );
+      expect(queue.tasks.single.courseDiagnostic?.code, code);
+      access.failure = null;
       await queue.resume(lesson.id);
       await _waitFor(
         () => queue.tasks.single.status == DownloadTaskStatus.completed,
       );
       expect(queue.tasks.single.error, isNull);
+      expect(queue.tasks.single.courseDiagnostic, isNull);
       expect(access.calls, 2);
     },
   );

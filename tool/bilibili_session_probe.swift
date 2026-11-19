@@ -68,6 +68,11 @@ private final class MemoryCookies: BilibiliCookieContainer {
         precondition(policy.paths.contains(detailPath))
         precondition(policy.snapshot([cookie("SESSDATA", "synthetic-detail", path: "/x/web-interface")], path: detailPath).header == "SESSDATA=synthetic-detail")
         precondition(policy.snapshot([cookie("buvid3", "synthetic-wrong-path", path: "/x/player")], path: detailPath).header.isEmpty)
+        let coursePlayviewPath = "/ogv/player/playview"
+        let courseSession = cookie("SESSDATA", "synthetic-course", path: "/ogv/player")
+        precondition(policy.snapshot([courseSession], path: coursePlayviewPath).header == "SESSDATA=synthetic-course")
+        precondition(policy.snapshot([courseSession], path: "/ogv/player/other").state == "unknown")
+        precondition(policy.snapshot([courseSession], path: path).header.isEmpty)
         let root = cookie("SESSDATA", "synthetic-one")
         precondition(policy.snapshot([root, cookie("outside", "synthetic", domain: ".evil.invalid")], path: path).header == "SESSDATA=synthetic-one")
         precondition(policy.snapshot([root, cookie("buvid3", "synthetic", domain: "www.bilibili.com")], path: path).header == "SESSDATA=synthetic-one", "Host-only cookie leaked across hosts")
