@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/layout/adaptive_page_frame.dart';
 import '../../core/layout/adaptive_two_column_list.dart';
@@ -11,6 +12,7 @@ import '../../services/app_favorites_file_service.dart';
 import '../../services/app_favorites_service.dart';
 import '../../services/bilibili_account_data_service.dart';
 import '../../services/bilibili_service.dart';
+import 'app_favorite_backup_dialogs.dart';
 import 'app_favorite_detail_page.dart';
 import 'app_favorite_import_page.dart';
 import 'favorite_folder_card.dart';
@@ -19,8 +21,8 @@ import 'app_favorite_video_tile.dart';
 /// 保存收藏夹管理菜单的两个明确动作。
 enum _FolderMenuAction { export, rename, delete }
 
-/// 区分本地备份的两个文件操作，避免与 B 站在线导入混淆。
-enum _BackupMenuAction { importFile, exportAll }
+/// 区分本地备份的两个动作，避免与 B 站在线导入混淆。
+enum _BackupMenuAction { importBackup, exportAll }
 
 /// 展示本机软件收藏夹列表，支持新建、重命名、删除和进入详情。
 class AppFavoriteFoldersPage extends StatefulWidget {
@@ -123,19 +125,26 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
   }
 
   /// 选择并预览本地备份，确认后合并；取消选择或关闭预览不会写入收藏。
-  Future<void> _importFile() async {
+  Future<void> _importBackup() async {
     if (_transferring) return;
     setState(() => _transferring = true);
     try {
-      final backup = await widget.fileService.pickBackup();
-      if (backup == null || !mounted) return;
+      final method = await chooseFavoriteBackupMethod(context, importing: true);
+      if (!mounted || method == null || !_onPage) return;
+      final backup = method == FavoriteBackupMethod.file
+          ? await widget.fileService.pickBackup()
+          : await showDialog<AppFavoritesBackup>(
+              context: context,
+              builder: (_) => const FavoriteBackupTextDialog(),
+            );
+      if (!mounted || backup == null || !_onPage) return;
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => AlertDialog(
           title: const Text('导入软件收藏夹'),
           content: SingleChildScrollView(
             child: Text(
-              '文件包含 ${backup.folders.length} 个收藏夹、${backup.itemCount} 条收藏。\n\n'
+              '备份包含 ${backup.folders.length} 个收藏夹、${backup.itemCount} 条收藏。\n\n'
               '相同标识或同名收藏夹将合并，同一收藏夹内重复视频会跳过，保留已有收藏。',
             ),
           ),
@@ -152,7 +161,7 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
           ],
         ),
       );
-      if (confirmed != true || !mounted) return;
+      if (confirmed != true || !_onPage) return;
       final result = await _favoritesService.importBackup(backup);
       if (!mounted) return;
       await _loadFolders();
@@ -169,22 +178,44 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
         if (mounted) _showMessage(error.message.toString());
       }
     } catch (_) {
-      if (mounted) _showMessage('收藏夹导入失败，请检查文件和存储后重试。');
+      if (mounted) _showMessage('收藏夹导入失败，请检查备份和本机存储后重试。');
     } finally {
       if (mounted) setState(() => _transferring = false);
     }
   }
 
+  bool get _onPage => mounted && ModalRoute.of(context)?.isCurrent != false;
+
   /// 导出全部或一个完整收藏夹，忽略搜索筛选；取消保存不会显示成功提示。
-  Future<void> _exportFile({String? folderId}) async {
+  Future<void> _exportBackup({String? folderId}) async {
     if (_transferring) return;
     setState(() => _transferring = true);
     try {
+      final method = await chooseFavoriteBackupMethod(
+        context,
+        importing: false,
+      );
+      if (!mounted || method == null || !_onPage) return;
       final AppFavoritesBackup backup = await _favoritesService.exportBackup(
         folderId: folderId,
       );
+      if (!_onPage) return;
+      if (method == FavoriteBackupMethod.text) {
+        try {
+          await Clipboard.setData(ClipboardData(text: backup.toText()));
+        } on PlatformException {
+          if (_onPage) _showMessage('无法写入剪贴板，请重试或选择导出文件。');
+          return;
+        }
+        if (_onPage) {
+          _showMessage(
+            '已复制到剪贴板：${backup.folders.length} 个收藏夹、${backup.itemCount} 条收藏。',
+          );
+        }
+        return;
+      }
       final saved = await widget.fileService.saveBackup(backup);
-      if (saved && mounted) {
+      if (saved && _onPage) {
         _showMessage(
           '已导出 ${backup.folders.length} 个收藏夹、${backup.itemCount} 条收藏。',
         );
@@ -478,24 +509,24 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
     label: const Text('从 B 站导入'),
   );
 
-  /// 在手机工具区和桌面顶栏提供一致的本地文件入口。
+  /// 在手机工具区和桌面顶栏提供一致的本机备份入口。
   Widget _buildBackupAction() => PopupMenuButton<_BackupMenuAction>(
     key: const Key('app-favorites-backup-menu'),
     tooltip: '导入 / 导出',
     enabled: !_transferring && !_isLoading,
     onSelected: (action) {
       switch (action) {
-        case _BackupMenuAction.importFile:
-          unawaited(_importFile());
+        case _BackupMenuAction.importBackup:
+          unawaited(_importBackup());
         case _BackupMenuAction.exportAll:
-          unawaited(_exportFile());
+          unawaited(_exportBackup());
       }
     },
     itemBuilder: (context) => const [
       PopupMenuItem(
-        key: Key('import-app-favorites-file'),
-        value: _BackupMenuAction.importFile,
-        child: Text('从文件导入'),
+        key: Key('import-app-favorites-backup'),
+        value: _BackupMenuAction.importBackup,
+        child: Text('导入收藏夹'),
       ),
       PopupMenuItem(
         key: Key('export-all-app-favorites'),
@@ -519,7 +550,7 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
         onSelected: (action) {
           switch (action) {
             case _FolderMenuAction.export:
-              unawaited(_exportFile(folderId: folder.id));
+              unawaited(_exportBackup(folderId: folder.id));
             case _FolderMenuAction.rename:
               unawaited(_renameFolder(folder));
             case _FolderMenuAction.delete:

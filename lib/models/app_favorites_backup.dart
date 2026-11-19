@@ -33,46 +33,71 @@ class AppFavoritesBackup {
   String get fileName =>
       'FocuBili-favorites-${exportedAt.toUtc().microsecondsSinceEpoch}.json';
 
-  /// 序列化为 UTF-8 JSON，并保证导出的文件可以被同一版本完整回导。
-  Uint8List toBytes() {
-    final bytes = Uint8List.fromList(
-      utf8.encode(
-        const JsonEncoder.withIndent('  ').convert({
-          'format': format,
-          'version': version,
-          'exportedAt': exportedAt.toUtc().toIso8601String(),
-          'folders': [
-            for (final folder in folders)
-              {
-                ...folder.toJson(),
-                'createdAt': folder.createdAt.toUtc().toIso8601String(),
-                'updatedAt': folder.updatedAt.toUtc().toIso8601String(),
-                'items': [
-                  for (final item in items[folder.id]!)
-                    {
-                      ...item.toJson(),
-                      'addedAt': item.addedAt.toUtc().toIso8601String(),
-                    },
-                ],
-              },
-          ],
-        }),
-      ),
-    );
-    fromBytes(bytes);
-    return bytes;
+  /// 文件与剪贴板共用同一份通过回导校验的 JSON。
+  Uint8List toBytes() => utf8.encode(toText());
+
+  String toText() {
+    final text = const JsonEncoder.withIndent('  ').convert({
+      'format': format,
+      'version': version,
+      'exportedAt': exportedAt.toUtc().toIso8601String(),
+      'folders': [
+        for (final folder in folders)
+          {
+            ...folder.toJson(),
+            'createdAt': folder.createdAt.toUtc().toIso8601String(),
+            'updatedAt': folder.updatedAt.toUtc().toIso8601String(),
+            'items': [
+              for (final item in items[folder.id]!)
+                {
+                  ...item.toJson(),
+                  'addedAt': item.addedAt.toUtc().toIso8601String(),
+                },
+            ],
+          },
+      ],
+    });
+    fromText(text);
+    return text;
+  }
+
+  static const _tooLarge = '收藏夹备份超过 20 MB，请分收藏夹导出后导入。';
+  static const _damaged = '收藏夹备份损坏或字段不完整，未导入任何内容。';
+
+  /// 接近上限时按实际 UTF-8 字节计数，不为过大的剪贴板再分配一份字节数组。
+  static void checkTextSize(String text) {
+    if (text.length <= maxBytes ~/ 3) return;
+    var size = text.length;
+    if (size > maxBytes) throw const FormatException(_tooLarge);
+    for (final rune in text.runes) {
+      // UTF-16 长度已包含每个码元的首字节；四字节字符占两个码元。
+      size += rune < 0x80 ? 0 : (rune < 0x800 ? 1 : 2);
+      if (size > maxBytes) throw const FormatException(_tooLarge);
+    }
+  }
+
+  static AppFavoritesBackup fromText(String text) {
+    checkTextSize(text);
+    return _parse(text);
   }
 
   /// 完整校验后才返回备份，拒绝不支持的版本、损坏字段和错误目录引用。
   static AppFavoritesBackup fromBytes(List<int> bytes) {
-    if (bytes.length > maxBytes) {
-      throw const FormatException('收藏夹文件超过 20 MB，请分收藏夹导出后导入。');
-    }
+    if (bytes.length > maxBytes) throw const FormatException(_tooLarge);
+    final String text;
     try {
-      final text = utf8.decode(bytes).replaceFirst(RegExp(r'^\uFEFF'), '');
-      final root = jsonDecode(text);
+      text = utf8.decode(bytes);
+    } on FormatException {
+      throw const FormatException(_damaged);
+    }
+    return _parse(text);
+  }
+
+  static AppFavoritesBackup _parse(String text) {
+    try {
+      final root = jsonDecode(text.replaceFirst(RegExp(r'^\uFEFF'), ''));
       if (root is! Map || root['format'] != format) {
-        throw const FormatException('请选择焦点哔哩导出的软件收藏夹 JSON 文件。');
+        throw const FormatException('请选择焦点哔哩导出的软件收藏夹 JSON 备份。');
       }
       if (root['version'] != version) {
         throw const FormatException('不支持这个收藏夹备份版本，请升级焦点哔哩后重试。');
@@ -134,9 +159,9 @@ class AppFavoritesBackup {
       if (error.message.startsWith('请选择') || error.message.startsWith('不支持')) {
         rethrow;
       }
-      throw const FormatException('收藏夹文件损坏或字段不完整，未导入任何内容。');
+      throw const FormatException(_damaged);
     } catch (_) {
-      throw const FormatException('收藏夹文件损坏或字段不完整，未导入任何内容。');
+      throw const FormatException(_damaged);
     }
   }
 

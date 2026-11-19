@@ -111,6 +111,30 @@ class RecordingFilePicker extends FilePickerPlatform {
 }
 
 void main() {
+  test('文本为原 UTF-8 文件 JSON，兼容 BOM 并以字节而非字符计算上限', () {
+    final backup = sample();
+    final text = backup.toText();
+    expect(utf8.encode(text), backup.toBytes());
+    expect(
+      AppFavoritesBackup.fromText('\uFEFF$text').itemCount,
+      backup.itemCount,
+    );
+    final size = AppFavoritesBackup.maxBytes;
+    // 各字符恰好占 1/2/3/4 字节，混合 UTF-16 代理对也按实际字节限制。
+    final exact = '😀' * (size ~/ 4 - 2) + '界' + 'é' + 'abc';
+    expect(() => AppFavoritesBackup.checkTextSize(exact), returnsNormally);
+    expect(
+      () => AppFavoritesBackup.fromText('$exact界'),
+      throwsA(
+        isA<FormatException>().having(
+          (e) => e.message,
+          'message',
+          contains('20 MB'),
+        ),
+      ),
+    );
+  });
+
   test('备份将本地时间统一导出为 UTC 并保留原始时刻', () {
     final local = DateTime(2026, 9, 1, 12, 30, 15, 123, 456);
     final updated = local.add(const Duration(hours: 2));
