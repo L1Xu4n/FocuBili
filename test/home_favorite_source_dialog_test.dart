@@ -112,6 +112,18 @@ void main() {
           ),
         );
         expect(rect.width, lessThanOrEqualTo(480));
+        final button = t.widget<FilledButton>(
+          find.descendant(of: option.$1, matching: find.byType(FilledButton)),
+        );
+        expect(button.style?.side?.resolve({}), BorderSide.none);
+        expect(
+          button.style?.backgroundColor?.resolve({}),
+          isNot(Colors.transparent),
+        );
+        expect(
+          button.style?.side?.resolve({WidgetState.focused}),
+          BorderSide.none,
+        );
         expect(
           find.descendant(of: option.$1, matching: find.byIcon(option.$3)),
           findsOneWidget,
@@ -180,7 +192,7 @@ void main() {
       await t.pumpAndSettle();
       final button = find.descendant(
         of: _remote,
-        matching: find.byType(OutlinedButton),
+        matching: find.byType(FilledButton),
       );
       focused =
           t.getSemantics(button).getSemanticsData().flagsCollection.isFocused ==

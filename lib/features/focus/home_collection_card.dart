@@ -1091,22 +1091,28 @@ class _HomeChoiceEditorState extends State<_HomeChoiceEditor> {
   );
 
   Widget _mode(bool custom, String label, IconData icon) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final selected = _custom == custom;
+    final foreground = selected ? colors.onPrimaryContainer : colors.onSurface;
     final compact =
         MediaQuery.sizeOf(context).width < 400 &&
         MediaQuery.textScalerOf(context).scale(17) >= 27;
     return ConstrainedBox(
       constraints: const BoxConstraints(minHeight: 112),
-      child: OutlinedButton(
+      child: FilledButton(
         key: ValueKey(custom ? 'home-mode-custom' : 'home-mode-overview'),
-        style: OutlinedButton.styleFrom(
+        style: FilledButton.styleFrom(
           padding: EdgeInsets.symmetric(
             vertical: 20,
             horizontal: compact ? 12 : 20,
           ),
           alignment: Alignment.centerLeft,
-          backgroundColor: _custom == custom
-              ? Theme.of(context).colorScheme.secondaryContainer
-              : null,
+          side: BorderSide.none,
+          backgroundColor: selected
+              ? colors.primaryContainer
+              : colors.surfaceContainerHigh,
+          foregroundColor: foreground,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
           ),
@@ -1117,31 +1123,57 @@ class _HomeChoiceEditorState extends State<_HomeChoiceEditor> {
                 _custom = false;
               }),
         child: Semantics(
-          selected: _custom == custom,
+          selected: selected,
           child: Row(
             children: [
-              Icon(icon),
+              Container(
+                width: compact ? 32 : 44,
+                height: compact ? 32 : 44,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: selected
+                      ? colors.primary
+                      : colors.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  icon,
+                  size: compact ? 20 : 24,
+                  color: selected ? colors.onPrimary : colors.onSurfaceVariant,
+                ),
+              ),
               SizedBox(width: compact ? 12 : 16),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(label, style: const TextStyle(fontSize: 17)),
-                    if (_custom == custom)
-                      const Padding(
-                        padding: EdgeInsets.only(top: 8),
-                        child: Text('当前方式'),
+                    Text(
+                      label,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        color: foreground,
+                        fontWeight: FontWeight.w600,
                       ),
+                    ),
+                    if (!compact) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        custom ? '挑选要放在首页的内容' : '首页只保留总入口',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: selected
+                              ? foreground
+                              : colors.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
-              if (!compact) ...[
+              if (selected || (!compact && custom)) ...[
                 const SizedBox(width: 8),
                 Icon(
-                  custom
-                      ? Icons.chevron_right
-                      : (_custom == custom ? Icons.check : null),
+                  selected ? Icons.check_rounded : Icons.chevron_right_rounded,
+                  size: compact ? 18 : 22,
                 ),
               ],
             ],
