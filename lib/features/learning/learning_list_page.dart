@@ -602,49 +602,7 @@ class _LearningListPageState extends State<LearningListPage> {
                 }),
               ),
             ),
-            for (final folder in _folders)
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: ChoiceChip(
-                  key: Key('learning-folder-${folder.id}'),
-                  label: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        '${folder.name}（${_entries.where((entry) => entry.folderId == folder.id).length}）',
-                      ),
-                      PopupMenuButton<String>(
-                        key: Key('manage-learning-folder-${folder.id}'),
-                        tooltip: '管理${folder.name}分组',
-                        enabled: !_folderBusy,
-                        padding: EdgeInsets.zero,
-                        child: const SizedBox(
-                          width: 40,
-                          height: 40,
-                          child: Icon(Icons.more_vert, size: 20),
-                        ),
-                        onSelected: (action) {
-                          if (action == 'rename') {
-                            unawaited(_editFolder(folder));
-                          } else if (action == 'delete') {
-                            unawaited(_deleteFolder(folder));
-                          }
-                        },
-                        itemBuilder: (_) => const [
-                          PopupMenuItem(value: 'rename', child: Text('重命名分组')),
-                          PopupMenuItem(value: 'delete', child: Text('删除分组')),
-                        ],
-                      ),
-                    ],
-                  ),
-                  selected: !_allFolders && _folderId == folder.id,
-                  onSelected: (_) => setState(() {
-                    _allFolders = false;
-                    _folderId = folder.id;
-                    _selected.clear();
-                  }),
-                ),
-              ),
+            for (final folder in _folders) _buildFolderChip(folder),
           ],
         ),
       ),
@@ -652,6 +610,63 @@ class _LearningListPageState extends State<LearningListPage> {
       const SizedBox(height: 8),
     ],
   );
+
+  Widget _buildFolderChip(LearningSubjectFolder folder) {
+    final selected = !_allFolders && _folderId == folder.id;
+    final colors = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: Material(
+        color: selected ? colors.secondaryContainer : colors.surface,
+        shape: StadiumBorder(side: BorderSide(color: colors.outlineVariant)),
+        clipBehavior: Clip.antiAlias,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Semantics(
+              key: Key('learning-folder-${folder.id}'),
+              selected: selected,
+              button: true,
+              child: InkWell(
+                onTap: () => setState(() {
+                  _allFolders = false;
+                  _folderId = folder.id;
+                  _selected.clear();
+                }),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 48),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Center(
+                      child: Text(
+                        '${folder.name}（${_entries.where((entry) => entry.folderId == folder.id).length}）',
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            PopupMenuButton<String>(
+              key: Key('manage-learning-folder-${folder.id}'),
+              tooltip: '管理${folder.name}分组',
+              enabled: !_folderBusy,
+              onSelected: (action) {
+                if (action == 'rename') {
+                  unawaited(_editFolder(folder));
+                } else if (action == 'delete') {
+                  unawaited(_deleteFolder(folder));
+                }
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 'rename', child: Text('重命名分组')),
+                PopupMenuItem(value: 'delete', child: Text('删除分组')),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   void _showSaveError() {
     if (mounted) {

@@ -9,6 +9,14 @@ import 'package:focubili/models/learning_list_entry.dart';
 import 'package:focubili/services/learning_list_service.dart';
 import 'learning_batch_test.dart' show video, RejectingPreferences;
 
+Future<void> tapVisible(WidgetTester tester, Finder target) async {
+  await tester.ensureVisible(target);
+  await tester.pumpAndSettle();
+  expect(target.hitTestable(), findsOneWidget);
+  await tester.tap(target.hitTestable());
+  await tester.pumpAndSettle();
+}
+
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
@@ -183,11 +191,12 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(Key('move-folder-${folder.id}')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(Key('learning-folder-${folder.id}')));
-    await tester.pumpAndSettle();
+    await tapVisible(tester, find.byKey(Key('learning-folder-${folder.id}')));
     expect(find.byKey(const Key('learning-list-BV1:1')), findsOneWidget);
-    await tester.tap(find.byKey(Key('manage-learning-folder-${folder.id}')));
-    await tester.pumpAndSettle();
+    await tapVisible(
+      tester,
+      find.byKey(Key('manage-learning-folder-${folder.id}')),
+    );
     await tester.tap(find.text('重命名分组'));
     await tester.pumpAndSettle();
     await tester.enterText(
@@ -197,8 +206,10 @@ void main() {
     await tester.tap(find.byKey(const Key('save-learning-folder')));
     await tester.pumpAndSettle();
     expect(find.text('高等数学（1）'), findsOneWidget);
-    await tester.tap(find.byKey(Key('manage-learning-folder-${folder.id}')));
-    await tester.pumpAndSettle();
+    await tapVisible(
+      tester,
+      find.byKey(Key('manage-learning-folder-${folder.id}')),
+    );
     await tester.tap(find.text('删除分组'));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('confirm-delete-learning-folder')));
@@ -231,11 +242,9 @@ void main() {
         findsNothing,
       );
     }
-    await tester.tap(find.byKey(Key('learning-folder-${first.id}')));
-    await tester.pumpAndSettle();
+    await tapVisible(tester, find.byKey(Key('learning-folder-${first.id}')));
     final secondMenu = find.byKey(Key('manage-learning-folder-${second.id}'));
-    await tester.tap(secondMenu);
-    await tester.pumpAndSettle();
+    await tapVisible(tester, secondMenu);
     await tester.tap(find.text('重命名分组'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const Key('learning-folder-name')), '物理');
@@ -243,21 +252,22 @@ void main() {
     await tester.pumpAndSettle();
     expect((await service.loadState()).folders.last.name, '物理');
     expect(
-      tester.widget<ChoiceChip>(find.byKey(Key('learning-folder-${first.id}'))).selected,
+      tester
+          .widget<Semantics>(find.byKey(Key('learning-folder-${first.id}')))
+          .properties
+          .selected,
       isTrue,
     );
     expect(find.byKey(const Key('learning-list-BV1:1')), findsNothing);
 
-    await tester.tap(secondMenu);
-    await tester.pumpAndSettle();
+    await tapVisible(tester, secondMenu);
     await tester.tap(find.text('删除分组'));
     await tester.pumpAndSettle();
     expect(find.textContaining('删除“物理”'), findsOneWidget);
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
     expect((await service.loadState()).folders, hasLength(2));
-    await tester.tap(secondMenu);
-    await tester.pumpAndSettle();
+    await tapVisible(tester, secondMenu);
     await tester.tap(find.text('删除分组'));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('confirm-delete-learning-folder')));
@@ -265,7 +275,10 @@ void main() {
     expect((await service.loadState()).folders.single.id, first.id);
     expect((await service.loadEntries()).single.folderId, isNull);
     expect(
-      tester.widget<ChoiceChip>(find.byKey(Key('learning-folder-${first.id}'))).selected,
+      tester
+          .widget<Semantics>(find.byKey(Key('learning-folder-${first.id}')))
+          .properties
+          .selected,
       isTrue,
     );
     await tester.tap(find.byKey(const Key('learning-folder-ungrouped')));
@@ -274,6 +287,51 @@ void main() {
     await tester.tap(find.byKey(const Key('learning-folder-all')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('learning-list-BV1:1')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('窄屏大字下长名称分组的独立菜单可点击', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(320, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final service = LearningListService();
+    final selected = (await service.createFolder('数学')).folders.single;
+    final target = (await service.createFolder(
+      '高等数学函数与极限线性代数概率论综合复习资料',
+    )).folders.last;
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context).copyWith(
+            textScaler: const TextScaler.linear(2),
+          ),
+          child: child!,
+        ),
+        home: LearningListPage(learningListService: service),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tapVisible(tester, find.byKey(Key('learning-folder-${selected.id}')));
+    final targetSelection = find.byKey(Key('learning-folder-${target.id}'));
+    expect(tester.widget<Semantics>(targetSelection).properties.button, isTrue);
+    expect(tester.widget<Semantics>(targetSelection).properties.selected, isFalse);
+    final menu = find.byKey(Key('manage-learning-folder-${target.id}'));
+    await tapVisible(tester, menu);
+    expect(find.text('重命名分组'), findsOneWidget);
+    await tester.tap(find.text('重命名分组'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('learning-folder-name')), '物理');
+    await tester.tap(find.byKey(const Key('save-learning-folder')));
+    await tester.pumpAndSettle();
+    final state = await service.loadState();
+    expect(state.folders.first.name, '数学');
+    expect(state.folders.last.name, '物理');
+    expect(
+      tester
+          .widget<Semantics>(find.byKey(Key('learning-folder-${selected.id}')))
+          .properties
+          .selected,
+      isTrue,
+    );
     expect(tester.takeException(), isNull);
   });
 

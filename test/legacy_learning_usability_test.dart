@@ -277,14 +277,16 @@ void main() {
     final chip = find.byKey(Key('learning-folder-${folder.id}'));
     await tester.ensureVisible(chip);
     await tester.pumpAndSettle();
-    await tester.tap(chip);
+    expect(chip.hitTestable(), findsOneWidget);
+    await tester.tap(chip.hitTestable());
     await tester.pumpAndSettle();
 
     Future<void> rename() async {
       final manage = find.byKey(Key('manage-learning-folder-${folder.id}'));
       await tester.ensureVisible(manage);
       await tester.pumpAndSettle();
-      await tester.tap(manage);
+      expect(manage.hitTestable(), findsOneWidget);
+      await tester.tap(manage.hitTestable());
       await tester.pumpAndSettle();
       await tester.tap(find.text('重命名分组'));
       await tester.pumpAndSettle();
