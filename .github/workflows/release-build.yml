@@ -19,6 +19,9 @@ on:
       beta_number:
         type: string
         default: ''
+      android_only:
+        type: boolean
+        default: false
     secrets:
       ANDROID_RELEASE_KEYSTORE_BASE64:
         required: false
@@ -164,6 +167,7 @@ jobs:
         run: rm -f "$RUNNER_TEMP/focubili-release.keystore" android/key.properties
 
   windows:
+    if: ${{ !inputs.android_only }}
     name: Windows release
     runs-on: windows-latest
     timeout-minutes: 45
