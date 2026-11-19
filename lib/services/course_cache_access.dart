@@ -9,15 +9,63 @@ import 'media_url_policy.dart';
 import 'course_cache_validity.dart';
 import 'offline_media_plan.dart';
 
+enum CourseCacheStage {
+  input,
+  account,
+  purchase,
+  course,
+  chapter,
+  playback,
+  media,
+  transport,
+}
+
+enum CourseCacheReason {
+  sessionChanged,
+  entitlementNotConfirmed,
+  restrictionReported,
+  policyUnknown,
+  watermarkUnknown,
+  previewUnknown,
+  drmUnknown,
+  unsupportedMedia,
+  invalidDeadline,
+  incompleteMedia,
+  containerUnverified,
+  requestFailed,
+  addressUnavailable,
+}
+
 /// A safe error for UI; never holds responses, cookies, or temporary URLs.
 class CourseCacheAccessException implements Exception {
   const CourseCacheAccessException(
     this.message, {
     this.revokesReceipt = true,
     this.knownUntil,
+    this.reason = CourseCacheReason.requestFailed,
+    this.stage,
   });
   final String message;
   final bool revokesReceipt;
+  final CourseCacheReason reason;
+  final CourseCacheStage? stage;
+
+  /// The shareable diagnostic contains only fixed labels, never request data.
+  String? get diagnosticCode {
+    final current = stage;
+    return current == null
+        ? null
+        : 'course-cache/v1/${current.name}/${reason.name}';
+  }
+
+  CourseCacheAccessException atStage(CourseCacheStage stage) =>
+      CourseCacheAccessException(
+        message,
+        revokesReceipt: revokesReceipt,
+        knownUntil: knownUntil,
+        reason: reason,
+        stage: stage,
+      );
 
   /// An explicit earlier restriction already observed before a transient error.
   final DateTime? knownUntil;
@@ -86,17 +134,29 @@ class CourseCacheAccess {
   static const _agent = BilibiliHttpAuthApi.desktopUserAgent;
   static const _sessionChanged = CourseCacheAccessException(
     '登录会话不完整或已变化，请重新登录购买课程的账号。',
+    reason: CourseCacheReason.sessionChanged,
   );
   static const _unavailable = CourseCacheAccessException(
     '当前账号无法确认本节课的有效购买或完整播放权限。',
+    reason: CourseCacheReason.entitlementNotConfirmed,
   );
   static const _protected = CourseCacheAccessException(
-    '课程含播放保护、试看或缓存限制，请使用 B 站官方课堂。',
+    '本章有播放保护、试看或下载限制，无法缓存。',
+    reason: CourseCacheReason.restrictionReported,
+  );
+  static const _unverifiedMessage = '当前无法确认本章能否离线缓存。';
+  static const _unverified = CourseCacheAccessException(
+    _unverifiedMessage,
+    reason: CourseCacheReason.policyUnknown,
   );
   static const _unsupported = CourseCacheAccessException(
     '当前课程未返回可确认的完整媒体格式，无法缓存。',
+    reason: CourseCacheReason.unsupportedMedia,
   );
-  static const _expiry = CourseCacheAccessException('无法确认有效期限，课程缓存不可用。');
+  static const _expiry = CourseCacheAccessException(
+    '无法确认有效期限，课程缓存不可用。',
+    reason: CourseCacheReason.invalidDeadline,
+  );
   static const _network = CourseCacheAccessException(
     '暂时无法联网核验课程，请检查网络后重试。',
     revokesReceipt: false,
@@ -105,6 +165,8 @@ class CourseCacheAccess {
   static const _transportUnavailable = CourseCacheAccessException(
     '课程下载地址已到期或无法确认，请重新联网确认。',
     revokesReceipt: false,
+    reason: CourseCacheReason.addressUnavailable,
+    stage: CourseCacheStage.transport,
   );
 
   final CourseJsonRequest _requestJson;
@@ -130,6 +192,7 @@ class CourseCacheAccess {
     VideoPart part,
     int quality,
   ) async {
+    var stage = CourseCacheStage.input;
     DateTime? authorizationExpiry;
     void cap(DateTime? expires) {
       if (expires != null &&
@@ -139,19 +202,18 @@ class CourseCacheAccess {
       }
     }
 
-    CourseCacheAccessException withObservedLimit(
-      CourseCacheAccessException error,
-    ) {
+    CourseCacheAccessException withContext(CourseCacheAccessException error) {
       final observed = authorizationExpiry;
-      final alreadyKnown = error.knownUntil;
-      if (observed == null ||
-          (alreadyKnown != null && !observed.isBefore(alreadyKnown))) {
-        return error;
-      }
+      final known = error.knownUntil;
       return CourseCacheAccessException(
         error.message,
         revokesReceipt: error.revokesReceipt,
-        knownUntil: observed,
+        knownUntil:
+            observed != null && (known == null || observed.isBefore(known))
+            ? observed
+            : known,
+        reason: error.reason,
+        stage: error.stage ?? stage,
       );
     }
 
@@ -178,6 +240,7 @@ class CourseCacheAccess {
         throw _unavailable;
       }
 
+      stage = CourseCacheStage.account;
       final account = await _captureSession();
       final checkedAt = _clock().toUtc();
       void restrictOfflineExpiry(Object? data) => cap(_offlineExpiry(data));
@@ -239,6 +302,7 @@ class CourseCacheAccess {
           _integer(identity['mid']) != account.mid) {
         throw _sessionChanged;
       }
+      stage = CourseCacheStage.purchase;
       final courses = BilibiliCourseService(
         readCookies: () async {
           await account.validate();
@@ -254,6 +318,7 @@ class CourseCacheAccess {
         await account.validate();
         throw _unavailable;
       }
+      stage = CourseCacheStage.course;
       final meta = _data(
         await request(
           Uri.https('api.bilibili.com', _season, {'ep_id': '$ep'}),
@@ -278,12 +343,18 @@ class CourseCacheAccess {
       if (authorizationExpiry case final end? when !checkedAt.isBefore(end)) {
         throw _expiry;
       }
-      if (_switch(meta['show_watermark']) != false) throw _protected;
+      if (_switch(meta['show_watermark']) != false) {
+        throw const CourseCacheAccessException(
+          _unverifiedMessage,
+          reason: CourseCacheReason.watermarkUnknown,
+        );
+      }
       final purchaseWindow = _purchaseExpiry(meta, status);
       cap(purchaseWindow.end);
       if (authorizationExpiry case final end? when !checkedAt.isBefore(end)) {
         throw _expiry;
       }
+      stage = CourseCacheStage.chapter;
       final episode = await _findEpisode(meta, season, ep, account, request);
       if (_integer(episode['aid']) != aid ||
           _integer(episode['cid']) != cid ||
@@ -299,6 +370,7 @@ class CourseCacheAccess {
         throw _expiry;
       }
 
+      stage = CourseCacheStage.playback;
       final mediaData = _data(
         await request(
           Uri.https('api.bilibili.com', _play, {
@@ -327,12 +399,22 @@ class CourseCacheAccess {
       // A purchased course can still be served a preview or a protected
       // rendition. Missing evidence of a full, unprotected response is not
       // evidence that a cached copy would be equivalent.
-      if (_switch(mediaData['is_preview']) != false ||
-          !(_switch(mediaData['is_drm']) == false ||
-              _switch(mediaData['drm_tech_type']) == false)) {
-        throw _protected;
+      if (_switch(mediaData['is_preview']) != false) {
+        throw const CourseCacheAccessException(
+          _unverifiedMessage,
+          reason: CourseCacheReason.previewUnknown,
+        );
       }
+      if (_switch(mediaData['is_drm']) != false &&
+          _switch(mediaData['drm_tech_type']) != false) {
+        throw const CourseCacheAccessException(
+          _unverifiedMessage,
+          reason: CourseCacheReason.drmUnknown,
+        );
+      }
+      stage = CourseCacheStage.media;
       final media = _media(mediaData, quality);
+      stage = CourseCacheStage.transport;
       // Validate the address metadata, but do not fold URL expiry into
       // the offline receipt. Each network request checks its own URL again.
       for (final track in [media.video, ?media.audio]) {
@@ -349,13 +431,17 @@ class CourseCacheAccess {
           : CourseCacheExpiryKind.serverDeadline;
       void checkClock() {
         if (!expiryKind.usableAt(_clock().toUtc(), checkedAt, expiry)) {
-          throw _expiry;
+          throw _expiry.atStage(CourseCacheStage.media);
         }
       }
 
       Future<void> checkSession() async {
         checkClock();
-        await account.validate();
+        try {
+          await account.validate();
+        } on CourseCacheAccessException catch (error) {
+          throw error.atStage(CourseCacheStage.account);
+        }
         checkClock();
       }
 
@@ -369,7 +455,7 @@ class CourseCacheAccess {
         checkSession: checkSession,
         checkTransport: (uri, now) {
           if (uri.port != 443 || !MediaUrlPolicy.isSafe(uri.toString())) {
-            throw _unsupported;
+            throw _unsupported.atStage(CourseCacheStage.transport);
           }
           final end = _mediaExpiry(uri);
           if (end != null && !now.isBefore(end)) {
@@ -385,9 +471,9 @@ class CourseCacheAccess {
         }),
       );
     } on CourseCacheAccessException catch (error) {
-      throw withObservedLimit(error);
+      throw withContext(error);
     } catch (_) {
-      throw withObservedLimit(_network);
+      throw withContext(_network);
     }
   }
 
@@ -651,7 +737,9 @@ class CourseCacheAccess {
             'cacheallowed',
             'paidaccess',
           }.contains(key)) {
-            if (_switch(raw) != true) throw _protected;
+            final allowed = _switch(raw);
+            if (allowed == false) throw _protected;
+            if (allowed == null) throw _unverified;
           } else if (const {
                 'ispreview',
                 'preview',
@@ -688,7 +776,9 @@ class CourseCacheAccess {
                   (key != 'watermarkinterval' ||
                       _switch(node['show_watermark']) != false))) {
             // Unknown values (including nested configurations) are not false.
-            if (_switch(raw) != false) throw _protected;
+            final restricted = _switch(raw);
+            if (restricted == true) throw _protected;
+            if (restricted == null) throw _unverified;
           }
           if (raw is Map || raw is List) pending.add(raw);
         }
@@ -733,17 +823,20 @@ class CourseCacheAccess {
           'audio': mp4(dash['audio'], 'audio'),
         };
       }
-      final result = OfflineMediaPlan.fromData(candidates, quality);
+      // Exclude only unsupported codecs before choosing a quality. A higher
+      // unsupported track must not hide a compatible track from this same
+      // response; all authorization and byte-level validation still applies.
+      final result = OfflineMediaPlan.fromData(
+        candidates,
+        quality,
+        allowDashVideo: (track) =>
+            RegExp(r'^(?:avc[13]|hev1|hvc1)(?:\.|$)').hasMatch(track.codec),
+        allowDashAudio: (track) =>
+            RegExp(r'^mp4a(?:\.|$)').hasMatch(track.codec),
+      );
       if (result.quality > quality) throw _unsupported;
       final audio = result.audio;
-      if (split &&
-          (audio == null ||
-              !RegExp(
-                r'^(?:avc[13]|hev1|hvc1)(?:\.|$)',
-              ).hasMatch(result.video.codec) ||
-              !RegExp(r'^mp4a(?:\.|$)').hasMatch(audio.codec))) {
-        throw _unsupported;
-      }
+      if (split && audio == null) throw _unsupported;
       for (final track in [result.video, ?audio]) {
         for (final address in track.urls) {
           final uri = Uri.parse(address);

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../models/video_preview.dart';
 import '../../platform/app_platform.dart';
@@ -163,6 +164,26 @@ class _CourseCachePageState extends State<CourseCachePage>
     }
   }
 
+  Future<void> _copyDiagnostic(String code) async {
+    final revision = CacheLifecycle.account.value;
+    var message = '已复制诊断代码';
+    try {
+      await Clipboard.setData(ClipboardData(text: code));
+    } catch (_) {
+      message = '复制失败，请重试。';
+    }
+    if (!mounted ||
+        suspended ||
+        revision != CacheLifecycle.account.value ||
+        store.diagnosticCode != code ||
+        ModalRoute.of(context)?.isCurrent == false) {
+      return;
+    }
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
   Future<void> _remove(CourseCacheEntry e) async {
     final old = generation;
     final yes = await showDialog<bool>(
@@ -225,6 +246,7 @@ class _CourseCachePageState extends State<CourseCachePage>
     final key =
         '${video?.courseSeasonId}-${part?.courseEpisodeId}-${part?.courseAid}-${part?.cid}';
     final selected = rows.where((e) => e.id == key).firstOrNull;
+    final diagnostic = store.diagnosticCode;
     return Scaffold(
       appBar: AppBar(
         title: const Text('课程缓存'),
@@ -240,9 +262,6 @@ class _CourseCachePageState extends State<CourseCachePage>
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            const Text(
-              '仅供购买账号离线播放允许缓存的完整章节，不可导出。已核验章节按服务端期限使用，不另设期限。过期或旧凭证可联网复核，内容没变不用重复下载。',
-            ),
             if (loading || suspended)
               const Padding(
                 padding: EdgeInsets.all(20),
@@ -255,7 +274,6 @@ class _CourseCachePageState extends State<CourseCachePage>
               )
             else ...[
               if (video != null && part != null && selected == null) ...[
-                const SizedBox(height: 16),
                 Text(
                   part.title,
                   style: Theme.of(context).textTheme.titleMedium,
@@ -298,19 +316,35 @@ class _CourseCachePageState extends State<CourseCachePage>
               if (store.error != null)
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 12),
-                  child: Text(
-                    store.error!,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.error,
-                    ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          store.error!,
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
+                      ),
+                      if (diagnostic != null)
+                        IconButton(
+                          tooltip: '复制诊断代码',
+                          onPressed: () => _copyDiagnostic(diagnostic),
+                          icon: const Icon(Icons.copy_outlined, size: 18),
+                        ),
+                    ],
                   ),
                 ),
               const SizedBox(height: 20),
               Text('本机章节', style: Theme.of(context).textTheme.titleMedium),
               if (rows.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 18),
-                  child: Text('暂无章节缓存。可在已购课程播放器中选择「缓存本章」。'),
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    video != null && part != null
+                        ? '暂无缓存'
+                        : '暂无缓存，可在课程播放器中缓存章节。',
+                  ),
                 ),
               for (final row in rows)
                 Card(

@@ -500,15 +500,25 @@ void main() {
     'known denial revokes the local receipt without a CDN request',
     () async {
       final old = await cache();
-      access.failure = const CourseCacheAccessException('购买资格已失效');
+      access.failure = const CourseCacheAccessException(
+        '购买资格已失效',
+        stage: CourseCacheStage.purchase,
+        reason: CourseCacheReason.entitlementNotConfirmed,
+      );
       requests.clear();
       await store.start(video, part);
       expect(store.error, contains('资格'));
+      expect(
+        store.diagnosticCode,
+        'course-cache/v1/purchase/entitlementNotConfirmed',
+      );
       final denied = (await store.entries()).single;
       expect(denied.hasMedia, isTrue);
       expect(denied.complete, isFalse);
       expect(requests, isEmpty);
       await expectLater(store.open(old), throwsA(isA<CourseCacheFailure>()));
+      CacheLifecycle.accountChanged();
+      expect(store.diagnosticCode, isNull);
     },
   );
 
