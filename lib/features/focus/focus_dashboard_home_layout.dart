@@ -3,20 +3,20 @@ part of 'focus_dashboard.dart';
 /// 首页的欢迎区与响应式容器；专注业务卡片继续由页面状态维护。
 extension _FocusDashboardHomeLayout on _FocusDashboardState {
   /// 根据文字实际换行高度为首屏留足空间，矮屏和大字体允许自然滚动。
-  double _homeHeroHeight(BuildContext context, Size windowSize) {
+  double _homeHeroHeight(BuildContext context, Size viewport) {
     final bool compact =
-        windowSize.width >= AdaptiveLayout.tabletBreakpoint ||
-        windowSize.height < 648;
+        viewport.width >= AdaptiveLayout.tabletBreakpoint ||
+        viewport.height < 648;
     final double preferred = compact
-        ? (windowSize.height - 64).clamp(280.0, 720.0).toDouble()
-        : (windowSize.height - 88).clamp(560.0, 760.0).toDouble();
+        ? (viewport.height - 64).clamp(280.0, 720.0).toDouble()
+        : (viewport.height - 88).clamp(560.0, 760.0).toDouble();
     final ThemeData theme = Theme.of(context);
     final double padding = AdaptiveLayout.centeredHorizontalPadding(
-      width: windowSize.width,
+      width: viewport.width,
       maxContentWidth: AdaptiveLayout.homeContentMaxWidth,
       compact: 24,
     );
-    final double width = (windowSize.width - padding * 2).clamp(80.0, 840.0);
+    final double width = (viewport.width - padding * 2).clamp(80.0, 840.0);
     final double titleHeight = _measureHeroText(
       context,
       '焦点哔哩',
@@ -73,7 +73,12 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
   }
 
   /// 卡片按实际滚动位置移动；仅欢迎内容使用正式版的下坠、模糊及淡出。
-  Widget _buildHomeHero(BuildContext context, double heroHeight, double width) {
+  Widget _buildHomeHero(
+    BuildContext context,
+    double heroHeight,
+    double width, {
+    required bool animateDepth,
+  }) {
     final ThemeData theme = Theme.of(context);
     final Color textColor = theme.colorScheme.onSurface;
     // 两个首页动作按钮都复用应用主题，避免草图颜色泄漏到成品界面。
@@ -87,7 +92,7 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
     return SliverToBoxAdapter(
       child: HomeDrawerHeroDepth(
         key: const Key('focus-home-hero'),
-        enabled: _hasHomeDrawer && !_editingHomeCards,
+        enabled: animateDepth,
         height: heroHeight,
         child: Padding(
           padding: EdgeInsets.fromLTRB(

@@ -20,6 +20,39 @@ mixin _PlayerOverlayCoordinator
   bool _danmakuPreferencesChangedByUser = false;
   bool _danmakuPersistenceWarningShown = false;
   SubtitleTrackLoadResult? _subtitleTrackResult;
+  _VideoFitMode get _videoFitMode;
+  Size _subtitleSurfaceSize = Size.zero;
+  EdgeInsets _subtitleSurfaceInsets = EdgeInsets.zero;
+  double? _subtitleAnnotationHeight;
+  final _subtitlePreviewViewport = ValueNotifier<SubtitlePreviewViewport?>(
+    null,
+  );
+
+  // Read the rendered pane (including split desktop layouts), not the window.
+  // The preview models watching with controls dismissed, while retaining any
+  // persistent A/B, chapter, or note annotation strip.
+  void _measureSubtitlePreviewViewport() {
+    final size = _subtitleSurfaceSize;
+    if (!size.isFinite || size.isEmpty) return;
+    final edges = _subtitleSurfaceInsets;
+    final annotations = _subtitleAnnotationHeight;
+    _subtitlePreviewViewport.value = SubtitlePreviewViewport(
+      size: size,
+      edgeInsets: edges,
+      videoAspectRatio: _playbackSnapshot.videoAspectRatio > 0
+          ? _playbackSnapshot.videoAspectRatio
+          : 16 / 9,
+      videoFit: switch (_videoFitMode) {
+        _VideoFitMode.contain => BoxFit.contain,
+        _VideoFitMode.cover => BoxFit.cover,
+        _VideoFitMode.stretch => BoxFit.fill,
+      },
+      bottomOverlayHeight: annotations != null
+          ? annotations + _collapsedTimelineBottomPadding(_fullscreen, edges)
+          : 0,
+    );
+  }
+
   final _subtitleSelection = ValueNotifier<SubtitleTrack?>(null);
   SubtitleTrack? get _selectedSubtitleTrack => _subtitleSelection.value;
   List<SubtitleCue> _subtitleCues = const <SubtitleCue>[];
@@ -73,6 +106,7 @@ mixin _PlayerOverlayCoordinator
   /// 释放弹幕帧时钟，供播放器 dispose 统一调用。
   void _disposePlayerOverlayCoordinator() {
     _subtitleSelection.dispose();
+    _subtitlePreviewViewport.dispose();
     _danmakuFrameController.dispose();
   }
 
@@ -636,6 +670,8 @@ mixin _PlayerOverlayCoordinator
         selectorToken == _subtitleRequestToken &&
         bvid == _activeVideo.bvid &&
         cid == _currentPart.cid;
+    _measureSubtitlePreviewViewport();
+    final sample = _activeSubtitleCue()?.content.trim();
     _subtitleSelectorOpen = true;
     String? selectedTrackId;
     try {
@@ -647,6 +683,8 @@ mixin _PlayerOverlayCoordinator
           valueListenable: _subtitleSelection,
           builder: (context, selectedTrack, _) => PlayerSubtitleSheet(
             videoLabel: videoLabel,
+            previewViewport: _subtitlePreviewViewport,
+            previewText: sample != null && sample.isNotEmpty ? sample : null,
             offValue: _subtitleOffValue,
             initialResult: initialResult,
             selectedTrackId: selectedTrack?.id,

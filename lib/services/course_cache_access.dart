@@ -1,40 +1,18 @@
 import 'dart:convert';
 import 'dart:io';
 
+import '../core/utils/bilibili_id_converter.dart';
+import '../models/course_cache_diagnostic.dart';
 import '../models/video_preview.dart';
 import 'bilibili_auth_service.dart';
 import 'bilibili_course_service.dart';
+import 'bilibili_wbi_signing_service.dart';
 import 'cache_lifecycle.dart';
 import 'media_url_policy.dart';
 import 'course_cache_validity.dart';
 import 'offline_media_plan.dart';
 
-enum CourseCacheStage {
-  input,
-  account,
-  purchase,
-  course,
-  chapter,
-  playback,
-  media,
-  transport,
-}
-
-enum CourseCacheReason {
-  sessionChanged,
-  entitlementNotConfirmed,
-  restrictionReported,
-  policyUnknown,
-  watermarkUnknown,
-  previewUnknown,
-  drmUnknown,
-  unsupportedMedia,
-  invalidDeadline,
-  incompleteMedia,
-  containerUnverified,
-  requestFailed,
-  addressUnavailable,
-}
+export '../models/course_cache_diagnostic.dart';
 
 /// A safe error for UI; never holds responses, cookies, or temporary URLs.
 class CourseCacheAccessException implements Exception {
@@ -51,12 +29,12 @@ class CourseCacheAccessException implements Exception {
   final CourseCacheStage? stage;
 
   /// The shareable diagnostic contains only fixed labels, never request data.
-  String? get diagnosticCode {
+  CourseCacheDiagnostic? get diagnostic {
     final current = stage;
-    return current == null
-        ? null
-        : 'course-cache/v1/${current.name}/${reason.name}';
+    return current == null ? null : CourseCacheDiagnostic(current, reason);
   }
+
+  String? get diagnosticCode => diagnostic?.code;
 
   CourseCacheAccessException atStage(CourseCacheStage stage) =>
       CourseCacheAccessException(
@@ -130,7 +108,7 @@ class CourseCacheAccess {
   static const _paid = '/pugv/pay/web/my/paid';
   static const _season = '/pugv/view/web/season';
   static const _episodeList = '/pugv/view/web/ep/list';
-  static const _play = '/pugv/player/web/playurl';
+  static const _play = '/ogv/player/playview';
   static const _agent = BilibiliHttpAuthApi.desktopUserAgent;
   static const _sessionChanged = CourseCacheAccessException(
     '登录会话不完整或已变化，请重新登录购买课程的账号。',
@@ -148,6 +126,15 @@ class CourseCacheAccess {
   static const _unverified = CourseCacheAccessException(
     _unverifiedMessage,
     reason: CourseCacheReason.policyUnknown,
+  );
+  static const _offlinePermissionUnknown = CourseCacheAccessException(
+    'B 站未明确确认本章允许离线缓存。',
+    reason: CourseCacheReason.offlinePermissionUnknown,
+  );
+  static const _signingUnavailable = CourseCacheAccessException(
+    '暂时无法确认课程播放请求，请稍后重试。',
+    revokesReceipt: false,
+    reason: CourseCacheReason.requestFailed,
   );
   static const _unsupported = CourseCacheAccessException(
     '当前课程未返回可确认的完整媒体格式，无法缓存。',
@@ -249,12 +236,12 @@ class CourseCacheAccess {
         if (cookie != account.header || !_isOfficial(uri)) {
           throw _sessionChanged;
         }
-        await account.validate();
+        final scopedHeader = await account.headerFor(uri.path);
         final String response;
         try {
           response = await _requestJson(
             uri,
-            cookie,
+            scopedHeader,
           ).timeout(const Duration(seconds: 30));
         } on CourseCacheAccessException {
           rethrow;
@@ -371,60 +358,101 @@ class CourseCacheAccess {
       }
 
       stage = CourseCacheStage.playback;
-      final mediaData = _data(
+      final bvid = BilibiliIdConverter.avToBv(aid);
+      if (bvid == null) throw _unavailable;
+      final String mixinKey;
+      try {
+        mixinKey = BilibiliWbiSigningService.mixinKeyFromNavImages(
+          identity['wbi_img'],
+        );
+      } on WbiSigningException {
+        throw _signingUnavailable;
+      }
+      final query = BilibiliWbiSigningService.sign(
+        {
+          'avid': '$aid',
+          'bvid': bvid,
+          'ep_id': '$ep',
+          'season_id': '$season',
+          'cid': '$cid',
+          'qn': '$quality',
+          'fnver': '0',
+          'fnval': '4048',
+          'fourk': '1',
+          'biz_type': 'pugv',
+          'scene': 'normal',
+          'from_client': 'BROWSER',
+          'app_id': '100',
+        },
+        mixinKey,
+        _clock().millisecondsSinceEpoch ~/ 1000,
+      );
+      final playview = _data(
         await request(
-          Uri.https('api.bilibili.com', _play, {
-            'avid': '$aid',
-            'ep_id': '$ep',
-            'cid': '$cid',
-            'qn': '$quality',
-            'fnver': '0',
-            'fnval': '16',
-            'fourk': '1',
-          }),
+          Uri.https(
+            'api.bilibili.com',
+            _play,
+          ).replace(query: BilibiliWbiSigningService.encodeQuery(query)),
           account.header,
         ),
       );
-      if ((mediaData.containsKey('code') && _integer(mediaData['code']) != 0) ||
-          !_matchesIfPresent(mediaData, 'season_id', season) ||
-          !_matchesIfPresent(mediaData, 'ep_id', ep) ||
-          !_matchesIfPresent(mediaData, 'episode_id', ep) ||
-          !_matchesIfPresent(mediaData, 'cid', cid) ||
-          !_matchesIfPresent(mediaData, 'aid', aid) ||
-          !_matchesIfPresent(mediaData, 'avid', aid)) {
-        throw _unavailable;
+      restrictOfflineExpiry(playview);
+      // A denial or protection in the outer result or another part of the
+      // playback response must not be hidden by a usable-looking video_info.
+      _checkRestrictions(playview);
+      if (playview['not_playable_reason'] != null) throw _protected;
+      final mediaData = playview['video_info'];
+      final arc = playview['arc'];
+      if (arc != null && arc is! Map) throw _unverified;
+      if (mediaData is! Map) throw _unsupported;
+      for (final source in [playview, mediaData, if (arc is Map) arc]) {
+        if (!_matchesIfPresent(source, 'code', 0) ||
+            !_matchesIfPresent(source, 'season_id', season) ||
+            !_matchesIfPresent(source, 'ep_id', ep) ||
+            !_matchesIfPresent(source, 'episode_id', ep) ||
+            !_matchesIfPresent(source, 'cid', cid) ||
+            !_matchesIfPresent(source, 'aid', aid) ||
+            !_matchesIfPresent(source, 'avid', aid) ||
+            (source.containsKey('bvid') && source['bvid'] != bvid)) {
+          throw _unavailable;
+        }
       }
-      _checkRestrictions(mediaData);
-      restrictOfflineExpiry(mediaData);
       // A purchased course can still be served a preview or a protected
       // rendition. Missing evidence of a full, unprotected response is not
       // evidence that a cached copy would be equivalent.
-      if (_switch(mediaData['is_preview']) != false) {
+      if (_switch(mediaData['is_preview']) != false &&
+          _switch(playview['is_preview']) != false) {
         throw const CourseCacheAccessException(
           _unverifiedMessage,
           reason: CourseCacheReason.previewUnknown,
         );
       }
-      if (_switch(mediaData['is_drm']) != false &&
-          _switch(mediaData['drm_tech_type']) != false) {
+      if (![playview, mediaData, if (arc is Map) arc].any(
+        (source) =>
+            _switch(source['is_drm']) == false ||
+            _switch(source['drm_tech_type']) == false,
+      )) {
         throw const CourseCacheAccessException(
           _unverifiedMessage,
           reason: CourseCacheReason.drmUnknown,
         );
       }
-      stage = CourseCacheStage.media;
-      final media = _media(mediaData, quality);
-      stage = CourseCacheStage.transport;
-      // Validate the address metadata, but do not fold URL expiry into
-      // the offline receipt. Each network request checks its own URL again.
-      for (final track in [media.video, ?media.audio]) {
-        var usable = false;
-        for (final raw in track.urls) {
-          final end = _mediaExpiry(Uri.parse(raw));
-          if (end == null || _clock().isBefore(end)) usable = true;
-        }
-        if (!usable) throw _transportUnavailable;
+      if (![episode, playview, mediaData].any(_permitsOffline)) {
+        throw _offlinePermissionUnknown;
       }
+      stage = CourseCacheStage.media;
+      final decodedMedia = _media(mediaData, quality);
+      stage = CourseCacheStage.transport;
+      // A signed URL is a delivery detail, not an offline authorization.
+      // Reject bad addresses individually; a same-track backup is still usable
+      // if it passed all media checks. Every request rechecks its own URL.
+      final now = _clock();
+      final media = OfflineMediaPlan(
+        video: _availableTrack(decodedMedia.video, now),
+        audio: decodedMedia.audio == null
+            ? null
+            : _availableTrack(decodedMedia.audio!, now),
+      );
       final expiry = authorizationExpiry;
       final expiryKind = expiry == null
           ? purchaseWindow.kind
@@ -484,6 +512,7 @@ class CourseCacheAccess {
     if (expected == null) throw _sessionChanged;
     try {
       final Future<String> Function() read;
+      Future<String> Function(String)? readScopedHeader;
       if (_readCookies case final injected?) {
         read = injected;
       } else {
@@ -492,6 +521,9 @@ class CourseCacheAccess {
         final native = await _auth
             .capturePlaybackSession(_play)
             .timeout(const Duration(seconds: 10));
+        if (native.hasScopedCookieHeaders) {
+          readScopedHeader = native.headerFor;
+        }
         read = () async {
           await native.validate();
           // Non-Apple snapshots fence Dart account writes but can otherwise
@@ -502,20 +534,27 @@ class CourseCacheAccess {
         };
       }
       final header = await read().timeout(const Duration(seconds: 10));
-      final mid = _cookieMid(header);
-      if (mid == null ||
-          '$mid' != expected ||
+      final identity = _cookieIdentity(header);
+      if (identity == null ||
+          '${identity.mid}' != expected ||
           scope != CacheLifecycle.accountScope ||
           revision != CacheLifecycle.account.value) {
         throw _sessionChanged;
       }
-      return _CourseCacheSession(mid, header, read, scope, revision);
+      return _CourseCacheSession(
+        identity,
+        header,
+        read,
+        readScopedHeader,
+        scope,
+        revision,
+      );
     } catch (_) {
       throw _sessionChanged;
     }
   }
 
-  static int? _cookieMid(String header) {
+  static ({int mid, String token})? _cookieIdentity(String header) {
     if (RegExp(r'[\x00-\x1f\x7f]').hasMatch(header)) return null;
     String? session;
     String? uid;
@@ -539,7 +578,8 @@ class CourseCacheAccess {
         uid = value;
       }
     }
-    return session == null ? null : int.tryParse(uid ?? '');
+    final mid = int.tryParse(uid ?? '');
+    return session == null || mid == null ? null : (mid: mid, token: session);
   }
 
   static Future<Map> _findEpisode(
@@ -678,6 +718,25 @@ class CourseCacheAccess {
   static String _canonical(String key) =>
       key.toLowerCase().replaceAll(RegExp('[^a-z0-9]'), '');
 
+  static const _offlinePermissionFields = {
+    'allowdownload',
+    'candownload',
+    'downloadable',
+    'isdownloadable',
+    'downloadallowed',
+    'allowofflinecache',
+    'offlinecacheallowed',
+    'allowoffline',
+    'canoffline',
+    'offlineallowed',
+  };
+
+  static bool _permitsOffline(Map data) => data.entries.any(
+    (item) =>
+        _offlinePermissionFields.contains(_canonical('${item.key}')) &&
+        _switch(item.value) == true,
+  );
+
   static const _offlineExpiryFields = {
     'offlineexpiresat',
     'offlineexpireat',
@@ -721,22 +780,13 @@ class CourseCacheAccess {
         for (final item in node.entries) {
           final key = _canonical('${item.key}');
           final raw = item.value;
-          if (const {
-            'allowdownload',
-            'candownload',
-            'downloadable',
-            'isdownloadable',
-            'downloadallowed',
-            'allowofflinecache',
-            'offlinecacheallowed',
-            'allowoffline',
-            'canoffline',
-            'offlineallowed',
-            'allowcache',
-            'cancache',
-            'cacheallowed',
-            'paidaccess',
-          }.contains(key)) {
+          if (_offlinePermissionFields.contains(key) ||
+              const {
+                'allowcache',
+                'cancache',
+                'cacheallowed',
+                'paidaccess',
+              }.contains(key)) {
             final allowed = _switch(raw);
             if (allowed == false) throw _protected;
             if (allowed == null) throw _unverified;
@@ -745,6 +795,9 @@ class CourseCacheAccess {
                 'preview',
                 'previewonly',
                 'ispaypreview',
+                'needpay',
+                'needlogin',
+                'needvip',
                 'downloadforbidden',
                 'forbiddownload',
                 'disabledownload',
@@ -897,6 +950,30 @@ class CourseCacheAccess {
     return expiry;
   }
 
+  static OfflineMediaTrack _availableTrack(
+    OfflineMediaTrack track,
+    DateTime now,
+  ) {
+    final urls = <String>[];
+    for (final raw in track.urls) {
+      try {
+        final end = _mediaExpiry(Uri.parse(raw));
+        if (end == null || now.isBefore(end)) urls.add(raw);
+      } on CourseCacheAccessException {
+        // Never request a candidate with an invalid or unknown signature.
+      }
+    }
+    if (urls.isEmpty) throw _transportUnavailable;
+    if (urls.length == track.urls.length) return track;
+    return OfflineMediaTrack(
+      id: track.id,
+      urls: List.unmodifiable(urls),
+      codec: track.codec,
+      bandwidth: track.bandwidth,
+      expectedBytes: track.expectedBytes,
+    );
+  }
+
   static bool _isOfficial(Uri uri) =>
       uri.scheme == 'https' &&
       uri.host == 'api.bilibili.com' &&
@@ -942,22 +1019,42 @@ class CourseCacheAccess {
 
 class _CourseCacheSession {
   const _CourseCacheSession(
-    this.mid,
+    this._identity,
     this.header,
     this._read,
+    this._readScopedHeader,
     this._scope,
     this._revision,
   );
 
-  final int mid;
+  final ({int mid, String token}) _identity;
+  int get mid => _identity.mid;
   final String header;
   final Future<String> Function() _read;
+  final Future<String> Function(String)? _readScopedHeader;
   final String _scope;
   final int _revision;
 
   bool get _current =>
       _revision == CacheLifecycle.account.value &&
       _scope == CacheLifecycle.accountScope;
+
+  Future<String> headerFor(String path) async {
+    await validate();
+    final read = _readScopedHeader;
+    if (read == null) return header;
+    try {
+      final scoped = await read(path).timeout(const Duration(seconds: 10));
+      // Device cookies may differ per API path. The authenticated subject
+      // and credential must not. Never fall back to the playback header.
+      if (!_current || CourseCacheAccess._cookieIdentity(scoped) != _identity) {
+        throw CourseCacheAccess._sessionChanged;
+      }
+      return scoped;
+    } catch (_) {
+      throw CourseCacheAccess._sessionChanged;
+    }
+  }
 
   Future<void> validate() async {
     if (!_current) throw CourseCacheAccess._sessionChanged;

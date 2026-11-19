@@ -118,6 +118,9 @@ class BilibiliAccountDataService {
       '/x/v3/fav/folder/created/list-all';
   static const String _favoriteResourcesPath = '/x/v3/fav/resource/list';
   static const String _followingsPath = '/x/relation/followings';
+  static const String _followingGroupsPath = '/x/relation/tags';
+  static const String _followingGroupMembersPath = '/x/relation/tag';
+  static const int _followingGroupPageSize = 20;
   static const String _subscribedCollectionsPath =
       '/x/v3/fav/folder/collected/list';
   static final RegExp _bvidPattern = RegExp(r'^BV[0-9A-Za-z]{10}$');
@@ -154,55 +157,95 @@ class BilibiliAccountDataService {
   /// 在同一个只读会话内完整读取远端分组及成员，任何失败都不返回半份导入资料。
   Future<FollowingGroupImport> loadFollowingGroups() async {
     final session = await _openReadSession();
-    final mid = session.account?.mid;
-    if (mid == null) throw StateError('请先登录并确认账号会话有效');
+    final failure = _sessionFailurePage<FollowingGroup>(session, page: 1);
+    if (failure != null) throw StateError(failure.message!);
+    final mid = session.account!.mid;
     final response = await _request(
-      Uri.https(_apiHost, '/x/relation/tags'),
+      Uri.https(_apiHost, _followingGroupsPath),
       session,
     );
-    final rawGroups = response.root?['data'];
+    final rawGroups = _followingGroupData(response, page: 1);
     if (rawGroups is! List) throw StateError('读取 B 站分组失败，请重试');
     final groups = <FollowingGroup>[];
     final seen = <int>{};
     for (final raw in rawGroups) {
       final map = _asObject(raw);
       final id = _readInteger(map?['tagid']);
-      if (id == null || id == 0 || !seen.add(id)) continue;
-      final members = <int, FollowedCreator>{};
-      for (var page = 1; ; page++) {
-        if (page > 1000) throw StateError('分组过大，导入已停止');
-        final result = await _request(
-          Uri.https(_apiHost, '/x/relation/tag', {
-            'mid': '$mid',
-            'tagid': '$id',
-            'pn': '$page',
-            'ps': '50',
-            'order_type': '',
-          }),
-          session,
-        );
-        final items = result.root?['data'];
-        if (items is! List) throw StateError('读取分组成员失败，已有分组未改变');
-        final previousCount = members.length;
-        for (final item in items) {
-          final creator = _parseFollowedCreator(item);
-          if (creator == null) throw StateError('分组成员资料不完整，请重试');
-          members[creator.mid] = creator;
-        }
-        if (items.length < 50) break;
-        if (members.length == previousCount) throw StateError('分组分页异常，请重试');
-      }
+      if (map == null || id == null) throw StateError('B 站分组资料不完整，请重试');
+      // 默认/全部是浏览入口，不作为本机分组导入；保留特别关注 (-10)。
+      if (id == 0 || id == -20 || !seen.add(id)) continue;
+      final members = await _loadFollowingGroupMembers(
+        session,
+        id,
+        expectedCount: _readNonNegativeInt(map['count']),
+      );
       groups.add(
         FollowingGroup(
           id: 'remote_$id',
           remoteId: id,
-          name: map?['name']?.toString() ?? '分组 $id',
-          members: members.values,
+          name: _readText(map['name'], '分组 $id'),
+          members: members,
         ),
       );
     }
-    if (await currentAccountMid() != mid) throw StateError('账号已变化，请重新导入');
-    return FollowingGroupImport(mid, groups);
+    final current = await _openReadSession();
+    final validationFailure = _sessionFailurePage<FollowingGroup>(
+      current,
+      page: 1,
+    );
+    if (validationFailure != null) throw StateError(validationFailure.message!);
+    if (current.account!.mid != mid) throw StateError('账号已变化，请重新导入');
+    return FollowingGroupImport(mid, List.unmodifiable(groups));
+  }
+
+  Future<Iterable<FollowedCreator>> _loadFollowingGroupMembers(
+    _AccountReadSession session,
+    int id, {
+    required int? expectedCount,
+  }) async {
+    final members = <int, FollowedCreator>{};
+    // 空分组仍须保留，但不必请求可能返回 null 的成员页。
+    for (
+      var page = 1;
+      expectedCount == null || members.length < expectedCount;
+      page++
+    ) {
+      if (page > 1000) throw StateError('分组过大，导入已停止');
+      final result = await _request(
+        Uri.https(_apiHost, _followingGroupMembersPath, {
+          'mid': '${session.account!.mid}',
+          'tagid': '$id',
+          'pn': '$page',
+          'ps': '$_followingGroupPageSize',
+          'order_type': '',
+        }),
+        session,
+      );
+      final items = _followingGroupData(result, page: page);
+      // 接口以 null 或 [] 结束分页；若已知还有成员，就不能用
+      // 提前结束的结果覆盖一份完整快照。
+      if (items == null || (items is List && items.isEmpty)) {
+        if (expectedCount == null) break;
+        throw StateError('B 站分组成员数有变化，请重试');
+      }
+      if (items is! List) throw StateError('读取 B 站分组成员失败，请重试');
+      final previousCount = members.length;
+      for (final item in items) {
+        final creator = _parseFollowedCreator(item);
+        if (creator == null) throw StateError('B 站分组成员资料不完整，请重试');
+        members.putIfAbsent(creator.mid, () => creator);
+      }
+      if (members.length == previousCount) throw StateError('B 站分组分页异常，请重试');
+    }
+    return members.values;
+  }
+
+  Object? _followingGroupData(_AccountApiResult response, {required int page}) {
+    final failure = _responseFailurePage<FollowingGroup>(response, page: page);
+    if (failure != null) throw StateError(failure.message!);
+    final root = response.root!;
+    if (!root.containsKey('data')) throw StateError('B 站没有返回分组资料，请重试');
+    return root['data'];
   }
 
   /// 读取当前已登录账号自己创建的收藏夹，不会读取其他账号或执行收藏操作。

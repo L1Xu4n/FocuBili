@@ -55,6 +55,16 @@ class _SubscriptionHomeCardState extends State<SubscriptionHomeCard>
     }
     setState(() => _opening = true);
     try {
+      if (item.readAt == null) {
+        // Save the tap independently of whether the player can open.
+        unawaited(
+          _service
+              .markRead(item.bvid)
+              .onError<SubscriptionStorageException>(
+                (_, _) {}, // The service already exposes the storage error.
+              ),
+        );
+      }
       final video = await _videos.lookupVideo(item.bvid);
       if (!mounted ||
           !discoveryBlocklistActionsReady ||

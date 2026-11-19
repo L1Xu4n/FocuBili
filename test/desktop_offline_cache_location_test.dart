@@ -10,6 +10,7 @@ import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/platform/app_platform.dart';
 import 'package:focubili/services/bilibili_cookie_store.dart';
 import 'package:focubili/services/cache_lifecycle.dart';
+import 'package:focubili/services/course_cache_access.dart';
 import 'package:focubili/services/course_cache_library.dart';
 import 'package:focubili/services/offline_cache_locations.dart';
 import 'package:focubili/services/offline_download_queue.dart';
@@ -502,6 +503,125 @@ void main() {
       } finally {
         await queue.close();
         courses.dispose();
+      }
+    },
+  );
+
+  test(
+    'a failed custom-root course restores its redacted diagnostic and retries in place',
+    () async {
+      await chooseSelected();
+      final custom = (await locations.activeId())!;
+      final root = await locations.requireRoot(custom);
+      final transfer = course.FixtureTransfer();
+      final access = course.Access()
+        ..now = DateTime.now()
+        ..media = OfflineMediaPlan(
+          video: OfflineMediaTrack(
+            id: 64,
+            urls: ['https://cdn.bilivideo.com/lesson?token=synthetic-secret'],
+            expectedBytes: transfer.payload.length,
+          ),
+        )
+        ..failure = const CourseCacheAccessException(
+          '无法验证购买。',
+          stage: CourseCacheStage.purchase,
+          reason: CourseCacheReason.entitlementNotConfirmed,
+        );
+
+      CourseCacheLibrary buildCourses(OfflineCacheLocations registry) =>
+          CourseCacheLibrary(
+            access: access,
+            root: () async => system,
+            cacheLocations: registry,
+            clock: () => access.now,
+            downloader: transfer,
+          );
+
+      const code = 'course-cache/v1/purchase/entitlementNotConfirmed';
+      late final OfflineDownloadTask task;
+      final firstCourses = buildCourses(locations);
+      final first = OfflineDownloadQueue(
+        library: library(),
+        courseLibrary: firstCourses,
+      );
+      try {
+        task = await first.enqueue(
+          course.video,
+          part: course.part,
+          quality: 64,
+        );
+        await _status(first, task, DownloadTaskStatus.failed);
+        expect(first.tasks.single.cacheLocationId, custom);
+        expect(first.tasks.single.courseDiagnostic?.code, code);
+        expect(transfer.starts, isEmpty);
+      } finally {
+        await first.close();
+        firstCourses.dispose();
+      }
+
+      final prefs = await SharedPreferences.getInstance();
+      Map<String, dynamic> savedTask() =>
+          (jsonDecode(prefs.getString(OfflineDownloadQueue.storageKey)!)
+                      as List)
+                  .single
+              as Map<String, dynamic>;
+      final saved = savedTask();
+      expect(saved['cacheLocationId'], custom);
+      expect(saved['courseDiagnostic'], code);
+      expect(jsonEncode(saved), isNot(contains('synthetic-secret')));
+      expect(jsonEncode(saved), isNot(contains(root.path)));
+
+      await locations.reset();
+      final restartedLocations = makeLocations();
+      expect(await restartedLocations.activeId(), isNull);
+      final restartedCourses = buildCourses(restartedLocations);
+      final restarted = OfflineDownloadQueue(
+        library: library(registry: restartedLocations),
+        courseLibrary: restartedCourses,
+      );
+      try {
+        await restarted.initialize();
+        expect(restarted.tasks.single.id, task.id);
+        expect(restarted.tasks.single.status, DownloadTaskStatus.failed);
+        expect(restarted.tasks.single.cacheLocationId, custom);
+        expect(restarted.tasks.single.courseDiagnostic?.code, code);
+
+        access.failure = null;
+        transfer.pausePoint = Completer<void>();
+        transfer.allow = Completer<void>();
+        await restarted.resume(task.id);
+        await transfer.pausePoint!.future.timeout(const Duration(seconds: 4));
+        final running = restarted.tasks.single;
+        expect(running.status, DownloadTaskStatus.downloading);
+        expect(running.cacheLocationId, custom);
+        expect(running.error, isNull);
+        expect(running.courseDiagnostic, isNull);
+        expect(savedTask().containsKey('courseDiagnostic'), isFalse);
+        final relative =
+            'private_course_v1/${task.courseMid}/${task.courseEntryId}/';
+        expect(
+          await File.fromUri(
+            root.uri.resolve('${relative}video.part'),
+          ).exists(),
+          isTrue,
+        );
+        expect(
+          await Directory.fromUri(system.uri.resolve(relative)).exists(),
+          isFalse,
+        );
+
+        transfer.allow!.complete();
+        await _status(restarted, task, DownloadTaskStatus.completed);
+        final entry = (await restartedCourses.entries()).single;
+        expect(entry.cacheLocationId, custom);
+        final playback = await restartedCourses.open(entry);
+        expect(await File(playback.video).readAsBytes(), transfer.payload);
+        expect(restarted.tasks.single.courseDiagnostic, isNull);
+        expect(access.calls, 2);
+      } finally {
+        await restarted.close();
+        restartedCourses.dispose();
       }
     },
   );

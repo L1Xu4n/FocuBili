@@ -1,5 +1,8 @@
 part of 'player_page.dart';
 
+double _collapsedTimelineBottomPadding(bool fullscreen, EdgeInsets edges) =>
+    4 + (fullscreen ? edges.bottom : 0);
+
 /// 组合共享轨道边界上的章节和笔记标记。
 extension _PlayerTimelineView on _PlayerPageState {
   bool get _showTimelineChapters =>
@@ -18,45 +21,48 @@ extension _PlayerTimelineView on _PlayerPageState {
     if (!showChapters && !showFlags && range == null) {
       return const SizedBox.shrink();
     }
-    return Column(
-      key: const Key('player-timeline-annotations'),
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (range != null)
-          InkWell(
-            key: const Key('ab-repeat-timeline'),
-            onTap: () => unawaited(_showAbRepeatSheet()),
-            child: PlayerAbRepeatMarkers(
-              range: range,
+    return _MeasureAnnotationHeight(
+      onLayout: (height) => _subtitleAnnotationHeight = height,
+      child: Column(
+        key: const Key('player-timeline-annotations'),
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (range != null)
+            InkWell(
+              key: const Key('ab-repeat-timeline'),
+              onTap: () => unawaited(_showAbRepeatSheet()),
+              child: PlayerAbRepeatMarkers(
+                range: range,
+                duration: _displayDuration,
+              ),
+            ),
+          if (showFlags)
+            PlayerNoteFlags(
+              notes: _currentVideoNotes,
+              bvid: _activeVideo.bvid,
+              cid: _currentPart.cid,
               duration: _displayDuration,
+              // 旗标回调打开现有工作区，不自动跳转播放位置。
+              onOpen: (notes) => unawaited(_openPlayerNoteFlag(notes)),
             ),
-          ),
-        if (showFlags)
-          PlayerNoteFlags(
-            notes: _currentVideoNotes,
-            bvid: _activeVideo.bvid,
-            cid: _currentPart.cid,
-            duration: _displayDuration,
-            // 旗标回调打开现有工作区，不自动跳转播放位置。
-            onOpen: (notes) => unawaited(_openPlayerNoteFlag(notes)),
-          ),
-        if (showChapters)
-          Padding(
-            padding: EdgeInsets.symmetric(
-              horizontal: collapsed ? 0 : PlayerTimelineGeometry.trackInset,
+          if (showChapters)
+            Padding(
+              padding: EdgeInsets.symmetric(
+                horizontal: collapsed ? 0 : PlayerTimelineGeometry.trackInset,
+              ),
+              child: VideoChapterStrip(
+                chapters: _playerEnhancementController.chapters,
+                position: _playbackSnapshot.position,
+                compact: true,
+                onDarkSurface: true,
+                // 画面内章节条点击函数统一跳转到对应章节的开始位置。
+                onSeek: (Duration position) {
+                  unawaited(_seekToChapter(position));
+                },
+              ),
             ),
-            child: VideoChapterStrip(
-              chapters: _playerEnhancementController.chapters,
-              position: _playbackSnapshot.position,
-              compact: true,
-              onDarkSurface: true,
-              // 画面内章节条点击函数统一跳转到对应章节的开始位置。
-              onSeek: (Duration position) {
-                unawaited(_seekToChapter(position));
-              },
-            ),
-          ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -69,13 +75,50 @@ extension _PlayerTimelineView on _PlayerPageState {
             _abRepeatRange == null)) {
       return const SizedBox.shrink();
     }
-    final double fullscreenSafeBottom = _fullscreen
-        ? MediaQuery.paddingOf(context).bottom
-        : 0;
+
     return Padding(
       key: const Key('collapsed-timeline-overlay'),
-      padding: EdgeInsets.only(bottom: 4 + fullscreenSafeBottom),
+      padding: EdgeInsets.only(
+        bottom: _collapsedTimelineBottomPadding(
+          _fullscreen,
+          MediaQuery.paddingOf(context),
+        ),
+      ),
       child: _buildTimelineAnnotations(collapsed: true),
     );
+  }
+}
+
+/// Measurement is passive: expanded and collapsed strips stay in their own
+/// element trees when a note is opened or player controls fade.
+class _MeasureAnnotationHeight extends SingleChildRenderObjectWidget {
+  const _MeasureAnnotationHeight({
+    required this.onLayout,
+    required super.child,
+  });
+  final ValueChanged<double> onLayout;
+
+  @override
+  _RenderAnnotationHeight createRenderObject(BuildContext context) =>
+      _RenderAnnotationHeight(onLayout);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderAnnotationHeight renderObject,
+  ) {
+    renderObject.onLayout = onLayout;
+  }
+}
+
+class _RenderAnnotationHeight extends RenderProxyBox {
+  _RenderAnnotationHeight(this.onLayout);
+  ValueChanged<double> onLayout;
+
+  @override
+  void performLayout() {
+    super.performLayout();
+    // Record only a number; notifications to the sheet happen after layout.
+    onLayout(size.height);
   }
 }

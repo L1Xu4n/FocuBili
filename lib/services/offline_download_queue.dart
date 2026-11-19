@@ -183,7 +183,8 @@ class OfflineDownloadQueue extends ChangeNotifier {
               ?.sizeBytes;
         } else if (!_visible(task)) {
           _tasks.add(
-            task.status == DownloadTaskStatus.completed
+            task.status == DownloadTaskStatus.completed ||
+                    task.status == DownloadTaskStatus.failed
                 ? task
                 : task.copyWith(status: DownloadTaskStatus.paused),
           );
@@ -216,6 +217,7 @@ class OfflineDownloadQueue extends ChangeNotifier {
                       ? DownloadTaskStatus.failed
                       : DownloadTaskStatus.paused,
                   error: task.error,
+                  courseDiagnostic: task.courseDiagnostic,
                 ),
         );
       }
@@ -586,6 +588,11 @@ class OfflineDownloadQueue extends ChangeNotifier {
               CourseCacheFailure() => error.message,
               CourseCacheAccessException() => error.message,
               _ => '下载失败，请检查网络后重试。',
+            },
+            courseDiagnostic: switch (error) {
+              CourseCacheFailure() => error.diagnostic,
+              CourseCacheAccessException() => error.diagnostic,
+              _ => null,
             },
           ),
         );

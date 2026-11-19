@@ -1,3 +1,4 @@
+import 'course_cache_diagnostic.dart';
 import 'video_preview.dart';
 
 /// Describes a durable queue entry independently of completed library records.
@@ -17,6 +18,7 @@ class OfflineDownloadTask {
     this.receivedBytes = 0,
     this.totalBytes,
     this.error,
+    this.courseDiagnostic,
     this.bytesPerSecond = 0,
   });
 
@@ -31,6 +33,7 @@ class OfflineDownloadTask {
   final int receivedBytes;
   final int? totalBytes;
   final String? error;
+  final CourseCacheDiagnostic? courseDiagnostic;
   // Transfer speed is transient; restored tasks always start at zero.
   final double bytesPerSecond;
 
@@ -58,6 +61,7 @@ class OfflineDownloadTask {
     int? receivedBytes,
     int? totalBytes,
     String? error,
+    CourseCacheDiagnostic? courseDiagnostic,
     bool clearError = false,
     double? bytesPerSecond,
   }) => OfflineDownloadTask(
@@ -71,6 +75,7 @@ class OfflineDownloadTask {
     receivedBytes: receivedBytes ?? this.receivedBytes,
     totalBytes: totalBytes ?? this.totalBytes,
     error: error,
+    courseDiagnostic: clearError ? null : courseDiagnostic,
     bytesPerSecond: (status ?? this.status) == DownloadTaskStatus.downloading
         ? bytesPerSecond ?? this.bytesPerSecond
         : 0,
@@ -91,6 +96,8 @@ class OfflineDownloadTask {
       'courseSeasonId': video.courseSeasonId,
       'courseEpisodeId': part.courseEpisodeId,
       'courseAid': part.courseAid,
+      if (status == DownloadTaskStatus.failed && courseDiagnostic != null)
+        'courseDiagnostic': courseDiagnostic!.code,
     },
     if (cacheLocationId != null) 'cacheLocationId': cacheLocationId,
     'quality': quality,
@@ -139,6 +146,7 @@ class OfflineDownloadTask {
       title: json['partTitle'] as String,
       duration: Duration(milliseconds: (json['durationMs'] as num).toInt()),
     );
+    final status = DownloadTaskStatus.values.byName(json['status'] as String);
     return OfflineDownloadTask(
       video: VideoPreview(
         bvid: bvid,
@@ -155,10 +163,13 @@ class OfflineDownloadTask {
       courseMid: courseMid,
       cacheLocationId: json['cacheLocationId'] as String?,
       createdAt: DateTime.parse(json['createdAt'] as String),
-      status: DownloadTaskStatus.values.byName(json['status'] as String),
+      status: status,
       receivedBytes: received,
       totalBytes: total,
       error: json['error'] as String?,
+      courseDiagnostic: course && status == DownloadTaskStatus.failed
+          ? CourseCacheDiagnostic.fromCode(json['courseDiagnostic'])
+          : null,
     );
   }
 }

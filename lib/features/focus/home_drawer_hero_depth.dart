@@ -24,8 +24,7 @@ class HomeDrawerHeroDepth extends StatelessWidget {
     final animate =
         enabled &&
         !MediaQuery.disableAnimationsOf(context) &&
-        !MediaQuery.accessibleNavigationOf(context) &&
-        height <= MediaQuery.sizeOf(context).height - 64;
+        !MediaQuery.accessibleNavigationOf(context);
 
     final contents = RepaintBoundary(child: child);
     Widget frame(double offset, {required bool filter}) {
@@ -63,8 +62,7 @@ class HomeDrawerHeroDepth extends StatelessWidget {
         animation: visualScroll ?? const AlwaysStoppedAnimation<double>(0),
         builder: (context, _) {
           if (visualScroll == null ||
-              !visualScroll.hasContentDimensions ||
-              height > visualScroll.viewportDimension ||
+              !visualScroll.hasPixels ||
               visualScroll.pixels <= 0) {
             return resting;
           }
