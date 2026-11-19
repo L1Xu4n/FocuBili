@@ -129,8 +129,7 @@ void main() {
       expect(find.text('离线播放'), findsNothing);
       await t.ensureVisible(find.text('联网复核'));
       if (const String.fromEnvironment('BETA3_CAPTURE_DIR').isNotEmpty) {
-        // Keep the whole explanatory paragraph and the action within the
-        // evidence image. The actual interaction below still uses 320×580.
+        // Keep the action in the evidence image. Interaction still uses 320×580.
         t.view.physicalSize = const Size(320, 840);
         await t.pumpAndSettle();
         await captureSubscriptionUi(t, key, 'course-cache-recheck-320');
@@ -246,6 +245,19 @@ void main() {
     await t.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('course cache overview has short contextual empty text', (
+    t,
+  ) async {
+    final library = _Library();
+    addTearDown(library.dispose);
+    await t.pumpWidget(MaterialApp(home: CourseCachePage(library: library)));
+    await t.pumpAndSettle();
+    expect(find.text('暂无缓存，可在课程播放器中缓存章节。'), findsOneWidget);
+    expect(find.textContaining('仅供购买账号'), findsNothing);
+    expect(find.text('缓存本章'), findsNothing);
+    await t.pumpWidget(const SizedBox.shrink());
+  });
+
   for (final mode in [(390.0, 780.0, 1.0), (320.0, 580.0, 1.8)]) {
     testWidgets(
       'chapter actions, cancel, delete, account-switch fence at ${mode.$1}',
@@ -279,6 +291,13 @@ void main() {
         );
         await t.pumpAndSettle();
         expect(find.text('缓存本章'), findsOneWidget);
+        expect(find.text('暂无缓存'), findsOneWidget);
+        expect(find.textContaining('仅供购买账号'), findsNothing);
+        await captureSubscriptionUi(
+          t,
+          key,
+          'course-cache-empty-${mode.$1.toInt()}',
+        );
         await t.tap(find.text('缓存本章'));
         await t.pumpAndSettle();
         expect(l.starts, 1);

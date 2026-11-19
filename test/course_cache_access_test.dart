@@ -231,6 +231,59 @@ void main() {
     },
   );
 
+  for (final scenario in <(String, void Function(_Fixture), bool, String)>[
+    (
+      'absent watermark metadata',
+      (f) => f.meta.remove('show_watermark'),
+      false,
+      '当前无法确认本章能否离线缓存。',
+    ),
+    (
+      'missing preview field despite enabled download hint',
+      (f) => f.response
+        ..remove('is_preview')
+        ..['allow_download'] = true,
+      true,
+      '当前无法确认本章能否离线缓存。',
+    ),
+    (
+      'unknown nested DRM metadata',
+      (f) => f.videoTrack['drm_unknown'] = 'future',
+      true,
+      '当前无法确认本章能否离线缓存。',
+    ),
+    (
+      'explicit download denial',
+      (f) => f.videoTrack['download_allowed'] = false,
+      true,
+      '本章有播放保护、试看或下载限制，无法缓存。',
+    ),
+    (
+      'explicit DRM',
+      (f) => f.response['is_drm'] = true,
+      true,
+      '本章有播放保护、试看或下载限制，无法缓存。',
+    ),
+  ]) {
+    test('reports ${scenario.$1} without authorizing a cache', () async {
+      scenario.$2(fixture);
+      await expectLater(
+        fixture.service().authorize(_video, _part, 64),
+        throwsA(
+          isA<CourseCacheAccessException>()
+              .having((e) => e.message, 'message', scenario.$4)
+              .having((e) => e.revokesReceipt, 'revokesReceipt', isTrue),
+        ),
+      );
+      expect(fixture.requests.map((u) => u.path), [
+        _nav,
+        _paid,
+        _season,
+        if (scenario.$3) _media,
+      ]);
+    });
+  }
+
   for (final invalid in [
     {'isLogin': true, 'mid': 52},
     {'isLogin': false, 'mid': 51},

@@ -90,9 +90,8 @@ class CourseCacheAccess {
   static const _unavailable = CourseCacheAccessException(
     '当前账号无法确认本节课的有效购买或完整播放权限。',
   );
-  static const _protected = CourseCacheAccessException(
-    '课程含播放保护、试看或缓存限制，请使用 B 站官方课堂。',
-  );
+  static const _protected = CourseCacheAccessException('本章有播放保护、试看或下载限制，无法缓存。');
+  static const _unverified = CourseCacheAccessException('当前无法确认本章能否离线缓存。');
   static const _unsupported = CourseCacheAccessException(
     '当前课程未返回可确认的完整媒体格式，无法缓存。',
   );
@@ -278,7 +277,7 @@ class CourseCacheAccess {
       if (authorizationExpiry case final end? when !checkedAt.isBefore(end)) {
         throw _expiry;
       }
-      if (_switch(meta['show_watermark']) != false) throw _protected;
+      if (_switch(meta['show_watermark']) != false) throw _unverified;
       final purchaseWindow = _purchaseExpiry(meta, status);
       cap(purchaseWindow.end);
       if (authorizationExpiry case final end? when !checkedAt.isBefore(end)) {
@@ -330,7 +329,7 @@ class CourseCacheAccess {
       if (_switch(mediaData['is_preview']) != false ||
           !(_switch(mediaData['is_drm']) == false ||
               _switch(mediaData['drm_tech_type']) == false)) {
-        throw _protected;
+        throw _unverified;
       }
       final media = _media(mediaData, quality);
       // Validate the address metadata, but do not fold URL expiry into
@@ -651,7 +650,9 @@ class CourseCacheAccess {
             'cacheallowed',
             'paidaccess',
           }.contains(key)) {
-            if (_switch(raw) != true) throw _protected;
+            final allowed = _switch(raw);
+            if (allowed == false) throw _protected;
+            if (allowed == null) throw _unverified;
           } else if (const {
                 'ispreview',
                 'preview',
@@ -688,7 +689,9 @@ class CourseCacheAccess {
                   (key != 'watermarkinterval' ||
                       _switch(node['show_watermark']) != false))) {
             // Unknown values (including nested configurations) are not false.
-            if (_switch(raw) != false) throw _protected;
+            final restricted = _switch(raw);
+            if (restricted == true) throw _protected;
+            if (restricted == null) throw _unverified;
           }
           if (raw is Map || raw is List) pending.add(raw);
         }

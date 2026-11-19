@@ -240,9 +240,6 @@ class _CourseCachePageState extends State<CourseCachePage>
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            const Text(
-              '仅供购买账号离线播放允许缓存的完整章节，不可导出。已核验章节按服务端期限使用，不另设期限。过期或旧凭证可联网复核，内容没变不用重复下载。',
-            ),
             if (loading || suspended)
               const Padding(
                 padding: EdgeInsets.all(20),
@@ -255,7 +252,6 @@ class _CourseCachePageState extends State<CourseCachePage>
               )
             else ...[
               if (video != null && part != null && selected == null) ...[
-                const SizedBox(height: 16),
                 Text(
                   part.title,
                   style: Theme.of(context).textTheme.titleMedium,
@@ -308,9 +304,13 @@ class _CourseCachePageState extends State<CourseCachePage>
               const SizedBox(height: 20),
               Text('本机章节', style: Theme.of(context).textTheme.titleMedium),
               if (rows.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 18),
-                  child: Text('暂无章节缓存。可在已购课程播放器中选择「缓存本章」。'),
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    video != null && part != null
+                        ? '暂无缓存'
+                        : '暂无缓存，可在课程播放器中缓存章节。',
+                  ),
                 ),
               for (final row in rows)
                 Card(
