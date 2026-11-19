@@ -39,25 +39,95 @@ class BilibiliVideoShotService implements VideoShotService {
   BilibiliVideoShotService({
     JsonRequest? requestJson,
     VideoShotImageRequest? requestImage,
+    DateTime Function()? clock,
+    Duration requestTimeout = _defaultTimeout,
   }) : _requestJson = requestJson ?? _requestPublicJson,
-       _requestImage = requestImage ?? _requestPublicImage;
+       _requestImage = requestImage ?? _requestPublicImage,
+       _clock = clock ?? DateTime.now,
+       _requestTimeout = requestTimeout;
 
+  /// Preview metadata uses an anonymous endpoint. Share only the production
+  /// instance: injected transports keep separate caches.
+  static final shared = BilibiliVideoShotService();
   static const String _apiHost = 'api.bilibili.com';
   static const String _path = '/x/player/videoshot';
   static const String _userAgent =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0 Safari/537.36';
+  static const _defaultTimeout = Duration(seconds: 8);
+  static const _previewLifetime = Duration(minutes: 5);
+  static const _entryLimit = 32;
+  static const _byteBudget = 256 * 1024;
   final JsonRequest _requestJson;
   final VideoShotImageRequest _requestImage;
+  final DateTime Function() _clock;
+  final Duration _requestTimeout;
+  final _previews =
+      <(String, int), ({VideoShotPreview value, DateTime expires, int size})>{};
+  final _pending = <(String, int), Future<VideoShotPreview?>>{};
+  int _previewBytes = 0;
 
-  /// 请求截图元数据并过滤不可信图片地址，任何异常都退回无预览而不打断播放。
+  /// 只在内存中短暂复用同一视频分 P 的已验证预览位置，不缓存失败。
   @override
   Future<VideoShotPreview?> loadPreview({
     required String bvid,
     required int cid,
   }) async {
-    if (bvid.trim().isEmpty || cid <= 0) {
-      return null;
+    bvid = bvid.trim();
+    if (bvid.isEmpty || cid <= 0) return null;
+    final key = (bvid, cid);
+    final cached = _previews.remove(key);
+    if (cached != null) {
+      if (cached.expires.isAfter(_clock())) {
+        _previews[key] = cached;
+        return cached.value;
+      }
+      _previewBytes -= cached.size;
     }
+    final pending = _pending[key];
+    if (pending != null) return pending;
+    if (_pending.length >= _entryLimit) return _fetchPreview(bvid, cid);
+
+    final operation = _fetchPreview(bvid, cid);
+    _pending[key] = operation;
+    try {
+      final preview = await operation;
+      if (preview != null) _rememberPreview(key, preview);
+      return preview;
+    } finally {
+      _pending.remove(key);
+    }
+  }
+
+  void _rememberPreview((String, int) key, VideoShotPreview preview) {
+    // Keep only public, unsigned atlas addresses. Estimate the retained
+    // metadata (not actual heap size), including long timelines and URLs.
+    var size = 128 + key.$1.length * 2 + preview.sampleSeconds.length * 8;
+    for (final address in preview.imageUrls) {
+      final uri = Uri.parse(address);
+      if (uri.userInfo.isNotEmpty ||
+          uri.port != 443 ||
+          uri.hasQuery ||
+          uri.hasFragment) {
+        return;
+      }
+      size += 32 + address.length * 2;
+    }
+    if (size > _byteBudget) return;
+    while (_previews.isNotEmpty &&
+        (_previews.length >= _entryLimit ||
+            _previewBytes + size > _byteBudget)) {
+      _previewBytes -= _previews.remove(_previews.keys.first)!.size;
+    }
+    _previews[key] = (
+      value: preview,
+      expires: _clock().add(_previewLifetime),
+      size: size,
+    );
+    _previewBytes += size;
+  }
+
+  /// 请求截图元数据并过滤不可信图片地址，任何异常都退回无预览而不打断播放。
+  Future<VideoShotPreview?> _fetchPreview(String bvid, int cid) async {
     try {
       final String responseText = await _requestJson(
         Uri.https(_apiHost, _path, <String, String>{
@@ -65,7 +135,7 @@ class BilibiliVideoShotService implements VideoShotService {
           'cid': cid.toString(),
           'index': '1',
         }),
-      );
+      ).timeout(_requestTimeout);
       final Object? decoded = jsonDecode(responseText);
       if (decoded is! Map || (decoded['code'] as num?)?.toInt() != 0) {
         return null;
@@ -231,18 +301,20 @@ class BilibiliVideoShotService implements VideoShotService {
   static Future<String> _requestPublicJson(Uri endpoint) async {
     final HttpClient client = HttpClient();
     try {
-      final HttpClientRequest request = await client.getUrl(endpoint);
-      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      request.headers.set(HttpHeaders.userAgentHeader, _userAgent);
-      request.headers.set(
-        HttpHeaders.refererHeader,
-        'https://www.bilibili.com/',
-      );
-      final HttpClientResponse response = await request.close();
-      if (response.statusCode != HttpStatus.ok) {
-        return '';
+      Future<String> requestJson() async {
+        final HttpClientRequest request = await client.getUrl(endpoint);
+        request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+        request.headers.set(HttpHeaders.userAgentHeader, _userAgent);
+        request.headers.set(
+          HttpHeaders.refererHeader,
+          'https://www.bilibili.com/',
+        );
+        final HttpClientResponse response = await request.close();
+        if (response.statusCode != HttpStatus.ok) return '';
+        return response.transform(utf8.decoder).join();
       }
-      return await response.transform(utf8.decoder).join();
+
+      return await requestJson().timeout(_defaultTimeout);
     } finally {
       client.close(force: true);
     }
