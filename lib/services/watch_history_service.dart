@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
@@ -20,17 +21,27 @@ class WatchHistoryService {
            AppBehaviorPreferencesService(preferencesLoader: preferencesLoader);
 
   static const String _storageKey = 'focubili_watch_history';
-  static Future<void> _writeQueue = Future<void>.value();
+  static final _pendingWrites = Expando<Future<void>>();
 
-  // Playback, thumbnail backfill and history management use separate service
-  // instances. Serialize their read-modify-write sequences on the shared key.
-  Future<T> _mutate<T>(Future<T> Function() operation) {
-    final next = _writeQueue.then((_) => operation());
-    _writeQueue = next.then<void>(
-      (_) {},
-      onError: (Object error, StackTrace stack) {},
-    );
-    return next;
+  // All users of a preferences cache share its lock. Do not retain a
+  // completed Future or let a replaced cache block writes to another one.
+  Future<T> _mutate<T>(
+    SharedPreferences preferences,
+    Future<T> Function() operation,
+  ) async {
+    final previous = _pendingWrites[preferences];
+    final done = Completer<void>();
+    final tail = done.future;
+    _pendingWrites[preferences] = tail;
+    try {
+      if (previous != null) await previous;
+      return await operation();
+    } finally {
+      if (identical(_pendingWrites[preferences], tail)) {
+        _pendingWrites[preferences] = null;
+      }
+      done.complete();
+    }
   }
 
   /// 限制本机最多保存的记录数量，避免观看记录无限占用存储空间。
@@ -41,41 +52,58 @@ class WatchHistoryService {
 
   /// 读取观看记录，跳过损坏条目、重复 BV 号和超过上限的旧数据。
   Future<List<WatchHistoryEntry>> loadHistory() async {
+    final preferences = await _loadAvailablePreferences();
+    return preferences == null ? const [] : _readEntries(preferences);
+  }
+
+  Future<SharedPreferences?> _loadAvailablePreferences() async {
     try {
-      final SharedPreferences preferences = await _preferencesLoader();
+      return await _preferencesLoader();
+    } catch (_) {
+      // 本地存储暂时不可用时，不阻止应用其他功能。
+      return null;
+    }
+  }
+
+  List<WatchHistoryEntry> _readEntries(SharedPreferences preferences) {
+    try {
       return _decodeEntries(preferences.getString(_storageKey));
     } catch (_) {
-      // 本地存储暂时不可用或旧数据类型不匹配时，不阻止应用其他功能。
-      return const <WatchHistoryEntry>[];
+      // 旧数据类型不匹配时按空记录处理。
+      return const [];
     }
   }
 
   /// 保存一次观看状态，并将同一 BV 号的旧记录替换为最新的一条。
-  Future<List<WatchHistoryEntry>> record(WatchHistoryEntry entry) =>
-      _mutate(() async {
-        if (!await _behaviorPreferencesService.loadWatchHistoryEnabled()) {
-          return loadHistory();
-        }
-        final WatchHistoryEntry? normalizedEntry = _normalizeEntry(entry);
-        if (normalizedEntry == null) {
-          return loadHistory();
-        }
+  Future<List<WatchHistoryEntry>> record(WatchHistoryEntry entry) async {
+    final normalizedEntry = _normalizeEntry(entry);
+    if (normalizedEntry == null) return loadHistory();
 
-        final List<WatchHistoryEntry> existing = await loadHistory();
-        final List<WatchHistoryEntry> updated = <WatchHistoryEntry>[
-          normalizedEntry,
-          ...existing.where(
-            (WatchHistoryEntry item) => item.bvid != normalizedEntry.bvid,
-          ),
-        ].take(maximumEntries).toList(growable: false);
-        await _writeEntries(updated);
-        return List<WatchHistoryEntry>.unmodifiable(updated);
-      });
+    final preferences = await _loadAvailablePreferences();
+    if (preferences == null) {
+      // Preserve the caller's in-memory result when storage is unavailable.
+      return await _behaviorPreferencesService.loadWatchHistoryEnabled()
+          ? List.unmodifiable([normalizedEntry])
+          : const [];
+    }
+    return _mutate(preferences, () async {
+      if (!await _behaviorPreferencesService.loadWatchHistoryEnabled()) {
+        return _readEntries(preferences);
+      }
+      final existing = _readEntries(preferences);
+      final updated = <WatchHistoryEntry>[
+        normalizedEntry,
+        ...existing.where((item) => item.bvid != normalizedEntry.bvid),
+      ].take(maximumEntries).toList(growable: false);
+      await _writeEntries(preferences, updated);
+      return List<WatchHistoryEntry>.unmodifiable(updated);
+    });
+  }
 
   /// 为旧版遗留的空封面记录批量补写安全缩略图，同时保持原顺序、观看时间和进度不变。
   Future<List<WatchHistoryEntry>> backfillThumbnails(
     Map<String, String> thumbnailUrls,
-  ) => _mutate(() async {
+  ) async {
     final Map<String, String> normalizedUrls = <String, String>{};
     thumbnailUrls.forEach((String bvid, String url) {
       final String normalizedBvid = bvid.trim();
@@ -87,37 +115,39 @@ class WatchHistoryService {
     if (normalizedUrls.isEmpty) {
       return loadHistory();
     }
-    final List<WatchHistoryEntry> existing = await loadHistory();
-    bool changed = false;
-    final List<WatchHistoryEntry> updated = existing
-        .map((entry) {
-          final String? thumbnailUrl = normalizedUrls[entry.bvid];
-          if (entry.thumbnailUrl.isNotEmpty || thumbnailUrl == null) {
-            return entry;
-          }
-          changed = true;
-          return entry.copyWith(thumbnailUrl: thumbnailUrl);
-        })
-        .toList(growable: false);
-    if (changed) {
-      await _writeEntries(updated);
-    }
-    return List<WatchHistoryEntry>.unmodifiable(updated);
-  });
+    final preferences = await _loadAvailablePreferences();
+    if (preferences == null) return const [];
+    return _mutate(preferences, () async {
+      final existing = _readEntries(preferences);
+      bool changed = false;
+      final updated = existing
+          .map((entry) {
+            final thumbnailUrl = normalizedUrls[entry.bvid];
+            if (entry.thumbnailUrl.isNotEmpty || thumbnailUrl == null) {
+              return entry;
+            }
+            changed = true;
+            return entry.copyWith(thumbnailUrl: thumbnailUrl);
+          })
+          .toList(growable: false);
+      if (changed) await _writeEntries(preferences, updated);
+      return List<WatchHistoryEntry>.unmodifiable(updated);
+    });
+  }
 
   /// 移除指定 BV 号的本机观看记录，并返回移除后的记录列表。
   Future<List<WatchHistoryEntry>> remove(String bvid) => removeMany([bvid]);
 
   /// Removes the selected local history IDs in one write; no native resume,
   /// learning progress, or online account storage is touched.
-  Future<List<WatchHistoryEntry>> removeMany(Iterable<String> bvids) {
+  Future<List<WatchHistoryEntry>> removeMany(Iterable<String> bvids) async {
     final ids = bvids
         .map((id) => id.trim())
         .where((id) => id.isNotEmpty)
         .toSet();
     if (ids.isEmpty) return loadHistory();
-    return _mutate(() async {
-      final preferences = await _preferencesLoader();
+    final preferences = await _preferencesLoader();
+    return _mutate(preferences, () async {
       final raw = preferences.getString(_storageKey);
       if (raw == null || raw.trim().isEmpty) return const [];
       final decoded = jsonDecode(raw);
@@ -148,20 +178,26 @@ class WatchHistoryService {
   }
 
   /// 清空设备上的所有观看记录，并返回空的页面状态列表。
-  Future<List<WatchHistoryEntry>> clear() => _mutate(() async {
-    try {
-      final SharedPreferences preferences = await _preferencesLoader();
-      await preferences.remove(_storageKey);
-    } catch (_) {
-      // 读取器不可用时保持幂等，页面仍可立即切换为空状态。
+  Future<List<WatchHistoryEntry>> clear() async {
+    final preferences = await _loadAvailablePreferences();
+    if (preferences != null) {
+      await _mutate(preferences, () async {
+        try {
+          await preferences.remove(_storageKey);
+        } catch (_) {
+          // 读取器不可用时保持幂等，页面仍可立即切换为空状态。
+        }
+      });
     }
     return const <WatchHistoryEntry>[];
-  });
+  }
 
   /// 将内存中的记录序列化后写入本机；失败时仍保留调用方的内存结果。
-  Future<void> _writeEntries(List<WatchHistoryEntry> entries) async {
+  Future<void> _writeEntries(
+    SharedPreferences preferences,
+    List<WatchHistoryEntry> entries,
+  ) async {
     try {
-      final SharedPreferences preferences = await _preferencesLoader();
       final String encoded = jsonEncode(
         entries.map((WatchHistoryEntry entry) => entry.toJson()).toList(),
       );

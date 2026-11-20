@@ -34,6 +34,36 @@ WatchHistoryService _service(SharedPreferences preferences) {
   return WatchHistoryService(preferencesLoader: () async => preferences);
 }
 
+/// Allows a test to pause a mutation after its read, but before its write.
+class _PausedWritePreferences implements SharedPreferences {
+  _PausedWritePreferences(this.raw);
+
+  static const historyKey = 'focubili_watch_history';
+  String? raw;
+  final writeStarted = Completer<void>();
+  final finishFirstWrite = Completer<void>();
+
+  @override
+  String? getString(String key) => key == historyKey ? raw : null;
+
+  @override
+  bool? getBool(String key) => null;
+
+  @override
+  Future<bool> setString(String key, String value) async {
+    expect(key, historyKey);
+    if (!writeStarted.isCompleted) {
+      writeStarted.complete();
+      await finishFirstWrite.future;
+    }
+    raw = value;
+    return true;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
 /// 注册观看记录服务的本地存储、容错和删除行为测试。
 void main() {
   /// 每个测试前重置内存偏好设置，避免测试之间共享记录。
@@ -228,47 +258,59 @@ void main() {
   });
 
   test('批量移除保留不相关记录，且不会被并发封面补写覆盖', () async {
-    const key = 'focubili_watch_history';
     final retained = _entry(
       bvid: 'BVkeep',
       thumbnailUrl: '',
       pageNumber: 3,
       lastPosition: const Duration(minutes: 25),
     );
-    final retainedRaw = {...retained.toJson(), 'legacyField': 'keep'};
     final elsewhere = _entry(bvid: 'BVnotSelected');
-    SharedPreferences.setMockInitialValues({
-      key: jsonEncode([
+    final preferences = _PausedWritePreferences(
+      jsonEncode([
         _entry(bvid: 'BVfirst').toJson(),
-        retainedRaw,
+        retained.toJson(),
         _entry(bvid: 'BVsecond').toJson(),
-        'unexpected legacy row',
         elsewhere.toJson(),
       ]),
-      'playback.progress.unrelated': 'native/learning data untouched',
-    });
-    final preferences = await SharedPreferences.getInstance();
-    final pendingRemoval = Completer<SharedPreferences>();
-    final removing = WatchHistoryService(
-      preferencesLoader: () => pendingRemoval.future,
     );
+    final removing = _service(preferences);
     final player = _service(preferences);
     final deletion = removing.removeMany(['BVfirst', 'BVsecond', 'BVfirst']);
+    await preferences.writeStarted.future;
     final backfill = player.backfillThumbnails({
       'BVfirst': 'would reappear if stale',
       'BVkeep': 'new-cover',
     });
-    pendingRemoval.complete(preferences);
 
-    final removed = await deletion;
-    expect(removed, [retained, elsewhere]);
+    // Unblock the first write only after a contender had time to read.
+    // Without a shared lock it would see BVfirst and restore it.
+    await Future<void>.delayed(Duration.zero);
+    preferences.finishFirstWrite.complete();
+    expect(await deletion, [retained, elsewhere]);
     final updated = await backfill;
     expect(updated, [retained.copyWith(thumbnailUrl: 'new-cover'), elsewhere]);
     expect(await player.loadHistory(), updated);
-    expect(
-      preferences.getString('playback.progress.unrelated'),
-      'native/learning data untouched',
+  });
+
+  test('旧本机历史存储等待写入时不会阻塞新存储', () async {
+    final oldStore = _PausedWritePreferences(
+      jsonEncode([_entry(bvid: 'BVold').toJson()]),
     );
+    final pendingRemoval = _service(oldStore).removeMany(['BVold']);
+    await oldStore.writeStarted.future;
+
+    final newService = _service(await SharedPreferences.getInstance());
+    final freshEntry = _entry(bvid: 'BVfresh');
+    try {
+      expect(
+        await newService.record(freshEntry).timeout(const Duration(seconds: 2)),
+        [freshEntry],
+      );
+    } finally {
+      oldStore.finishFirstWrite.complete();
+      await pendingRemoval;
+    }
+    expect(await newService.loadHistory(), [freshEntry]);
   });
 
   test('批量移除仅改写匹配的本机历史行，损坏的 JSON 保持原样', () async {
@@ -281,11 +323,16 @@ void main() {
         _entry(bvid: 'BVtarget').toJson(),
         unsupportedRow,
       ]),
+      'playback.progress.unrelated': 'native/learning data untouched',
     });
     final prefs = await SharedPreferences.getInstance();
     final service = _service(prefs);
     expect(await service.removeMany(['BVtarget']), hasLength(1));
     expect(jsonDecode(prefs.getString(key)!), [keep, unsupportedRow]);
+    expect(
+      prefs.getString('playback.progress.unrelated'),
+      'native/learning data untouched',
+    );
 
     const malformed = '[{';
     await prefs.setString(key, malformed);
