@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:collection';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -44,6 +47,24 @@ class _RejectingCachedPreferences extends _RejectingPreferences {
   Future<void> reload() async {
     reloads++;
     cached.clear();
+  }
+}
+
+/// Advances only this zone's microtasks, like an individual widget test.
+class _MicrotaskClock {
+  final _pending = Queue<void Function()>();
+  late final zone = Zone.current.fork(
+    specification: ZoneSpecification(
+      scheduleMicrotask: (_, _, zone, task) {
+        _pending.add(() => zone.run(task));
+      },
+    ),
+  );
+
+  void pump() {
+    while (_pending.isNotEmpty) {
+      _pending.removeFirst()();
+    }
   }
 }
 
@@ -302,4 +323,34 @@ void main() {
     }
     expect(AppFavoritesService.contentsRevision.value, revision);
   });
+
+  test(
+    'a drained write queue does not depend on the previous test zone',
+    () async {
+      final prefs = await SharedPreferences.getInstance();
+      final before = _MicrotaskClock();
+      final after = _MicrotaskClock();
+      String? first, second;
+      final a = AppFavoritesService(preferencesLoader: () async => prefs);
+      final b = AppFavoritesService(preferencesLoader: () async => prefs);
+
+      before.zone.run(() {
+        unawaited(
+          a.createFolder('first').then((folder) => first = folder?.name),
+        );
+      });
+      // Nothing drives the previous clock after its test has ended.
+      await Future<void>.delayed(Duration.zero);
+      before.pump();
+      expect(first, 'first');
+
+      after.zone.run(() {
+        unawaited(
+          b.createFolder('second').then((folder) => second = folder?.name),
+        );
+      });
+      after.pump();
+      expect(second, 'second');
+    },
+  );
 }

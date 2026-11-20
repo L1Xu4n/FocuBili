@@ -20,7 +20,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final row = find.text(second.name);
+    final row = find.descendant(
+      of: find.byKey(Key('app-favorite-folder-${second.id}')),
+      matching: find.text(second.name),
+    );
     final rename = find.byKey(Key('rename-app-favorite-${second.id}'));
     final wrong = find.byKey(Key('rename-app-favorite-${first.id}'));
     final rightClick = await tester.startGesture(

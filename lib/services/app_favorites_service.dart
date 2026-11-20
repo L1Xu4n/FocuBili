@@ -23,7 +23,7 @@ class AppFavoritesService {
 
   static const _foldersKey = 'app_favorites.folders_v1';
   static const _itemsPrefix = 'app_favorites.items_v1.';
-  static Future<void> _queue = Future<void>.value();
+  static Future<void>? _queue;
   static int _idSequence = 0;
   final AppFavoritesPreferencesLoader? _preferencesLoader;
   final Map<String, Future<int?>> _partCounts = {};
@@ -67,16 +67,24 @@ class AppFavoritesService {
   }
 
   /// Serializes complete mutations across all service instances, including failures.
-  Future<T> _mutate<T>(Future<T> Function() operation, {bool notify = true}) {
-    final next = _queue.then((_) => operation()).then((result) {
+  Future<T> _mutate<T>(
+    Future<T> Function() operation, {
+    bool notify = true,
+  }) async {
+    final previous = _queue;
+    final release = Completer<void>();
+    final tail = _queue = release.future;
+    try {
+      if (previous != null) await previous;
+      final result = await operation();
       if (notify && result != null && result != false) contentsRevision.value++;
       return result;
-    });
-    _queue = next.then<void>(
-      (_) {},
-      onError: (Object error, StackTrace stack) {},
-    );
-    return next;
+    } finally {
+      // A completed Future can schedule late listeners in its original Zone.
+      // Drop the drained tail so later mutations never need that zone to run.
+      if (identical(_queue, tail)) _queue = null;
+      release.complete();
+    }
   }
 
   /// Uses only the injected or local preferences backend.
