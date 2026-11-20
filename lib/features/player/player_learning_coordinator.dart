@@ -230,6 +230,39 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
     }
   }
 
+  /// 合集批量勾选只需一个分 P：优先当前播放的 P，其次上次观看的 P。
+  Future<LearningPartSelection> _resolveCollectionLearningSelection(
+    VideoCollectionEntry entry,
+  ) async {
+    final bvid = entry.bvid;
+    if (bvid == _activeVideo.bvid) {
+      return LearningPartSelection(
+        _activeVideo,
+        _currentPart,
+        position: _playbackSnapshot.phase == PlaybackPhase.ready
+            ? _playbackSnapshot.position
+            : Duration.zero,
+      );
+    }
+    final video = await _bilibiliService.lookupVideo(bvid);
+    if (video.bvid != bvid || video.parts.isEmpty) {
+      throw StateError('合集视频详情无效');
+    }
+    final history = _watchHistoryByBvid[bvid];
+    if (history != null) {
+      for (final part in video.parts) {
+        if (part.pageNumber == history.lastPartPageNumber) {
+          return LearningPartSelection(
+            video,
+            part,
+            position: history.lastPosition,
+          );
+        }
+      }
+    }
+    return LearningPartSelection(video, video.initialPart);
+  }
+
   /// 查询合集条目的完整资料并选择分 P；当前视频无需重复查询。
   Future<void> _addCollectionVideoToLearningList(
     VideoCollectionEntry entry,

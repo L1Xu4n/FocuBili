@@ -650,9 +650,11 @@ mixin _PlayerVideoCoordinator
             collection: collection,
             currentBvid: _activeVideo.bvid,
             watchHistoryByBvid: _watchHistoryByBvid,
-            // 合集面板加入函数沿用播放器的完整视频查询与学习清单服务。
-            onAddToLearningList: (VideoCollectionEntry entry) =>
-                unawaited(_addCollectionVideoToLearningList(entry)),
+            learningListService: _learningListService,
+            resolveLearningSelection: _resolveCollectionLearningSelection,
+            onLearningSaved: () {
+              if (mounted) unawaited(_loadCurrentLearningListEntry());
+            },
           ),
         );
     if (selected != null && mounted && selected.bvid != _activeVideo.bvid) {

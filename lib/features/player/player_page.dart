@@ -22,6 +22,7 @@ import 'widgets/player_video_tags.dart';
 import '../../core/layout/adaptive_layout.dart';
 import '../../core/layout/app_scroll_behavior.dart';
 import '../../core/layout/device_orientation_policy.dart';
+import '../../core/widgets/drag_selection_region.dart';
 import '../../features/common/watch_history_badge.dart';
 import '../../features/focus/focus_timer_controller.dart';
 import '../../features/focus/focus_timer_scope.dart';
