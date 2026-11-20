@@ -9,7 +9,7 @@ import '../../services/data_transfer_file_service.dart';
 import '../../services/settings_transfer_service.dart';
 import 'settings_transfer_dialogs.dart';
 
-/// 提供用户主动操作的设置与登录迁移入口，登录备份仅在明确确认后导出，凭据不回显或写入诊断。
+/// 提供用户主动操作的设置与登录迁移入口，登录备份仅在明确确认后导出，凭据不明文显示或写入诊断。
 class DataTransferPage extends StatefulWidget {
   /// 创建迁移页面，测试可以注入只使用合成数据的服务。
   const DataTransferPage({
@@ -143,7 +143,7 @@ class _DataTransferPageState extends State<DataTransferPage> {
     } else {
       values = await showDialog<Map<String, Object>>(
         context: context,
-        builder: (_) => SettingsTextImportDialog(
+        builder: (_) => DataTransferTextImportDialog<Map<String, Object>>(
           parse: widget.settingsService.parseSettings,
         ),
       );
@@ -194,7 +194,7 @@ class _DataTransferPageState extends State<DataTransferPage> {
       WidgetsBinding.instance.lifecycleState == null ||
       WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
 
-  /// 两种载体只接受现有登录 JSON 格式，不把原文传给 UI 或日志。
+  /// 两种载体只接受现有登录 JSON 格式，解析错误不带出备份内容。
   static String _parseLogin(String source) {
     if (!SettingsTransferService.fitsTransferLimit(source)) {
       throw const FormatException();
@@ -211,7 +211,7 @@ class _DataTransferPageState extends State<DataTransferPage> {
     return cookie;
   }
 
-  /// 仅显式粘贴时读取文本，不把登录备份交给输入法或建立草稿。
+  /// 登录文本仅保留在当次编辑中，通过格式校验和确认后才验证账号。
   Future<void> _importLogin() => _run(() async {
     final method = await chooseDataTransferMethod(
       context,
@@ -219,40 +219,31 @@ class _DataTransferPageState extends State<DataTransferPage> {
       login: true,
     );
     if (!mounted || method == null || !_current) return;
-    final String? source;
-    final pasting = method == DataTransferMethod.text;
-    if (pasting) {
+    final String? cookie;
+    final fromText = method == DataTransferMethod.text;
+    if (fromText) {
       if (!_foreground) return;
-      try {
-        source = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
-      } catch (_) {
-        if (_current) _message('无法读取剪贴板，请重试或从文件导入。');
-        return;
-      }
-      if (!_current || !_foreground) return;
-      if (source == null || source.isEmpty) {
-        _message('剪贴板没有登录备份文本。');
-        return;
-      }
+      cookie = await showDialog<String>(
+        context: context,
+        builder: (_) => DataTransferTextImportDialog<String>(
+          parse: _parseLogin,
+          login: true,
+        ),
+      );
     } else {
-      source = await _pick();
-    }
-    if (source == null || !_current) return;
-    final String cookie;
-    try {
+      final source = await _pick();
+      if (source == null || !_current) return;
       cookie = _parseLogin(source);
-    } on FormatException {
-      _message(pasting ? '剪贴板内容不是有效的登录备份。' : '文件格式不支持或内容损坏，未导入。');
-      return;
     }
+    if (cookie == null || !_current || (fromText && !_foreground)) return;
     final confirmed = await _confirm(
       '导入登录信息？',
-      pasting
+      fromText
           ? '请仅导入你自己的登录备份。应用将连接 B 站验证，成功后替换当前登录账号；失效备份或网络验证失败不会切换账号。'
           : '请仅导入你自己的登录文件。应用将连接 B 站验证，成功后替换当前登录账号；失效文件或网络验证失败不会切换账号。',
       '验证并导入',
     );
-    if (!confirmed || !_current || (pasting && !_foreground)) return;
+    if (!confirmed || !_current || (fromText && !_foreground)) return;
     await _auth.loginWithCookie(cookie);
     if (_current) _message('登录信息已导入，请返回“我的”页面刷新账号。');
   });
