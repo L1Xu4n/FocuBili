@@ -140,6 +140,72 @@ class AppFavoritesService {
     return saved;
   });
 
+  /// Reorders an exact set of current folders without modifying their metadata.
+  Future<bool> reorderFolders(List<String> orderedIds) {
+    final ids = List<String>.of(orderedIds);
+    return _mutate(() async {
+      final current = await loadFolders();
+      final ordered = _inOrder(current, (folder) => folder.id, ids);
+      if (ordered == null) return false;
+      return _saveOrder(_foldersKey, ordered.map((folder) => folder.toJson()));
+    });
+  }
+
+  /// Saves a manual order for one folder without replacing changed membership.
+  Future<bool> reorderItems(String folderId, List<String> orderedIds) {
+    final ids = List<String>.of(orderedIds);
+    return _mutate(() async {
+      if (!(await loadFolders()).any((folder) => folder.id == folderId)) {
+        return false;
+      }
+      final current = await loadItems(folderId);
+      final ordered = _inOrder(current, (item) => item.bvid, ids);
+      if (ordered == null) return false;
+      return _saveOrder('$_itemsPrefix$folderId', [
+        for (var i = 0; i < ordered.length; i++)
+          ordered[i].withSortIndex(i).toJson(),
+      ]);
+    });
+  }
+
+  /// Refuses duplicates or stale lists that could drop, add, or resurrect data.
+  List<T>? _inOrder<T>(
+    List<T> current,
+    String Function(T) idOf,
+    List<String> orderedIds,
+  ) {
+    if (orderedIds.length != current.length) return null;
+    final byId = {for (final item in current) idOf(item): item};
+    if (byId.length != current.length ||
+        orderedIds.toSet().length != current.length ||
+        !byId.keys.toSet().containsAll(orderedIds)) {
+      return null;
+    }
+    return [for (final id in orderedIds) byId[id]!];
+  }
+
+  /// SharedPreferences changes its memory cache even if the backend rejects
+  /// a write. Reload the durable values rather than displaying a phantom order.
+  Future<bool> _saveOrder(
+    String key,
+    Iterable<Map<String, Object?>> entries,
+  ) async {
+    final prefs = await _loadPreferences();
+    try {
+      if (await prefs.setString(key, jsonEncode(entries.toList()))) {
+        return true;
+      }
+    } catch (_) {
+      // A thrown write and a rejected write both need a cache refresh.
+    }
+    try {
+      await prefs.reload();
+    } catch (_) {
+      // The caller retains the last displayed data if storage is unavailable.
+    }
+    return false;
+  }
+
   /// Removes metadata before item cleanup; failed cleanup restores the folder list.
   Future<bool> deleteFolder(String id) => _mutate(() async {
     final folders = await loadFolders();
@@ -160,14 +226,23 @@ class AppFavoritesService {
     }
   });
 
-  /// Restores the newest items first and refuses to discard damaged entries.
+  /// Restores manual order, with new or legacy items newest-first above it.
   Future<List<AppFavoriteItem>> loadItems(String folderId) async {
     final prefs = await _loadPreferences();
     final items = _decode(
       prefs.getString('$_itemsPrefix$folderId'),
       AppFavoriteItem.fromJson,
     );
-    items.sort((a, b) => b.addedAt.compareTo(a.addedAt));
+    items.sort((a, b) {
+      final aIndex = a.sortIndex;
+      final bIndex = b.sortIndex;
+      if (aIndex != null && bIndex != null && aIndex != bIndex) {
+        return aIndex.compareTo(bIndex);
+      }
+      if (aIndex == null && bIndex != null) return -1;
+      if (aIndex != null && bIndex == null) return 1;
+      return b.addedAt.compareTo(a.addedAt);
+    });
     return List.unmodifiable(items);
   }
 
@@ -271,6 +346,7 @@ class AppFavoritesService {
             !sourceIds.contains(folder.id),
       );
       final AppFavoriteFolder target;
+      final bool createTarget = byId.isEmpty && byName.isEmpty;
       if (byId.isNotEmpty) {
         target = byId.first;
       } else if (byName.isNotEmpty) {
@@ -299,6 +375,8 @@ class AppFavoritesService {
             durationText: item.durationText,
             addedAt: item.addedAt,
             partCount: item.partCount,
+            // Preserve rank for a fresh restore, not when merging two orders.
+            sortIndex: createTarget ? item.sortIndex : null,
           ),
         );
         imported++;

@@ -13,6 +13,7 @@ class AppFavoriteVideoTile extends StatefulWidget {
     this.onRemove,
     this.onLongPress,
     this.selectionControl,
+    this.reorderHandle,
     this.folderNames,
     this.loadPartCount,
   });
@@ -20,6 +21,7 @@ class AppFavoriteVideoTile extends StatefulWidget {
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
   final Widget? selectionControl;
+  final Widget? reorderHandle;
   final VoidCallback? onRemove;
   final String? folderNames;
   final Future<int?> Function()? loadPartCount;
@@ -57,84 +59,93 @@ class _AppFavoriteVideoTileState extends State<AppFavoriteVideoTile> {
     final onTap = widget.onTap;
     final onRemove = widget.onRemove;
     final folderNames = widget.folderNames;
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        onLongPress: widget.onLongPress,
-        child: Padding(
-          padding: const EdgeInsets.all(10),
-          child: Row(
-            children: [
-              SizedBox(
-                width: 96,
-                height: 60,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(6),
-                  child: item.coverUrl.isEmpty
-                      ? const Icon(Icons.bookmark_rounded)
-                      : AppNetworkImage(
-                          imageUrl: item.coverUrl,
-                          httpHeaders: const {
-                            'Referer': 'https://www.bilibili.com/',
-                          },
-                          fit: BoxFit.cover,
-                          memCacheWidth: 256,
-                          errorWidget: (context, url, error) =>
-                              const Icon(Icons.broken_image_outlined),
-                        ),
-                ),
+    final body = InkWell(
+      onTap: onTap,
+      onLongPress: widget.onLongPress,
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 96,
+              height: 60,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: item.coverUrl.isEmpty
+                    ? const Icon(Icons.bookmark_rounded)
+                    : AppNetworkImage(
+                        imageUrl: item.coverUrl,
+                        httpHeaders: const {
+                          'Referer': 'https://www.bilibili.com/',
+                        },
+                        fit: BoxFit.cover,
+                        memCacheWidth: 256,
+                        errorWidget: (context, url, error) =>
+                            const Icon(Icons.broken_image_outlined),
+                      ),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    item.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    item.ownerName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  if (item.durationText.isNotEmpty)
                     Text(
-                      item.title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontWeight: FontWeight.w700),
+                      item.durationText,
+                      style: Theme.of(context).textTheme.bodySmall,
                     ),
-                    const SizedBox(height: 4),
+                  Text(
+                    _partCount == null ? 'P 数未知' : '共 $_partCount P',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  if (folderNames != null)
                     Text(
-                      item.ownerName,
+                      folderNames,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
-                    if (item.durationText.isNotEmpty)
-                      Text(
-                        item.durationText,
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    Text(
-                      _partCount == null ? 'P 数未知' : '共 $_partCount P',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                    if (folderNames != null)
-                      Text(
-                        folderNames,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                  ],
-                ),
+                ],
               ),
-              if (widget.selectionControl case final control?)
-                control
-              else if (onRemove != null)
-                IconButton(
-                  key: Key('remove-app-favorite-${item.bvid}'),
-                  tooltip: '移除',
-                  icon: const Icon(Icons.delete_outline_rounded),
-                  onPressed: onRemove,
-                ),
-            ],
-          ),
+            ),
+            if (widget.selectionControl case final control?)
+              control
+            else if (onRemove != null)
+              IconButton(
+                key: Key('remove-app-favorite-${item.bvid}'),
+                tooltip: '移除',
+                icon: const Icon(Icons.delete_outline_rounded),
+                onPressed: onRemove,
+              ),
+          ],
         ),
       ),
+    );
+    final handle = widget.reorderHandle;
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: handle == null
+          ? body
+          : Row(
+              children: [
+                Expanded(child: body),
+                handle,
+              ],
+            ),
     );
   }
 }

@@ -10,6 +10,7 @@ import '../../models/app_favorite.dart';
 import '../../models/playback_queue.dart';
 import '../../services/app_favorites_service.dart';
 import '../../services/bilibili_service.dart';
+import 'app_favorite_reorder.dart';
 import 'app_favorite_video_tile.dart';
 import 'local_video_list_selection.dart';
 
@@ -48,6 +49,7 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
   final _selection = LocalVideoListSelection();
   List<AppFavoriteItem> _visibleItems = const [];
   bool _removing = false;
+  bool _reordering = false;
   int _loadGeneration = 0;
   int _openGeneration = 0;
 
@@ -76,6 +78,7 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
       _selection.end();
       _searchController.clear();
       _removing = false;
+      _reordering = false;
       _items = const [];
       _updateVisibleItems();
       _isLoading = true;
@@ -91,6 +94,7 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
   }
 
   void _startSelection([String? anchor]) {
+    if (_removing || _reordering) return;
     FocusScope.of(context).unfocus();
     setState(() {
       ++_openGeneration;
@@ -118,6 +122,37 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
       if (mounted && generation == _loadGeneration) {
         setState(() => _isLoading = false);
         _showMessage('本机数据操作失败，请重试；未覆盖损坏的记录。');
+      }
+    }
+  }
+
+  Future<void> _reorderItems(List<String> ids) async {
+    if (_removing ||
+        _reordering ||
+        _selection.active ||
+        _searchController.text.trim().isNotEmpty) {
+      return;
+    }
+    final folderId = widget.folder.id;
+    setState(() {
+      _reordering = true;
+      ++_openGeneration;
+    });
+    try {
+      final saved = await _favoritesService.reorderItems(folderId, ids);
+      if (!mounted || widget.folder.id != folderId) return;
+      if (!saved) {
+        _showMessage('未能保存视频顺序，请刷新后重试。');
+        return;
+      }
+      await _loadItems();
+    } catch (_) {
+      if (mounted && widget.folder.id == folderId) {
+        _showMessage('未能保存视频顺序，请重试。');
+      }
+    } finally {
+      if (mounted && widget.folder.id == folderId) {
+        setState(() => _reordering = false);
       }
     }
   }
@@ -152,7 +187,7 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
 
   /// Both single and batch removal are scoped to the current physical folder.
   Future<void> _removeItems({AppFavoriteItem? single}) async {
-    if (_removing) return;
+    if (_removing || _reordering) return;
     final folder = widget.folder;
     final bvids = single == null ? {..._selection.ids} : {single.bvid};
     if (bvids.isEmpty) return;
@@ -208,7 +243,11 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
     }
   }
 
-  Widget _buildItemCard(AppFavoriteItem item, Key handleKey) {
+  Widget _buildItemCard(
+    AppFavoriteItem item,
+    Key handleKey,
+    Widget? reorderHandle,
+  ) {
     void toggle() => setState(() => _selection.toggle(item.bvid));
     return AppFavoriteVideoTile(
       key: Key('app-favorite-item-${item.bvid}'),
@@ -217,14 +256,15 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
         item,
         _bilibiliService.lookupVideo,
       ),
-      onTap: _removing
+      onTap: _removing || _reordering
           ? null
           : _selection.active
           ? toggle
           : () => unawaited(_openVideo(item)),
-      onLongPress: _selection.active || _removing
+      onLongPress: _selection.active || _removing || _reordering
           ? null
           : () => _startSelection(item.bvid),
+      reorderHandle: reorderHandle,
       selectionControl: _selection.active
           ? _selection.checkbox(
               handleKey: handleKey,
@@ -233,7 +273,9 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
               onToggle: _removing ? null : toggle,
             )
           : null,
-      onRemove: _removing ? null : () => unawaited(_removeItems(single: item)),
+      onRemove: _removing || _reordering
+          ? null
+          : () => unawaited(_removeItems(single: item)),
     );
   }
 
@@ -278,23 +320,39 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
         notificationPredicate: (notification) =>
             !_selection.active && notification.depth == 0,
         onRefresh: _loadItems,
-        child: AdaptiveTwoColumnList(
-          key: const Key('app-favorite-items-list'),
-          controller: _scrollController,
-          physics: dragging
-              ? const NeverScrollableScrollPhysics()
-              : const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-          itemCount: _visibleItems.length,
-          mainAxisSpacing: 8,
-          itemBuilder: (context, index) {
-            final item = _visibleItems[index];
-            return DragSelectionTarget(
-              key: ValueKey(item.bvid),
-              index: index,
-              builder: (context, handleKey) => _buildItemCard(item, handleKey),
-            );
-          },
+        child: AppFavoriteReorder(
+          ids: [for (final item in _visibleItems) item.bvid],
+          enabled:
+              !_selection.active &&
+              !_removing &&
+              !_reordering &&
+              _searchController.text.trim().isEmpty,
+          onDragStarted: () => ++_openGeneration,
+          onReorder: (ids) => unawaited(_reorderItems(ids)),
+          builder: (context, reorder) => AdaptiveTwoColumnList(
+            key: const Key('app-favorite-items-list'),
+            controller: _scrollController,
+            physics: dragging
+                ? const NeverScrollableScrollPhysics()
+                : const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+            itemCount: _visibleItems.length,
+            mainAxisSpacing: 8,
+            itemBuilder: (context, index) {
+              final item = _visibleItems[index];
+              return DragSelectionTarget(
+                key: ValueKey(item.bvid),
+                index: index,
+                builder: (context, handleKey) => reorder.row(
+                  context: context,
+                  id: item.bvid,
+                  title: item.title,
+                  handleKey: Key('reorder-app-favorite-item-${item.bvid}'),
+                  builder: (handle) => _buildItemCard(item, handleKey, handle),
+                ),
+              );
+            },
+          ),
         ),
       ),
     );
@@ -310,7 +368,7 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
           actions: [
             if (_visibleItems.isNotEmpty)
               TextButton(
-                onPressed: _removing ? null : _startSelection,
+                onPressed: _removing || _reordering ? null : _startSelection,
                 child: const Text('多选'),
               ),
           ],

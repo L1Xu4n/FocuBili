@@ -13,10 +13,11 @@ import '../../services/bilibili_account_data_service.dart';
 import '../../services/bilibili_service.dart';
 import 'app_favorite_detail_page.dart';
 import 'app_favorite_import_page.dart';
-import 'favorite_folder_card.dart';
+import 'app_favorite_reorder.dart';
 import 'app_favorite_video_tile.dart';
+import 'favorite_folder_card.dart';
 
-/// 保存收藏夹管理菜单的两个明确动作。
+/// 本机收藏夹的管理动作。
 enum _FolderMenuAction { export, rename, delete }
 
 /// 区分本地备份的两个文件操作，避免与 B 站在线导入混淆。
@@ -50,6 +51,8 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
   List<AppFavoriteFolder> _folders = const <AppFavoriteFolder>[];
   bool _isLoading = true;
   bool _transferring = false;
+  bool _reordering = false;
+  int _loadGeneration = 0;
   final TextEditingController _searchController = TextEditingController();
   Map<String, List<AppFavoriteItem>> _items = {};
 
@@ -63,6 +66,7 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
 
   /// 读取全部软件收藏夹；失败时保留上一次成功显示的数据。
   Future<void> _loadFolders() async {
+    final generation = ++_loadGeneration;
     try {
       final List<AppFavoriteFolder> folders = await _favoritesService
           .loadFolders();
@@ -70,7 +74,7 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
       for (final folder in folders) {
         items[folder.id] = await _favoritesService.loadItems(folder.id);
       }
-      if (!mounted) {
+      if (!mounted || generation != _loadGeneration) {
         return;
       }
       setState(() {
@@ -79,10 +83,32 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
         _items = items;
       });
     } catch (_) {
-      if (mounted) {
+      if (mounted && generation == _loadGeneration) {
         setState(() => _isLoading = false);
         _showMessage('本机数据操作失败，请重试；未覆盖损坏的记录。');
       }
+    }
+  }
+
+  Future<void> _reorderFolders(List<String> ids) async {
+    if (_reordering ||
+        _transferring ||
+        _searchController.text.trim().isNotEmpty) {
+      return;
+    }
+    setState(() => _reordering = true);
+    try {
+      final saved = await _favoritesService.reorderFolders(ids);
+      if (!mounted) return;
+      if (!saved) {
+        _showMessage('未能保存收藏夹顺序，请刷新后重试。');
+        return;
+      }
+      await _loadFolders();
+    } catch (_) {
+      if (mounted) _showMessage('未能保存收藏夹顺序，请重试。');
+    } finally {
+      if (mounted) setState(() => _reordering = false);
     }
   }
 
@@ -509,41 +535,69 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
     ),
   );
 
-  /// 将偶尔使用的管理动作放入具有完整触摸面积的菜单，给收藏夹名称留出空间。
+  void _applyFolderAction(AppFavoriteFolder folder, _FolderMenuAction action) {
+    switch (action) {
+      case _FolderMenuAction.export:
+        unawaited(_exportFile(folderId: folder.id));
+      case _FolderMenuAction.rename:
+        unawaited(_renameFolder(folder));
+      case _FolderMenuAction.delete:
+        unawaited(_deleteFolder(folder));
+    }
+  }
+
+  List<PopupMenuEntry<_FolderMenuAction>> _folderMenuItems(
+    AppFavoriteFolder folder,
+  ) => [
+    PopupMenuItem(
+      key: Key('export-app-favorite-${folder.id}'),
+      value: _FolderMenuAction.export,
+      child: const Text('导出此收藏夹'),
+    ),
+    PopupMenuItem(
+      key: Key('rename-app-favorite-${folder.id}'),
+      value: _FolderMenuAction.rename,
+      child: const Text('重命名'),
+    ),
+    PopupMenuItem(
+      key: Key('delete-app-favorite-${folder.id}'),
+      value: _FolderMenuAction.delete,
+      child: const Text('删除收藏夹'),
+    ),
+  ];
+
   Widget _buildFolderActions(AppFavoriteFolder folder) =>
       PopupMenuButton<_FolderMenuAction>(
         key: Key('app-favorite-actions-${folder.id}'),
         tooltip: '管理收藏夹',
         enabled: !_transferring,
         icon: const Icon(Icons.more_vert_rounded),
-        onSelected: (action) {
-          switch (action) {
-            case _FolderMenuAction.export:
-              unawaited(_exportFile(folderId: folder.id));
-            case _FolderMenuAction.rename:
-              unawaited(_renameFolder(folder));
-            case _FolderMenuAction.delete:
-              unawaited(_deleteFolder(folder));
-          }
-        },
-        itemBuilder: (context) => [
-          PopupMenuItem(
-            key: Key('export-app-favorite-${folder.id}'),
-            value: _FolderMenuAction.export,
-            child: const Text('导出此收藏夹'),
-          ),
-          PopupMenuItem(
-            key: Key('rename-app-favorite-${folder.id}'),
-            value: _FolderMenuAction.rename,
-            child: const Text('重命名'),
-          ),
-          PopupMenuItem(
-            key: Key('delete-app-favorite-${folder.id}'),
-            value: _FolderMenuAction.delete,
-            child: const Text('删除收藏夹'),
-          ),
-        ],
+        onSelected: (action) => _applyFolderAction(folder, action),
+        itemBuilder: (_) => _folderMenuItems(folder),
       );
+
+  Future<void> _showFolderMenu(
+    BuildContext rowContext,
+    AppFavoriteFolder folder,
+  ) async {
+    if (_transferring) return;
+    final overlay = Navigator.of(context).overlay!.context.findRenderObject();
+    final row = rowContext.findRenderObject();
+    if (overlay is! RenderBox || row is! RenderBox || !row.hasSize) return;
+    final bounds = RelativeRect.fromRect(
+      Rect.fromPoints(
+        row.localToGlobal(Offset.zero, ancestor: overlay),
+        row.localToGlobal(row.size.bottomRight(Offset.zero), ancestor: overlay),
+      ),
+      Offset.zero & overlay.size,
+    );
+    final action = await showMenu<_FolderMenuAction>(
+      context: context,
+      position: bounds,
+      items: _folderMenuItems(folder),
+    );
+    if (mounted && action != null) _applyFolderAction(folder, action);
+  }
 
   /// Displays the current folder collection or its empty state.
   Widget _buildBody() {
@@ -576,25 +630,42 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
     final folders = _folders;
     return RefreshIndicator(
       onRefresh: _loadFolders,
-      child: AdaptiveTwoColumnList(
-        key: const Key('app-favorite-folders-list'),
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-        itemCount: folders.length,
-        mainAxisSpacing: 8,
-        itemBuilder: (BuildContext context, int index) {
-          final AppFavoriteFolder folder = folders[index];
-          final items = _items[folder.id] ?? const <AppFavoriteItem>[];
-          final covers = items.where((item) => item.coverUrl.isNotEmpty);
-          return FavoriteFolderCard(
-            key: Key('app-favorite-folder-${folder.id}'),
-            title: folder.name,
-            count: items.length,
-            coverUrl: covers.isEmpty ? '' : covers.first.coverUrl,
-            actions: _buildFolderActions(folder),
-            onTap: () => unawaited(_openFolder(folder)),
-          );
-        },
+      child: AppFavoriteReorder(
+        ids: [for (final folder in folders) folder.id],
+        enabled: !_transferring && !_reordering,
+        onReorder: (ids) => unawaited(_reorderFolders(ids)),
+        builder: (context, reorder) => AdaptiveTwoColumnList(
+          key: const Key('app-favorite-folders-list'),
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+          itemCount: folders.length,
+          mainAxisSpacing: 8,
+          itemBuilder: (context, index) {
+            final folder = folders[index];
+            final items = _items[folder.id] ?? const <AppFavoriteItem>[];
+            final covers = items.where((item) => item.coverUrl.isNotEmpty);
+            return reorder.row(
+              context: context,
+              id: folder.id,
+              title: folder.name,
+              handleKey: Key('reorder-app-favorite-folder-${folder.id}'),
+              builder: (handle) => Builder(
+                builder: (rowContext) => FavoriteFolderCard(
+                  key: Key('app-favorite-folder-${folder.id}'),
+                  title: folder.name,
+                  count: items.length,
+                  coverUrl: covers.isEmpty ? '' : covers.first.coverUrl,
+                  actions: _buildFolderActions(folder),
+                  reorderHandle: handle,
+                  onTap: () => unawaited(_openFolder(folder)),
+                  onLongPress: _transferring
+                      ? null
+                      : () => unawaited(_showFolderMenu(rowContext, folder)),
+                ),
+              ),
+            );
+          },
+        ),
       ),
     );
   }
