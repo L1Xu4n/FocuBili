@@ -9,6 +9,9 @@ class AppBehaviorPreferencesService {
   /// Notifies open pages after preferences have been successfully persisted.
   static final ValueNotifier<int> changes = ValueNotifier<int>(0);
 
+  static const String noteMarkdownEnabledKey =
+      'app_behavior.note_markdown_enabled';
+
   /// 创建行为偏好服务；未传入读取器时使用设备上的 SharedPreferences。
   AppBehaviorPreferencesService({
     AppBehaviorPreferencesLoader? preferencesLoader,
@@ -60,6 +63,14 @@ class AppBehaviorPreferencesService {
   /// 保存播放请求签名开关，写入失败时让设置页恢复原值。
   Future<bool> saveWbiSigningEnabled(bool enabled) =>
       _saveBool(_wbiSigningEnabledKey, enabled);
+
+  /// 已有笔记也默认按纯文本显示，直到用户主动启用 Markdown。
+  Future<bool> loadNoteMarkdownEnabled() =>
+      _loadBool(noteMarkdownEnabledKey, defaultValue: false);
+
+  /// 只保存正文显示偏好，不改动任何笔记。
+  Future<bool> saveNoteMarkdownEnabled(bool enabled) =>
+      _saveBool(noteMarkdownEnabledKey, enabled);
 
   /// 从本机读取布尔偏好；存储不可用时使用调用方指定的安全默认值。
   Future<bool> _loadBool(String key, {required bool defaultValue}) async {

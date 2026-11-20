@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:focubili/features/notes/video_note_detail_page.dart';
 import 'package:focubili/models/video_note.dart';
+import 'package:focubili/services/app_behavior_preferences_service.dart';
 import 'package:focubili/services/video_note_service.dart';
 
 const _evidencePath = String.fromEnvironment('FOCUBILI_NOTES_QA_EVIDENCE');
@@ -76,6 +77,7 @@ void main() {
   });
 
   testWidgets('窄屏笔记预览可回到编辑，修改和旧笔记位置均保留', (tester) async {
+    await AppBehaviorPreferencesService().saveNoteMarkdownEnabled(true);
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(320, 640);
     addTearDown(tester.view.resetDevicePixelRatio);

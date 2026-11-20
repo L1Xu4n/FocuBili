@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
+import '../../services/app_behavior_preferences_service.dart';
 import '../../services/external_link_service.dart';
 
 /// Keeps the editable source and rendered preview on the same draft.
@@ -21,7 +22,33 @@ class VideoNoteBodyEditor extends StatefulWidget {
 }
 
 class _VideoNoteBodyEditorState extends State<VideoNoteBodyEditor> {
+  final _preferencesService = AppBehaviorPreferencesService();
+  bool _markdownEnabled = false;
   bool _previewing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    AppBehaviorPreferencesService.changes.addListener(_loadMarkdownPreference);
+    unawaited(_loadMarkdownPreference());
+  }
+
+  @override
+  void dispose() {
+    AppBehaviorPreferencesService.changes.removeListener(
+      _loadMarkdownPreference,
+    );
+    super.dispose();
+  }
+
+  Future<void> _loadMarkdownPreference() async {
+    final enabled = await _preferencesService.loadNoteMarkdownEnabled();
+    if (!mounted || enabled == _markdownEnabled) return;
+    setState(() {
+      _markdownEnabled = enabled;
+      if (!enabled) _previewing = false;
+    });
+  }
 
   Future<void> _openLink(String? href) async {
     final Uri? uri = href == null ? null : Uri.tryParse(href);
@@ -49,7 +76,7 @@ class _VideoNoteBodyEditorState extends State<VideoNoteBodyEditor> {
         ],
       ),
     );
-    if (confirmed != true || !mounted) {
+    if (confirmed != true || !mounted || !_markdownEnabled) {
       return;
     }
 
@@ -108,18 +135,19 @@ class _VideoNoteBodyEditorState extends State<VideoNoteBodyEditor> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        Align(
-          alignment: AlignmentDirectional.centerEnd,
-          child: TextButton.icon(
-            onPressed: () => setState(() => _previewing = !_previewing),
-            icon: Icon(
-              _previewing ? Icons.edit_outlined : Icons.visibility_outlined,
-              size: 18,
+        if (_markdownEnabled)
+          Align(
+            alignment: AlignmentDirectional.centerEnd,
+            child: TextButton.icon(
+              onPressed: () => setState(() => _previewing = !_previewing),
+              icon: Icon(
+                _previewing ? Icons.edit_outlined : Icons.visibility_outlined,
+                size: 18,
+              ),
+              label: Text(_previewing ? '编辑正文' : 'Markdown 预览'),
             ),
-            label: Text(_previewing ? '编辑正文' : 'Markdown 预览'),
           ),
-        ),
-        if (_previewing)
+        if (_markdownEnabled && _previewing)
           ValueListenableBuilder<TextEditingValue>(
             valueListenable: widget.controller,
             builder: _buildPreview,

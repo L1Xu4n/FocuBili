@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/video_note.dart';
 import '../models/player_overlay_data.dart';
 import '../platform/app_platform.dart';
+import 'app_behavior_preferences_service.dart';
 import 'native_playback_progress_export.dart';
 import 'subtitle_export_service.dart';
 import 'cached_player_overlay_service.dart';
@@ -119,6 +120,7 @@ class UnifiedExportService {
     'app_behavior.search_history_enabled',
     'app_behavior.watch_history_enabled',
     'app_behavior.wbi_signing_enabled',
+    AppBehaviorPreferencesService.noteMarkdownEnabledKey,
     'windows_clipboard_link_detection.enabled',
     'app_update.check_on_start',
     'app_update.ignored_release',

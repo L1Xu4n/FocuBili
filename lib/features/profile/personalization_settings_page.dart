@@ -95,6 +95,7 @@ class _PersonalizationSettingsPageState
   bool _searchHistoryEnabled = true;
   bool _watchHistoryEnabled = true;
   bool _wbiSigningEnabled = false;
+  bool _noteMarkdownEnabled = false;
   final TextEditingController _settingsSearch = TextEditingController();
   bool _savingBehaviorPreference = false;
   _SettingsLevel _settingsLevel = _SettingsLevel.overview;
@@ -172,6 +173,8 @@ class _PersonalizationSettingsPageState
           .loadWatchHistoryEnabled();
       final bool wbiSigningEnabled = await _behaviorPreferencesService
           .loadWbiSigningEnabled();
+      final bool noteMarkdownEnabled = await _behaviorPreferencesService
+          .loadNoteMarkdownEnabled();
       final bool hasDoNotDisturbAccess =
           widget.focusNotificationService.supportsDoNotDisturb
           ? await widget.focusNotificationService.hasDoNotDisturbAccess()
@@ -188,6 +191,7 @@ class _PersonalizationSettingsPageState
         _searchHistoryEnabled = searchHistoryEnabled;
         _watchHistoryEnabled = watchHistoryEnabled;
         _wbiSigningEnabled = wbiSigningEnabled;
+        _noteMarkdownEnabled = noteMarkdownEnabled;
         _hasDoNotDisturbAccess = hasDoNotDisturbAccess;
         _loading = false;
       });
@@ -271,6 +275,14 @@ class _PersonalizationSettingsPageState
     applyValue: (bool value) => _wbiSigningEnabled = value,
     saveValue: _behaviorPreferencesService.saveWbiSigningEnabled,
     failureMessage: 'WBI 签名设置保存失败，请稍后重试。',
+  );
+
+  Future<void> _setNoteMarkdownEnabled(bool enabled) => _saveBehaviorPreference(
+    enabled: enabled,
+    previous: _noteMarkdownEnabled,
+    applyValue: (bool value) => _noteMarkdownEnabled = value,
+    saveValue: _behaviorPreferencesService.saveNoteMarkdownEnabled,
+    failureMessage: '笔记 Markdown 设置保存失败，请稍后重试。',
   );
 
   /// 保存前台剪贴板检测开关；失败时恢复原值并显示说明。
@@ -1195,6 +1207,14 @@ class _PersonalizationSettingsPageState
           secondary: const Icon(Icons.flag_outlined),
           title: const Text('显示笔记时间标记'),
           subtitle: const Text('在进度条上方显示当前分 P 的笔记，点击可打开。'),
+        ),
+        SwitchListTile.adaptive(
+          key: const Key('enable-note-markdown'),
+          value: _noteMarkdownEnabled,
+          onChanged: _savingBehaviorPreference ? null : _setNoteMarkdownEnabled,
+          secondary: const Icon(Icons.text_snippet_outlined),
+          title: const Text('启用笔记 Markdown'),
+          subtitle: const Text('关闭后仅显示纯文本，不提供格式预览。'),
         ),
         SwitchListTile.adaptive(
           key: const Key('auto-enable-subtitles-preference'),

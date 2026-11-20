@@ -1,11 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:focubili/features/notes/video_note_composer.dart';
+import 'package:focubili/services/app_behavior_preferences_service.dart';
 
 /// 验证时间点笔记底部操作在宽屏和窄屏都保持稳定的右对齐布局。
 void main() {
-  testWidgets('播放器笔记可切换预览，草稿和修改回调不变', (tester) async {
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  testWidgets('播放器笔记默认纯文本，启用预览与关闭后均保留草稿', (tester) async {
     await tester.binding.setSurfaceSize(const Size(340, 600));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final titleController = TextEditingController();
@@ -17,6 +22,9 @@ void main() {
         '# 复习\n\n第一步\n第二步\n\n![附图](file:///note.png)\n\n'
         '[继续阅读](https://example.org/notes)';
     final bodyField = find.byKey(const Key('note-body-field'));
+    final preview = find.text('Markdown 预览');
+    final edit = find.text('编辑正文');
+    final preferences = AppBehaviorPreferencesService();
 
     await tester.pumpWidget(
       MaterialApp(
@@ -44,7 +52,14 @@ void main() {
     );
 
     await tester.enterText(bodyField, source);
-    await tester.tap(find.text('Markdown 预览'));
+    expect(preview, findsNothing);
+    expect(edit, findsNothing);
+    expect(find.byType(MarkdownBody), findsNothing);
+    expect(tester.widget<TextField>(bodyField).controller!.text, source);
+
+    expect(await preferences.saveNoteMarkdownEnabled(true), isTrue);
+    await tester.pumpAndSettle();
+    await tester.tap(preview);
     await tester.pumpAndSettle();
     expect(bodyField, findsNothing);
     expect(find.text('复习', findRichText: true), findsOneWidget);
@@ -59,8 +74,25 @@ void main() {
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('编辑正文'));
+    await tester.tap(edit);
     await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(bodyField).controller!.text, source);
+
+    await tester.tap(preview);
+    await tester.pumpAndSettle();
+    expect(find.byType(MarkdownBody), findsOneWidget);
+    expect(await preferences.saveNoteMarkdownEnabled(false), isTrue);
+    await tester.pumpAndSettle();
+    expect(preview, findsNothing);
+    expect(edit, findsNothing);
+    expect(find.byType(MarkdownBody), findsNothing);
+    expect(tester.widget<TextField>(bodyField).controller!.text, source);
+
+    expect(await preferences.saveNoteMarkdownEnabled(true), isTrue);
+    await tester.pumpAndSettle();
+    expect(preview, findsOneWidget);
+    expect(edit, findsNothing);
+    expect(find.byType(MarkdownBody), findsNothing);
     expect(tester.widget<TextField>(bodyField).controller!.text, source);
     expect(changes, <String>[source]);
     expect(tester.takeException(), isNull);

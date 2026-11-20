@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:archive/archive.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:photo_view/photo_view.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -13,6 +14,7 @@ import 'package:focubili/features/notes/video_notes_page.dart';
 import 'package:focubili/features/notes/video_note_share_preview.dart';
 import 'package:focubili/models/video_note.dart';
 import 'package:focubili/models/video_preview.dart';
+import 'package:focubili/services/app_behavior_preferences_service.dart';
 import 'package:focubili/services/bilibili_service.dart';
 import 'package:focubili/services/video_note_service.dart';
 import 'package:focubili/services/video_note_share_service.dart';
@@ -295,11 +297,12 @@ void main() {
   });
 
   testWidgets('笔记详情预览 Markdown，保存并重新打开后保留原文', (tester) async {
+    const String oldSource = '# 旧笔记\n\n**原始内容**';
     const String source = '    x = 2\n\n# 复习提纲\n\n**关键公式**\n\n- 复盘\n';
     const bodyField = Key('note-detail-body-field');
     const openNote = Key('managed-video-note-managed-note');
     final VideoNoteService service = await _createPageNoteService();
-    await service.saveNote(_createPageNote());
+    await service.saveNote(_createPageNote().copyWith(body: oldSource));
     await tester.pumpWidget(
       MaterialApp(
         home: VideoNotesPage(
@@ -312,6 +315,17 @@ void main() {
     await tester.tap(find.byKey(openNote));
     await tester.pumpAndSettle();
 
+    expect(find.text('Markdown 预览'), findsNothing);
+    expect(find.text('编辑正文'), findsNothing);
+    expect(find.byType(MarkdownBody), findsNothing);
+    expect(
+      tester.widget<TextField>(find.byKey(bodyField)).controller!.text,
+      oldSource,
+    );
+
+    final preferences = AppBehaviorPreferencesService();
+    expect(await preferences.saveNoteMarkdownEnabled(true), isTrue);
+    await tester.pumpAndSettle();
     await tester.enterText(find.byKey(bodyField), source);
     await tester.ensureVisible(find.text('Markdown 预览'));
     await tester.tap(find.text('Markdown 预览'));
@@ -326,8 +340,12 @@ void main() {
     expect((await service.loadNotes()).single.body, source);
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
+    expect(await preferences.saveNoteMarkdownEnabled(false), isTrue);
     await tester.tap(find.byKey(openNote));
     await tester.pumpAndSettle();
+    expect(find.text('Markdown 预览'), findsNothing);
+    expect(find.text('编辑正文'), findsNothing);
+    expect(find.byType(MarkdownBody), findsNothing);
     final TextField editor = tester.widget<TextField>(find.byKey(bodyField));
     expect(editor.controller!.text, source);
   });
