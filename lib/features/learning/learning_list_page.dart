@@ -931,6 +931,8 @@ class _LearningListPageState extends State<LearningListPage> {
             _folderId = folder.id;
             _selected.clear();
           }),
+          // Keep the native vertical padding and trim only the menu end.
+          padding: const EdgeInsetsDirectional.fromSTEB(8, 8, 4, 8),
           // InputChip's separate trailing action opens management, not deletion.
           deleteIcon: Icon(
             Icons.more_vert,
@@ -938,7 +940,7 @@ class _LearningListPageState extends State<LearningListPage> {
             size: 16,
           ),
           deleteIconBoxConstraints: const BoxConstraints.tightFor(
-            width: 36,
+            width: 24,
             height: 16,
           ),
           deleteButtonTooltipMessage: '管理${folder.name}分组',

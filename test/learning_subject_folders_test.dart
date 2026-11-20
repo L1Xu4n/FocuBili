@@ -459,7 +459,17 @@ void main() {
         tester.getRect(surface(custom)).center.dy,
         tester.getRect(surface(all)).center.dy,
       );
-      expect(tester.getCenter(menu).dy, tester.getCenter(surface(custom)).dy);
+      final chipBounds = tester.getRect(surface(custom));
+      final countBounds = tester.getRect(
+        find.descendant(of: custom, matching: find.text('（0）')),
+      );
+      expect(tester.getCenter(menu).dy, chipBounds.center.dy);
+      // Keep the visible menu after the count compact, without crowding the edge.
+      expect(chipBounds.right - countBounds.right, inInclusiveRange(34, 38));
+      expect(
+        chipBounds.right - tester.getCenter(menu).dx,
+        inInclusiveRange(15, 17),
+      );
       expect(tester.getSize(custom).height, greaterThanOrEqualTo(48));
       expect(
         tester.getTopLeft(find.widgetWithText(ChoiceChip, '全部')).dy,
@@ -468,7 +478,8 @@ void main() {
 
       final selectedShape = shape(all);
       final selectedFill = decoration(all).color;
-      await tapVisible(tester, custom);
+      await tester.tapAt(countBounds.center);
+      await tester.pumpAndSettle();
       expect(shape(custom), selectedShape);
       expect(decoration(custom).color, selectedFill);
       expect(find.byType(LearningFolderBadge), findsOneWidget);
