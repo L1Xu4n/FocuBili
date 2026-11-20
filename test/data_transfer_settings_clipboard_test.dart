@@ -162,11 +162,11 @@ void main() {
       await _tap(t, '导入设置');
       await _tap(t, '从文本导入');
       expect(reads, confirm ? 1 : 0);
-      await _tap(t, '从剪贴板粘贴');
-      expect(
-        t.widget<TextField>(find.byType(TextField)).controller!.text,
-        file,
-      );
+      final field = t.widget<TextField>(find.byType(TextField));
+      expect(field.controller!.text, isEmpty);
+      await _tap(t, '从剪贴板填充');
+      expect(field.controller!.text, file);
+      expect(find.text('确认导入'), findsNothing);
       await _tap(t, '下一步');
       expect(find.textContaining('1 项设置'), findsOneWidget);
       expect(prefs.getString('appearance.theme_mode'), 'light');
@@ -245,6 +245,9 @@ void main() {
     await _tap(t, '导入设置');
     await _tap(t, '从文本导入');
     final field = find.byType(TextField);
+    await _tap(t, '下一步');
+    expect(find.textContaining('请输入设置备份'), findsOneWidget);
+    expect(find.text('确认导入'), findsNothing);
     for (final source in [
       '{bad',
       '{"format":"focubili-login","schemaVersion":1,"cookie":"synthetic"}',
@@ -330,18 +333,18 @@ void main() {
     await _tap(t, '从文本导入');
     final field = find.byType(TextField);
     await t.enterText(field, '草稿');
-    await _tap(t, '从剪贴板粘贴');
+    await _tap(t, '从剪贴板填充');
     expect(find.textContaining('剪贴板没有文本'), findsOneWidget);
     clipboard = '界' * (SettingsTransferService.maximumBytes ~/ 3 + 1);
-    await _tap(t, '从剪贴板粘贴');
+    await _tap(t, '从剪贴板填充');
     expect(find.textContaining('不能超过 2 MB'), findsOneWidget);
     read = () async => throw PlatformException(code: 'denied');
-    await _tap(t, '从剪贴板粘贴');
+    await _tap(t, '从剪贴板填充');
     expect(find.textContaining('无法读取剪贴板'), findsOneWidget);
     expect(t.widget<TextField>(field).controller!.text, '草稿');
     final pending = Completer<Object?>();
     read = () => pending.future;
-    await _tap(t, '从剪贴板粘贴');
+    await _tap(t, '从剪贴板填充');
     await _tap(t, '取消');
     pending.complete({'text': await service.exportSettings()});
     await _advance(t);
