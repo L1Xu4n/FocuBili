@@ -842,39 +842,42 @@ class _LearningListPageState extends State<LearningListPage> {
           ),
         ],
       ),
-      SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: [
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: ChoiceChip(
-                key: const Key('learning-folder-all'),
-                label: Text('全部学科（${_entries.length}）'),
-                selected: _allFolders,
-                onSelected: (_) => setState(() {
-                  _allFolders = true;
-                  _selected.clear();
-                }),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: ChoiceChip(
-                key: const Key('learning-folder-ungrouped'),
-                label: Text(
-                  '未分组（${_entries.where((entry) => entry.folderId == null).length}）',
+      LayoutBuilder(
+        builder: (context, constraints) => SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: ChoiceChip(
+                  key: const Key('learning-folder-all'),
+                  label: Text('全部学科（${_entries.length}）'),
+                  selected: _allFolders,
+                  onSelected: (_) => setState(() {
+                    _allFolders = true;
+                    _selected.clear();
+                  }),
                 ),
-                selected: !_allFolders && _folderId == null,
-                onSelected: (_) => setState(() {
-                  _allFolders = false;
-                  _folderId = null;
-                  _selected.clear();
-                }),
               ),
-            ),
-            for (final folder in _folders) _buildFolderChip(folder),
-          ],
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: ChoiceChip(
+                  key: const Key('learning-folder-ungrouped'),
+                  label: Text(
+                    '未分组（${_entries.where((entry) => entry.folderId == null).length}）',
+                  ),
+                  selected: !_allFolders && _folderId == null,
+                  onSelected: (_) => setState(() {
+                    _allFolders = false;
+                    _folderId = null;
+                    _selected.clear();
+                  }),
+                ),
+              ),
+              for (final folder in _folders)
+                _buildFolderChip(folder, maxWidth: constraints.maxWidth),
+            ],
+          ),
         ),
       ),
       if (_folderBusy) const LinearProgressIndicator(),
@@ -882,56 +885,64 @@ class _LearningListPageState extends State<LearningListPage> {
     ],
   );
 
-  Widget _buildFolderChip(LearningSubjectFolder folder) {
+  Widget _buildFolderChip(
+    LearningSubjectFolder folder, {
+    required double maxWidth,
+  }) {
     final selected = !_allFolders && _folderId == folder.id;
-    final colors = Theme.of(context).colorScheme;
+    final count = _entries.where((entry) => entry.folderId == folder.id).length;
+    final suffix = '（$count）';
     return Padding(
       padding: const EdgeInsets.only(right: 8),
-      child: Material(
-        color: selected ? colors.secondaryContainer : colors.surface,
-        shape: StadiumBorder(side: BorderSide(color: colors.outlineVariant)),
-        clipBehavior: Clip.antiAlias,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Semantics(
-              key: Key('learning-folder-${folder.id}'),
-              selected: selected,
-              button: true,
-              child: InkWell(
-                onTap: () => setState(() {
-                  _allFolders = false;
-                  _folderId = folder.id;
-                  _selected.clear();
-                }),
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(minHeight: 48),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        LearningFolderBadge(
-                          iconId: folder.iconId,
-                          colorId: folder.colorId,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          '${folder.name}（${_entries.where((entry) => entry.folderId == folder.id).length}）',
-                        ),
-                      ],
-                    ),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxWidth),
+        child: InputChip(
+          key: Key('learning-folder-${folder.id}'),
+          selected: selected,
+          // Keep the user's folder badge visible; the native chip fill
+          // indicates selection just as it does on the built-in filters.
+          showCheckmark: false,
+          avatar: Center(
+            child: LearningFolderBadge(
+              iconId: folder.iconId,
+              colorId: folder.colorId,
+              size: 22,
+            ),
+          ),
+          label: Semantics(
+            label: '${folder.name}$suffix',
+            excludeSemantics: true,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: Text(
+                    folder.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
-              ),
+                Text(suffix),
+              ],
             ),
-            IconButton(
-              key: Key('manage-learning-folder-${folder.id}'),
-              tooltip: '管理${folder.name}分组',
-              onPressed: _folderBusy ? null : () => _editFolder(folder),
-              icon: const Icon(Icons.more_vert),
-            ),
-          ],
+          ),
+          onSelected: (_) => setState(() {
+            _allFolders = false;
+            _folderId = folder.id;
+            _selected.clear();
+          }),
+          // InputChip's separate trailing action opens management, not deletion.
+          deleteIcon: Icon(
+            Icons.more_vert,
+            key: Key('manage-learning-folder-${folder.id}'),
+            size: 16,
+          ),
+          deleteIconBoxConstraints: const BoxConstraints.tightFor(
+            width: 36,
+            height: 16,
+          ),
+          deleteButtonTooltipMessage: '管理${folder.name}分组',
+          onDeleted: _folderBusy ? null : () => _editFolder(folder),
         ),
       ),
     );
