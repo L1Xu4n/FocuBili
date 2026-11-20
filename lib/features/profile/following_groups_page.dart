@@ -167,8 +167,10 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
       final snapshot = await _api.loadFollowingGroups();
       if (!isCurrent()) return;
       if (snapshot.mid != mid) throw StateError('账号已变化');
-      if (snapshot.groups.isEmpty) return;
-      final groups = await _store.merge(snapshot, isCurrent: isCurrent);
+      final groups = await _store.mirrorFromBilibili(
+        snapshot,
+        isCurrent: isCurrent,
+      );
       if (isCurrent()) setState(() => _groups = groups);
     } catch (e) {
       if (isCurrent()) _showImportFailure(e, automatic: true);
@@ -206,6 +208,17 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
     final action = automatic ? '自动同步失败' : '导入失败';
     final detail = error is StateError ? '：${error.message}' : '';
     _message('$action，本机分组未改变$detail');
+  }
+
+  void _showImportResult(FollowingGroupMergeResult result) {
+    final changes = [
+      if (result.addedGroups > 0) '新增 ${result.addedGroups} 个分组',
+      if (result.restoredGroups > 0) '恢复 ${result.restoredGroups} 个分组',
+      if (result.addedMembers > 0) '向已有分组补充 ${result.addedMembers} 位成员',
+    ];
+    final headline = changes.isEmpty ? '本机分组没有变化' : changes.join('，');
+    final skipped = result.skippedDeletedGroups;
+    _message(skipped == 0 ? headline : '$headline。跳过 $skipped 个本机删除过的分组。');
   }
 
   /// 新建或重命名本机分组，不修改 B 站原分组。
@@ -264,49 +277,72 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
       final snapshot = await _api.loadFollowingGroups();
       if (!mounted || !isCurrent()) return;
       if (snapshot.mid != mid) throw StateError('账号已变化，请重新导入');
-      final confirmed = await showDialog<bool>(
+      final deleted = await _store.deletedRemoteIds(mid);
+      if (!isCurrent()) return;
+      final selected = <int>{};
+      final restoreRemoteIds = await showDialog<Set<int>>(
         context: context,
         builder: (context) => ValueListenableBuilder(
           valueListenable: CacheLifecycle.account,
-          builder: (context, _, _) {
-            final current = isCurrent();
-            return AlertDialog(
-              title: const Text('从 B 站导入分组'),
-              content: current
-                  ? SizedBox(
-                      width: 420,
-                      child: SingleChildScrollView(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (snapshot.groups.isEmpty) const Text('没有可导入的分组'),
-                            for (final group in snapshot.groups)
-                              ListTile(
-                                title: Text(group.name),
-                                trailing: Text('${group.members.length} 位'),
-                              ),
-                          ],
+          builder: (context, _, _) => StatefulBuilder(
+            builder: (context, update) {
+              final current = isCurrent();
+              return AlertDialog(
+                title: const Text('从 B 站导入分组'),
+                content: current
+                    ? SizedBox(
+                        width: 420,
+                        child: SingleChildScrollView(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (snapshot.groups.isEmpty)
+                                const Text('没有可导入的分组'),
+                              for (final group in snapshot.groups)
+                                if (deleted.contains(group.remoteId))
+                                  CheckboxListTile(
+                                    title: Text(group.name),
+                                    subtitle: Text(
+                                      '已从本机删除，勾选后恢复（${group.members.length} 位）',
+                                    ),
+                                    value: selected.contains(group.remoteId),
+                                    onChanged: (checked) => update(() {
+                                      final id = group.remoteId!;
+                                      if (checked == true) {
+                                        selected.add(id);
+                                      } else {
+                                        selected.remove(id);
+                                      }
+                                    }),
+                                  )
+                                else
+                                  ListTile(
+                                    title: Text(group.name),
+                                    trailing: Text('${group.members.length} 位'),
+                                  ),
+                            ],
+                          ),
                         ),
-                      ),
-                    )
-                  : const Text('账号已变化，请重新导入'),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context, false),
-                  child: const Text('取消'),
-                ),
-                FilledButton(
-                  onPressed: !current || snapshot.groups.isEmpty
-                      ? null
-                      : () => Navigator.pop(context, true),
-                  child: const Text('合并到本机'),
-                ),
-              ],
-            );
-          },
+                      )
+                    : const Text('账号已变化，请重新导入'),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('取消'),
+                  ),
+                  FilledButton(
+                    onPressed: !current || snapshot.groups.isEmpty
+                        ? null
+                        : () => Navigator.pop(context, Set<int>.of(selected)),
+                    child: const Text('合并到本机'),
+                  ),
+                ],
+              );
+            },
+          ),
         ),
       );
-      if (confirmed != true || !isCurrent()) return;
+      if (restoreRemoteIds == null || !isCurrent()) return;
       final currentMid = await _api.currentAccountMid();
       if (!isCurrent()) return;
       if (currentMid == null) throw StateError('暂时无法确认当前账号，请重试');
@@ -314,8 +350,15 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
         _accountChanged();
         return;
       }
-      final groups = await _store.merge(snapshot, isCurrent: isCurrent);
-      if (isCurrent()) setState(() => _groups = groups);
+      final result = await _store.mergeManually(
+        snapshot,
+        restoreRemoteIds: restoreRemoteIds,
+        isCurrent: isCurrent,
+      );
+      if (isCurrent()) {
+        setState(() => _groups = result.groups);
+        _showImportResult(result);
+      }
     } catch (e) {
       if (isCurrent()) _showImportFailure(e, automatic: false);
     } finally {
@@ -433,7 +476,7 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
               if (_mid != null)
                 SwitchListTile(
                   title: const Text('自动同步 B 站分组'),
-                  subtitle: const Text('进入此页时从 B 站合并到本机'),
+                  subtitle: const Text('进入此页时以 B 站分组为准，本机自建分组保留'),
                   value: _autoSync,
                   onChanged: _busy || _savingAutoSync ? null : _setAutoSync,
                 ),
