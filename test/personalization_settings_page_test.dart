@@ -148,6 +148,45 @@ void main() {
     });
   }
 
+  testWidgets('笔记 Markdown 默认关闭，可搜索、开启并在重开设置后关闭', (tester) async {
+    const page = MaterialApp(
+      home: PersonalizationSettingsPage(appPlatform: AppPlatform.windows),
+    );
+    final search = find.byKey(const Key('settings-search'));
+    final toggle = find.byKey(const Key('enable-note-markdown'));
+    await tester.pumpWidget(page);
+    await tester.pumpAndSettle();
+    await _openSettingsLevel(tester, const Key('open-playback-focus-settings'));
+    expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
+    await tester.tap(find.byKey(const Key('settings-level-back-button')));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(search, 'mD 笔记格式');
+    await tester.pumpAndSettle();
+    expect(find.text('启用笔记 Markdown'), findsOneWidget);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
+    expect(
+      await AppBehaviorPreferencesService().loadNoteMarkdownEnabled(),
+      isTrue,
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpWidget(page);
+    await tester.pumpAndSettle();
+    await tester.enterText(search, 'Markdown');
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
+    expect(
+      await AppBehaviorPreferencesService().loadNoteMarkdownEnabled(),
+      isFalse,
+    );
+  });
+
   TestWidgetsFlutterBinding.ensureInitialized();
   const MethodChannel channel = MethodChannel(
     'com.focubili.app/test_settings_focus_notifications',

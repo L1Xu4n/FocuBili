@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/models/player_overlay_data.dart';
 import 'package:focubili/models/video_note.dart';
+import 'package:focubili/services/app_behavior_preferences_service.dart';
 import 'package:focubili/services/cached_player_overlay_service.dart';
 import 'package:focubili/services/unified_export_service.dart';
 import 'package:focubili/services/video_note_service.dart';
@@ -43,6 +44,7 @@ void main() {
     () async {
       SharedPreferences.setMockInitialValues({
         'appearance.theme_mode': 'dark',
+        AppBehaviorPreferencesService.noteMarkdownEnabledKey: true,
         'content.blocklist_v1': '{"version":1,"videos":{}}',
         'focubili_learning_list_v2':
             '{"schemaVersion":3,"folders":[{"id":"math"}],"entries":[]}',
@@ -80,6 +82,13 @@ void main() {
       expect(
         _document(archive, 'settings.json')['values'],
         containsPair('appearance.theme_mode', 'dark'),
+      );
+      expect(
+        _document(archive, 'settings.json')['values'],
+        containsPair(
+          AppBehaviorPreferencesService.noteMarkdownEnabledKey,
+          true,
+        ),
       );
       final learning = _document(archive, 'learning.json')['values'] as Map;
       expect(

@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/models/danmaku_preferences.dart';
 import 'package:focubili/models/dashboard_layout.dart';
 import 'package:focubili/models/playback_preferences.dart';
+import 'package:focubili/services/app_behavior_preferences_service.dart';
 import 'package:focubili/services/app_theme_mode_service.dart';
 import 'package:focubili/services/danmaku_preferences_service.dart';
 import 'package:focubili/services/dashboard_layout_service.dart';
@@ -401,6 +402,7 @@ void main() {
         'app_behavior.search_history_enabled',
         'app_behavior.watch_history_enabled',
         'app_behavior.wbi_signing_enabled',
+        AppBehaviorPreferencesService.noteMarkdownEnabledKey,
         'app_update.check_on_start',
         'windows_clipboard_link_detection.enabled',
         'focus_preferences.enable_do_not_disturb',
@@ -455,6 +457,17 @@ void main() {
         expect(playback.showNoteTimeMarkers, value);
         expect(playback.enableTwoFingerVideoTransform, value);
         expect(playback.preferOfflineCache, value);
+        expect(
+          await AppBehaviorPreferencesService().loadNoteMarkdownEnabled(),
+          value,
+        );
+        expect(
+          service.parseSettings(await service.exportSettings()),
+          containsPair(
+            AppBehaviorPreferencesService.noteMarkdownEnabledKey,
+            value,
+          ),
+        );
       }
     },
   );
