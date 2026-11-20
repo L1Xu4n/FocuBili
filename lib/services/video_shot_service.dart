@@ -258,24 +258,32 @@ class BilibiliVideoShotService implements VideoShotService {
     return number == null || number <= 0 ? 0 : number;
   }
 
-  /// 读取并升序整理截图时间点，负数和损坏项会被忽略。
+  /// videoshot 的 index[0] 是占位，index[1] 才对应图集首格（0 秒）。
+  /// 之后的时间与图格一一对应，不可筛掉或重排其中的项。
   List<int> _readIndexes(Object? value) {
-    if (value is! List) {
+    if (value is! List || value.length < 2 || _readIndexSecond(value[0]) != 0) {
       return const <int>[];
     }
-    final List<int> indexes =
-        value
-            .map(
-              (Object? item) => item is num
-                  ? item.toInt()
-                  : int.tryParse(item?.toString() ?? ''),
-            )
-            .whereType<int>()
-            .where((int item) => item >= 0)
-            .toList(growable: true)
-          ..sort();
+    // 双零开头的标准时间表只去掉一个零；兼容已经省略占位的时间表。
+    final int firstFollowingCell = _readIndexSecond(value[1]) == 0 ? 2 : 1;
+    final indexes = <int>[0];
+    for (final item in value.skip(firstFollowingCell)) {
+      final seconds = _readIndexSecond(item);
+      if (seconds == null || seconds < indexes.last) {
+        return const <int>[];
+      }
+      indexes.add(seconds);
+    }
     return indexes;
   }
+
+  int? _readIndexSecond(Object? value) => switch (value) {
+    int seconds => seconds,
+    double seconds when seconds.isFinite && seconds == seconds.toInt() =>
+      seconds.toInt(),
+    String seconds => int.tryParse(seconds),
+    _ => null,
+  };
 
   /// 读取可信 B 站图片地址并统一为 HTTPS。
   List<String> _readImageUrls(Object? value) {
