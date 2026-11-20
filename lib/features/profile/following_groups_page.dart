@@ -278,7 +278,7 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
       if (!mounted || !isCurrent()) return;
       if (snapshot.mid != mid) throw StateError('账号已变化，请重新导入');
       final deleted = await _store.deletedRemoteIds(mid);
-      if (!isCurrent()) return;
+      if (!mounted || !isCurrent()) return;
       final selected = <int>{};
       final restoreRemoteIds = await showDialog<Set<int>>(
         context: context,
