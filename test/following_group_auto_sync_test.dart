@@ -18,7 +18,9 @@ class _Api extends BilibiliAccountDataService {
   Future<int?> currentAccountMid() async => mid;
 
   @override
-  Future<FollowingGroupImport> loadFollowingGroups() {
+  Future<FollowingGroupImport> loadFollowingGroups({
+    bool verifyMemberPagination = false,
+  }) {
     final hold = Completer<FollowingGroupImport>();
     requests.add(hold);
     return hold.future;
@@ -45,23 +47,32 @@ class _GroupReadApi implements BilibiliAccountDataApi {
       listReads++;
       return BilibiliAccountDataResponse(
         statusCode: 200,
-        body:
-            '''
+        body: '''
           {"code":0,"data":[
             {"tagid":-10,"name":"特别关注","count":0},
-            {"tagid":42,"name":"课程","count":$listReads}
+            {"tagid":42,"name":"课程","count":1}
           ]}
         ''',
       );
     }
     expect(endpoint.path, '/x/relation/tag');
+    final page = endpoint.queryParameters['pn'];
+    if (endpoint.queryParameters['tagid'] == '-10') {
+      expect(page, '1');
+      return const BilibiliAccountDataResponse(
+        statusCode: 200,
+        body: '{"code":0,"data":null}',
+      );
+    }
     expect(endpoint.queryParameters['tagid'], '42');
-    expect(endpoint.queryParameters['pn'], '1');
     return BilibiliAccountDataResponse(
       statusCode: 200,
-      body: listReads == 1
-          ? '{"code":0,"data":[{"mid":11,"uname":"第一位"}]}'
-          : '{"code":0,"data":[{"mid":11,"uname":"第一位"},{"mid":12,"uname":"第二位"}]}',
+      body: switch (page) {
+        '1' => '{"code":0,"data":[{"mid":11,"uname":"第一位"}]}',
+        '2' when listReads > 1 =>
+          '{"code":0,"data":[{"mid":12,"uname":"第二位"}]}',
+        _ => '{"code":0,"data":[]}',
+      },
     );
   }
 }

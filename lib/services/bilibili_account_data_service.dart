@@ -155,7 +155,10 @@ class BilibiliAccountDataService {
   }
 
   /// 在同一个只读会话内完整读取远端分组及成员，任何失败都不返回半份导入资料。
-  Future<FollowingGroupImport> loadFollowingGroups() async {
+  /// 自动镜像可能删除本机成员，不能仅用另一个请求返回的总数判断已读完。
+  Future<FollowingGroupImport> loadFollowingGroups({
+    bool verifyMemberPagination = false,
+  }) async {
     final session = await _openReadSession();
     final failure = _sessionFailurePage<FollowingGroup>(session, page: 1);
     if (failure != null) throw StateError(failure.message!);
@@ -178,6 +181,7 @@ class BilibiliAccountDataService {
         session,
         id,
         expectedCount: _readNonNegativeInt(map['count']),
+        verifyMemberPagination: verifyMemberPagination,
       );
       groups.add(
         FollowingGroup(
@@ -202,12 +206,15 @@ class BilibiliAccountDataService {
     _AccountReadSession session,
     int id, {
     required int? expectedCount,
+    required bool verifyMemberPagination,
   }) async {
     final members = <int, FollowedCreator>{};
-    // 空分组仍须保留，但不必请求可能返回 null 的成员页。
+    // 镜像必须看到成功的空末页；分组总数过时（包括报 0）可能漏掉一整页。
     for (
       var page = 1;
-      expectedCount == null || members.length < expectedCount;
+      verifyMemberPagination ||
+          expectedCount == null ||
+          members.length < expectedCount;
       page++
     ) {
       if (page > 1000) throw StateError('分组过大，导入已停止');
@@ -225,14 +232,19 @@ class BilibiliAccountDataService {
       // 接口以 null 或 [] 结束分页；若已知还有成员，就不能用
       // 提前结束的结果覆盖一份完整快照。
       if (items == null || (items is List && items.isEmpty)) {
-        if (expectedCount == null) break;
-        throw StateError('B 站分组成员数有变化，请重试');
+        if (expectedCount != null && members.length < expectedCount) {
+          throw StateError('B 站分组成员数有变化，请重试');
+        }
+        break;
       }
       if (items is! List) throw StateError('读取 B 站分组成员失败，请重试');
       final previousCount = members.length;
       for (final item in items) {
         final creator = _parseFollowedCreator(item);
         if (creator == null) throw StateError('B 站分组成员资料不完整，请重试');
+        if (verifyMemberPagination && members.containsKey(creator.mid)) {
+          throw StateError('B 站分组分页异常，请重试');
+        }
         members.putIfAbsent(creator.mid, () => creator);
       }
       if (members.length == previousCount) throw StateError('B 站分组分页异常，请重试');

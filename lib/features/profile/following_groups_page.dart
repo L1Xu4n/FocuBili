@@ -164,7 +164,9 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
 
     setState(() => _autoSyncRunning = true);
     try {
-      final snapshot = await _api.loadFollowingGroups();
+      final snapshot = await _api.loadFollowingGroups(
+        verifyMemberPagination: true,
+      );
       if (!isCurrent()) return;
       if (snapshot.mid != mid) throw StateError('账号已变化');
       final groups = await _store.mirrorFromBilibili(
