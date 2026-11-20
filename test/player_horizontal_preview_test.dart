@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -138,7 +139,7 @@ final _targetTime = find.textContaining('跳转至 ');
 Future<void> _mount(
   WidgetTester t,
   _Playback playback,
-  _Metadata metadata,
+  VideoShotService metadata,
   _Atlases cache, {
   bool desktop = false,
   double dpr = 1,
@@ -171,6 +172,7 @@ Future<Uint8List> _atlas(
   Color color, {
   int w = 32,
   int h = 18,
+  void Function(Canvas)? paintCells,
 }) async {
   return (await t.runAsync(() async {
     final recorder = ui.PictureRecorder();
@@ -179,6 +181,7 @@ Future<Uint8List> _atlas(
       Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()),
       Paint()..color = color,
     );
+    paintCells?.call(canvas);
     final picture = recorder.endRecording();
     final image = await picture.toImage(w, h);
     picture.dispose();
@@ -215,6 +218,96 @@ Future<void> _remove(WidgetTester t, _Atlases cache) async {
 }
 
 void main() {
+  testWidgets('a 110s picture swipe shows the 109s cell and seeks to 110s', (
+    t,
+  ) async {
+    const green = Color(0xFF00FF00);
+    const red = Color(0xFFFF0000);
+    final atlas = await _atlas(
+      t,
+      Colors.black,
+      w: 160,
+      h: 90,
+      paintCells: (canvas) {
+        canvas.drawRect(
+          const Rect.fromLTWH(80, 9, 16, 9),
+          Paint()..color = green,
+        );
+        canvas.drawRect(
+          const Rect.fromLTWH(96, 9, 16, 9),
+          Paint()..color = red,
+        );
+      },
+    );
+    final metadata = BilibiliVideoShotService(
+      requestJson: (_) async => jsonEncode({
+        'code': 0,
+        'data': {
+          'image': [_first],
+          'img_x_len': 10,
+          'img_y_len': 10,
+          'img_x_size': 16,
+          'img_y_size': 9,
+          // Captured videoshot index prefix. Green is 109s; red is 117s.
+          'index': [
+            0,
+            0,
+            8,
+            14,
+            19,
+            25,
+            34,
+            40,
+            46,
+            56,
+            63,
+            70,
+            80,
+            87,
+            93,
+            100,
+            109,
+            117,
+            124,
+          ],
+        },
+      }),
+    );
+    // This fixture's long video uses 600s / 75% of the surface width.
+    // _begin's 8% swipe moves from 46s to 110s exactly.
+    final p = _Playback(position: const Duration(seconds: 46));
+    final cache = _Atlases((_) => atlas);
+    await _mount(t, p, metadata, cache);
+    final swipe = await _begin(t);
+    await _pumpImages(t);
+    expect(find.text('跳转至 1:50'), findsOneWidget);
+    final cell = find.descendant(of: _shot, matching: find.byType(CustomPaint));
+    final painter = t.widget<CustomPaint>(cell).painter!;
+    final size = t.getSize(cell);
+    final rgba = await t.runAsync(() async {
+      final recorder = ui.PictureRecorder();
+      painter.paint(Canvas(recorder), size);
+      final picture = recorder.endRecording();
+      final image = await picture.toImage(
+        size.width.ceil(),
+        size.height.ceil(),
+      );
+      picture.dispose();
+      final bytes = (await image.toByteData(
+        format: ui.ImageByteFormat.rawRgba,
+      ))!;
+      final center = (image.height ~/ 2 * image.width + image.width ~/ 2) * 4;
+      image.dispose();
+      return bytes.getUint32(center);
+    });
+    expect(rgba, 0x00FF00FF, reason: '109s is green; 117s is red');
+    expect(p.seeks, isEmpty);
+    await swipe.up();
+    await t.pump();
+    expect(p.seeks, [const Duration(seconds: 110)]);
+    await _remove(t, cache);
+  });
+
   for (final desktop in [false, true]) {
     testWidgets(
       'target sheet owns loading and raster throughout a real horizontal gesture ($desktop)',

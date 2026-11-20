@@ -8,15 +8,21 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:focubili/models/video_shot_preview.dart';
 import 'package:focubili/services/video_shot_service.dart';
 
-String _previewResponse(String image, {int samples = 2}) => jsonEncode({
+String _previewResponse(
+  String image, {
+  List<Object?> index = const [0, 0, 10],
+  List<String>? images,
+  int columns = 2,
+  int rows = 1,
+}) => jsonEncode({
   'code': 0,
   'data': {
-    'img_x_len': 2,
-    'img_y_len': 1,
+    'img_x_len': columns,
+    'img_y_len': rows,
     'img_x_size': 160,
     'img_y_size': 90,
-    'image': ['https://i0.hdslb.com/$image'],
-    'index': List<int>.generate(samples, (index) => index * 10),
+    'image': images ?? ['https://i0.hdslb.com/$image'],
+    'index': index,
   },
 });
 
@@ -152,11 +158,32 @@ void main() {
       requestJson: (uri) async {
         final cid = int.parse(uri.queryParameters['cid']!);
         calls.add(cid);
-        return _previewResponse('long.jpg', samples: cid == 3 ? 33000 : 18000);
+        final samples = cid == 3 ? 33000 : 18000;
+        return _previewResponse(
+          'long.jpg',
+          index: [0, ...List.generate(samples, (index) => index)],
+          images: List.generate(
+            samples ~/ 100,
+            (index) => 'https://i0.hdslb.com/long-$index.jpg',
+          ),
+          columns: 10,
+          rows: 10,
+        );
       },
     );
     final first = await service.loadPreview(bvid: bvid, cid: 1);
     expect(first?.sampleSeconds.length, 18000);
+    final beforeBoundary = first?.frameFor(
+      const Duration(seconds: 9599, milliseconds: 999),
+    );
+    final atBoundary = first?.frameFor(const Duration(seconds: 9600));
+    final lastFrame = first?.frameFor(const Duration(seconds: 18000));
+    expect(beforeBoundary?.imageUrl, endsWith('/long-95.jpg'));
+    expect((beforeBoundary?.row, beforeBoundary?.column), (9, 9));
+    expect(atBoundary?.imageUrl, endsWith('/long-96.jpg'));
+    expect((atBoundary?.row, atBoundary?.column), (0, 0));
+    expect(lastFrame?.imageUrl, endsWith('/long-179.jpg'));
+    expect((lastFrame?.row, lastFrame?.column), (9, 9));
     expect(await service.loadPreview(bvid: bvid, cid: 1), same(first));
     await service.loadPreview(bvid: bvid, cid: 2);
     expect(await service.loadPreview(bvid: bvid, cid: 1), isNot(same(first)));
@@ -202,7 +229,7 @@ void main() {
                 "//i0.hdslb.com/first.jpg",
                 "https://i0.hdslb.com/second.jpg"
               ],
-              "index": [0, 5, 10, 30, 60]
+              "index": [0, 0, 5, 10, 30, 60]
             }
           }
         ''';
@@ -229,6 +256,81 @@ void main() {
     expect(secondSheetFrame?.row, 0);
   });
 
+  test('真实时间表的首项不占图格，110 秒选择 109 秒而非 117 秒', () async {
+    final service = BilibiliVideoShotService(
+      requestJson: (_) async => _previewResponse(
+        '49075258.jpg',
+        columns: 10,
+        rows: 10,
+        // Prefix captured from /x/player/videoshot for BV1os411H7wm.
+        index: [
+          0,
+          0,
+          8,
+          14,
+          19,
+          25,
+          34,
+          40,
+          46,
+          56,
+          63,
+          70,
+          80,
+          87,
+          93,
+          100,
+          109,
+          117,
+          124,
+        ],
+      ),
+    );
+    final preview = (await service.loadPreview(
+      bvid: 'BV1os411H7wm',
+      cid: 49075258,
+    ))!;
+    for (final (milliseconds, expectedCell) in [
+      (110000, (1, 5)),
+      (0, (0, 0)),
+      (116999, (1, 5)),
+      (117000, (1, 6)),
+    ]) {
+      final frame = preview.frameFor(Duration(milliseconds: milliseconds));
+      expect((frame?.row, frame?.column), expectedCell);
+    }
+  });
+
+  test('不筛掉或排序损坏的时间槽，避免缩略图错位', () async {
+    for (final index in <List<Object?>>[
+      [0],
+      [1, 0, 8],
+      [0, 0, 8, 'broken', 14],
+      [0, 0, 8, 6],
+      [0, 0, -1, 8],
+      [0, 0, 1.5, 8],
+    ]) {
+      final service = BilibiliVideoShotService(
+        requestJson: (_) async =>
+            _previewResponse('atlas.jpg', index: index, columns: 10, rows: 10),
+      );
+      expect(
+        await service.loadPreview(bvid: bvid, cid: 1),
+        isNull,
+        reason: '$index',
+      );
+    }
+  });
+
+  test('时间表只有一个起始零时保持已经对齐的图格', () async {
+    final service = BilibiliVideoShotService(
+      requestJson: (_) async => _previewResponse('atlas.jpg', index: [0, 8]),
+    );
+    final preview = (await service.loadPreview(bvid: bvid, cid: 1))!;
+    expect(preview.frameFor(const Duration(seconds: 7))?.column, 0);
+    expect(preview.frameFor(const Duration(seconds: 8))?.column, 1);
+  });
+
   /// 验证时间点保存会下载对应雪碧图并裁出第二格蓝色画面。
   test('裁切时间点雪碧图为独立 PNG', () async {
     final Uint8List spriteBytes = await _buildSpritePng();
@@ -242,7 +344,7 @@ void main() {
             "img_x_size": 2,
             "img_y_size": 1,
             "image": ["https://i0.hdslb.com/sprite.png"],
-            "index": [0, 30]
+            "index": [0, 0, 30]
           }
         }
       ''',
