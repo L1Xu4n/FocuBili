@@ -302,7 +302,7 @@ void main() {
 
     await open();
     expect(find.byIcon(Icons.delete_outline_rounded), findsNothing);
-    expect(find.text('多选'), findsOneWidget);
+    expect(find.byTooltip('多选'), findsOneWidget);
     expect(await currentOrder(), [_third, _second, _first]);
     await tester.tap(_itemHandle(_third));
     await tester.pumpAndSettle();
@@ -344,13 +344,13 @@ void main() {
     await _holdAndMove(tester, _checkbox(_first), _checkbox(_third));
     expect(find.text('已选 3 项'), findsOneWidget);
     await tester.tap(_checkbox(_first));
-    await tester.tap(find.text('移除所选'));
+    await tester.tap(find.byTooltip('移除所选'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
     expect(await currentOrder(), [_second, _first, _third]);
     expect(find.text('已选 2 项'), findsOneWidget);
-    await tester.tap(find.text('移除所选'));
+    await tester.tap(find.byTooltip('移除所选'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('移除'));
     await tester.pumpAndSettle();

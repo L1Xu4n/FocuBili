@@ -8,8 +8,11 @@ import '../../core/router/app_router.dart';
 import '../../core/widgets/drag_selection_region.dart';
 import '../../models/app_favorite.dart';
 import '../../models/playback_queue.dart';
+import '../../models/public_profile.dart';
 import '../../services/app_favorites_service.dart';
 import '../../services/bilibili_service.dart';
+import '../../services/learning_list_service.dart';
+import '../learning/learning_add_sheet.dart';
 import 'app_favorite_reorder.dart';
 import 'app_favorite_video_tile.dart';
 import 'local_video_list_selection.dart';
@@ -22,6 +25,7 @@ class AppFavoriteDetailPage extends StatefulWidget {
     required this.folder,
     this.favoritesService,
     this.bilibiliService,
+    this.learningService,
   });
 
   /// 当前展示的软件收藏夹。
@@ -33,6 +37,9 @@ class AppFavoriteDetailPage extends StatefulWidget {
   /// 可选的公开视频详情服务，用于打开收藏视频前补齐播放数据。
   final BilibiliService? bilibiliService;
 
+  /// Learning-list backend; the add sheet writes only after confirmation.
+  final LearningListService? learningService;
+
   /// 创建管理收藏项读取与移除行为的状态对象。
   @override
   State<AppFavoriteDetailPage> createState() => _AppFavoriteDetailPageState();
@@ -42,6 +49,7 @@ class AppFavoriteDetailPage extends StatefulWidget {
 class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
   late final AppFavoritesService _favoritesService;
   late final BilibiliService _bilibiliService;
+  late final LearningListService _learningService;
   List<AppFavoriteItem> _items = const <AppFavoriteItem>[];
   bool _isLoading = true;
   final _searchController = TextEditingController();
@@ -50,6 +58,8 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
   List<AppFavoriteItem> _visibleItems = const [];
   bool _removing = false;
   bool _reordering = false;
+  bool _addingToLearning = false;
+  bool get _busy => _removing || _reordering || _addingToLearning;
   int _loadGeneration = 0;
   int _openGeneration = 0;
 
@@ -67,6 +77,7 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
     super.initState();
     _favoritesService = widget.favoritesService ?? AppFavoritesService();
     _bilibiliService = widget.bilibiliService ?? BilibiliVideoInfoService();
+    _learningService = widget.learningService ?? LearningListService();
     unawaited(_loadItems());
   }
 
@@ -79,6 +90,7 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
       _searchController.clear();
       _removing = false;
       _reordering = false;
+      _addingToLearning = false;
       _items = const [];
       _updateVisibleItems();
       _isLoading = true;
@@ -94,7 +106,7 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
   }
 
   void _startSelection([String? anchor]) {
-    if (_removing || _reordering) return;
+    if (_busy) return;
     FocusScope.of(context).unfocus();
     setState(() {
       ++_openGeneration;
@@ -127,8 +139,7 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
   }
 
   Future<void> _reorderItems(List<String> ids) async {
-    if (_removing ||
-        _reordering ||
+    if (_busy ||
         _selection.active ||
         _searchController.text.trim().isNotEmpty) {
       return;
@@ -162,7 +173,7 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
     final generation = ++_openGeneration;
     try {
       final preview = await _bilibiliService.lookupVideo(item.bvid);
-      if (!mounted || generation != _openGeneration || _removing) {
+      if (!mounted || generation != _openGeneration || _busy) {
         return;
       }
       await Navigator.of(context).pushNamed(
@@ -179,15 +190,65 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
         ),
       );
     } on Object {
-      if (mounted && generation == _openGeneration && !_removing) {
+      if (mounted && generation == _openGeneration && !_busy) {
         _showMessage('无法打开视频，请检查网络后重试。');
+      }
+    }
+  }
+
+  /// Use the shared picker for real part IDs and optional subject folders.
+  Future<void> _addToLearning() async {
+    if (_busy || !_selection.active) return;
+    final selectedIds = {..._selection.ids};
+    final selected = [
+      for (final item in _visibleItems)
+        if (selectedIds.contains(item.bvid))
+          CreatorVideo(
+            bvid: item.bvid,
+            title: item.title,
+            coverUrl: item.coverUrl,
+            duration: Duration.zero,
+          ),
+    ];
+    if (selected.isEmpty) return;
+
+    final generation = ++_openGeneration;
+    setState(() => _addingToLearning = true);
+    bool isCurrent() =>
+        mounted &&
+        generation == _openGeneration &&
+        _selection.active &&
+        _selection.ids.length == selectedIds.length &&
+        _selection.ids.containsAll(selectedIds);
+    try {
+      final result = await LearningAddSheet.showSelectedVideos(
+        context,
+        items: selected,
+        canConfirm: isCurrent,
+        videoService: _bilibiliService,
+        service: _learningService,
+      );
+      if (result == null || !isCurrent()) return;
+      setState(_selection.end);
+      final added = result.addedIds.length;
+      final existing = result.existingIds.length;
+      _showMessage(
+        added == 0
+            ? '学习清单中已有 $existing 项'
+            : '已添加到学习清单：$added 项${existing == 0 ? '' : '，已有 $existing 项'}',
+      );
+    } catch (_) {
+      if (isCurrent()) _showMessage('未能加入学习清单，请重试。');
+    } finally {
+      if (mounted && generation == _openGeneration) {
+        setState(() => _addingToLearning = false);
       }
     }
   }
 
   /// Removes the selected videos from the current folder only.
   Future<void> _removeItems() async {
-    if (_removing || _reordering) return;
+    if (_busy) return;
     final folder = widget.folder;
     final bvids = {..._selection.ids};
     if (bvids.isEmpty) return;
@@ -252,12 +313,12 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
         item,
         _bilibiliService.lookupVideo,
       ),
-      onTap: _removing || _reordering
+      onTap: _busy
           ? null
           : _selection.active
           ? toggle
           : () => unawaited(_openVideo(item)),
-      onLongPress: _selection.active || _removing || _reordering
+      onLongPress: _selection.active || _busy
           ? null
           : () => _startSelection(item.bvid),
       reorderHandle: reorderHandle,
@@ -266,7 +327,7 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
               handleKey: handleKey,
               id: item.bvid,
               title: item.title,
-              onToggle: _removing ? null : toggle,
+              onToggle: _busy ? null : toggle,
             )
           : null,
     );
@@ -307,7 +368,7 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
     }
     return _selection.region(
       controller: _scrollController,
-      busy: _removing,
+      busy: _busy,
       setState: setState,
       builder: (context, dragging) => RefreshIndicator(
         notificationPredicate: (notification) =>
@@ -317,8 +378,7 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
           ids: [for (final item in _visibleItems) item.bvid],
           enabled:
               !_selection.active &&
-              !_removing &&
-              !_reordering &&
+              !_busy &&
               _searchController.text.trim().isEmpty,
           onDragStarted: () => ++_openGeneration,
           onReorder: (ids) => unawaited(_reorderItems(ids)),
@@ -351,21 +411,43 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
     );
   }
 
-  AppBar _buildAppBar() => _selection.active
-      ? _selection.appBar(
-          onExit: _removing ? null : () => setState(_selection.end),
-          onRemove: _removing ? null : () => unawaited(_removeItems()),
-        )
-      : AppBar(
-          title: Text(widget.folder.name),
-          actions: [
-            if (_visibleItems.isNotEmpty)
-              TextButton(
-                onPressed: _removing || _reordering ? null : _startSelection,
-                child: const Text('多选'),
-              ),
-          ],
-        );
+  AppBar _buildAppBar() {
+    final selecting = _selection.active;
+    final canAct = !_busy && _selection.ids.isNotEmpty;
+    return AppBar(
+      leading: selecting
+          ? IconButton(
+              tooltip: '退出多选',
+              onPressed: _busy ? null : () => setState(_selection.end),
+              icon: const Icon(Icons.close_rounded),
+            )
+          : null,
+      title: Text(
+        selecting ? '已选 ${_selection.ids.length} 项' : widget.folder.name,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      actions: [
+        if (selecting) ...[
+          IconButton(
+            tooltip: '添加到学习清单',
+            onPressed: canAct ? () => unawaited(_addToLearning()) : null,
+            icon: const Icon(Icons.playlist_add_rounded),
+          ),
+          IconButton(
+            tooltip: '移除所选',
+            onPressed: canAct ? () => unawaited(_removeItems()) : null,
+            icon: const Icon(Icons.delete_outline_rounded),
+          ),
+        ] else if (_visibleItems.isNotEmpty)
+          IconButton(
+            tooltip: '多选',
+            onPressed: _busy ? null : _startSelection,
+            icon: const Icon(Icons.checklist_rounded),
+          ),
+      ],
+    );
+  }
 
   /// 创建收藏夹详情页标题和内容区域。
   @override
@@ -373,7 +455,7 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
     return PopScope(
       canPop: !_selection.active,
       onPopInvokedWithResult: (popped, _) {
-        if (!popped && _selection.active && !_removing) {
+        if (!popped && _selection.active && !_busy) {
           setState(_selection.end);
         }
       },
@@ -388,7 +470,7 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
                 child: TextField(
                   key: const Key('app-favorite-videos-search'),
                   controller: _searchController,
-                  enabled: !_removing,
+                  enabled: !_busy,
                   onChanged: (_) => setState(_updateVisibleItems),
                   decoration: InputDecoration(
                     hintText: '搜索收藏视频、UP 主或 BV 号',
@@ -398,7 +480,7 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
                         : IconButton(
                             tooltip: '清空搜索',
                             icon: const Icon(Icons.close),
-                            onPressed: _removing
+                            onPressed: _busy
                                 ? null
                                 : () => setState(() {
                                     _searchController.clear();

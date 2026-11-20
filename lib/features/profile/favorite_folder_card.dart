@@ -1,5 +1,6 @@
 import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 /// 为账号收藏与本机收藏提供同一套自适应封面、名称和数量布局。
 class FavoriteFolderCard extends StatelessWidget {
@@ -41,9 +42,11 @@ class FavoriteFolderCard extends StatelessWidget {
     builder: (context, constraints) {
       final width = ((constraints.maxWidth - 24) * .30).clamp(72.0, 112.0);
       final largeText = MediaQuery.textScalerOf(context).scale(14) > 18;
-      final body = InkWell(
+      final manage = available ? onLongPress : null;
+      final ink = InkWell(
         onTap: available ? onTap : null,
-        onLongPress: available ? onLongPress : null,
+        onLongPress: manage,
+        onSecondaryTap: manage,
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Row(
@@ -111,6 +114,22 @@ class FavoriteFolderCard extends StatelessWidget {
           ),
         ),
       );
+      final Widget body = manage == null
+          ? ink
+          : CallbackShortcuts(
+              bindings: {
+                const SingleActivator(
+                  LogicalKeyboardKey.f10,
+                  shift: true,
+                  includeRepeats: false,
+                ): manage,
+                const SingleActivator(
+                  LogicalKeyboardKey.contextMenu,
+                  includeRepeats: false,
+                ): manage,
+              },
+              child: ink,
+            );
       // The dedicated handle is outside the row's tap/long-press hit area.
       final handle = reorderHandle;
       return Card(

@@ -119,7 +119,7 @@ class _AppFavoriteVideoTileState extends State<AppFavoriteVideoTile> {
                 ],
               ),
             ),
-            if (widget.selectionControl case final control?) control,
+            ?widget.selectionControl,
           ],
         ),
       ),
