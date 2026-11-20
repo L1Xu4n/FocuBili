@@ -3,6 +3,7 @@ import 'dart:collection';
 
 import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 
 import '../../core/layout/adaptive_page_frame.dart';
 import '../../core/widgets/drag_selection_region.dart';
@@ -38,6 +39,7 @@ class UserProfilePage extends StatefulWidget {
     this.initialAvatarUrl = '',
     this.initialSign = '',
     this.initialOfficialDescription = '',
+    this.currentPlayback,
     this.publicContentService,
     this.interactionService,
     this.videoService,
@@ -54,6 +56,10 @@ class UserProfilePage extends StatefulWidget {
   final String initialAvatarUrl;
   final String initialSign;
   final String initialOfficialDescription;
+
+  /// The player route's current public upload, never a history entry.
+  final ({int ownerMid, String bvid, int accountRevision})? currentPlayback;
+
   final BilibiliPublicContentService? publicContentService;
   final BilibiliInteractionService? interactionService;
   final BilibiliService? videoService;
@@ -113,6 +119,9 @@ class _UserProfilePageState extends State<UserProfilePage>
         SingleTickerProviderStateMixin,
         DiscoveryBlocklistState<UserProfilePage> {
   static const int _maximumPartCountLookupConcurrency = 2;
+  static const int _maximumLocationPages = 10;
+  static const double _videoListBreakpoint = 760;
+  static const double _videoRowSpacing = 12;
   static final _defaultAvatarSnapshots = _CreatorAvatarSnapshot();
   static final _injectedAvatarSnapshots = Expando<_CreatorAvatarSnapshot>();
   late final _CreatorAvatarSnapshot _avatarSnapshots;
@@ -126,6 +135,12 @@ class _UserProfilePageState extends State<UserProfilePage>
   late final BilibiliInteractionService _interactionService;
   late final TabController _tabController;
   final ScrollController _profileScrollController = ScrollController();
+  ScrollController? _videoListController;
+  final _videoRowKeys = <String, GlobalKey>{};
+  int _locationGeneration = 0;
+  bool _locatingCurrentVideo = false;
+  String? _highlightedVideo;
+  Timer? _highlightTimer;
   final TextEditingController _videoSearchController = TextEditingController();
   CreatorProfile? _profile;
   List<Object> _items = const <Object>[];
@@ -274,21 +289,27 @@ class _UserProfilePageState extends State<UserProfilePage>
       _cachedAvatarUrl = _avatarSnapshots.read(widget.mid);
     });
     unawaited(_loadProfile());
+    unawaited(_loadFirstContentPage());
   }
 
   @override
   void didUpdateWidget(covariant UserProfilePage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.mid == widget.mid) return;
-    _profile = null;
-    _cachedAvatarUrl = _avatarSnapshots.read(widget.mid);
-    unawaited(_loadProfile());
+    if (oldWidget.mid != widget.mid) {
+      _profile = null;
+      _cachedAvatarUrl = _avatarSnapshots.read(widget.mid);
+      unawaited(_loadProfile());
+      unawaited(_loadFirstContentPage());
+    } else if (oldWidget.currentPlayback != widget.currentPlayback) {
+      _cancelVideoLocation();
+    }
   }
 
   /// 移除监听并释放标签与滚动控制器。
   @override
   void dispose() {
     CacheLifecycle.account.removeListener(_profileAccountChanged);
+    _highlightTimer?.cancel();
     _tabController
       ..removeListener(_handleTabChanged)
       ..dispose();
@@ -316,8 +337,13 @@ class _UserProfilePageState extends State<UserProfilePage>
 
   /// 接收嵌套列表滚动通知，在距离底部较近时自动读取下一页。
   bool _handleContentScrollNotification(ScrollNotification notification) {
-    if (notification.metrics.axis == Axis.vertical &&
-        notification.metrics.extentAfter < 420) {
+    if (notification.metrics.axis != Axis.vertical) return false;
+    if (_locatingCurrentVideo) {
+      if (notification is UserScrollNotification &&
+          notification.direction != ScrollDirection.idle) {
+        setState(_cancelVideoLocation);
+      }
+    } else if (notification.metrics.extentAfter < 420) {
       unawaited(_loadMore());
     }
     return false;
@@ -364,7 +390,9 @@ class _UserProfilePageState extends State<UserProfilePage>
   }
 
   /// 读取当前标签第 1 页，并清除上一标签留下的内容和错误。
-  Future<void> _loadFirstContentPage() async {
+  Future<void> _loadFirstContentPage({bool keepVideoLocation = false}) async {
+    if (!keepVideoLocation) _cancelVideoLocation();
+    _videoRowKeys.clear();
     _selection.end();
     final _CreatorTab requestedTab = _selectedTab;
     final generation = ++_contentGeneration;
@@ -480,7 +508,10 @@ class _UserProfilePageState extends State<UserProfilePage>
 
   /// 展开或收起投稿搜索框，收起时保留已经提交的关键词结果。
   void _toggleVideoSearch() {
-    setState(() => _videoSearchExpanded = !_videoSearchExpanded);
+    setState(() {
+      _cancelVideoLocation();
+      _videoSearchExpanded = !_videoSearchExpanded;
+    });
     if (!_videoSearchExpanded) {
       FocusScope.of(context).unfocus();
     } else {
@@ -580,38 +611,232 @@ class _UserProfilePageState extends State<UserProfilePage>
   }
 
   /// 读取当前标签下一页并按业务主键去重合并。
-  Future<void> _loadMore() async {
-    if (_loadingContent || _loadingMore || !_hasMore) {
-      return;
+  Future<bool> _loadMore({bool forLocation = false}) async {
+    if (_loadingContent || _loadingMore || !_hasMore || _page == 0) {
+      return false;
     }
     final _CreatorTab requestedTab = _selectedTab;
     final generation = _contentGeneration;
+    final requestedPage = _page + 1;
+    bool isCurrent() =>
+        mounted &&
+        requestedTab == _selectedTab &&
+        generation == _contentGeneration;
+
     setState(() => _loadingMore = true);
     try {
       final CreatorContentPage<Object> result = await _loadContentPage(
         requestedTab,
-        _page + 1,
+        requestedPage,
       );
-      if (!mounted ||
-          requestedTab != _selectedTab ||
-          generation != _contentGeneration) {
-        return;
-      }
+      if (!isCurrent()) return false;
       setState(() {
-        _items = _mergeContent(_items, result.items, requestedTab);
-        _page = result.page;
-        _hasMore = result.hasMore;
         _loadingMore = false;
+        if (result.page == requestedPage) {
+          _items = _mergeContent(_items, result.items, requestedTab);
+          _page = result.page;
+          _hasMore = result.hasMore;
+        }
       });
+      return result.page == requestedPage;
     } catch (error) {
-      if (!mounted ||
-          requestedTab != _selectedTab ||
-          generation != _contentGeneration) {
+      if (!isCurrent()) return false;
+      setState(() => _loadingMore = false);
+      if (!forLocation) _showMessage('加载更多失败：$error');
+      return false;
+    }
+  }
+
+  String? get _currentPlaybackBvid {
+    final playback = widget.currentPlayback;
+    return playback != null &&
+            widget.mid > 0 &&
+            playback.ownerMid == widget.mid &&
+            playback.accountRevision == CacheLifecycle.account.value &&
+            playback.bvid.isNotEmpty
+        ? playback.bvid
+        : null;
+  }
+
+  void _cancelVideoLocation() {
+    _locationGeneration++;
+    _locatingCurrentVideo = false;
+    _highlightTimer?.cancel();
+    _highlightedVideo = null;
+  }
+
+  bool _matchesPlayingUpload(CreatorVideo item, String bvid) =>
+      item.bvid == bvid && (item.ownerMid == 0 || item.ownerMid == widget.mid);
+
+  Future<void> _locateCurrentVideo() async {
+    final bvid = _currentPlaybackBvid;
+    if (bvid == null || _locatingCurrentVideo || _loadingMore) return;
+    setState(() {
+      _cancelVideoLocation();
+      _locatingCurrentVideo = true;
+    });
+    final operation = _locationGeneration;
+    final mid = widget.mid;
+    final switchToUploads = _selectedTab != _CreatorTab.videos;
+    final clearSearch =
+        _videoKeyword.isNotEmpty &&
+        (switchToUploads ||
+            !_items.whereType<CreatorVideo>().any(
+              (item) =>
+                  _matchesPlayingUpload(item, bvid) &&
+                  !_isCreatorVideoBlocked(item),
+            ));
+    Future<void>? firstPage;
+    if (switchToUploads || clearSearch || _contentError != null) {
+      if (switchToUploads) {
+        _selectedTab = _CreatorTab.videos;
+        _tabController.index = _CreatorTab.videos.index;
+      }
+      if (clearSearch) {
+        _videoKeyword = '';
+        _videoSearchController.clear();
+      }
+      FocusScope.of(context).unfocus();
+      firstPage = _loadFirstContentPage(keepVideoLocation: true);
+    }
+    final generation = _contentGeneration;
+    final rulesRevision = discoveryBlocklistGeneration;
+    bool isCurrent() =>
+        mounted &&
+        operation == _locationGeneration &&
+        generation == _contentGeneration &&
+        discoveryBlocklistGeneration == rulesRevision &&
+        discoveryBlocklistActionsReady &&
+        !_selection.active &&
+        widget.mid == mid &&
+        _currentPlaybackBvid == bvid &&
+        _selectedTab == _CreatorTab.videos &&
+        ModalRoute.of(context)?.isCurrent != false;
+
+    try {
+      await firstPage;
+      if (!isCurrent()) return;
+      var pages = 0;
+      while (_contentError == null) {
+        final videos = _items.cast<CreatorVideo>();
+        final visible = _visibleCreatorVideos(videos);
+        final index = visible.indexWhere(
+          (item) => _matchesPlayingUpload(item, bvid),
+        );
+        if (index >= 0) {
+          await _scrollToPlayingUpload(visible, index, isCurrent);
+          return;
+        }
+        // A video hidden by the local blocklist must not be revealed by locating.
+        if (!_hasMore ||
+            videos.any((item) => _matchesPlayingUpload(item, bvid))) {
+          _showMessage('未在公开投稿中找到当前视频');
+          return;
+        }
+        if (pages++ >= _maximumLocationPages) {
+          _showMessage('暂未找到当前视频，可继续定位');
+          return;
+        }
+        final loaded = await _loadMore(forLocation: true);
+        if (!isCurrent()) return;
+        if (!loaded) break;
+      }
+      _showMessage('投稿加载失败，请重试');
+    } finally {
+      if (mounted && operation == _locationGeneration) {
+        setState(() => _locatingCurrentVideo = false);
+      }
+    }
+  }
+
+  RenderBox? _videoRow(String bvid) {
+    final render = _videoRowKeys[bvid]?.currentContext?.findRenderObject();
+    return render is RenderBox && render.attached && render.hasSize
+        ? render
+        : null;
+  }
+
+  /// The lazy list only lays out nearby rows. Seek using measured row offsets,
+  /// then align the exact render box; this also handles variable text heights.
+  Future<void> _scrollToPlayingUpload(
+    List<CreatorVideo> visible,
+    int index,
+    bool Function() isCurrent,
+  ) async {
+    final bvid = visible[index].bvid;
+    final operation = _locationGeneration;
+    double lower = 0;
+    double upper = double.infinity;
+    for (var attempt = 0; attempt < 12; attempt++) {
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted || !isCurrent() || !_isVideoDisplayed(bvid)) return;
+      final controller = _videoListController;
+      if (controller == null || !controller.hasClients) continue;
+      final position = controller.position;
+      if (!position.hasContentDimensions) continue;
+
+      final row = _videoRow(bvid);
+      if (row != null) {
+        setState(() => _highlightedVideo = bvid);
+        await position.ensureVisible(
+          row,
+          alignment: .18,
+          duration: MediaQuery.disableAnimationsOf(context)
+              ? Duration.zero
+              : const Duration(milliseconds: 230),
+          curve: Curves.easeOutCubic,
+        );
+        if (isCurrent()) {
+          _highlightTimer = Timer(const Duration(seconds: 2), () {
+            if (mounted) setState(() => _highlightedVideo = null);
+          });
+        } else if (mounted && operation == _locationGeneration) {
+          setState(() => _highlightedVideo = null);
+        }
         return;
       }
-      setState(() => _loadingMore = false);
-      _showMessage('加载更多失败：$error');
+
+      final built = <(int, RenderBox)>[
+        for (var i = 0; i < visible.length; i++)
+          if (_videoRow(visible[i].bvid) case final row?) (i, row),
+      ];
+      if (built.isEmpty) continue;
+      final first = built.first;
+      final last = built.last;
+      final viewport = RenderAbstractViewport.of(first.$2);
+      final columns =
+          viewport is RenderBox &&
+              (viewport as RenderBox).size.width >= _videoListBreakpoint
+          ? 2
+          : 1;
+      final firstOffset = viewport.getOffsetToReveal(first.$2, 0).offset;
+      final lastOffset = viewport.getOffsetToReveal(last.$2, 0).offset;
+      final rowCount = last.$1 ~/ columns - first.$1 ~/ columns;
+      final stride = rowCount > 0
+          ? (lastOffset - firstOffset) / rowCount
+          : first.$2.size.height + _videoRowSpacing;
+      final before = index < first.$1;
+      if (before) {
+        upper = position.pixels < upper ? position.pixels : upper;
+      } else {
+        lower = position.pixels > lower ? position.pixels : lower;
+      }
+      var offset =
+          firstOffset +
+          (index ~/ columns - first.$1 ~/ columns) * stride -
+          position.viewportDimension * .18;
+      if (offset <= lower || offset >= upper) {
+        offset = upper.isFinite
+            ? (lower + upper) / 2
+            : position.pixels + position.viewportDimension;
+      }
+      position.jumpTo(
+        offset
+            .clamp(position.minScrollExtent, position.maxScrollExtent)
+            .toDouble(),
+      );
     }
+    if (isCurrent()) _showMessage('暂时无法定位当前视频');
   }
 
   /// 按 BV、文章编号或合集编号合并分页内容，避免重复卡片。
@@ -1348,6 +1573,7 @@ class _UserProfilePageState extends State<UserProfilePage>
     final bool opening = _openingBvid == item.bvid;
     final bool adding = _addingBvid == item.bvid;
     final bool added = _learningListBvids.contains(item.bvid);
+    final selecting = _selection.active;
     final selected = _selection.ids.contains(item.bvid);
     final WatchHistoryEntry? watchHistory = _watchHistoryByBvid[item.bvid];
     _schedulePartCountFallback(item);
@@ -1355,21 +1581,28 @@ class _UserProfilePageState extends State<UserProfilePage>
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         final textScale = MediaQuery.textScalerOf(context).scale(14) / 14;
-        final double thumbnailWidth =
-            textScale > 1.4 && constraints.maxWidth < 450
+        const selectionInset = 6.0;
+        final double thumbnailWidth = selecting
+            ? ((constraints.maxWidth - selectionInset * 2) * .36)
+                  .clamp(0, 184)
+                  .toDouble()
+            : textScale > 1.4 && constraints.maxWidth < 450
             ? constraints.maxWidth * .34
             : (constraints.maxWidth * .42).clamp(148, 196).toDouble();
-        final double thumbnailHeight = (thumbnailWidth * 9 / 16)
-            .clamp(64, 112)
-            .toDouble();
-        final Color onSurfaceVariant = Theme.of(
-          context,
-        ).colorScheme.onSurfaceVariant;
+        final thumbnailHeight = selecting
+            ? thumbnailWidth * 9 / 16
+            : (thumbnailWidth * 9 / 16).clamp(64, 112).toDouble();
+        final colors = Theme.of(context).colorScheme;
+        final onSurfaceVariant = colors.onSurfaceVariant;
         return Material(
           color: selected
-              ? Theme.of(context).colorScheme.secondaryContainer
+              ? colors.primary.withValues(
+                  alpha: colors.brightness == Brightness.dark ? .14 : .08,
+                )
+              : _highlightedVideo == item.bvid
+              ? colors.primaryContainer.withValues(alpha: .42)
               : Colors.transparent,
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(selecting ? 16 : 12),
           clipBehavior: Clip.antiAlias,
           child: InkWell(
             key: Key('creator-video-${item.bvid}'),
@@ -1391,206 +1624,220 @@ class _UserProfilePageState extends State<UserProfilePage>
                     _openingBvid != null
                 ? null
                 : () => _changeVisibleSelection(item, start: true),
-            child: IntrinsicHeight(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  ClipRRect(
-                    key: Key('creator-video-thumbnail-${item.bvid}'),
-                    borderRadius: BorderRadius.circular(11),
-                    child: Stack(
-                      children: <Widget>[
-                        _buildImage(
-                          item.coverUrl,
-                          width: thumbnailWidth,
-                          height: thumbnailHeight,
-                          fit: BoxFit.cover,
-                          placeholderIcon: Icons.video_library_outlined,
-                        ),
-                        if (watchHistory != null)
-                          Positioned(
-                            left: 5,
-                            top: 5,
-                            child: WatchHistoryBadge(entry: watchHistory),
+            child: Padding(
+              padding: selecting
+                  ? const EdgeInsets.all(selectionInset)
+                  : EdgeInsets.zero,
+              child: IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: selecting
+                      ? CrossAxisAlignment.center
+                      : CrossAxisAlignment.start,
+                  children: <Widget>[
+                    ClipRRect(
+                      key: Key('creator-video-thumbnail-${item.bvid}'),
+                      borderRadius: BorderRadius.circular(11),
+                      child: Stack(
+                        children: <Widget>[
+                          _buildImage(
+                            item.coverUrl,
+                            width: thumbnailWidth,
+                            height: thumbnailHeight,
+                            fit: BoxFit.cover,
+                            placeholderIcon: Icons.video_library_outlined,
                           ),
-                        if (partCount > 1)
+                          if (watchHistory != null)
+                            Positioned(
+                              left: 5,
+                              top: 5,
+                              child: WatchHistoryBadge(entry: watchHistory),
+                            ),
+                          if (partCount > 1)
+                            Positioned(
+                              right: 5,
+                              top: 5,
+                              child: DecoratedBox(
+                                key: Key('creator-video-parts-${item.bvid}'),
+                                decoration: BoxDecoration(
+                                  color: Colors.black87,
+                                  borderRadius: BorderRadius.circular(5),
+                                ),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 3,
+                                  ),
+                                  child: Text(
+                                    '$partCount集',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
                           Positioned(
                             right: 5,
-                            top: 5,
+                            bottom: 5,
                             child: DecoratedBox(
-                              key: Key('creator-video-parts-${item.bvid}'),
                               decoration: BoxDecoration(
                                 color: Colors.black87,
                                 borderRadius: BorderRadius.circular(5),
                               ),
                               child: Padding(
                                 padding: const EdgeInsets.symmetric(
-                                  horizontal: 6,
-                                  vertical: 3,
+                                  horizontal: 5,
+                                  vertical: 2,
                                 ),
                                 child: Text(
-                                  '$partCount集',
+                                  _formatDuration(item.duration),
                                   style: const TextStyle(
                                     color: Colors.white,
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w600,
+                                    fontSize: 11,
                                   ),
                                 ),
                               ),
                             ),
                           ),
-                        Positioned(
-                          right: 5,
-                          bottom: 5,
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: Colors.black87,
-                              borderRadius: BorderRadius.circular(5),
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 5,
-                                vertical: 2,
-                              ),
-                              child: Text(
-                                _formatDuration(item.duration),
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 11,
+                          if (opening)
+                            const Positioned.fill(
+                              child: ColoredBox(
+                                color: Colors.black38,
+                                child: Center(
+                                  child: CircularProgressIndicator(
+                                    color: Colors.white,
+                                    strokeWidth: 2,
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
-                        ),
-                        if (opening)
-                          const Positioned.fill(
-                            child: ColoredBox(
-                              color: Colors.black38,
-                              child: Center(
-                                child: CircularProgressIndicator(
-                                  color: Colors.white,
-                                  strokeWidth: 2,
-                                ),
-                              ),
-                            ),
-                          ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        Text(
-                          key: Key('creator-video-title-${item.bvid}'),
-                          item.title,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w600,
-                            height: 1.25,
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text(
+                            key: Key('creator-video-title-${item.bvid}'),
+                            item.title,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w600,
+                              height: 1.25,
+                            ),
                           ),
-                        ),
-                        const Spacer(),
-                        Text(
-                          _formatDate(item.publishedAt),
-                          maxLines: 1,
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                        const SizedBox(height: 3),
-                        Row(
-                          children: <Widget>[
-                            Expanded(
-                              child: FittedBox(
-                                alignment: Alignment.centerLeft,
-                                fit: BoxFit.scaleDown,
-                                child: Row(
-                                  children: <Widget>[
-                                    Icon(
-                                      Icons.play_circle_outline_rounded,
-                                      size: 15,
-                                      color: onSurfaceVariant,
+                          const Spacer(),
+                          Text(
+                            _formatDate(item.publishedAt),
+                            maxLines: 1,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                          const SizedBox(height: 3),
+                          Row(
+                            children: <Widget>[
+                              Expanded(
+                                child: FittedBox(
+                                  alignment: Alignment.centerLeft,
+                                  fit: BoxFit.scaleDown,
+                                  child: Row(
+                                    children: <Widget>[
+                                      Icon(
+                                        Icons.play_circle_outline_rounded,
+                                        size: 15,
+                                        color: onSurfaceVariant,
+                                      ),
+                                      const SizedBox(width: 3),
+                                      Text(
+                                        _formatCount(item.stats.viewCount),
+                                        style: Theme.of(
+                                          context,
+                                        ).textTheme.bodySmall,
+                                      ),
+                                      const SizedBox(width: 10),
+                                      Icon(
+                                        Icons.subtitles_outlined,
+                                        size: 15,
+                                        color: onSurfaceVariant,
+                                      ),
+                                      const SizedBox(width: 3),
+                                      Text(
+                                        _formatCount(item.stats.danmakuCount),
+                                        style: Theme.of(
+                                          context,
+                                        ).textTheme.bodySmall,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              if (!selecting) ...[
+                                const SizedBox(width: 4),
+                                PopupMenuButton<VideoSaveDestination>(
+                                  key: Key('add-creator-video-${item.bvid}'),
+                                  tooltip: '更多操作：${item.title}',
+                                  enabled:
+                                      discoveryBlocklistActionsReady &&
+                                      !_batchBusy &&
+                                      _openingBvid == null &&
+                                      _addingBvid == null,
+                                  onSelected: (destination) =>
+                                      unawaited(_saveOne(item, destination)),
+                                  icon: adding
+                                      ? const SizedBox.square(
+                                          dimension: 18,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                          ),
+                                        )
+                                      : const Icon(Icons.more_horiz_rounded),
+                                  itemBuilder: (_) => [
+                                    PopupMenuItem(
+                                      value: VideoSaveDestination.learning,
+                                      child: Text(
+                                        added ? '学习清单 · 选择更多分 P' : '加入学习清单',
+                                      ),
                                     ),
-                                    const SizedBox(width: 3),
-                                    Text(
-                                      _formatCount(item.stats.viewCount),
-                                      style: Theme.of(
-                                        context,
-                                      ).textTheme.bodySmall,
-                                    ),
-                                    const SizedBox(width: 10),
-                                    Icon(
-                                      Icons.subtitles_outlined,
-                                      size: 15,
-                                      color: onSurfaceVariant,
-                                    ),
-                                    const SizedBox(width: 3),
-                                    Text(
-                                      _formatCount(item.stats.danmakuCount),
-                                      style: Theme.of(
-                                        context,
-                                      ).textTheme.bodySmall,
+                                    const PopupMenuItem(
+                                      value: VideoSaveDestination.favorites,
+                                      child: Text('加入收藏夹'),
                                     ),
                                   ],
                                 ),
-                              ),
-                            ),
-                            const SizedBox(width: 4),
-                            if (_selection.active)
-                              SizedBox(
-                                key: handleKey,
-                                width: 48,
-                                height: 48,
-                                child: Checkbox(
-                                  key: ValueKey('check-creator-${item.bvid}'),
-                                  semanticLabel: '选择 ${item.title}',
-                                  value: selected,
-                                  onChanged:
-                                      _batchBusy ||
-                                          !discoveryBlocklistActionsReady
-                                      ? null
-                                      : (_) => _changeVisibleSelection(item),
-                                ),
-                              )
-                            else
-                              PopupMenuButton<VideoSaveDestination>(
-                                key: Key('add-creator-video-${item.bvid}'),
-                                tooltip: '更多操作：${item.title}',
-                                enabled:
-                                    discoveryBlocklistActionsReady &&
-                                    !_batchBusy &&
-                                    _openingBvid == null &&
-                                    _addingBvid == null,
-                                onSelected: (destination) =>
-                                    unawaited(_saveOne(item, destination)),
-                                icon: adding
-                                    ? const SizedBox.square(
-                                        dimension: 18,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                        ),
-                                      )
-                                    : const Icon(Icons.more_horiz_rounded),
-                                itemBuilder: (_) => [
-                                  PopupMenuItem(
-                                    value: VideoSaveDestination.learning,
-                                    child: Text(
-                                      added ? '学习清单 · 选择更多分 P' : '加入学习清单',
-                                    ),
-                                  ),
-                                  const PopupMenuItem(
-                                    value: VideoSaveDestination.favorites,
-                                    child: Text('加入收藏夹'),
-                                  ),
-                                ],
-                              ),
-                          ],
-                        ),
-                      ],
+                              ],
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                ],
+                    if (selecting) ...[
+                      const SizedBox(width: 4),
+                      SizedBox.square(
+                        key: handleKey,
+                        dimension: 48,
+                        child: Checkbox(
+                          key: ValueKey('check-creator-${item.bvid}'),
+                          semanticLabel: '选择 ${item.title}',
+                          value: selected,
+                          materialTapTargetSize: MaterialTapTargetSize.padded,
+                          visualDensity: VisualDensity.standard,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          side: BorderSide(color: colors.outline, width: 1.5),
+                          onChanged:
+                              _batchBusy || !discoveryBlocklistActionsReady
+                              ? null
+                              : (_) => _changeVisibleSelection(item),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
               ),
             ),
           ),
@@ -1777,6 +2024,7 @@ class _UserProfilePageState extends State<UserProfilePage>
       return Builder(
         builder: (context) {
           final inner = PrimaryScrollController.of(context);
+          _videoListController = inner;
           return DragSelectionRegion(
             key: ValueKey('creator-drag-$_contentGeneration-$epoch'),
             controller: inner,
@@ -1820,12 +2068,18 @@ class _UserProfilePageState extends State<UserProfilePage>
                       )
                     : null,
                 footer: _buildLoadingFooter(),
-                mainAxisSpacing: 12,
-                itemBuilder: (context, index) => DragSelectionTarget(
-                  index: index,
-                  builder: (context, key) =>
-                      _buildVideoCard(videos[index], key),
-                ),
+                breakpoint: _videoListBreakpoint,
+                mainAxisSpacing: _videoRowSpacing,
+                itemBuilder: (context, index) {
+                  final item = videos[index];
+                  return DragSelectionTarget(
+                    key: _currentPlaybackBvid == null
+                        ? null
+                        : _videoRowKeys.putIfAbsent(item.bvid, GlobalKey.new),
+                    index: index,
+                    builder: (context, key) => _buildVideoCard(item, key),
+                  );
+                },
               ),
             ),
           );
@@ -1921,6 +2175,25 @@ class _UserProfilePageState extends State<UserProfilePage>
                     ? _buildSearchField()
                     : null,
                 actions: <Widget>[
+                  if (_currentPlaybackBvid != null)
+                    IconButton(
+                      key: const Key('creator-locate-current-video'),
+                      tooltip: '定位到当前播放视频',
+                      onPressed:
+                          _locatingCurrentVideo ||
+                              _loadingMore ||
+                              (_loadingContent &&
+                                  _selectedTab == _CreatorTab.videos) ||
+                              !discoveryBlocklistActionsReady
+                          ? null
+                          : () => unawaited(_locateCurrentVideo()),
+                      icon: _locatingCurrentVideo
+                          ? const SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.my_location_rounded),
+                    ),
                   if (_selectedTab == _CreatorTab.videos)
                     IconButton(
                       // 搜索按钮函数展开或收起当前 UP 主的投稿搜索框。

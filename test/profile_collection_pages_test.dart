@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -15,6 +17,7 @@ import 'package:focubili/services/bilibili_account_data_service.dart';
 import 'package:focubili/services/bilibili_interaction_service.dart';
 import 'package:focubili/services/bilibili_public_content_service.dart';
 import 'package:focubili/services/bilibili_service.dart';
+import 'package:focubili/services/cache_lifecycle.dart';
 import 'package:focubili/services/learning_list_service.dart';
 import 'package:focubili/services/watch_history_service.dart';
 
@@ -129,6 +132,50 @@ class _FakePublicContentService implements BilibiliPublicContentService {
       page: page,
       hasMore: false,
       totalCount: 8,
+    );
+  }
+}
+
+class _LocateUploadService extends _FakePublicContentService {
+  static const currentBvid = 'BV1GJ411x7h7';
+  final calls = <(int, String)>[];
+  final Completer<void>? waitForPageTwo;
+  final bool includeCurrent;
+  final int lastPage;
+
+  _LocateUploadService({
+    this.waitForPageTwo,
+    this.includeCurrent = true,
+    this.lastPage = 3,
+  });
+
+  @override
+  Future<CreatorContentPage<CreatorVideo>> loadVideos(
+    int mid, {
+    int page = 1,
+    String keyword = '',
+    CreatorVideoOrder order = CreatorVideoOrder.latest,
+  }) async {
+    calls.add((page, keyword));
+    if (page == 2) await waitForPageTwo?.future;
+    return CreatorContentPage<CreatorVideo>(
+      items: [
+        for (var i = 0; i < 20; i++)
+          CreatorVideo(
+            bvid: includeCurrent && page == 3 && i == 14 && keyword.isEmpty
+                ? currentBvid
+                : 'BVfake${page}index$i',
+            title: i.isEven
+                ? '第$page页的简短投稿 $i'
+                : '用于测试不同行高的两行投稿标题。用于测试不同行高的两行投稿标题。$i',
+            coverUrl: '',
+            duration: const Duration(minutes: 3),
+            ownerMid: mid,
+            partCount: 2,
+          ),
+      ],
+      page: page,
+      hasMore: page < lastPage,
     );
   }
 }
@@ -281,6 +328,127 @@ void main() {
   setUp(() {
     FlutterSecureStorage.setMockInitialValues(<String, String>{});
     SharedPreferences.setMockInitialValues(<String, Object>{});
+  });
+
+  const locate = Key('creator-locate-current-video');
+  const playingRow = Key('creator-video-${_LocateUploadService.currentBvid}');
+
+  Widget locatePage(
+    _LocateUploadService service, {
+    ({int ownerMid, String bvid, int accountRevision})? playback,
+  }) => _host(
+    UserProfilePage(
+      mid: 7,
+      currentPlayback: playback,
+      publicContentService: service,
+      videoService: _FakeVideoService(),
+    ),
+  );
+
+  ({int ownerMid, String bvid, int accountRevision}) playback({
+    int ownerMid = 7,
+  }) => (
+    ownerMid: ownerMid,
+    bvid: _LocateUploadService.currentBvid,
+    accountRevision: CacheLifecycle.account.value,
+  );
+
+  testWidgets('定位按钮只在当前播放视频所属的 UP 主页出现', (tester) async {
+    final service = _LocateUploadService();
+    await tester.pumpWidget(locatePage(service));
+    await tester.pumpAndSettle();
+    expect(find.byKey(locate), findsNothing);
+    await tester.pumpWidget(
+      locatePage(service, playback: playback(ownerMid: 8)),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(locate), findsNothing);
+    await tester.pumpWidget(locatePage(service, playback: playback()));
+    await tester.pumpAndSettle();
+    expect(find.byKey(locate), findsOneWidget);
+  });
+
+  for (final size in [const Size(390, 790), const Size(1024, 800)]) {
+    testWidgets('定位到第 3 页的准确投稿并短暂高亮（${size.width}）', (tester) async {
+      await tester.binding.setSurfaceSize(size);
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final service = _LocateUploadService();
+      await tester.pumpWidget(locatePage(service, playback: playback()));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(playingRow), findsNothing);
+      await tester.tap(find.byKey(locate));
+      await tester.pumpAndSettle(const Duration(milliseconds: 30));
+
+      final row = find.byKey(playingRow);
+      expect(row.hitTestable(), findsOneWidget);
+      expect(service.calls, [(1, ''), (2, ''), (3, '')]);
+      Color? rowColor() => tester
+          .widget<Material>(
+            find.ancestor(of: row, matching: find.byType(Material)).first,
+          )
+          .color;
+      expect(rowColor(), isNot(Colors.transparent));
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+      expect(rowColor(), Colors.transparent);
+    });
+  }
+
+  testWidgets('投稿搜索过滤掉当前视频时，定位可恢复全部投稿', (tester) async {
+    final service = _LocateUploadService();
+    await tester.pumpWidget(locatePage(service, playback: playback()));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('搜索投稿'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('creator-video-search')),
+      '排除当前投稿',
+    );
+    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.pumpAndSettle();
+    expect(service.calls.last, (1, '排除当前投稿'));
+
+    await tester.tap(find.byKey(locate));
+    await tester.pumpAndSettle(const Duration(milliseconds: 30));
+    expect(find.byKey(playingRow).hitTestable(), findsOneWidget);
+    expect(service.calls.toSet(), {(1, ''), (1, '排除当前投稿'), (2, ''), (3, '')});
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('无法找到播放视频时不会滚到其他投稿或无限翻页', (tester) async {
+    final service = _LocateUploadService(includeCurrent: false, lastPage: 30);
+    await tester.pumpWidget(locatePage(service, playback: playback()));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(locate));
+    await tester.pumpAndSettle();
+
+    expect(service.calls, [for (var page = 1; page <= 11; page++) (page, '')]);
+    expect(find.text('暂未找到当前视频，可继续定位'), findsOneWidget);
+    expect(find.byKey(playingRow), findsNothing);
+    expect(
+      find.byKey(const Key('creator-video-BVfake1index0')).hitTestable(),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('切换账号后忽略定位中的旧分页', (tester) async {
+    final pageTwo = Completer<void>();
+    final service = _LocateUploadService(waitForPageTwo: pageTwo);
+    await tester.pumpWidget(locatePage(service, playback: playback()));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(locate));
+    await tester.pump();
+    expect(service.calls.last, (2, ''));
+
+    CacheLifecycle.accountChanged();
+    await tester.pumpAndSettle();
+    pageTwo.complete();
+    await tester.pumpAndSettle();
+    expect(find.byKey(locate), findsNothing);
+    expect(service.calls, [(1, ''), (2, ''), (1, '')]);
+    expect(find.byKey(playingRow), findsNothing);
   });
 
   /// 验证用户主页只有投稿、专栏和合集标签，不出现消息入口。

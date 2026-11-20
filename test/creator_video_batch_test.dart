@@ -193,7 +193,9 @@ class _Many extends _FakePublicContentService {
       40,
       (i) => CreatorVideo(
         bvid: 'BVqa$i',
-        title: '投稿课程 $i',
+        title: i == 1
+            ? 'A long video title that wraps onto a second line in the creator profile'
+            : '投稿课程 $i',
         coverUrl: '',
         duration: const Duration(minutes: 4),
         partCount: 2,
@@ -611,6 +613,56 @@ void main() {
       );
     });
   }
+  for (final config in [
+    (const Size(320, 740), 2.0),
+    (const Size(390, 844), 1.0),
+    (const Size(1100, 800), 1.0),
+  ]) {
+    testWidgets('多选勾选垂直居中并保留独立点击区 ${config.$1}', (tester) async {
+      await _pump(tester, size: config.$1, scale: config.$2);
+      await tester.tap(find.byTooltip('多选投稿'));
+      await tester.pumpAndSettle();
+
+      for (final bvid in ['BVqa0', 'BVqa1']) {
+        final row = find.byKey(Key('creator-video-$bvid'));
+        final checkbox = find.byKey(Key('check-creator-$bvid'));
+        final cover = find.byKey(Key('creator-video-thumbnail-$bvid'));
+        final title = find.byKey(Key('creator-video-title-$bvid'));
+        final rowRect = tester.getRect(row);
+        final checkboxRect = tester.getRect(checkbox);
+        final stats = find.descendant(
+          of: row,
+          matching: find.byIcon(Icons.play_circle_outline_rounded),
+        );
+
+        expect(checkboxRect.size, const Size(48, 48));
+        expect(checkboxRect.center.dy, closeTo(rowRect.center.dy, 0.01));
+        expect(rowRect.right - checkboxRect.right, 6);
+        expect(tester.getRect(cover).left - rowRect.left, 6);
+        expect(
+          tester.getRect(cover).center.dy,
+          closeTo(rowRect.center.dy, 0.01),
+        );
+        expect(tester.getRect(title).right, lessThan(checkboxRect.left));
+        expect(tester.getRect(stats).right, lessThan(checkboxRect.left));
+
+        final surface = find
+            .ancestor(of: row, matching: find.byType(Material))
+            .first;
+        expect(tester.widget<Material>(surface).color, Colors.transparent);
+        await tester.tap(checkbox);
+        await tester.pumpAndSettle();
+
+        expect(tester.widget<Checkbox>(checkbox).value, isTrue);
+        expect(tester.getRect(row), rowRect);
+        expect(tester.getRect(checkbox), checkboxRect);
+        final tint = tester.widget<Material>(surface).color!;
+        expect(tint.a, inInclusiveRange(.05, .16));
+        expect(tester.takeException(), isNull);
+      }
+    });
+  }
+
   testWidgets('在UP内列表底边等待慢页，追加后无需移动手指继续滚选', (tester) async {
     final paging = _Paging();
     await _pump(tester, content: paging);

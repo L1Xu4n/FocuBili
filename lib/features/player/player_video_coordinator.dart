@@ -390,20 +390,31 @@ mixin _PlayerVideoCoordinator
 
   /// 暂停当前视频后打开指定作者主页，返回时重建被下层播放器占用的原生会话。
   Future<void> _openOwnerProfile([VideoAuthor? selectedAuthor]) async {
+    final VideoPreview video = _activeVideo;
     final VideoAuthor author =
         selectedAuthor ??
         VideoAuthor(
-          mid: _activeVideo.ownerMid,
-          name: _activeVideo.ownerName,
-          avatarUrl: _activeVideo.ownerAvatarUrl,
+          mid: video.ownerMid,
+          name: video.ownerName,
+          avatarUrl: video.ownerAvatarUrl,
         );
     if (author.mid <= 0) {
       _showPlayerNotice('暂时没有这个 UP 主的主页编号');
       return;
     }
     final bool shouldResume = _playing;
+    // Opening the profile supersedes any unfinished video/part switch.
+    _beginVideoNavigation();
+    final accountRevision = CacheLifecycle.account.value;
+    final currentPlayback =
+        author.mid == video.ownerMid && !video.isCourse && video.bvid.isNotEmpty
+        ? (
+            ownerMid: video.ownerMid,
+            bvid: video.bvid,
+            accountRevision: accountRevision,
+          )
+        : null;
     _cancelNoteCaptureForExternalNavigation();
-    _clearAbRepeatForNavigation();
     await _drainAbRepeatSeek();
     if (!mounted) return;
     if (shouldResume) {
@@ -423,6 +434,7 @@ mixin _PlayerVideoCoordinator
           mid: author.mid,
           initialName: author.name,
           initialAvatarUrl: author.avatarUrl,
+          currentPlayback: currentPlayback,
           publicContentService: _publicContentService,
           videoService: _bilibiliService,
           learningListService: _learningListService,
