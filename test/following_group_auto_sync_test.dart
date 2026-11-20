@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:focubili/core/widgets/drag_checkbox_options.dart';
 import 'package:focubili/features/profile/following_groups_page.dart';
 import 'package:focubili/models/following_group.dart';
 import 'package:focubili/services/bilibili_account_data_service.dart';
@@ -9,6 +10,8 @@ import 'package:focubili/services/bilibili_auth_service.dart';
 import 'package:focubili/services/cache_lifecycle.dart';
 import 'package:focubili/services/following_group_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'support/checkbox_sweep.dart';
 
 class _Api extends BilibiliAccountDataService {
   int? mid = 7;
@@ -189,13 +192,13 @@ void main() {
     final api = _Api();
     await _open(tester, api);
 
-    final aChoice = find.widgetWithText(CheckboxListTile, '本机删除 A');
-    final bChoice = find.widgetWithText(CheckboxListTile, '本机删除 B');
+    final aChoice = find.widgetWithText(DragCheckboxTile, '本机删除 A');
+    final bChoice = find.widgetWithText(DragCheckboxTile, '本机删除 B');
     final confirm = find.widgetWithText(FilledButton, '合并到本机');
     await _preview(tester, api, snapshot);
     expect(find.textContaining('已从本机删除，勾选后恢复'), findsNWidgets(2));
-    expect(tester.widget<CheckboxListTile>(aChoice).value, isFalse);
-    expect(tester.widget<CheckboxListTile>(bChoice).value, isFalse);
+    expect(tester.widget<DragCheckboxTile>(aChoice).value, isFalse);
+    expect(tester.widget<DragCheckboxTile>(bChoice).value, isFalse);
     await tester.tap(confirm);
     await tester.pumpAndSettle();
     expect(await store.load(7), isEmpty);
@@ -206,8 +209,8 @@ void main() {
     await _preview(tester, api, snapshot);
     await tester.tap(aChoice);
     await tester.pump();
-    expect(tester.widget<CheckboxListTile>(aChoice).value, isTrue);
-    expect(tester.widget<CheckboxListTile>(bChoice).value, isFalse);
+    expect(tester.widget<DragCheckboxTile>(aChoice).value, isTrue);
+    expect(tester.widget<DragCheckboxTile>(bChoice).value, isFalse);
     await tester.tap(confirm);
     await tester.pumpAndSettle();
     expect(confirm, findsNothing);
@@ -216,6 +219,39 @@ void main() {
     expect(find.text('本机删除 A'), findsOneWidget);
     expect(find.text('本机删除 B'), findsNothing);
     expect(find.textContaining('恢复 1 个分组。跳过 1 个'), findsOneWidget);
+  });
+
+  testWidgets('恢复预览扫过普通分组不勾选，取消保留删除记录', (tester) async {
+    final store = FollowingGroupService();
+    final a = _snapshot(7, '可恢复甲').groups.single;
+    final b = _snapshot(7, '可恢复乙', id: 2).groups.single;
+    final ordinary = _snapshot(7, '普通分组', id: 3).groups.single;
+    await store.merge(FollowingGroupImport(7, [a, b]));
+    await store.save(7, []);
+    final api = _Api();
+    await _open(tester, api);
+    final snapshot = FollowingGroupImport(7, [a, ordinary, b]);
+    final from = checkboxIn(find.widgetWithText(DragCheckboxTile, '可恢复甲'));
+    final to = checkboxIn(find.widgetWithText(DragCheckboxTile, '可恢复乙'));
+
+    await _preview(tester, api, snapshot);
+    expect(checkboxIn(find.widgetWithText(ListTile, '普通分组')), findsNothing);
+    await sweepCheckboxes(tester, from, to);
+    expect(tester.widget<Checkbox>(from).value, isTrue);
+    expect(tester.widget<Checkbox>(to).value, isTrue);
+    expect(await store.load(7), isEmpty);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(await store.deletedRemoteIds(7), {1, 2});
+
+    await _preview(tester, api, snapshot);
+    expect(tester.widget<Checkbox>(from).value, isFalse);
+    expect(tester.widget<Checkbox>(to).value, isFalse);
+    await sweepCheckboxes(tester, from, to);
+    await tester.tap(find.text('合并到本机'));
+    await tester.pumpAndSettle();
+    expect((await store.load(7)).map((g) => g.remoteId).toSet(), {1, 2, 3});
+    expect(await store.deletedRemoteIds(7), isEmpty);
   });
 
   testWidgets('完整空快照会清空远端关联组，读取失败不会清空', (tester) async {

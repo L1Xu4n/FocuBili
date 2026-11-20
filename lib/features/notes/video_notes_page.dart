@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../../core/layout/adaptive_page_frame.dart';
 import '../../core/layout/adaptive_two_column_list.dart';
+import '../../core/widgets/drag_selection_region.dart';
 import '../../models/video_note.dart';
 import '../../models/video_preview.dart';
 import '../../services/bilibili_service.dart';
@@ -12,6 +13,7 @@ import '../../services/video_note_service.dart';
 import '../../services/video_note_export_service.dart';
 import '../../services/video_note_share_service.dart';
 import '../../services/local_export_service.dart';
+import '../common/selection_range_snapshot.dart';
 import 'video_note_list_tile.dart';
 import 'video_note_detail_page.dart';
 
@@ -44,11 +46,13 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
   late final BilibiliService _videoService;
   late final TextEditingController _searchController;
   final _listFocus = FocusNode(debugLabel: '时间点笔记');
+  final _scrollController = ScrollController();
   List<VideoNote> _notes = const <VideoNote>[];
   bool _loading = true;
   String? _errorMessage;
   String _query = '';
   final Set<String> _selectedNoteIds = <String>{};
+  final _selectionRange = SelectionRangeSnapshot();
   bool _selectionMode = false;
   bool _exporting = false;
 
@@ -67,6 +71,7 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
   void dispose() {
     _listFocus.dispose();
     _searchController.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -172,6 +177,7 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
   void _updateQuery(String value) {
     setState(() {
       _query = value;
+      _selectionRange.clear();
       _retainVisibleSelection();
     });
   }
@@ -193,6 +199,7 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
   void _startSelection([VideoNote? note]) {
     _listFocus.requestFocus();
     setState(() {
+      _selectionRange.clear();
       _selectionMode = true;
       if (note != null) _selectedNoteIds.add(note.id);
     });
@@ -201,6 +208,7 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
   /// 切换一条笔记的选中状态；最后一条取消后仍保留选择模式供继续挑选。
   void _toggleNoteSelection(VideoNote note) {
     setState(() {
+      _selectionRange.clear();
       if (!_selectedNoteIds.add(note.id)) {
         _selectedNoteIds.remove(note.id);
       }
@@ -210,6 +218,7 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
   /// 选中当前搜索结果里的全部笔记，避免误把隐藏结果一起导出。
   void _selectAllVisibleNotes() {
     setState(() {
+      _selectionRange.clear();
       _selectionMode = true;
       _selectedNoteIds.addAll(_filteredNotes.map((VideoNote note) => note.id));
     });
@@ -218,9 +227,21 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
   /// 退出选择模式并清空所有临时选择，不修改任何笔记数据。
   void _leaveSelectionMode() {
     setState(() {
+      _selectionRange.clear();
       _selectionMode = false;
       _selectedNoteIds.clear();
     });
+  }
+
+  void _updateSelectionRange(DragSelectionUpdate update, List<String> ids) {
+    if (!_selectionMode || _exporting) return;
+    final next = _selectionRange.apply(update, ids, _selectedNoteIds);
+    if (next == null) return;
+    setState(
+      () => _selectedNoteIds
+        ..clear()
+        ..addAll(next),
+    );
   }
 
   /// 打开格式选择面板，并把用户选择交给统一导出流程。
@@ -579,48 +600,66 @@ class _VideoNotesPageState extends State<VideoNotesPage> {
       body = _buildEmptyState(searchEmpty: false);
     } else {
       final List<VideoNote> visibleNotes = _filteredNotes;
-      body = RefreshIndicator(
-        onRefresh: _loadNotes,
-        child: AdaptiveTwoColumnList(
-          key: const PageStorageKey<String>('video-notes-list'),
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-          physics: const AlwaysScrollableScrollPhysics(),
-          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-          header: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _buildSearchField(),
-              Padding(
-                padding: const EdgeInsets.only(left: 2, top: 10),
-                child: Text(
-                  _query.trim().isEmpty
-                      ? '共 ${_notes.length} 条笔记'
-                      : '找到 ${visibleNotes.length} 条笔记',
-                  style: Theme.of(context).textTheme.bodySmall,
+      final orderedIds = visibleNotes.map((note) => note.id).toList();
+      body = DragSelectionRegion(
+        controller: _scrollController,
+        itemCount: orderedIds.length,
+        enabled: _selectionMode && !_exporting,
+        checkedAt: (index) => _selectedNoteIds.contains(orderedIds[index]),
+        onDragUpdate: (update) => _updateSelectionRange(update, orderedIds),
+        builder: (context, dragging) => RefreshIndicator(
+          onRefresh: _loadNotes,
+          notificationPredicate: (notification) =>
+              !dragging && notification.depth == 0,
+          child: AdaptiveTwoColumnList(
+            key: const PageStorageKey<String>('video-notes-list'),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+            controller: _scrollController,
+            physics: dragging
+                ? const NeverScrollableScrollPhysics()
+                : const AlwaysScrollableScrollPhysics(),
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            header: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildSearchField(),
+                Padding(
+                  padding: const EdgeInsets.only(left: 2, top: 10),
+                  child: Text(
+                    _query.trim().isEmpty
+                        ? '共 ${_notes.length} 条笔记'
+                        : '找到 ${visibleNotes.length} 条笔记',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
+            itemCount: visibleNotes.length,
+            footer: visibleNotes.isEmpty
+                ? _buildEmptyState(searchEmpty: true)
+                : null,
+            mainAxisSpacing: 10,
+            itemBuilder: (context, index) {
+              final note = visibleNotes[index];
+              return DragSelectionTarget(
+                key: ValueKey(note.id),
+                index: index,
+                builder: (context, handleKey) => VideoNoteListTile(
+                  key: Key('managed-video-note-${note.id}'),
+                  selectionHandleKey: handleKey,
+                  note: note,
+                  query: _query,
+                  selecting: _selectionMode,
+                  selected: _selectedNoteIds.contains(note.id),
+                  onTap: _selectionMode
+                      ? () => _toggleNoteSelection(note)
+                      : () => _openNote(note),
+                  onLongPress: () => _startSelection(note),
+                  onDelete: () => _deleteNote(note),
+                ),
+              );
+            },
           ),
-          itemCount: visibleNotes.length,
-          footer: visibleNotes.isEmpty
-              ? _buildEmptyState(searchEmpty: true)
-              : null,
-          mainAxisSpacing: 10,
-          itemBuilder: (context, index) {
-            final note = visibleNotes[index];
-            return VideoNoteListTile(
-              key: Key('managed-video-note-${note.id}'),
-              note: note,
-              query: _query,
-              selecting: _selectionMode,
-              selected: _selectedNoteIds.contains(note.id),
-              onTap: _selectionMode
-                  ? () => _toggleNoteSelection(note)
-                  : () => _openNote(note),
-              onLongPress: () => _startSelection(note),
-              onDelete: () => _deleteNote(note),
-            );
-          },
         ),
       );
     }

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import '../../core/widgets/drag_checkbox_options.dart';
 import '../../models/account_collection.dart';
 import '../../models/following_group.dart';
 import '../../services/bilibili_account_data_service.dart';
@@ -281,6 +282,7 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
       if (snapshot.mid != mid) throw StateError('账号已变化，请重新导入');
       final deleted = await _store.deletedRemoteIds(mid);
       if (!mounted || !isCurrent()) return;
+      final groups = snapshot.groups;
       final selected = <int>{};
       final restoreRemoteIds = await showDialog<Set<int>>(
         context: context,
@@ -289,41 +291,63 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
           builder: (context, _, _) => StatefulBuilder(
             builder: (context, update) {
               final current = isCurrent();
+              void setChecked(int first, int last, bool checked) {
+                if (!isCurrent()) return;
+                update(() {
+                  for (var i = first; i <= last; i++) {
+                    final id = groups[i].remoteId;
+                    if (id == null || !deleted.contains(id)) continue;
+                    if (checked) {
+                      selected.add(id);
+                    } else {
+                      selected.remove(id);
+                    }
+                  }
+                });
+              }
+
               return AlertDialog(
                 title: const Text('从 B 站导入分组'),
                 content: current
                     ? SizedBox(
                         width: 420,
-                        child: SingleChildScrollView(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (snapshot.groups.isEmpty)
-                                const Text('没有可导入的分组'),
-                              for (final group in snapshot.groups)
-                                if (deleted.contains(group.remoteId))
-                                  CheckboxListTile(
-                                    title: Text(group.name),
-                                    subtitle: Text(
-                                      '已从本机删除，勾选后恢复（${group.members.length} 位）',
-                                    ),
-                                    value: selected.contains(group.remoteId),
-                                    onChanged: (checked) => update(() {
-                                      final id = group.remoteId!;
-                                      if (checked == true) {
-                                        selected.add(id);
-                                      } else {
-                                        selected.remove(id);
-                                      }
-                                    }),
-                                  )
-                                else
-                                  ListTile(
-                                    title: Text(group.name),
-                                    trailing: Text('${group.members.length} 位'),
-                                  ),
-                            ],
-                          ),
+                        child: DragCheckboxOptions(
+                          itemCount: groups.length,
+                          checkedAt: (index) =>
+                              selected.contains(groups[index].remoteId),
+                          onRangeChanged: setChecked,
+                          builder: (context, controller, physics) =>
+                              SingleChildScrollView(
+                                controller: controller,
+                                physics: physics,
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (groups.isEmpty) const Text('没有可导入的分组'),
+                                    for (final (index, group) in groups.indexed)
+                                      if (deleted.contains(group.remoteId))
+                                        DragCheckboxTile(
+                                          index: index,
+                                          title: Text(group.name),
+                                          subtitle: Text(
+                                            '已从本机删除，勾选后恢复（${group.members.length} 位）',
+                                          ),
+                                          value: selected.contains(
+                                            group.remoteId,
+                                          ),
+                                          onChanged: (checked) =>
+                                              setChecked(index, index, checked),
+                                        )
+                                      else
+                                        ListTile(
+                                          title: Text(group.name),
+                                          trailing: Text(
+                                            '${group.members.length} 位',
+                                          ),
+                                        ),
+                                  ],
+                                ),
+                              ),
                         ),
                       )
                     : const Text('账号已变化，请重新导入'),
@@ -583,9 +607,23 @@ class _GroupMembersPickerState extends State<_GroupMembersPicker> {
   /// 搜索并切换成员，保存时一次返回完整选择。
   @override
   Widget build(BuildContext context) {
+    final query = _query.toLowerCase();
     final visible = widget.creators
-        .where((m) => m.name.toLowerCase().contains(_query.toLowerCase()))
+        .where((m) => m.name.toLowerCase().contains(query))
         .toList();
+    void setChecked(int first, int last, bool checked) {
+      setState(() {
+        for (var i = first; i <= last; i++) {
+          final mid = visible[i].mid;
+          if (checked) {
+            _selected.add(mid);
+          } else {
+            _selected.remove(mid);
+          }
+        }
+      });
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('调整成员'),
@@ -612,23 +650,27 @@ class _GroupMembersPickerState extends State<_GroupMembersPicker> {
             ),
           ),
           Expanded(
-            child: ListView.builder(
+            child: DragCheckboxOptions(
+              key: ValueKey(query),
               itemCount: visible.length,
-              itemBuilder: (_, index) {
-                final member = visible[index];
-                return CheckboxListTile(
-                  secondary: FollowingGroupMemberAvatar(member: member),
-                  title: Text(member.name),
-                  value: _selected.contains(member.mid),
-                  onChanged: (value) => setState(() {
-                    if (value == true) {
-                      _selected.add(member.mid);
-                    } else {
-                      _selected.remove(member.mid);
-                    }
-                  }),
-                );
-              },
+              checkedAt: (index) => _selected.contains(visible[index].mid),
+              onRangeChanged: setChecked,
+              builder: (context, controller, physics) => ListView.builder(
+                controller: controller,
+                physics: physics,
+                itemCount: visible.length,
+                itemBuilder: (_, index) {
+                  final member = visible[index];
+                  return DragCheckboxTile(
+                    key: ValueKey(member.mid),
+                    index: index,
+                    leading: FollowingGroupMemberAvatar(member: member),
+                    title: Text(member.name),
+                    value: _selected.contains(member.mid),
+                    onChanged: (checked) => setChecked(index, index, checked),
+                  );
+                },
+              ),
             ),
           ),
         ],

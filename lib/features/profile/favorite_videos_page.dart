@@ -6,11 +6,17 @@ import 'package:flutter/material.dart';
 import '../../core/layout/adaptive_page_frame.dart';
 import '../../core/layout/adaptive_two_column_list.dart';
 import '../../core/router/app_router.dart';
+import '../../core/widgets/drag_selection_region.dart';
 import '../../models/account_collection.dart';
+import '../../models/public_profile.dart';
 import '../../models/video_preview.dart';
 import '../../models/playback_queue.dart';
 import '../../services/bilibili_account_data_service.dart';
 import '../../services/bilibili_service.dart';
+import '../../services/cache_lifecycle.dart';
+import '../../services/learning_list_service.dart';
+import '../common/discovery_batch_selection.dart';
+import '../common/video_batch_actions.dart';
 
 /// 展示一个收藏夹内的只读视频列表，并在用户点击后查询公开详情进入播放器。
 class FavoriteVideosPage extends StatefulWidget {
@@ -20,6 +26,7 @@ class FavoriteVideosPage extends StatefulWidget {
     required this.folder,
     this.accountDataService,
     this.bilibiliService,
+    this.learningListService,
   });
 
   /// 当前页面读取的收藏夹基本资料。
@@ -30,6 +37,7 @@ class FavoriteVideosPage extends StatefulWidget {
 
   /// 可选的公开视频详情服务，未传入时使用默认公开视频查询实现。
   final BilibiliService? bilibiliService;
+  final LearningListService? learningListService;
 
   /// 创建管理首次读取、分页、刷新和打开播放器状态的页面状态。
   @override
@@ -40,6 +48,14 @@ class FavoriteVideosPage extends StatefulWidget {
 class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
   late final BilibiliAccountDataService _accountDataService;
   late final BilibiliService _bilibiliService;
+  late final VideoBatchActions _batchActions;
+  final _batchSelection = DiscoveryBatchSelection();
+  final _scrollController = ScrollController();
+  late int _sourceAccount;
+  var _loadGeneration = 0;
+  bool _batchBusy = false;
+
+  bool get _sourceCurrent => _sourceAccount == CacheLifecycle.account.value;
   final TextEditingController _searchController = TextEditingController();
   List<FavoriteVideo> _videos = const <FavoriteVideo>[];
   AccountDataPage<FavoriteVideo>? _page;
@@ -55,31 +71,64 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
     _accountDataService =
         widget.accountDataService ?? BilibiliAccountDataService();
     _bilibiliService = widget.bilibiliService ?? BilibiliVideoInfoService();
+    _batchActions = VideoBatchActions(
+      learningService: widget.learningListService ?? LearningListService(),
+      videoService: _bilibiliService,
+      accountService: _accountDataService,
+    );
+    _sourceAccount = CacheLifecycle.account.value;
+    CacheLifecycle.account.addListener(_accountChanged);
     unawaited(_loadFirstPage());
+  }
+
+  @override
+  void didUpdateWidget(covariant FavoriteVideosPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.folder.mediaId == oldWidget.folder.mediaId) return;
+    _sourceAccount = CacheLifecycle.account.value;
+    _accountChanged();
+    unawaited(_loadFirstPage());
+  }
+
+  void _accountChanged() {
+    _loadGeneration++;
+    setState(() {
+      _batchSelection.reset();
+      _videos = const [];
+      _page = null;
+      _openingBvid = null;
+      _isLoading = false;
+      _isLoadingMore = false;
+    });
   }
 
   /// 释放收藏内容搜索输入控制器。
   @override
   void dispose() {
+    CacheLifecycle.account.removeListener(_accountChanged);
+    _scrollController.dispose();
     _searchController.dispose();
     super.dispose();
   }
 
   /// 读取收藏夹第 1 页；刷新失败时保留原有已成功显示的视频列表。
   Future<void> _loadFirstPage() async {
-    if (mounted) {
-      setState(() => _isLoading = true);
-    }
+    if (!mounted || !_sourceCurrent) return;
+    final generation = ++_loadGeneration;
+    setState(() {
+      _batchSelection.reset();
+      _isLoading = true;
+      _isLoadingMore = false;
+      _openingBvid = null;
+    });
     final AccountDataPage<FavoriteVideo> result = await _accountDataService
         .loadFavoriteVideos(widget.folder.mediaId);
-    if (!mounted) {
-      return;
-    }
+    if (!mounted || generation != _loadGeneration || !_sourceCurrent) return;
     final bool keepPreviousList = !result.isSuccess && _videos.isNotEmpty;
     setState(() {
       _isLoading = false;
       if (result.isSuccess) {
-        _videos = result.items;
+        _videos = _mergeVideos(const [], result.items);
         _page = result;
       } else if (!keepPreviousList) {
         _videos = const <FavoriteVideo>[];
@@ -94,18 +143,19 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
   /// 请求下一页并按 BV 号合并结果；下一页失败不会清空已经显示的内容。
   Future<void> _loadMore() async {
     final AccountDataPage<FavoriteVideo>? currentPage = _page;
-    if (_isLoadingMore ||
+    if (!_sourceCurrent ||
+        _isLoading ||
+        _isLoadingMore ||
         currentPage == null ||
         !currentPage.isSuccess ||
         !currentPage.hasMore) {
       return;
     }
+    final generation = _loadGeneration;
     setState(() => _isLoadingMore = true);
     final AccountDataPage<FavoriteVideo> result = await _accountDataService
         .loadFavoriteVideos(widget.folder.mediaId, page: currentPage.page + 1);
-    if (!mounted) {
-      return;
-    }
+    if (!mounted || generation != _loadGeneration || !_sourceCurrent) return;
     setState(() => _isLoadingMore = false);
     if (!result.isSuccess) {
       _showMessage(result.message ?? '加载更多收藏内容失败，请稍后重试。');
@@ -136,20 +186,20 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
 
   /// 读取点击视频的公开详情，补齐 cid 和分P后才向播放器路由传递 VideoPreview。
   Future<void> _openVideo(FavoriteVideo video) async {
-    if (!video.isAvailable || _openingBvid != null) {
+    if (!_sourceCurrent || !video.isAvailable || _openingBvid != null) {
       return;
     }
+    final generation = _loadGeneration;
     setState(() => _openingBvid = video.bvid);
     try {
       final VideoPreview preview = await _bilibiliService.lookupVideo(
         video.bvid,
       );
-      if (!mounted) {
-        return;
-      }
+      if (!mounted || generation != _loadGeneration || !_sourceCurrent) return;
       setState(() => _openingBvid = null);
       final service = _accountDataService;
       final folder = widget.folder;
+      final account = _sourceAccount;
       final queue = PlaybackQueue(
         title: folder.title,
         items: _filteredVideos()
@@ -161,11 +211,16 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
         hasMore: (_page?.hasMore ?? false) && _searchQuery.trim().isEmpty,
         // 分页读取器仅持有服务和来源身份，不读取已离开的页面状态。
         loadPage: (page) async {
+          if (account != CacheLifecycle.account.value) {
+            throw StateError('账号已变化');
+          }
           final result = await service.loadFavoriteVideos(
             folder.mediaId,
             page: page,
           );
-          if (!result.isSuccess) throw StateError('收藏夹读取失败');
+          if (account != CacheLifecycle.account.value || !result.isSuccess) {
+            throw StateError('收藏夹读取失败');
+          }
           return PlaybackQueuePage(
             result.items
                 .where((item) => item.isAvailable)
@@ -183,12 +238,12 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
         arguments: PlayerLaunchRequest(preview, queue),
       );
     } on BilibiliLookupException catch (error) {
-      if (mounted) {
+      if (mounted && generation == _loadGeneration && _sourceCurrent) {
         setState(() => _openingBvid = null);
         _showMessage(error.message);
       }
     } catch (_) {
-      if (mounted) {
+      if (mounted && generation == _loadGeneration && _sourceCurrent) {
         setState(() => _openingBvid = null);
         _showMessage('无法打开该视频，请稍后重试。');
       }
@@ -399,7 +454,11 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
       child: TextField(
         key: const Key('favorite-videos-search'),
         controller: _searchController,
-        onChanged: (String value) => setState(() => _searchQuery = value),
+        onChanged: (String value) => setState(() {
+          if (_searchQuery == value) return;
+          _searchQuery = value;
+          _batchSelection.reset();
+        }),
         decoration: InputDecoration(
           hintText: '搜索视频标题、UP 主或 BV 号',
           prefixIcon: const Icon(Icons.search_rounded),
@@ -408,6 +467,65 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
         ),
       ),
     );
+  }
+
+  List<String> _eligibleIds(Iterable<FavoriteVideo> videos) => videos
+      .where((video) => video.isAvailable && video.bvid.isNotEmpty)
+      .map((video) => video.bvid)
+      .toSet()
+      .toList();
+
+  bool get _canStartBatch =>
+      _sourceCurrent &&
+      !_isLoading &&
+      !_batchBusy &&
+      _openingBvid == null &&
+      _eligibleIds(_filteredVideos()).length >= 2;
+
+  void _startBatch([String? bvid]) {
+    if (!_canStartBatch) return;
+    FocusScope.of(context).unfocus();
+    setState(() => _batchSelection.start(bvid));
+  }
+
+  Future<void> _saveSelectedFavorites() async {
+    if (!_sourceCurrent || _batchBusy || _batchSelection.ids.isEmpty) return;
+    final ids = Set<String>.of(_batchSelection.ids);
+    final distinct = <String>{};
+    final videos = [
+      for (final row in _filteredVideos())
+        if (row.isAvailable && ids.contains(row.bvid) && distinct.add(row.bvid))
+          CreatorVideo(
+            bvid: row.bvid,
+            title: row.title,
+            coverUrl: row.coverUrl,
+            duration: row.duration,
+            ownerName: row.ownerName,
+            partCount: row.partCount,
+          ),
+    ];
+    if (videos.length != ids.length) return;
+    final generation = _loadGeneration;
+    final account = _sourceAccount;
+    final query = _searchQuery;
+    bool isCurrent() =>
+        mounted &&
+        _sourceCurrent &&
+        account == _sourceAccount &&
+        generation == _loadGeneration &&
+        query == _searchQuery &&
+        _eligibleIds(_filteredVideos()).toSet().containsAll(ids);
+    setState(() => _batchBusy = true);
+    try {
+      final saved = await _batchActions.run(
+        context,
+        videos: videos,
+        sourceIsCurrent: isCurrent,
+      );
+      if (saved && isCurrent()) setState(_batchSelection.close);
+    } finally {
+      if (mounted) setState(() => _batchBusy = false);
+    }
   }
 
   /// 创建自适应收藏视频卡片列表，避免宽封面和尾部图标在窄屏挤压标题。
@@ -420,81 +538,149 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
             child: Center(child: Text('没有匹配的收藏视频')),
           )
         : _buildLoadMoreFooter();
-    return RefreshIndicator(
-      // 下拉刷新函数只重新读取第 1 页，不会写入收藏夹或账号数据。
-      onRefresh: _loadFirstPage,
-      child: AdaptiveTwoColumnList(
-        key: const Key('favorite-videos-list'),
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-        itemCount: visibleVideos.length,
-        footer: footer,
-        mainAxisSpacing: 8,
-        itemBuilder: (BuildContext context, int index) {
-          final FavoriteVideo video = visibleVideos[index];
-          final bool isOpening = _openingBvid == video.bvid;
-          return Card(
-            key: Key('favorite-video-${video.bvid}'),
-            clipBehavior: Clip.antiAlias,
-            child: InkWell(
-              // 视频点击函数仅在条目可播放时补齐详情并进入播放器。
-              onTap: !video.isAvailable || isOpening
-                  ? null
-                  : () => _openVideo(video),
-              child: Padding(
-                padding: const EdgeInsets.all(10),
-                child: Row(
+    final eligibleIds = _eligibleIds(visibleVideos);
+    final indices = {
+      for (var i = 0; i < eligibleIds.length; i++) eligibleIds[i]: i,
+    };
+    _batchSelection.sync(eligibleIds);
+    final epoch = _batchSelection.epoch;
+    final canStart = _canStartBatch;
+    return DragSelectionRegion(
+      key: ValueKey('favorite-video-drag-$epoch'),
+      controller: _scrollController,
+      itemCount: eligibleIds.length,
+      enabled: _batchSelection.active && !_batchBusy,
+      checkedAt: (index) => _batchSelection.ids.contains(eligibleIds[index]),
+      onDragUpdate: (update) {
+        if (epoch == _batchSelection.epoch) {
+          setState(() => _batchSelection.range(update, eligibleIds));
+        }
+      },
+      builder: (context, dragging) => RefreshIndicator(
+        notificationPredicate: (notification) =>
+            !_batchSelection.active && notification.depth == 0,
+        // 下拉刷新函数只重新读取第 1 页，不会写入收藏夹或账号数据。
+        onRefresh: _loadFirstPage,
+        child: AdaptiveTwoColumnList(
+          key: const Key('favorite-videos-list'),
+          controller: _scrollController,
+          physics: dragging
+              ? const NeverScrollableScrollPhysics()
+              : const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          itemCount: visibleVideos.length,
+          footer: footer,
+          mainAxisSpacing: 8,
+          itemBuilder: (BuildContext context, int index) {
+            final FavoriteVideo video = visibleVideos[index];
+            final selectionIndex = video.isAvailable
+                ? indices[video.bvid]
+                : null;
+            Widget card(Key? handleKey) => _buildVideoCard(
+              video,
+              handleKey: handleKey,
+              canSelect: selectionIndex != null && canStart,
+            );
+            if (!_batchSelection.active || selectionIndex == null) {
+              return card(null);
+            }
+            return DragSelectionTarget(
+              key: ValueKey('favorite-selection-${video.bvid}'),
+              index: selectionIndex,
+              builder: (context, handleKey) => card(handleKey),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVideoCard(
+    FavoriteVideo video, {
+    Key? handleKey,
+    required bool canSelect,
+  }) {
+    final isOpening = _openingBvid == video.bvid;
+    final selecting = _batchSelection.active;
+    final selected = selecting && _batchSelection.ids.contains(video.bvid);
+    final toggle = selecting && handleKey != null && !_batchBusy
+        ? () => setState(() => _batchSelection.toggle(video.bvid))
+        : null;
+    return Card(
+      color: selected ? Theme.of(context).colorScheme.secondaryContainer : null,
+      key: Key('favorite-video-${video.bvid}'),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        // 视频点击函数仅在条目可播放时补齐详情并进入播放器。
+        onTap: selecting
+            ? toggle
+            : !video.isAvailable || isOpening || _batchBusy
+            ? null
+            : () => _openVideo(video),
+        onLongPress: !selecting && canSelect
+            ? () => _startBatch(video.bvid)
+            : null,
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Row(
+            children: <Widget>[
+              _buildThumbnail(video),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    _buildThumbnail(video),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: <Widget>[
-                          Text(
-                            video.title,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            video.isAvailable
-                                ? video.ownerName
-                                : '${video.ownerName} · 视频已失效，暂不可播放',
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                        ],
-                      ),
+                    Text(
+                      video.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
                     ),
-                    if (isOpening)
-                      const Padding(
-                        padding: EdgeInsets.all(8),
-                        child: SizedBox.square(
-                          dimension: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      )
-                    else
-                      Icon(
-                        video.isAvailable
-                            ? Icons.play_circle_outline_rounded
-                            : Icons.block_rounded,
-                      ),
+                    const SizedBox(height: 6),
+                    Text(
+                      video.isAvailable
+                          ? video.ownerName
+                          : '${video.ownerName} · 视频已失效，暂不可播放',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
                   ],
                 ),
               ),
-            ),
-          );
-        },
+              if (handleKey != null)
+                Checkbox(
+                  key: handleKey,
+                  value: selected,
+                  semanticLabel: video.title,
+                  onChanged: toggle == null ? null : (_) => toggle(),
+                )
+              else if (isOpening)
+                const Padding(
+                  padding: EdgeInsets.all(8),
+                  child: SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                )
+              else
+                Icon(
+                  video.isAvailable
+                      ? Icons.play_circle_outline_rounded
+                      : Icons.block_rounded,
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }
 
   /// 根据首次加载、失败、空和正常列表状态选择收藏视频页主体。
   Widget _buildBody() {
+    if (!_sourceCurrent) {
+      return const Center(child: Text('账号已变化，请返回后重新打开收藏夹。'));
+    }
     if (_isLoading && _page == null) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -514,25 +700,51 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
   /// 创建收藏夹标题、刷新入口和随状态变化的内容区域。
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.folder.title),
-        actions: <Widget>[
-          IconButton(
-            // 刷新按钮函数只读取当前收藏夹第 1 页，不写入任何 B 站数据。
-            onPressed: _isLoading ? null : () => unawaited(_loadFirstPage()),
-            icon: const Icon(Icons.refresh_rounded),
-            tooltip: '刷新收藏内容',
-          ),
-        ],
-      ),
-      body: AdaptivePageFrame(
-        maxWidth: 1180,
-        child: Column(
-          children: <Widget>[
-            _buildSearchField(),
-            Expanded(child: _buildBody()),
+    return PopScope(
+      canPop: !_batchSelection.active,
+      onPopInvokedWithResult: (popped, _) {
+        if (!popped && !_batchBusy && _batchSelection.active) {
+          setState(_batchSelection.close);
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(widget.folder.title),
+          actions: <Widget>[
+            if (!_batchSelection.active && _canStartBatch)
+              IconButton(
+                tooltip: '多选视频',
+                icon: const Icon(Icons.checklist),
+                onPressed: _startBatch,
+              ),
+            IconButton(
+              // 刷新按钮函数只读取当前收藏夹第 1 页，不写入任何 B 站数据。
+              onPressed: _isLoading || _batchSelection.active || !_sourceCurrent
+                  ? null
+                  : () => unawaited(_loadFirstPage()),
+              icon: const Icon(Icons.refresh_rounded),
+              tooltip: '刷新收藏内容',
+            ),
           ],
+        ),
+        body: AdaptivePageFrame(
+          maxWidth: 1180,
+          child: Column(
+            children: <Widget>[
+              _buildSearchField(),
+              if (_batchSelection.active)
+                DiscoveryBatchSelectionBar(
+                  count: _batchSelection.ids.length,
+                  onClose: _batchBusy
+                      ? null
+                      : () => setState(_batchSelection.close),
+                  onSave: _batchBusy || _batchSelection.ids.isEmpty
+                      ? null
+                      : _saveSelectedFavorites,
+                ),
+              Expanded(child: _buildBody()),
+            ],
+          ),
         ),
       ),
     );

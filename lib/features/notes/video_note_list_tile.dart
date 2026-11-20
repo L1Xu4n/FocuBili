@@ -15,6 +15,7 @@ class VideoNoteListTile extends StatelessWidget {
     required this.onTap,
     required this.onLongPress,
     required this.onDelete,
+    this.selectionHandleKey,
   });
 
   final VideoNote note;
@@ -24,6 +25,7 @@ class VideoNoteListTile extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback onLongPress;
   final VoidCallback onDelete;
+  final Key? selectionHandleKey;
 
   String _shorten(String text, int limit) {
     final head = text.characters.take(limit).toString();
@@ -175,6 +177,7 @@ class VideoNoteListTile extends StatelessWidget {
                   ),
                   if (selecting)
                     SizedBox.square(
+                      key: selectionHandleKey,
                       dimension: 48,
                       child: ExcludeSemantics(
                         child: Icon(

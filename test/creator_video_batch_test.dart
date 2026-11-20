@@ -956,7 +956,7 @@ void main() {
     await t.tap(find.text('加入收藏夹'));
     await t.pumpAndSettle();
     expect(local.writes, isEmpty);
-    expect(find.textContaining('投稿筛选已变化'), findsOneWidget);
+    expect(find.textContaining('来源或筛选已变化'), findsOneWidget);
     await t.tap(find.text('取消'));
     await t.pumpAndSettle();
     expect(find.textContaining('相关操作已暂停'), findsOneWidget);
@@ -1004,7 +1004,7 @@ void main() {
       expect((await t.runAsync(learn.loadEntries))!, isEmpty);
       expect(
         find.textContaining(
-          target == 'favorites' ? '投稿筛选已变化' : '来源列表的规则或状态已变化',
+          target == 'favorites' ? '来源或筛选已变化' : '来源列表的规则或状态已变化',
         ),
         findsOneWidget,
       );

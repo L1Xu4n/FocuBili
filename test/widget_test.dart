@@ -23,6 +23,7 @@ import 'package:focubili/features/profile/login_page.dart';
 import 'package:focubili/features/profile/user_profile_page.dart';
 import 'package:focubili/features/search/search_page.dart';
 import 'package:focubili/models/video_preview.dart';
+import 'package:focubili/models/app_favorite.dart';
 import 'package:focubili/models/focus_session.dart';
 import 'package:focubili/core/theme/app_theme.dart';
 import 'package:focubili/models/video_note.dart';
@@ -34,6 +35,7 @@ import 'package:focubili/models/playback_preferences.dart';
 import 'package:focubili/services/bilibili_service.dart';
 import 'package:focubili/services/bilibili_interaction_service.dart';
 import 'package:focubili/services/app_theme_mode_service.dart';
+import 'package:focubili/services/app_favorites_service.dart';
 import 'package:focubili/services/cache_lifecycle.dart';
 import 'package:focubili/services/device_status_service.dart';
 import 'package:focubili/services/danmaku_preferences_service.dart';
@@ -59,6 +61,8 @@ import 'package:focubili/services/bilibili_player_enhancement_service.dart';
 import 'package:focubili/models/player_overlay_data.dart';
 import 'package:focubili/platform/app_platform.dart';
 import 'package:focubili/platform/platform_services.dart';
+
+import 'support/checkbox_sweep.dart';
 
 /// 提供可手动推进的时间，让播放器专注测试不必真实等待一分钟。
 class _PlayerFocusTestClock {
@@ -3341,7 +3345,7 @@ void main() {
   });
 
   /// 验证收藏弹窗可以在一次提交中同时新增和移除多个收藏夹。
-  testWidgets('播放器收藏弹窗支持多选并批量更新', (WidgetTester tester) async {
+  testWidgets('播放器 B 站收藏弹窗支持扫选并批量更新', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final _FakePlayerInteractionService interactionService =
@@ -3395,14 +3399,110 @@ void main() {
 
     await tester.tap(find.byKey(const Key('video-favorite-button')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('favorite-folder-111')));
-    await tester.tap(find.byKey(const Key('favorite-folder-222')));
+    final first = checkboxIn(find.byKey(const Key('favorite-folder-111')));
+    final second = checkboxIn(find.byKey(const Key('favorite-folder-222')));
+    final third = checkboxIn(find.byKey(const Key('favorite-folder-333')));
+    expect(tester.widget<Checkbox>(first).value, isTrue);
+    expect(tester.widget<Checkbox>(second).value, isFalse);
+    expect(tester.widget<Checkbox>(third).value, isTrue);
+    await sweepCheckboxes(tester, third, first);
+    expect(tester.widget<Checkbox>(first).value, isFalse);
+    expect(tester.widget<Checkbox>(second).value, isFalse);
+    expect(tester.widget<Checkbox>(third).value, isFalse);
+    expect(interactionService.lastDeletedFavoriteMediaIds, isEmpty);
+    expect(interactionService.lastAddedFavoriteMediaIds, isEmpty);
+    await tester.tap(second);
+    await tester.tap(third);
     await tester.tap(find.byKey(const Key('confirm-favorite-folders')));
     await tester.pumpAndSettle();
 
     expect(interactionService.lastAddedFavoriteMediaIds, <int>{222});
     expect(interactionService.lastDeletedFavoriteMediaIds, <int>{111});
     expect(find.text('67'), findsOneWidget);
+  });
+
+  testWidgets('播放器软件收藏弹窗扫选直到确认才写入本机', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final local = AppFavoritesService();
+    final firstFolder = (await local.createFolder('已收藏目录'))!;
+    final secondFolder = (await local.createFolder('备选目录'))!;
+    final thirdFolder = (await local.createFolder('另一个备选目录'))!;
+    const video = VideoPreview(
+      bvid: 'BV1GJ411x7h7',
+      cid: 137649199,
+      title: '软件收藏扫选测试',
+      ownerName: '测试作者',
+      parts: [
+        VideoPart(
+          pageNumber: 1,
+          cid: 137649199,
+          title: '第一 P',
+          duration: Duration(minutes: 1),
+        ),
+      ],
+    );
+    await local.addItem(
+      AppFavoriteItem(
+        folderId: firstFolder.id,
+        bvid: video.bvid,
+        title: video.title,
+        coverUrl: '',
+        ownerName: '',
+        durationText: '',
+        addedAt: DateTime(2026),
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: video,
+          playbackService: _FakePlaybackService(),
+          interactionService: _FakePlayerInteractionService(),
+          appFavoritesService: local,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final openPicker = find.byKey(
+      const Key('current-video-app-favorite-button'),
+    );
+    final first = checkboxIn(
+      find.byKey(Key('app-favorite-folder-${firstFolder.id}')),
+    );
+    final second = checkboxIn(
+      find.byKey(Key('app-favorite-folder-${secondFolder.id}')),
+    );
+    final third = checkboxIn(
+      find.byKey(Key('app-favorite-folder-${thirdFolder.id}')),
+    );
+
+    Future<void> openAndSweep() async {
+      await tester.ensureVisible(openPicker);
+      await tester.tap(openPicker);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(tester.widget<Checkbox>(first).value, isTrue);
+      expect(tester.widget<Checkbox>(second).value, isFalse);
+      expect(tester.widget<Checkbox>(third).value, isFalse);
+      await sweepCheckboxes(tester, second, third);
+      expect(tester.widget<Checkbox>(first).value, isTrue);
+      expect(tester.widget<Checkbox>(second).value, isTrue);
+      expect(tester.widget<Checkbox>(third).value, isTrue);
+      expect(await local.loadItems(secondFolder.id), isEmpty);
+      expect(await local.loadItems(thirdFolder.id), isEmpty);
+    }
+
+    await openAndSweep();
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    await openAndSweep();
+    await tester.tap(find.byKey(const Key('confirm-app-favorite-folders')));
+    await tester.pumpAndSettle();
+    for (final folder in [firstFolder, secondFolder, thirdFolder]) {
+      expect((await local.loadItems(folder.id)).single.bvid, video.bvid);
+    }
   });
 
   /// 验证结构化简介把 @UP 和链接标蓝，且外链必须确认风险后才交给默认浏览器启动器。

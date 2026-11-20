@@ -19,6 +19,7 @@ import 'package:window_manager/window_manager.dart';
 import 'widgets/player_tap_gesture.dart';
 import 'widgets/player_video_tags.dart';
 
+import '../../core/widgets/drag_checkbox_options.dart';
 import '../../core/layout/adaptive_layout.dart';
 import '../../core/layout/app_scroll_behavior.dart';
 import '../../core/layout/device_orientation_policy.dart';

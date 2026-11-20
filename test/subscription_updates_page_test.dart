@@ -1,16 +1,44 @@
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/features/subscriptions/subscription_updates_page.dart';
 import 'package:focubili/services/subscription_service.dart';
 import 'package:focubili/services/bilibili_public_content_service.dart';
+import 'package:focubili/services/bilibili_service.dart';
 import 'package:focubili/models/public_profile.dart';
 import 'package:focubili/models/subscription.dart';
+import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/services/focus_notification_service.dart';
 import 'package:focubili/platform/app_platform.dart';
+import 'subscription_background_test.dart' show AtomicSnapshots;
 import 'subscription_service_test.dart' show Content, item, source;
+
+class _CountingSnapshots extends AtomicSnapshots {
+  int writes = 0;
+
+  @override
+  Future<T> transact<T>(
+    FutureOr<T> Function(String?, void Function(String)) action,
+  ) => super.transact(
+    (current, save) => action(current, (value) {
+      writes++;
+      save(value);
+    }),
+  );
+}
+
+class _PlaybackSpy extends Fake implements BilibiliService {
+  final lookups = <String>[];
+
+  @override
+  Future<VideoPreview> lookupVideo(String input) async {
+    lookups.add(input);
+    throw StateError('Selection must not start playback.');
+  }
+}
 
 class Permission extends FocusNotificationService {
   int requests = 0;
@@ -42,6 +70,256 @@ class HeldContent implements BilibiliPublicContentService {
 
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  testWidgets('feed checkbox swipe selects only filtered rows without writes', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(430, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final content = Content()
+      ..pages[1] = [
+        [item('baseline')],
+      ];
+    final service = SubscriptionService(contentService: content);
+    addTearDown(service.dispose);
+    await service.addSource(source(1));
+    await service.setEnabled(true);
+    service.setForeground(true);
+    await service.refresh(manual: true);
+    content.pages[1] = [
+      [
+        item('alpha'),
+        item('bravo'),
+        item('charlie'),
+        item('delta'),
+        item('baseline'),
+      ],
+    ];
+    await service.refresh(manual: true);
+    await service.markRead('bravo');
+    service.setForeground(false);
+    await tester.pumpWidget(
+      MaterialApp(home: SubscriptionUpdatesPage(service: service)),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('仅未读'));
+    await tester.pumpAndSettle();
+    expect(find.text('bravo'), findsNothing);
+
+    Finder box(String id, {bool selected = false}) => find.descendant(
+      of: find.byKey(ValueKey('subscription-feed-$id')),
+      matching: find.byIcon(
+        selected ? Icons.check_circle : Icons.radio_button_unchecked,
+      ),
+    );
+
+    await tester.longPress(find.text('alpha'));
+    await tester.pumpAndSettle();
+    expect(find.text('已选 1 项'), findsOneWidget);
+    await tester.tap(box('alpha', selected: true));
+    await tester.pumpAndSettle();
+    expect(find.text('已选 0 项'), findsOneWidget);
+    expect(
+      tester
+          .widget<IconButton>(find.widgetWithIcon(IconButton, Icons.done_all))
+          .onPressed,
+      isNull,
+    );
+    final alphaGlyph = tester.getRect(box('alpha'));
+    final alphaAnchor = alphaGlyph.center + const Offset(12, 0);
+    expect(alphaGlyph.contains(alphaAnchor), isFalse);
+    final drag = await tester.startGesture(alphaAnchor);
+    await tester.pump(kLongPressTimeout + const Duration(milliseconds: 1));
+    await tester.pump();
+    await drag.moveTo(tester.getCenter(box('delta')));
+    await tester.pump();
+    await drag.up();
+    await tester.pumpAndSettle();
+    expect(find.text('已选 3 项'), findsOneWidget);
+    expect(
+      tester.getSemantics(box('charlie', selected: true)),
+      isSemantics(hasCheckedState: true, isChecked: true, hasTapAction: true),
+    );
+    expect(
+      service.feed.where((entry) => entry.readAt != null).map((e) => e.bvid),
+      ['bravo'],
+    );
+    await tester.tap(find.byTooltip('标为已读'));
+    await tester.pumpAndSettle();
+    expect(find.text('焦点订阅'), findsOneWidget);
+    expect(service.feed.every((item) => item.readAt != null), isTrue);
+  });
+
+  testWidgets('feed uncheck sweep stays at zero through day and read headers', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(430, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    var now = DateTime(2026, 4, 10, 12);
+    final content = Content();
+    var videos = [item('baseline')];
+    content.pages[1] = [videos];
+    final store = _CountingSnapshots();
+    final service = SubscriptionService(
+      contentService: content,
+      clock: () => now,
+      snapshotStore: store,
+    );
+    addTearDown(service.dispose);
+    await service.addSource(source(1));
+    await service.setEnabled(true);
+    service.setForeground(true);
+    await service.refresh(manual: true);
+    for (final id in ['older-read', 'middle-unread', 'latest-unread']) {
+      now = now.add(const Duration(days: 1));
+      videos = [item(id, publishedAt: now), ...videos];
+      content.pages[1] = [videos];
+      await service.refresh(manual: true);
+    }
+    await service.markRead('older-read');
+    service.setForeground(false);
+    expect(service.feed.map((entry) => entry.bvid), [
+      'latest-unread',
+      'middle-unread',
+      'older-read',
+    ]);
+    final snapshotsBefore = store.value;
+    final writesBefore = store.writes;
+    final videoService = _PlaybackSpy();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SubscriptionUpdatesPage(
+          service: service,
+          videoService: videoService,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    Finder box(String id, {bool checked = false}) => find.descendant(
+      of: find.byKey(ValueKey('subscription-feed-$id')),
+      matching: find.byIcon(
+        checked ? Icons.check_circle : Icons.radio_button_unchecked,
+      ),
+    );
+    await tester.longPress(find.text('latest-unread'));
+    await tester.pumpAndSettle();
+    expect(find.text('已选 1 项'), findsOneWidget);
+    final start = tester.getCenter(box('latest-unread', checked: true));
+    final negative = await tester.startGesture(start);
+    await tester.pump(kLongPressTimeout + const Duration(milliseconds: 1));
+    await tester.pump();
+    expect(find.text('已选 0 项'), findsOneWidget);
+
+    final middleDay = find.textContaining('4月12日');
+    final readSection = find.text('已读');
+    final readDay = find.textContaining('4月11日');
+    for (final destination in [
+      middleDay,
+      box('middle-unread'),
+      readSection,
+      readDay,
+      box('older-read'),
+    ]) {
+      await negative.moveTo(Offset(start.dx, tester.getCenter(destination).dy));
+      await tester.pump();
+      expect(find.text('已选 0 项'), findsOneWidget);
+    }
+    await negative.up();
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('退出多选'), findsOneWidget);
+
+    final positive = await tester.startGesture(
+      tester.getCenter(box('latest-unread')),
+    );
+    await tester.pump(kLongPressTimeout + const Duration(milliseconds: 1));
+    await tester.pump();
+    await positive.moveTo(tester.getCenter(box('older-read')));
+    await tester.pump();
+    await positive.up();
+    await tester.pumpAndSettle();
+    expect(find.text('已选 3 项'), findsOneWidget);
+    expect(box('middle-unread', checked: true), findsOneWidget);
+    expect(videoService.lookups, isEmpty);
+    expect(
+      tester.state<NavigatorState>(find.byType(Navigator)).canPop(),
+      isFalse,
+    );
+    expect(store.writes, writesBefore);
+    expect(store.value, snapshotsBefore);
+  });
+
+  testWidgets('source swipe can uncheck to zero and deletion still confirms', (
+    tester,
+  ) async {
+    final service = SubscriptionService(contentService: Content());
+    addTearDown(service.dispose);
+    for (final id in [1, 2, 3]) {
+      await service.addSource(source(id));
+    }
+    await tester.pumpWidget(
+      MaterialApp(home: SubscriptionSettingsPage(service: service)),
+    );
+    await tester.pumpAndSettle();
+
+    Finder box(int id, {bool selected = false}) => find.descendant(
+      of: find.byKey(ValueKey('subscription-source-creator:$id')),
+      matching: find.byIcon(
+        selected ? Icons.check_circle : Icons.radio_button_unchecked,
+      ),
+    );
+    await tester.longPress(find.text('源1'));
+    await tester.pumpAndSettle();
+    expect(find.text('已选 1 个来源'), findsOneWidget);
+    final sourceGlyph = tester.getRect(box(2));
+    final sourceAnchor = sourceGlyph.center + const Offset(12, 0);
+    expect(sourceGlyph.contains(sourceAnchor), isFalse);
+    final add = await tester.startGesture(sourceAnchor);
+    await tester.pump(kLongPressTimeout + const Duration(milliseconds: 1));
+    await tester.pump();
+    await add.moveTo(tester.getCenter(box(3)));
+    await tester.pump();
+    await add.up();
+    await tester.pumpAndSettle();
+    expect(find.text('已选 3 个来源'), findsOneWidget);
+
+    final remove = await tester.startGesture(
+      tester.getCenter(box(1, selected: true)),
+    );
+    await tester.pump(kLongPressTimeout + const Duration(milliseconds: 1));
+    await tester.pump();
+    await remove.moveTo(tester.getCenter(box(3, selected: true)));
+    await tester.pump();
+    await remove.up();
+    await tester.pumpAndSettle();
+    expect(find.text('已选 0 个来源'), findsOneWidget);
+    expect(
+      tester.getSemantics(box(2)),
+      isSemantics(hasCheckedState: true, isChecked: false, hasTapAction: true),
+    );
+    expect(
+      tester
+          .widget<IconButton>(
+            find.widgetWithIcon(IconButton, Icons.delete_outline),
+          )
+          .onPressed,
+      isNull,
+    );
+    await tester.tap(box(2));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('删除所选'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('删除所选 1 个订阅源'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(find.text('已选 1 个来源'), findsOneWidget);
+    expect(service.sources.map((entry) => entry.key), [
+      'creator:1',
+      'creator:2',
+      'creator:3',
+    ]);
+    expect(service.sources.every((entry) => !entry.paused), isTrue);
+  });
   testWidgets(
     'off default, permission only on explicit notifications switch; rejection keeps list',
     (tester) async {

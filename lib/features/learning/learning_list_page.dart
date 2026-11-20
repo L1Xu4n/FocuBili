@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../core/layout/adaptive_page_frame.dart';
+import '../../core/widgets/drag_selection_region.dart';
 import '../../models/learning_list_entry.dart';
 import '../../models/learning_subject_folder.dart';
 import '../../services/bilibili_service.dart';
@@ -33,6 +34,7 @@ class _LearningListPageState extends State<LearningListPage> {
   late final LearningListService _learningListService;
   late final BilibiliService _videoService;
   late final TextEditingController _searchController;
+  final ScrollController _listController = ScrollController();
   List<LearningListEntry> _entries = const <LearningListEntry>[];
   List<LearningSubjectFolder> _folders = const [];
   bool _allFolders = true;
@@ -56,6 +58,13 @@ class _LearningListPageState extends State<LearningListPage> {
   bool _reordering = false;
   String? _openingStableId;
   String? _updatingStableId;
+  bool get _canSelectTasks =>
+      !_loading &&
+      !_folderBusy &&
+      !_sortSaving &&
+      !_reordering &&
+      _openingStableId == null &&
+      _updatingStableId == null;
 
   /// 初始化服务、搜索控制器并读取设备上已有的学习任务。
   @override
@@ -67,10 +76,11 @@ class _LearningListPageState extends State<LearningListPage> {
     unawaited(_reloadEntries(loadSort: true));
   }
 
-  /// 页面销毁时释放搜索控制器，避免输入资源残留在内存中。
+  /// 页面销毁时释放搜索和滚动控制器。
   @override
   void dispose() {
     _searchController.dispose();
+    _listController.dispose();
     super.dispose();
   }
 
@@ -146,6 +156,54 @@ class _LearningListPageState extends State<LearningListPage> {
         .map((e) => e.stableId)
         .toSet();
     _selected.retainAll(visible);
+  }
+
+  void _beginSelection(LearningListEntry entry, BuildContext rowContext) {
+    if (!_canSelectTasks || _selecting || !_matchesQuery(entry)) return;
+    setState(() {
+      _selecting = true;
+      _selected.add(entry.stableId);
+    });
+    // The newly shown bulk-action toolbar may push this row below the fold.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          !rowContext.mounted ||
+          !_selecting ||
+          !_selected.contains(entry.stableId)) {
+        return;
+      }
+      unawaited(
+        Scrollable.ensureVisible(
+          rowContext,
+          alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+        ),
+      );
+    });
+  }
+
+  void _setEntryChecked(LearningListEntry entry, bool checked) {
+    // Filter state may have changed before the region's next build.
+    if (checked && _matchesQuery(entry)) {
+      _selected.add(entry.stableId);
+    } else {
+      _selected.remove(entry.stableId);
+    }
+  }
+
+  void _selectRange(
+    DragSelectionUpdate change,
+    List<LearningListEntry> visible,
+  ) {
+    if (!_selecting || !_canSelectTasks) return;
+    final previous = change.previous;
+    final current = change.current;
+    final first = previous < current ? previous : current;
+    final last = previous > current ? previous : current;
+    setState(() {
+      for (var i = first; i <= last; i++) {
+        _setEntryChecked(visible[i], change.checked);
+      }
+    });
   }
 
   /// 判断一条任务是否匹配标题、UP 主、分 P 标题或 P 序号的本机搜索词。
@@ -340,11 +398,14 @@ class _LearningListPageState extends State<LearningListPage> {
   }
 
   Future<void> _removeSelected() async {
+    // Delete exactly the set shown in the confirmation, even if a sweep is
+    // still releasing when a second pointer taps the bulk action.
+    final selected = Set<String>.of(_selected);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialog) => AlertDialog(
         title: const Text('移除所选学习任务'),
-        content: Text('移除 ${_selected.length} 条任务？观看记录和笔记保留。'),
+        content: Text('移除 ${selected.length} 条任务？观看记录和笔记保留。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialog, false),
@@ -359,7 +420,7 @@ class _LearningListPageState extends State<LearningListPage> {
     );
     if (confirmed != true || !mounted) return;
     try {
-      final entries = await _learningListService.removeBatch(Set.of(_selected));
+      final entries = await _learningListService.removeBatch(selected);
       if (mounted) {
         setState(() {
           _entries = entries;
@@ -1000,11 +1061,32 @@ class _LearningListPageState extends State<LearningListPage> {
     );
   }
 
+  Widget _buildSelectableEntry(
+    LearningListEntry entry, {
+    required int selectionIndex,
+    int? reorderIndex,
+  }) => DragSelectionTarget(
+    key: ValueKey(entry.stableId),
+    index: selectionIndex,
+    builder: (context, handleKey) => _buildEntryCard(
+      context,
+      entry,
+      handleKey: handleKey,
+      reorderIndex: reorderIndex,
+    ),
+  );
+
   /// 创建一条带状态切换、继续学习、分 P 信息和移除入口的学习任务卡片。
-  Widget _buildEntryCard(LearningListEntry entry, {int? reorderIndex}) {
+  Widget _buildEntryCard(
+    BuildContext rowContext,
+    LearningListEntry entry, {
+    required Key handleKey,
+    int? reorderIndex,
+  }) {
     final bool opening = _openingStableId == entry.stableId;
     final bool updating = _updatingStableId == entry.stableId;
     final bool completed = entry.status == LearningListStatus.completed;
+    final bool checked = _selected.contains(entry.stableId);
     final double progress = entry.duration > Duration.zero
         ? (entry.position.inMilliseconds / entry.duration.inMilliseconds)
               .clamp(0, 1)
@@ -1020,14 +1102,14 @@ class _LearningListPageState extends State<LearningListPage> {
             contentPadding: const EdgeInsets.fromLTRB(12, 10, 8, 4),
             leading: _selecting
                 ? Checkbox(
-                    value: _selected.contains(entry.stableId),
-                    onChanged: (checked) => setState(() {
-                      if (checked == true) {
-                        _selected.add(entry.stableId);
-                      } else {
-                        _selected.remove(entry.stableId);
-                      }
-                    }),
+                    key: handleKey,
+                    value: checked,
+                    semanticLabel: entry.title,
+                    onChanged: _canSelectTasks
+                        ? (value) => setState(
+                            () => _setEntryChecked(entry, value == true),
+                          )
+                        : null,
                   )
                 : SizedBox(
                     width: 88,
@@ -1121,10 +1203,16 @@ class _LearningListPageState extends State<LearningListPage> {
                 ],
               ],
             ),
-            // 条目点击函数查询新鲜视频详情，再恢复这个分 P 独立保存的进度。
-            onTap: opening || updating || _reordering
+            onTap: _selecting
+                ? _canSelectTasks
+                      ? () => setState(() => _setEntryChecked(entry, !checked))
+                      : null
+                : opening || updating || _reordering
                 ? null
                 : () => unawaited(_openEntry(entry)),
+            onLongPress: !_selecting && _canSelectTasks
+                ? () => _beginSelection(entry, rowContext)
+                : null,
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 2, 16, 0),
@@ -1382,11 +1470,17 @@ class _LearningListPageState extends State<LearningListPage> {
               ),
             ],
           ),
-          if (!_newestFirst && !_sortSaving) ...[
+          if (_selecting) ...[
+            Text(
+              '长按复选框并滑过任务可连续勾选或取消。',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 4),
+          ] else if (!_newestFirst && !_sortSaving) ...[
             Text(
               _canReorder
                   ? '拖动右侧图标调整学习顺序；完成后会自动移到列表末尾。'
-                  : '筛选或多选时不能拖拽，恢复全部后可调整顺序。',
+                  : '筛选时不能拖拽，恢复全部后可调整顺序。',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 4),
@@ -1401,9 +1495,11 @@ class _LearningListPageState extends State<LearningListPage> {
   }
 
   /// 创建已完成分区和搜索无结果提示，让完成任务与待学习任务视觉分隔。
-  Widget _buildListFooter(List<LearningListEntry> completedEntries) {
-    final List<LearningListEntry> activeEntries = _activeEntries;
-    if (activeEntries.isEmpty && completedEntries.isEmpty) {
+  Widget _buildListFooter(
+    int activeCount,
+    List<LearningListEntry> completedEntries,
+  ) {
+    if (activeCount == 0 && completedEntries.isEmpty) {
       return Padding(
         padding: const EdgeInsets.fromLTRB(24, 64, 24, 32),
         child: Center(
@@ -1453,12 +1549,13 @@ class _LearningListPageState extends State<LearningListPage> {
             ],
           ),
           const SizedBox(height: 10),
-          ...completedEntries.expand(
-            (LearningListEntry entry) => <Widget>[
-              _buildEntryCard(entry),
-              const SizedBox(height: 10),
-            ],
-          ),
+          for (var i = 0; i < completedEntries.length; i++) ...[
+            _buildSelectableEntry(
+              completedEntries[i],
+              selectionIndex: activeCount + i,
+            ),
+            const SizedBox(height: 10),
+          ],
         ],
       ),
     );
@@ -1471,27 +1568,40 @@ class _LearningListPageState extends State<LearningListPage> {
     }
     final List<LearningListEntry> activeEntries = _activeEntries;
     final List<LearningListEntry> completedEntries = _completedEntries;
-    return RefreshIndicator(
-      // 下拉刷新函数重新读取本机任务，不会访问网络。
-      onRefresh: _reloadEntries,
-      child: ReorderableListView.builder(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.only(bottom: 0),
-        buildDefaultDragHandles: false,
-        header: _buildListHeader(),
-        footer: _buildListFooter(completedEntries),
-        itemCount: activeEntries.length,
-        // 构建函数只为未完成条目提供拖动手柄，完成条目由 footer 固定在末尾分区。
-        itemBuilder: (BuildContext context, int index) => Padding(
-          key: Key('reorder-learning-list-${activeEntries[index].stableId}'),
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-          child: _buildEntryCard(
-            activeEntries[index],
-            reorderIndex: _canReorder ? index : null,
+    final visible = [...activeEntries, ...completedEntries];
+    return DragSelectionRegion(
+      controller: _listController,
+      itemCount: visible.length,
+      itemOrderKey: visible.map((entry) => entry.stableId).join('\u0000'),
+      enabled: _selecting && _canSelectTasks,
+      checkedAt: (index) => _selected.contains(visible[index].stableId),
+      onDragUpdate: (change) => _selectRange(change, visible),
+      builder: (context, dragging) => RefreshIndicator(
+        // 下拉刷新函数重新读取本机任务，不会访问网络。
+        onRefresh: _reloadEntries,
+        child: ReorderableListView.builder(
+          scrollController: _listController,
+          physics: dragging
+              ? const NeverScrollableScrollPhysics()
+              : const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.only(bottom: 0),
+          buildDefaultDragHandles: false,
+          header: _buildListHeader(),
+          footer: _buildListFooter(activeEntries.length, completedEntries),
+          itemCount: activeEntries.length,
+          // 只有未完成条目提供拖动手柄，完成条目固定在末尾分区。
+          itemBuilder: (BuildContext context, int index) => Padding(
+            key: Key('reorder-learning-list-${activeEntries[index].stableId}'),
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+            child: _buildSelectableEntry(
+              activeEntries[index],
+              selectionIndex: index,
+              reorderIndex: _canReorder ? index : null,
+            ),
           ),
+          // 重排回调将完整的未完成队列写回本机，避免局部排序。
+          onReorderItem: _reorderActiveEntries,
         ),
-        // 重排回调在搜索为空时把完整未完成队列写回本机，避免局部搜索导致顺序意外变化。
-        onReorderItem: _reorderActiveEntries,
       ),
     );
   }
@@ -1517,7 +1627,7 @@ class _LearningListPageState extends State<LearningListPage> {
                   focusedBorder: InputBorder.none,
                 ),
               )
-            : const Text('学习清单'),
+            : Text(_selecting ? '已选 ${_selected.length}' : '学习清单'),
         actions: <Widget>[
           IconButton(
             tooltip: _selecting ? '结束多选' : '多选管理',
