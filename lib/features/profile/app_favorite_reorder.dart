@@ -226,6 +226,7 @@ class AppFavoriteReorderState extends State<AppFavoriteReorder> {
       ),
       child: Semantics(
         label: '拖动排序：$title',
+        tooltip: '长按拖动排序',
         customSemanticsActions: {
           if (previous != null)
             const CustomSemanticsAction(label: '上移'): () => _move(id, previous),
@@ -235,14 +236,9 @@ class AppFavoriteReorderState extends State<AppFavoriteReorder> {
         },
         child: const MouseRegion(
           cursor: SystemMouseCursors.grab,
-          child: Tooltip(
-            triggerMode: TooltipTriggerMode.manual,
-            excludeFromSemantics: true,
-            message: '长按拖动排序',
-            child: SizedBox.square(
-              dimension: 48,
-              child: Icon(Icons.drag_handle_rounded),
-            ),
+          child: SizedBox.square(
+            dimension: 48,
+            child: Icon(Icons.drag_handle_rounded),
           ),
         ),
       ),

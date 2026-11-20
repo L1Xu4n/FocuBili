@@ -14,6 +14,7 @@ class FavoriteFolderCard extends StatelessWidget {
     this.onTap,
     this.onLongPress,
     this.showTrailingIcon = true,
+    this.showTitleTooltip = true,
     this.reorderHandle,
   });
   final String title;
@@ -23,6 +24,7 @@ class FavoriteFolderCard extends StatelessWidget {
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
   final bool showTrailingIcon;
+  final bool showTitleTooltip;
   final Widget? reorderHandle;
 
   /// 图片缺失时使用跟随明暗主题的占位图标，避免深色背景上的低对比图标。
@@ -43,6 +45,12 @@ class FavoriteFolderCard extends StatelessWidget {
       final width = ((constraints.maxWidth - 24) * .30).clamp(72.0, 112.0);
       final largeText = MediaQuery.textScalerOf(context).scale(14) > 18;
       final manage = available ? onLongPress : null;
+      final name = Text(
+        title,
+        maxLines: largeText ? 3 : 2,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontWeight: FontWeight.w700),
+      );
       final ink = InkWell(
         onTap: available ? onTap : null,
         onLongPress: manage,
@@ -82,18 +90,16 @@ class FavoriteFolderCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Tooltip(
-                      message: title,
-                      triggerMode: onLongPress == null
-                          ? null
-                          : TooltipTriggerMode.manual,
-                      child: Text(
-                        title,
-                        maxLines: largeText ? 3 : 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                    ),
+                    if (showTitleTooltip)
+                      Tooltip(
+                        message: title,
+                        triggerMode: onLongPress == null
+                            ? null
+                            : TooltipTriggerMode.manual,
+                        child: name,
+                      )
+                    else
+                      name,
                     const SizedBox(height: 6),
                     Text(
                       available ? '$count 个视频' : '收藏夹已失效',

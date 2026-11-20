@@ -79,6 +79,11 @@ Future<void> _holdAndMove(
     await tester.pump(kLongPressTimeout + const Duration(milliseconds: 20));
     await gesture.moveTo(tester.getCenter(to));
     await tester.pump();
+    if (kind == PointerDeviceKind.mouse) {
+      // Allow the target's hover state to settle before reparenting its row.
+      // Flutter 3.44 hit an OverlayPortal layout assertion on mouse drop.
+      await tester.pump(const Duration(milliseconds: 700));
+    }
     moved = true;
   } finally {
     if (cancel || !moved) {
@@ -157,6 +162,15 @@ void main() {
         final firstRow = _folderTitle(first);
         final secondRow = _folderTitle(second);
         if (wide) {
+          // Neither the local title nor its handle should mount a tooltip
+          // overlay that could be moved to another column during reorder.
+          expect(
+            find.descendant(
+              of: _folderCard(second.id),
+              matching: find.byType(Tooltip),
+            ),
+            findsNothing,
+          );
           expect(tester.getCenter(firstRow).dy, tester.getCenter(secondRow).dy);
           expect(
             tester.getCenter(firstRow).dx,

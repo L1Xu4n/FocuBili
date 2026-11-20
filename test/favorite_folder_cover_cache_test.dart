@@ -97,6 +97,7 @@ void main() {
       expect(cover(), service.url);
       expect(find.byIcon(Icons.chevron_right_rounded), findsOneWidget);
       expect(find.byIcon(Icons.drag_handle_rounded), findsNothing);
+      expect(find.byTooltip('原账号收藏'), findsOneWidget);
       expect(service.listCalls, 1);
       expect(service.coverCalls, 1);
 

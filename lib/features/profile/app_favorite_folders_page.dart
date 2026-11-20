@@ -646,6 +646,9 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
                   count: items.length,
                   coverUrl: covers.isEmpty ? '' : covers.first.coverUrl,
                   showTrailingIcon: false,
+                  // Flutter's hover OverlayPortal cannot follow a keyed
+                  // card as it moves between the two adaptive columns.
+                  showTitleTooltip: false,
                   reorderHandle: handle,
                   onTap: () => unawaited(_openFolder(folder)),
                   onLongPress: _transferring
