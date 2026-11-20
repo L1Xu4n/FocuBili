@@ -18,7 +18,9 @@ class _Api extends BilibiliAccountDataService {
   Future<int?> currentAccountMid() async => mid;
 
   @override
-  Future<FollowingGroupImport> loadFollowingGroups() {
+  Future<FollowingGroupImport> loadFollowingGroups({
+    bool verifyMemberPagination = false,
+  }) {
     final hold = Completer<FollowingGroupImport>();
     requests.add(hold);
     return hold.future;
@@ -45,31 +47,40 @@ class _GroupReadApi implements BilibiliAccountDataApi {
       listReads++;
       return BilibiliAccountDataResponse(
         statusCode: 200,
-        body:
-            '''
+        body: '''
           {"code":0,"data":[
             {"tagid":-10,"name":"特别关注","count":0},
-            {"tagid":42,"name":"课程","count":$listReads}
+            {"tagid":42,"name":"课程","count":1}
           ]}
         ''',
       );
     }
     expect(endpoint.path, '/x/relation/tag');
+    final page = endpoint.queryParameters['pn'];
+    if (endpoint.queryParameters['tagid'] == '-10') {
+      expect(page, '1');
+      return const BilibiliAccountDataResponse(
+        statusCode: 200,
+        body: '{"code":0,"data":null}',
+      );
+    }
     expect(endpoint.queryParameters['tagid'], '42');
-    expect(endpoint.queryParameters['pn'], '1');
     return BilibiliAccountDataResponse(
       statusCode: 200,
-      body: listReads == 1
-          ? '{"code":0,"data":[{"mid":11,"uname":"第一位"}]}'
-          : '{"code":0,"data":[{"mid":11,"uname":"第一位"},{"mid":12,"uname":"第二位"}]}',
+      body: switch (page) {
+        '1' => '{"code":0,"data":[{"mid":11,"uname":"第一位"}]}',
+        '2' when listReads > 1 =>
+          '{"code":0,"data":[{"mid":12,"uname":"第二位"}]}',
+        _ => '{"code":0,"data":[]}',
+      },
     );
   }
 }
 
-FollowingGroupImport _snapshot(int mid, String name) => FollowingGroupImport(
-  mid,
-  [FollowingGroup(id: 'remote_1', name: name, remoteId: 1)],
-);
+FollowingGroupImport _snapshot(int mid, String name, {int id = 1}) =>
+    FollowingGroupImport(mid, [
+      FollowingGroup(id: 'remote_$id', name: name, remoteId: id),
+    ]);
 
 final _toggle = find.widgetWithText(SwitchListTile, '自动同步 B 站分组');
 
@@ -90,6 +101,18 @@ Future<void> _reopen(WidgetTester tester, _Api api) async {
   await tester.pumpWidget(const SizedBox());
   await tester.pump();
   await _open(tester, api);
+}
+
+Future<void> _preview(
+  WidgetTester tester,
+  _Api api,
+  FollowingGroupImport snapshot,
+) async {
+  await tester.tap(find.byTooltip('从 B 站导入分组'));
+  await tester.pump();
+  api.requests.last.complete(snapshot);
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 500));
 }
 
 void main() {
@@ -154,6 +177,67 @@ void main() {
     expect(network.listReads, 2);
     expect(find.text('2 位 UP 主'), findsOneWidget);
     expect((await store.load(7)).last.members.map((m) => m.mid), [11, 12]);
+  });
+
+  testWidgets('手动预览默认跳过删除过的组，勾选一个只恢复该组并报告结果', (tester) async {
+    final store = FollowingGroupService();
+    final a = _snapshot(7, '本机删除 A').groups.single;
+    final b = _snapshot(7, '本机删除 B', id: 2).groups.single;
+    final snapshot = FollowingGroupImport(7, [a, b]);
+    await store.merge(snapshot);
+    await store.save(7, []);
+    final api = _Api();
+    await _open(tester, api);
+
+    final aChoice = find.widgetWithText(CheckboxListTile, '本机删除 A');
+    final bChoice = find.widgetWithText(CheckboxListTile, '本机删除 B');
+    final confirm = find.widgetWithText(FilledButton, '合并到本机');
+    await _preview(tester, api, snapshot);
+    expect(find.textContaining('已从本机删除，勾选后恢复'), findsNWidgets(2));
+    expect(tester.widget<CheckboxListTile>(aChoice).value, isFalse);
+    expect(tester.widget<CheckboxListTile>(bChoice).value, isFalse);
+    await tester.tap(confirm);
+    await tester.pumpAndSettle();
+    expect(await store.load(7), isEmpty);
+    expect(find.textContaining('本机分组没有变化。跳过 2 个'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+
+    await _preview(tester, api, snapshot);
+    await tester.tap(aChoice);
+    await tester.pump();
+    expect(tester.widget<CheckboxListTile>(aChoice).value, isTrue);
+    expect(tester.widget<CheckboxListTile>(bChoice).value, isFalse);
+    await tester.tap(confirm);
+    await tester.pumpAndSettle();
+    expect(confirm, findsNothing);
+    expect((await store.load(7)).map((g) => g.remoteId), [1]);
+    expect(await store.deletedRemoteIds(7), {2});
+    expect(find.text('本机删除 A'), findsOneWidget);
+    expect(find.text('本机删除 B'), findsNothing);
+    expect(find.textContaining('恢复 1 个分组。跳过 1 个'), findsOneWidget);
+  });
+
+  testWidgets('完整空快照会清空远端关联组，读取失败不会清空', (tester) async {
+    final store = FollowingGroupService();
+    final remote = _snapshot(7, '原 B 站分组').groups.single;
+    final local = FollowingGroup(id: 'local_a', name: '本机自建分组');
+    await store.save(7, [remote, local]);
+    await store.saveAutoSync(7, true);
+    final api = _Api();
+    await _open(tester, api);
+    api.requests.single.completeError(StateError('B 站返回不完整'));
+    await tester.pumpAndSettle();
+    expect(find.text('原 B 站分组'), findsOneWidget);
+    expect(find.text('本机自建分组'), findsOneWidget);
+    expect((await store.load(7)).map((g) => g.id), ['remote_1', 'local_a']);
+
+    await _reopen(tester, api);
+    api.requests.last.complete(FollowingGroupImport(7, []));
+    await tester.pumpAndSettle();
+    expect(find.text('原 B 站分组'), findsNothing);
+    expect(find.text('本机自建分组'), findsOneWidget);
+    expect((await store.load(7)).map((g) => g.id), ['local_a']);
   });
 
   testWidgets('账号切换后手动导入确认不得写入旧分组', (tester) async {

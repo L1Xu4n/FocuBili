@@ -189,6 +189,84 @@ void main() {
     }
   });
 
+  test('自动镜像继续读取低估的总数并核实报零的分组', () async {
+    final session = _FakeSessionProvider(state: _activeSession());
+    final api = _RecordingAccountDataApi((endpoint) async {
+      if (endpoint.path == '/x/relation/tags') {
+        return _ok(
+          '{"code":0,"data":[{"tagid":12,"count":20},{"tagid":13,"count":0},'
+          '{"tagid":14,"count":0}]}',
+        );
+      }
+      expect(endpoint.queryParameters['ps'], '20');
+      final id = endpoint.queryParameters['tagid'];
+      final page = endpoint.queryParameters['pn'];
+      final data = switch ((id, page)) {
+        ('12', '1') => [
+          for (var mid = 1; mid <= 20; mid++) {'mid': mid},
+        ],
+        ('12', '2') => [
+          {'mid': 21},
+        ],
+        ('13', '1') => [
+          {'mid': 31},
+        ],
+        ('14', '1') => [],
+        _ => null,
+      };
+      return _ok(jsonEncode({'code': 0, 'data': data}));
+    });
+    final snapshot = await _service(
+      session,
+      api,
+    ).loadFollowingGroups(verifyMemberPagination: true);
+    expect(snapshot.groups.map((g) => g.members.length), [21, 1, 0]);
+    expect(snapshot.groups.first.members.last.mid, 21);
+    expect(
+      api.endpoints
+          .skip(1)
+          .map((u) => (u.queryParameters['tagid'], u.queryParameters['pn'])),
+      [
+        ('12', '1'),
+        ('12', '2'),
+        ('12', '3'),
+        ('13', '1'),
+        ('13', '2'),
+        ('14', '1'),
+      ],
+    );
+  });
+
+  test('自动镜像拒绝异常末页和不完整成员快照', () async {
+    final session = _FakeSessionProvider(state: _activeSession());
+    for (final (expectedCount, secondPage) in [
+      (2, '{"code":0,"data":null}'),
+      (2, '{"code":0,"data":[]}'),
+      (1, '{"code":0,"data":[{"mid":9},{"mid":10}]}'),
+      (1, '{"code":0}'),
+      (1, '{"code":-101}'),
+    ]) {
+      final api = _RecordingAccountDataApi((endpoint) async {
+        if (endpoint.path == '/x/relation/tags') {
+          return _ok('{"code":0,"data":[{"tagid":12,"count":$expectedCount}]}');
+        }
+        return _ok(
+          endpoint.queryParameters['pn'] == '1'
+              ? '{"code":0,"data":[{"mid":9}]}'
+              : secondPage,
+        );
+      });
+      await expectLater(
+        _service(
+          session,
+          api,
+        ).loadFollowingGroups(verifyMemberPagination: true),
+        throwsStateError,
+      );
+      expect(api.endpoints, hasLength(3));
+    }
+  });
+
   test('完成远端读取后再次检查账号，不返回其他账号的分组', () async {
     final session = _FakeSessionProvider(state: _activeSession());
     final api = _RecordingAccountDataApi((endpoint) async {
