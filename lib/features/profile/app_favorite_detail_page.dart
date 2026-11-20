@@ -5,11 +5,13 @@ import 'package:flutter/material.dart';
 import '../../core/layout/adaptive_page_frame.dart';
 import '../../core/layout/adaptive_two_column_list.dart';
 import '../../core/router/app_router.dart';
+import '../../core/widgets/drag_selection_region.dart';
 import '../../models/app_favorite.dart';
 import '../../models/playback_queue.dart';
 import '../../services/app_favorites_service.dart';
 import '../../services/bilibili_service.dart';
 import 'app_favorite_video_tile.dart';
+import 'local_video_list_selection.dart';
 
 /// 展示一个软件收藏夹内保存的全部视频，支持打开播放和移除收藏。
 class AppFavoriteDetailPage extends StatefulWidget {
@@ -42,11 +44,18 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
   List<AppFavoriteItem> _items = const <AppFavoriteItem>[];
   bool _isLoading = true;
   final _searchController = TextEditingController();
+  final _scrollController = ScrollController();
+  final _selection = LocalVideoListSelection();
+  List<AppFavoriteItem> _visibleItems = const [];
+  bool _removing = false;
+  int _loadGeneration = 0;
+  int _openGeneration = 0;
 
   /// Releases the within-folder video search input.
   @override
   void dispose() {
     _searchController.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -59,21 +68,54 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
     unawaited(_loadItems());
   }
 
+  @override
+  void didUpdateWidget(covariant AppFavoriteDetailPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.folder.id != widget.folder.id) {
+      ++_openGeneration;
+      _selection.end();
+      _searchController.clear();
+      _removing = false;
+      _items = const [];
+      _updateVisibleItems();
+      _isLoading = true;
+      unawaited(_loadItems());
+    }
+  }
+
+  void _updateVisibleItems() {
+    _visibleItems = _items
+        .where((item) => item.matchesQuery(_searchController.text))
+        .toList(growable: false);
+    _selection.project(_visibleItems.map((item) => item.bvid));
+  }
+
+  void _startSelection([String? anchor]) {
+    FocusScope.of(context).unfocus();
+    setState(() {
+      ++_openGeneration;
+      _selection.start(anchor);
+    });
+  }
+
   /// 读取收藏项；失败时保留上一次成功显示的数据。
   Future<void> _loadItems() async {
+    final generation = ++_loadGeneration;
     try {
       final List<AppFavoriteItem> items = await _favoritesService.loadItems(
         widget.folder.id,
       );
-      if (!mounted) {
+      if (!mounted || generation != _loadGeneration) {
         return;
       }
       setState(() {
         _isLoading = false;
         _items = items;
+        if (items.isEmpty) _selection.end();
+        _updateVisibleItems();
       });
     } catch (_) {
-      if (mounted) {
+      if (mounted && generation == _loadGeneration) {
         setState(() => _isLoading = false);
         _showMessage('本机数据操作失败，请重试；未覆盖损坏的记录。');
       }
@@ -82,9 +124,10 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
 
   /// 点击收藏项时先补齐公开视频数据，再进入播放器。
   Future<void> _openVideo(AppFavoriteItem item) async {
+    final generation = ++_openGeneration;
     try {
       final preview = await _bilibiliService.lookupVideo(item.bvid);
-      if (!mounted) {
+      if (!mounted || generation != _openGeneration || _removing) {
         return;
       }
       await Navigator.of(context).pushNamed(
@@ -93,30 +136,40 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
           preview,
           PlaybackQueue(
             title: widget.folder.name,
-            items: _items
-                .where((entry) => entry.matchesQuery(_searchController.text))
-                .map(
-                  (entry) =>
-                      PlaybackQueueItem(bvid: entry.bvid, title: entry.title),
-                ),
+            items: _visibleItems.map(
+              (entry) =>
+                  PlaybackQueueItem(bvid: entry.bvid, title: entry.title),
+            ),
           ),
         ),
       );
     } on Object {
-      if (mounted) {
+      if (mounted && generation == _openGeneration && !_removing) {
         _showMessage('无法打开视频，请检查网络后重试。');
       }
     }
   }
 
-  /// 确认后从软件收藏夹移除指定视频。
-  Future<void> _removeItem(AppFavoriteItem item) async {
+  /// Both single and batch removal are scoped to the current physical folder.
+  Future<void> _removeItems({AppFavoriteItem? single}) async {
+    if (_removing) return;
+    final folder = widget.folder;
+    final bvids = single == null ? {..._selection.ids} : {single.bvid};
+    if (bvids.isEmpty) return;
+    setState(() {
+      _removing = true;
+      ++_openGeneration;
+    });
     try {
-      final bool? confirmed = await showDialog<bool>(
+      final confirmed = await showDialog<bool>(
         context: context,
-        builder: (BuildContext dialogContext) => AlertDialog(
-          title: const Text('移除收藏'),
-          content: Text('将把“${item.title}”从“${widget.folder.name}”中移除。'),
+        builder: (dialogContext) => AlertDialog(
+          title: Text(single == null ? '移除所选收藏' : '移除收藏'),
+          content: Text(
+            single == null
+                ? '将把所选 ${bvids.length} 个视频从“${folder.name}”中移除，不影响其他收藏夹。'
+                : '将把“${single.title}”从“${folder.name}”中移除。',
+          ),
           actions: <Widget>[
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(false),
@@ -129,31 +182,34 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
           ],
         ),
       );
-      if (confirmed != true || !mounted) {
+      if (confirmed != true || !mounted || widget.folder.id != folder.id) {
         return;
       }
-      final bool removed = await _favoritesService.removeItem(
-        widget.folder.id,
-        item.bvid,
-      );
-      if (!mounted) {
-        return;
-      }
+      final removed = single == null
+          ? await _favoritesService.removeItems(folder.id, bvids) != null
+          : await _favoritesService.removeItem(folder.id, single.bvid);
+      if (!mounted || widget.folder.id != folder.id) return;
       if (!removed) {
         _showMessage('移除失败，请稍后重试。');
         return;
       }
       await _loadItems();
+      if (mounted && widget.folder.id == folder.id && single == null) {
+        setState(_selection.end);
+      }
     } catch (_) {
-      if (mounted) {
-        setState(() => _isLoading = false);
+      if (mounted && widget.folder.id == folder.id) {
         _showMessage('本机数据操作失败，请重试；未覆盖损坏的记录。');
+      }
+    } finally {
+      if (mounted && widget.folder.id == folder.id) {
+        setState(() => _removing = false);
       }
     }
   }
 
-  /// 创建单个收藏项卡片，点击进入播放器并提供移除入口。
-  Widget _buildItemCard(AppFavoriteItem item) {
+  Widget _buildItemCard(AppFavoriteItem item, Key handleKey) {
+    void toggle() => setState(() => _selection.toggle(item.bvid));
     return AppFavoriteVideoTile(
       key: Key('app-favorite-item-${item.bvid}'),
       item: item,
@@ -161,8 +217,23 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
         item,
         _bilibiliService.lookupVideo,
       ),
-      onTap: () => unawaited(_openVideo(item)),
-      onRemove: () => unawaited(_removeItem(item)),
+      onTap: _removing
+          ? null
+          : _selection.active
+          ? toggle
+          : () => unawaited(_openVideo(item)),
+      onLongPress: _selection.active || _removing
+          ? null
+          : () => _startSelection(item.bvid),
+      selectionControl: _selection.active
+          ? _selection.checkbox(
+              handleKey: handleKey,
+              id: item.bvid,
+              title: item.title,
+              onToggle: _removing ? null : toggle,
+            )
+          : null,
+      onRemove: _removing ? null : () => unawaited(_removeItems(single: item)),
     );
   }
 
@@ -196,72 +267,116 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
         ),
       );
     }
-    final items = _items
-        .where((item) => item.matchesQuery(_searchController.text))
-        .toList();
-    if (items.isEmpty) return const Center(child: Text('没有匹配的收藏视频'));
-    return RefreshIndicator(
-      onRefresh: _loadItems,
-      child: AdaptiveTwoColumnList(
-        key: const Key('app-favorite-items-list'),
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-        itemCount: items.length,
-        mainAxisSpacing: 8,
-        itemBuilder: (BuildContext context, int index) {
-          return _buildItemCard(items[index]);
-        },
+    if (_visibleItems.isEmpty) {
+      return const Center(child: Text('没有匹配的收藏视频'));
+    }
+    return _selection.region(
+      controller: _scrollController,
+      busy: _removing,
+      setState: setState,
+      builder: (context, dragging) => RefreshIndicator(
+        notificationPredicate: (notification) =>
+            !_selection.active && notification.depth == 0,
+        onRefresh: _loadItems,
+        child: AdaptiveTwoColumnList(
+          key: const Key('app-favorite-items-list'),
+          controller: _scrollController,
+          physics: dragging
+              ? const NeverScrollableScrollPhysics()
+              : const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+          itemCount: _visibleItems.length,
+          mainAxisSpacing: 8,
+          itemBuilder: (context, index) {
+            final item = _visibleItems[index];
+            return DragSelectionTarget(
+              key: ValueKey(item.bvid),
+              index: index,
+              builder: (context, handleKey) => _buildItemCard(item, handleKey),
+            );
+          },
+        ),
       ),
     );
   }
 
+  AppBar _buildAppBar() => _selection.active
+      ? _selection.appBar(
+          onExit: _removing ? null : () => setState(_selection.end),
+          onRemove: _removing ? null : () => unawaited(_removeItems()),
+        )
+      : AppBar(
+          title: Text(widget.folder.name),
+          actions: [
+            if (_visibleItems.isNotEmpty)
+              TextButton(
+                onPressed: _removing ? null : _startSelection,
+                child: const Text('多选'),
+              ),
+          ],
+        );
+
   /// 创建收藏夹详情页标题和内容区域。
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text(widget.folder.name)),
-      body: AdaptivePageFrame(
-        maxWidth: 1180,
-        child: Column(
-          children: <Widget>[
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-              child: TextField(
-                key: const Key('app-favorite-videos-search'),
-                controller: _searchController,
-                onChanged: (_) => setState(() {}),
-                decoration: InputDecoration(
-                  hintText: '搜索收藏视频、UP 主或 BV 号',
-                  prefixIcon: const Icon(Icons.search),
-                  suffixIcon: _searchController.text.isEmpty
-                      ? null
-                      : IconButton(
-                          tooltip: '清空搜索',
-                          icon: const Icon(Icons.close),
-                          onPressed: () => setState(_searchController.clear),
-                        ),
-                  isDense: true,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
+    return PopScope(
+      canPop: !_selection.active,
+      onPopInvokedWithResult: (popped, _) {
+        if (!popped && _selection.active && !_removing) {
+          setState(_selection.end);
+        }
+      },
+      child: Scaffold(
+        appBar: _buildAppBar(),
+        body: AdaptivePageFrame(
+          maxWidth: 1180,
+          child: Column(
+            children: <Widget>[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                child: TextField(
+                  key: const Key('app-favorite-videos-search'),
+                  controller: _searchController,
+                  enabled: !_removing,
+                  onChanged: (_) => setState(_updateVisibleItems),
+                  decoration: InputDecoration(
+                    hintText: '搜索收藏视频、UP 主或 BV 号',
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: _searchController.text.isEmpty
+                        ? null
+                        : IconButton(
+                            tooltip: '清空搜索',
+                            icon: const Icon(Icons.close),
+                            onPressed: _removing
+                                ? null
+                                : () => setState(() {
+                                    _searchController.clear();
+                                    _updateVisibleItems();
+                                  }),
+                          ),
+                    isDense: true,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
                   ),
                 ),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-              child: Row(
-                children: <Widget>[
-                  const Icon(Icons.bookmark_rounded, size: 18),
-                  const SizedBox(width: 8),
-                  Text(
-                    '共 ${_items.length} 个视频',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                child: Row(
+                  children: <Widget>[
+                    const Icon(Icons.bookmark_rounded, size: 18),
+                    const SizedBox(width: 8),
+                    Text(
+                      '共 ${_items.length} 个视频',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
               ),
-            ),
-            Expanded(child: _buildBody()),
-          ],
+              Expanded(child: _buildBody()),
+            ],
+          ),
         ),
       ),
     );

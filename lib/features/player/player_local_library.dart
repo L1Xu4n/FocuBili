@@ -262,6 +262,19 @@ extension _PlayerLocalLibrary on _PlayerPageState {
       showDragHandle: true,
       builder: (BuildContext sheetContext) => StatefulBuilder(
         builder: (BuildContext context, StateSetter setSheetState) {
+          void setChecked(int first, int last, bool checked) {
+            setSheetState(() {
+              for (var i = first; i <= last; i++) {
+                final id = folders[i].id;
+                if (checked) {
+                  selected.add(id);
+                } else {
+                  selected.remove(id);
+                }
+              }
+            });
+          }
+
           return SafeArea(
             child: ConstrainedBox(
               constraints: BoxConstraints(
@@ -308,27 +321,28 @@ extension _PlayerLocalLibrary on _PlayerPageState {
                     )
                   else
                     Flexible(
-                      child: ListView.builder(
+                      child: DragCheckboxOptions(
                         itemCount: folders.length,
-                        itemBuilder: (BuildContext context, int index) {
-                          final AppFavoriteFolder folder = folders[index];
-                          final bool checked = selected.contains(folder.id);
-                          return CheckboxListTile(
-                            key: Key('app-favorite-folder-${folder.id}'),
-                            value: checked,
-                            controlAffinity: ListTileControlAffinity.trailing,
-                            title: Text(folder.name),
-                            onChanged: (bool? value) {
-                              setSheetState(() {
-                                if (value ?? false) {
-                                  selected.add(folder.id);
-                                } else {
-                                  selected.remove(folder.id);
-                                }
-                              });
-                            },
-                          );
-                        },
+                        checkedAt: (index) =>
+                            selected.contains(folders[index].id),
+                        onRangeChanged: setChecked,
+                        builder: (context, controller, physics) =>
+                            ListView.builder(
+                              controller: controller,
+                              physics: physics,
+                              itemCount: folders.length,
+                              itemBuilder: (context, index) {
+                                final AppFavoriteFolder folder = folders[index];
+                                return DragCheckboxTile(
+                                  key: Key('app-favorite-folder-${folder.id}'),
+                                  index: index,
+                                  value: selected.contains(folder.id),
+                                  title: Text(folder.name),
+                                  onChanged: (checked) =>
+                                      setChecked(index, index, checked),
+                                );
+                              },
+                            ),
                       ),
                     ),
                   Padding(

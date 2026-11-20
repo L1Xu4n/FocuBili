@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../core/widgets/drag_checkbox_list.dart';
+import '../../core/widgets/drag_selection_region.dart';
 import '../../models/video_preview.dart';
 import '../../models/learning_subject_folder.dart';
 import '../../models/public_profile.dart';
@@ -530,6 +531,7 @@ class _CollectionSelection extends StatefulWidget {
 class _CollectionSelectionState extends State<_CollectionSelection> {
   final List<CreatorVideo> _videos = [];
   final Set<String> _selected = {};
+  final ScrollController _options = ScrollController();
   int _page = 1;
   bool _hasMore = true, _loading = false;
   String? _error;
@@ -537,6 +539,12 @@ class _CollectionSelectionState extends State<_CollectionSelection> {
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _options.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -555,7 +563,9 @@ class _CollectionSelectionState extends State<_CollectionSelection> {
       if (!mounted) return;
       setState(() {
         final seen = _videos.map((e) => e.bvid).toSet();
-        _videos.addAll(page.items.where((e) => seen.add(e.bvid)));
+        _videos.addAll(
+          page.items.where((e) => e.bvid.isNotEmpty && seen.add(e.bvid)),
+        );
         _page++;
         _hasMore = page.hasMore;
         _loading = false;
@@ -570,6 +580,76 @@ class _CollectionSelectionState extends State<_CollectionSelection> {
     }
   }
 
+  void _setSelectionRange(int first, int last, bool selected) {
+    setState(() {
+      for (var i = first; i <= last; i++) {
+        final id = _videos[i].bvid;
+        if (selected) {
+          _selected.add(id);
+        } else {
+          _selected.remove(id);
+        }
+      }
+    });
+  }
+
+  Widget _buildOption(int index) {
+    final video = _videos[index];
+    final checked = _selected.contains(video.bvid);
+    return DragSelectionTarget(
+      key: ValueKey(video.bvid),
+      index: index,
+      builder: (context, handleKey) => MergeSemantics(
+        child: ListTile(
+          title: Text(video.title),
+          onTap: () => _setSelectionRange(index, index, !checked),
+          trailing: ExcludeFocus(
+            child: Checkbox(
+              key: handleKey,
+              value: checked,
+              onChanged: (value) =>
+                  _setSelectionRange(index, index, value == true),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOptions() => DragSelectionRegion(
+    controller: _options,
+    itemCount: _videos.length,
+    checkedAt: (index) => _selected.contains(_videos[index].bvid),
+    onDragUpdate: (change) {
+      final previous = change.previous;
+      final current = change.current;
+      _setSelectionRange(
+        previous < current ? previous : current,
+        previous > current ? previous : current,
+        change.checked,
+      );
+    },
+    builder: (context, dragging) => ListView.builder(
+      key: const Key('learning-collection-options'),
+      controller: _options,
+      physics: dragging ? const NeverScrollableScrollPhysics() : null,
+      itemCount: _videos.length + (_error != null ? 1 : 0) + (_hasMore ? 1 : 0),
+      itemBuilder: (context, index) {
+        if (index < _videos.length) return _buildOption(index);
+        if (index == _videos.length && _error != null) {
+          return Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(_error!),
+          );
+        }
+        return TextButton(
+          onPressed: _loading ? null : _load,
+          child: Text(_loading ? '读取中…' : '加载下一页'),
+        );
+      },
+    ),
+  );
+
   @override
   Widget build(BuildContext context) => SizedBox(
     height: MediaQuery.sizeOf(context).height * .85,
@@ -579,7 +659,18 @@ class _CollectionSelectionState extends State<_CollectionSelection> {
           padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
           child: Row(
             children: [
-              const Expanded(child: Text('合集：先选择视频，再选择各视频的 P')),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('合集：先选择视频，再选择各视频的 P'),
+                    Text(
+                      '长按复选框并滑过视频可连续勾选或取消。',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
               IconButton(
                 onPressed: () => Navigator.pop(context),
                 tooltip: '关闭合集选择',
@@ -588,34 +679,7 @@ class _CollectionSelectionState extends State<_CollectionSelection> {
             ],
           ),
         ),
-        Expanded(
-          child: ListView(
-            children: [
-              for (final video in _videos)
-                CheckboxListTile(
-                  value: _selected.contains(video.bvid),
-                  title: Text(video.title),
-                  onChanged: (value) => setState(() {
-                    if (value == true) {
-                      _selected.add(video.bvid);
-                    } else {
-                      _selected.remove(video.bvid);
-                    }
-                  }),
-                ),
-              if (_error != null)
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Text(_error!),
-                ),
-              if (_hasMore)
-                TextButton(
-                  onPressed: _loading ? null : _load,
-                  child: Text(_loading ? '读取中…' : '加载下一页'),
-                ),
-            ],
-          ),
-        ),
+        Expanded(child: _buildOptions()),
         Padding(
           padding: const EdgeInsets.all(16),
           child: Wrap(

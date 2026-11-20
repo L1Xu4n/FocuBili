@@ -11,11 +11,15 @@ class AppFavoriteVideoTile extends StatefulWidget {
     required this.item,
     required this.onTap,
     this.onRemove,
+    this.onLongPress,
+    this.selectionControl,
     this.folderNames,
     this.loadPartCount,
   });
   final AppFavoriteItem item;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
+  final Widget? selectionControl;
   final VoidCallback? onRemove;
   final String? folderNames;
   final Future<int?> Function()? loadPartCount;
@@ -57,6 +61,7 @@ class _AppFavoriteVideoTileState extends State<AppFavoriteVideoTile> {
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
+        onLongPress: widget.onLongPress,
         child: Padding(
           padding: const EdgeInsets.all(10),
           child: Row(
@@ -117,7 +122,9 @@ class _AppFavoriteVideoTileState extends State<AppFavoriteVideoTile> {
                   ],
                 ),
               ),
-              if (onRemove != null)
+              if (widget.selectionControl case final control?)
+                control
+              else if (onRemove != null)
                 IconButton(
                   key: Key('remove-app-favorite-${item.bvid}'),
                   tooltip: '移除',

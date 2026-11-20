@@ -20,6 +20,18 @@ class WatchHistoryService {
            AppBehaviorPreferencesService(preferencesLoader: preferencesLoader);
 
   static const String _storageKey = 'focubili_watch_history';
+  static Future<void> _writeQueue = Future<void>.value();
+
+  // Playback, thumbnail backfill and history management use separate service
+  // instances. Serialize their read-modify-write sequences on the shared key.
+  Future<T> _mutate<T>(Future<T> Function() operation) {
+    final next = _writeQueue.then((_) => operation());
+    _writeQueue = next.then<void>(
+      (_) {},
+      onError: (Object error, StackTrace stack) {},
+    );
+    return next;
+  }
 
   /// 限制本机最多保存的记录数量，避免观看记录无限占用存储空间。
   static const int maximumEntries = 50;
@@ -39,30 +51,31 @@ class WatchHistoryService {
   }
 
   /// 保存一次观看状态，并将同一 BV 号的旧记录替换为最新的一条。
-  Future<List<WatchHistoryEntry>> record(WatchHistoryEntry entry) async {
-    if (!await _behaviorPreferencesService.loadWatchHistoryEnabled()) {
-      return loadHistory();
-    }
-    final WatchHistoryEntry? normalizedEntry = _normalizeEntry(entry);
-    if (normalizedEntry == null) {
-      return loadHistory();
-    }
+  Future<List<WatchHistoryEntry>> record(WatchHistoryEntry entry) =>
+      _mutate(() async {
+        if (!await _behaviorPreferencesService.loadWatchHistoryEnabled()) {
+          return loadHistory();
+        }
+        final WatchHistoryEntry? normalizedEntry = _normalizeEntry(entry);
+        if (normalizedEntry == null) {
+          return loadHistory();
+        }
 
-    final List<WatchHistoryEntry> existing = await loadHistory();
-    final List<WatchHistoryEntry> updated = <WatchHistoryEntry>[
-      normalizedEntry,
-      ...existing.where(
-        (WatchHistoryEntry item) => item.bvid != normalizedEntry.bvid,
-      ),
-    ].take(maximumEntries).toList(growable: false);
-    await _writeEntries(updated);
-    return List<WatchHistoryEntry>.unmodifiable(updated);
-  }
+        final List<WatchHistoryEntry> existing = await loadHistory();
+        final List<WatchHistoryEntry> updated = <WatchHistoryEntry>[
+          normalizedEntry,
+          ...existing.where(
+            (WatchHistoryEntry item) => item.bvid != normalizedEntry.bvid,
+          ),
+        ].take(maximumEntries).toList(growable: false);
+        await _writeEntries(updated);
+        return List<WatchHistoryEntry>.unmodifiable(updated);
+      });
 
   /// 为旧版遗留的空封面记录批量补写安全缩略图，同时保持原顺序、观看时间和进度不变。
   Future<List<WatchHistoryEntry>> backfillThumbnails(
     Map<String, String> thumbnailUrls,
-  ) async {
+  ) => _mutate(() async {
     final Map<String, String> normalizedUrls = <String, String>{};
     thumbnailUrls.forEach((String bvid, String url) {
       final String normalizedBvid = bvid.trim();
@@ -90,27 +103,52 @@ class WatchHistoryService {
       await _writeEntries(updated);
     }
     return List<WatchHistoryEntry>.unmodifiable(updated);
-  }
+  });
 
   /// 移除指定 BV 号的本机观看记录，并返回移除后的记录列表。
-  Future<List<WatchHistoryEntry>> remove(String bvid) async {
-    final String normalizedBvid = bvid.trim();
-    if (normalizedBvid.isEmpty) {
-      return loadHistory();
-    }
+  Future<List<WatchHistoryEntry>> remove(String bvid) => removeMany([bvid]);
 
-    final List<WatchHistoryEntry> existing = await loadHistory();
-    final List<WatchHistoryEntry> updated = existing
-        .where((WatchHistoryEntry item) => item.bvid != normalizedBvid)
-        .toList(growable: false);
-    if (updated.length != existing.length) {
-      await _writeEntries(updated);
-    }
-    return List<WatchHistoryEntry>.unmodifiable(updated);
+  /// Removes the selected local history IDs in one write; no native resume,
+  /// learning progress, or online account storage is touched.
+  Future<List<WatchHistoryEntry>> removeMany(Iterable<String> bvids) {
+    final ids = bvids
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    if (ids.isEmpty) return loadHistory();
+    return _mutate(() async {
+      final preferences = await _preferencesLoader();
+      final raw = preferences.getString(_storageKey);
+      if (raw == null || raw.trim().isEmpty) return const [];
+      final decoded = jsonDecode(raw);
+      if (decoded is! List<Object?>) throw const FormatException();
+      // Keep unrelated rows verbatim in structure, including legacy
+      // fields/metadata and records skipped by the tolerant history reader.
+      final remaining = decoded.where((item) {
+        final bvid = item is Map<String, dynamic> ? item['bvid'] : null;
+        return bvid is! String || !ids.contains(bvid.trim());
+      }).toList();
+      if (remaining.length == decoded.length) return _decodeEntries(raw);
+      final encoded = jsonEncode(remaining);
+      try {
+        if (!await preferences.setString(_storageKey, encoded)) {
+          throw StateError('Watch history removal was not saved');
+        }
+      } catch (_) {
+        // SharedPreferences updates its cache even if the write is rejected.
+        try {
+          await preferences.reload();
+        } catch (_) {
+          // Report the original write failure to the page.
+        }
+        rethrow;
+      }
+      return _decodeEntries(encoded);
+    });
   }
 
   /// 清空设备上的所有观看记录，并返回空的页面状态列表。
-  Future<List<WatchHistoryEntry>> clear() async {
+  Future<List<WatchHistoryEntry>> clear() => _mutate(() async {
     try {
       final SharedPreferences preferences = await _preferencesLoader();
       await preferences.remove(_storageKey);
@@ -118,7 +156,7 @@ class WatchHistoryService {
       // 读取器不可用时保持幂等，页面仍可立即切换为空状态。
     }
     return const <WatchHistoryEntry>[];
-  }
+  });
 
   /// 将内存中的记录序列化后写入本机；失败时仍保留调用方的内存结果。
   Future<void> _writeEntries(List<WatchHistoryEntry> entries) async {

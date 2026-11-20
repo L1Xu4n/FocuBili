@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../../core/widgets/drag_checkbox_options.dart';
 import '../../models/app_favorite.dart';
 import '../../models/public_profile.dart';
 import '../../models/account_collection.dart';
@@ -177,7 +178,7 @@ class _VideoFavoritesBatchDialogState extends State<VideoFavoritesBatchDialog> {
   Future<void> _save() async {
     if (_saving || _loading || _totalCount == 0) return;
     if (!_sourceCurrent()) {
-      setState(() => _message = '投稿筛选已变化，请取消并重新选择。');
+      setState(() => _message = '来源或筛选已变化，请取消并重新选择。');
       return;
     }
     final total = _totalCount;
@@ -209,7 +210,9 @@ class _VideoFavoritesBatchDialogState extends State<VideoFavoritesBatchDialog> {
                 bvid: v.bvid,
                 title: v.title,
                 coverUrl: v.coverUrl,
-                ownerName: widget.ownerName,
+                ownerName: v.ownerName.trim().isEmpty
+                    ? widget.ownerName
+                    : v.ownerName,
                 durationText: _duration(v.duration),
                 addedAt: now.subtract(Duration(microseconds: i)),
                 partCount: v.partCount > 1 ? v.partCount : null,
@@ -299,10 +302,37 @@ class _VideoFavoritesBatchDialogState extends State<VideoFavoritesBatchDialog> {
     final colors = Theme.of(context).colorScheme;
     final selectionLocked = _saving || _doneCount > 0;
     final hasTarget = _targetCount > 0 && (!_remote || _mid != null);
-    final choices = _remote
+    final isRemote = _remote;
+    final choices = isRemote
         ? [for (final f in _remotes) (f.mediaId.toString(), f.title)]
         : [for (final f in _locals) (f.id, f.name)];
     final showDraft = !_remote && _newName != null;
+    final loadId = _loadId;
+    final selectable = !_loading && !selectionLocked;
+
+    bool checkedAt(int index) {
+      final id = choices[index].$1;
+      return isRemote
+          ? _remoteIds.contains(int.parse(id))
+          : _localIds.contains(id);
+    }
+
+    void setChecked(int first, int last, bool checked) {
+      if (_loading || _saving || _doneCount > 0 || loadId != _loadId) return;
+      setState(() {
+        _message = null;
+        for (var index = first; index <= last; index++) {
+          final id = choices[index].$1;
+          if (isRemote) {
+            final folder = int.parse(id);
+            checked ? _remoteIds.add(folder) : _remoteIds.remove(folder);
+          } else {
+            checked ? _localIds.add(id) : _localIds.remove(id);
+          }
+        }
+      });
+    }
+
     return PopScope(
       canPop: !_saving,
       child: AlertDialog(
@@ -367,46 +397,43 @@ class _VideoFavoritesBatchDialogState extends State<VideoFavoritesBatchDialog> {
                       520.0,
                     ),
                   ),
-                  child: SingleChildScrollView(
-                    key: const Key('batch-favorite-folder-list'),
-                    primary: false,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        for (final (id, title) in choices)
-                          _folderOption(
-                            context,
-                            title: title,
-                            selected: _remote
-                                ? _remoteIds.contains(int.parse(id))
-                                : _localIds.contains(id),
-                            onChanged: selectionLocked
-                                ? null
-                                : (checked) => setState(() {
-                                    _message = null;
-                                    if (_remote) {
-                                      final folder = int.parse(id);
-                                      checked
-                                          ? _remoteIds.add(folder)
-                                          : _remoteIds.remove(folder);
-                                    } else {
-                                      checked
-                                          ? _localIds.add(id)
-                                          : _localIds.remove(id);
-                                    }
-                                  }),
+                  child: DragCheckboxOptions(
+                    key: ValueKey(loadId),
+                    itemCount: choices.length,
+                    checkedAt: checkedAt,
+                    onRangeChanged: setChecked,
+                    enabled: selectable,
+                    builder: (context, controller, physics) =>
+                        SingleChildScrollView(
+                          key: const Key('batch-favorite-folder-list'),
+                          controller: controller,
+                          physics: physics,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              for (final (index, (_, title)) in choices.indexed)
+                                _folderOption(
+                                  context,
+                                  index: index,
+                                  title: title,
+                                  selected: checkedAt(index),
+                                  onChanged: !selectable
+                                      ? null
+                                      : (checked) =>
+                                            setChecked(index, index, checked),
+                                ),
+                              if (showDraft)
+                                _folderOption(
+                                  context,
+                                  title: '新建：$_newName',
+                                  selected: true,
+                                  onChanged: selectionLocked
+                                      ? null
+                                      : (_) => setState(() => _newName = null),
+                                ),
+                            ],
                           ),
-                        if (showDraft)
-                          _folderOption(
-                            context,
-                            title: '新建：$_newName',
-                            selected: true,
-                            onChanged: selectionLocked
-                                ? null
-                                : (_) => setState(() => _newName = null),
-                          ),
-                      ],
-                    ),
+                        ),
                   ),
                 ),
               if (!_remote && !_loading)
@@ -467,6 +494,7 @@ class _VideoFavoritesBatchDialogState extends State<VideoFavoritesBatchDialog> {
     required String title,
     required bool selected,
     required ValueChanged<bool>? onChanged,
+    int? index,
   }) {
     final colors = Theme.of(context).colorScheme;
     final shape = RoundedRectangleBorder(
@@ -478,23 +506,21 @@ class _VideoFavoritesBatchDialogState extends State<VideoFavoritesBatchDialog> {
         color: selected ? colors.primaryContainer : colors.surfaceContainerLow,
         shape: shape,
         clipBehavior: Clip.antiAlias,
-        child: CheckboxListTile(
+        child: DragCheckboxTile(
+          index: index,
           shape: shape,
           dense: true,
-          controlAffinity: ListTileControlAffinity.trailing,
           contentPadding: const EdgeInsetsDirectional.only(start: 10, end: 6),
           value: selected,
           title: Text(title, maxLines: 2, overflow: TextOverflow.ellipsis),
-          secondary: Icon(
+          leading: Icon(
             _remote ? Icons.cloud_outlined : Icons.folder_outlined,
             size: 18,
             color: selected
                 ? colors.onPrimaryContainer
                 : colors.onSurfaceVariant,
           ),
-          onChanged: onChanged == null
-              ? null
-              : (value) => onChanged(value ?? false),
+          onChanged: onChanged,
         ),
       ),
     );

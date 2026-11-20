@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:focubili/core/widgets/drag_checkbox_options.dart';
 import 'package:focubili/features/common/app_network_image.dart';
 import 'package:focubili/features/common/following_group_avatar.dart';
 import 'package:focubili/features/focus/home_collection_card.dart';
@@ -15,6 +16,7 @@ import 'package:focubili/services/following_group_service.dart';
 
 import 'home_collection_preview_test.dart'
     show Api, choice, creator, key, seed, settle, tap;
+import 'support/checkbox_sweep.dart';
 
 const _first = 'https://i0.hdslb.com/focu-a.jpg';
 const _second = 'https://i0.hdslb.com/focu-b.jpg';
@@ -190,9 +192,9 @@ void main() {
       ),
     );
     await tap(tester, find.text('调整成员'));
-    final editMember = find.widgetWithText(CheckboxListTile, '成员 1');
+    final editMember = find.widgetWithText(DragCheckboxTile, '成员 1');
     expect(_renderedImages(tester, editMember), [_first]);
-    final candidate = find.widgetWithText(CheckboxListTile, '候选 UP');
+    final candidate = find.widgetWithText(DragCheckboxTile, '候选 UP');
     expect(_renderedImages(tester, candidate), isEmpty);
     expect(
       find.descendant(
@@ -208,5 +210,66 @@ void main() {
     await settle(tester);
     expect(find.byType(FollowingGroupAvatar), findsNothing);
     expect(find.text('总览分组'), findsNothing);
+  });
+
+  testWidgets('调整成员按筛选后的顺序扫选，返回不保存，确认才更新', (tester) async {
+    final api = Api();
+    final store = FollowingGroupService();
+    await _saveGroups(101, [
+      FollowingGroup(
+        id: 'editing',
+        name: '测试关注组',
+        members: [
+          creator(30, '已关注 A', ''),
+          creator(31, '筛选隐藏 B', ''),
+          creator(32, '已关注 C', ''),
+        ],
+      ),
+    ]);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: FollowingGroupsPage(accountDataService: api, groupService: store),
+      ),
+    );
+    await settle(tester);
+
+    Future<void> openEditor() async {
+      await tap(tester, find.byType(PopupMenuButton<String>));
+      await tap(tester, find.text('调整成员'));
+    }
+
+    Finder member(String name) =>
+        checkboxIn(find.widgetWithText(DragCheckboxTile, name));
+
+    Future<void> filterAndClearVisible() async {
+      await tester.enterText(find.byType(TextField), '已关注');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await settle(tester);
+      expect(member('筛选隐藏 B'), findsNothing);
+      final a = member('已关注 A');
+      final c = member('已关注 C');
+      expect(tester.widget<Checkbox>(a).value, isTrue);
+      expect(tester.widget<Checkbox>(c).value, isTrue);
+      await sweepCheckboxes(tester, a, c);
+      expect(tester.widget<Checkbox>(a).value, isFalse);
+      expect(tester.widget<Checkbox>(c).value, isFalse);
+    }
+
+    await openEditor();
+    await filterAndClearVisible();
+    await tester.pageBack();
+    await settle(tester);
+    expect((await store.load(101)).single.members.map((m) => m.mid), [
+      30,
+      31,
+      32,
+    ]);
+
+    await openEditor();
+    await filterAndClearVisible();
+    await tap(tester, find.text('保存'));
+    final saved = (await store.load(101)).single;
+    expect(saved.members.map((m) => m.mid), [31]);
+    expect(saved.excluded, {30, 32});
   });
 }

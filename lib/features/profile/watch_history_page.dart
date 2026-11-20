@@ -6,10 +6,12 @@ import 'package:flutter/material.dart';
 import '../../core/layout/adaptive_page_frame.dart';
 import '../../core/layout/adaptive_two_column_list.dart';
 import '../../core/router/app_router.dart';
+import '../../core/widgets/drag_selection_region.dart';
 import '../../models/video_preview.dart';
 import '../../models/watch_history_entry.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/watch_history_service.dart';
+import 'local_video_list_selection.dart';
 
 /// 展示只保存在当前设备上的观看记录，不读取或同步 B 站账号历史。
 class WatchHistoryPage extends StatefulWidget {
@@ -41,6 +43,32 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
   String? _loadError;
   String? _openingBvid;
   String _searchQuery = '';
+  final _scrollController = ScrollController();
+  final _selection = LocalVideoListSelection();
+  List<WatchHistoryEntry> _visibleEntries = const [];
+  bool _mutating = false;
+  int _loadGeneration = 0;
+  int _openGeneration = 0;
+
+  void _replaceEntries(List<WatchHistoryEntry> entries) {
+    _entries = entries;
+    if (entries.isEmpty) _selection.end();
+    _updateVisibleEntries();
+  }
+
+  void _updateVisibleEntries() {
+    _visibleEntries = _filteredEntries();
+    _selection.project(_visibleEntries.map((entry) => entry.bvid));
+  }
+
+  void _startSelection([String? anchor]) {
+    FocusScope.of(context).unfocus();
+    setState(() {
+      ++_openGeneration;
+      _openingBvid = null;
+      _selection.start(anchor);
+    });
+  }
 
   /// 初始化可替换服务并在首次显示页面时读取设备本机记录。
   @override
@@ -55,11 +83,13 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
   @override
   void dispose() {
     _searchController.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
   /// 从本机存储读取列表，并把读取失败转换为可重试的页面状态。
   Future<void> _loadHistory() async {
+    final generation = ++_loadGeneration;
     if (mounted) {
       setState(() {
         _isLoading = true;
@@ -69,20 +99,16 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
     try {
       final List<WatchHistoryEntry> entries = await _historyService
           .loadHistory();
-      if (!mounted) {
-        return;
-      }
+      if (!mounted || generation != _loadGeneration) return;
       setState(() {
-        _entries = entries;
+        _replaceEntries(entries);
         _isLoading = false;
       });
-      unawaited(_backfillMissingThumbnails(entries));
+      unawaited(_backfillMissingThumbnails(entries, generation));
     } catch (_) {
-      if (!mounted) {
-        return;
-      }
+      if (!mounted || generation != _loadGeneration) return;
       setState(() {
-        _entries = const <WatchHistoryEntry>[];
+        _replaceEntries(const []);
         _isLoading = false;
         _loadError = '读取本机观看记录失败，请稍后重试。';
       });
@@ -92,6 +118,7 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
   /// 以每批最多两个公开详情请求补齐旧记录封面，失败时保留原记录且不阻塞页面显示。
   Future<void> _backfillMissingThumbnails(
     List<WatchHistoryEntry> entries,
+    int generation,
   ) async {
     final List<WatchHistoryEntry> missingEntries = entries
         .where((WatchHistoryEntry entry) => entry.thumbnailUrl.isEmpty)
@@ -111,13 +138,16 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
         }
       }
     }
-    if (!mounted || thumbnailUrls.isEmpty) {
+    if (!mounted || generation != _loadGeneration || thumbnailUrls.isEmpty) {
       return;
     }
-    final List<WatchHistoryEntry> updated = await _historyService
-        .backfillThumbnails(thumbnailUrls);
-    if (mounted) {
-      setState(() => _entries = updated);
+    try {
+      final updated = await _historyService.backfillThumbnails(thumbnailUrls);
+      if (mounted && generation == _loadGeneration) {
+        setState(() => _replaceEntries(updated));
+      }
+    } catch (_) {
+      // Cover refresh does not block local history management.
     }
   }
 
@@ -136,21 +166,22 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
     }
   }
 
-  /// 询问用户是否确认删除一条记录，避免误触立即丢失本机数据。
-  Future<bool> _confirmRemove(WatchHistoryEntry entry) async {
+  Future<bool> _confirmRemove(WatchHistoryEntry? entry, int count) async {
     final bool? confirmed = await showDialog<bool>(
       context: context,
       builder: (BuildContext dialogContext) => AlertDialog(
-        title: const Text('移除观看记录'),
-        content: Text('确定移除“${entry.title}”吗？此操作只影响本机。'),
+        title: Text(entry == null ? '移除所选观看记录' : '移除观看记录'),
+        content: Text(
+          entry == null
+              ? '确定移除所选 $count 条本机观看记录吗？不会影响 B 站账号。'
+              : '确定移除“${entry.title}”吗？此操作只影响本机。',
+        ),
         actions: <Widget>[
           TextButton(
-            // 取消按钮函数关闭对话框而不修改本机记录。
             onPressed: () => Navigator.of(dialogContext).pop(false),
             child: const Text('取消'),
           ),
           FilledButton(
-            // 确认按钮函数只返回结果，实际删除统一由外层函数执行。
             onPressed: () => Navigator.of(dialogContext).pop(true),
             child: const Text('移除'),
           ),
@@ -184,41 +215,51 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
     return confirmed ?? false;
   }
 
-  /// 删除一条已确认的本机记录，并以服务返回的列表更新当前界面。
-  Future<void> _removeEntry(WatchHistoryEntry entry) async {
-    if (!await _confirmRemove(entry) || !mounted) {
-      return;
-    }
+  /// Capture only the visible selection before opening confirmation.
+  Future<void> _removeEntries({WatchHistoryEntry? single}) async {
+    if (_mutating) return;
+    final ids = single == null ? {..._selection.ids} : {single.bvid};
+    if (ids.isEmpty) return;
+    setState(() {
+      _mutating = true;
+      ++_openGeneration;
+      _openingBvid = null;
+    });
     try {
-      final List<WatchHistoryEntry> entries = await _historyService.remove(
-        entry.bvid,
-      );
-      if (!mounted) {
-        return;
-      }
-      setState(() => _entries = entries);
+      if (!await _confirmRemove(single, ids.length) || !mounted) return;
+      ++_loadGeneration; // An older cover backfill cannot restore removed rows.
+      final entries = single == null
+          ? await _historyService.removeMany(ids)
+          : await _historyService.remove(single.bvid);
+      if (!mounted) return;
+      setState(() {
+        _replaceEntries(entries);
+        if (single == null) _selection.end();
+      });
     } catch (_) {
-      if (mounted) {
-        _showMessage('移除本机观看记录失败，请稍后重试。');
-      }
+      if (mounted) _showMessage('移除本机观看记录失败，请稍后重试。');
+    } finally {
+      if (mounted) setState(() => _mutating = false);
     }
   }
 
   /// 清空用户已确认的全部本机记录，并立即显示空记录状态。
   Future<void> _clearAll() async {
-    if (!await _confirmClear() || !mounted) {
-      return;
-    }
+    if (_mutating) return;
+    setState(() {
+      _mutating = true;
+      ++_openGeneration;
+      _openingBvid = null;
+    });
     try {
-      final List<WatchHistoryEntry> entries = await _historyService.clear();
-      if (!mounted) {
-        return;
-      }
-      setState(() => _entries = entries);
+      if (!await _confirmClear() || !mounted) return;
+      ++_loadGeneration;
+      final entries = await _historyService.clear();
+      if (mounted) setState(() => _replaceEntries(entries));
     } catch (_) {
-      if (mounted) {
-        _showMessage('清空本机观看记录失败，请稍后重试。');
-      }
+      if (mounted) _showMessage('清空本机观看记录失败，请稍后重试。');
+    } finally {
+      if (mounted) setState(() => _mutating = false);
     }
   }
 
@@ -227,16 +268,17 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
     if (_openingBvid != null) {
       return;
     }
+    final generation = ++_openGeneration;
     setState(() => _openingBvid = entry.bvid);
     try {
       final VideoPreview video = await _bilibiliService.lookupVideo(entry.bvid);
-      if (!mounted) {
+      if (!mounted || generation != _openGeneration) {
         return;
       }
       setState(() => _openingBvid = null);
       Navigator.of(context).pushNamed(AppRoutes.player, arguments: video);
     } catch (error) {
-      if (!mounted) {
+      if (!mounted || generation != _openGeneration) {
         return;
       }
       setState(() => _openingBvid = null);
@@ -343,7 +385,11 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
       child: TextField(
         key: const Key('watch-history-search'),
         controller: _searchController,
-        onChanged: (String value) => setState(() => _searchQuery = value),
+        enabled: !_mutating,
+        onChanged: (value) => setState(() {
+          _searchQuery = value;
+          _updateVisibleEntries();
+        }),
         decoration: InputDecoration(
           hintText: '搜索标题、UP 主、分P或 BV 号',
           prefixIcon: const Icon(Icons.search_rounded),
@@ -453,94 +499,125 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
 
   /// 构建自适应记录卡；封面使用固定比例，文字区域在窄屏也不会被 ListTile 挤坏。
   Widget _buildHistoryList() {
-    final List<WatchHistoryEntry> visibleEntries = _filteredEntries();
-    if (visibleEntries.isEmpty) {
+    if (_visibleEntries.isEmpty) {
       return const Center(child: Text('没有匹配的观看记录'));
     }
-    return AdaptiveTwoColumnList(
-      key: const Key('watch-history-list'),
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-      itemCount: visibleEntries.length,
-      mainAxisSpacing: 8,
-      itemBuilder: (BuildContext context, int index) {
-        final WatchHistoryEntry entry = visibleEntries[index];
-        final bool isOpening = _openingBvid == entry.bvid;
-        return Card(
-          key: Key('watch-history-${entry.bvid}'),
-          clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            // 卡片点击函数查询最新公开详情，避免使用可能已失效的旧分P数据。
-            onTap: isOpening ? null : () => _openEntry(entry),
-            child: Padding(
-              padding: const EdgeInsets.all(10),
-              child: Column(
+    return _selection.region(
+      controller: _scrollController,
+      busy: _mutating,
+      setState: setState,
+      builder: (context, dragging) => AdaptiveTwoColumnList(
+        key: const Key('watch-history-list'),
+        controller: _scrollController,
+        physics: dragging ? const NeverScrollableScrollPhysics() : null,
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        itemCount: _visibleEntries.length,
+        mainAxisSpacing: 8,
+        itemBuilder: (context, index) {
+          final entry = _visibleEntries[index];
+          return DragSelectionTarget(
+            key: ValueKey(entry.bvid),
+            index: index,
+            builder: (context, handleKey) =>
+                _buildHistoryCard(entry, handleKey),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildHistoryCard(WatchHistoryEntry entry, Key handleKey) {
+    final bool isOpening = _openingBvid == entry.bvid;
+    void toggle() => setState(() => _selection.toggle(entry.bvid));
+
+    return Card(
+      key: Key('watch-history-${entry.bvid}'),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        // 卡片点击函数查询最新公开详情，避免使用可能已失效的旧分P数据。
+        onTap: _mutating || isOpening
+            ? null
+            : _selection.active
+            ? toggle
+            : () => _openEntry(entry),
+        onLongPress: _selection.active || _mutating
+            ? null
+            : () => _startSelection(entry.bvid),
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      _buildHistoryThumbnail(entry),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: <Widget>[
-                            Text(
-                              entry.title,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              entry.ownerName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                          ],
+                  _buildHistoryThumbnail(entry),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text(
+                          entry.title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w700),
                         ),
+                        const SizedBox(height: 6),
+                        Text(
+                          entry.ownerName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (_selection.active)
+                    _selection.checkbox(
+                      handleKey: handleKey,
+                      id: entry.bvid,
+                      title: entry.title,
+                      onToggle: _mutating ? null : toggle,
+                    )
+                  else if (isOpening)
+                    const Padding(
+                      padding: EdgeInsets.all(10),
+                      child: SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
                       ),
-                      if (isOpening)
-                        const Padding(
-                          padding: EdgeInsets.all(10),
-                          child: SizedBox.square(
-                            dimension: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                        )
-                      else
-                        IconButton(
-                          tooltip: '移除记录',
-                          icon: const Icon(Icons.delete_outline_rounded),
-                          // 删除按钮函数先二次确认，再仅移除设备上的这一条记录。
-                          onPressed: () => _removeEntry(entry),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    '上次看至 P${entry.lastPartPageNumber} · '
-                    '${entry.lastPartTitle}',
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    '上次观看：${_formatWatchedAt(entry.watchedAt)}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
+                    )
+                  else
+                    IconButton(
+                      tooltip: '移除记录',
+                      icon: const Icon(Icons.delete_outline_rounded),
+                      // 删除按钮函数先二次确认，再仅移除设备上的这一条记录。
+                      onPressed: _mutating
+                          ? null
+                          : () => _removeEntries(single: entry),
+                    ),
                 ],
               ),
-            ),
+              const SizedBox(height: 8),
+              Text(
+                '上次看至 P${entry.lastPartPageNumber} · '
+                '${entry.lastPartTitle}',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 3),
+              Text(
+                '上次观看：${_formatWatchedAt(entry.watchedAt)}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 
@@ -569,19 +646,36 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
   /// 创建本机记录页标题、清空入口和与状态相匹配的内容区域。
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('本机观看记录'),
-        actions: <Widget>[
-          if (!_isLoading && _loadError == null && _entries.isNotEmpty)
-            TextButton(
-              // 清空按钮函数会先二次确认，避免误触抹去全部设备记录。
-              onPressed: _clearAll,
-              child: const Text('清空'),
-            ),
-        ],
+    return PopScope(
+      canPop: !_selection.active,
+      onPopInvokedWithResult: (popped, _) {
+        if (!popped && _selection.active && !_mutating) {
+          setState(_selection.end);
+        }
+      },
+      child: Scaffold(
+        appBar: _selection.active
+            ? _selection.appBar(
+                onExit: _mutating ? null : () => setState(_selection.end),
+                onRemove: _mutating ? null : _removeEntries,
+              )
+            : AppBar(
+                title: const Text('本机观看记录'),
+                actions: <Widget>[
+                  if (_visibleEntries.isNotEmpty)
+                    TextButton(
+                      onPressed: _mutating ? null : _startSelection,
+                      child: const Text('多选'),
+                    ),
+                  if (!_isLoading && _loadError == null && _entries.isNotEmpty)
+                    TextButton(
+                      onPressed: _mutating ? null : _clearAll,
+                      child: const Text('清空'),
+                    ),
+                ],
+              ),
+        body: AdaptivePageFrame(maxWidth: 1180, child: _buildBody()),
       ),
-      body: AdaptivePageFrame(maxWidth: 1180, child: _buildBody()),
     );
   }
 }

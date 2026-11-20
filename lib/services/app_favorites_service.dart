@@ -198,13 +198,27 @@ class AppFavoritesService {
       });
 
   /// Removes a BV within the same queue as additions and folder deletions.
-  Future<bool> removeItem(String folderId, String bvid) => _mutate(() async {
-    final items = await loadItems(folderId);
-    return _saveItems(
-      folderId,
-      items.where((item) => item.bvid != bvid).toList(),
-    );
-  });
+  Future<bool> removeItem(String folderId, String bvid) async =>
+      await removeItems(folderId, [bvid]) != null;
+
+  /// Saves only the targeted folder once, in the same queue as backup and import.
+  /// Returns the number removed, or null if the folder no longer exists or saving failed.
+  Future<int?> removeItems(String folderId, Iterable<String> bvids) {
+    final ids = bvids.toSet();
+    return _mutate(() async {
+      if (!(await loadFolders()).any((folder) => folder.id == folderId)) {
+        return null;
+      }
+      final items = await loadItems(folderId);
+      final remaining = items
+          .where((item) => !ids.contains(item.bvid))
+          .toList();
+      if (remaining.length == items.length) return 0;
+      return await _saveItems(folderId, remaining)
+          ? items.length - remaining.length
+          : null;
+    });
+  }
 
   /// Counts saved items across all current folders.
   Future<int> totalItemCount() async {

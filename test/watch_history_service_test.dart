@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -224,6 +225,73 @@ void main() {
     expect(await service.clear(), isEmpty);
     expect(await service.loadHistory(), isEmpty);
     expect(preferences.containsKey('focubili_watch_history'), isFalse);
+  });
+
+  test('批量移除保留不相关记录，且不会被并发封面补写覆盖', () async {
+    const key = 'focubili_watch_history';
+    final retained = _entry(
+      bvid: 'BVkeep',
+      thumbnailUrl: '',
+      pageNumber: 3,
+      lastPosition: const Duration(minutes: 25),
+    );
+    final retainedRaw = {...retained.toJson(), 'legacyField': 'keep'};
+    final elsewhere = _entry(bvid: 'BVnotSelected');
+    SharedPreferences.setMockInitialValues({
+      key: jsonEncode([
+        _entry(bvid: 'BVfirst').toJson(),
+        retainedRaw,
+        _entry(bvid: 'BVsecond').toJson(),
+        'unexpected legacy row',
+        elsewhere.toJson(),
+      ]),
+      'playback.progress.unrelated': 'native/learning data untouched',
+    });
+    final preferences = await SharedPreferences.getInstance();
+    final pendingRemoval = Completer<SharedPreferences>();
+    final removing = WatchHistoryService(
+      preferencesLoader: () => pendingRemoval.future,
+    );
+    final player = _service(preferences);
+    final deletion = removing.removeMany(['BVfirst', 'BVsecond', 'BVfirst']);
+    final backfill = player.backfillThumbnails({
+      'BVfirst': 'would reappear if stale',
+      'BVkeep': 'new-cover',
+    });
+    pendingRemoval.complete(preferences);
+
+    final removed = await deletion;
+    expect(removed, [retained, elsewhere]);
+    final updated = await backfill;
+    expect(updated, [retained.copyWith(thumbnailUrl: 'new-cover'), elsewhere]);
+    expect(await player.loadHistory(), updated);
+    expect(
+      preferences.getString('playback.progress.unrelated'),
+      'native/learning data untouched',
+    );
+  });
+
+  test('批量移除仅改写匹配的本机历史行，损坏的 JSON 保持原样', () async {
+    const key = 'focubili_watch_history';
+    final keep = {..._entry(bvid: 'BVkeep').toJson(), 'legacyField': true};
+    const unsupportedRow = 'legacy';
+    SharedPreferences.setMockInitialValues({
+      key: jsonEncode([
+        keep,
+        _entry(bvid: 'BVtarget').toJson(),
+        unsupportedRow,
+      ]),
+    });
+    final prefs = await SharedPreferences.getInstance();
+    final service = _service(prefs);
+    expect(await service.removeMany(['BVtarget']), hasLength(1));
+    expect(jsonDecode(prefs.getString(key)!), [keep, unsupportedRow]);
+
+    const malformed = '[{';
+    await prefs.setString(key, malformed);
+    await expectLater(service.removeMany(['BVtarget']), throwsFormatException);
+    expect(prefs.getString(key), malformed);
+    expect(await service.clear(), isEmpty);
   });
 
   /// 验证关闭观看记录后播放器不会新增或更新记录，但已有记录仍能读取。

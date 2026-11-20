@@ -321,6 +321,19 @@ extension _PlayerDetailsView on _PlayerPageState {
       builder: (BuildContext sheetContext) => StatefulBuilder(
         // 弹窗状态函数只维护本次勾选集合，提交前不修改播放器或服务端状态。
         builder: (BuildContext context, StateSetter setSheetState) {
+          void setChecked(int first, int last, bool checked) {
+            setSheetState(() {
+              for (var i = first; i <= last; i++) {
+                final id = folders[i].mediaId;
+                if (checked) {
+                  selectedMediaIds.add(id);
+                } else {
+                  selectedMediaIds.remove(id);
+                }
+              }
+            });
+          }
+
           return SafeArea(
             child: ConstrainedBox(
               constraints: BoxConstraints(
@@ -365,31 +378,32 @@ extension _PlayerDetailsView on _PlayerPageState {
                     )
                   else
                     Flexible(
-                      child: ListView.builder(
+                      child: DragCheckboxOptions(
                         itemCount: folders.length,
-                        // 收藏夹构建函数切换单个目录的临时勾选状态，不会提前发起网络请求。
-                        itemBuilder: (BuildContext context, int index) {
-                          final BilibiliFavoriteFolder folder = folders[index];
-                          final bool selected = selectedMediaIds.contains(
-                            folder.mediaId,
-                          );
-                          return CheckboxListTile(
-                            key: Key('favorite-folder-${folder.mediaId}'),
-                            value: selected,
-                            controlAffinity: ListTileControlAffinity.trailing,
-                            title: Text(folder.title),
-                            subtitle: Text('${folder.mediaCount} 个视频'),
-                            onChanged: (bool? value) {
-                              setSheetState(() {
-                                if (value ?? false) {
-                                  selectedMediaIds.add(folder.mediaId);
-                                } else {
-                                  selectedMediaIds.remove(folder.mediaId);
-                                }
-                              });
-                            },
-                          );
-                        },
+                        checkedAt: (index) =>
+                            selectedMediaIds.contains(folders[index].mediaId),
+                        onRangeChanged: setChecked,
+                        builder: (context, controller, physics) =>
+                            ListView.builder(
+                              controller: controller,
+                              physics: physics,
+                              itemCount: folders.length,
+                              itemBuilder: (context, index) {
+                                final BilibiliFavoriteFolder folder =
+                                    folders[index];
+                                return DragCheckboxTile(
+                                  key: Key('favorite-folder-${folder.mediaId}'),
+                                  index: index,
+                                  value: selectedMediaIds.contains(
+                                    folder.mediaId,
+                                  ),
+                                  title: Text(folder.title),
+                                  subtitle: Text('${folder.mediaCount} 个视频'),
+                                  onChanged: (checked) =>
+                                      setChecked(index, index, checked),
+                                );
+                              },
+                            ),
                       ),
                     ),
                   Padding(
