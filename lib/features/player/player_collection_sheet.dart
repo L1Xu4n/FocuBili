@@ -7,15 +7,19 @@ class _CollectionPickerSheet extends StatefulWidget {
     required this.collection,
     required this.currentBvid,
     required this.watchHistoryByBvid,
-    this.onAddToLearningList,
+    required this.learningListService,
+    required this.resolveLearningSelection,
+    required this.onLearningSaved,
   });
 
   final VideoCollection collection;
   final String currentBvid;
   final Map<String, WatchHistoryEntry> watchHistoryByBvid;
 
-  /// 将当前条目加入播放器外层学习清单的回调；面板本身不保存视频数据。
-  final ValueChanged<VideoCollectionEntry>? onAddToLearningList;
+  final LearningListService learningListService;
+  final Future<LearningPartSelection> Function(VideoCollectionEntry)
+  resolveLearningSelection;
+  final VoidCallback onLearningSaved;
 
   /// 创建保存搜索文字、排序选项和滚动位置的面板状态。
   @override
@@ -29,6 +33,193 @@ class _CollectionPickerSheetState extends State<_CollectionPickerSheet> {
   final ScrollController _scrollController = ScrollController();
   _CollectionEntryOrder _order = _CollectionEntryOrder.original;
   String _keyword = '';
+  bool _selecting = false;
+  bool _saving = false;
+  bool _confirming = false;
+  int _draftGeneration = 0;
+  int _initialTaskCount = 0;
+  Map<String, Set<String>>? _initialLearningIds;
+  Set<String> _selectedBvids = {};
+  Set<String> _beforeDrag = {};
+  String? _learningError;
+  String? _learningNotice;
+
+  bool get _canChangeSelection =>
+      _initialLearningIds != null && !_saving && !_confirming;
+
+  Future<void> _startLearningSelection(VideoCollectionEntry entry) async {
+    if (_selecting) return;
+    final generation = ++_draftGeneration;
+    final wasFiltered = _keyword.trim().isNotEmpty;
+    FocusScope.of(context).unfocus();
+    _searchController.clear();
+    setState(() {
+      _keyword = '';
+      _selecting = true;
+      _learningError = null;
+      _learningNotice = null;
+    });
+    if (wasFiltered) _locateVideo(entry.bvid, animated: false);
+
+    final learning = widget.learningListService;
+    final entries = await learning.loadEntries();
+    if (!mounted || generation != _draftGeneration) return;
+    if (learning.readFailed) {
+      setState(() => _learningError = '无法读取学习清单，请取消后重试。');
+      return;
+    }
+    final collectionBvids = widget.collection.entries
+        .map((e) => e.bvid)
+        .toSet();
+    final ids = <String, Set<String>>{};
+    for (final task in entries) {
+      if (collectionBvids.contains(task.bvid)) {
+        (ids[task.bvid] ??= <String>{}).add(task.stableId);
+      }
+    }
+    setState(() {
+      _initialTaskCount = entries.length;
+      _initialLearningIds = ids;
+      _selectedBvids = {...ids.keys, entry.bvid};
+    });
+  }
+
+  void _endLearningSelection({String? notice}) {
+    ++_draftGeneration;
+    setState(() {
+      _selecting = false;
+      _saving = false;
+      _initialLearningIds = null;
+      _selectedBvids.clear();
+      _beforeDrag.clear();
+      _learningError = null;
+      _learningNotice = notice;
+    });
+  }
+
+  void _toggleLearningSelection(String bvid) {
+    if (!_canChangeSelection) return;
+    setState(() {
+      _learningError = null;
+      if (!_selectedBvids.remove(bvid)) _selectedBvids.add(bvid);
+    });
+  }
+
+  void _updateLearningRange(
+    DragSelectionUpdate update,
+    List<VideoCollectionEntry> entries,
+  ) {
+    if (!_canChangeSelection) return;
+    if (update.anchor == update.previous && update.previous == update.current) {
+      _beforeDrag = {..._selectedBvids};
+    }
+    final start = update.anchor < update.current
+        ? update.anchor
+        : update.current;
+    final end = update.anchor > update.current ? update.anchor : update.current;
+    setState(() {
+      _learningError = null;
+      _selectedBvids = {..._beforeDrag};
+      for (var i = start; i <= end; i++) {
+        if (update.checked) {
+          _selectedBvids.add(entries[i].bvid);
+        } else {
+          _selectedBvids.remove(entries[i].bvid);
+        }
+      }
+    });
+  }
+
+  Future<void> _saveLearningSelection() async {
+    final initial = _initialLearningIds;
+    if (initial == null || !_canChangeSelection) return;
+    final addedBvids = _selectedBvids.difference(initial.keys.toSet());
+    final removedBvids = initial.keys.toSet().difference(_selectedBvids);
+    if (addedBvids.isEmpty && removedBvids.isEmpty) return;
+    final removeIds = {for (final bvid in removedBvids) ...initial[bvid]!};
+    const capacityError =
+        '未保存：学习清单最多保存 ${LearningListService.maximumEntries} 项任务，请减少勾选。';
+    // Avoid requesting details when the draft already exceeds local capacity.
+    // The service also validates against the newest state when it writes.
+    if (_initialTaskCount - removeIds.length + addedBvids.length >
+        LearningListService.maximumEntries) {
+      setState(() => _learningError = capacityError);
+      return;
+    }
+
+    if (removedBvids.isNotEmpty) {
+      setState(() => _confirming = true);
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          scrollable: true,
+          title: Text('移出 ${removedBvids.length} 支视频？'),
+          content: const Text('会移出这些视频的所有学习任务，并清除清单内的进度。观看历史和笔记不受影响。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('返回修改'),
+            ),
+            FilledButton(
+              key: const Key('confirm-collection-learning-changes'),
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('确认保存'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted) return;
+      setState(() => _confirming = false);
+      if (confirmed != true) return;
+    }
+
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _saving = true;
+      _learningError = null;
+    });
+    final selections = <LearningPartSelection>[];
+    for (final entry in widget.collection.entries) {
+      // Use the original collection order, independent of search/sort order.
+      if (!addedBvids.remove(entry.bvid)) continue;
+      try {
+        selections.add(await widget.resolveLearningSelection(entry));
+      } catch (_) {
+        if (mounted) {
+          setState(() {
+            _saving = false;
+            _learningError = '未保存：无法读取「${entry.title}」的视频详情，请重试。';
+          });
+        }
+        return;
+      }
+      if (!mounted || ModalRoute.of(context)?.isActive == false) return;
+    }
+
+    final onSaved = widget.onLearningSaved;
+    final result = await widget.learningListService.addBatch(
+      selections,
+      removeIds: removeIds,
+    );
+    final saved =
+        result.persisted &&
+        !result.capacityExceeded &&
+        result.failedItems.isEmpty;
+    if (saved) onSaved();
+    if (!mounted) return;
+    if (saved) {
+      _endLearningSelection(notice: '学习清单已保存');
+    } else {
+      setState(() {
+        _saving = false;
+        _learningError = !result.persisted
+            ? '未保存，请检查设备存储后重试。'
+            : result.capacityExceeded
+            ? capacityError
+            : '未保存：有视频的分 P 已失效，请重试。';
+      });
+    }
+  }
 
   /// 面板出现后自动滚到当前播放视频，避免长合集总是从第一条开始。
   @override
@@ -127,10 +318,12 @@ class _CollectionPickerSheetState extends State<_CollectionPickerSheet> {
     if (_keyword.isNotEmpty) {
       _clearSearch();
     }
+    _locateVideo(widget.currentBvid, animated: animated);
+  }
+
+  void _locateVideo(String bvid, {required bool animated}) {
     final List<VideoCollectionEntry> entries = _visibleEntries();
-    final int index = entries.indexWhere(
-      (VideoCollectionEntry entry) => entry.bvid == widget.currentBvid,
-    );
+    final int index = entries.indexWhere((entry) => entry.bvid == bvid);
     if (index < 0) {
       return;
     }
@@ -250,16 +443,19 @@ class _CollectionPickerSheetState extends State<_CollectionPickerSheet> {
     );
   }
 
-  /// 创建单条合集视频，点击后把选择结果交回播放器页面。
-  Widget _buildEntry(VideoCollectionEntry entry) {
+  /// 普通模式切换播放；学习模式仅修改待保存的勾选状态。
+  Widget _buildEntry(VideoCollectionEntry entry, {Key? handleKey}) {
     final bool current = entry.bvid == widget.currentBvid;
+    final bool checked = _selectedBvids.contains(entry.bvid);
+    final colors = Theme.of(context).colorScheme;
+    final VoidCallback? toggleSelection = _canChangeSelection
+        ? () => _toggleLearningSelection(entry.bvid)
+        : null;
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
       child: Material(
-        color: current
-            ? Theme.of(
-                context,
-              ).colorScheme.primaryContainer.withValues(alpha: 0.45)
+        color: (_selecting ? checked : current)
+            ? colors.primaryContainer.withValues(alpha: 0.45)
             : Colors.transparent,
         borderRadius: BorderRadius.circular(12),
         clipBehavior: Clip.antiAlias,
@@ -277,26 +473,42 @@ class _CollectionPickerSheetState extends State<_CollectionPickerSheet> {
             current ? '正在播放' : '${_formatCount(entry.stats.viewCount)}播放',
             maxLines: 1,
           ),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              IconButton(
-                key: Key('add-learning-collection-sheet-${entry.bvid}'),
-                visualDensity: VisualDensity.compact,
-                // 加入按钮函数交给外层播放器查询完整视频并写入本机学习清单。
-                onPressed: widget.onAddToLearningList == null
-                    ? null
-                    : () => widget.onAddToLearningList!(entry),
-                icon: const Icon(Icons.playlist_add_rounded),
-                tooltip: '加入学习清单',
-              ),
-              Icon(
-                current ? Icons.graphic_eq_rounded : Icons.play_arrow_rounded,
-              ),
-            ],
-          ),
-          // 条目点击函数关闭合集面板，并把所选视频返回给播放器切换。
-          onTap: current ? null : () => Navigator.of(context).pop(entry),
+          trailing: _selecting
+              ? ExcludeFocus(
+                  child: Checkbox(
+                    key: handleKey,
+                    value: checked,
+                    onChanged: toggleSelection == null
+                        ? null
+                        : (_) => toggleSelection(),
+                  ),
+                )
+              : Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    IconButton(
+                      key: Key('add-learning-collection-sheet-${entry.bvid}'),
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () =>
+                          unawaited(_startLearningSelection(entry)),
+                      icon: const Icon(Icons.playlist_add_rounded),
+                      tooltip: '管理合集学习清单',
+                    ),
+                    Icon(
+                      current
+                          ? Icons.graphic_eq_rounded
+                          : Icons.play_arrow_rounded,
+                    ),
+                  ],
+                ),
+          onTap: _selecting
+              ? toggleSelection
+              : current
+              ? null
+              : () => Navigator.of(context).pop(entry),
+          onLongPress: _selecting
+              ? null
+              : () => unawaited(_startLearningSelection(entry)),
         ),
       ),
     );
@@ -306,7 +518,11 @@ class _CollectionPickerSheetState extends State<_CollectionPickerSheet> {
   @override
   Widget build(BuildContext context) {
     final List<VideoCollectionEntry> entries = _visibleEntries();
-    return SafeArea(
+    final initiallySelected = _initialLearningIds?.keys.toSet() ?? <String>{};
+    final added = _selectedBvids.difference(initiallySelected).length;
+    final removed = initiallySelected.difference(_selectedBvids).length;
+    final count = widget.collection.entries.length;
+    final contents = SafeArea(
       child: FractionallySizedBox(
         heightFactor: 0.84,
         child: Padding(
@@ -318,7 +534,7 @@ class _CollectionPickerSheetState extends State<_CollectionPickerSheet> {
                 children: <Widget>[
                   Expanded(
                     child: Text(
-                      '合集 · ${widget.collection.title}',
+                      _selecting ? '管理学习清单' : '合集 · ${widget.collection.title}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
@@ -326,14 +542,18 @@ class _CollectionPickerSheetState extends State<_CollectionPickerSheet> {
                       ),
                     ),
                   ),
-                  Text('${entries.length}/${widget.collection.entries.length}'),
-                  IconButton(
-                    key: const Key('collection-locate-current'),
-                    tooltip: '定位到正在播放',
-                    // 定位按钮函数会清空搜索，并滚动到当前播放视频。
-                    onPressed: _locateCurrent,
-                    icon: const Icon(Icons.my_location_rounded),
-                  ),
+                  if (_selecting)
+                    Text('已选 ${_selectedBvids.length}/$count')
+                  else ...[
+                    Text('${entries.length}/$count'),
+                    IconButton(
+                      key: const Key('collection-locate-current'),
+                      tooltip: '定位到正在播放',
+                      // 定位按钮函数会清空搜索，并滚动到当前播放视频。
+                      onPressed: _locateCurrent,
+                      icon: const Icon(Icons.my_location_rounded),
+                    ),
+                  ],
                 ],
               ),
               const SizedBox(height: 6),
@@ -343,6 +563,7 @@ class _CollectionPickerSheetState extends State<_CollectionPickerSheet> {
                     child: TextField(
                       key: const Key('collection-search-field'),
                       controller: _searchController,
+                      enabled: !_saving,
                       onChanged: _updateKeyword,
                       decoration: InputDecoration(
                         hintText: '搜索标题或 BV 号',
@@ -366,6 +587,7 @@ class _CollectionPickerSheetState extends State<_CollectionPickerSheet> {
                     key: const Key('collection-sort-button'),
                     tooltip: '排序',
                     initialValue: _order,
+                    enabled: !_saving,
                     // 排序选择函数只重新排列当前面板，不修改合集本身。
                     onSelected: _changeOrder,
                     itemBuilder: (BuildContext context) => _CollectionEntryOrder
@@ -401,21 +623,94 @@ class _CollectionPickerSheetState extends State<_CollectionPickerSheet> {
                     ? const Center(child: Text('没有找到匹配的视频'))
                     : Scrollbar(
                         controller: _scrollController,
-                        child: ListView.builder(
-                          key: const Key('collection-sheet-list'),
+                        child: DragSelectionRegion(
+                          key: ValueKey((_keyword, _order)),
                           controller: _scrollController,
-                          itemExtent: _entryExtent,
                           itemCount: entries.length,
-                          // 长列表构建函数只创建屏幕附近的条目，781 条也能继续滑动。
-                          itemBuilder: (BuildContext context, int index) =>
-                              _buildEntry(entries[index]),
+                          enabled: _canChangeSelection,
+                          checkedAt: (i) =>
+                              _selectedBvids.contains(entries[i].bvid),
+                          onDragUpdate: (update) =>
+                              _updateLearningRange(update, entries),
+                          builder: (context, dragging) => ListView.builder(
+                            key: const Key('collection-sheet-list'),
+                            controller: _scrollController,
+                            physics: dragging
+                                ? const NeverScrollableScrollPhysics()
+                                : null,
+                            itemExtent: _entryExtent,
+                            itemCount: entries.length,
+                            itemBuilder: (context, index) {
+                              final entry = entries[index];
+                              if (!_selecting) return _buildEntry(entry);
+                              return DragSelectionTarget(
+                                index: index,
+                                key: ValueKey(entry.bvid),
+                                builder: (context, handleKey) => MergeSemantics(
+                                  child: _buildEntry(
+                                    entry,
+                                    handleKey: handleKey,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
                         ),
                       ),
               ),
+              if (_selecting) ...[
+                const Divider(height: 12),
+                Semantics(
+                  liveRegion: true,
+                  child: Text(
+                    _learningError ??
+                        (_saving
+                            ? '正在保存…'
+                            : _initialLearningIds == null
+                            ? '正在读取学习清单…'
+                            : added + removed == 0
+                            ? '长按复选框后滑动可连续勾选或取消'
+                            : '待加入 $added 支 · 待移出 $removed 支'),
+                    style: TextStyle(
+                      color: _learningError == null
+                          ? Theme.of(context).colorScheme.onSurfaceVariant
+                          : Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      key: const Key('cancel-collection-learning-selection'),
+                      onPressed: _saving ? null : () => _endLearningSelection(),
+                      child: const Text('取消'),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton(
+                      key: const Key('save-collection-learning-selection'),
+                      onPressed: _canChangeSelection && (added + removed > 0)
+                          ? _saveLearningSelection
+                          : null,
+                      child: const Text('保存更改'),
+                    ),
+                  ],
+                ),
+              ] else if (_learningNotice case final notice?)
+                Semantics(liveRegion: true, child: Text(notice)),
             ],
           ),
         ),
       ),
+    );
+    return PopScope(
+      canPop: !_selecting,
+      onPopInvokedWithResult: (popped, _) {
+        if (!popped && _selecting && !_saving && !_confirming) {
+          _endLearningSelection();
+        }
+      },
+      child: contents,
     );
   }
 }

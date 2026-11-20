@@ -323,11 +323,13 @@ class LearningListService {
     List<VideoPart> parts,
   ) => addBatch([for (final part in parts) LearningPartSelection(video, part)]);
 
-  /// Validate the selection and capacity before writing any new task.
-  /// Duplicates never replace progress, status or order.
+  /// Validate all changes and capacity before committing one updated list.
+  /// [removeIds] contains exact saved tasks, not video IDs. Duplicates never
+  /// replace progress, status or order, even when also requested for removal.
   Future<LearningBatchResult> addBatch(
     List<LearningPartSelection> selections, {
     String? folderId,
+    Set<String> removeIds = const {},
   }) => _serialized(() async {
     List<LearningListEntry> entries;
     try {
@@ -341,6 +343,7 @@ class LearningListService {
       return const LearningBatchResult(persisted: false);
     }
     final existing = entries.map((e) => e.stableId).toSet();
+    final removed = existing.intersection(removeIds);
     final added = <String>[];
     final duplicates = <String>[];
     final failed = <String>[];
@@ -375,6 +378,7 @@ class LearningListService {
         failed.add('${video.bvid}:${part.cid}');
       } else if (!existing.add(entry.stableId)) {
         duplicates.add(entry.stableId);
+        removed.remove(entry.stableId);
       } else {
         pending.add(entry);
         added.add(entry.stableId);
@@ -382,22 +386,29 @@ class LearningListService {
       }
     }
     // A rejected confirmation must not save a subset behind the form.
-    if (failed.isNotEmpty || entries.length + pending.length > maximumEntries) {
+    final capacityExceeded =
+        entries.length - removed.length + pending.length > maximumEntries;
+    if (failed.isNotEmpty || capacityExceeded) {
       return LearningBatchResult(
         entries: entries,
         existingIds: duplicates,
         failedItems: failed,
-        capacityExceeded: entries.length + pending.length > maximumEntries,
+        capacityExceeded: capacityExceeded,
         persisted: true,
       );
     }
     try {
-      if (pending.isNotEmpty) {
-        entries = List.of(await _saveEntries([...entries, ...pending]));
+      if (pending.isNotEmpty || removed.isNotEmpty) {
+        entries = await _saveEntries([
+          for (final entry in entries)
+            if (!removed.contains(entry.stableId)) entry,
+          ...pending,
+        ]);
       }
       return LearningBatchResult(
         entries: entries,
         addedIds: added,
+        removedIds: removed.toList(),
         existingIds: duplicates,
         failedItems: failed,
         persisted: true,
@@ -836,6 +847,7 @@ class LearningBatchResult {
   const LearningBatchResult({
     this.entries = const [],
     this.addedIds = const [],
+    this.removedIds = const [],
     this.existingIds = const [],
     this.failedItems = const [],
     this.capacityExceeded = false,
@@ -843,6 +855,7 @@ class LearningBatchResult {
   });
   final List<LearningListEntry> entries;
   final List<String> addedIds;
+  final List<String> removedIds;
   final List<String> existingIds;
   final List<String> failedItems;
   final bool capacityExceeded;
