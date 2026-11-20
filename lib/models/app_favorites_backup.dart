@@ -103,7 +103,11 @@ class AppFavoritesBackup {
             throw const FormatException();
           }
           final partCount = raw['partCount'];
+          final sortIndex = raw['sortIndex'];
           if (partCount != null && (partCount is! int || partCount <= 0)) {
+            throw const FormatException();
+          }
+          if (sortIndex != null && (sortIndex is! int || sortIndex < 0)) {
             throw const FormatException();
           }
           entries.add(
@@ -116,6 +120,7 @@ class AppFavoritesBackup {
               durationText: _optionalString(raw, 'durationText'),
               addedAt: _date(raw, 'addedAt'),
               partCount: partCount as int?,
+              sortIndex: sortIndex as int?,
             ),
           );
         }

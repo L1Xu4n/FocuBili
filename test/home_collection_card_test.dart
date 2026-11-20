@@ -250,7 +250,9 @@ void main() {
     await _settle(tester);
 
     for (final save in [false, true]) {
-      await _tap(tester, find.byKey(Key('app-favorite-actions-${folder.id}')));
+      await tester.longPress(
+        find.byKey(Key('app-favorite-folder-${folder.id}')),
+      );
       await _settle(tester);
       await _tap(tester, find.byKey(Key('rename-app-favorite-${folder.id}')));
       await _settle(tester);

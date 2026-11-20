@@ -29,7 +29,7 @@ The Dart protocol tests use a serialized atomic-store test double for repeatabil
 
 Use a dedicated test install/session and controlled subscription source. Avoid secrets in logs/screenshots.
 
-1. Fresh install: background and notifications are off. Enable subscriptions and complete a baseline; verify historical items do not notify. Add up to 50 sources; the 51st is rejected.
+1. Fresh install: background and notifications are off. Enable subscriptions and complete a baseline; verify historical items do not notify. Add up to 100 sources; the 101st is rejected.
 2. Enable background checks; inspect the app's WorkManager/JobScheduler entry and connected-network constraint. Add a genuinely new item after baseline. Trigger the scheduled job with Android development tools or wait for system execution. Verify one summary and the unread item, then reopen and verify last-check/status.
 3. Swipe the app away / kill its process without force-stop. Allow the scheduled job to run. Verify session access, storage, summary and notification tap cold-launch into subscription updates. Repeat warm-tap navigation.
 4. Deny Android notification permission and separately disable the subscription channel. Run with a new item. Verify no crash, unread remains, no repeated notification after permission restoration.
