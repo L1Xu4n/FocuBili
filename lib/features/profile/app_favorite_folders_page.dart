@@ -566,16 +566,6 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
     ),
   ];
 
-  Widget _buildFolderActions(AppFavoriteFolder folder) =>
-      PopupMenuButton<_FolderMenuAction>(
-        key: Key('app-favorite-actions-${folder.id}'),
-        tooltip: '管理收藏夹',
-        enabled: !_transferring,
-        icon: const Icon(Icons.more_vert_rounded),
-        onSelected: (action) => _applyFolderAction(folder, action),
-        itemBuilder: (_) => _folderMenuItems(folder),
-      );
-
   Future<void> _showFolderMenu(
     BuildContext rowContext,
     AppFavoriteFolder folder,
@@ -655,7 +645,7 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
                   title: folder.name,
                   count: items.length,
                   coverUrl: covers.isEmpty ? '' : covers.first.coverUrl,
-                  actions: _buildFolderActions(folder),
+                  showTrailingIcon: false,
                   reorderHandle: handle,
                   onTap: () => unawaited(_openFolder(folder)),
                   onLongPress: _transferring

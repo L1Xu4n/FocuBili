@@ -95,6 +95,8 @@ void main() {
           .coverUrl;
       await open();
       expect(cover(), service.url);
+      expect(find.byIcon(Icons.chevron_right_rounded), findsOneWidget);
+      expect(find.byIcon(Icons.drag_handle_rounded), findsNothing);
       expect(service.listCalls, 1);
       expect(service.coverCalls, 1);
 

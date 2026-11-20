@@ -5,12 +5,11 @@ import '../../models/app_favorite.dart';
 
 /// Shares the same video result layout between a folder and global favorite search.
 class AppFavoriteVideoTile extends StatefulWidget {
-  /// Receives navigation/removal callbacks without owning storage or player state.
+  /// Receives navigation and selection controls without owning storage or player state.
   const AppFavoriteVideoTile({
     super.key,
     required this.item,
     required this.onTap,
-    this.onRemove,
     this.onLongPress,
     this.selectionControl,
     this.reorderHandle,
@@ -22,7 +21,6 @@ class AppFavoriteVideoTile extends StatefulWidget {
   final VoidCallback? onLongPress;
   final Widget? selectionControl;
   final Widget? reorderHandle;
-  final VoidCallback? onRemove;
   final String? folderNames;
   final Future<int?> Function()? loadPartCount;
 
@@ -57,7 +55,6 @@ class _AppFavoriteVideoTileState extends State<AppFavoriteVideoTile> {
   Widget build(BuildContext context) {
     final item = widget.item;
     final onTap = widget.onTap;
-    final onRemove = widget.onRemove;
     final folderNames = widget.folderNames;
     final body = InkWell(
       onTap: onTap,
@@ -122,15 +119,7 @@ class _AppFavoriteVideoTileState extends State<AppFavoriteVideoTile> {
                 ],
               ),
             ),
-            if (widget.selectionControl case final control?)
-              control
-            else if (onRemove != null)
-              IconButton(
-                key: Key('remove-app-favorite-${item.bvid}'),
-                tooltip: '移除',
-                icon: const Icon(Icons.delete_outline_rounded),
-                onPressed: onRemove,
-              ),
+            if (widget.selectionControl case final control?) control,
           ],
         ),
       ),

@@ -185,11 +185,11 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
     }
   }
 
-  /// Both single and batch removal are scoped to the current physical folder.
-  Future<void> _removeItems({AppFavoriteItem? single}) async {
+  /// Removes the selected videos from the current folder only.
+  Future<void> _removeItems() async {
     if (_removing || _reordering) return;
     final folder = widget.folder;
-    final bvids = single == null ? {..._selection.ids} : {single.bvid};
+    final bvids = {..._selection.ids};
     if (bvids.isEmpty) return;
     setState(() {
       _removing = true;
@@ -199,11 +199,9 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => AlertDialog(
-          title: Text(single == null ? '移除所选收藏' : '移除收藏'),
+          title: const Text('移除所选收藏'),
           content: Text(
-            single == null
-                ? '将把所选 ${bvids.length} 个视频从“${folder.name}”中移除，不影响其他收藏夹。'
-                : '将把“${single.title}”从“${folder.name}”中移除。',
+            '将把所选 ${bvids.length} 个视频从“${folder.name}”中移除，不影响其他收藏夹。',
           ),
           actions: <Widget>[
             TextButton(
@@ -220,16 +218,14 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
       if (confirmed != true || !mounted || widget.folder.id != folder.id) {
         return;
       }
-      final removed = single == null
-          ? await _favoritesService.removeItems(folder.id, bvids) != null
-          : await _favoritesService.removeItem(folder.id, single.bvid);
+      final removed = await _favoritesService.removeItems(folder.id, bvids);
       if (!mounted || widget.folder.id != folder.id) return;
-      if (!removed) {
+      if (removed == null) {
         _showMessage('移除失败，请稍后重试。');
         return;
       }
       await _loadItems();
-      if (mounted && widget.folder.id == folder.id && single == null) {
+      if (mounted && widget.folder.id == folder.id) {
         setState(_selection.end);
       }
     } catch (_) {
@@ -273,9 +269,6 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
               onToggle: _removing ? null : toggle,
             )
           : null,
-      onRemove: _removing || _reordering
-          ? null
-          : () => unawaited(_removeItems(single: item)),
     );
   }
 

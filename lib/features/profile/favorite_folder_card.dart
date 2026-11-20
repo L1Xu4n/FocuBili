@@ -12,7 +12,7 @@ class FavoriteFolderCard extends StatelessWidget {
     this.available = true,
     this.onTap,
     this.onLongPress,
-    this.actions,
+    this.showTrailingIcon = true,
     this.reorderHandle,
   });
   final String title;
@@ -21,7 +21,7 @@ class FavoriteFolderCard extends StatelessWidget {
   final bool available;
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
-  final Widget? actions;
+  final bool showTrailingIcon;
   final Widget? reorderHandle;
 
   /// 图片缺失时使用跟随明暗主题的占位图标，避免深色背景上的低对比图标。
@@ -103,12 +103,10 @@ class FavoriteFolderCard extends StatelessWidget {
                   ],
                 ),
               ),
-              actions ??
-                  Icon(
-                    available
-                        ? Icons.chevron_right_rounded
-                        : Icons.block_rounded,
-                  ),
+              if (showTrailingIcon)
+                Icon(
+                  available ? Icons.chevron_right_rounded : Icons.block_rounded,
+                ),
             ],
           ),
         ),

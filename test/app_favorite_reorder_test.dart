@@ -106,6 +106,8 @@ void main() {
       ];
 
       await open();
+      expect(find.byIcon(Icons.more_vert_rounded), findsNothing);
+      expect(find.byIcon(Icons.chevron_right_rounded), findsNothing);
       final firstRow = find.text(first.name);
       final secondRow = find.text(second.name);
       if (wide) {
@@ -299,6 +301,8 @@ void main() {
     ];
 
     await open();
+    expect(find.byIcon(Icons.delete_outline_rounded), findsNothing);
+    expect(find.text('多选'), findsOneWidget);
     expect(await currentOrder(), [_third, _second, _first]);
     await tester.tap(_itemHandle(_third));
     await tester.pumpAndSettle();
