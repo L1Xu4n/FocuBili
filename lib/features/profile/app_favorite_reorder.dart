@@ -30,10 +30,12 @@ class AppFavoriteReorder extends StatefulWidget {
 }
 
 class AppFavoriteReorderState extends State<AppFavoriteReorder> {
+  static const _edgeZone = 48.0;
   final _bounds = <String, GlobalKey>{};
   final _highlight = ValueNotifier<String?>(null);
   String? _dragging;
   Offset? _pointer;
+  ScrollableState? _scrollable;
   EdgeDraggingAutoScroller? _autoScroller;
 
   bool get _enabled => widget.enabled && widget.ids.length > 1;
@@ -81,12 +83,44 @@ class AppFavoriteReorderState extends State<AppFavoriteReorder> {
   void _start(BuildContext context, String id) {
     if (!_enabled || _dragging != null) return;
     _dragging = id;
-    _autoScroller = EdgeDraggingAutoScroller(
-      Scrollable.of(context),
-      velocityScalar: 12,
-      onScrollViewScrolled: _updateHighlight,
-    );
+    _scrollable = Scrollable.of(context);
     widget.onDragStarted?.call();
+  }
+
+  EdgeDraggingAutoScroller _createAutoScroller(ScrollableState scrollable) {
+    late final EdgeDraggingAutoScroller scroller;
+    scroller = EdgeDraggingAutoScroller(
+      scrollable,
+      velocityScalar: 12,
+      onScrollViewScrolled: () {
+        if (!mounted || !identical(_autoScroller, scroller)) return;
+        // Flutter stores the supplied rect relative to the scroll origin.
+        // Re-anchor it after each step even if the user's pointer is stationary.
+        _scrollAtPointer();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (identical(_autoScroller, scroller)) _updateHighlight();
+        });
+      },
+    );
+    return scroller;
+  }
+
+  void _scrollAtPointer() {
+    final pointer = _pointer;
+    final scrollable = _scrollable;
+    if (pointer == null || scrollable == null || !scrollable.mounted) return;
+    final position = scrollable.position;
+    if (!position.hasViewportDimension || position.viewportDimension <= 0) {
+      return;
+    }
+    final scroller = _autoScroller ??= _createAutoScroller(scrollable);
+    scroller.startAutoScrollIfNecessary(
+      Rect.fromCenter(
+        center: pointer,
+        width: 1,
+        height: position.viewportDimension.clamp(0.0, _edgeZone * 2).toDouble(),
+      ),
+    );
   }
 
   void _updateHighlight() {
@@ -100,12 +134,13 @@ class AppFavoriteReorderState extends State<AppFavoriteReorder> {
     _pointer = null;
     _highlight.value = null;
     _autoScroller?.stopAutoScroll();
+    _autoScroller = null;
   }
 
   void _finish() {
     _leave();
     _dragging = null;
-    _autoScroller = null;
+    _scrollable = null;
   }
 
   void _end(String id) {
@@ -124,9 +159,7 @@ class AppFavoriteReorderState extends State<AppFavoriteReorder> {
       }
       _pointer = details.offset;
       _updateHighlight();
-      _autoScroller?.startAutoScrollIfNecessary(
-        Rect.fromCenter(center: details.offset, width: 1, height: 56),
-      );
+      _scrollAtPointer();
     },
     onLeave: (data) {
       if (identical(data?.owner, this) && data?.id == _dragging) _leave();

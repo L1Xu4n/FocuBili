@@ -49,6 +49,17 @@ AppFavoriteItem _item(String folderId, String bvid, String title, int hours) =>
       partCount: 2,
     );
 
+Finder _folderCard(String id) => find.byKey(Key('app-favorite-folder-$id'));
+
+/// Tooltips render the same label as rich text, even inside their own card's
+/// element subtree. Target the plain, visible title acted on by the user.
+Finder _folderTitle(AppFavoriteFolder folder) => find.descendant(
+  of: _folderCard(folder.id),
+  matching: find.byWidgetPredicate(
+    (widget) => widget is Text && widget.data == folder.name,
+  ),
+);
+
 Finder _folderHandle(String id) =>
     find.byKey(ValueKey('reorder-app-favorite-folder-$id'));
 Finder _itemHandle(String id) =>
@@ -108,8 +119,8 @@ void main() {
       await open();
       expect(find.byIcon(Icons.more_vert_rounded), findsNothing);
       expect(find.byIcon(Icons.chevron_right_rounded), findsNothing);
-      final firstRow = find.text(first.name);
-      final secondRow = find.text(second.name);
+      final firstRow = _folderTitle(first);
+      final secondRow = _folderTitle(second);
       if (wide) {
         expect(tester.getCenter(firstRow).dy, tester.getCenter(secondRow).dy);
         expect(
@@ -226,7 +237,8 @@ void main() {
 
     final list = find.byKey(const Key('app-favorite-folders-list'));
     final viewport = tester.getRect(list);
-    final pointer = Offset(viewport.center.dx, viewport.bottom - 14);
+    // Stay inside the edge-scroll zone but above the list's bottom padding.
+    final pointer = Offset(viewport.center.dx, viewport.bottom - 34);
     final scrollable = find.descendant(
       of: list,
       matching: find.byType(Scrollable),
@@ -242,7 +254,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
       if (position.pixels < 150) continue;
       for (var i = 1; i < ids.length; i++) {
-        final row = find.byKey(Key('app-favorite-folder-${ids[i]}'));
+        final row = _folderCard(ids[i]);
         if (row.evaluate().isNotEmpty &&
             tester.getRect(row).contains(pointer)) {
           targetIndex = i;
@@ -250,6 +262,11 @@ void main() {
         }
       }
     }
+    expect(
+      position.pixels,
+      greaterThanOrEqualTo(150),
+      reason: 'Holding still at the edge must move more than one scroll step.',
+    );
     expect(targetIndex, greaterThan(0));
     await gesture.up();
     await tester.pumpAndSettle();

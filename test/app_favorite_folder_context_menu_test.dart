@@ -22,7 +22,11 @@ void main() {
 
     final row = find.descendant(
       of: find.byKey(Key('app-favorite-folder-${second.id}')),
-      matching: find.text(second.name),
+      // The hovered title's Tooltip is a rich Text painted in an overlay;
+      // focus the actual, plain card label instead of the tooltip copy.
+      matching: find.byWidgetPredicate(
+        (widget) => widget is Text && widget.data == second.name,
+      ),
     );
     final rename = find.byKey(Key('rename-app-favorite-${second.id}'));
     final wrong = find.byKey(Key('rename-app-favorite-${first.id}'));
