@@ -29,7 +29,7 @@ class SubscriptionService extends ChangeNotifier {
     SubscriptionHistoryStore? historyStore,
     Future<void> Function(bool enabled, int generation)? backgroundScheduler,
     this.pageBudget = 20,
-    this.maxSources = 50,
+    this.maxSources = 100,
     this.requestTimeout = const Duration(seconds: 30),
     AppPlatform? platform,
     NativeSubscriptionScheduler? nativeScheduler,

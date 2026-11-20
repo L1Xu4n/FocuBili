@@ -341,6 +341,7 @@ void main() {
       await tester.tap(find.byTooltip('焦点订阅设置'));
       await tester.pumpAndSettle();
       expect(find.text('开启焦点订阅'), findsOneWidget);
+      expect(find.text('订阅源（0/100）'), findsOneWidget);
       expect(permission.requests, 0);
       expect(s.enabled, false);
       await tester.tap(find.byType(SwitchListTile).first);
