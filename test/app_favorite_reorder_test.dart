@@ -74,130 +74,168 @@ Future<void> _holdAndMove(
   bool cancel = false,
 }) async {
   final gesture = await tester.startGesture(tester.getCenter(from), kind: kind);
-  await tester.pump(kLongPressTimeout + const Duration(milliseconds: 20));
-  await gesture.moveTo(tester.getCenter(to));
-  await tester.pump();
-  if (cancel) {
-    await gesture.cancel();
-  } else {
-    await gesture.up();
+  var moved = false;
+  try {
+    await tester.pump(kLongPressTimeout + const Duration(milliseconds: 20));
+    await gesture.moveTo(tester.getCenter(to));
+    await tester.pump();
+    moved = true;
+  } finally {
+    if (cancel || !moved) {
+      await gesture.cancel();
+    } else {
+      await gesture.up();
+    }
   }
   await tester.pumpAndSettle();
 }
 
 void main() {
-  setUp(() => SharedPreferences.setMockInitialValues({}));
+  late SharedPreferences preferences;
+  setUp(() async {
+    SharedPreferences.setMockInitialValues({});
+    // Resolve the plugin's singleton Future in setUp, outside the widget's
+    // fake clock. Each case owns its mock store and passes it explicitly.
+    preferences = await SharedPreferences.getInstance();
+  });
 
-  for (final wide in [false, true]) {
-    testWidgets('本机收藏夹在${wide ? '桌面双列' : '手机单列'}排序，长按行才打开管理菜单', (tester) async {
-      await tester.binding.setSurfaceSize(
-        wide ? const Size(1120, 760) : const Size(360, 650),
-      );
+  void favoriteWidgetTest(
+    String description,
+    Size size,
+    Future<void> Function(WidgetTester, AppFavoritesService Function())
+    exercise,
+  ) {
+    testWidgets(description, (tester) async {
       addTearDown(() => tester.binding.setSurfaceSize(null));
-      final favorites = AppFavoritesService();
-      final first = (await favorites.createFolder('首个目录'))!;
-      final second = (await favorites.createFolder('次个目录'))!;
-      final third = (await favorites.createFolder('第三目录'))!;
-      await favorites.addItem(_item(first.id, _first, '视频一', 1));
-      final files = _BackupFiles();
-      Future<void> open() async {
-        await tester.pumpWidget(
-          MaterialApp(
-            home: AppFavoriteFoldersPage(
-              favoritesService: AppFavoritesService(),
-              fileService: files,
-            ),
-          ),
-        );
-        await tester.pumpAndSettle();
+      await tester.binding.setSurfaceSize(size);
+      final store = preferences;
+      AppFavoritesService createService() =>
+          AppFavoritesService(preferencesLoader: () async => store);
+      try {
+        await exercise(tester, createService);
+      } finally {
+        // Dismiss tooltips, routes and overlay state while their own fake
+        // clock is still alive, before the next case changes the surface.
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump();
       }
-
-      Future<List<String>> currentOrder() async => [
-        for (final folder in await favorites.loadFolders()) folder.id,
-      ];
-
-      await open();
-      expect(find.byIcon(Icons.more_vert_rounded), findsNothing);
-      expect(find.byIcon(Icons.chevron_right_rounded), findsNothing);
-      final firstRow = _folderTitle(first);
-      final secondRow = _folderTitle(second);
-      if (wide) {
-        expect(tester.getCenter(firstRow).dy, tester.getCenter(secondRow).dy);
-        expect(
-          tester.getCenter(firstRow).dx,
-          lessThan(tester.getCenter(secondRow).dx),
-        );
-      }
-      await tester.tap(_folderHandle(first.id));
-      await tester.pumpAndSettle();
-      expect(find.text('导出此收藏夹'), findsNothing);
-      expect(await currentOrder(), [first.id, second.id, third.id]);
-
-      final kind = wide ? PointerDeviceKind.mouse : PointerDeviceKind.touch;
-      await _holdAndMove(
-        tester,
-        _folderHandle(first.id),
-        secondRow,
-        kind: kind,
-        cancel: true,
-      );
-      expect(await currentOrder(), [first.id, second.id, third.id]);
-
-      await _holdAndMove(
-        tester,
-        _folderHandle(first.id),
-        secondRow,
-        kind: kind,
-      );
-      expect(await currentOrder(), [second.id, first.id, third.id]);
-      expect(find.text('导出此收藏夹'), findsNothing);
-      expect(find.byType(AppFavoriteDetailPage), findsNothing);
-
-      await tester.pumpWidget(const SizedBox.shrink());
-      await open();
-      if (wide) {
-        expect(
-          tester.getCenter(secondRow).dx,
-          lessThan(tester.getCenter(firstRow).dx),
-        );
-      } else {
-        expect(
-          tester.getCenter(secondRow).dy,
-          lessThan(tester.getCenter(firstRow).dy),
-        );
-      }
-
-      await tester.tap(firstRow);
-      await tester.pumpAndSettle();
-      expect(find.byType(AppFavoriteDetailPage), findsOneWidget);
-      await tester.binding.handlePopRoute();
-      await tester.pumpAndSettle();
-
-      await tester.longPress(firstRow);
-      await tester.pumpAndSettle();
-      expect(find.text('导出此收藏夹'), findsOneWidget);
-      expect(find.text('重命名'), findsOneWidget);
-      expect(find.text('删除收藏夹'), findsOneWidget);
-      await tester.tap(find.text('导出此收藏夹'));
-      await tester.pumpAndSettle();
-      expect(files.saved?.folders.single.id, first.id);
-      expect(files.saved?.items[first.id]?.single.bvid, _first);
-
-      await tester.longPress(firstRow);
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('删除收藏夹'));
-      await tester.pumpAndSettle();
-      expect(find.text('删除软件收藏夹'), findsOneWidget);
-      await tester.tap(find.text('取消'));
-      await tester.pumpAndSettle();
-      expect(await currentOrder(), [second.id, first.id, third.id]);
-    });
+    }, timeout: const Timeout(Duration(minutes: 1)));
   }
 
-  testWidgets('普通滚动不会重排本机收藏夹', (tester) async {
-    await tester.binding.setSurfaceSize(const Size(360, 640));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final favorites = AppFavoritesService();
+  for (final wide in [false, true]) {
+    favoriteWidgetTest(
+      '本机收藏夹在${wide ? '桌面双列' : '手机单列'}排序，长按行才打开管理菜单',
+      wide ? const Size(1120, 760) : const Size(360, 650),
+      (tester, createService) async {
+        final favorites = createService();
+        final first = (await favorites.createFolder('首个目录'))!;
+        final second = (await favorites.createFolder('次个目录'))!;
+        final third = (await favorites.createFolder('第三目录'))!;
+        await favorites.addItem(_item(first.id, _first, '视频一', 1));
+        final files = _BackupFiles();
+        final lookup = _VideoLookup();
+        Future<void> open() async {
+          await tester.pumpWidget(
+            MaterialApp(
+              home: AppFavoriteFoldersPage(
+                favoritesService: createService(),
+                bilibiliService: lookup,
+                fileService: files,
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+        }
+
+        Future<List<String>> currentOrder() async => [
+          for (final folder in await favorites.loadFolders()) folder.id,
+        ];
+
+        await open();
+        expect(find.byIcon(Icons.more_vert_rounded), findsNothing);
+        expect(find.byIcon(Icons.chevron_right_rounded), findsNothing);
+        final firstRow = _folderTitle(first);
+        final secondRow = _folderTitle(second);
+        if (wide) {
+          expect(tester.getCenter(firstRow).dy, tester.getCenter(secondRow).dy);
+          expect(
+            tester.getCenter(firstRow).dx,
+            lessThan(tester.getCenter(secondRow).dx),
+          );
+        }
+        await tester.tap(_folderHandle(first.id));
+        await tester.pumpAndSettle();
+        expect(find.text('导出此收藏夹'), findsNothing);
+        expect(await currentOrder(), [first.id, second.id, third.id]);
+
+        final kind = wide ? PointerDeviceKind.mouse : PointerDeviceKind.touch;
+        await _holdAndMove(
+          tester,
+          _folderHandle(first.id),
+          secondRow,
+          kind: kind,
+          cancel: true,
+        );
+        expect(await currentOrder(), [first.id, second.id, third.id]);
+
+        await _holdAndMove(
+          tester,
+          _folderHandle(first.id),
+          secondRow,
+          kind: kind,
+        );
+        expect(await currentOrder(), [second.id, first.id, third.id]);
+        expect(find.text('导出此收藏夹'), findsNothing);
+        expect(find.byType(AppFavoriteDetailPage), findsNothing);
+
+        await tester.pumpWidget(const SizedBox.shrink());
+        await open();
+        if (wide) {
+          expect(
+            tester.getCenter(secondRow).dx,
+            lessThan(tester.getCenter(firstRow).dx),
+          );
+        } else {
+          expect(
+            tester.getCenter(secondRow).dy,
+            lessThan(tester.getCenter(firstRow).dy),
+          );
+        }
+
+        await tester.tap(firstRow);
+        await tester.pumpAndSettle();
+        expect(find.byType(AppFavoriteDetailPage), findsOneWidget);
+        await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+
+        await tester.longPress(firstRow);
+        await tester.pumpAndSettle();
+        expect(find.text('导出此收藏夹'), findsOneWidget);
+        expect(find.text('重命名'), findsOneWidget);
+        expect(find.text('删除收藏夹'), findsOneWidget);
+        await tester.tap(find.text('导出此收藏夹'));
+        await tester.pumpAndSettle();
+        expect(files.saved?.folders.single.id, first.id);
+        expect(files.saved?.items[first.id]?.single.bvid, _first);
+
+        await tester.longPress(firstRow);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('删除收藏夹'));
+        await tester.pumpAndSettle();
+        expect(find.text('删除软件收藏夹'), findsOneWidget);
+        await tester.tap(find.text('取消'));
+        await tester.pumpAndSettle();
+        expect(await currentOrder(), [second.id, first.id, third.id]);
+        expect(lookup.requests, isEmpty);
+      },
+    );
+  }
+
+  favoriteWidgetTest('普通滚动不会重排本机收藏夹', const Size(360, 640), (
+    tester,
+    createService,
+  ) async {
+    final favorites = createService();
     final ids = [
       for (var n = 0; n < 12; n++) (await favorites.createFolder('目录 $n'))!.id,
     ];
@@ -223,10 +261,11 @@ void main() {
     expect(find.text('导出此收藏夹'), findsNothing);
   });
 
-  testWidgets('保持手柄在底部边缘时滚动，放手使用当前所在的目录', (tester) async {
-    await tester.binding.setSurfaceSize(const Size(360, 650));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final favorites = AppFavoritesService();
+  favoriteWidgetTest('保持手柄在底部边缘时滚动，放手使用当前所在的目录', const Size(360, 650), (
+    tester,
+    createService,
+  ) async {
+    final favorites = createService();
     final ids = [
       for (var n = 0; n < 16; n++) (await favorites.createFolder('目录 $n'))!.id,
     ];
@@ -247,28 +286,38 @@ void main() {
     final gesture = await tester.startGesture(
       tester.getCenter(_folderHandle(ids.first)),
     );
-    await tester.pump(kLongPressTimeout + const Duration(milliseconds: 20));
-    await gesture.moveTo(pointer);
     var targetIndex = -1;
-    for (var frame = 0; frame < 40 && targetIndex == -1; frame++) {
-      await tester.pump(const Duration(milliseconds: 100));
-      if (position.pixels < 150) continue;
-      for (var i = 1; i < ids.length; i++) {
-        final row = _folderCard(ids[i]);
-        if (row.evaluate().isNotEmpty &&
-            tester.getRect(row).contains(pointer)) {
-          targetIndex = i;
-          break;
+    var canDrop = false;
+    try {
+      await tester.pump(kLongPressTimeout + const Duration(milliseconds: 20));
+      await gesture.moveTo(pointer);
+      for (var frame = 0; frame < 40 && targetIndex == -1; frame++) {
+        await tester.pump(const Duration(milliseconds: 100));
+        if (position.pixels < 150) continue;
+        for (var i = 1; i < ids.length; i++) {
+          final row = _folderCard(ids[i]);
+          if (row.evaluate().isNotEmpty &&
+              tester.getRect(row).contains(pointer)) {
+            targetIndex = i;
+            break;
+          }
         }
       }
+      expect(
+        position.pixels,
+        greaterThanOrEqualTo(150),
+        reason:
+            'Holding still at the edge must move more than one scroll step.',
+      );
+      expect(targetIndex, greaterThan(0));
+      canDrop = true;
+    } finally {
+      if (canDrop) {
+        await gesture.up();
+      } else {
+        await gesture.cancel();
+      }
     }
-    expect(
-      position.pixels,
-      greaterThanOrEqualTo(150),
-      reason: 'Holding still at the edge must move more than one scroll step.',
-    );
-    expect(targetIndex, greaterThan(0));
-    await gesture.up();
     await tester.pumpAndSettle();
 
     final expected = ids.toList();
@@ -279,10 +328,11 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('视频拖动不播放或多选，重新打开后按新顺序播放并保留快速扫选', (tester) async {
-    await tester.binding.setSurfaceSize(const Size(360, 760));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final favorites = AppFavoritesService();
+  favoriteWidgetTest('视频拖动不播放或多选，重新打开后按新顺序播放并保留快速扫选', const Size(360, 760), (
+    tester,
+    createService,
+  ) async {
+    final favorites = createService();
     final folder = (await favorites.createFolder('主目录'))!;
     final other = (await favorites.createFolder('另一个目录'))!;
     await favorites.addItems(folder.id, [
@@ -298,7 +348,7 @@ void main() {
         MaterialApp(
           home: AppFavoriteDetailPage(
             folder: folder,
-            favoritesService: AppFavoritesService(),
+            favoritesService: createService(),
             bilibiliService: lookup,
           ),
           onGenerateRoute: (settings) {
