@@ -917,42 +917,9 @@ extension _PlayerDetailsView on _PlayerPageState {
     if (mid == null || mid <= 0) {
       return;
     }
-    final bool shouldResume = _playing;
-    _cancelNoteCaptureForExternalNavigation();
-    _clearAbRepeatForNavigation();
-    await _drainAbRepeatSeek();
-    if (!mounted) return;
-    if (shouldResume) {
-      await _playbackService.pause();
-    }
-    if (!mounted) {
-      return;
-    }
-    await _showStandardSystemUiForNestedRoute();
-    if (!mounted) {
-      return;
-    }
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        // 用户主页构建函数把 @ 文本去掉后作为初始昵称，随后由公开接口校正。
-        builder: (BuildContext context) => UserProfilePage(
-          mid: mid,
-          initialName: segment.text.replaceFirst('@', '').trim(),
-          publicContentService: _publicContentService,
-          videoService: _bilibiliService,
-          learningListService: _learningListService,
-          watchHistoryService: _watchHistoryService,
-        ),
-      ),
+    await _openOwnerProfile(
+      VideoAuthor(mid: mid, name: segment.text.replaceFirst('@', '').trim()),
     );
-    if (!mounted) {
-      return;
-    }
-    _resumePlayerSystemUiAfterNestedRoute();
-    await _restorePlaybackAfterNestedPlayer(shouldResume: shouldResume);
-    if (mounted && shouldResume && !_playing) {
-      await _playbackService.play();
-    }
   }
 
   /// 展示明确的离开应用风险说明，用户确认后才调用可注入的系统浏览器启动器。
