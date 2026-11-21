@@ -6,9 +6,6 @@ enum _PlayerSystemUiLayout { standard, landscapePlayer, fullscreen }
 /// 封装播放器方向策略、系统栏模式、移动端自动全屏和桌面窗口全屏。
 mixin _PlayerViewportCoordinator
     on State<PlayerPage>, _PlayerGestureCoordinator, _PlayerNotesWorkspace {
-  /// 由播放器状态提供当前运行平台，供窗口与移动端方向策略分流。
-  AppPlatform get _appPlatform;
-
   /// 由播放器状态提供控制层可见性，供桌面鼠标光标和窗口布局同步使用。
   @override
   bool get _showControls;
@@ -22,6 +19,7 @@ mixin _PlayerViewportCoordinator
 
   @override
   bool _fullscreen = false;
+  @override
   bool _controlsLocked = false;
   bool _fullscreenEnteredByOrientation = false;
   bool _suppressAutoFullscreenUntilPortrait = false;

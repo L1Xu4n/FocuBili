@@ -31,13 +31,62 @@ mixin _PlayerControlsCoordinator
   /// 根据当前真实播放状态向原生播放器发送播放或暂停命令。
   @override
   void _togglePlayback({bool showControls = true}) {
-    if (showControls) _showPlayerControls();
-    unawaited(_setPlaybackActive(!_playing));
+    if (showControls) {
+      _desktopTapRecognizer?.cancelPendingTap();
+      _showPlayerControls();
+    }
+    unawaited(
+      _setPlaybackActive(!_playing, preserveControlsOnPause: !showControls),
+    );
+  }
+
+  /// Mouse and keyboard transport reveal the controls, but never replace a
+  /// source/seek transition or interfere with a playback prompt.
+  bool _toggleDesktopPlayback() {
+    final snapshot = _playbackSnapshot;
+    final hasMedia = switch (snapshot.phase) {
+      PlaybackPhase.ready || PlaybackPhase.ended => true,
+      PlaybackPhase.loading => snapshot.duration > Duration.zero,
+      _ => false,
+    };
+    if (!hasMedia ||
+        _controlsLocked ||
+        _externalNavigationSuspended ||
+        _changingPlaybackSource ||
+        _pendingQualitySelection != null ||
+        snapshot.isInPictureInPicture ||
+        snapshot.isRestoringPosition ||
+        _partSelectorExpanded ||
+        _abRepeatEditorVisible ||
+        _interactivePromptVisible ||
+        _completionPromptVisible ||
+        _isDraggingProgress ||
+        _horizontalScrubbing) {
+      return false;
+    }
+    _desktopTapRecognizer?.cancelPendingTap();
+    _desktopSuppressedEdge = null;
+    _desktopControlsHover = _desktopPointerEdge != null;
+    _showPlayerControls();
+    // A buffering video can report isPlaying=false even though it will resume
+    // by itself. Space/click should pause that intent, not issue another play.
+    final shouldPlay =
+        snapshot.phase == PlaybackPhase.ended ||
+        !(snapshot.playRequested ?? snapshot.isPlaying);
+    unawaited(_setPlaybackActive(shouldPlay));
+    return true;
   }
 
   /// 执行原生播放或暂停命令，并把平台异常转换为页面可读的错误。
   @override
-  Future<void> _setPlaybackActive(bool shouldPlay) async {
+  Future<void> _setPlaybackActive(
+    bool shouldPlay, {
+    bool preserveControlsOnPause = false,
+  }) async {
+    _hiddenGesturePauseSource =
+        !shouldPlay && preserveControlsOnPause && !_showControls
+        ? _sourceGeneration
+        : null;
     if (!shouldPlay) {
       _cancelTemporaryLongPress();
       _stopPendingPlaybackNavigation();
@@ -418,22 +467,42 @@ mixin _PlayerControlsCoordinator
   bool _isDesktopRouteShortcut(LogicalKeyboardKey key) =>
       key == LogicalKeyboardKey.space || key == LogicalKeyboardKey.escape;
 
-  /// Space and Escape still work when a desktop click or a layout change
-  /// leaves focus on the route instead of inside the player's Focus widget.
-  KeyEventResult _handleDesktopPlayerShortcut(KeyEvent event) {
-    if (event is! KeyDownEvent ||
-        !_isDesktopRouteShortcut(event.logicalKey) ||
-        !mounted ||
-        _externalNavigationSuspended) {
-      return KeyEventResult.ignored;
-    }
+  bool _desktopShortcutRouteIsCurrent() {
+    if (!mounted || _externalNavigationSuspended) return false;
     final route = ModalRoute.of(context);
-    if (route?.isCurrent != true) return KeyEventResult.ignored;
+    if (route?.isCurrent != true) return false;
     final focusContext = FocusManager.instance.primaryFocus?.context;
     final focusRoute = focusContext == null
         ? null
         : ModalRoute.of(focusContext);
-    if (focusRoute != null && !identical(focusRoute, route)) {
+    return focusRoute == null || identical(focusRoute, route);
+  }
+
+  /// The notebook or A/B editor can explicitly handle Escape while editing
+  /// text, without letting the playback shortcut exit fullscreen.
+  KeyEventResult _handleDesktopEditorEscape(KeyEvent event) {
+    if (event is! KeyDownEvent ||
+        event.logicalKey != LogicalKeyboardKey.escape) {
+      return KeyEventResult.ignored;
+    }
+    final noteCanClose =
+        _notesOpen &&
+        !_notesParked &&
+        (_usesFloatingVideoNotes ||
+            _playerNotesLayout == _PlayerNotesLayout.workspace);
+    if ((!noteCanClose && !_abRepeatEditorVisible) ||
+        !_desktopShortcutRouteIsCurrent()) {
+      return KeyEventResult.ignored;
+    }
+    return _handlePlayerShortcut(event);
+  }
+
+  /// A route-level fallback after focused controls have had a chance to handle
+  /// Space/Escape (including dialogs and editable fields).
+  KeyEventResult _handleDesktopPlayerShortcut(KeyEvent event) {
+    if (event is! KeyDownEvent ||
+        !_isDesktopRouteShortcut(event.logicalKey) ||
+        !_desktopShortcutRouteIsCurrent()) {
       return KeyEventResult.ignored;
     }
     return _handlePlayerShortcut(event);
@@ -470,6 +539,11 @@ mixin _PlayerControlsCoordinator
     }
     if (_isTextEditingFocused()) return KeyEventResult.ignored;
     if (key == LogicalKeyboardKey.space) {
+      if (_appPlatform.isDesktop) {
+        return _toggleDesktopPlayback()
+            ? KeyEventResult.handled
+            : KeyEventResult.ignored;
+      }
       _togglePlayback();
       return KeyEventResult.handled;
     }

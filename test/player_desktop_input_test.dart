@@ -53,12 +53,19 @@ class _Playback extends FeedbackPlayback {
   final offsets = <Duration>[];
   final openedParts = <int>[];
 
-  void emit(bool playing) => controller.add(
+  void emit(
+    bool playing, {
+    bool? playRequested,
+    PlaybackPhase phase = PlaybackPhase.ready,
+    bool inPictureInPicture = false,
+  }) => controller.add(
     PlaybackSnapshot(
-      phase: PlaybackPhase.ready,
+      phase: phase,
       position: const Duration(seconds: 20),
       duration: _duration,
       isPlaying: playing,
+      playRequested: playRequested,
+      isInPictureInPicture: inPictureInPicture,
     ),
   );
 
@@ -386,7 +393,7 @@ void main() {
     AppPlatform.linux,
   ]) {
     testWidgets(
-      '${platform.name} mouse single toggles controls, double only fullscreen',
+      '${platform.name} mouse single toggles playback, double only fullscreen',
       (t) async {
         final playback = _Playback();
         final metadata = _Metadata();
@@ -395,32 +402,40 @@ void main() {
         addTearDown(mouse.removePointer);
 
         final center = t.getRect(_surface).center;
+        await t.pump(const Duration(seconds: 6));
+        expect(_controlOpacity(t), 0);
         await mouse.down(center);
         await mouse.up();
         await t.pump(const Duration(milliseconds: 150));
-        expect(_controlOpacity(t), 1);
-        expect(playback.commands, isEmpty);
-        await t.pump(const Duration(milliseconds: 160));
         expect(_controlOpacity(t), 0);
         expect(playback.commands, isEmpty);
+        await t.pump(const Duration(milliseconds: 160));
+        expect(_controlOpacity(t), 1);
+        expect(playback.commands, ['pause']);
+        await t.pump(const Duration(seconds: 6));
+        expect(_controlOpacity(t), 1);
+
         await mouse.down(center);
         await mouse.up();
         await t.pump(kDoubleTapTimeout);
         expect(_controlOpacity(t), 1);
-        expect(playback.commands, isEmpty);
+        expect(playback.commands, ['pause', 'play']);
+        await t.pump(const Duration(seconds: 6));
+        expect(_controlOpacity(t), 0);
 
         final side = t.getRect(_surface).topLeft + const Offset(80, 220);
         await mouse.down(side);
         await mouse.up();
         await t.pump(const Duration(milliseconds: 65));
-        expect(_controlOpacity(t), 1);
-        expect(playback.commands, isEmpty);
+        expect(_controlOpacity(t), 0);
+        expect(playback.commands, ['pause', 'play']);
         await mouse.down(side);
         await mouse.up();
         await t.pumpAndSettle();
+        await t.pump(kDoubleTapTimeout);
         expect(find.byTooltip('退出全屏'), findsOneWidget);
         expect(_controlOpacity(t), 1);
-        expect(playback.commands, isEmpty);
+        expect(playback.commands, ['pause', 'play']);
         expect(playback.seeks, isEmpty);
         expect(playback.offsets, isEmpty);
         expect(metadata.calls, isEmpty);
@@ -433,9 +448,10 @@ void main() {
         await mouse.down(fullscreenSide);
         await mouse.up();
         await t.pumpAndSettle();
+        await t.pump(kDoubleTapTimeout);
         expect(find.byTooltip('进入全屏'), findsOneWidget);
         expect(_controlOpacity(t), 1);
-        expect(playback.commands, isEmpty);
+        expect(playback.commands, ['pause', 'play']);
       },
     );
   }
@@ -507,6 +523,80 @@ void main() {
     },
   );
 
+  testWidgets(
+    'an interrupted surface click cannot fire after a covering modal closes',
+    (t) async {
+      final playback = _Playback();
+      await _mount(t, playback, _Metadata());
+      final center = t.getCenter(_surface);
+      final mouse = await _mouse(t, center);
+      addTearDown(mouse.removePointer);
+      await mouse.down(center);
+      await mouse.up();
+      await t.pump(const Duration(milliseconds: 25));
+
+      final context = t.element(_surface);
+      unawaited(
+        showDialog<void>(
+          context: context,
+          builder: (_) => const AlertDialog(title: Text('Covering player')),
+        ),
+      );
+      await t.pump();
+      expect(find.text('Covering player'), findsOneWidget);
+      await t.sendKeyEvent(LogicalKeyboardKey.space);
+      expect(playback.commands, isEmpty);
+      await t.sendKeyEvent(LogicalKeyboardKey.escape);
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 175));
+      expect(find.text('Covering player'), findsNothing);
+      await t.pump(kDoubleTapTimeout);
+      expect(playback.commands, isEmpty);
+
+      await mouse.down(center);
+      await mouse.up();
+      await t.pump(kDoubleTapTimeout);
+      expect(playback.commands, ['pause']);
+    },
+  );
+
+  testWidgets('fullscreen lock and PiP block desktop transport', (t) async {
+    final playback = _Playback();
+    await _mount(t, playback, _Metadata());
+    await t.tap(find.byTooltip('进入全屏'));
+    await t.pumpAndSettle();
+    final center = t.getCenter(_surface);
+    final mouse = await _mouse(t, center);
+    addTearDown(mouse.removePointer);
+    await mouse.down(center);
+    await mouse.up();
+    await t.pump(const Duration(milliseconds: 25));
+
+    await t.tap(find.byTooltip('锁定播放器'));
+    await t.pump(kDoubleTapTimeout);
+    expect(find.byTooltip('解锁播放器'), findsOneWidget);
+    await t.sendKeyEvent(LogicalKeyboardKey.space);
+    await mouse.down(center);
+    await mouse.up();
+    await t.pump(kDoubleTapTimeout);
+    expect(playback.commands, isEmpty);
+    expect(_controlOpacity(t), 0);
+    await t.sendKeyEvent(LogicalKeyboardKey.escape);
+    await t.pumpAndSettle();
+    expect(find.byTooltip('锁定播放器'), findsOneWidget);
+    expect(find.byTooltip('退出全屏'), findsOneWidget);
+
+    await mouse.down(center);
+    await mouse.up();
+    await t.pump(const Duration(milliseconds: 25));
+    playback.emit(true, inPictureInPicture: true);
+    await t.pumpAndSettle();
+    await t.sendKeyEvent(LogicalKeyboardKey.space);
+    await t.pump(kDoubleTapTimeout);
+    expect(playback.commands, isEmpty);
+    expect(_controlOpacity(t), 0);
+  });
+
   testWidgets('a hidden toolbar does not steal a bottom picture click', (
     t,
   ) async {
@@ -514,11 +604,8 @@ void main() {
     await _mount(t, playback, _Metadata());
     final mouse = await _mouse(t, t.getCenter(_surface));
     addTearDown(mouse.removePointer);
-    final center = t.getCenter(_surface);
     final bottom = t.getCenter(_slider);
-    await mouse.down(center);
-    await mouse.up();
-    await t.pump(kDoubleTapTimeout);
+    await t.pump(const Duration(seconds: 6));
     await t.pumpAndSettle();
     expect(_controlOpacity(t), 0);
     await mouse.down(bottom);
@@ -532,67 +619,92 @@ void main() {
     await t.pump(kDoubleTapTimeout);
     await t.pumpAndSettle();
     expect(_controlOpacity(t), 1);
-    expect(playback.commands, isEmpty);
+    expect(playback.commands, ['pause']);
     expect(playback.seeks, isEmpty);
   });
 
-  testWidgets(
-    'desktop top hover reveals and holds controls without overriding a manual hide',
-    (t) async {
-      final playback = _VisualPlayback();
-      await _mount(
-        t,
-        playback,
-        _Metadata(),
-        textScaler: TextScaler.linear(1.5),
-      );
-      final surface = t.getRect(_surface);
-      final picture = t.getRect(find.byKey(const Key('video-fit-contain')));
-      // This is a blank pixel in the toolbar padding, over the top letterbox.
-      final top = surface.topCenter + const Offset(-60, 1);
-      expect(top.dy, lessThan(picture.top));
-      final mouse = await _mouse(t, surface.center);
-      addTearDown(mouse.removePointer);
-      await t.pump(const Duration(seconds: 6));
-      await t.pumpAndSettle();
-      expect(_controlOpacity(t), 0);
+  testWidgets('desktop top hover reveals and holds controls while playing', (
+    t,
+  ) async {
+    final playback = _VisualPlayback();
+    await _mount(t, playback, _Metadata(), textScaler: TextScaler.linear(1.5));
+    final surface = t.getRect(_surface);
+    final picture = t.getRect(find.byKey(const Key('video-fit-contain')));
+    // This is a blank pixel in the toolbar padding, over the top letterbox.
+    final top = surface.topCenter + const Offset(-60, 1);
+    expect(top.dy, lessThan(picture.top));
+    final mouse = await _mouse(t, surface.center);
+    addTearDown(mouse.removePointer);
+    await t.pump(const Duration(seconds: 6));
+    await t.pumpAndSettle();
+    expect(_controlOpacity(t), 0);
 
-      await mouse.moveTo(top);
-      await t.pumpAndSettle();
-      expect(_controlOpacity(t), 1);
-      await t.pump(const Duration(seconds: 6));
-      expect(_controlOpacity(t), 1);
+    await mouse.moveTo(top);
+    await t.pumpAndSettle();
+    expect(_controlOpacity(t), 1);
+    await t.pump(const Duration(seconds: 6));
+    expect(_controlOpacity(t), 1);
+
+    for (final expected in ['pause', 'play']) {
       await mouse.down(top);
       await mouse.up();
       await t.pump(kDoubleTapTimeout);
       await t.pumpAndSettle();
-      expect(_controlOpacity(t), 0);
-      await mouse.moveBy(const Offset(6, 0));
-      await t.pumpAndSettle();
-      expect(
-        _controlOpacity(t),
-        0,
-        reason:
-            'small motion within the manually hidden hotspot must not reopen controls',
-      );
-      expect(playback.commands, isEmpty);
+      expect(playback.commands.last, expected);
+    }
+    await t.pump(const Duration(seconds: 6));
+    expect(_controlOpacity(t), 1, reason: 'stationary hover still holds');
+    await mouse.moveTo(surface.center);
+    await t.pump(const Duration(seconds: 6));
+    expect(_controlOpacity(t), 0);
+    expect(playback.commands, ['pause', 'play']);
+  });
 
-      await mouse.moveTo(surface.center);
-      await t.pumpAndSettle();
+  testWidgets(
+    'a backend pause reveals hidden desktop controls but buffering does not',
+    (t) async {
+      final playback = _Playback();
+      await _mount(t, playback, _Metadata());
+      await t.pump(const Duration(seconds: 6));
       expect(_controlOpacity(t), 0);
-      await mouse.moveTo(top);
+
+      playback.emit(false, playRequested: true, phase: PlaybackPhase.loading);
+      await t.pump();
+      expect(_controlOpacity(t), 0);
+      playback.emit(false, playRequested: false);
       await t.pumpAndSettle();
+      await t.pump(const Duration(seconds: 6));
       expect(_controlOpacity(t), 1);
-      await mouse.moveTo(surface.center);
+
+      playback.emit(true, playRequested: true);
+      await t.pumpAndSettle();
       await t.pump(const Duration(seconds: 6));
       expect(_controlOpacity(t), 0);
       expect(playback.commands, isEmpty);
     },
   );
 
+  testWidgets('a mouse click pauses the intent to play through buffering', (
+    t,
+  ) async {
+    final playback = _Playback();
+    await _mount(t, playback, _Metadata());
+    playback.emit(false, playRequested: true, phase: PlaybackPhase.loading);
+    await t.pump();
+
+    final center = t.getCenter(_surface);
+    final mouse = await _mouse(t, center);
+    addTearDown(mouse.removePointer);
+    await mouse.down(center);
+    await mouse.up();
+    await t.pump(kDoubleTapTimeout);
+    expect(playback.commands, ['pause']);
+    expect(_controlOpacity(t), 1);
+  });
+
   for (final platform in [AppPlatform.android, AppPlatform.ios]) {
     testWidgets(
-      '${platform.name} wide tablet single touch toggles controls without changing playback',
+      '${platform.name} wide tablet keeps touch tap, double-tap and swipe gestures',
       (t) async {
         final playback = _Playback();
         await _mount(
@@ -627,6 +739,26 @@ void main() {
         expect(_controlOpacity(t), 1);
         expect(playback.commands, isEmpty);
         expect(playback.offsets, isEmpty);
+
+        final side =
+            surface.topLeft + Offset(surface.width * .12, surface.height * .45);
+        await t.tapAt(side);
+        await t.pump(const Duration(milliseconds: 60));
+        await t.tapAt(side);
+        await t.pumpAndSettle();
+        expect(playback.offsets, [const Duration(seconds: -5)]);
+        expect(find.byTooltip('退出全屏'), findsNothing);
+        expect(playback.commands, isEmpty);
+
+        final finger = await t.startGesture(surface.center);
+        await finger.moveBy(Offset(surface.width * .16, 0));
+        await t.pump();
+        expect(find.textContaining('跳转至'), findsOneWidget);
+        expect(playback.seeks, isEmpty);
+        await finger.up();
+        await t.pumpAndSettle();
+        expect(playback.seeks, hasLength(1));
+        expect(playback.commands, isEmpty);
       },
     );
   }
@@ -771,10 +903,10 @@ void main() {
     await t.tapAt(side);
     await t.pump(kDoubleTapTimeout);
     await t.pumpAndSettle();
-    expect(playback.commands, isEmpty);
+    expect(playback.commands, ['pause']);
     expect(playback.offsets, isEmpty);
     expect(find.byTooltip('退出全屏'), findsNothing);
-    expect(_controlOpacity(t), 1); // Two independent single clicks.
+    expect(_controlOpacity(t), 0); // Separate, later touch toggles controls.
   });
 
   testWidgets(

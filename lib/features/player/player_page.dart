@@ -463,9 +463,9 @@ class _PlayerPageState extends State<PlayerPage>
     _initializePlayerNoteFlags();
     _appPlatform = widget.appPlatform ?? AppPlatformDetector.current;
     if (_appPlatform.isDesktop) {
-      FocusManager.instance.addEarlyKeyEventHandler(
-        _handleDesktopPlayerShortcut,
-      );
+      FocusManager.instance
+        ..addEarlyKeyEventHandler(_handleDesktopEditorEscape)
+        ..addLateKeyEventHandler(_handleDesktopPlayerShortcut);
     }
     _problemDiagnosticsService = ProblemDiagnosticsService();
     _playbackPreferencesService =
@@ -504,6 +504,9 @@ class _PlayerPageState extends State<PlayerPage>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    if (_appPlatform.isDesktop && ModalRoute.isCurrentOf(context) == false) {
+      _desktopTapRecognizer?.cancelPendingTap();
+    }
     _restoreNotesForInlineLayout();
     _bindFocusController(
       widget.focusTimerController ?? FocusTimerScope.maybeOf(context),
@@ -521,9 +524,11 @@ class _PlayerPageState extends State<PlayerPage>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _handleAbRepeatLifecycle(state);
-    if (state != AppLifecycleState.resumed) _cancelTemporaryLongPress();
     if (state == AppLifecycleState.resumed) {
       unawaited(_loadCurrentVideoNotes());
+    } else {
+      _desktopTapRecognizer?.cancelPendingTap();
+      _cancelTemporaryLongPress();
     }
   }
 
@@ -555,9 +560,9 @@ class _PlayerPageState extends State<PlayerPage>
   @override
   void dispose() {
     if (_appPlatform.isDesktop) {
-      FocusManager.instance.removeEarlyKeyEventHandler(
-        _handleDesktopPlayerShortcut,
-      );
+      FocusManager.instance
+        ..removeEarlyKeyEventHandler(_handleDesktopEditorEscape)
+        ..removeLateKeyEventHandler(_handleDesktopPlayerShortcut);
     }
     _tagSession.dispose();
     _playerToolsSession?.closeAfterOwnerDisposed();

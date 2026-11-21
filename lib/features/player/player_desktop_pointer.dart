@@ -41,7 +41,7 @@ extension _PlayerDesktopPointer on _PlayerPageState {
       _desktopTapRecognizer = recognizer;
       recognizer
         ..onSingleTap = () {
-          if (current()) _toggleControls();
+          if (current()) _toggleDesktopPlayback();
         }
         ..onDoubleTap = () {
           if (current()) unawaited(_toggleFullscreen());
