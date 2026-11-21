@@ -1,8 +1,9 @@
 """One-time build-32 correction from the ordinary exact-SHA publisher.
 
-Only the original release ID and the six pinned public assets can be archived.
-The remote tag is compare-and-swapped only after a verified draft and archive
-exist. No asset is removed or overwritten. Rerun the same Actions run to resume.
+The original release must have no assets: its owner removed the old packages.
+Preserve its notes and exact tagged source, never recreate any removed files.
+The canonical tag moves only after a verified draft and source archive exist.
+Rerun the same Actions run to resume.
 """
 import hashlib
 import json
@@ -69,13 +70,16 @@ def api(path, payload=None, method="GET"):
     return json.loads(command(*args, "--input", "-", input=json.dumps(payload)))
 
 
+def normalized_notes(notes):
+    require(isinstance(notes, str), "Missing release notes")
+    # GitHub's web editor may turn only LF into CRLF on a maintainer's save.
+    return notes.replace("\r\n", "\n").strip()
+
+
 def archive_body(notes):
-    hashes = "\n".join(f"{sha.removeprefix('sha256:')}  {name}"
-                       for name, (_, sha) in sorted(OLD_ASSETS.items()))
-    return (f"> 此版本为归档，保留原构建 `2038` 供核对；"
-            f"请优先下载 [正式版 v1.9.0](https://github.com/{REPO}/releases/tag/{TAG})。\n\n"
-            f"原始源码：`{OLD_SHA}`；原始 annotated tag 对象：`{OLD_TAG}`。\n\n"
-            f"原始安装包 SHA-256：\n\n```text\n{hashes}\n```\n\n---\n\n{notes}")
+    return (f"> 此归档仅保留原构建 `2038` 的源码和发布说明；原安装包已由维护者移除。"
+            f"请下载 [正式版 v1.9.0](https://github.com/{REPO}/releases/tag/{TAG})。\n\n"
+            f"原始源码：`{OLD_SHA}`；原始 annotated tag 对象：`{OLD_TAG}`。\n\n---\n\n{notes}")
 
 
 def assets(release):
@@ -126,18 +130,12 @@ class Github:
                                   "-H", f"Content-Length: {path.stat().st_size}", "--input", str(path)))
 
     def verify_bytes(self, release, asset):
+        require(release.get("draft") is True, "Can only verify corrected draft assets")
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "asset"
-            if release["draft"]:
-                with path.open("wb") as out:
-                    subprocess.run(["gh", "api", f"repos/{REPO}/releases/assets/{asset['id']}",
-                                    "-H", "Accept: application/octet-stream"], stdout=out, check=True)
-            else:
-                url = (f"https://github.com/{REPO}/releases/download/"
-                       f"{release['tag_name']}/{asset['name']}")
-                require(asset.get("browser_download_url") == url, "Unexpected public download URL")
-                command("curl", "--fail", "--location", "--retry", "2",
-                        "--output", str(path), url)
+            with path.open("wb") as out:
+                subprocess.run(["gh", "api", f"repos/{REPO}/releases/assets/{asset['id']}",
+                                "-H", "Accept: application/octet-stream"], stdout=out, check=True)
             require(path.stat().st_size == asset["size"] and digest(path) == asset["digest"],
                     f"Downloaded bytes do not match: {asset['name']}")
 
@@ -181,10 +179,10 @@ def correct(gh, head, new_tag, notes, old_notes, packages, evidence):
                 # pins the commit when the destination tag already exists.
                 and old.get("target_commitish") in (("master", OLD_SHA) if archived else ("master",))
                 and old.get("name") == (ARCHIVE_TITLE if archived else TITLE)
-                and old.get("body", "").strip() == (archive_body(old_notes) if archived else old_notes).strip(),
+                and normalized_notes(old.get("body")) == normalized_notes(archive_body(old_notes) if archived else old_notes),
                 "Original release metadata does not match expected build-2038 state")
-        require({name: (a["id"], a["digest"]) for name, a in assets(old).items()} == OLD_ASSETS,
-                "Original release package IDs or digests changed")
+        require(old.get("assets") == [],
+                "Owner-cleared original release must contain no assets; refusing changed inventory")
         return old, archived
 
     def corrected_release(release, *, name, draft, complete):
@@ -193,11 +191,13 @@ def correct(gh, head, new_tag, notes, old_notes, packages, evidence):
                 and release.get("prerelease") is False
                 and release.get("tag_name") == name
                 and release.get("target_commitish") == head
-                and release.get("name") == TITLE and release.get("body", "").strip() == notes.strip(),
+                and release.get("name") == TITLE and normalized_notes(release.get("body")) == normalized_notes(notes),
                 "Corrected release is not the verified draft or final release")
         current = assets(release)
         require(current.keys() <= expected.keys() and (not complete or current.keys() == expected.keys())
-                and all((a["size"], a["digest"]) == expected[name] for name, a in current.items()),
+                and all((a["size"], a["digest"]) == expected[name]
+                        and a["id"] not in {asset_id for asset_id, _ in OLD_ASSETS.values()}
+                        for name, a in current.items()),
                 "Staged package inventory, size, or digest mismatch")
         return current
 
@@ -228,10 +228,6 @@ def correct(gh, head, new_tag, notes, old_notes, packages, evidence):
 
     if not archived:
         require(gh.latest() == OLD_ID, "Another release became latest; refusing to replace latest")
-
-    # Verify all public original bytes before creating or altering remote state.
-    for asset in assets(old).values():
-        gh.verify_bytes(old, asset)
 
     if canonical_draft is not None:
         staged = canonical_draft
@@ -266,16 +262,8 @@ def correct(gh, head, new_tag, notes, old_notes, packages, evidence):
                           "prerelease": True, "make_latest": "false"})
     old_after, archived = old_release()
     require(archived and gh.latest() != OLD_ID, "Original release did not become a non-latest archive")
-    require({name: (a["size"], a.get("label"), a.get("content_type"))
-             for name, a in assets(old_after).items()}
-            == {name: (a["size"], a.get("label"), a.get("content_type"))
-                for name, a in assets(old).items()}, "Original package metadata changed")
     record("archived-release.json", old_after)
-    print(f"Preserved the old release and annotated source at {ARCHIVE}", flush=True)
-    # Exercise the archive URLs themselves before changing what the public tag points to.
-    if old["tag_name"] != ARCHIVE:
-        for asset in assets(old_after).values():
-            gh.verify_bytes(old_after, asset)
+    print(f"Preserved the owner-cleared release and annotated source at {ARCHIVE}", flush=True)
 
     require(read_refs() == (canonical, OLD_TAG), "Remote refs changed during archive verification")
     if canonical == OLD_TAG:
@@ -288,7 +276,8 @@ def correct(gh, head, new_tag, notes, old_notes, packages, evidence):
     canonical_draft = gh.release(staged["id"])
     corrected_release(canonical_draft, name=TAG, draft=True, complete=True)
     record("canonical-draft.json", canonical_draft)
-    require(read_refs() == (new_tag, OLD_TAG), "Tag changed before publishing verified draft")
+    require(read_refs() == (new_tag, OLD_TAG) and old_release()[1],
+            "Tag or owner-cleared archive changed before publishing verified draft")
     gh.patch(staged["id"], {"draft": False, "prerelease": False, "make_latest": "true"})
     done = gh.release(staged["id"])
     corrected_release(done, name=TAG, draft=False, complete=True)
@@ -327,7 +316,7 @@ def main():
                   f"{timestamp} +0000\n\n{TITLE}\n")
     notes_file = "docs/RELEASE_NOTES_v1.9.0.md"
     old_notes = git("show", f"{OLD_SHA}:{notes_file}")
-    require(hashlib.sha256(old_notes.strip().encode("utf-8")).hexdigest() == OLD_NOTES_SHA256,
+    require(hashlib.sha256(normalized_notes(old_notes).encode("utf-8")).hexdigest() == OLD_NOTES_SHA256,
             "Pinned original notes do not match the original public release")
     notes = Path(notes_file).read_text(encoding="utf-8")
     require("构建号 `2038`" in old_notes and "构建号 `32`" in notes, "Build notes do not match correction")
