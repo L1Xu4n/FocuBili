@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       source_sha:
-        description: Full reviewed commit on dev/master; pubspec must commit a build code above every published APK
+        description: Full reviewed commit on dev/master; pubspec focubili_beta_build_number must exceed every published preview APK code
         required: true
         type: string
       beta_number:

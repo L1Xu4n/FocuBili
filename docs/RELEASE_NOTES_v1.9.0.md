@@ -20,7 +20,7 @@
 
 | 平台 | 安装包 | 注意事项 |
 | --- | --- | --- |
-| Android | `FocuBili-v1.9.0-android.apk` | 正式包 `com.focubili.app`，构建号 `2038`。更新旧正式版请覆盖安装，不要先卸载；Beta 预览包可并存，数据不会自动跨包迁移。 |
+| Android | `FocuBili-v1.9.0-android.apk` | 正式包 `com.focubili.app`，构建号 `32`。从构建号 31 或更低的正式版升级时请覆盖安装，不要先卸载；Beta 预览包可并存，数据不会自动跨包迁移。 |
 | Windows x64 安装版 | `FocuBili-v1.9.0-windows-x64-setup.exe` | 未做商业代码签名。 |
 | Windows x64 便携版 | `FocuBili-v1.9.0-windows-x64-portable.zip` | 完整解压后运行，不要只复制 EXE。 |
 | macOS | `FocuBili-v1.9.0-macos-universal.dmg` | ad-hoc 签名，未公证。 |

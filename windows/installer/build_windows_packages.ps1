@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
-    [string]$InnoCompilerPath = ''
+    [string]$InnoCompilerPath = '',
+    [ValidateRange(2026, 65535)]
+    [int]$BetaBuildNumber
 )
 
 Set-StrictMode -Version Latest
@@ -178,6 +180,9 @@ if (-not (Test-Path -LiteralPath (Join-Path $releaseDirectory 'FocuBili.exe') -P
 }
 
 $versionInfo = Get-FocuBiliVersion -PubspecPath $pubspecPath
+if ($PSBoundParameters.ContainsKey('BetaBuildNumber')) {
+    $versionInfo.Build = "$BetaBuildNumber"
+}
 $portableName = "FocuBili-v$($versionInfo.Version)-windows-x64-portable"
 $portableDirectory = Join-Path $outputDirectory $portableName
 $portableArchive = Join-Path $outputDirectory "$portableName.zip"
