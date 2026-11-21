@@ -501,78 +501,76 @@ void main() {
   });
 
   for (final (kind, platform, _) in pointerLayouts) {
-    testWidgets(
-      '${platform.name} ${kind.name} edge drag scrolls both ways',
-      (tester) async {
-        await tester.binding.setSurfaceSize(
-          platform == TargetPlatform.windows
-              ? const Size(900, 600)
-              : const Size(320, 560),
-        );
-        addTearDown(() => tester.binding.setSurfaceSize(null));
-        final s = await service();
-        await open(tester, s, count: 60);
-        final Finder list = find.byKey(const Key('learning-part-options'));
-        final ScrollController controller = tester
-            .widget<ListView>(list)
-            .controller!;
-        final Rect viewport = tester.getRect(list);
-        final point = tester.getCenter(optionCheckbox(2));
+    final description =
+        '${platform.name} ${kind.name} edge drag scrolls both ways';
+    testWidgets(description, (tester) async {
+      await tester.binding.setSurfaceSize(
+        platform == TargetPlatform.windows
+            ? const Size(900, 600)
+            : const Size(320, 560),
+      );
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final s = await service();
+      await open(tester, s, count: 60);
+      final Finder list = find.byKey(const Key('learning-part-options'));
+      final ScrollController controller = tester
+          .widget<ListView>(list)
+          .controller!;
+      final Rect viewport = tester.getRect(list);
+      final point = tester.getCenter(optionCheckbox(2));
 
-        // A quick swipe on a checkbox is scrolling, not a selection gesture.
-        if (kind == PointerDeviceKind.touch) {
-          await tester.dragFrom(point, const Offset(0, -180), kind: kind);
-          await tester.pumpAndSettle();
-          expect(controller.offset, greaterThan(0));
-          controller.jumpTo(0);
-          await tester.pumpAndSettle();
-          expect(checked(tester, 2), isFalse);
-        } else {
-          final quick = await tester.startGesture(point, kind: kind);
-          await quick.moveBy(const Offset(0, -120));
-          await quick.up();
-          await tester.pumpAndSettle();
-          expect(checked(tester, 2), isFalse);
-        }
-
-        final down = await longPressCheckbox(tester, 2, kind);
-        await down.moveTo(Offset(point.dx, viewport.bottom - 2));
-        for (var frame = 0; frame < 65; frame++) {
-          await tester.pump(const Duration(milliseconds: 16));
-        }
-        expect(controller.offset, greaterThan(650));
-        expect(optionCheckbox(2), findsNothing);
-        final capped = [
-          for (var p = 3; p <= 60; p++)
-            if (optionCheckbox(p).hitTestable().evaluate().isNotEmpty &&
-                checked(tester, p))
-              p,
-        ];
-        expect(capped.last, greaterThanOrEqualTo(15));
-        await down.up();
+      // A quick swipe on a checkbox is scrolling, not a selection gesture.
+      if (kind == PointerDeviceKind.touch) {
+        await tester.dragFrom(point, const Offset(0, -180), kind: kind);
         await tester.pumpAndSettle();
-        final double bottom = controller.offset;
-
-        final up = await longPressCheckbox(tester, capped.first, kind);
-        await up.moveTo(Offset(point.dx, viewport.top + 2));
-        for (var frame = 0; frame < 35; frame++) {
-          await tester.pump(const Duration(milliseconds: 16));
-        }
-        expect(controller.offset, lessThan(bottom - 300));
-        expect(checked(tester, 10), isFalse);
-        await up.cancel();
-        await tester.pump();
-        final double canceled = controller.offset;
-        await tester.pump(const Duration(milliseconds: 300));
-        expect(controller.offset, canceled);
-        expect(tester.takeException(), isNull);
-
-        await tester.tap(find.widgetWithText(TextButton, '取消'));
+        expect(controller.offset, greaterThan(0));
+        controller.jumpTo(0);
         await tester.pumpAndSettle();
-        expect(await s.loadEntries(), isEmpty);
-      },
-      variant: TargetPlatformVariant({platform}),
-    );
+        expect(checked(tester, 2), isFalse);
+      } else {
+        final quick = await tester.startGesture(point, kind: kind);
+        await quick.moveBy(const Offset(0, -120));
+        await quick.up();
+        await tester.pumpAndSettle();
+        expect(checked(tester, 2), isFalse);
+      }
+
+      final down = await longPressCheckbox(tester, 2, kind);
+      await down.moveTo(Offset(point.dx, viewport.bottom - 2));
+      for (var frame = 0; frame < 65; frame++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(controller.offset, greaterThan(650));
+      expect(optionCheckbox(2), findsNothing);
+      final capped = [
+        for (var p = 3; p <= 60; p++)
+          if (optionCheckbox(p).hitTestable().evaluate().isNotEmpty &&
+              checked(tester, p))
+            p,
+      ];
+      expect(capped.last, greaterThanOrEqualTo(15));
+      await down.up();
+      await tester.pumpAndSettle();
+      final double bottom = controller.offset;
+
+      final up = await longPressCheckbox(tester, capped.first, kind);
+      await up.moveTo(Offset(point.dx, viewport.top + 2));
+      for (var frame = 0; frame < 35; frame++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(controller.offset, lessThan(bottom - 300));
+      expect(checked(tester, 10), isFalse);
+      await up.cancel();
+      await tester.pump();
+      final double canceled = controller.offset;
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(controller.offset, canceled);
+      expect(tester.takeException(), isNull);
+
+      await tester.tap(find.widgetWithText(TextButton, '取消'));
+      await tester.pumpAndSettle();
+      expect(await s.loadEntries(), isEmpty);
+    }, variant: TargetPlatformVariant({platform}));
   }
 
   test(
