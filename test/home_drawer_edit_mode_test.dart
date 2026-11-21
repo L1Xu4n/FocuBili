@@ -127,6 +127,15 @@ Future<void> _settle(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
+Finder _railAction(Finder child) => find.ancestor(
+  of: child,
+  matching: find.byWidgetPredicate((widget) => widget is InkResponse),
+);
+
+Finder _subscriptionRailAction() => _railAction(
+  find.byKey(const Key('workspace-navigation-open-subscription')),
+);
+
 Future<void> _tap(WidgetTester tester, Finder finder) async {
   if (finder.evaluate().isEmpty) {
     await tester.scrollUntilVisible(
@@ -619,9 +628,7 @@ void main() {
       useMainShell: true,
       subscriptions: subscriptions,
     );
-    final shortcut = find.byKey(
-      const Key('workspace-navigation-open-subscription'),
-    );
+    final shortcut = _subscriptionRailAction();
     final rail = find.byKey(const Key('workspace-navigation-rail'));
     final open = find.byKey(const Key('desktop-dock-open'));
     final close = find.byKey(const Key('desktop-dock-collapse'));
@@ -743,9 +750,7 @@ void main() {
       final search = find.byKey(const Key('home-start-search'));
       final restore = find.byKey(const Key('home-restore-drawer'));
       final about = find.byKey(const Key('workspace-navigation-open-about'));
-      final subscription = find.byKey(
-        const Key('workspace-navigation-open-subscription'),
-      );
+      final subscription = _subscriptionRailAction();
       final unread = find.descendant(
         of: subscription,
         matching: find.byType(Badge),
@@ -781,6 +786,15 @@ void main() {
       expect(find.descendant(of: rail, matching: subscription), findsOneWidget);
       expect(subscriptionLabel, findsOneWidget);
       expect(subscriptionIcon, findsOneWidget);
+      final searchDestination = _railAction(
+        find.descendant(of: rail, matching: find.text('搜索')),
+      );
+      final subscriptionInk = tester.widget<InkResponse>(subscription);
+      final searchInk = tester.widget<InkResponse>(searchDestination);
+      expect(subscriptionInk.runtimeType, searchInk.runtimeType);
+      expect(subscriptionInk.hoverColor, searchInk.hoverColor);
+      expect(subscriptionInk.borderRadius, searchInk.borderRadius);
+      expect(subscriptionInk.customBorder, searchInk.customBorder);
       expect(
         tester.getCenter(subscriptionIcon).dx,
         closeTo(tester.getCenter(profileIcon).dx, 1),
@@ -879,8 +893,26 @@ void main() {
 
       await _tap(tester, search);
       expect(find.byKey(const Key('search-workspace-layout')), findsOneWidget);
-      expect(subscription, findsNothing);
+      expect(subscription.hitTestable(), findsOneWidget);
       expect(about, findsOneWidget);
+
+      await _tap(tester, profile);
+      final profilePage = find.byKey(const Key('profile-workspace-layout'));
+      expect(profilePage, findsOneWidget);
+      expect(subscription.hitTestable(), findsOneWidget);
+      await _tap(tester, subscription);
+      expect(find.byType(SubscriptionUpdatesPage), findsOneWidget);
+      expect(await tester.binding.handlePopRoute(), isTrue);
+      await _settle(tester);
+      expect(profilePage, findsOneWidget);
+      expect(subscription.hitTestable(), findsOneWidget);
+
+      await subscriptions.setEnabled(false);
+      await _settle(tester);
+      expect(subscription, findsNothing);
+      await subscriptions.setEnabled(true);
+      await _settle(tester);
+      expect(subscription.hitTestable(), findsOneWidget);
       await _tap(tester, find.descendant(of: rail, matching: find.text('首页')));
       expect(subscription, findsOneWidget);
 
