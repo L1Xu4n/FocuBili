@@ -44,7 +44,7 @@ void main() {
     );
   });
 
-  /// 检查发布只响应明确的最终提交，并创建注释标签和三种公开资产。
+  /// 检查发布只响应明确的最终提交，并创建注释标签和六种公开资产。
   test('发布工作流受提交信息保护并排除 MSIX', () {
     final String workflow = File(
       '.github/workflows/publish-release.yml',
@@ -58,11 +58,27 @@ void main() {
     );
     expect(workflow, contains('git tag -a'));
     expect(workflow, contains('gh release create'));
-    expect(workflow, contains('FocuBili-v\${VERSION}-android.apk'));
-    expect(workflow, contains('windows-x64-setup.exe'));
-    expect(workflow, contains('windows-x64-portable.zip'));
-    expect(workflow, contains('macos-universal.dmg'));
-    expect(workflow, contains('FocuBili-v\${VERSION}-ios-unsigned.ipa'));
+    expect(
+      workflow,
+      contains(r'FULL_VERSION: ${{ steps.release.outputs.full_version }}'),
+    );
+    expect(workflow, contains(r'test "${FULL_VERSION%+*}" = "$VERSION"'));
+    expect(
+      workflow,
+      contains(
+        r'prefix="$(python3 tool/release_asset_names.py "$FULL_VERSION")"',
+      ),
+    );
+    for (final suffix in <String>[
+      'android.apk',
+      'windows-x64-setup.exe',
+      'windows-x64-portable.zip',
+      'macos-universal.dmg',
+      'ios-unsigned.ipa',
+      'linux-amd64.deb',
+    ]) {
+      expect(workflow, contains('release/\${prefix}-$suffix'));
+    }
     expect(
       workflow,
       contains(
@@ -73,8 +89,22 @@ void main() {
       workflow,
       contains(r'test "$(find release -maxdepth 1 -type f | wc -l)" -eq 6'),
     );
-    expect(workflow, contains('linux-amd64.deb'));
     expect(workflow, contains("run['headSha'] == os.environ['GITHUB_SHA']"));
     expect(workflow.toLowerCase(), isNot(contains('.msix')));
+  });
+
+  test('正式包使用真实构建号，但 v1.9.0+32 保持原文件名', () {
+    final String naming = File(
+      'tool/release_asset_names.py',
+    ).readAsStringSync();
+    expect(naming, contains('prefix = f"FocuBili-v{version}"'));
+    expect(
+      naming,
+      contains(
+        'if not beta and (version, build) == ("1.9.0", 32):\n'
+        '        return prefix',
+      ),
+    );
+    expect(naming, contains('return f"{prefix}-build{build}"'));
   });
 }
