@@ -11,6 +11,7 @@ import 'course_cache_access.dart';
 import 'course_cache_library.dart';
 import 'download_control.dart';
 import 'download_notification_service.dart';
+import 'offline_cache_locations.dart';
 import 'offline_video_service.dart';
 
 /// Owns durable FIFO tasks independently of player and library page lifetimes.
@@ -80,14 +81,34 @@ class OfflineDownloadQueue extends ChangeNotifier {
     }
   }
 
-  Future<CourseCacheEntry?> courseEntry(
+  OfflineCacheLocations _locationsFor(bool isCourse) =>
+      isCourse ? courses.cacheLocations : library.cacheLocations;
+
+  Future<bool> _locationAvailable(OfflineDownloadTask task) async {
+    final id = task.cacheLocationId;
+    if (id == null) return true;
+    try {
+      await _locationsFor(task.courseMid != null).requireRoot(id);
+      return true;
+    } on OfflineCacheLocationUnavailable {
+      return false;
+    }
+  }
+
+  Future<CourseCacheEntry?> courseEntry(VideoPreview video, VideoPart part) =>
+      _findCourseEntry(video, part, requireMedia: true);
+
+  Future<CourseCacheEntry?> _findCourseEntry(
     VideoPreview video,
-    VideoPart part,
-  ) async {
+    VideoPart part, {
+    required bool requireMedia,
+  }) async {
     final found = await courses.entries();
     final id =
         '${video.courseSeasonId}-${part.courseEpisodeId}-${part.courseAid}-${part.cid}';
-    return found.where((entry) => entry.id == id && entry.hasMedia).firstOrNull;
+    return found
+        .where((entry) => entry.id == id && (!requireMedia || entry.hasMedia))
+        .firstOrNull;
   }
 
   final OfflineVideoPreferencesLoader _preferencesLoader;
@@ -154,7 +175,9 @@ class OfflineDownloadQueue extends ChangeNotifier {
           ready = completed
               .where(
                 (file) =>
-                    file.bvid == task.video.bvid && file.cid == task.part.cid,
+                    file.bvid == task.video.bvid &&
+                    file.cid == task.part.cid &&
+                    file.cacheLocationId == task.cacheLocationId,
               )
               .firstOrNull
               ?.sizeBytes;
@@ -172,12 +195,14 @@ class OfflineDownloadQueue extends ChangeNotifier {
                 (file) =>
                     file.id == task.courseEntryId &&
                     file.mid == task.courseMid &&
+                    file.cacheLocationId == task.cacheLocationId &&
                     file.hasMedia,
               )
               .firstOrNull;
           ready = entry == null ? null : entry.videoBytes + entry.audioBytes;
         }
         if (task.status == DownloadTaskStatus.completed && ready == null) {
+          if (!await _locationAvailable(task)) _tasks.add(task);
           continue;
         }
         _tasks.add(
@@ -260,25 +285,61 @@ class OfflineDownloadQueue extends ChangeNotifier {
     if (video.isCourse && _courseMid == null) {
       throw const OfflineVideoException('请登录购买课程的账号后再下载。');
     }
+    final mid = video.isCourse ? _courseMid : null;
+    final taskId = mid == null
+        ? '${video.bvid}:${target.cid}'
+        : 'course:$mid:${video.courseSeasonId}-${target.courseEpisodeId}-${target.courseAid}-${target.cid}';
+    final existing = _find(taskId);
+    if (existing != null && existing.status != DownloadTaskStatus.completed) {
+      return existing;
+    }
+    final CourseCacheEntry? existingCourse;
+    if (mid != null) {
+      existingCourse = await _findCourseEntry(
+        video,
+        target,
+        requireMedia: false,
+      );
+      // Keep previous receipts and server deadlines at their original location.
+      if (existing != null &&
+          !revalidateCourse &&
+          ((existingCourse?.mid == mid && existingCourse!.hasMedia) ||
+              !await _locationAvailable(existing))) {
+        return existing;
+      }
+    } else {
+      existingCourse = null;
+      if (existing != null &&
+          (await library.isDownloaded(video.bvid, cid: target.cid) ||
+              !await _locationAvailable(existing))) {
+        return existing;
+      }
+    }
+    final String? locationId;
+    if (existingCourse != null) {
+      locationId = existingCourse.cacheLocationId;
+    } else if (mid != null && existing != null) {
+      locationId = existing.cacheLocationId;
+    } else {
+      locationId = await _locationsFor(mid != null).activeId();
+    }
     final task = OfflineDownloadTask(
       video: video,
       part: target,
       quality: quality,
       createdAt: DateTime.now(),
-      courseMid: video.isCourse ? _courseMid : null,
+      courseMid: mid,
+      cacheLocationId: locationId,
     );
-    if (video.isCourse) OfflineDownloadTask.fromJson(task.toJson());
-    final existing = _find(task.id);
-    if (existing != null) {
-      if (existing.status != DownloadTaskStatus.completed ||
-          (video.isCourse
-              ? !revalidateCourse &&
-                    (await courseEntry(video, target))?.mid == task.courseMid
-              : await library.isDownloaded(video.bvid, cid: target.cid))) {
-        return existing;
+    if (mid != null) {
+      OfflineDownloadTask.fromJson(task.toJson());
+      if (_courseMid != mid ||
+          (expectedAccountRevision != null &&
+              expectedAccountRevision != CacheLifecycle.account.value)) {
+        throw const OfflineVideoException('登录账号已变化，请重新选择下载。');
       }
-      _tasks.remove(existing);
     }
+    if (existing != null) _tasks.remove(existing);
     _tasks.add(task);
     try {
       await _save();
@@ -355,14 +416,21 @@ class OfflineDownloadQueue extends ChangeNotifier {
       _control?.interrupt();
       await _running;
     }
-    if (task.courseMid == null) {
-      await library.discardPartial(
-        task.video.bvid,
-        task.part.cid,
-        task.quality,
-      );
-    } else if (task.status != DownloadTaskStatus.completed) {
-      await courses.discardPartial(task.courseMid!, task.courseEntryId);
+    if (task.status != DownloadTaskStatus.completed) {
+      if (task.courseMid == null) {
+        await library.discardPartial(
+          task.video.bvid,
+          task.part.cid,
+          task.quality,
+          cacheLocationId: task.cacheLocationId,
+        );
+      } else {
+        await courses.discardPartial(
+          task.courseMid!,
+          task.courseEntryId,
+          cacheLocationId: task.cacheLocationId,
+        );
+      }
     }
     final index = _tasks.indexWhere((e) => e.id == id);
     final removed = _tasks.removeAt(index);
@@ -386,12 +454,16 @@ class OfflineDownloadQueue extends ChangeNotifier {
           .map((file) => 'course:${file.mid}:${file.id}'),
     );
     final before = List<OfflineDownloadTask>.of(_tasks);
-    _tasks.removeWhere(
-      (task) =>
-          _visible(task) &&
+    final removed = <String>{};
+    for (final task in before) {
+      if (_visible(task) &&
           task.status == DownloadTaskStatus.completed &&
-          !ready.contains(task.id),
-    );
+          !ready.contains(task.id) &&
+          await _locationAvailable(task)) {
+        removed.add(task.id);
+      }
+    }
+    _tasks.removeWhere((task) => removed.contains(task.id));
     if (_tasks.length == before.length) return;
     try {
       await _save();
@@ -527,6 +599,7 @@ class OfflineDownloadQueue extends ChangeNotifier {
             quality: task.quality,
             control: control,
             expectedMid: task.courseMid!,
+            cacheLocationId: task.cacheLocationId,
           );
           control.check();
           final file = await courseEntry(task.video, task.part);
@@ -543,6 +616,7 @@ class OfflineDownloadQueue extends ChangeNotifier {
           part: task.part,
           quality: task.quality,
           control: control,
+          cacheLocationId: task.cacheLocationId,
           onProgress: (received, total) =>
               _onProgress(task.id, received, total),
         );
@@ -568,6 +642,7 @@ class OfflineDownloadQueue extends ChangeNotifier {
             status: DownloadTaskStatus.failed,
             error: switch (error) {
               OfflineVideoException() => error.message,
+              OfflineCacheLocationException() => error.message,
               CourseCacheFailure() => error.message,
               CourseCacheAccessException() => error.message,
               _ => '下载失败，请检查网络后重试。',

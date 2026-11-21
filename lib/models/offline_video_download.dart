@@ -5,7 +5,7 @@ enum OfflineDownloadStatus { downloading, ready, failed }
 
 /// 表示一条已下载到本机的离线视频，支持直接播放、删除和统计占用空间。
 ///
-/// 下载文件保存在应用私有目录，卸载应用或清理数据时会随应用一起移除；
+/// 默认下载到应用目录；桌面也可使用用户选定的专用子目录。
 /// 离线缓存不写入 B 站账号，也不影响原视频的在线播放。
 class OfflineVideoDownload {
   /// 创建一条不可变的离线视频记录。
@@ -26,6 +26,7 @@ class OfflineVideoDownload {
     this.parts = const [],
     this.audioFilePath,
     this.audioSizeBytes = 0,
+    this.cacheLocationId,
   });
 
   /// 视频 BV 号。
@@ -45,6 +46,9 @@ class OfflineVideoDownload {
 
   /// 本地视频文件的绝对路径。
   final String filePath;
+
+  /// 空值表示原有系统默认目录；自定义路径只通过本机目录设置解析。
+  final String? cacheLocationId;
 
   /// DASH 缓存的独立音频文件；旧版合并文件没有该字段。
   final String? audioFilePath;
@@ -113,6 +117,7 @@ class OfflineVideoDownload {
       'coverUrl': coverUrl,
       'ownerName': ownerName,
       'filePath': filePath,
+      if (cacheLocationId != null) 'cacheLocationId': cacheLocationId,
       if (audioFilePath != null) 'audioFilePath': audioFilePath,
       if (audioFilePath != null) 'audioSizeBytes': audioSizeBytes,
       'sizeBytes': sizeBytes,
@@ -170,6 +175,7 @@ class OfflineVideoDownload {
       coverUrl: json['coverUrl']?.toString() ?? '',
       ownerName: ownerName!.trim(),
       filePath: filePath,
+      cacheLocationId: json['cacheLocationId'] as String?,
       sizeBytes: sizeBytes,
       audioFilePath: audioFilePath,
       audioSizeBytes: audioSizeBytes,

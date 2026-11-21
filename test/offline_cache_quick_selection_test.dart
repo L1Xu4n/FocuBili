@@ -7,14 +7,17 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/features/profile/offline_videos_page.dart';
 import 'package:focubili/models/offline_download_task.dart';
 import 'package:focubili/models/offline_video_download.dart';
+import 'package:focubili/platform/app_platform.dart';
 import 'package:focubili/services/cache_lifecycle.dart';
 import 'package:focubili/services/course_cache_library.dart';
+import 'package:focubili/services/offline_cache_locations.dart';
 import 'package:focubili/services/offline_download_queue.dart';
 
 import 'course_cache_library_test.dart' show Access;
 import 'offline_download_queue_test.dart' show QueueLibrary, fixture;
 
 class _VideoFixtures extends QueueLibrary {
+  _VideoFixtures({super.cacheLocations});
   final attempts = <int>[];
   final failures = <int>{};
 
@@ -99,6 +102,7 @@ Finder _courseCard(CourseCacheEntry row) =>
     find.byKey(Key('offline-video-course-${row.id}'));
 Finder _checkbox(Finder card) =>
     find.descendant(of: card, matching: find.byType(Checkbox));
+Finder get _location => find.byKey(const Key('offline-cache-location'));
 Finder get _search => find.byKey(const Key('offline-search'));
 Finder get _delete => find.byKey(const Key('delete-selected-offline-videos'));
 Finder get _confirm =>
@@ -184,9 +188,14 @@ void main() {
   testWidgets(
     'desktop preserves exact hidden selection across queue tab; only successful parts disappear',
     (tester) async {
-      final videos = _VideoFixtures()
-        ..ready.addAll([_video(1), _video(2), _video(3)])
-        ..failures.add(2);
+      final videos =
+          _VideoFixtures(
+              cacheLocations: OfflineCacheLocations(
+                platform: AppPlatform.windows,
+              ),
+            )
+            ..ready.addAll([_video(1), _video(2), _video(3)])
+            ..failures.add(2);
       final ready = [1, 2, 3].map((cid) {
         final v = fixture(cid);
         return OfflineDownloadTask(
@@ -212,18 +221,22 @@ void main() {
       videos.progress!(10, 100);
       await tester.pumpAndSettle();
 
+      expect(_location, findsOneWidget);
       await tester.tap(find.byKey(const Key('start-offline-selection')));
       await tester.pumpAndSettle();
+      expect(_location, findsNothing);
       await _sweep(tester, _checkbox(_videoCard(1)), _checkbox(_videoCard(2)));
       expect(find.text('已选 2'), findsOneWidget);
 
       await tester.tap(find.text('下载队列'));
       await tester.pumpAndSettle();
       expect(_delete, findsNothing);
+      expect(_location, findsOneWidget);
       expect(find.byKey(Key('download-task-${active.id}')), findsOneWidget);
       await tester.tap(find.text('已缓存'));
       await tester.pumpAndSettle();
       expect(find.text('已选 2'), findsOneWidget);
+      expect(_location, findsNothing);
 
       await tester.enterText(_search, '学习视频 3');
       await tester.pumpAndSettle();

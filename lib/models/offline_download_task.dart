@@ -13,6 +13,7 @@ class OfflineDownloadTask {
     required this.quality,
     required this.createdAt,
     this.courseMid,
+    this.cacheLocationId,
     this.status = DownloadTaskStatus.queued,
     this.receivedBytes = 0,
     this.totalBytes,
@@ -25,6 +26,8 @@ class OfflineDownloadTask {
   final VideoPart part;
   final int quality;
   final int? courseMid;
+  // Fixed at enqueue; null also represents pre-feature tasks in the default root.
+  final String? cacheLocationId;
   final DateTime createdAt;
   final DownloadTaskStatus status;
   final int receivedBytes;
@@ -66,6 +69,7 @@ class OfflineDownloadTask {
     part: part,
     quality: quality,
     courseMid: courseMid,
+    cacheLocationId: cacheLocationId,
     createdAt: createdAt,
     status: status ?? this.status,
     receivedBytes: receivedBytes ?? this.receivedBytes,
@@ -95,6 +99,7 @@ class OfflineDownloadTask {
       if (status == DownloadTaskStatus.failed && courseDiagnostic != null)
         'courseDiagnostic': courseDiagnostic!.code,
     },
+    if (cacheLocationId != null) 'cacheLocationId': cacheLocationId,
     'quality': quality,
     'createdAt': createdAt.toIso8601String(),
     'status': status.name,
@@ -156,6 +161,7 @@ class OfflineDownloadTask {
       part: part,
       quality: quality,
       courseMid: courseMid,
+      cacheLocationId: json['cacheLocationId'] as String?,
       createdAt: DateTime.parse(json['createdAt'] as String),
       status: status,
       receivedBytes: received,
