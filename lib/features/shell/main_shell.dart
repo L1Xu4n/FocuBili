@@ -27,6 +27,7 @@ class _MainShellState extends State<MainShell>
   late final AnimationController _navigationController;
   late final SubscriptionService _subscriptions =
       widget.subscriptionService ?? SubscriptionService.instance;
+  static const _subscriptionDestinationIndex = 3;
   int _currentIndex = 0;
   int? _transitionFrom;
   int? _transitionTo;
@@ -146,28 +147,36 @@ class _MainShellState extends State<MainShell>
         padding: const EdgeInsets.only(bottom: 12),
         child: _buildWorkspaceLogo(),
       ),
-      destinations: const <NavigationRailDestination>[
-        NavigationRailDestination(
+      destinations: <NavigationRailDestination>[
+        const NavigationRailDestination(
           icon: Icon(Icons.home_outlined),
           selectedIcon: Icon(Icons.home_rounded),
           label: Text('首页'),
         ),
-        NavigationRailDestination(
+        const NavigationRailDestination(
           icon: Icon(Icons.search_rounded),
           selectedIcon: Icon(Icons.manage_search_rounded),
           label: Text('搜索'),
         ),
-        NavigationRailDestination(
+        const NavigationRailDestination(
           icon: Icon(Icons.person_outline_rounded),
           selectedIcon: Icon(Icons.person_rounded),
           label: Text('我的'),
         ),
+        if (showSubscription) _buildWorkspaceSubscriptionDestination(),
       ],
       scrollable: showSubscription,
-      trailing: showSubscription
-          ? _buildWorkspaceSubscription(windowSize, extended: extended)
-          : null,
-      onDestinationSelected: _selectPage,
+      onDestinationSelected: (index) {
+        if (index == _subscriptionDestinationIndex) {
+          Navigator.of(context).push<void>(
+            MaterialPageRoute(
+              builder: (_) => SubscriptionUpdatesPage(service: _subscriptions),
+            ),
+          );
+        } else {
+          _selectPage(index);
+        }
+      },
     );
   }
 
@@ -197,72 +206,18 @@ class _MainShellState extends State<MainShell>
     );
   }
 
-  /// 在桌面侧栏提供已启用订阅的快捷入口，切换一级页面时保持可用。
-  Widget _buildWorkspaceSubscription(
-    Size windowSize, {
-    required bool extended,
-  }) {
-    final theme = Theme.of(context);
-    final railTheme = NavigationRailTheme.of(context);
-    final icon = IconTheme(
-      data:
-          railTheme.unselectedIconTheme ??
-          IconThemeData(size: 24, color: theme.colorScheme.onSurfaceVariant),
-      child: const Icon(Icons.rss_feed),
-    );
-    const label = Text('焦点订阅', textAlign: TextAlign.center);
+  /// 复用侧栏入口的悬停、按压和键盘焦点反馈，但打开独立路由。
+  NavigationRailDestination _buildWorkspaceSubscriptionDestination() {
     final unread = _subscriptions.unreadCount;
-    Widget unreadBadge({Widget? child}) => Semantics(
-      label: '$unread 条未读',
-      excludeSemantics: true,
-      child: Badge.count(count: unread, child: child),
-    );
-    return SizedBox(
-      width: AdaptiveLayout.workspaceNavigationWidth(windowSize),
-      child: TextButton(
+    const icon = Icon(Icons.rss_feed);
+    return NavigationRailDestination(
+      icon: KeyedSubtree(
         key: const Key('workspace-navigation-open-subscription'),
-        onPressed: () => Navigator.of(context).push<void>(
-          MaterialPageRoute(
-            builder: (_) => SubscriptionUpdatesPage(service: _subscriptions),
-          ),
-        ),
-        style: TextButton.styleFrom(
-          foregroundColor:
-              railTheme.unselectedLabelTextStyle?.color ??
-              theme.colorScheme.onSurface,
-          textStyle:
-              railTheme.unselectedLabelTextStyle ?? theme.textTheme.labelMedium,
-          minimumSize: const Size(48, 48),
-          padding: EdgeInsets.symmetric(
-            horizontal: extended ? 0 : 8,
-            vertical: 8,
-          ),
-        ),
-        // 与导航项共用图标列和文字起点；窄侧栏和其他导航项一样上下排列。
-        child: extended
-            ? Row(
-                children: [
-                  SizedBox(
-                    width: AdaptiveLayout.compactNavigationWidth,
-                    child: Center(child: icon),
-                  ),
-                  Flexible(child: label),
-                  if (unread > 0)
-                    Padding(
-                      padding: const EdgeInsetsDirectional.only(start: 8),
-                      child: unreadBadge(),
-                    ),
-                  const SizedBox(width: 8),
-                ],
-              )
-            : Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  unread > 0 ? unreadBadge(child: icon) : icon,
-                  const SizedBox(height: 4),
-                  label,
-                ],
-              ),
+        child: unread == 0 ? icon : Badge.count(count: unread, child: icon),
+      ),
+      label: Text(
+        '焦点订阅',
+        semanticsLabel: unread == 0 ? '焦点订阅' : '焦点订阅，$unread 条未读',
       ),
     );
   }
