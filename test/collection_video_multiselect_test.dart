@@ -1,4 +1,6 @@
 import 'dart:async';
+
+import 'package:focubili/core/widgets/drag_checkbox_options.dart';
 import 'package:flutter/material.dart';
 import 'package:focubili/core/layout/adaptive_two_column_list.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -20,9 +22,12 @@ import 'package:focubili/services/cache_lifecycle.dart';
 import 'package:focubili/services/learning_list_service.dart';
 import 'package:focubili/services/subscription_service.dart';
 
-CreatorVideo lesson(int n) => CreatorVideo(
+import 'support/checkbox_sweep.dart';
+
+CreatorVideo lesson(int n, {String ownerName = ''}) => CreatorVideo(
   bvid: 'BV$n',
   title: '课程$n',
+  ownerName: ownerName,
   coverUrl: '',
   duration: const Duration(minutes: 3),
 );
@@ -116,6 +121,13 @@ class _Account extends BilibiliAccountDataService {
             coverUrl: '',
             mediaCount: 4,
             isAvailable: true,
+          ),
+          FavoriteFolder(
+            mediaId: 3,
+            title: '不可写入的收藏夹',
+            coverUrl: '',
+            mediaCount: 0,
+            isAvailable: false,
           ),
           FavoriteFolder(
             mediaId: 2,
@@ -251,7 +263,11 @@ class _Fixture {
                   body: TextButton(
                     onPressed: () => actions.run(
                       c,
-                      videos: [lesson(1), lesson(1), lesson(2)],
+                      videos: [
+                        lesson(1),
+                        lesson(1),
+                        lesson(2, ownerName: '另一位作者'),
+                      ],
                       ownerName: '作者',
                       destination: VideoSaveDestination.favorites,
                     ),
@@ -528,7 +544,7 @@ void main() {
     expect(x.videos.calls, isEmpty);
     expect(x.remote.writes, isEmpty);
   });
-  testWidgets('本机多选、取消某一项并在窄屏大字确认', (t) async {
+  testWidgets('本机扫选、取消某一项并在窄屏大字确认', (t) async {
     final x = _Fixture(local: _MemoryFavorites());
     final first = (await t.runAsync(() => x.local.createFolder('先保存')))!;
     final second = (await t.runAsync(() => x.local.createFolder('也保存')))!;
@@ -536,19 +552,22 @@ void main() {
     await x.host(t, size: const Size(320, 640), scale: 1.7, page: false);
     await t.tap(find.text('保存两支'));
     await t.pumpAndSettle();
-    for (final title in ['先保存', '也保存', '不保存', '不保存']) {
-      final option = find.text(title);
-      await t.ensureVisible(option);
-      await t.tap(option);
-      await t.pumpAndSettle();
-    }
+    Finder folder(String title) =>
+        checkboxIn(find.widgetWithText(DragCheckboxTile, title));
+    await sweepCheckboxes(t, folder('先保存'), folder('不保存'));
+    expect(find.text('2 支视频 · 已选 3 个'), findsOneWidget);
+    await t.tap(find.text('不保存'));
+    await t.pumpAndSettle();
     expect(find.text('2 支视频 · 已选 2 个'), findsOneWidget);
     expect(await t.runAsync(() => x.local.loadItems(first.id)), isEmpty);
     await t.tap(find.text('加入收藏夹'));
     await t.pumpAndSettle();
     for (final folder in [first, second]) {
       final saved = (await t.runAsync(() => x.local.loadItems(folder.id)))!;
-      expect(saved.map((item) => item.bvid).toSet(), {'BV1', 'BV2'});
+      expect(
+        {for (final item in saved) item.bvid: item.ownerName},
+        {'BV1': '作者', 'BV2': '另一位作者'},
+      );
     }
     expect(await t.runAsync(() => x.local.loadItems(skipped.id)), isEmpty);
     expect(t.takeException(), isNull);
@@ -589,15 +608,20 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.text('B 站'));
     await t.pumpAndSettle();
-    await t.tap(find.text('线上物理'));
-    await t.pumpAndSettle();
-    await t.tap(find.text('线上笔记'));
-    await t.pumpAndSettle();
+    expect(find.text('不可写入的收藏夹'), findsNothing);
+    final first = checkboxIn(find.widgetWithText(DragCheckboxTile, '线上物理'));
+    final second = checkboxIn(find.widgetWithText(DragCheckboxTile, '线上笔记'));
+    await sweepCheckboxes(t, first, second);
+    expect(find.text('2 支视频 · 已选 2 个'), findsOneWidget);
+    expect(x.remote.attempts, isEmpty);
     await t.tap(find.text('加入收藏夹'));
     await t.pumpAndSettle();
     expect(x.remote.attempts, [(1001, 1), (1001, 2), (1002, 1), (1002, 2)]);
     expect(x.videos.calls, ['BV1', 'BV2']);
     expect(find.textContaining('新增 2 项、已有 1 项、剩余 1 项'), findsOneWidget);
+    await sweepCheckboxes(t, first, second);
+    expect(find.text('2 支视频 · 已选 2 个'), findsOneWidget);
+    expect(t.widget<Checkbox>(first).onChanged, isNull);
     x.remote.failPair = null;
     await t.tap(find.text('继续剩余项'));
     await t.pumpAndSettle();

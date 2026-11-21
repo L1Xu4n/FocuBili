@@ -191,12 +191,6 @@ extension _PlayerLocalLibrary on _PlayerPageState {
 
   /// 创建“离线缓存”按钮，并根据下载状态切换图标与文字。
   Widget _buildOfflineDownloadButton() {
-    if (_activeVideo.isCourse &&
-        (widget.forceOffline ||
-            (_appPlatform != AppPlatform.android &&
-                _appPlatform != AppPlatform.windows))) {
-      return const SizedBox.shrink();
-    }
     return PlayerLibraryAction(
       tooltip: _currentVideoDownloaded ? '删除离线缓存' : '下载离线缓存',
       key: const Key('current-video-offline-download-button'),
@@ -262,6 +256,19 @@ extension _PlayerLocalLibrary on _PlayerPageState {
       showDragHandle: true,
       builder: (BuildContext sheetContext) => StatefulBuilder(
         builder: (BuildContext context, StateSetter setSheetState) {
+          void setChecked(int first, int last, bool checked) {
+            setSheetState(() {
+              for (var i = first; i <= last; i++) {
+                final id = folders[i].id;
+                if (checked) {
+                  selected.add(id);
+                } else {
+                  selected.remove(id);
+                }
+              }
+            });
+          }
+
           return SafeArea(
             child: ConstrainedBox(
               constraints: BoxConstraints(
@@ -308,27 +315,28 @@ extension _PlayerLocalLibrary on _PlayerPageState {
                     )
                   else
                     Flexible(
-                      child: ListView.builder(
+                      child: DragCheckboxOptions(
                         itemCount: folders.length,
-                        itemBuilder: (BuildContext context, int index) {
-                          final AppFavoriteFolder folder = folders[index];
-                          final bool checked = selected.contains(folder.id);
-                          return CheckboxListTile(
-                            key: Key('app-favorite-folder-${folder.id}'),
-                            value: checked,
-                            controlAffinity: ListTileControlAffinity.trailing,
-                            title: Text(folder.name),
-                            onChanged: (bool? value) {
-                              setSheetState(() {
-                                if (value ?? false) {
-                                  selected.add(folder.id);
-                                } else {
-                                  selected.remove(folder.id);
-                                }
-                              });
-                            },
-                          );
-                        },
+                        checkedAt: (index) =>
+                            selected.contains(folders[index].id),
+                        onRangeChanged: setChecked,
+                        builder: (context, controller, physics) =>
+                            ListView.builder(
+                              controller: controller,
+                              physics: physics,
+                              itemCount: folders.length,
+                              itemBuilder: (context, index) {
+                                final AppFavoriteFolder folder = folders[index];
+                                return DragCheckboxTile(
+                                  key: Key('app-favorite-folder-${folder.id}'),
+                                  index: index,
+                                  value: selected.contains(folder.id),
+                                  title: Text(folder.name),
+                                  onChanged: (checked) =>
+                                      setChecked(index, index, checked),
+                                );
+                              },
+                            ),
                       ),
                     ),
                   Padding(

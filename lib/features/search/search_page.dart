@@ -11,9 +11,11 @@ import '../../core/layout/adaptive_layout.dart';
 import '../../core/layout/adaptive_two_column_list.dart';
 import '../../core/layout/app_scroll_behavior.dart';
 import '../../core/router/app_router.dart';
+import '../../core/widgets/drag_selection_region.dart';
 import '../../models/user_search.dart';
 import '../../models/learning_list_entry.dart';
 import '../../models/video_preview.dart';
+import '../../models/public_profile.dart';
 import '../../models/search_content_filter.dart';
 import '../../models/content_blocklist.dart';
 import '../../services/content_blocklist_service.dart';
@@ -24,6 +26,8 @@ import '../../services/multi_category_video_search.dart';
 import '../../services/problem_diagnostics_service.dart';
 import '../../services/search_history_service.dart';
 import '../../services/cache_lifecycle.dart';
+import '../common/discovery_batch_selection.dart';
+import '../common/video_batch_actions.dart';
 import '../profile/user_profile_page.dart';
 import '../profile/content_blocklist_page.dart';
 import 'content_block_actions.dart';
@@ -118,6 +122,9 @@ class _SearchPageState extends State<SearchPage> {
   late final BilibiliService _service;
   late final BilibiliUserSearchService _userSearchService;
   late final LearningListService _learningListService;
+  late final VideoBatchActions _batchActions;
+  final _batchSelection = DiscoveryBatchSelection();
+  bool _batchBusy = false;
   late final ProblemDiagnosticsService _problemDiagnosticsService;
   final SearchContentFilterService _contentFilterService =
       const SearchContentFilterService();
@@ -160,6 +167,10 @@ class _SearchPageState extends State<SearchPage> {
     super.initState();
     _service = widget.service ?? BilibiliVideoInfoService();
     _learningListService = widget.learningListService ?? LearningListService();
+    _batchActions = VideoBatchActions(
+      learningService: _learningListService,
+      videoService: _service,
+    );
     _problemDiagnosticsService = ProblemDiagnosticsService();
     _userSearchService =
         widget.userSearchService ??
@@ -274,7 +285,10 @@ class _SearchPageState extends State<SearchPage> {
     try {
       final list = await const ContentBlocklistService().load();
       if (!mounted) return;
-      setState(() => _blocklist = list);
+      setState(() {
+        _blocklist = list;
+        _batchSelection.reset();
+      });
       _scheduleFilteredPage();
     } catch (_) {
       if (mounted) _showTransientMessage('黑名单读取失败，请到黑名单页面重试。');
@@ -682,6 +696,7 @@ class _SearchPageState extends State<SearchPage> {
     required bool loading,
     required bool submitted,
   }) {
+    _batchSelection.reset();
     _directResult = null;
     _searchResults = const [];
     _userResults = const [];
@@ -1283,7 +1298,10 @@ class _SearchPageState extends State<SearchPage> {
     }
     if (!mounted || _searchMode != _SearchMode.videos) return;
     if (!_sameLocalFilter(_contentFilter, storedContent)) {
-      setState(() => _contentFilter = storedContent);
+      setState(() {
+        _contentFilter = storedContent;
+        _batchSelection.reset();
+      });
       _scheduleFilteredPage();
     }
     VideoSearchFilter editingFilter = _filter;
@@ -1456,6 +1474,9 @@ class _SearchPageState extends State<SearchPage> {
     setState(() {
       _filter = selectedFilter;
       _categoryIds = selection.categories;
+      if (!_sameLocalFilter(_contentFilter, editingContent)) {
+        _batchSelection.reset();
+      }
       _contentFilter = editingContent;
     });
     final input = _activeQuery.isNotEmpty
@@ -1720,7 +1741,17 @@ class _SearchPageState extends State<SearchPage> {
 
   /// 创建顶部一体式搜索栏、搜索类型切换、筛选和结果区域。
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => PopScope(
+    canPop: !_batchSelection.active,
+    onPopInvokedWithResult: (popped, _) {
+      if (!popped && !_batchBusy && _batchSelection.active) {
+        setState(_batchSelection.close);
+      }
+    },
+    child: _buildSearchScaffold(context),
+  );
+
+  Widget _buildSearchScaffold(BuildContext context) {
     final bool keyboardVisible = MediaQuery.viewInsetsOf(context).bottom > 0;
     return Scaffold(
       resizeToAvoidBottomInset: true,
@@ -1793,7 +1824,11 @@ class _SearchPageState extends State<SearchPage> {
             IconButton(
               key: const Key('search-back-button'),
               // 返回按钮函数把搜索页交还给主框架首页。
-              onPressed: widget.onBackRequested,
+              onPressed: _batchSelection.active
+                  ? _batchBusy
+                        ? null
+                        : () => setState(_batchSelection.close)
+                  : widget.onBackRequested,
               icon: const Icon(Icons.arrow_back_rounded),
               tooltip: '返回首页',
             ),
@@ -1852,7 +1887,8 @@ class _SearchPageState extends State<SearchPage> {
     final bool showHistory = _searchHistory.isNotEmpty;
     final bool showSearchSupport =
         (showSuggestions || showHistory) &&
-        (_searchFocusNode.hasFocus || !_hasSubmitted);
+        (_searchFocusNode.hasFocus || !_hasSubmitted) &&
+        !_batchSelection.active;
     return Stack(
       key: const Key('search-result-overlay'),
       fit: StackFit.expand,
@@ -1965,6 +2001,12 @@ class _SearchPageState extends State<SearchPage> {
               ),
             ),
           ),
+          if (!_batchSelection.active && _canStartVideoBatch)
+            IconButton(
+              tooltip: '多选视频',
+              onPressed: _startVideoBatch,
+              icon: const Icon(Icons.checklist),
+            ),
           const VerticalDivider(indent: 8, endIndent: 8),
           Badge(
             isLabelVisible: filterCount > 0,
@@ -2183,18 +2225,7 @@ class _SearchPageState extends State<SearchPage> {
           ],
         );
       }
-      return AdaptiveTwoColumnList(
-        key: const Key('search-results-list'),
-        controller: _resultScrollController,
-        breakpoint: 840,
-        crossAxisSpacing: 24,
-        mainAxisSpacing: 4,
-        itemCount: visibleResults.length,
-        footer: _buildLoadMoreFooter(),
-        itemBuilder: (BuildContext context, int index) {
-          return _buildSearchResultCard(visibleResults[index]);
-        },
-      );
+      return _buildKeywordVideoList(visibleResults);
     }
     if (_hasSubmitted) {
       return _SearchMessage(
@@ -2205,6 +2236,143 @@ class _SearchPageState extends State<SearchPage> {
       );
     }
     return const _SearchEmptyState();
+  }
+
+  List<String> _eligibleKeywordIds(Iterable<VideoSearchResult> results) =>
+      results
+          .map((row) => row.bvid)
+          .where((id) => id.isNotEmpty)
+          .toSet()
+          .toList();
+
+  bool get _canStartVideoBatch =>
+      _searchMode == _SearchMode.videos &&
+      _directResult == null &&
+      !_loading &&
+      !_batchBusy &&
+      _openingBvid == null &&
+      _addingBvid == null &&
+      _eligibleKeywordIds(_visibleSearchResults).length >= 2;
+
+  void _startVideoBatch([String? bvid]) {
+    if (!_canStartVideoBatch) return;
+    _searchFocusNode.unfocus();
+    setState(() => _batchSelection.start(bvid));
+  }
+
+  Future<void> _saveSelectedSearchVideos() async {
+    if (_batchBusy || !_batchSelection.active || _batchSelection.ids.isEmpty) {
+      return;
+    }
+    final ids = Set<String>.of(_batchSelection.ids);
+    final distinct = <String>{};
+    final videos = [
+      for (final row in _visibleSearchResults)
+        if (ids.contains(row.bvid) && distinct.add(row.bvid))
+          CreatorVideo(
+            bvid: row.bvid,
+            title: row.title,
+            coverUrl: row.thumbnailUrl,
+            duration: row.duration,
+            ownerName: row.ownerName,
+          ),
+    ];
+    if (videos.length != ids.length) return;
+    final generation = _requestGeneration;
+    final account = CacheLifecycle.account.value;
+    final filter = _contentFilter;
+    final blocklist = _blocklist;
+    bool isCurrent() =>
+        mounted &&
+        generation == _requestGeneration &&
+        account == CacheLifecycle.account.value &&
+        identical(filter, _contentFilter) &&
+        identical(blocklist, _blocklist) &&
+        _searchMode == _SearchMode.videos &&
+        _eligibleKeywordIds(_visibleSearchResults).toSet().containsAll(ids);
+    setState(() => _batchBusy = true);
+    try {
+      final saved = await _batchActions.run(
+        context,
+        videos: videos,
+        sourceIsCurrent: isCurrent,
+      );
+      if (saved && isCurrent()) {
+        setState(_batchSelection.close);
+        await _loadLearningListMembership();
+      }
+    } finally {
+      if (mounted) setState(() => _batchBusy = false);
+    }
+  }
+
+  Widget _buildKeywordVideoList(List<VideoSearchResult> results) {
+    final seen = <String>{};
+    final visibleResults = [
+      for (final row in results)
+        if (row.bvid.isEmpty || seen.add(row.bvid)) row,
+    ];
+    final eligibleIds = _eligibleKeywordIds(visibleResults);
+    final indices = {
+      for (var index = 0; index < eligibleIds.length; index++)
+        eligibleIds[index]: index,
+    };
+    _batchSelection.sync(eligibleIds);
+    final epoch = _batchSelection.epoch;
+    final canStart = !_batchSelection.active && _canStartVideoBatch;
+    return Column(
+      children: [
+        if (_batchSelection.active)
+          DiscoveryBatchSelectionBar(
+            count: _batchSelection.ids.length,
+            onClose: _batchBusy ? null : () => setState(_batchSelection.close),
+            onSave: _batchBusy || _batchSelection.ids.isEmpty
+                ? null
+                : _saveSelectedSearchVideos,
+          ),
+        Expanded(
+          child: DragSelectionRegion(
+            key: ValueKey('search-video-drag-$epoch'),
+            controller: _resultScrollController,
+            itemCount: eligibleIds.length,
+            enabled: _batchSelection.active && !_batchBusy,
+            checkedAt: (index) =>
+                _batchSelection.ids.contains(eligibleIds[index]),
+            onDragUpdate: (update) {
+              if (epoch == _batchSelection.epoch) {
+                setState(() => _batchSelection.range(update, eligibleIds));
+              }
+            },
+            builder: (context, dragging) => AdaptiveTwoColumnList(
+              key: const Key('search-results-list'),
+              controller: _resultScrollController,
+              physics: dragging ? const NeverScrollableScrollPhysics() : null,
+              breakpoint: 840,
+              crossAxisSpacing: 24,
+              mainAxisSpacing: 4,
+              itemCount: visibleResults.length,
+              footer: _buildLoadMoreFooter(),
+              itemBuilder: (context, index) {
+                final result = visibleResults[index];
+                final selectionIndex = indices[result.bvid];
+                if (!_batchSelection.active || selectionIndex == null) {
+                  return _buildSearchResultCard(
+                    result,
+                    canSelect: canStart && selectionIndex != null,
+                  );
+                }
+                return DragSelectionTarget(
+                  key: ValueKey('search-selection-${result.bvid}'),
+                  index: selectionIndex,
+                  builder: (context, handleKey) =>
+                      _buildSearchResultCard(result, handleKey: handleKey),
+                );
+              },
+            ),
+          ),
+        ),
+      ],
+    );
   }
 
   /// 创建用户头像、等级、粉丝数、投稿数、认证和签名组成的搜索卡片。
@@ -2295,11 +2463,16 @@ class _SearchPageState extends State<SearchPage> {
   Widget _buildSearchResultCard(
     VideoSearchResult result, {
     VideoPreview? directVideo,
+    Key? handleKey,
+    bool canSelect = false,
   }) {
     final bool isDirectResult = directVideo != null;
+    final selecting = !isDirectResult && _batchSelection.active;
+    final selected = selecting && _batchSelection.ids.contains(result.bvid);
     final bool opening = _openingBvid == result.bvid;
     final bool changingLearningState = _addingBvid == result.bvid;
-    final bool menuEnabled = _openingBvid == null && _addingBvid == null;
+    final bool menuEnabled =
+        !_batchBusy && _openingBvid == null && _addingBvid == null;
     final int? knownPartCid =
         directVideo?.initialPart.cid ??
         _knownSearchInitialPartCids[result.bvid];
@@ -2322,90 +2495,109 @@ class _SearchPageState extends State<SearchPage> {
       playCount: _formatCount(result.playCount),
       danmakuCount: _formatCount(result.danmakuCount),
       opening: opening,
+      selected: selected,
+      onLongPress: canSelect ? () => _startVideoBatch(result.bvid) : null,
       thumbnailBuilder: (width) => _buildSearchThumbnail(
         result,
         episodeCountText: episodeCountText,
         width: width,
       ),
       // 直达结果直接打开；轻量结果先补全 cid 与分P 再进入播放器。
-      onTap: opening || changingLearningState
+      onTap: selecting
+          ? _batchBusy || handleKey == null
+                ? null
+                : () => setState(() => _batchSelection.toggle(result.bvid))
+          : opening || changingLearningState || _batchBusy
           ? null
           : () => _openSearchResult(result, direct: directVideo),
-      menu: PopupMenuButton<_SearchResultMenuAction>(
-        key: Key(
-          '${isDirectResult ? 'more-direct' : 'more-search'}-'
-          '${result.bvid}',
-        ),
-        enabled: menuEnabled,
-        tooltip: '更多选项',
-        padding: EdgeInsets.zero,
-        // 使用标准图标按钮，圆形悬停与水波纹围绕居中的图标绘制。
-        style: IconButton.styleFrom(shape: const CircleBorder()),
-        icon: changingLearningState
-            ? const SizedBox.square(
-                dimension: 17,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            : Icon(
-                Icons.more_vert_rounded,
-                size: 18,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
+      menu: selecting
+          ? handleKey == null
+                ? const SizedBox.shrink()
+                : Checkbox(
+                    key: handleKey,
+                    value: selected,
+                    semanticLabel: result.title,
+                    onChanged: _batchBusy
+                        ? null
+                        : (_) => setState(
+                            () => _batchSelection.toggle(result.bvid),
+                          ),
+                  )
+          : PopupMenuButton<_SearchResultMenuAction>(
+              key: Key(
+                '${isDirectResult ? 'more-direct' : 'more-search'}-'
+                '${result.bvid}',
               ),
-        itemBuilder: (BuildContext context) =>
-            <PopupMenuEntry<_SearchResultMenuAction>>[
-              if (isInLearningList)
-                const PopupMenuItem(
-                  value: _SearchResultMenuAction.selectParts,
-                  child: ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(Icons.playlist_add),
-                    title: Text('选择更多分 P'),
-                  ),
-                ),
-              PopupMenuItem<_SearchResultMenuAction>(
-                key: Key(
-                  '${isDirectResult ? 'add-learning-direct' : 'add-learning-search'}-'
-                  '${result.bvid}',
-                ),
-                value: _SearchResultMenuAction.toggleLearningList,
-                child: ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(
-                    isInLearningList
-                        ? Icons.playlist_remove_rounded
-                        : Icons.playlist_add_rounded,
-                  ),
-                  title: Text(isInLearningList ? '取消加入学习清单' : '加入学习清单'),
-                ),
-              ),
-              const PopupMenuDivider(),
-              const PopupMenuItem(
-                value: _SearchResultMenuAction.blockVideo,
-                child: ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.block),
-                  title: Text('屏蔽该视频'),
-                ),
-              ),
-              PopupMenuItem(
-                value: _SearchResultMenuAction.blockCreator,
-                enabled: !isDirectResult || directVideo.ownerMid > 0,
-                child: const ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.person_off_outlined),
-                  title: Text('屏蔽该 UP 主'),
-                ),
-              ),
-            ],
-        // 更多菜单函数执行加入或取消加入，并阻止卡片同时跳转。
-        onSelected: (_SearchResultMenuAction action) {
-          if (isDirectResult) {
-            _handleDirectResultMenuAction(action, directVideo);
-            return;
-          }
-          _handleSearchResultMenuAction(action, result);
-        },
-      ),
+              enabled: menuEnabled,
+              tooltip: '更多选项',
+              padding: EdgeInsets.zero,
+              // 使用标准图标按钮，圆形悬停与水波纹围绕居中的图标绘制。
+              style: IconButton.styleFrom(shape: const CircleBorder()),
+              icon: changingLearningState
+                  ? const SizedBox.square(
+                      dimension: 17,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Icon(
+                      Icons.more_vert_rounded,
+                      size: 18,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+              itemBuilder: (BuildContext context) =>
+                  <PopupMenuEntry<_SearchResultMenuAction>>[
+                    if (isInLearningList)
+                      const PopupMenuItem(
+                        value: _SearchResultMenuAction.selectParts,
+                        child: ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: Icon(Icons.playlist_add),
+                          title: Text('选择更多分 P'),
+                        ),
+                      ),
+                    PopupMenuItem<_SearchResultMenuAction>(
+                      key: Key(
+                        '${isDirectResult ? 'add-learning-direct' : 'add-learning-search'}-'
+                        '${result.bvid}',
+                      ),
+                      value: _SearchResultMenuAction.toggleLearningList,
+                      child: ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(
+                          isInLearningList
+                              ? Icons.playlist_remove_rounded
+                              : Icons.playlist_add_rounded,
+                        ),
+                        title: Text(isInLearningList ? '取消加入学习清单' : '加入学习清单'),
+                      ),
+                    ),
+                    const PopupMenuDivider(),
+                    const PopupMenuItem(
+                      value: _SearchResultMenuAction.blockVideo,
+                      child: ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.block),
+                        title: Text('屏蔽该视频'),
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: _SearchResultMenuAction.blockCreator,
+                      enabled: !isDirectResult || directVideo.ownerMid > 0,
+                      child: const ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.person_off_outlined),
+                        title: Text('屏蔽该 UP 主'),
+                      ),
+                    ),
+                  ],
+              // 更多菜单函数执行加入或取消加入，并阻止卡片同时跳转。
+              onSelected: (_SearchResultMenuAction action) {
+                if (isDirectResult) {
+                  _handleDirectResultMenuAction(action, directVideo);
+                  return;
+                }
+                _handleSearchResultMenuAction(action, result);
+              },
+            ),
     );
   }
 

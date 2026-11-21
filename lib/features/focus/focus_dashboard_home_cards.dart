@@ -49,6 +49,8 @@ extension _FocusDashboardHomeCards on _FocusDashboardState {
         icon: Icons.insights_rounded,
         available: ready,
         builder: _buildTodaySummary,
+        editingBuilder: (context) =>
+            _buildTodaySummary(context, allowNavigation: false),
       ),
       DashboardCardDefinition(
         id: 'home.recent_history',

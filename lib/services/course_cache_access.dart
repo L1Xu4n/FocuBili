@@ -127,10 +127,6 @@ class CourseCacheAccess {
     _unverifiedMessage,
     reason: CourseCacheReason.policyUnknown,
   );
-  static const _offlinePermissionUnknown = CourseCacheAccessException(
-    'B 站未明确确认本章允许离线缓存。',
-    reason: CourseCacheReason.offlinePermissionUnknown,
-  );
   static const _signingUnavailable = CourseCacheAccessException(
     '暂时无法确认课程播放请求，请稍后重试。',
     revokesReceipt: false,
@@ -437,9 +433,8 @@ class CourseCacheAccess {
           reason: CourseCacheReason.drmUnknown,
         );
       }
-      if (![episode, playview, mediaData].any(_permitsOffline)) {
-        throw _offlinePermissionUnknown;
-      }
+      // Playview can omit download flags entirely. The restriction checks
+      // above still reject an explicit denial or unrecognized restriction.
       stage = CourseCacheStage.media;
       final decodedMedia = _media(mediaData, quality);
       stage = CourseCacheStage.transport;
@@ -730,12 +725,6 @@ class CourseCacheAccess {
     'canoffline',
     'offlineallowed',
   };
-
-  static bool _permitsOffline(Map data) => data.entries.any(
-    (item) =>
-        _offlinePermissionFields.contains(_canonical('${item.key}')) &&
-        _switch(item.value) == true,
-  );
 
   static const _offlineExpiryFields = {
     'offlineexpiresat',

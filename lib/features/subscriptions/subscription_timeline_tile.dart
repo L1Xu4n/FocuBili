@@ -17,11 +17,13 @@ class SubscriptionTimelineTile extends StatelessWidget {
     this.onAdd,
     this.enabled = true,
     this.coverCache,
+    this.selectionHandleKey,
   });
   final SubscriptionFeedItem item;
   final bool? selected;
   final bool enabled;
   final ImageResourceCache? coverCache;
+  final Key? selectionHandleKey;
   final VoidCallback? onTap, onLongPress, onRead, onAdd;
   @override
   Widget build(BuildContext context) {
@@ -52,12 +54,10 @@ class SubscriptionTimelineTile extends StatelessWidget {
                         height: coverWidth * 9 / 16,
                         child: Center(
                           child: selected != null
-                              ? Icon(
-                                  selected!
-                                      ? Icons.check_circle
-                                      : Icons.radio_button_unchecked,
-                                  size: 21,
-                                  semanticLabel: selected! ? '已选' : '未选',
+                              ? SubscriptionSelectionHandle(
+                                  handleKey: selectionHandleKey,
+                                  checked: selected!,
+                                  iconSize: 21,
                                 )
                               : Icon(
                                   Icons.circle,
@@ -164,6 +164,48 @@ class SubscriptionTimelineTile extends StatelessWidget {
           ),
           Divider(height: 1, thickness: .6, color: colors.outlineVariant),
         ],
+      ),
+    );
+  }
+}
+
+/// Registers a 48dp sweep anchor without widening the original icon slot.
+/// Taps are still handled by the row, so the glyph does not add a second action.
+class SubscriptionSelectionHandle extends StatelessWidget {
+  const SubscriptionSelectionHandle({
+    super.key,
+    required this.handleKey,
+    required this.checked,
+    this.iconSize,
+  });
+
+  final Key? handleKey;
+  final bool checked;
+  final double? iconSize;
+
+  @override
+  Widget build(BuildContext context) {
+    final glyphSize = iconSize ?? IconTheme.of(context).size ?? 24.0;
+    return SizedBox.square(
+      dimension: glyphSize,
+      child: OverflowBox(
+        minWidth: 48,
+        maxWidth: 48,
+        minHeight: 48,
+        maxHeight: 48,
+        child: SizedBox.square(
+          key: handleKey,
+          dimension: 48,
+          child: Center(
+            child: Semantics(
+              checked: checked,
+              child: Icon(
+                checked ? Icons.check_circle : Icons.radio_button_unchecked,
+                size: glyphSize,
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

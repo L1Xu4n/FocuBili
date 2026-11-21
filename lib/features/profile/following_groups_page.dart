@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import '../../core/widgets/drag_checkbox_options.dart';
 import '../../models/account_collection.dart';
 import '../../models/following_group.dart';
 import '../../services/bilibili_account_data_service.dart';
@@ -164,11 +165,15 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
 
     setState(() => _autoSyncRunning = true);
     try {
-      final snapshot = await _api.loadFollowingGroups();
+      final snapshot = await _api.loadFollowingGroups(
+        verifyMemberPagination: true,
+      );
       if (!isCurrent()) return;
       if (snapshot.mid != mid) throw StateError('账号已变化');
-      if (snapshot.groups.isEmpty) return;
-      final groups = await _store.merge(snapshot, isCurrent: isCurrent);
+      final groups = await _store.mirrorFromBilibili(
+        snapshot,
+        isCurrent: isCurrent,
+      );
       if (isCurrent()) setState(() => _groups = groups);
     } catch (e) {
       if (isCurrent()) _showImportFailure(e, automatic: true);
@@ -206,6 +211,17 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
     final action = automatic ? '自动同步失败' : '导入失败';
     final detail = error is StateError ? '：${error.message}' : '';
     _message('$action，本机分组未改变$detail');
+  }
+
+  void _showImportResult(FollowingGroupMergeResult result) {
+    final changes = [
+      if (result.addedGroups > 0) '新增 ${result.addedGroups} 个分组',
+      if (result.restoredGroups > 0) '恢复 ${result.restoredGroups} 个分组',
+      if (result.addedMembers > 0) '向已有分组补充 ${result.addedMembers} 位成员',
+    ];
+    final headline = changes.isEmpty ? '本机分组没有变化' : changes.join('，');
+    final skipped = result.skippedDeletedGroups;
+    _message(skipped == 0 ? headline : '$headline。跳过 $skipped 个本机删除过的分组。');
   }
 
   /// 新建或重命名本机分组，不修改 B 站原分组。
@@ -264,49 +280,95 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
       final snapshot = await _api.loadFollowingGroups();
       if (!mounted || !isCurrent()) return;
       if (snapshot.mid != mid) throw StateError('账号已变化，请重新导入');
-      final confirmed = await showDialog<bool>(
+      final deleted = await _store.deletedRemoteIds(mid);
+      if (!mounted || !isCurrent()) return;
+      final groups = snapshot.groups;
+      final selected = <int>{};
+      final restoreRemoteIds = await showDialog<Set<int>>(
         context: context,
         builder: (context) => ValueListenableBuilder(
           valueListenable: CacheLifecycle.account,
-          builder: (context, _, _) {
-            final current = isCurrent();
-            return AlertDialog(
-              title: const Text('从 B 站导入分组'),
-              content: current
-                  ? SizedBox(
-                      width: 420,
-                      child: SingleChildScrollView(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (snapshot.groups.isEmpty) const Text('没有可导入的分组'),
-                            for (final group in snapshot.groups)
-                              ListTile(
-                                title: Text(group.name),
-                                trailing: Text('${group.members.length} 位'),
+          builder: (context, _, _) => StatefulBuilder(
+            builder: (context, update) {
+              final current = isCurrent();
+              void setChecked(int first, int last, bool checked) {
+                if (!isCurrent()) return;
+                update(() {
+                  for (var i = first; i <= last; i++) {
+                    final id = groups[i].remoteId;
+                    if (id == null || !deleted.contains(id)) continue;
+                    if (checked) {
+                      selected.add(id);
+                    } else {
+                      selected.remove(id);
+                    }
+                  }
+                });
+              }
+
+              return AlertDialog(
+                title: const Text('从 B 站导入分组'),
+                content: current
+                    ? SizedBox(
+                        width: 420,
+                        child: DragCheckboxOptions(
+                          itemCount: groups.length,
+                          checkedAt: (index) =>
+                              selected.contains(groups[index].remoteId),
+                          onRangeChanged: setChecked,
+                          builder: (context, controller, physics) =>
+                              SingleChildScrollView(
+                                controller: controller,
+                                physics: physics,
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (groups.isEmpty) const Text('没有可导入的分组'),
+                                    for (final (index, group) in groups.indexed)
+                                      if (deleted.contains(group.remoteId))
+                                        DragCheckboxTile(
+                                          index: index,
+                                          title: Text(group.name),
+                                          subtitle: Text(
+                                            '已从本机删除，勾选后恢复（${group.members.length} 位）',
+                                          ),
+                                          value: selected.contains(
+                                            group.remoteId,
+                                          ),
+                                          onChanged: (checked) =>
+                                              setChecked(index, index, checked),
+                                        )
+                                      else
+                                        ListTile(
+                                          title: Text(group.name),
+                                          trailing: Text(
+                                            '${group.members.length} 位',
+                                          ),
+                                        ),
+                                  ],
+                                ),
                               ),
-                          ],
                         ),
-                      ),
-                    )
-                  : const Text('账号已变化，请重新导入'),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context, false),
-                  child: const Text('取消'),
-                ),
-                FilledButton(
-                  onPressed: !current || snapshot.groups.isEmpty
-                      ? null
-                      : () => Navigator.pop(context, true),
-                  child: const Text('合并到本机'),
-                ),
-              ],
-            );
-          },
+                      )
+                    : const Text('账号已变化，请重新导入'),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('取消'),
+                  ),
+                  FilledButton(
+                    onPressed: !current || snapshot.groups.isEmpty
+                        ? null
+                        : () => Navigator.pop(context, Set<int>.of(selected)),
+                    child: const Text('合并到本机'),
+                  ),
+                ],
+              );
+            },
+          ),
         ),
       );
-      if (confirmed != true || !isCurrent()) return;
+      if (restoreRemoteIds == null || !isCurrent()) return;
       final currentMid = await _api.currentAccountMid();
       if (!isCurrent()) return;
       if (currentMid == null) throw StateError('暂时无法确认当前账号，请重试');
@@ -314,8 +376,15 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
         _accountChanged();
         return;
       }
-      final groups = await _store.merge(snapshot, isCurrent: isCurrent);
-      if (isCurrent()) setState(() => _groups = groups);
+      final result = await _store.mergeManually(
+        snapshot,
+        restoreRemoteIds: restoreRemoteIds,
+        isCurrent: isCurrent,
+      );
+      if (isCurrent()) {
+        setState(() => _groups = result.groups);
+        _showImportResult(result);
+      }
     } catch (e) {
       if (isCurrent()) _showImportFailure(e, automatic: false);
     } finally {
@@ -433,7 +502,7 @@ class _FollowingGroupsPageState extends State<FollowingGroupsPage> {
               if (_mid != null)
                 SwitchListTile(
                   title: const Text('自动同步 B 站分组'),
-                  subtitle: const Text('进入此页时从 B 站合并到本机'),
+                  subtitle: const Text('进入此页时以 B 站分组为准，本机自建分组保留'),
                   value: _autoSync,
                   onChanged: _busy || _savingAutoSync ? null : _setAutoSync,
                 ),
@@ -538,9 +607,23 @@ class _GroupMembersPickerState extends State<_GroupMembersPicker> {
   /// 搜索并切换成员，保存时一次返回完整选择。
   @override
   Widget build(BuildContext context) {
+    final query = _query.toLowerCase();
     final visible = widget.creators
-        .where((m) => m.name.toLowerCase().contains(_query.toLowerCase()))
+        .where((m) => m.name.toLowerCase().contains(query))
         .toList();
+    void setChecked(int first, int last, bool checked) {
+      setState(() {
+        for (var i = first; i <= last; i++) {
+          final mid = visible[i].mid;
+          if (checked) {
+            _selected.add(mid);
+          } else {
+            _selected.remove(mid);
+          }
+        }
+      });
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('调整成员'),
@@ -567,23 +650,27 @@ class _GroupMembersPickerState extends State<_GroupMembersPicker> {
             ),
           ),
           Expanded(
-            child: ListView.builder(
+            child: DragCheckboxOptions(
+              key: ValueKey(query),
               itemCount: visible.length,
-              itemBuilder: (_, index) {
-                final member = visible[index];
-                return CheckboxListTile(
-                  secondary: FollowingGroupMemberAvatar(member: member),
-                  title: Text(member.name),
-                  value: _selected.contains(member.mid),
-                  onChanged: (value) => setState(() {
-                    if (value == true) {
-                      _selected.add(member.mid);
-                    } else {
-                      _selected.remove(member.mid);
-                    }
-                  }),
-                );
-              },
+              checkedAt: (index) => _selected.contains(visible[index].mid),
+              onRangeChanged: setChecked,
+              builder: (context, controller, physics) => ListView.builder(
+                controller: controller,
+                physics: physics,
+                itemCount: visible.length,
+                itemBuilder: (_, index) {
+                  final member = visible[index];
+                  return DragCheckboxTile(
+                    key: ValueKey(member.mid),
+                    index: index,
+                    leading: FollowingGroupMemberAvatar(member: member),
+                    title: Text(member.name),
+                    value: _selected.contains(member.mid),
+                    onChanged: (checked) => setChecked(index, index, checked),
+                  );
+                },
+              ),
             ),
           ),
         ],

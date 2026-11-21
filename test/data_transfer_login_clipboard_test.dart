@@ -177,14 +177,13 @@ void main() {
     await _tap(t, '取消');
     expect(reads, 0);
     await _tap(t, '导入登录信息');
-    await _tap(t, '从剪贴板粘贴');
+    await _tap(t, '从文本导入');
+    expect(reads, 0);
+    await _tap(t, '从剪贴板填充');
     expect(reads, 1);
     expect(find.textContaining('无法读取剪贴板'), findsOneWidget);
     expect(find.textContaining(_fixture), findsNothing);
-    ScaffoldMessenger.of(
-      t.element(find.byType(DataTransferPage)),
-    ).removeCurrentSnackBar();
-    await _frame(t);
+    await _tap(t, '取消');
     await _tap(t, '导出登录信息');
     await _tap(t, '复制到剪贴板');
     await _tap(t, '我已了解，复制');
@@ -193,11 +192,26 @@ void main() {
     expect(find.textContaining(_fixture), findsNothing);
   });
 
-  testWidgets('空、过大、错误包或设置备份不验证，不显示明文控件', (t) async {
+  testWidgets('空、过大、错误包或设置备份不可进入验证，修正前保留输入', (t) async {
     final store = _Store(), nav = _Nav();
     await page(t, BilibiliAuthService(cookieStore: store, api: nav));
+    await _tap(t, '导入登录信息');
+    await _tap(t, '从文本导入');
+    final field = find.byType(TextField);
+    expect(t.widget<TextField>(field).controller!.text, isEmpty);
+    expect(reads, 0);
+    await _tap(t, '下一步');
+    expect(find.textContaining('请输入登录备份'), findsOneWidget);
+
+    getClipboard = () async => null;
+    await _tap(t, '从剪贴板填充');
+    expect(find.textContaining('剪贴板没有文本'), findsOneWidget);
+    getClipboard = () async => {'text': '界' * (2 * 1024 * 1024 ~/ 3 + 1)};
+    await _tap(t, '从剪贴板填充');
+    expect(find.textContaining('不能超过 2 MB'), findsOneWidget);
+    expect(t.widget<TextField>(field).controller!.text, isEmpty);
+
     for (final bad in [
-      null,
       '{bad',
       '{"format":"focubili-settings","schemaVersion":1,"settings":{}}',
       jsonEncode({
@@ -205,13 +219,14 @@ void main() {
         'schemaVersion': 1,
         'cookie': 'a' * 65537,
       }),
-      '界' * (2 * 1024 * 1024 ~/ 3 + 1),
     ]) {
-      getClipboard = () async => bad == null ? null : {'text': bad};
-      await _tap(t, '导入登录信息');
-      await _tap(t, '从剪贴板粘贴');
+      getClipboard = () async => {'text': bad};
+      await _tap(t, '从剪贴板填充');
       expect(find.text('验证并导入'), findsNothing);
-      expect(find.byType(EditableText), findsNothing);
+      await _tap(t, '下一步');
+      expect(find.textContaining('不是有效的登录备份'), findsOneWidget);
+      expect(t.widget<TextField>(field).controller!.text, bad);
+      expect(find.text('验证并导入'), findsNothing);
     }
     expect(nav.calls, 0);
     expect(store.writes, 0);
@@ -239,8 +254,9 @@ void main() {
     final pending = Completer<Object?>();
     getClipboard = () => pending.future;
     await _tap(t, '导入登录信息');
+    await _tap(t, '从文本导入');
     expect(reads, 0);
-    await _tap(t, '从剪贴板粘贴');
+    await _tap(t, '从剪贴板填充');
     expect(reads, 1);
     try {
       t.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
@@ -250,22 +266,45 @@ void main() {
       t.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     }
     await _frame(t);
+    final field = t.widget<TextField>(find.byType(TextField));
+    expect(field.controller!.text, isEmpty);
+    expect(field.readOnly, isFalse);
     expect(find.text('验证并导入'), findsNothing);
     expect(nav.calls, 0);
     expect(store.writes, 0);
   });
 
-  testWidgets('取消不调用验证；过期保留旧账号，验证通过才替换合成存储', (t) async {
+  testWidgets('手动输入或填充仅编辑隐藏文本；取消不验证，成功验证才替换', (t) async {
     final store = _Store(), nav = _Nav();
     final service = BilibiliAuthService(cookieStore: store, api: nav);
     await page(t, service);
     for (final step in ['取消', '验证并导入', '验证并导入']) {
       await _tap(t, '导入登录信息');
       expect(find.byType(EditableText), findsNothing);
-      await _tap(t, '从剪贴板粘贴');
-      expect(find.textContaining('连接 B 站验证'), findsOneWidget);
-      expect(find.textContaining(_fixture), findsNothing);
+      final readCount = reads;
+      await _tap(t, '从文本导入');
+      final field = find.byType(TextField);
+      final editor = t.widget<TextField>(field);
+      expect(editor.controller!.text, isEmpty);
+      expect(editor.obscureText, isTrue);
+      expect(editor.autofillHints, isNull);
+      expect(editor.enableIMEPersonalizedLearning, isFalse);
+      expect(reads, readCount);
+      if (step == '取消') {
+        await t.enterText(field, backup);
+        expect(reads, readCount);
+      } else {
+        await _tap(t, '从剪贴板填充');
+        expect(reads, readCount + 1);
+      }
+      expect(editor.controller!.text, backup);
+      expect(find.text('验证并导入'), findsNothing);
       final before = nav.calls;
+      await _tap(t, '下一步');
+      expect(find.textContaining('连接 B 站验证'), findsOneWidget);
+      expect(find.byType(EditableText), findsNothing);
+      expect(find.textContaining(_fixture), findsNothing);
+      expect(nav.calls, before);
       await _tap(t, step);
       expect(nav.calls, before + (step == '取消' ? 0 : 1));
       if (!nav.allowed) {

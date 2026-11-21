@@ -17,6 +17,7 @@ final _settingsAliases = <Key, String>{
   Key('show-playback-action-animation'):
       '播放暂停动画 开始播放 暂停 标志 图标 缩小 淡出 反馈 animation',
   Key('show-note-time-markers'): '显示笔记时间标记 笔记旗标 时间点 播放器',
+  Key('enable-note-markdown'): '笔记格式 富文本 纯文本 md 预览',
   Key('enable-two-finger-video-transform'): '启用双指缩放画面 全屏 拖动 双指双击恢复画面 播放器手势',
   Key('enable-focus-do-not-disturb'): '专注 勿扰 通知 Windows 系统专注',
   Key('video-tag-mode'): '视频标签 默认展开 点击后展开 隐藏 播放器外观',

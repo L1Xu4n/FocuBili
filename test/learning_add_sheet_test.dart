@@ -31,9 +31,10 @@ VideoPreview partsVideo([int count = 5]) => VideoPreview(
 );
 
 class CollectionContent implements BilibiliPublicContentService {
-  const CollectionContent({this.paged = false});
+  const CollectionContent({this.paged = false, this.pages});
 
   final bool paged;
+  final Map<int, List<int?>>? pages;
 
   @override
   Future<CreatorContentPage<CreatorVideo>> loadCollectionVideos(
@@ -42,17 +43,17 @@ class CollectionContent implements BilibiliPublicContentService {
     int page = 1,
   }) async => CreatorContentPage(
     items: [
-      for (final i in paged ? [page] : [1, 2])
+      for (final i in pages?[page] ?? (paged ? [page] : [1, 2]))
         CreatorVideo(
-          bvid: 'BV$i',
-          title: '课程$i',
+          bvid: i == null ? '' : 'BV$i',
+          title: i == null ? '无效视频' : '课程$i',
           coverUrl: '',
           duration: const Duration(minutes: 1),
         ),
     ],
     page: page,
-    hasMore: paged && page == 1,
-    totalCount: 2,
+    hasMore: pages?.containsKey(page + 1) ?? (paged && page == 1),
+    totalCount: pages?.values.expand((ids) => ids).length ?? 2,
   );
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -393,12 +394,12 @@ void main() {
       expect((await s.loadEntries()).single.position.inSeconds, 30);
     },
   );
-  Future<void> openCollection(
+  Future<void> openCollectionPicker(
     WidgetTester tester,
     LearningListService learning,
-    CollectionDetails details, {
-    bool paged = false,
-  }) async {
+    CollectionDetails details,
+    CollectionContent content,
+  ) async {
     await tester.pumpWidget(
       MaterialApp(
         home: Builder(
@@ -408,7 +409,7 @@ void main() {
                 context,
                 ownerMid: 1,
                 collectionId: 1,
-                contentService: CollectionContent(paged: paged),
+                contentService: content,
                 videoService: details,
                 service: learning,
               ),
@@ -420,6 +421,20 @@ void main() {
     );
     await tester.tap(find.text('批量'));
     await tester.pumpAndSettle();
+  }
+
+  Future<void> openCollection(
+    WidgetTester tester,
+    LearningListService learning,
+    CollectionDetails details, {
+    bool paged = false,
+  }) async {
+    await openCollectionPicker(
+      tester,
+      learning,
+      details,
+      CollectionContent(paged: paged),
+    );
     if (paged) {
       expect(find.text('课程1'), findsOneWidget);
       expect(find.text('课程2'), findsNothing);
@@ -433,6 +448,73 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
   }
+
+  testWidgets(
+    'collection sweep stays staged and submits only eligible choices',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(420, 820));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final learning = await service();
+      final details = CollectionDetails()
+        ..blocked = false
+        ..distinct = true;
+      const content = CollectionContent(
+        pages: {
+          1: [1, 2, 3, null, 2],
+          2: [3, 4, 5],
+        },
+      );
+      Finder checkbox(int id) => find.descendant(
+        of: find.widgetWithText(ListTile, '课程$id'),
+        matching: find.byType(Checkbox),
+      );
+      Future<void> sweep(int from, int to) async {
+        final gesture = await tester.startGesture(
+          tester.getCenter(checkbox(from)),
+        );
+        await tester.pump(kLongPressTimeout + const Duration(milliseconds: 1));
+        await gesture.moveTo(tester.getCenter(checkbox(to)));
+        await gesture.up();
+        await tester.pumpAndSettle();
+      }
+
+      await openCollectionPicker(tester, learning, details, content);
+      expect(find.text('无效视频'), findsNothing);
+      expect(find.text('课程2'), findsOneWidget);
+      await sweep(1, 3);
+      expect(find.text('下一步（3 支）'), findsOneWidget);
+      expect(details.calls, isEmpty);
+      await tester.tap(find.byTooltip('关闭合集选择'));
+      await tester.pumpAndSettle();
+      expect(await learning.loadEntries(), isEmpty);
+
+      await openCollectionPicker(tester, learning, details, content);
+      expect(find.text('下一步（0 支）'), findsOneWidget);
+      await sweep(1, 3);
+      await tester.tap(find.text('加载下一页'));
+      await tester.pumpAndSettle();
+      expect(find.text('下一步（3 支）'), findsOneWidget);
+      expect(find.text('课程3'), findsOneWidget);
+      await sweep(3, 2);
+      await tester.tap(find.text('课程5'));
+      await tester.pumpAndSettle();
+      expect(find.text('下一步（2 支）'), findsOneWidget);
+      expect(details.calls, isEmpty);
+      expect(await learning.loadEntries(), isEmpty);
+
+      await tester.tap(find.text('下一步（2 支）'));
+      await tester.pumpAndSettle();
+      expect(details.calls, ['BV1', 'BV5']);
+      expect(await learning.loadEntries(), isEmpty);
+      await tester.tap(find.text('确认加入'));
+      await tester.pumpAndSettle();
+      expect((await learning.loadEntries()).map((entry) => entry.stableId), [
+        'BV1:101',
+        'BV5:101',
+      ]);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('all parts of a complete two-page collection commit together', (
     tester,

@@ -1,5 +1,7 @@
 part of 'player_page.dart';
 
+enum _DesktopControlsEdge { top, bottom }
+
 typedef _DesktopTimelinePoint = ({
   double progress,
   double x,
@@ -39,7 +41,7 @@ extension _PlayerDesktopPointer on _PlayerPageState {
       _desktopTapRecognizer = recognizer;
       recognizer
         ..onSingleTap = () {
-          if (current()) _togglePlayback(showControls: false);
+          if (current()) _toggleDesktopPlayback();
         }
         ..onDoubleTap = () {
           if (current()) unawaited(_toggleFullscreen());
@@ -71,11 +73,12 @@ extension _PlayerDesktopPointer on _PlayerPageState {
       ? _desktopTimelineHover
       : null;
 
-  Widget _withDesktopPointerRegion(Widget child, double height) {
+  Widget _withDesktopPointerRegion(Widget child) {
     if (!_appPlatform.isDesktop) return child;
     return MouseRegion(
       onExit: (_) {
-        _setDesktopBottomHover(false);
+        _recordDesktopPointerEdge(null);
+        _setDesktopControlsHover(false);
         _setDesktopTimelineHover(null);
       },
       child: Listener(
@@ -83,19 +86,14 @@ extension _PlayerDesktopPointer on _PlayerPageState {
           if (event.kind != PointerDeviceKind.mouse || event.buttons != 0) {
             return;
           }
-          // Measure the toolbar that is actually laid out (wrapped buttons,
-          // visible flags and safe-area padding), even when it is faded out.
-          final bar = _desktopBottomBarKey.currentContext?.findRenderObject();
-          final barHeight = bar is RenderBox && bar.hasSize
-              ? bar.size.height
-              : 0.0;
-          _setDesktopBottomHover(
-            _desktopControlsAvailable &&
-                event.localPosition.dy >= height - barHeight,
-          );
+          _recordDesktopPointerEdge(_desktopControlsEdgeAt(event.position));
+          _holdDesktopControlsOnEdge(mayReveal: true);
         },
-        onPointerDown: (_) {
-          _setDesktopBottomHover(false);
+        onPointerDown: (event) {
+          if (event.kind == PointerDeviceKind.mouse) {
+            _recordDesktopPointerEdge(_desktopControlsEdgeAt(event.position));
+          }
+          _setDesktopControlsHover(false);
           _setDesktopTimelineHover(null);
         },
         onPointerUp: (event) {
@@ -103,26 +101,60 @@ extension _PlayerDesktopPointer on _PlayerPageState {
             return;
           }
           // A stationary mouse produces no hover event after a click or drag.
-          // Reclaim only the toolbar hold, not the timeline image preview.
-          // Pointer-up follows the down hit-test path even outside the player.
-          final bar = _desktopBottomBarKey.currentContext?.findRenderObject();
-          _setDesktopBottomHover(
-            _desktopControlsAvailable &&
-                bar is RenderBox &&
-                bar.hasSize &&
-                (Offset.zero & bar.size).contains(
-                  bar.globalToLocal(event.position),
-                ),
-          );
+          // Reclaim an already visible toolbar without revealing hidden
+          // controls or restoring the timeline image preview on pointer-up.
+          _recordDesktopPointerEdge(_desktopControlsEdgeAt(event.position));
+          _holdDesktopControlsOnEdge(mayReveal: false);
         },
         child: child,
       ),
     );
   }
 
-  void _setDesktopBottomHover(bool hovering) {
-    if (!mounted || _desktopBottomHover == hovering) return;
-    _desktopBottomHover = hovering;
+  RenderBox? _desktopBarBox(_DesktopControlsEdge edge) {
+    final context = switch (edge) {
+      _DesktopControlsEdge.top => _desktopTopBarContext,
+      _DesktopControlsEdge.bottom => _desktopBottomBarContext,
+    };
+    if (context == null || !context.mounted) return null;
+    final box = context.findRenderObject();
+    return box is RenderBox && box.attached && box.hasSize ? box : null;
+  }
+
+  _DesktopControlsEdge? _desktopControlsEdgeAt(Offset position) {
+    if (!_desktopControlsAvailable) return null;
+    bool contains(_DesktopControlsEdge edge) {
+      final bar = _desktopBarBox(edge);
+      return bar != null &&
+          (Offset.zero & bar.size).contains(bar.globalToLocal(position));
+    }
+
+    // Use the actual toolbar bounds, including text/control scaling and
+    // safe-area insets, even when the toolbars are faded out.
+    if (contains(_DesktopControlsEdge.bottom)) {
+      return _DesktopControlsEdge.bottom;
+    }
+    if (contains(_DesktopControlsEdge.top)) return _DesktopControlsEdge.top;
+    return null;
+  }
+
+  void _recordDesktopPointerEdge(_DesktopControlsEdge? edge) {
+    if (_desktopPointerEdge == edge) return;
+    _desktopPointerEdge = edge;
+    _desktopSuppressedEdge = null;
+  }
+
+  void _holdDesktopControlsOnEdge({required bool mayReveal}) {
+    _setDesktopControlsHover(
+      _desktopPointerEdge != null &&
+          _desktopPointerEdge != _desktopSuppressedEdge &&
+          (mayReveal || _showControls),
+    );
+  }
+
+  void _setDesktopControlsHover(bool hovering) {
+    if (!mounted || _desktopControlsHover == hovering) return;
+    _desktopControlsHover = hovering;
     if (hovering) {
       _showPlayerControls();
     } else {
@@ -130,7 +162,15 @@ extension _PlayerDesktopPointer on _PlayerPageState {
     }
   }
 
-  Widget _withTimelineMouseHover(Widget slider) {
+  Widget _withTimelinePointerRegion(Widget slider) {
+    slider = Listener(
+      onPointerDown: _recordProgressPointer,
+      onPointerUp: (event) =>
+          _endProgressPointer(event.pointer, canceled: false),
+      onPointerCancel: (event) =>
+          _endProgressPointer(event.pointer, canceled: true),
+      child: slider,
+    );
     if (!_appPlatform.isDesktop) return slider;
     return MouseRegion(
       onExit: (_) => _setDesktopTimelineHover(null),
@@ -143,8 +183,8 @@ extension _PlayerDesktopPointer on _PlayerPageState {
               return;
             }
             final size = context.size;
-            final bar = _desktopBottomBarKey.currentContext?.findRenderObject();
-            if (size == null || bar is! RenderBox || !bar.hasSize) return;
+            final bar = _desktopBarBox(_DesktopControlsEdge.bottom);
+            if (size == null || bar == null) return;
             final track = PlayerTimelineGeometry.trackRect(size);
             if (track.width <= 0) return;
             final fraction =
@@ -171,77 +211,4 @@ extension _PlayerDesktopPointer on _PlayerPageState {
       ),
     );
   }
-
-  Widget _buildTimelineHoverCard({
-    required double progress,
-    required double x,
-  }) {
-    final target = Duration(
-      milliseconds: (_playbackSnapshot.duration.inMilliseconds * progress)
-          .round(),
-    );
-    final frame = _videoShotPreview?.frameFor(target);
-    return Positioned.fill(
-      child: IgnorePointer(
-        child: LayoutBuilder(
-          builder: (context, constraints) => CustomSingleChildLayout(
-            delegate: _TimelineHoverPosition(x),
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              child: DecoratedBox(
-                key: const Key('timeline-hover-preview'),
-                decoration: BoxDecoration(
-                  color: Colors.black87,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 5,
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (constraints.maxHeight >= 92 &&
-                          constraints.maxWidth >= 140)
-                        if (frame != null)
-                          _buildVideoShotFrame(frame)
-                        else if (_videoShotLoading)
-                          const _VideoShotLoading(),
-                      Text(
-                        _formatSeconds(target.inSeconds),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _TimelineHoverPosition extends SingleChildLayoutDelegate {
-  const _TimelineHoverPosition(this.x);
-
-  final double x;
-
-  @override
-  BoxConstraints getConstraintsForChild(BoxConstraints constraints) =>
-      constraints.loosen();
-
-  @override
-  Offset getPositionForChild(Size size, Size childSize) => Offset(
-    (x - childSize.width / 2).clamp(0.0, size.width - childSize.width),
-    size.height - childSize.height,
-  );
-
-  @override
-  bool shouldRelayout(_TimelineHoverPosition oldDelegate) => x != oldDelegate.x;
 }

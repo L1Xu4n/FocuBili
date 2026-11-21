@@ -320,6 +320,197 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
     );
   }
 
+  /// 桌面关闭抽屉后，以内容区域为中心，只保留欢迎语和两个文字动作。
+  Widget _buildMinimalWorkspaceHome(
+    BuildContext context, {
+    bool showRestore = true,
+  }) {
+    final theme = Theme.of(context);
+    final titleStyle =
+        AdaptiveLayout.usesExpandedWorkspace(MediaQuery.sizeOf(context))
+        ? theme.textTheme.displayMedium
+        : theme.textTheme.displaySmall;
+    return Center(
+      key: Key(
+        showRestore ? 'focus-minimal-workspace-home' : 'desktop-dock-welcome',
+      ),
+      child: SingleChildScrollView(
+        primary: false,
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Semantics(
+              header: true,
+              child: Text(
+                '今天要学点什么？',
+                textAlign: TextAlign.center,
+                style: titleStyle?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  color: theme.colorScheme.onSurface,
+                ),
+              ),
+            ),
+            const SizedBox(height: 28),
+            FilledButton(
+              key: const Key('home-start-search'),
+              onPressed: widget.onOpenVideo,
+              style: FilledButton.styleFrom(
+                minimumSize: const Size(176, 48),
+                textStyle: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 12,
+                ),
+              ),
+              child: const Text('开始搜索'),
+            ),
+            if (showRestore) ...[
+              const SizedBox(height: 8),
+              Tooltip(
+                message: '启用抽屉并编辑',
+                child: TextButton(
+                  key: const Key('home-restore-drawer'),
+                  onPressed: _canRestoreDrawer
+                      ? _restoreDrawerForEditing
+                      : null,
+                  style: TextButton.styleFrom(
+                    foregroundColor: theme.colorScheme.onSurfaceVariant,
+                    minimumSize: const Size(48, 48),
+                  ),
+                  child: const Text('启用抽屉'),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// The main pane and the dock are siblings, never a modal overlay.
+  Widget _buildDesktopDock(
+    BuildContext context,
+    FocusSession? activeSession,
+    FocusSession? finishedSession,
+  ) {
+    final colors = Theme.of(context).colorScheme;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = (constraints.maxWidth * .37).clamp(364.0, 520.0);
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  _buildMinimalWorkspaceHome(context, showRestore: false),
+                  if (!_desktopDockOpen)
+                    Positioned(
+                      right: 16,
+                      top: 12,
+                      child: FilledButton.tonalIcon(
+                        key: const Key('desktop-dock-open'),
+                        onPressed: _toggleDesktopDock,
+                        iconAlignment: IconAlignment.end,
+                        icon: const Icon(Icons.chevron_left_rounded, size: 18),
+                        label: const Text('打开抽屉'),
+                      ),
+                    )
+                  else
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Tooltip(
+                        message: '收起抽屉',
+                        child: SizedBox(
+                          width: 44,
+                          height: 76,
+                          child: Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              key: const Key('desktop-dock-collapse'),
+                              onTap: _toggleDesktopDock,
+                              child: Align(
+                                alignment: Alignment.centerRight,
+                                child: Container(
+                                  width: 26,
+                                  height: 76,
+                                  decoration: BoxDecoration(
+                                    color: colors.surfaceContainerHigh,
+                                    border: Border.all(
+                                      color: colors.outlineVariant,
+                                    ),
+                                    borderRadius: const BorderRadius.horizontal(
+                                      left: Radius.circular(9),
+                                    ),
+                                  ),
+                                  child: Icon(
+                                    Icons.chevron_right_rounded,
+                                    size: 21,
+                                    color: colors.onSurfaceVariant,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            if (_desktopDockVisited)
+              Offstage(
+                offstage: !_desktopDockOpen,
+                child: ExcludeFocus(
+                  excluding: !_desktopDockOpen,
+                  child: TickerMode(
+                    enabled: _desktopDockOpen,
+                    child: Container(
+                      key: const Key('desktop-learning-dock'),
+                      width: width,
+                      decoration: BoxDecoration(
+                        border: Border(
+                          left: BorderSide(color: colors.outlineVariant),
+                        ),
+                      ),
+                      // Share the homepage canvas instead of painting a separate panel.
+                      child: Semantics(
+                        container: true,
+                        explicitChildNodes: true,
+                        label: '学习抽屉',
+                        child: SingleChildScrollView(
+                          key: const PageStorageKey(
+                            'desktop-learning-dock-scroll',
+                          ),
+                          controller: _scrollController,
+                          padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
+                          child: Column(
+                            children: [
+                              _buildSubscriptionIntroduction(),
+                              _buildHomeCardBoard(
+                                context,
+                                activeSession,
+                                finishedSession,
+                                columns: 1,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
   /// 横屏左侧保留简介，所有可编辑卡片统一放在独立可滚动的右侧区域。
   Widget _buildWorkspaceDashboard(
     BuildContext context,

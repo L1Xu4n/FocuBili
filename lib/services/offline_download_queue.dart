@@ -476,6 +476,64 @@ class OfflineDownloadQueue extends ChangeNotifier {
     _emit();
   });
 
+  /// Refreshes only the completed task rows matching deleted cache identities.
+  ///
+  /// Unlike task removal, this cannot interrupt transfers or discard partial
+  /// bytes. A new download which already finished must keep its completed row.
+  Future<void> reconcileDeleted(
+    Set<String> ids, {
+    int? expectedCourseAccountRevision,
+  }) => _command(() async {
+    if (ids.isEmpty) return;
+    bool scopeIsCurrent() =>
+        expectedCourseAccountRevision == null ||
+        expectedCourseAccountRevision == CacheLifecycle.account.value;
+    bool matches(OfflineDownloadTask task) =>
+        ids.contains(task.id) &&
+        (task.courseMid != null) == (expectedCourseAccountRevision != null) &&
+        _visible(task) &&
+        task.id != _activeId &&
+        task.status == DownloadTaskStatus.completed;
+    if (!scopeIsCurrent()) return;
+    final candidates = _tasks.where(matches).toSet();
+    if (candidates.isEmpty) return;
+
+    final remaining = expectedCourseAccountRevision == null
+        ? (await library.loadDownloads())
+              .map((e) => '${e.bvid}:${e.cid}')
+              .toSet()
+        // Do not interpret unavailable private storage as an empty library.
+        : (await courses.entries())
+              .where((e) => e.hasMedia)
+              .map((e) => 'course:${e.mid}:${e.id}')
+              .toSet();
+    if (!scopeIsCurrent()) return;
+
+    final removed = <int, OfflineDownloadTask>{};
+    for (var i = 0; i < _tasks.length; i++) {
+      final task = _tasks[i];
+      if (candidates.contains(task) &&
+          matches(task) &&
+          !remaining.contains(task.id)) {
+        removed[i] = task;
+      }
+    }
+    if (removed.isEmpty) return;
+    for (final index in removed.keys.toList().reversed) {
+      _tasks.removeAt(index);
+    }
+    try {
+      await _save();
+    } catch (_) {
+      // Preserve status/progress changes made by an unrelated active task.
+      for (final entry in removed.entries) {
+        _tasks.insert(entry.key, entry.value);
+      }
+      rethrow;
+    }
+    _emit();
+  });
+
   /// Finds a current immutable task by BV/CID identity.
   OfflineDownloadTask? _find(String id) {
     for (final task in _tasks) {

@@ -266,6 +266,8 @@ void main() {
       tester,
       Offset(surface.left + surface.width * .8, surface.center.dy),
     );
+    final glyphs = find.byKey(const Key('double-tap-seek-glyphs'));
+    final ready = tester.getRect(glyphs);
     playback.controller.add(
       const PlaybackSnapshot(
         phase: PlaybackPhase.loading,
@@ -275,11 +277,10 @@ void main() {
     );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
-    final seek = tester.getRect(
-      find.byKey(const Key('double-tap-seek-glyphs')),
-    );
+    final seek = tester.getRect(glyphs);
     final hint = tester.getRect(find.text('缓冲回归测试'));
-    expect(seek.bottom, lessThanOrEqualTo(hint.top));
+    expect(seek.center, ready.center);
+    expect(hint.right, lessThanOrEqualTo(seek.left));
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });

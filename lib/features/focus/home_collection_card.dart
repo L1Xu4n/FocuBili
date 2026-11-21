@@ -29,9 +29,11 @@ class _HomeChoice {
     this.label, {
     this.imageUrl = '',
     this.groupAvatarUrls = const [],
+    this.needsRemoteCover = false,
   });
   final String imageUrl;
   final List<String> groupAvatarUrls;
+  final bool needsRemoteCover;
   final String kind;
   final String id;
   final String label;
@@ -447,6 +449,54 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
       _coverSessionEnded(status) ||
       status == AccountDataLoadStatus.permissionDenied;
 
+  Future<({String? cover, AccountDataLoadStatus status})> _favoriteFolderCover(
+    int mediaId,
+  ) async {
+    final request = _fallbackCoverRequests.putIfAbsent(mediaId, () async {
+      try {
+        final videos = await _api.loadFavoriteVideos(mediaId);
+        if (videos.status == AccountDataLoadStatus.networkError) {
+          return (cover: null, status: videos.status);
+        }
+        if (_coverAccessRejected(videos.status)) {
+          return (cover: '', status: videos.status);
+        }
+        if (videos.isSuccess) {
+          for (final video in videos.items) {
+            if (video.isAvailable && video.coverUrl.trim().isNotEmpty) {
+              return (cover: video.coverUrl, status: videos.status);
+            }
+          }
+        }
+      } catch (_) {
+        // One unreadable folder should not affect other thumbnails.
+      }
+      return (cover: '', status: AccountDataLoadStatus.unavailable);
+    });
+    final result = await request;
+    final cover = result.cover;
+    if ((cover == null || cover.isEmpty) &&
+        identical(_fallbackCoverRequests[mediaId], request)) {
+      _fallbackCoverRequests.remove(mediaId);
+    }
+    return result;
+  }
+
+  Future<String> _loadPickerCover(
+    int mediaId,
+    int mid,
+    bool Function() valid,
+  ) async {
+    if (!valid()) return '';
+    final result = await _favoriteFolderCover(mediaId);
+    final cover = result.cover;
+    if (!valid() || cover == null || cover.isEmpty) return '';
+    final current = await _api.currentHomeCollectionMid();
+    if (!valid()) return '';
+    if (current != null && current != mid) CacheLifecycle.accountChanged();
+    return current == mid ? cover : '';
+  }
+
   /// 只为已选且有视频的缺图收藏夹补查第一页，每批最多三项。
   Future<void> _backfillSelectedCovers(
     List<FavoriteFolder> missing,
@@ -459,38 +509,13 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
       final batch = missing.skip(offset).take(3);
       final covers = await Future.wait(
         batch.map((folder) async {
-          final request = _fallbackCoverRequests.putIfAbsent(
-            folder.mediaId,
-            () async {
-              try {
-                final videos = await _api.loadFavoriteVideos(folder.mediaId);
-                if (videos.status == AccountDataLoadStatus.networkError) {
-                  return (cover: null, status: videos.status);
-                }
-                if (_coverAccessRejected(videos.status)) {
-                  return (cover: '', status: videos.status);
-                }
-                if (videos.isSuccess) {
-                  for (final video in videos.items) {
-                    if (video.isAvailable && video.coverUrl.trim().isNotEmpty) {
-                      return (cover: video.coverUrl, status: videos.status);
-                    }
-                  }
-                }
-              } catch (_) {
-                /* 单夹失败不影响其余来源。 */
-              }
-              return (cover: '', status: AccountDataLoadStatus.unavailable);
-            },
-          );
-          final result = await request;
-          final cover = result.cover;
-          if ((cover == null || cover.isEmpty) &&
-              identical(_fallbackCoverRequests[folder.mediaId], request)) {
-            _fallbackCoverRequests.remove(folder.mediaId);
-          }
+          final result = await _favoriteFolderCover(folder.mediaId);
           // Null is a transient failure, not an authoritative empty result.
-          return (id: '${folder.mediaId}', cover: cover, status: result.status);
+          return (
+            id: '${folder.mediaId}',
+            cover: result.cover,
+            status: result.status,
+          );
         }),
       );
       if (!mounted || generation != _generation || mid != _mid) return;
@@ -811,12 +836,17 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
         }
 
         for (final folder in page.items) {
+          final id = '${folder.mediaId}';
+          final cover = folder.isAvailable ? folder.coverUrl.trim() : '';
+          final missing =
+              folder.isAvailable && folder.mediaCount > 0 && cover.isEmpty;
           choices.add(
             _HomeChoice(
               'remote',
-              '${folder.mediaId}',
+              id,
               folder.title,
-              imageUrl: folder.coverUrl,
+              imageUrl: missing ? (_remoteFolderCovers[id] ?? '') : cover,
+              needsRemoteCover: missing,
             ),
           );
         }
@@ -926,6 +956,13 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
                 ),
                 loadRemote: mid > 0
                     ? (valid) => _loadRemoteChoices(
+                        () => editing && isCurrent() && valid(),
+                      )
+                    : null,
+                loadRemoteCover: widget.favorites && mid > 0
+                    ? (id, valid) => _loadPickerCover(
+                        id,
+                        mid,
                         () => editing && isCurrent() && valid(),
                       )
                     : null,
@@ -1080,6 +1117,7 @@ class _HomeChoiceEditor extends StatefulWidget {
     required this.favorites,
     required this.loadLocal,
     required this.loadRemote,
+    required this.loadRemoteCover,
     required this.accountRevision,
     required this.selected,
     required this.custom,
@@ -1090,6 +1128,7 @@ class _HomeChoiceEditor extends StatefulWidget {
   final bool favorites;
   final Future<List<_HomeChoice>> Function(bool Function()) loadLocal;
   final Future<List<_HomeChoice>?> Function(bool Function())? loadRemote;
+  final Future<String> Function(int, bool Function())? loadRemoteCover;
   final int accountRevision;
   final List<_HomeChoice> selected;
   final bool custom;
@@ -1121,6 +1160,46 @@ class _HomeChoiceEditorState extends State<_HomeChoiceEditor> {
   bool _localLoading = false;
   bool _localFailed = false;
   int _request = 0;
+  final _coverPreviews = <String, String>{};
+  int _activeCoverPreviews = 0;
+  Completer<void>? _coverSlot;
+
+  /// The picker mounts only visible/nearby rows. Ignore queued work when its
+  /// row disappears (scroll, search, back) or the account changes.
+  Future<String> _previewCover(
+    _HomeChoice choice,
+    bool Function() rowMounted,
+  ) async {
+    final load = widget.loadRemoteCover;
+    final id = int.tryParse(choice.id);
+    if (load == null || id == null) return '';
+    final request = _request;
+    bool valid() =>
+        mounted &&
+        rowMounted() &&
+        _managing &&
+        request == _request &&
+        CacheLifecycle.account.value == widget.accountRevision;
+    while (valid()) {
+      if (_coverPreviews[choice.id] case final String cover) return cover;
+      if (_activeCoverPreviews < 3) break;
+      await (_coverSlot ??= Completer<void>()).future;
+    }
+    if (!valid()) return '';
+    _activeCoverPreviews++;
+    try {
+      final cover = await load(id, valid);
+      if (!valid()) return '';
+      return _coverPreviews[choice.id] = cover;
+    } catch (_) {
+      return '';
+    } finally {
+      _activeCoverPreviews--;
+      final slot = _coverSlot;
+      _coverSlot = null;
+      slot?.complete();
+    }
+  }
 
   void _chooseCustom() {
     final enriched = _selected.map(_enrich).toList();
@@ -1138,6 +1217,7 @@ class _HomeChoiceEditorState extends State<_HomeChoiceEditor> {
       _managing = true;
       _local = [];
       _remote = [];
+      _coverPreviews.clear();
       _localLoading = true;
       _localFailed = false;
       _remoteFuture = widget.loadRemote?.call(valid);
@@ -1299,7 +1379,9 @@ class _HomeChoiceEditorState extends State<_HomeChoiceEditor> {
     final matches = [..._local, ..._remote].where(
       (item) =>
           item.key == saved.key &&
-          (item.kind == 'group' || item.imageUrl.isNotEmpty),
+          (item.kind == 'group' ||
+              item.kind == 'remote' ||
+              item.imageUrl.isNotEmpty),
     );
     return matches.isEmpty ? saved : matches.first;
   }
@@ -1405,12 +1487,19 @@ class _HomeChoiceEditorState extends State<_HomeChoiceEditor> {
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Row(
         children: [
-          _ChoiceAvatar(
-            choice: choice,
-            imageUrl: choice.imageUrl,
-            groupAvatarUrls: choice.groupAvatarUrls,
-            cache: widget.imageCache,
-          ),
+          if (choice.needsRemoteCover && choice.imageUrl.isEmpty)
+            _PickerFavoriteCover(
+              key: ValueKey(choice.id),
+              load: (valid) => _previewCover(choice, valid),
+              cache: widget.imageCache,
+            )
+          else
+            _ChoiceAvatar(
+              choice: choice,
+              imageUrl: choice.imageUrl,
+              groupAvatarUrls: choice.groupAvatarUrls,
+              cache: widget.imageCache,
+            ),
           const SizedBox(width: 12),
           Expanded(
             child: Text(
@@ -1528,6 +1617,31 @@ class _HomeChoiceEditorState extends State<_HomeChoiceEditor> {
           ),
       ],
     ],
+  );
+}
+
+/// Starts one optional lookup on mount, not during rebuilds or for every folder.
+class _PickerFavoriteCover extends StatefulWidget {
+  const _PickerFavoriteCover({super.key, required this.load, this.cache});
+
+  final Future<String> Function(bool Function()) load;
+  final ImageResourceCache? cache;
+
+  @override
+  State<_PickerFavoriteCover> createState() => _PickerFavoriteCoverState();
+}
+
+class _PickerFavoriteCoverState extends State<_PickerFavoriteCover> {
+  late final _cover = widget.load(() => mounted);
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<String>(
+    future: _cover,
+    builder: (context, snapshot) => HomeFavoriteCover(
+      coverUrl: snapshot.data ?? '',
+      remote: true,
+      cache: widget.cache,
+    ),
   );
 }
 

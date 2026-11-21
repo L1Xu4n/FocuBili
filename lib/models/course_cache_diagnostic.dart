@@ -15,6 +15,7 @@ enum CourseCacheReason {
   entitlementNotConfirmed,
   restrictionReported,
   policyUnknown,
+  // Legacy Beta 8 diagnostic; keep decoding it for existing queue entries.
   offlinePermissionUnknown,
   watermarkUnknown,
   previewUnknown,

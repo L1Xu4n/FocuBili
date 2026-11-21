@@ -190,7 +190,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.byType(FavoriteFolderCard), findsOneWidget);
-      expect(find.byTooltip('管理收藏夹'), findsOneWidget);
+      expect(find.byTooltip('管理收藏夹'), findsNothing);
       expect(find.text('从 B 站导入'), findsOneWidget);
       if (size.width < 520) {
         expect(
@@ -202,7 +202,8 @@ void main() {
       }
       expect(tester.takeException(), isNull);
       await capture(tester, key, 'favorites-${size.width.toInt()}');
-      await tester.tap(find.byKey(Key('app-favorite-actions-${folder!.id}')));
+      final row = find.byKey(Key('app-favorite-folder-${folder!.id}'));
+      await tester.longPress(row);
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(Key('rename-app-favorite-${folder.id}')));
       await tester.pumpAndSettle();
@@ -215,7 +216,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('重命名后的课程'), findsOneWidget);
-      await tester.tap(find.byKey(Key('app-favorite-actions-${folder.id}')));
+      await tester.longPress(row);
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(Key('delete-app-favorite-${folder.id}')));
       await tester.pumpAndSettle();

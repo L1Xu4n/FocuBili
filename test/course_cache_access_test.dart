@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
@@ -7,7 +8,10 @@ import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/services/bilibili_auth_service.dart';
 import 'package:focubili/services/cache_lifecycle.dart';
 import 'package:focubili/services/course_cache_access.dart';
+import 'package:focubili/services/course_cache_library.dart';
 import 'package:focubili/services/course_cache_validity.dart';
+
+import 'course_cache_library_test.dart' show FixtureTransfer;
 
 const _nav = '/x/web-interface/nav';
 const _paid = '/pugv/pay/web/my/paid';
@@ -67,7 +71,6 @@ class _Fixture {
     response = {
       'is_preview': 0,
       'is_drm': 0,
-      'allow_download': true,
       'season_id': 145,
       'ep_id': 168,
       'cid': 243,
@@ -163,6 +166,22 @@ String _body(Map data) => jsonEncode({'code': 0, 'data': data});
 
 String _url(String file, Duration ttl) =>
     'https://cdn.bilivideo.com/$file?deadline=${_seconds(_now.add(ttl))}&upsig=masked';
+
+Future<(CourseCacheLibrary, FixtureTransfer)> _libraryFor(
+  _Fixture fixture,
+) async {
+  final root = await Directory.systemTemp.createTemp('course_cache_access');
+  addTearDown(() => root.delete(recursive: true));
+  final transfer = FixtureTransfer();
+  final library = CourseCacheLibrary(
+    access: fixture.service(),
+    root: () async => root,
+    downloader: transfer,
+    clock: () => fixture.now,
+  );
+  addTearDown(library.dispose);
+  return (library, transfer);
+}
 
 final _rejected = throwsA(isA<CourseCacheAccessException>());
 
@@ -268,14 +287,9 @@ void main() {
   );
 
   test(
-    'OGV arc and exact episode supply clear and offline-authorized facts',
+    'OGV arc supplies clear DRM status without an offline permission flag',
     () async {
-      fixture.response
-        ..remove('is_drm')
-        ..remove('allow_download');
-      fixture.meta['episodes'] = [
-        {..._lesson(), 'offline_allowed': true},
-      ];
+      fixture.response.remove('is_drm');
       fixture.playviewFields['arc'] = {
         'aid': 297,
         'cid': 243,
@@ -290,30 +304,59 @@ void main() {
   );
 
   test(
-    'successful online playback is not positive offline authorization',
+    'verified lesson reaches both media transfers without a download flag',
     () async {
-      fixture.response
-        ..remove('allow_download')
-        ..['paid_access'] = true;
-      fixture.playviewFields['watch_progress'] = {'allow_download': true};
-      await expectLater(
-        fixture.service().authorize(_video, _part, 64),
-        throwsA(
-          isA<CourseCacheAccessException>().having(
-            (e) => e.diagnosticCode,
-            'diagnostic code',
-            'course-cache/v1/playback/offlinePermissionUnknown',
-          ),
-        ),
+      final (library, transfer) = await _libraryFor(fixture);
+
+      await library.start(_video, _part);
+
+      expect(library.error, isNull);
+      expect(transfer.starts, ['/v.m4s', '/a.m4s']);
+      expect((await library.entries()).single.complete, isTrue);
+    },
+  );
+
+  for (final scenario in <String, void Function(_Fixture)>{
+    'explicit offline denial despite nested positive flags': (f) {
+      f.playviewFields['can_download'] = false;
+      f.response['allow_download'] = true;
+      f.videoTrack['flags'] = {'offline_allowed': true};
+    },
+    'DRM despite otherwise valid media URLs': (f) =>
+        f.playviewFields['arc'] = {'is_drm': true},
+    'encryption despite otherwise valid media URLs': (f) =>
+        f.videoTrack['is_encrypted'] = true,
+    'preview despite otherwise valid media URLs': (f) =>
+        f.playviewFields['is_preview'] = true,
+  }.entries) {
+    test('blocks ${scenario.key} before requesting CDN media', () async {
+      scenario.value(fixture);
+      final (library, transfer) = await _libraryFor(fixture);
+
+      await library.start(_video, _part);
+
+      expect(
+        library.diagnosticCode,
+        'course-cache/v1/playback/restrictionReported',
       );
-      expect(fixture.requests.map((u) => u.path), [
+      expect(transfer.starts, isEmpty);
+      expect(
+        (await library.entries()).where((entry) => entry.complete),
+        isEmpty,
+      );
+      expect(fixture.requests.map((uri) => uri.path), [
         _nav,
         _paid,
         _season,
         _media,
       ]);
-    },
-  );
+    });
+  }
+
+  test('still decodes the strict Beta 8 diagnostic for stored tasks', () {
+    const code = 'course-cache/v1/playback/offlinePermissionUnknown';
+    expect(CourseCacheDiagnostic.fromCode(code)?.code, code);
+  });
 
   for (final reason in <String, void Function(_Fixture)>{
     'DRM on outer arc even with a clear rendition': (f) =>
@@ -329,8 +372,10 @@ void main() {
         },
     'preview on outer result despite inner full marker': (f) =>
         f.playviewFields['is_preview'] = true,
-    'outer offline denial despite inner grant': (f) =>
-        f.playviewFields['allow_download'] = false,
+    'outer offline denial despite inner grant': (f) {
+      f.playviewFields['allow_download'] = false;
+      f.response['allow_download'] = true;
+    },
     'unrelated chapter identities': (f) =>
         f.playviewFields['arc'] = {'cid': 244, 'is_drm': false},
     'legacy flat response': (f) => f.playviewFields

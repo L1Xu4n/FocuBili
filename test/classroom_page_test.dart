@@ -10,6 +10,7 @@ import 'package:focubili/services/bilibili_course_service.dart';
 import 'package:focubili/core/theme/app_theme.dart';
 import 'package:focubili/features/player/player_page.dart';
 import 'package:focubili/models/video_preview.dart';
+import 'package:focubili/platform/app_platform.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'refactor_r3_feedback_test.dart' show FeedbackPlayback;
 import 'review_pr24_regression_test.dart' show ReviewOfflineLibrary;
@@ -138,6 +139,147 @@ Future<void> capture(WidgetTester tester, GlobalKey key, String name) async {
 }
 
 void main() {
+  const offlineAction = Key('current-video-offline-download-button');
+  const toolbarKey = Key('player-library-actions');
+  const studyActions = <Key>[
+    Key('current-video-learning-list-button'),
+    Key('current-video-app-favorite-button'),
+    Key('portrait-note-button'),
+  ];
+
+  Future<void> pumpPlayer(
+    WidgetTester tester, {
+    required VideoPreview video,
+    required AppPlatform platform,
+    required Size size,
+    double textScale = 1,
+  }) async {
+    SharedPreferences.setMockInitialValues({});
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = size;
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: TextScaler.linear(textScale)),
+          child: child!,
+        ),
+        home: PlayerPage(
+          video: video,
+          appPlatform: platform,
+          playbackService: FeedbackPlayback(),
+          offlineVideoService: ReviewOfflineLibrary(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+  }
+
+  for (final (label, platform, size, workspace) in const [
+    ('Android phone', AppPlatform.android, Size(390, 844), false),
+    ('Android tablet', AppPlatform.android, Size(1100, 800), true),
+    ('Windows desktop', AppPlatform.windows, Size(1440, 900), true),
+    ('iPhone', AppPlatform.ios, Size(390, 844), false),
+  ]) {
+    testWidgets('classroom actions evenly fill the $label details', (
+      tester,
+    ) async {
+      await pumpPlayer(tester, video: course, platform: platform, size: size);
+      expect(
+        find.byKey(const Key('player-workspace-layout')),
+        workspace ? findsOneWidget : findsNothing,
+      );
+      expect(find.byKey(offlineAction), findsNothing);
+
+      final actions = [
+        for (final key in studyActions) tester.getRect(find.byKey(key)),
+      ];
+      final toolbar = tester.getRect(find.byKey(toolbarKey));
+      final pitch = actions[1].center.dx - actions[0].center.dx;
+      expect(actions[0].left, closeTo(toolbar.left, 0.01));
+      expect(actions[2].right, closeTo(toolbar.right, 0.01));
+      expect(pitch, greaterThan(actions[0].width));
+      expect(actions[2].center.dx - actions[1].center.dx, closeTo(pitch, 0.01));
+      for (final action in actions) {
+        expect(action.width, closeTo(actions.first.width, 0.01));
+        expect(action.top, closeTo(actions.first.top, 0.01));
+      }
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('classroom actions stack without empty slots at large text', (
+    tester,
+  ) async {
+    await pumpPlayer(
+      tester,
+      video: course,
+      platform: AppPlatform.macos,
+      size: const Size(1000, 700),
+      textScale: 1.6,
+    );
+    expect(find.byKey(offlineAction), findsNothing);
+    final actions = [
+      for (final key in studyActions) tester.getRect(find.byKey(key)),
+    ];
+    final toolbar = tester.getRect(find.byKey(toolbarKey));
+    for (final action in actions) {
+      expect(action.left, closeTo(toolbar.left, 0.01));
+      expect(action.right, closeTo(toolbar.right, 0.01));
+    }
+    expect(actions[1].top, greaterThan(actions[0].bottom));
+    expect(actions[2].top, greaterThan(actions[1].bottom));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('ordinary videos retain all four actions including cache', (
+    tester,
+  ) async {
+    await pumpPlayer(
+      tester,
+      video: const VideoPreview(
+        bvid: 'BV1xx411c7mD',
+        cid: 456,
+        title: 'Ordinary video',
+        ownerName: 'Uploader',
+        parts: [
+          VideoPart(
+            pageNumber: 1,
+            cid: 456,
+            title: 'Part one',
+            duration: Duration(minutes: 2),
+          ),
+        ],
+      ),
+      platform: AppPlatform.android,
+      size: const Size(390, 844),
+    );
+    final cache = find.byKey(offlineAction);
+    expect(find.byTooltip('下载离线缓存'), findsOneWidget);
+    final cacheButton = find.descendant(
+      of: cache,
+      matching: find.byType(TextButton),
+    );
+    expect(tester.widget<TextButton>(cacheButton).onPressed, isNotNull);
+    final actions = [
+      tester.getRect(find.byKey(studyActions[0])),
+      tester.getRect(cache),
+      tester.getRect(find.byKey(studyActions[1])),
+      tester.getRect(find.byKey(studyActions[2])),
+    ];
+    for (var index = 0; index < actions.length; index++) {
+      expect(actions[index].width, closeTo(actions.first.width, 0.01));
+      expect(actions[index].top, closeTo(actions.first.top, 0.01));
+      if (index > 0) {
+        expect(actions[index].left, greaterThan(actions[index - 1].right));
+      }
+    }
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'existing player switches classroom chapters with exact IDs and hides UGC/download actions',
     (tester) async {
@@ -147,6 +289,7 @@ void main() {
         MaterialApp(
           home: PlayerPage(
             video: course,
+            appPlatform: AppPlatform.android,
             playbackService: playback,
             offlineVideoService: ReviewOfflineLibrary(),
           ),
@@ -154,10 +297,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(playback.openedParts.single.courseEpisodeId, 1913937);
-      expect(
-        find.byKey(const Key('current-video-offline-download-button')),
-        findsNothing,
-      );
+      expect(find.byKey(offlineAction), findsNothing);
       expect(find.byKey(const Key('video-like-button')), findsNothing);
       await tester.ensureVisible(find.byKey(const Key('part-2')).first);
       await tester.pumpAndSettle();
@@ -167,6 +307,7 @@ void main() {
       expect(playback.openedParts.last.courseAid, 116492549095986);
       expect(playback.openedParts.last.cid, 37970971612);
       expect(playback.paused, isTrue);
+      expect(find.byKey(offlineAction), findsNothing);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
     },

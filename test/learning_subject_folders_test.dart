@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:ui' show Tristate;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -337,7 +338,7 @@ void main() {
       '高等数学',
     );
     await tapVisible(tester, find.byKey(const Key('save-learning-folder')));
-    expect(find.text('高等数学（1）'), findsOneWidget);
+    expect(find.bySemanticsLabel('高等数学（1）'), findsOneWidget);
     await tapVisible(
       tester,
       find.byKey(Key('manage-learning-folder-${folder.id}')),
@@ -381,10 +382,11 @@ void main() {
     expect((await service.loadState()).folders.last.name, '物理');
     expect(
       tester
-          .widget<Semantics>(find.byKey(Key('learning-folder-${first.id}')))
-          .properties
-          .selected,
-      isTrue,
+          .getSemantics(find.byKey(Key('learning-folder-${first.id}')))
+          .getSemanticsData()
+          .flagsCollection
+          .isSelected,
+      Tristate.isTrue,
     );
     expect(find.byKey(const Key('learning-list-BV1:1')), findsNothing);
 
@@ -401,10 +403,11 @@ void main() {
     expect((await service.loadEntries()).single.folderId, isNull);
     expect(
       tester
-          .widget<Semantics>(find.byKey(Key('learning-folder-${first.id}')))
-          .properties
-          .selected,
-      isTrue,
+          .getSemantics(find.byKey(Key('learning-folder-${first.id}')))
+          .getSemanticsData()
+          .flagsCollection
+          .isSelected,
+      Tristate.isTrue,
     );
     await tester.tap(find.byKey(const Key('learning-folder-ungrouped')));
     await tester.pumpAndSettle();
@@ -414,6 +417,85 @@ void main() {
     expect(find.byKey(const Key('learning-list-BV1:1')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  for (final brightness in Brightness.values) {
+    testWidgets('自定义分组的边框、基线和选中底色与内置分组一致 ($brightness)', (tester) async {
+      final service = LearningListService();
+      final folder = (await service.createFolder(
+        '数学',
+        iconId: 'book',
+      )).folders.single;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ThemeData(useMaterial3: true, brightness: brightness),
+          home: LearningListPage(learningListService: service),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final all = find.byKey(const Key('learning-folder-all'));
+      final ungrouped = find.byKey(const Key('learning-folder-ungrouped'));
+      final custom = find.byKey(Key('learning-folder-${folder.id}'));
+      final menu = find.byKey(Key('manage-learning-folder-${folder.id}'));
+      Finder surface(Finder chip) =>
+          find.descendant(of: chip, matching: find.byType(Material));
+      ShapeBorder? shape(Finder chip) =>
+          tester.widget<Material>(surface(chip)).shape;
+      ShapeDecoration decoration(Finder chip) =>
+          tester
+                  .widget<Ink>(
+                    find.descendant(of: chip, matching: find.byType(Ink)),
+                  )
+                  .decoration!
+              as ShapeDecoration;
+
+      expect(shape(custom), shape(ungrouped));
+      expect(decoration(custom).color, decoration(ungrouped).color);
+      expect(
+        tester.getRect(surface(custom)).height,
+        tester.getRect(surface(all)).height,
+      );
+      expect(
+        tester.getRect(surface(custom)).center.dy,
+        tester.getRect(surface(all)).center.dy,
+      );
+      final chipBounds = tester.getRect(surface(custom));
+      final countBounds = tester.getRect(
+        find.descendant(of: custom, matching: find.text('（0）')),
+      );
+      expect(tester.getCenter(menu).dy, chipBounds.center.dy);
+      // Keep the visible menu after the count compact, without crowding the edge.
+      expect(chipBounds.right - countBounds.right, inInclusiveRange(34, 38));
+      expect(
+        chipBounds.right - tester.getCenter(menu).dx,
+        inInclusiveRange(15, 17),
+      );
+      expect(tester.getSize(custom).height, greaterThanOrEqualTo(48));
+      expect(
+        tester.getTopLeft(find.widgetWithText(ChoiceChip, '全部')).dy,
+        greaterThan(tester.getBottomLeft(custom).dy),
+      );
+
+      final selectedShape = shape(all);
+      final selectedFill = decoration(all).color;
+      await tester.tapAt(countBounds.center);
+      await tester.pumpAndSettle();
+      expect(shape(custom), selectedShape);
+      expect(decoration(custom).color, selectedFill);
+      expect(find.byType(LearningFolderBadge), findsOneWidget);
+
+      // The upper edge of the padded chip is still tappable for the menu.
+      await tester.tapAt(
+        Offset(tester.getCenter(menu).dx, tester.getTopLeft(custom).dy + 1),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('编辑分组'), findsOneWidget);
+      await tester.tap(find.byTooltip('关闭'));
+      await tester.pumpAndSettle();
+      expect(tester.widget<InputChip>(custom).selected, isTrue);
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   testWidgets('窄屏大字下长名称分组的独立菜单可点击', (tester) async {
     await tester.binding.setSurfaceSize(const Size(320, 1000));
@@ -437,13 +519,39 @@ void main() {
     await tester.pumpAndSettle();
     await tapVisible(tester, find.byKey(Key('learning-folder-${selected.id}')));
     final targetSelection = find.byKey(Key('learning-folder-${target.id}'));
-    expect(tester.widget<Semantics>(targetSelection).properties.button, isTrue);
-    expect(
-      tester.widget<Semantics>(targetSelection).properties.selected,
-      isFalse,
-    );
+    final flags = tester
+        .getSemantics(targetSelection)
+        .getSemanticsData()
+        .flagsCollection;
+    expect(flags.isButton, isTrue);
+    expect(flags.isSelected, Tristate.isFalse);
     final menu = find.byKey(Key('manage-learning-folder-${target.id}'));
-    await tapVisible(tester, menu);
+    final scroll = find.ancestor(
+      of: targetSelection,
+      matching: find.byType(SingleChildScrollView),
+    );
+    final position = tester
+        .state<ScrollableState>(
+          find.descendant(of: scroll, matching: find.byType(Scrollable)),
+        )
+        .position;
+    await tester.drag(scroll, const Offset(-420, 0));
+    await tester.pumpAndSettle();
+    final scrolledOffset = position.pixels;
+    expect(scrolledOffset, greaterThan(0));
+    expect(
+      tester.getSize(targetSelection).width,
+      lessThanOrEqualTo(tester.getSize(scroll).width),
+    );
+    final count = tester.getRect(
+      find.descendant(of: targetSelection, matching: find.text('（0）')),
+    );
+    expect(count.width, greaterThan(0));
+    expect(tester.getRect(scroll).contains(count.center), isTrue);
+    expect(menu.hitTestable(), findsOneWidget);
+    await tester.tap(menu);
+    await tester.pumpAndSettle();
+    expect(position.pixels, scrolledOffset);
     expect(find.text('编辑分组'), findsOneWidget);
     await tester.enterText(find.byKey(const Key('learning-folder-name')), '物理');
     await tapVisible(tester, find.byKey(const Key('save-learning-folder')));
@@ -452,10 +560,11 @@ void main() {
     expect(state.folders.last.name, '物理');
     expect(
       tester
-          .widget<Semantics>(find.byKey(Key('learning-folder-${selected.id}')))
-          .properties
-          .selected,
-      isTrue,
+          .getSemantics(find.byKey(Key('learning-folder-${selected.id}')))
+          .getSemanticsData()
+          .flagsCollection
+          .isSelected,
+      Tristate.isTrue,
     );
     expect(tester.takeException(), isNull);
   });

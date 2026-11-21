@@ -1,8 +1,10 @@
 import 'dart:io';
 
 import 'package:archive/archive.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:photo_view/photo_view.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -13,6 +15,7 @@ import 'package:focubili/features/notes/video_notes_page.dart';
 import 'package:focubili/features/notes/video_note_share_preview.dart';
 import 'package:focubili/models/video_note.dart';
 import 'package:focubili/models/video_preview.dart';
+import 'package:focubili/services/app_behavior_preferences_service.dart';
 import 'package:focubili/services/bilibili_service.dart';
 import 'package:focubili/services/video_note_service.dart';
 import 'package:focubili/services/video_note_share_service.dart';
@@ -27,20 +30,23 @@ Future<VideoNoteService> _createPageNoteService() async {
 
 /// 创建“我的笔记”页面需要展示的一条完整测试笔记。
 VideoNote _createPageNote({
+  String id = 'managed-note',
+  String title = '原笔记标题',
+  DateTime? createdAt,
   String videoCoverUrl = '',
   String partTitle = '第一P',
   String? framePath,
 }) {
-  final DateTime time = DateTime(2026, 7, 15, 19, 1);
+  final DateTime time = createdAt ?? DateTime(2026, 7, 15, 19, 1);
   return VideoNote(
-    id: 'managed-note',
+    id: id,
     bvid: 'BV1GJ411x7h7',
     videoTitle: '统一管理测试视频',
     ownerName: '测试UP',
     partCid: 100,
     partPageNumber: 1,
     partTitle: partTitle,
-    title: '原笔记标题',
+    title: title,
     body: '原正文',
     createdAt: time,
     updatedAt: time,
@@ -295,11 +301,12 @@ void main() {
   });
 
   testWidgets('笔记详情预览 Markdown，保存并重新打开后保留原文', (tester) async {
+    const String oldSource = '# 旧笔记\n\n**原始内容**';
     const String source = '    x = 2\n\n# 复习提纲\n\n**关键公式**\n\n- 复盘\n';
     const bodyField = Key('note-detail-body-field');
     const openNote = Key('managed-video-note-managed-note');
     final VideoNoteService service = await _createPageNoteService();
-    await service.saveNote(_createPageNote());
+    await service.saveNote(_createPageNote().copyWith(body: oldSource));
     await tester.pumpWidget(
       MaterialApp(
         home: VideoNotesPage(
@@ -312,6 +319,17 @@ void main() {
     await tester.tap(find.byKey(openNote));
     await tester.pumpAndSettle();
 
+    expect(find.text('Markdown 预览'), findsNothing);
+    expect(find.text('编辑正文'), findsNothing);
+    expect(find.byType(MarkdownBody), findsNothing);
+    expect(
+      tester.widget<TextField>(find.byKey(bodyField)).controller!.text,
+      oldSource,
+    );
+
+    final preferences = AppBehaviorPreferencesService();
+    expect(await preferences.saveNoteMarkdownEnabled(true), isTrue);
+    await tester.pumpAndSettle();
     await tester.enterText(find.byKey(bodyField), source);
     await tester.ensureVisible(find.text('Markdown 预览'));
     await tester.tap(find.text('Markdown 预览'));
@@ -326,8 +344,12 @@ void main() {
     expect((await service.loadNotes()).single.body, source);
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
+    expect(await preferences.saveNoteMarkdownEnabled(false), isTrue);
     await tester.tap(find.byKey(openNote));
     await tester.pumpAndSettle();
+    expect(find.text('Markdown 预览'), findsNothing);
+    expect(find.text('编辑正文'), findsNothing);
+    expect(find.byType(MarkdownBody), findsNothing);
     final TextField editor = tester.widget<TextField>(find.byKey(bodyField));
     expect(editor.controller!.text, source);
   });
@@ -358,6 +380,85 @@ void main() {
     );
     expect(exportButton.onPressed, isNotNull);
     expect(shareButton.onPressed, isNotNull);
+  });
+
+  testWidgets('笔记勾选框可拖选当前搜索结果，回拖收缩范围', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(430, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final service = await _createPageNoteService();
+    for (final (index, label) in ['复习 A', '课外 B', '复习 C', '复习 D'].indexed) {
+      await service.saveNote(
+        _createPageNote(
+          id: 'drag-$index',
+          title: label,
+          createdAt: DateTime(2026, 7, 15, 12 - index),
+        ),
+      );
+    }
+    await tester.pumpWidget(
+      MaterialApp(
+        home: VideoNotesPage(
+          noteService: service,
+          videoService: _FakeNoteVideoService(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('video-notes-search-field')),
+      '复习',
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('课外 B'), findsNothing);
+
+    Finder row(int index) => find.byKey(Key('managed-video-note-drag-$index'));
+    Finder box(int index, {bool selected = false}) => find.descendant(
+      of: row(index),
+      matching: find.byIcon(
+        selected
+            ? Icons.check_box_rounded
+            : Icons.check_box_outline_blank_rounded,
+      ),
+    );
+
+    await tester.longPress(find.text('复习 A'));
+    await tester.pumpAndSettle();
+    expect(find.text('已选择 1 条'), findsOneWidget);
+    final add = await tester.startGesture(tester.getCenter(box(2)));
+    await tester.pump(kLongPressTimeout + const Duration(milliseconds: 1));
+    await tester.pump();
+    await add.moveTo(tester.getCenter(box(3)));
+    await tester.pump();
+    expect(find.text('已选择 3 条'), findsOneWidget);
+    await add.moveTo(tester.getCenter(box(2, selected: true)));
+    await tester.pump();
+    await add.up();
+    await tester.pumpAndSettle();
+    expect(find.text('已选择 2 条'), findsOneWidget);
+    expect(box(3), findsOneWidget);
+
+    final remove = await tester.startGesture(
+      tester.getCenter(box(0, selected: true)),
+    );
+    await tester.pump(kLongPressTimeout + const Duration(milliseconds: 1));
+    await tester.pump();
+    await remove.moveTo(tester.getCenter(box(2, selected: true)));
+    await tester.pump();
+    await remove.up();
+    await tester.pumpAndSettle();
+    expect(find.text('已选择 0 条'), findsOneWidget);
+    expect(
+      tester
+          .widget<OutlinedButton>(
+            find.byKey(const Key('save-selected-video-notes')),
+          )
+          .onPressed,
+      isNull,
+    );
+    await tester.tap(box(3));
+    await tester.pumpAndSettle();
+    expect(find.text('已选择 1 条'), findsOneWidget);
+    expect((await service.loadNotes()).map((note) => note.id), hasLength(4));
   });
 
   /// 验证旧版本笔记会用公开视频资料补齐视频封面并写回本机。

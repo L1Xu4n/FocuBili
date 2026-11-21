@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/danmaku_preferences.dart';
 import '../models/playback_preferences.dart';
 import '../models/search_content_filter.dart';
+import 'app_behavior_preferences_service.dart';
 import 'app_theme_mode_service.dart';
 import 'app_text_scale_service.dart';
 import 'image_resource_cache.dart';
@@ -31,6 +32,7 @@ class SettingsTransferService {
     'app_behavior.search_history_enabled': _SettingType.boolean,
     'app_behavior.watch_history_enabled': _SettingType.boolean,
     'app_behavior.wbi_signing_enabled': _SettingType.boolean,
+    AppBehaviorPreferencesService.noteMarkdownEnabledKey: _SettingType.boolean,
     VideoTagPreferences.key: _SettingType.text,
     'appearance.theme_mode': _SettingType.text,
     'appearance.theme_color': _SettingType.integer,
@@ -355,6 +357,11 @@ class SettingsTransferService {
       if (runtime.isNotEmpty) await runtimeAdapter.writeSettings(runtime);
       if (regular.containsKey(VideoTagPreferences.key)) {
         VideoTagPreferences.changes.value++;
+      }
+      if (regular.containsKey(
+        AppBehaviorPreferencesService.noteMarkdownEnabledKey,
+      )) {
+        AppBehaviorPreferencesService.changes.value++;
       }
     } catch (_) {
       var restored = true;

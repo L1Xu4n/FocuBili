@@ -1,5 +1,7 @@
 import 'dart:ui' show Size;
 
+import 'package:flutter/foundation.dart' show TargetPlatform;
+
 /// 保存应用在手机、平板和宽窗口中共用的响应式布局尺寸。
 abstract final class AdaptiveLayout {
   /// 从 600 逻辑像素起按平板或分屏宽窗口增加页面留白。
@@ -42,6 +44,14 @@ abstract final class AdaptiveLayout {
   static bool usesWorkspace(Size size) {
     return size.width >= workspaceBreakpoint && size.width > size.height;
   }
+
+  /// 区分桌面与平板：两者共用工作台布局，但可提供不同的导航操作。
+  static bool isDesktopPlatform(TargetPlatform platform) => switch (platform) {
+    TargetPlatform.linux ||
+    TargetPlatform.macOS ||
+    TargetPlatform.windows => true,
+    _ => false,
+  };
 
   /// 判断当前窗口是否足够宽，可以展开导航文字和更多辅助内容。
   static bool usesExpandedWorkspace(Size size) {

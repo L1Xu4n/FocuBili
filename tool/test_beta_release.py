@@ -469,6 +469,21 @@ class BetaReleaseTests(unittest.TestCase):
         quality = (Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         self.assertIn('python3 -m unittest discover -s tool -p test_beta_release.py -v', quality)
 
+    def test_paired_workflow_reuses_the_signed_build_but_cannot_publish(self):
+        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/beta-release.yml").read_text(encoding="utf-8")
+        self.assertIn("      android_windows_only:\n", workflow)
+        self.assertIn("if: inputs.android_only || inputs.android_windows_only", workflow)
+        self.assertIn('--commit "$REQUESTED_SHA" --event push', workflow)
+        self.assertIn('item.get("headBranch") == branch and item.get("event") == "push"', workflow)
+        self.assertIn('exact.get("conclusion") != "success"', workflow)
+        paired = workflow.split("\n  android-windows:\n", 1)[1].split("\n  apple:\n", 1)[0]
+        self.assertIn("needs: prepare", paired)
+        self.assertIn("uses: ./.github/workflows/release-build.yml", paired)
+        self.assertIn("android_only: ${{ inputs.android_only }}", paired)
+        for job in ["apple", "linux", "assemble"]:
+            self.assertIn(f"\n  {job}:\n    if: ${{{{ !inputs.android_only && !inputs.android_windows_only }}}}", workflow)
+        self.assertIn("\n  publish:\n    if: inputs.publish && !inputs.android_only && !inputs.android_windows_only", workflow)
+
     def test_ci_requires_success_for_every_exact_sha_run(self):
         run = {"headSha": "a" * 40, "databaseId": 1, "status": "completed", "conclusion": "success"}
         with patch.object(beta, "text", return_value=json.dumps([run])):

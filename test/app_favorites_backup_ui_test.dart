@@ -184,7 +184,7 @@ void main() {
       '',
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('app-favorite-actions-empty')));
+    await tester.longPress(find.byKey(const Key('app-favorite-folder-empty')));
     await tester.pumpAndSettle();
     files.saveSucceeded = false;
     await tester.runAsync(() async {

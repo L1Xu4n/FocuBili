@@ -24,6 +24,7 @@ class DragSelectionRegion extends StatefulWidget {
     required this.onDragUpdate,
     required this.builder,
     this.enabled = true,
+    this.itemOrderKey,
   });
 
   final ScrollController controller;
@@ -35,6 +36,10 @@ class DragSelectionRegion extends StatefulWidget {
   /// (but not programmatic scrolling) so a second pointer cannot move it.
   final Widget Function(BuildContext context, bool dragging) builder;
   final bool enabled;
+
+  /// Change this if existing indexes no longer refer to the same items.
+  /// Appending items can keep this key unchanged to continue the gesture.
+  final Object? itemOrderKey;
 
   @override
   State<DragSelectionRegion> createState() => _DragSelectionRegionState();
@@ -64,10 +69,12 @@ class _DragSelectionRegionState extends State<DragSelectionRegion>
   void didUpdateWidget(covariant DragSelectionRegion oldWidget) {
     super.didUpdateWidget(oldWidget);
     // Appending a page keeps indexes stable. A new controller or a shorter
-    // list invalidates the former indexes; callers can key reordered lists.
+    // list invalidates the former indexes. A caller can also invalidate
+    // indexes without rebuilding the scrollable when it filters or reorders.
     if (!widget.enabled ||
         widget.itemCount < oldWidget.itemCount ||
-        widget.controller != oldWidget.controller) {
+        widget.controller != oldWidget.controller ||
+        widget.itemOrderKey != oldWidget.itemOrderKey) {
       _clearDrag();
     } else if (_lastIndex != null && widget.itemCount > oldWidget.itemCount) {
       // A slow next page can arrive after the edge ticker has stopped at the

@@ -20,7 +20,7 @@ mixin _PlayerVideoCoordinator
   /// 所有切视频、切分 P 与剧情跳转共用代次，新操作撤销仍在等待的旧操作。
   int _beginVideoNavigation() {
     _navigationStopRevision = _playbackStopRevision;
-    _clearDesktopPointerForTransition();
+    _clearPlayerPointerForTransition();
     _cancelHorizontalScrub();
     _cancelTemporaryLongPress();
     _cancelLiveNoteFrame();
@@ -390,20 +390,31 @@ mixin _PlayerVideoCoordinator
 
   /// 暂停当前视频后打开指定作者主页，返回时重建被下层播放器占用的原生会话。
   Future<void> _openOwnerProfile([VideoAuthor? selectedAuthor]) async {
+    final VideoPreview video = _activeVideo;
     final VideoAuthor author =
         selectedAuthor ??
         VideoAuthor(
-          mid: _activeVideo.ownerMid,
-          name: _activeVideo.ownerName,
-          avatarUrl: _activeVideo.ownerAvatarUrl,
+          mid: video.ownerMid,
+          name: video.ownerName,
+          avatarUrl: video.ownerAvatarUrl,
         );
     if (author.mid <= 0) {
       _showPlayerNotice('暂时没有这个 UP 主的主页编号');
       return;
     }
     final bool shouldResume = _playing;
+    // Opening the profile supersedes any unfinished video/part switch.
+    _beginVideoNavigation();
+    final accountRevision = CacheLifecycle.account.value;
+    final currentPlayback =
+        author.mid == video.ownerMid && !video.isCourse && video.bvid.isNotEmpty
+        ? (
+            ownerMid: video.ownerMid,
+            bvid: video.bvid,
+            accountRevision: accountRevision,
+          )
+        : null;
     _cancelNoteCaptureForExternalNavigation();
-    _clearAbRepeatForNavigation();
     await _drainAbRepeatSeek();
     if (!mounted) return;
     if (shouldResume) {
@@ -423,6 +434,7 @@ mixin _PlayerVideoCoordinator
           mid: author.mid,
           initialName: author.name,
           initialAvatarUrl: author.avatarUrl,
+          currentPlayback: currentPlayback,
           publicContentService: _publicContentService,
           videoService: _bilibiliService,
           learningListService: _learningListService,
@@ -638,9 +650,11 @@ mixin _PlayerVideoCoordinator
             collection: collection,
             currentBvid: _activeVideo.bvid,
             watchHistoryByBvid: _watchHistoryByBvid,
-            // 合集面板加入函数沿用播放器的完整视频查询与学习清单服务。
-            onAddToLearningList: (VideoCollectionEntry entry) =>
-                unawaited(_addCollectionVideoToLearningList(entry)),
+            learningListService: _learningListService,
+            resolveLearningSelection: _resolveCollectionLearningSelection,
+            onLearningSaved: () {
+              if (mounted) unawaited(_loadCurrentLearningListEntry());
+            },
           ),
         );
     if (selected != null && mounted && selected.bvid != _activeVideo.bvid) {
