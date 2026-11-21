@@ -6,6 +6,10 @@ import 'package:sqflite/sqflite.dart';
 /// No Dart-held SQLite transaction survives a stopped headless engine.
 abstract interface class SubscriptionSnapshotStore {
   Future<String?> read();
+
+  /// Reads committed data without creating, migrating or repairing storage.
+  /// Missing storage may return null; all other failures must propagate.
+  Future<String?> readForExport();
   Future<String?> recover(bool Function(String) validate);
   Future<T> transact<T>(
     FutureOr<T> Function(String? current, void Function(String) save) action,
@@ -46,6 +50,25 @@ class SqliteSubscriptionSnapshotStore implements SubscriptionSnapshotStore {
       where: 'id = 1',
     );
     return rows.isEmpty ? null : rows.single['value'] as String;
+  }
+
+  @override
+  Future<String?> readForExport() async {
+    final path = '${await getDatabasesPath()}/$databaseName';
+    if (!await databaseExists(path)) return null;
+    // Never use _db: its writable cold open creates the database and schema.
+    // An independent read-only handle also cannot alias a business writer.
+    final db = await openDatabase(path, readOnly: true, singleInstance: false);
+    try {
+      final rows = await db.query(
+        'snapshot',
+        columns: ['value'],
+        where: 'id = 1',
+      );
+      return rows.isEmpty ? null : rows.single['value'] as String;
+    } finally {
+      await db.close();
+    }
   }
 
   @override

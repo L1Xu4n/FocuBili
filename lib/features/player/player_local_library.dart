@@ -5,15 +5,18 @@ extension _PlayerLocalLibrary on _PlayerPageState {
   /// Loads offline membership for the exact part and discards stale lookup results.
   Future<void> _loadOfflineState() async {
     final generation = ++_offlineStateGeneration;
-    final bvid = _activeVideo.bvid;
-    final cid = _currentPart.cid;
+    final video = _activeVideo;
+    final part = _currentPart;
+    final revision = CacheLifecycle.account.value;
+    final bvid = video.bvid;
+    final cid = part.cid;
     try {
-      final downloaded = await _offlineVideoService.isDownloaded(
-        bvid,
-        cid: cid,
-      );
+      final downloaded = video.isCourse
+          ? await _downloadQueue.courseEntry(video, part) != null
+          : await _offlineVideoService.isDownloaded(bvid, cid: cid);
       if (mounted &&
           generation == _offlineStateGeneration &&
+          revision == CacheLifecycle.account.value &&
           _activeVideo.bvid == bvid &&
           _currentPart.cid == cid) {
         _updatePlayerState(() => _currentVideoDownloaded = downloaded);
@@ -28,19 +31,31 @@ extension _PlayerLocalLibrary on _PlayerPageState {
     if (_offlineDownloading) return;
     final video = _activeVideo;
     final part = _currentPart;
+    final revision = CacheLifecycle.account.value;
+    bool currentAccount() =>
+        !video.isCourse || revision == CacheLifecycle.account.value;
     _updatePlayerState(() => _offlineDownloading = true);
     try {
-      final downloaded = await _offlineVideoService.isDownloaded(
-        video.bvid,
-        cid: part.cid,
-      );
-      if (!mounted) return;
+      if (!video.isCourse && video.parts.length > 1) {
+        await _selectOfflineParts(video);
+        if (mounted) await _loadOfflineState();
+        return;
+      }
+      final lesson = video.isCourse
+          ? await _downloadQueue.courseEntry(video, part)
+          : null;
+      final downloaded = video.isCourse
+          ? lesson != null
+          : await _offlineVideoService.isDownloaded(video.bvid, cid: part.cid);
+      if (!mounted || !currentAccount()) return;
       if (downloaded) {
         final confirmed = await showDialog<bool>(
           context: context,
           builder: (dialogContext) => AlertDialog(
             title: const Text('删除离线缓存'),
-            content: Text('删除 P${part.pageNumber} 的离线文件？'),
+            content: Text(
+              video.isCourse ? '删除本章的离线文件？' : '删除 P${part.pageNumber} 的离线文件？',
+            ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(dialogContext, false),
@@ -53,16 +68,35 @@ extension _PlayerLocalLibrary on _PlayerPageState {
             ],
           ),
         );
-        if (confirmed != true || !mounted) return;
-        await _offlineVideoService.delete(video.bvid, cid: part.cid);
+        if (confirmed != true || !mounted || !currentAccount()) return;
+        if (lesson != null) {
+          await _downloadQueue.courses.remove(lesson);
+        } else {
+          await _offlineVideoService.delete(video.bvid, cid: part.cid);
+        }
         await _downloadQueue.reconcileCompleted();
-        if (mounted) _showTransientSnackBar('已删除该分 P 的离线缓存');
+        if (mounted && currentAccount()) _showTransientSnackBar('已删除离线缓存');
       } else {
-        final qualities = await _offlineVideoService.availableQualities(
-          video,
-          part,
-        );
-        if (!mounted) return;
+        final List<PreferredPlaybackQuality> qualities;
+        if (video.isCourse) {
+          final grant = await _downloadQueue.courses.access.authorize(
+            video,
+            part,
+            _currentQuality > 0 ? _currentQuality : 64,
+          );
+          qualities = PreferredPlaybackQuality.values
+              .where((option) => option.id == grant.media.quality)
+              .toList();
+        } else {
+          qualities = await _offlineVideoService.availableQualities(
+            video,
+            part,
+          );
+        }
+        if (!mounted || !currentAccount()) return;
+        if (qualities.isEmpty) {
+          throw const OfflineVideoException('当前视频没有可用的离线清晰度。');
+        }
         final quality = await showDialog<int>(
           context: context,
           builder: (context) => SimpleDialog(
@@ -85,11 +119,12 @@ extension _PlayerLocalLibrary on _PlayerPageState {
             ],
           ),
         );
-        if (quality == null || !mounted) return;
+        if (quality == null || !mounted || !currentAccount()) return;
         final task = await _downloadQueue.enqueue(
           video,
           part: part,
           quality: quality,
+          expectedAccountRevision: video.isCourse ? revision : null,
         );
         unawaited(DownloadNotificationService.instance.requestPermission());
         if (mounted) {
@@ -97,45 +132,64 @@ extension _PlayerLocalLibrary on _PlayerPageState {
               task.status.name == 'queued' || task.status.name == 'downloading'
               ? '已加入下载队列'
               : '下载任务已存在';
-          if (_fullscreen ||
-              AdaptiveLayout.usesWorkspace(MediaQuery.sizeOf(context))) {
-            _playerNotices.show(
-              message,
-              duration: const Duration(seconds: 4),
-              actionLabel: '查看队列',
-              onAction: () => unawaited(_openDownloadQueue()),
-            );
-          } else {
-            ScaffoldMessenger.of(context)
-              ..hideCurrentSnackBar()
-              ..showSnackBar(
-                SnackBar(
-                  duration: const Duration(seconds: 4),
-                  persist: false,
-                  content: Text(message),
-                  action: SnackBarAction(
-                    label: '查看队列',
-                    onPressed: () => unawaited(_openDownloadQueue()),
-                  ),
-                ),
-              );
-          }
+          _showOfflineQueueNotice(message);
         }
       }
       if (mounted) await _loadOfflineState();
     } catch (error) {
-      if (mounted) {
-        _showTransientSnackBar(
-          error is OfflineVideoException ? error.message : '离线操作失败，请重试。',
-        );
+      if (mounted && currentAccount()) {
+        _showTransientSnackBar(switch (error) {
+          OfflineVideoException() => error.message,
+          CourseCacheAccessException() => error.message,
+          CourseCacheFailure() => error.message,
+          _ => '离线操作失败，请重试。',
+        });
       }
     } finally {
       if (mounted) _updatePlayerState(() => _offlineDownloading = false);
     }
   }
 
+  void _showOfflineQueueNotice(String message) => _showOfflineNotice(
+    message,
+    actionLabel: '查看队列',
+    onAction: () => unawaited(_openDownloadQueue()),
+  );
+
+  void _showOfflineNotice(
+    String message, {
+    required String actionLabel,
+    required VoidCallback onAction,
+    Duration duration = const Duration(seconds: 4),
+  }) {
+    if (_fullscreen ||
+        AdaptiveLayout.usesWorkspace(MediaQuery.sizeOf(context))) {
+      _playerNotices.show(
+        message,
+        duration: duration,
+        actionLabel: actionLabel,
+        onAction: onAction,
+      );
+    } else {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            duration: duration,
+            persist: false,
+            content: Text(message),
+            action: SnackBarAction(label: actionLabel, onPressed: onAction),
+          ),
+        );
+    }
+  }
+
   /// Opens queue management without allowing the covered player to keep playing.
   Future<void> _openDownloadQueue() async {
+    _cancelNoteCaptureForExternalNavigation();
+    _clearAbRepeatForNavigation();
+    await _drainAbRepeatSeek();
+    if (!mounted) return;
     await _playbackService.pause();
     if (!mounted) return;
     await Navigator.of(context).push<void>(
@@ -154,20 +208,23 @@ extension _PlayerLocalLibrary on _PlayerPageState {
 
   /// 创建“离线缓存”按钮，并根据下载状态切换图标与文字。
   Widget _buildOfflineDownloadButton() {
+    final managedAsParts =
+        !_activeVideo.isCourse && _activeVideo.parts.length > 1;
+    final cached = _currentVideoDownloaded && !managedAsParts;
     return PlayerLibraryAction(
-      tooltip: _currentVideoDownloaded ? '删除离线缓存' : '下载离线缓存',
+      tooltip: cached ? '删除离线缓存' : '下载离线缓存',
       key: const Key('current-video-offline-download-button'),
       busy: _offlineDownloading,
-      selected: _currentVideoDownloaded,
+      selected: cached,
       onPressed: _offlineDownloading
           ? null
           : () => unawaited(_toggleOfflineDownload()),
-      icon: _currentVideoDownloaded
+      icon: cached
           ? Icons.offline_pin_rounded
           : Icons.download_for_offline_outlined,
       label: _offlineDownloading
           ? '加入中…'
-          : _currentVideoDownloaded
+          : cached
           ? '已缓存'
           : '离线缓存',
     );
@@ -219,6 +276,19 @@ extension _PlayerLocalLibrary on _PlayerPageState {
       showDragHandle: true,
       builder: (BuildContext sheetContext) => StatefulBuilder(
         builder: (BuildContext context, StateSetter setSheetState) {
+          void setChecked(int first, int last, bool checked) {
+            setSheetState(() {
+              for (var i = first; i <= last; i++) {
+                final id = folders[i].id;
+                if (checked) {
+                  selected.add(id);
+                } else {
+                  selected.remove(id);
+                }
+              }
+            });
+          }
+
           return SafeArea(
             child: ConstrainedBox(
               constraints: BoxConstraints(
@@ -265,27 +335,28 @@ extension _PlayerLocalLibrary on _PlayerPageState {
                     )
                   else
                     Flexible(
-                      child: ListView.builder(
+                      child: DragCheckboxOptions(
                         itemCount: folders.length,
-                        itemBuilder: (BuildContext context, int index) {
-                          final AppFavoriteFolder folder = folders[index];
-                          final bool checked = selected.contains(folder.id);
-                          return CheckboxListTile(
-                            key: Key('app-favorite-folder-${folder.id}'),
-                            value: checked,
-                            controlAffinity: ListTileControlAffinity.trailing,
-                            title: Text(folder.name),
-                            onChanged: (bool? value) {
-                              setSheetState(() {
-                                if (value ?? false) {
-                                  selected.add(folder.id);
-                                } else {
-                                  selected.remove(folder.id);
-                                }
-                              });
-                            },
-                          );
-                        },
+                        checkedAt: (index) =>
+                            selected.contains(folders[index].id),
+                        onRangeChanged: setChecked,
+                        builder: (context, controller, physics) =>
+                            ListView.builder(
+                              controller: controller,
+                              physics: physics,
+                              itemCount: folders.length,
+                              itemBuilder: (context, index) {
+                                final AppFavoriteFolder folder = folders[index];
+                                return DragCheckboxTile(
+                                  key: Key('app-favorite-folder-${folder.id}'),
+                                  index: index,
+                                  value: selected.contains(folder.id),
+                                  title: Text(folder.name),
+                                  onChanged: (checked) =>
+                                      setChecked(index, index, checked),
+                                );
+                              },
+                            ),
                       ),
                     ),
                   Padding(

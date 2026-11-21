@@ -5,23 +5,30 @@ import '../subscriptions/subscription_home_card.dart';
 import '../subscriptions/subscription_introduction.dart';
 import 'dart:async';
 import 'dart:io';
-import 'dart:ui' as ui;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show ScrollDirection, SliverConstraints;
+import 'package:flutter/rendering.dart' show SliverConstraints;
 
 import '../../core/layout/adaptive_layout.dart';
 import '../../core/router/app_router.dart';
 import '../../core/widgets/editable_card_board.dart';
 import '../../services/dashboard_layout_service.dart';
+import '../../models/dashboard_layout.dart';
+import 'home_collection_card.dart';
 import '../../models/focus_session.dart';
 import 'custom_focus_duration_dialog.dart';
 import 'focus_do_not_disturb.dart';
 import 'focus_interruption_dialog.dart';
+import 'focus_storage_notice.dart';
 import 'focus_timer_controller.dart';
+import 'home_drawer_scroll_physics.dart';
+import 'home_drawer_hero_depth.dart';
 
 part 'focus_dashboard_home_layout.dart';
 part 'focus_dashboard_home_cards.dart';
+
+enum _HomeLayoutStatus { loading, ready, failed }
 
 /// 首页专注台，提供目标、计时控制、今日汇总和最近本机记录。
 class FocusDashboard extends StatefulWidget {
@@ -38,6 +45,7 @@ class FocusDashboard extends StatefulWidget {
     this.onOpenLearningList,
     this.layoutService,
     this.subscriptionService,
+    this.workspace,
   });
 
   final FocusTimerController controller;
@@ -59,6 +67,9 @@ class FocusDashboard extends StatefulWidget {
   final DashboardLayoutService? layoutService;
   final SubscriptionService? subscriptionService;
 
+  /// 主框架根据安全区域内的窗口判断工作台，确保首页与侧栏同步。
+  final bool? workspace;
+
   /// 创建保存目标输入和预设时长选择的页面状态。
   @override
   State<FocusDashboard> createState() => _FocusDashboardState();
@@ -67,9 +78,8 @@ class FocusDashboard extends StatefulWidget {
 /// 管理专注台表单输入、确认弹窗和计时操作反馈。
 class _FocusDashboardState extends State<FocusDashboard> {
   static const List<int> _presetMinutes = <int>[25, 45, 60];
-  static const double _homeSnapTriggerDistance = 48;
-  static const double _homeSnapOvershoot = 220;
-  static const double _homeReverseSnapDistance = 120;
+  static const double _homeCardTopPadding = 12;
+  static const double _homeCardBottomPadding = 32;
 
   final TextEditingController _goalController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
@@ -87,27 +97,203 @@ class _FocusDashboardState extends State<FocusDashboard> {
     layoutService: _homeLayouts,
     onVisibilityChanged: (visible) {
       if (mounted && _showSubscriptionIntroduction != visible) {
-        setState(() => _showSubscriptionIntroduction = visible);
+        setState(() {
+          _showSubscriptionIntroduction = visible;
+          // 提示改变首屏高度，旧手势的起点不再对应当前抽屉范围。
+          _homeScrollStartOffset = null;
+        });
       }
     },
     onEnabled: () {
       if (mounted) {
-        // 引导会销毁旧卡片容器，先同步退出父页的编辑状态并清理旧手势。
-        _handleHomeEditingChanged(false);
-        setState(
-          () => _homeBoardKey = GlobalKey(debugLabel: 'home-card-board'),
-        );
+        // 新容器从非编辑状态读取置顶布局，父页也必须同步退出旧编辑状态。
+        // 原容器销毁不会回调 onEditingChanged；先停止它留下的滚动惯性。
+        if (_scrollController.hasClients) {
+          _scrollController.jumpTo(_scrollController.offset);
+        }
+        setState(() {
+          _editingHomeCards = false;
+          _homeScrollStartOffset = null;
+          _homeBoardKey = GlobalKey(debugLabel: 'home-card-board');
+        });
       }
     },
   );
   bool _showSubscriptionIntroduction = false;
   bool _editingHomeCards = false;
+  bool _drawerEnabled = true;
+  DashboardLayout? _homeLayout;
+  _HomeLayoutStatus _homeLayoutStatus = _HomeLayoutStatus.loading;
+  bool get _homeLayoutLoaded => _homeLayoutStatus == _HomeLayoutStatus.ready;
+
+  bool _allAvailableCardsHidden(DashboardLayout? layout) {
+    if (layout == null) return false;
+    final available = _homeCardDefinitions(
+      widget.controller.activeSession,
+      widget.controller.lastFinishedSession,
+    ).where((card) => card.available).toList();
+    return available.isNotEmpty &&
+        available.every((card) => layout.hidden.contains(card.id));
+  }
+
+  /// 编辑空抽屉时仍保留“添加卡片”；加载/暂不可用不代表用户全部隐藏。
+  bool get _hasHomeDrawer =>
+      _editingHomeCards ||
+      (_drawerEnabled &&
+          (!_homeLayoutLoaded || !_allAvailableCardsHidden(_homeLayout)));
+  bool _restoringDrawer = false;
+  bool _closingDrawer = false;
+  bool get _canRestoreDrawer =>
+      _homeLayoutLoaded && !_restoringDrawer && !_closingDrawer;
+
+  bool get _usesHomeWorkspace =>
+      widget.workspace ??
+      AdaptiveLayout.usesWorkspace(MediaQuery.sizeOf(context));
+
+  // 收起工作台抽屉是临时操作，不改变已保存的卡片。
+  bool _desktopDockOpen = false;
+  bool _desktopDockVisited = false;
+  void _toggleDesktopDock() {
+    if (_desktopDockOpen) FocusManager.instance.primaryFocus?.unfocus();
+    setState(() {
+      _desktopDockOpen = !_desktopDockOpen;
+      _desktopDockVisited = true;
+    });
+  }
+
+  Future<void> _closeEmptyDrawer() async {
+    if (!mounted || _closingDrawer) return;
+    final wasEnabled = _drawerEnabled;
+    final wasEditing = _editingHomeCards;
+    final previousOffset = _scrollController.hasClients
+        ? _scrollController.offset
+        : 0.0;
+    if (_scrollController.hasClients) _scrollController.jumpTo(0);
+    setState(() {
+      _closingDrawer = true;
+      _drawerEnabled = false;
+      _editingHomeCards = false;
+      _homeScrollStartOffset = null;
+    });
+    try {
+      await _homeLayouts.saveDrawerEnabled(false);
+    } catch (_) {
+      if (mounted) {
+        if (!_allAvailableCardsHidden(_homeLayout)) {
+          setState(() {
+            _drawerEnabled = wasEnabled;
+            _editingHomeCards = wasEditing;
+            _homeBoardKey = GlobalKey(debugLabel: 'home-card-board');
+          });
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && _scrollController.hasClients) {
+              _scrollController.jumpTo(
+                previousOffset.clamp(
+                  0.0,
+                  _scrollController.position.maxScrollExtent,
+                ),
+              );
+            }
+          });
+        }
+        _showMessage('抽屉设置保存失败，卡片配置未更改。');
+      }
+    } finally {
+      if (mounted) setState(() => _closingDrawer = false);
+    }
+  }
+
+  Future<void> _restoreDrawerForEditing() async {
+    if (!_canRestoreDrawer) return;
+    setState(() => _restoringDrawer = true);
+    try {
+      await _homeLayouts.saveDrawerEnabled(true);
+      if (!mounted) return;
+      setState(() {
+        _drawerEnabled = true;
+        _desktopDockOpen = true;
+        _desktopDockVisited = true;
+        _editingHomeCards = true;
+        _homeScrollStartOffset = null;
+        _homeBoardKey = GlobalKey(debugLabel: 'home-card-board');
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _scrollController.hasClients) {
+          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+        }
+      });
+    } catch (_) {
+      if (mounted) _showMessage('抽屉设置保存失败，请重试。');
+    } finally {
+      if (mounted) setState(() => _restoringDrawer = false);
+    }
+  }
+
+  Widget _drawerRecoveryButton() => IconButton(
+    key: const Key('home-restore-drawer'),
+    tooltip: '启用抽屉并编辑',
+    constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+    onPressed: _restoringDrawer || _closingDrawer
+        ? null
+        : _restoreDrawerForEditing,
+    icon: const Icon(Icons.view_agenda_outlined, size: 22),
+  );
+
+  /// 首次读取布局与抽屉开关，保留旧版默认显示。
+  Future<void> _loadHomeLayout() async {
+    try {
+      final enabled = await _homeLayouts.loadDrawerEnabled();
+      final layout = await _homeLayouts.load(
+        'home',
+        _homeCardDefinitions(
+          widget.controller.activeSession,
+          widget.controller.lastFinishedSession,
+        ),
+      );
+      if (mounted) {
+        setState(() {
+          _drawerEnabled = enabled;
+          _homeLayout = layout;
+          _homeLayoutStatus = _HomeLayoutStatus.ready;
+        });
+      }
+    } catch (_) {
+      // 布局加载失败时仍显示原工作台，让卡片容器保留原有重试与错误反馈。
+      if (mounted) {
+        setState(() => _homeLayoutStatus = _HomeLayoutStatus.failed);
+      }
+    }
+  }
+
+  /// 成功保存最后一个可用卡片的隐藏后收起抽屉，不改隐藏集合或顺序。
+  void _homeLayoutChanged(DashboardLayout layout) {
+    if (!mounted) return;
+    final becameEmpty =
+        _homeLayoutLoaded &&
+        _homeLayout != null &&
+        !_allAvailableCardsHidden(_homeLayout) &&
+        _allAvailableCardsHidden(layout);
+    setState(() => _homeLayout = layout);
+    if (becameEmpty) unawaited(_closeEmptyDrawer());
+  }
+
   int _selectedMinutes = 25;
-  double _scrollOffset = 0;
-  bool _homeCardsSnapped = false;
-  bool _isSnappingHomeScroll = false;
-  ScrollDirection _homeScrollDirection = ScrollDirection.idle;
   double? _homeScrollStartOffset;
+  double _homeDrawerExtent = 0;
+  double _homeViewportHeight = 0;
+
+  bool _fitsHomeDrawer(double viewportHeight) =>
+      !_editingHomeCards && _homeDrawerExtent <= viewportHeight;
+
+  bool get _canSnapHomeDrawer {
+    // A responsive switch can briefly have both scroll views attached.
+    if (_editingHomeCards || _scrollController.positions.length != 1) {
+      return false;
+    }
+    final position = _scrollController.position;
+    return position.hasViewportDimension &&
+        _fitsHomeDrawer(position.viewportDimension);
+  }
 
   Widget _buildSubscriptionButton() => ListenableBuilder(
     listenable: _subscriptions,
@@ -135,10 +321,10 @@ class _FocusDashboardState extends State<FocusDashboard> {
   @override
   void initState() {
     super.initState();
+    unawaited(_loadHomeLayout());
     _subscriptions.addListener(_subscriptionChanged);
     unawaited(_subscriptions.initialize());
     _goalController.addListener(_handleGoalChanged);
-    _scrollController.addListener(_handleScrollChanged);
   }
 
   /// 目标输入变化时刷新开始按钮，不修改控制器中的活动计时。
@@ -148,129 +334,37 @@ class _FocusDashboardState extends State<FocusDashboard> {
     }
   }
 
-  /// 记录首页滚动距离，用来驱动首屏内容的上移、模糊和透明度变化。
-  void _handleScrollChanged() {
-    if (!mounted) {
-      return;
-    }
-    setState(() => _scrollOffset = _scrollController.offset);
-  }
-
-  /// 在一次拖动结束后把首屏或卡片区吸附到完整的阅读位置。
-  void _handleHomeScrollEnd(BuildContext context) {
-    if (widget.onOpenProfile == null ||
-        _editingHomeCards ||
-        !_canAnimateHomeHero(context) ||
-        _isSnappingHomeScroll ||
-        !_scrollController.hasClients) {
-      return;
-    }
-    final double heroHeight = _homeHeroHeight(context);
-    final double currentOffset = _scrollController.offset;
-    final double maxOffset = _scrollController.position.maxScrollExtent;
-    final double startOffset = _homeScrollStartOffset ?? currentOffset;
-    final double gestureDistance = (currentOffset - startOffset).abs();
-    if (currentOffset <= 24) {
-      _homeCardsSnapped = false;
-      return;
-    }
-    final double targetOffset;
-    final double firstCardOffset = (heroHeight + 12)
-        .clamp(0.0, maxOffset)
-        .toDouble();
-    if (!_homeCardsSnapped &&
-        currentOffset > _homeSnapTriggerDistance &&
-        currentOffset <= firstCardOffset + _homeSnapOvershoot) {
-      targetOffset = firstCardOffset;
-    } else if (!_homeCardsSnapped &&
-        currentOffset > firstCardOffset + _homeSnapOvershoot) {
-      // 用户已经越过首张卡片的吸附窗口，保留其自然滚动到的深层位置。
-      _homeCardsSnapped = true;
-      return;
-    } else if (_homeCardsSnapped &&
-        currentOffset > 24 &&
-        _homeScrollDirection == ScrollDirection.forward &&
-        gestureDistance >= _homeReverseSnapDistance) {
-      targetOffset = 0;
-    } else {
-      if (currentOffset >= heroHeight) {
-        _homeCardsSnapped = true;
-      }
-      return;
-    }
-    if ((targetOffset - currentOffset).abs() < 2) {
-      _homeCardsSnapped = targetOffset > 0;
-      return;
-    }
-    _isSnappingHomeScroll = true;
-    // 等当前 ScrollEndNotification 完成后再启动驱动动画，避免手势活动取消吸附。
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _editingHomeCards || !_scrollController.hasClients) {
-        _isSnappingHomeScroll = false;
-        return;
-      }
-      unawaited(_animateHomeSnap(targetOffset));
-    });
-  }
-
-  /// 记录首页主滚动的手势方向，并在手势结束后触发一次吸附。
-  bool _handleHomeScrollNotification(
-    BuildContext context,
-    ScrollNotification notification,
-  ) {
-    if (_editingHomeCards || notification.depth != 0) {
-      return false;
-    }
-    if (notification is UserScrollNotification) {
-      _homeScrollDirection = notification.direction;
-    } else if (notification is ScrollStartNotification &&
+  /// Only the outer scroll view participates; card lists keep their own gestures.
+  bool _handleHomeScrollNotification(ScrollNotification notification) {
+    if (_editingHomeCards || notification.depth != 0) return false;
+    if (notification is ScrollStartNotification &&
         notification.dragDetails != null &&
         _scrollController.hasClients) {
       _homeScrollStartOffset = _scrollController.offset;
     } else if (notification is ScrollEndNotification) {
-      // 只吸附真实手势，跳转到输入框、底部编辑入口和拖动边缘滚动均保留目标位置。
-      if (_homeScrollStartOffset != null) {
-        _handleHomeScrollEnd(context);
-      }
-      _homeScrollDirection = ScrollDirection.idle;
       _homeScrollStartOffset = null;
     }
     return false;
   }
 
-  /// 以短暂缓动完成首屏与卡片区之间的吸附，并在结束后恢复手势监听。
-  Future<void> _animateHomeSnap(double targetOffset) async {
-    try {
-      await _scrollController.animateTo(
-        targetOffset,
-        duration: const Duration(milliseconds: 420),
-        curve: Curves.easeOutCubic,
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isSnappingHomeScroll = false;
-          _homeCardsSnapped = targetOffset > 0;
-        });
-      } else {
-        _isSnappingHomeScroll = false;
-        _homeCardsSnapped = targetOffset > 0;
-      }
-    }
-  }
-
   /// 编辑时停止首页吸附，并清理旧手势，防止长按拖动被自动滚动抢走。
   void _handleHomeEditingChanged(bool editing) {
     if (!mounted || editing == _editingHomeCards) return;
+    _homeScrollStartOffset = null;
     if (editing && _scrollController.hasClients) {
       _scrollController.jumpTo(_scrollController.offset);
     }
     setState(() {
       _editingHomeCards = editing;
-      _homeScrollDirection = ScrollDirection.idle;
-      _homeScrollStartOffset = null;
-      _isSnappingHomeScroll = false;
+      if (editing && !_usesHomeWorkspace) {
+        // 正在手机布局里编辑时旋转，不把未完成的操作藏进收起的侧边抽屉。
+        _desktopDockOpen = true;
+        _desktopDockVisited = true;
+      }
     });
+    if (!editing && _allAvailableCardsHidden(_homeLayout)) {
+      unawaited(_closeEmptyDrawer());
+    }
   }
 
   /// 使用当前目标和所选分钟数开始专注，并在失败时给出可读提示。
@@ -278,7 +372,7 @@ class _FocusDashboardState extends State<FocusDashboard> {
     final bool started = await widget.controller.startFocus(
       goal: _goalController.text,
       duration: Duration(minutes: _selectedMinutes),
-      startImmediately: false,
+      startImmediately: true,
     );
     if (!mounted) {
       return;
@@ -295,11 +389,13 @@ class _FocusDashboardState extends State<FocusDashboard> {
     final bool? openVideo = await showDialog<bool>(
       context: context,
       builder: (BuildContext dialogContext) => AlertDialog(
-        title: const Text('专注任务已创建'),
-        content: const Text('请打开一个视频关联本次专注任务'),
+        title: const Text('专注已开始'),
+        content: const Text(
+          '本次专注连续计时，换视频、换 P 或暂停视频都不会结束会话。应用进入后台会暂停，返回后请主动继续。',
+        ),
         actions: <Widget>[
           TextButton(
-            // 稍后打开函数保留等待关联的首页 Pin。
+            // 稍后打开函数保留正在计时的首页会话 Pin。
             onPressed: () => Navigator.of(dialogContext).pop(false),
             child: const Text('稍后'),
           ),
@@ -345,14 +441,9 @@ class _FocusDashboardState extends State<FocusDashboard> {
     );
   }
 
-  /// 继续按钮打开关联视频；未关联时进入视频搜索等待用户确认关联。
+  /// 恢复同一会话；最近观看书签仍可通过独立卡片打开。
   void _continueFocus(FocusSession session) {
-    if (session.hasVideoAssociation && widget.onOpenLinkedVideo != null) {
-      widget.onOpenLinkedVideo!(session);
-      return;
-    }
-    _showMessage('请先打开一个视频并确认关联，播放后计时会自动继续。');
-    widget.onOpenVideo();
+    unawaited(widget.controller.resumeFocus());
   }
 
   /// 根据暂停业务原因返回首页 Pin 中的明确状态文字。
@@ -361,8 +452,8 @@ class _FocusDashboardState extends State<FocusDashboard> {
       return '正在专注';
     }
     return switch (session.pauseReason) {
-      FocusPauseReason.awaitingVideo => '等待关联视频',
-      FocusPauseReason.playback => '等待视频播放',
+      FocusPauseReason.awaitingVideo => '已暂停',
+      FocusPauseReason.playback => '已暂停',
       FocusPauseReason.interruption => '专注被打断',
       FocusPauseReason.manual => '已暂停',
       null => '已暂停',
@@ -537,9 +628,7 @@ class _FocusDashboardState extends State<FocusDashboard> {
             ),
             const SizedBox(height: 18),
             Text(
-              session.completeOnPartEnd
-                  ? '等待当前分P完播 · ${_formatCountdown(widget.controller.remainingDuration)}'
-                  : _formatCountdown(widget.controller.remainingDuration),
+              _formatCountdown(widget.controller.remainingDuration),
               key: const Key('focus-countdown'),
               textAlign: TextAlign.center,
               style: theme.textTheme.displayMedium?.copyWith(
@@ -703,35 +792,52 @@ class _FocusDashboardState extends State<FocusDashboard> {
   }
 
   /// 创建今日专注分钟和正常完成次数的轻量汇总卡片。
-  Widget _buildTodaySummary(BuildContext context) {
+  Widget _buildTodaySummary(
+    BuildContext context, {
+    bool allowNavigation = true,
+  }) {
     final ThemeData theme = Theme.of(context);
+    final metrics = Padding(
+      padding: const EdgeInsets.all(18),
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: _FocusMetric(
+              label: '今日专注',
+              value: '${widget.controller.todayFocusedDuration().inMinutes}',
+              unit: '分钟',
+            ),
+          ),
+          SizedBox(
+            height: 46,
+            child: VerticalDivider(color: theme.colorScheme.outlineVariant),
+          ),
+          Expanded(
+            child: _FocusMetric(
+              label: '按时完成',
+              value: '${widget.controller.todayCompletedCount()}',
+              unit: '次',
+            ),
+          ),
+        ],
+      ),
+    );
     return Card(
       key: const Key('focus-today-summary'),
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Row(
-          children: <Widget>[
-            Expanded(
-              child: _FocusMetric(
-                label: '今日专注',
-                value: '${widget.controller.todayFocusedDuration().inMinutes}',
-                unit: '分钟',
+      clipBehavior: Clip.antiAlias,
+      child: allowNavigation
+          ? Tooltip(
+              message: '查看专注统计',
+              child: Semantics(
+                button: true,
+                child: InkWell(
+                  key: const Key('focus-today-summary-open-statistics'),
+                  onTap: widget.onOpenStatistics,
+                  child: metrics,
+                ),
               ),
-            ),
-            SizedBox(
-              height: 46,
-              child: VerticalDivider(color: theme.colorScheme.outlineVariant),
-            ),
-            Expanded(
-              child: _FocusMetric(
-                label: '按时完成',
-                value: '${widget.controller.todayCompletedCount()}',
-                unit: '次',
-              ),
-            ),
-          ],
-        ),
-      ),
+            )
+          : metrics,
     );
   }
 
@@ -794,57 +900,109 @@ class _FocusDashboardState extends State<FocusDashboard> {
         final FocusSession? finishedSession =
             widget.controller.lastFinishedSession;
         final bool useHomeHero = widget.onOpenProfile != null;
-        if (useHomeHero &&
-            AdaptiveLayout.usesWorkspace(MediaQuery.sizeOf(context))) {
-          return _buildWorkspaceDashboard(
+        if (useHomeHero && _usesHomeWorkspace) {
+          if (_homeLayoutStatus == _HomeLayoutStatus.loading) {
+            // 首次读取偏好时不要闪现可能已关闭的工作台和卡片。
+            return const SizedBox.expand();
+          }
+          return _hasHomeDrawer
+              ? _buildDesktopDock(context, activeSession, finishedSession)
+              : _buildMinimalWorkspaceHome(context);
+        }
+        return LayoutBuilder(
+          builder: (context, constraints) => _buildScrollDashboard(
             context,
+            constraints.biggest,
+            useHomeHero,
             activeSession,
             finishedSession,
-          );
-        }
-        return NotificationListener<ScrollNotification>(
-          onNotification: (ScrollNotification notification) =>
-              _handleHomeScrollNotification(context, notification),
-          child: CustomScrollView(
-            controller: _scrollController,
-            slivers: <Widget>[
-              if (useHomeHero) _buildHomeHero(context),
-              if (useHomeHero)
-                _buildCardsSliver(context, activeSession, finishedSession)
-              else ...<Widget>[
-                SliverAppBar.large(
-                  title: const Text('焦点哔哩'),
-                  actions: <Widget>[
-                    _buildSubscriptionButton(),
-                    if (widget.onOpenLearningList != null)
-                      IconButton(
-                        key: const Key('open-learning-list'),
-                        // 学习清单按钮函数由首页打开完整任务管理页面。
-                        onPressed: widget.onOpenLearningList,
-                        icon: const Icon(Icons.menu_book_rounded),
-                        tooltip: '学习清单',
-                      ),
-                    IconButton(
-                      key: const Key('open-focus-statistics'),
-                      // 统计按钮函数打开本机专注看板与统一记录管理页。
-                      onPressed: widget.onOpenStatistics,
-                      icon: const Icon(Icons.insights_rounded),
-                      tooltip: '专注数据',
-                    ),
-                    IconButton(
-                      // 顶部打开视频函数直接切换到搜索页。
-                      onPressed: widget.onOpenVideo,
-                      icon: const Icon(Icons.search_rounded),
-                      tooltip: '打开视频',
-                    ),
-                  ],
-                ),
-                _buildCardsSliver(context, activeSession, finishedSession),
-              ],
-            ],
           ),
         );
       },
+    );
+  }
+
+  Widget _buildScrollDashboard(
+    BuildContext context,
+    Size viewport,
+    bool useHomeHero,
+    FocusSession? activeSession,
+    FocusSession? finishedSession,
+  ) {
+    final heroHeight = useHomeHero ? _homeHeroHeight(context, viewport) : 0.0;
+    final hasDrawer = useHomeHero && _hasHomeDrawer;
+    final drawerExtent = heroHeight + _homeCardTopPadding;
+    if (_homeDrawerExtent != drawerExtent ||
+        _homeViewportHeight != viewport.height ||
+        !hasDrawer) {
+      _homeScrollStartOffset = null;
+    }
+    _homeDrawerExtent = drawerExtent;
+    _homeViewportHeight = viewport.height;
+    final behavior = ScrollConfiguration.of(context);
+    return NotificationListener<ScrollNotification>(
+      onNotification: _handleHomeScrollNotification,
+      child: CustomScrollView(
+        controller: _scrollController,
+        dragStartBehavior: hasDrawer
+            ? DragStartBehavior.down
+            : DragStartBehavior.start,
+        // Only this scroll view adds mouse dragging. Native wheel and
+        // nested scrollables keep their existing behavior.
+        scrollBehavior: hasDrawer
+            ? behavior.copyWith(
+                dragDevices: {...behavior.dragDevices, PointerDeviceKind.mouse},
+              )
+            : null,
+        physics: hasDrawer
+            ? HomeDrawerScrollPhysics(
+                cardOffset: () => _homeDrawerExtent,
+                gestureStart: () => _homeScrollStartOffset,
+                enabled: () => _canSnapHomeDrawer,
+              )
+            : null,
+        slivers: <Widget>[
+          if (useHomeHero)
+            _buildHomeHero(
+              context,
+              heroHeight,
+              viewport.width,
+              animateDepth: hasDrawer && _fitsHomeDrawer(viewport.height),
+            ),
+          if (hasDrawer)
+            _buildHomeCardsSliver(context, activeSession, finishedSession)
+          else if (!useHomeHero) ...<Widget>[
+            SliverAppBar.large(
+              title: const Text('焦点哔哩'),
+              actions: <Widget>[
+                _buildSubscriptionButton(),
+                if (widget.onOpenLearningList != null)
+                  IconButton(
+                    key: const Key('open-learning-list'),
+                    // 学习清单按钮函数由首页打开完整任务管理页面。
+                    onPressed: widget.onOpenLearningList,
+                    icon: const Icon(Icons.menu_book_rounded),
+                    tooltip: '学习清单',
+                  ),
+                IconButton(
+                  key: const Key('open-focus-statistics'),
+                  // 统计按钮函数打开本机专注看板与统一记录管理页。
+                  onPressed: widget.onOpenStatistics,
+                  icon: const Icon(Icons.insights_rounded),
+                  tooltip: '专注数据',
+                ),
+                IconButton(
+                  // 顶部打开视频函数直接切换到搜索页。
+                  onPressed: widget.onOpenVideo,
+                  icon: const Icon(Icons.search_rounded),
+                  tooltip: '打开视频',
+                ),
+              ],
+            ),
+            _buildCardsSliver(context, activeSession, finishedSession),
+          ],
+        ],
+      ),
     );
   }
 
@@ -855,9 +1013,7 @@ class _FocusDashboardState extends State<FocusDashboard> {
     _goalController
       ..removeListener(_handleGoalChanged)
       ..dispose();
-    _scrollController
-      ..removeListener(_handleScrollChanged)
-      ..dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 }

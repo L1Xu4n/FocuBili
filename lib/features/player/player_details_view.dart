@@ -51,9 +51,14 @@ extension _PlayerDetailsView on _PlayerPageState {
 
   /// 把当前 BV 号复制到系统剪贴板，并用轻量提示确认操作成功。
   Future<void> _copyBvid() async {
-    await Clipboard.setData(ClipboardData(text: _activeVideo.bvid));
+    final text = _activeVideo.isCourse
+        ? 'https://www.bilibili.com/cheese/play/ss${_activeVideo.courseSeasonId}'
+        : _activeVideo.bvid;
+    await Clipboard.setData(ClipboardData(text: text));
     if (mounted) {
-      _showTransientSnackBar('已复制 ${_activeVideo.bvid}');
+      _showTransientSnackBar(
+        _activeVideo.isCourse ? '已复制课程链接' : '已复制 ${_activeVideo.bvid}',
+      );
     }
   }
 
@@ -102,7 +107,7 @@ extension _PlayerDetailsView on _PlayerPageState {
 
   /// 读取当前视频的关注、点赞、投币和收藏状态，失败时保留默认未操作状态。
   Future<void> _loadVideoInteractionState() async {
-    if (_activeVideo.aid <= 0) {
+    if (_activeVideo.isCourse || _activeVideo.aid <= 0) {
       return;
     }
     final String bvid = _activeVideo.bvid;
@@ -316,6 +321,19 @@ extension _PlayerDetailsView on _PlayerPageState {
       builder: (BuildContext sheetContext) => StatefulBuilder(
         // 弹窗状态函数只维护本次勾选集合，提交前不修改播放器或服务端状态。
         builder: (BuildContext context, StateSetter setSheetState) {
+          void setChecked(int first, int last, bool checked) {
+            setSheetState(() {
+              for (var i = first; i <= last; i++) {
+                final id = folders[i].mediaId;
+                if (checked) {
+                  selectedMediaIds.add(id);
+                } else {
+                  selectedMediaIds.remove(id);
+                }
+              }
+            });
+          }
+
           return SafeArea(
             child: ConstrainedBox(
               constraints: BoxConstraints(
@@ -360,31 +378,32 @@ extension _PlayerDetailsView on _PlayerPageState {
                     )
                   else
                     Flexible(
-                      child: ListView.builder(
+                      child: DragCheckboxOptions(
                         itemCount: folders.length,
-                        // 收藏夹构建函数切换单个目录的临时勾选状态，不会提前发起网络请求。
-                        itemBuilder: (BuildContext context, int index) {
-                          final BilibiliFavoriteFolder folder = folders[index];
-                          final bool selected = selectedMediaIds.contains(
-                            folder.mediaId,
-                          );
-                          return CheckboxListTile(
-                            key: Key('favorite-folder-${folder.mediaId}'),
-                            value: selected,
-                            controlAffinity: ListTileControlAffinity.trailing,
-                            title: Text(folder.title),
-                            subtitle: Text('${folder.mediaCount} 个视频'),
-                            onChanged: (bool? value) {
-                              setSheetState(() {
-                                if (value ?? false) {
-                                  selectedMediaIds.add(folder.mediaId);
-                                } else {
-                                  selectedMediaIds.remove(folder.mediaId);
-                                }
-                              });
-                            },
-                          );
-                        },
+                        checkedAt: (index) =>
+                            selectedMediaIds.contains(folders[index].mediaId),
+                        onRangeChanged: setChecked,
+                        builder: (context, controller, physics) =>
+                            ListView.builder(
+                              controller: controller,
+                              physics: physics,
+                              itemCount: folders.length,
+                              itemBuilder: (context, index) {
+                                final BilibiliFavoriteFolder folder =
+                                    folders[index];
+                                return DragCheckboxTile(
+                                  key: Key('favorite-folder-${folder.mediaId}'),
+                                  index: index,
+                                  value: selectedMediaIds.contains(
+                                    folder.mediaId,
+                                  ),
+                                  title: Text(folder.title),
+                                  subtitle: Text('${folder.mediaCount} 个视频'),
+                                  onChanged: (checked) =>
+                                      setChecked(index, index, checked),
+                                );
+                              },
+                            ),
                       ),
                     ),
                   Padding(
@@ -419,24 +438,39 @@ extension _PlayerDetailsView on _PlayerPageState {
   }
 
   /// 请求用户输入新收藏夹名称，空名称时禁用创建按钮。
-  Future<String?> _showCreateFavoriteFolderDialog() {
+  Future<({String title, bool isPrivate})?> _showCreateFavoriteFolderDialog() {
     String title = '';
-    return showDialog<String>(
+    var isPrivate = false;
+    return showDialog<({String title, bool isPrivate})>(
       context: context,
       builder: (BuildContext dialogContext) => StatefulBuilder(
         // 对话框状态函数只刷新名称校验，不改动播放器页面状态。
         builder: (BuildContext context, StateSetter setDialogState) {
           return AlertDialog(
             title: const Text('创建收藏夹'),
-            content: TextField(
-              key: const Key('favorite-folder-name'),
-              autofocus: true,
-              maxLength: 20,
-              decoration: const InputDecoration(hintText: '输入收藏夹名称'),
-              // 名称变化函数用于即时启用或禁用确认按钮。
-              onChanged: (String value) {
-                setDialogState(() => title = value.trim());
-              },
+            scrollable: true,
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  key: const Key('favorite-folder-name'),
+                  autofocus: true,
+                  maxLength: 20,
+                  decoration: const InputDecoration(hintText: '输入收藏夹名称'),
+                  // 名称变化函数用于即时启用或禁用确认按钮。
+                  onChanged: (String value) {
+                    setDialogState(() => title = value.trim());
+                  },
+                ),
+                SwitchListTile.adaptive(
+                  key: const Key('favorite-folder-private'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('私密收藏夹'),
+                  subtitle: Text(isPrivate ? '仅自己可见' : '公开，其他人可见'),
+                  value: isPrivate,
+                  onChanged: (value) => setDialogState(() => isPrivate = value),
+                ),
+              ],
             ),
             actions: <Widget>[
               TextButton(
@@ -446,7 +480,9 @@ extension _PlayerDetailsView on _PlayerPageState {
               FilledButton(
                 onPressed: title.isEmpty
                     ? null
-                    : () => Navigator.of(dialogContext).pop(title),
+                    : () => Navigator.of(
+                        dialogContext,
+                      ).pop((title: title, isPrivate: isPrivate)),
                 child: const Text('创建'),
               ),
             ],
@@ -461,12 +497,18 @@ extension _PlayerDetailsView on _PlayerPageState {
     if (_interactionAction != null || _activeVideo.aid <= 0) {
       return;
     }
+    final aid = _activeVideo.aid;
+    final account = CacheLifecycle.account.value;
+    final scope = CacheLifecycle.accountScope;
+    bool current() =>
+        mounted &&
+        _activeVideo.aid == aid &&
+        CacheLifecycle.account.value == account &&
+        CacheLifecycle.accountScope == scope;
     List<BilibiliFavoriteFolder> folders;
     _updatePlayerState(() => _interactionAction = 'favorite');
     try {
-      folders = await _interactionService.loadFavoriteFolders(
-        aid: _activeVideo.aid,
-      );
+      folders = await _interactionService.loadFavoriteFolders(aid: aid);
     } on Object catch (error) {
       if (mounted) {
         _showTransientSnackBar(error.toString());
@@ -477,13 +519,13 @@ extension _PlayerDetailsView on _PlayerPageState {
         _updatePlayerState(() => _interactionAction = null);
       }
     }
-    if (!mounted) {
+    if (!current()) {
       return;
     }
     final _FavoriteFolderSelection? selection = await _showFavoriteFolderSheet(
       folders,
     );
-    if (!mounted || selection == null) {
+    if (!current() || selection == null) {
       return;
     }
     final Set<int> initialMediaIds = folders
@@ -491,28 +533,32 @@ extension _PlayerDetailsView on _PlayerPageState {
         .map((BilibiliFavoriteFolder folder) => folder.mediaId)
         .toSet();
     final Set<int> selectedMediaIds = selection.selectedMediaIds.toSet();
-    String? newFolderTitle;
+    ({String title, bool isPrivate})? newFolder;
     if (selection.createNewFolder) {
-      newFolderTitle = await _showCreateFavoriteFolderDialog();
-      if (!mounted || newFolderTitle == null) {
+      newFolder = await _showCreateFavoriteFolderDialog();
+      if (!current() || newFolder == null) {
         return;
       }
     }
     _updatePlayerState(() => _interactionAction = 'favorite');
     try {
-      if (newFolderTitle != null) {
+      if (newFolder != null) {
         final BilibiliFavoriteFolder createdFolder = await _interactionService
-            .createFavoriteFolder(title: newFolderTitle);
+            .createFavoriteFolder(
+              title: newFolder.title,
+              isPrivate: newFolder.isPrivate,
+            );
+        if (!current()) return;
         selectedMediaIds.add(createdFolder.mediaId);
       }
       final Set<int> additions = selectedMediaIds.difference(initialMediaIds);
       final Set<int> deletions = initialMediaIds.difference(selectedMediaIds);
       await _interactionService.setFavoriteFolders(
-        aid: _activeVideo.aid,
+        aid: aid,
         addMediaIds: additions,
         deleteMediaIds: deletions,
       );
-      if (mounted) {
+      if (current()) {
         final bool wasFavorited = _interactionState.isFavorited;
         final bool nextFavorited = selectedMediaIds.isNotEmpty;
         _updatePlayerState(() {
@@ -654,7 +700,7 @@ extension _PlayerDetailsView on _PlayerPageState {
         ),
         const SizedBox(height: 8),
         Tooltip(
-          message: '长按复制 BV 号',
+          message: _activeVideo.isCourse ? '长按复制课程链接' : '长按复制 BV 号',
           child: InkWell(
             key: const Key('copy-bvid'),
             // BV 文字长按函数只复制 BV 号，旁边显示的 AV 号不会混入剪贴板。
@@ -663,7 +709,9 @@ extension _PlayerDetailsView on _PlayerPageState {
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: Text(
-                _activeVideo.aid > 0
+                _activeVideo.isCourse
+                    ? 'B站课堂 · SS${_activeVideo.courseSeasonId}'
+                    : _activeVideo.aid > 0
                     ? '${_activeVideo.bvid}  AV${_activeVideo.aid}'
                     : _activeVideo.bvid,
                 style: Theme.of(context).textTheme.bodySmall,
@@ -675,72 +723,60 @@ extension _PlayerDetailsView on _PlayerPageState {
           const SizedBox(height: 12),
           _buildExpandableDescription(),
         ],
-        if (_activeVideo.tags.isNotEmpty) ...<Widget>[
-          const SizedBox(height: 12),
-          Wrap(
-            key: const Key('video-tags'),
-            spacing: 8,
-            runSpacing: 6,
-            children: _activeVideo.tags
-                .map(
-                  (String tag) => Chip(
-                    visualDensity: VisualDensity.compact,
-                    label: Text(tag),
-                  ),
-                )
-                .toList(growable: false),
+        PlayerVideoTags(session: _tagSession),
+        if (!_activeVideo.isCourse) ...<Widget>[
+          const SizedBox(height: 18),
+          Row(
+            children: <Widget>[
+              _buildInteractionStat(
+                key: const Key('video-like-button'),
+                icon: _interactionState.isLiked
+                    ? Icons.thumb_up_alt
+                    : Icons.thumb_up_alt_outlined,
+                label: _interactionState.isLiked ? '已点赞' : '点赞',
+                value: _adjustedInteractionCount(
+                  stats.likeCount,
+                  _likeCountDelta,
+                ),
+                action: 'like',
+                selected: _interactionState.isLiked,
+                onPressed: _activeVideo.aid > 0 ? _toggleVideoLike : null,
+              ),
+              _buildInteractionStat(
+                key: const Key('video-coin-button'),
+                icon: _interactionState.isCoined
+                    ? Icons.paid
+                    : Icons.paid_outlined,
+                label: _interactionState.isCoined ? '已投币' : '投币',
+                value: _adjustedInteractionCount(
+                  stats.coinCount,
+                  _coinCountDelta,
+                ),
+                action: 'coin',
+                selected: _interactionState.isCoined,
+                onPressed:
+                    _activeVideo.aid > 0 && _interactionState.coinCount < 2
+                    ? _addVideoCoin
+                    : null,
+              ),
+              _buildInteractionStat(
+                key: const Key('video-favorite-button'),
+                icon: _interactionState.isFavorited
+                    ? Icons.star
+                    : Icons.star_border_rounded,
+                label: _interactionState.isFavorited ? '已收藏' : '收藏',
+                value: _adjustedInteractionCount(
+                  stats.favoriteCount,
+                  _favoriteCountDelta,
+                ),
+                action: 'favorite',
+                selected: _interactionState.isFavorited,
+                onPressed: _activeVideo.aid > 0 ? _toggleVideoFavorite : null,
+              ),
+              _buildReadOnlyStat(Icons.share_outlined, '分享', stats.shareCount),
+            ],
           ),
         ],
-        const SizedBox(height: 18),
-        Row(
-          children: <Widget>[
-            _buildInteractionStat(
-              key: const Key('video-like-button'),
-              icon: _interactionState.isLiked
-                  ? Icons.thumb_up_alt
-                  : Icons.thumb_up_alt_outlined,
-              label: _interactionState.isLiked ? '已点赞' : '点赞',
-              value: _adjustedInteractionCount(
-                stats.likeCount,
-                _likeCountDelta,
-              ),
-              action: 'like',
-              selected: _interactionState.isLiked,
-              onPressed: _activeVideo.aid > 0 ? _toggleVideoLike : null,
-            ),
-            _buildInteractionStat(
-              key: const Key('video-coin-button'),
-              icon: _interactionState.isCoined
-                  ? Icons.paid
-                  : Icons.paid_outlined,
-              label: _interactionState.isCoined ? '已投币' : '投币',
-              value: _adjustedInteractionCount(
-                stats.coinCount,
-                _coinCountDelta,
-              ),
-              action: 'coin',
-              selected: _interactionState.isCoined,
-              onPressed: _activeVideo.aid > 0 && _interactionState.coinCount < 2
-                  ? _addVideoCoin
-                  : null,
-            ),
-            _buildInteractionStat(
-              key: const Key('video-favorite-button'),
-              icon: _interactionState.isFavorited
-                  ? Icons.star
-                  : Icons.star_border_rounded,
-              label: _interactionState.isFavorited ? '已收藏' : '收藏',
-              value: _adjustedInteractionCount(
-                stats.favoriteCount,
-                _favoriteCountDelta,
-              ),
-              action: 'favorite',
-              selected: _interactionState.isFavorited,
-              onPressed: _activeVideo.aid > 0 ? _toggleVideoFavorite : null,
-            ),
-            _buildReadOnlyStat(Icons.share_outlined, '分享', stats.shareCount),
-          ],
-        ),
       ],
     );
   }
@@ -753,7 +789,7 @@ extension _PlayerDetailsView on _PlayerPageState {
     return PlayerLibraryAction(
       tooltip: currentEntry == null ? '加入学习清单' : '取消加入学习清单',
       key: const Key('current-video-learning-list-button'),
-      busy: busy,
+      busy: busy && !_choosingLearningParts,
       selected: currentEntry != null,
       // 顶部学习清单按钮函数会在加入与取消加入之间切换，并在取消前要求确认。
       onPressed: busy
@@ -895,38 +931,9 @@ extension _PlayerDetailsView on _PlayerPageState {
     if (mid == null || mid <= 0) {
       return;
     }
-    final bool shouldResume = _playing;
-    if (shouldResume) {
-      await _playbackService.pause();
-    }
-    if (!mounted) {
-      return;
-    }
-    await _showStandardSystemUiForNestedRoute();
-    if (!mounted) {
-      return;
-    }
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        // 用户主页构建函数把 @ 文本去掉后作为初始昵称，随后由公开接口校正。
-        builder: (BuildContext context) => UserProfilePage(
-          mid: mid,
-          initialName: segment.text.replaceFirst('@', '').trim(),
-          publicContentService: _publicContentService,
-          videoService: _bilibiliService,
-          learningListService: _learningListService,
-          watchHistoryService: _watchHistoryService,
-        ),
-      ),
+    await _openOwnerProfile(
+      VideoAuthor(mid: mid, name: segment.text.replaceFirst('@', '').trim()),
     );
-    if (!mounted) {
-      return;
-    }
-    _resumePlayerSystemUiAfterNestedRoute();
-    await _restorePlaybackAfterNestedPlayer(shouldResume: shouldResume);
-    if (mounted && shouldResume && !_playing) {
-      await _playbackService.play();
-    }
   }
 
   /// 展示明确的离开应用风险说明，用户确认后才调用可注入的系统浏览器启动器。

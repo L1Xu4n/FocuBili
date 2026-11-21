@@ -60,6 +60,8 @@ import java.io.FileOutputStream
 import java.lang.ref.WeakReference
 import java.net.URL
 import java.util.Locale
+import java.util.UUID
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import javax.net.ssl.HttpsURLConnection
@@ -91,6 +93,10 @@ class NativePlaybackController(
 ) : MethodChannel.MethodCallHandler {
     private val channel = MethodChannel(messenger, CHANNEL_NAME)
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val frameCaptureExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    private var liveFrameTimelineRevision = 0L
+    private var lastFrameDiscontinuityMs = 0L
+    private var hasRenderedVideoFrame = false
     private val playbackRequestExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val overlayDataRequestExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val progressPreferences = activity.getSharedPreferences(
@@ -109,6 +115,50 @@ class NativePlaybackController(
     private var textureEntry: TextureRegistry.SurfaceTextureEntry? = null
     private var videoSurface: Surface? = null
     private var currentBvid = ""
+    private var currentCourse: CoursePlaybackTarget? = null
+    // Native enforcement also applies when Flutter timers are suspended.
+    private var localCourseMid = 0L
+    private var localCourseUntil = 0L
+    private var localCourseCheckedAt = 0L
+    private var localCourseGeneration = -1L
+    private var localCourseElapsedUntil = 0L
+    private var localCourseCookieCheck = 0L
+    private fun clearLocalCourseGrant() {
+        localCourseMid = 0L
+        localCourseUntil = 0L
+        localCourseCheckedAt = 0L
+        localCourseGeneration = -1L
+        localCourseElapsedUntil = 0L
+        localCourseCookieCheck = 0L
+    }
+    private fun hasLocalCourseSession(mid: Long): Boolean {
+        val snap = BilibiliSessionGate.read { CookieManager.getInstance().getCookie(it) }
+        return snap.state == BilibiliCookiePolicy.State.SESSION && !snap.partial &&
+            snap.header.split(';').map { it.trim() }.any { it == "DedeUserID=$mid" }
+    }
+    private fun localCourseValid(): Boolean {
+        if (localCourseMid == 0L) return true
+        val elapsed = SystemClock.elapsedRealtime()
+        val now = System.currentTimeMillis()
+        if (now < localCourseCheckedAt ||
+            (localCourseUntil > 0L && (elapsed >= localCourseElapsedUntil || now >= localCourseUntil)) ||
+            !BilibiliSessionGate.isCurrent(localCourseGeneration)) return false
+        // Catch WebView/system mutations that did not go through a Dart account write.
+        if (elapsed >= localCourseCookieCheck) {
+            localCourseCookieCheck = elapsed + 5_000L
+            if (!hasLocalCourseSession(localCourseMid) || !BilibiliSessionGate.isCurrent(localCourseGeneration)) return false
+        }
+        return true
+    }
+    private fun revokeLocalCourse() {
+        if (localCourseMid == 0L) return
+        player?.stop()
+        player?.clearMediaItems()
+        localVideoPath = null; localAudioPath = null
+        localSource = false; currentBvid = ""; currentCourse = null
+        clearLocalCourseGrant()
+        reportError("课程校验已到期或账号已变化，请退出并重新验证。")
+    }
     private var localSource = false
     private var audioOnly = false
     private var localVideoPath: String? = null
@@ -127,6 +177,10 @@ class NativePlaybackController(
     private var currentOwnerName = ""
     private var requestedQuality = DEFAULT_QUALITY
     private var wbiSigningEnabled = false
+    private var ordinaryApiUserAgentAllowed = false
+    private var ordinaryApiUserAgent: String? = null
+    private var linePreference = "smart"
+    private var preferNonPcdn = true
     @Volatile private var failedVideoTracks: Set<Pair<Int, String>> = emptySet()
     private var canContinueAsGuest = false
     private var guestOfferGeneration: Long? = null
@@ -247,6 +301,7 @@ class NativePlaybackController(
         /** 在播放器仍存在时保存进度、发送状态并安排下一次刷新。 */
         override fun run() {
             if (player != null) {
+                if (!localCourseValid()) revokeLocalCourse()
                 sleepTimer.check()
                 saveCurrentPlaybackProgress(force = false)
                 emitPlaybackState()
@@ -270,10 +325,16 @@ class NativePlaybackController(
             "open" -> {
                 val bvid = call.argument<String>("bvid")?.trim().orEmpty()
                 val cid = call.argument<Number>("cid")?.toLong()
+                val courseEpisodeId = call.argument<Number>("courseEpisodeId")?.toLong()
+                val courseAid = call.argument<Number>("courseAid")?.toLong()
+                val course = CoursePlaybackTarget.create(bvid, courseEpisodeId, courseAid)
                 val pageNumber = call.argument<Number>("pageNumber")?.toInt() ?: 1
                 val quality = call.argument<Number>("quality")?.toInt() ?: DEFAULT_QUALITY
                 val initialPositionMs = call.argument<Number>("initialPositionMs")?.toLong()
-                if (buildVideoPageUrl(bvid) == null) {
+                if ((CoursePlaybackTarget.isCourseKey(bvid) && course == null) ||
+                    (!CoursePlaybackTarget.isCourseKey(bvid) && (courseEpisodeId != null || courseAid != null))) {
+                    result.error("invalid_course", "课程章节编号不完整，请重新打开课程。", null)
+                } else if (buildVideoPageUrl(bvid) == null) {
                     result.error("invalid_bvid", "请输入有效的 BV 号。", null)
                 } else if (cid == null || cid <= 0L) {
                     result.error("invalid_cid", "该视频没有可播放的分P编号。", null)
@@ -285,6 +346,13 @@ class NativePlaybackController(
                     result.error("invalid_position", "初始播放位置不能为负数。", null)
                 } else {
                     wbiSigningEnabled = call.argument<Boolean>("wbiEnabled") == true
+                    linePreference = call.argument<String>("linePreference") ?: "smart"
+                    preferNonPcdn = call.argument<Boolean>("preferNonPcdn") != false
+                    ordinaryApiUserAgentAllowed = course == null &&
+                        call.argument<Boolean>("ordinaryApiUserAgentAllowed") == true
+                    ordinaryApiUserAgent = if (ordinaryApiUserAgentAllowed) {
+                        OrdinaryPlaybackUserAgent.safeForChannel(call.argument("ordinaryApiUserAgent"))
+                    } else null
                     openVideo(
                         bvid = bvid,
                         cid = cid,
@@ -294,6 +362,7 @@ class NativePlaybackController(
                         partTitle = call.argument<String>("partTitle").orEmpty(),
                         ownerName = call.argument<String>("ownerName").orEmpty(),
                         initialPositionMs = initialPositionMs,
+                        course = course,
                     )
                     result.success(null)
                 }
@@ -316,11 +385,38 @@ class NativePlaybackController(
                 val filePath = call.argument<String>("filePath")?.trim().orEmpty()
                 val title = call.argument<String>("title").orEmpty()
                 val initialPositionMs = call.argument<Number>("initialPositionMs")?.toLong()
-                if (filePath.isEmpty()) {
+                val bvid = call.argument<String>("bvid").orEmpty()
+                val mid = call.argument<Number>("courseCacheMid")?.toLong() ?: 0L
+                val checkedAt = call.argument<Number>("courseCacheCheckedAt")?.toLong()
+                val kind = call.argument<String>("courseCacheExpiryKind")
+                val until = call.argument<Number>("courseCacheUntil")?.toLong()
+                val course = CoursePlaybackTarget.create(bvid, call.argument<Number>("courseEpisodeId")?.toLong(), call.argument<Number>("courseAid")?.toLong())
+                val cid = call.argument<Number>("cid")?.toLong() ?: 0L
+                val isPrivate = CoursePlaybackTarget.isCourseKey(bvid)
+                // Bind both absolute files to the exact app-cache account and lesson.
+                val dir = if (course != null && mid > 0 && cid > 0)
+                    runCatching { File(activity.cacheDir.canonicalFile, "private_course_v1/$mid/${course.seasonId}-${course.episodeId}-${course.aid}-$cid") }.getOrNull() else null
+                val audio = call.argument<String>("audioFilePath")?.trim()?.takeIf { it.isNotEmpty() }
+                val privateRoot = File(activity.cacheDir, "private_course_v1")
+                val underPrivate = listOfNotNull(filePath, audio).any { PrivateCoursePlayback.restricted(privateRoot, it) }
+                val now = System.currentTimeMillis()
+                if ((isPrivate && (course == null || !PrivateCoursePlayback.acceptsWindow(now, checkedAt ?: 0L, kind, until) ||
+                        !PrivateCoursePlayback.matches(dir, filePath, "video.bin") ||
+                        (audio != null && !PrivateCoursePlayback.matches(dir, audio, "audio.bin")) || !hasLocalCourseSession(mid))) ||
+                    (!isPrivate && (mid != 0L || checkedAt != null || kind != null || until != null || underPrivate))) {
+                    result.error("invalid_course_cache", "本机课程缓存不可用或校验已到期。", null)
+                } else if (filePath.isEmpty()) {
                     result.error("invalid_path", "请选择有效的本地视频文件。", null)
                 } else if (initialPositionMs != null && initialPositionMs < 0L) {
                     result.error("invalid_position", "初始播放位置不能为负数。", null)
                 } else {
+                    localCourseMid = mid
+                    localCourseUntil = until ?: 0L
+                    localCourseCheckedAt = checkedAt ?: 0L
+                    localCourseElapsedUntil = if (isPrivate && until != null)
+                        SystemClock.elapsedRealtime() + (until - now) else 0L
+                    localCourseCookieCheck = 0L
+                    localCourseGeneration = if (isPrivate) BilibiliSessionGate.generation() else -1L
                     openLocalVideo(
                         filePath = filePath,
                         audioFilePath = call.argument<String>("audioFilePath")?.trim()?.takeIf { it.isNotEmpty() },
@@ -352,6 +448,11 @@ class NativePlaybackController(
                 }
             }
             "play" -> {
+                if (!localCourseValid()) {
+                    revokeLocalCourse()
+                    result.error("invalid_course_cache", "课程校验已到期或账号已变化。", null)
+                    return
+                }
                 resumeAfterPrepare = true
                 player?.play()
                 result.success(null)
@@ -388,6 +489,11 @@ class NativePlaybackController(
                     result.error("invalid_quality", "请选择有效的清晰度。", null)
                 } else {
                     wbiSigningEnabled = call.argument<Boolean>("wbiEnabled") == true
+                    linePreference = call.argument<String>("linePreference") ?: "smart"
+                    preferNonPcdn = call.argument<Boolean>("preferNonPcdn") != false
+                    ordinaryApiUserAgent = if (ordinaryApiUserAgentAllowed) {
+                        OrdinaryPlaybackUserAgent.safeForChannel(call.argument("ordinaryApiUserAgent"))
+                    } else null
                     switchQuality(quality)
                     result.success(null)
                 }
@@ -395,6 +501,17 @@ class NativePlaybackController(
             "getSavedPlaybackState" -> {
                 val bvid = call.argument<String>("bvid")?.trim().orEmpty()
                 result.success(loadSavedVideoState(bvid))
+            }
+            "exportSavedPlaybackProgress" -> {
+                try {
+                    // Do not call resume loaders: those may clear stale positions.
+                    result.success(NativePlaybackProgressStorage.read(File(
+                        activity.applicationInfo.dataDir,
+                        "shared_prefs/$PROGRESS_PREFERENCES_NAME.xml",
+                    )))
+                } catch (_: Exception) {
+                    result.error("progress_export_failed", "Android playback progress is unavailable.", null)
+                }
             }
             "getSystemPlaybackLevels" -> {
                 result.success(readSystemPlaybackLevels())
@@ -416,6 +533,9 @@ class NativePlaybackController(
             }
             "captureCurrentFrame" -> {
                 captureCurrentVideoFrame(result)
+            }
+            "captureLiveVideoFrame" -> {
+                captureCurrentVideoFrame(result, live = true)
             }
             "getMediaCacheStatus" -> {
                 handleMediaCacheOperation(result, ::readMediaCacheStatus)
@@ -509,6 +629,7 @@ class NativePlaybackController(
         releasePlaybackResources()
         releaseMediaCache()
         playbackRequestExecutor.shutdownNow()
+        frameCaptureExecutor.shutdown()
         overlayDataRequestExecutor.shutdownNow()
         channel.setMethodCallHandler(null)
     }
@@ -678,6 +799,22 @@ class NativePlaybackController(
         nativePlayer.setWakeMode(C.WAKE_MODE_LOCAL)
         nativePlayer.playbackParameters = PlaybackParameters(playbackSpeed)
         nativePlayer.addListener(object : Player.Listener {
+            override fun onPositionDiscontinuity(
+                oldPosition: Player.PositionInfo,
+                newPosition: Player.PositionInfo,
+                reason: Int,
+            ) {
+                invalidateLiveFrameTimeline()
+            }
+
+            override fun onRenderedFirstFrame() {
+                hasRenderedVideoFrame = true
+            }
+
+            /** Intent changes also matter while buffering/ended, when isPlaying stays false. */
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                emitPlaybackState()
+            }
             /** 播放或暂停变化时把最新状态同步给 Flutter。 */
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 if (
@@ -975,75 +1112,136 @@ class NativePlaybackController(
         val entry = renderer.createSurfaceTexture()
         entry.surfaceTexture().setDefaultBufferSize(DEFAULT_TEXTURE_WIDTH, DEFAULT_TEXTURE_HEIGHT)
         textureEntry = entry
+        hasRenderedVideoFrame = false
+        invalidateLiveFrameTimeline()
         videoSurface = Surface(entry.surfaceTexture())
         player?.setVideoSurface(videoSurface)
         return entry.id()
     }
 
-    /** 使用 PixelCopy 把当前视频 Surface 保存为应用私有 JPEG，供时间点笔记插入画面。 */
-    private fun captureCurrentVideoFrame(result: MethodChannel.Result) {
+    private fun invalidateLiveFrameTimeline() {
+        liveFrameTimelineRevision++
+        lastFrameDiscontinuityMs = SystemClock.elapsedRealtime()
+    }
+
+    /** Copy only the existing Surface. Live reads never issue playback commands. */
+    private fun captureCurrentVideoFrame(result: MethodChannel.Result, live: Boolean = false) {
+        fun unavailable(code: String, message: String, details: Any? = null) {
+            if (live) result.success(null) else result.error(code, message, details)
+        }
+
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
-            result.error("frame_capture_unsupported", "当前 Android 版本不支持截取视频画面。", null)
+            unavailable("frame_capture_unsupported", "当前 Android 版本不支持截取视频画面。")
             return
         }
         val surface = videoSurface
-        val videoSize = player?.videoSize
-        if (surface == null || !surface.isValid || videoSize == null ||
+        val nativePlayer = player
+        val videoSize = nativePlayer?.videoSize
+        if (surface == null || !surface.isValid || nativePlayer == null || videoSize == null ||
             videoSize.width <= 0 || videoSize.height <= 0
         ) {
-            result.error("frame_capture_unavailable", "视频画面还没有准备好，请稍后再试。", null)
+            unavailable("frame_capture_unavailable", "视频画面还没有准备好，请稍后再试。")
             return
         }
-        val maximumWidth = 1280
-        val scale = minOf(1.0, maximumWidth.toDouble() / videoSize.width.toDouble())
+        val item = nativePlayer.currentMediaItem
+        val bvid = currentBvid
+        val cid = currentCid
+        val timeline = liveFrameTimelineRevision
+        val request = playbackRequestToken
+        // Metadata and PixelCopy both respect the native protection boundary.
+        // Do not fall back to a downloaded thumbnail or decoded source.
+        fun isCurrentLiveSurface(): Boolean =
+            player === nativePlayer && videoSurface === surface && surface.isValid &&
+                currentBvid == bvid && currentCid == cid && bvid.isNotEmpty() && cid > 0 &&
+                liveFrameTimelineRevision == timeline && playbackRequestToken == request &&
+                !audioOnly && hasRenderedVideoFrame && item != null &&
+                item == nativePlayer.currentMediaItem &&
+                item.localConfiguration?.drmConfiguration == null &&
+                nativePlayer.videoFormat?.drmInitData == null &&
+                nativePlayer.playbackState == Player.STATE_READY &&
+                SystemClock.elapsedRealtime() - lastFrameDiscontinuityMs >= LiveFramePositionPolicy.SEEK_SETTLE_MS
+        if (live && !isCurrentLiveSurface()) {
+            result.success(null)
+            return
+        }
+        val referenceEdge = if (live) maxOf(videoSize.width, videoSize.height) else videoSize.width
+        val scale = minOf(1.0, 1280.0 / referenceEdge)
         val width = maxOf(2, (videoSize.width * scale).toInt())
         val height = maxOf(2, (videoSize.height * scale).toInt())
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        PixelCopy.request(
-            surface,
-            bitmap,
-            { copyResult ->
-                if (copyResult != PixelCopy.SUCCESS) {
-                    bitmap.recycle()
-                    result.error(
-                        "frame_capture_failed",
-                        "无法读取当前视频画面，请继续播放后再试。",
-                        copyResult,
-                    )
-                    return@request
-                }
-                playbackRequestExecutor.execute {
-                    try {
-                        val directory = File(activity.filesDir, "video_note_frames")
-                        if (!directory.exists() && !directory.mkdirs()) {
-                            throw IllegalStateException("无法创建笔记画面目录。")
-                        }
-                        val safeBvid = currentBvid.replace(Regex("[^0-9A-Za-z]"), "_")
-                        val output = File(
-                            directory,
-                            "${safeBvid}_${System.currentTimeMillis()}.jpg",
+        val before = nativePlayer.currentPosition
+        val requestedAt = SystemClock.elapsedRealtime()
+        try {
+            PixelCopy.request(
+                surface,
+                bitmap,
+                { copyResult ->
+                    if (copyResult != PixelCopy.SUCCESS) {
+                        bitmap.recycle()
+                        unavailable("frame_capture_failed", "无法读取当前视频画面，请继续播放后再试。", copyResult)
+                        return@request
+                    }
+                    val position = if (live && isCurrentLiveSurface()) {
+                        LiveFramePositionPolicy.estimate(
+                            before, nativePlayer.currentPosition, SystemClock.elapsedRealtime() - requestedAt,
                         )
-                        FileOutputStream(output).use { stream ->
-                            if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 90, stream)) {
-                                throw IllegalStateException("无法压缩当前视频画面。")
+                    } else null
+                    if (live && position == null) {
+                        bitmap.recycle()
+                        result.success(null)
+                        return@request
+                    }
+                    try {
+                        frameCaptureExecutor.execute {
+                            var output: File? = null
+                            try {
+                                val directory = File(activity.filesDir, "video_note_frames")
+                                if (!directory.isDirectory && !directory.mkdirs()) {
+                                    throw IllegalStateException("无法创建笔记画面目录。")
+                                }
+                                val safeBvid = bvid.replace(Regex("[^0-9A-Za-z]"), "_")
+                                val frameFile = File(directory, "${safeBvid}_${UUID.randomUUID()}.jpg")
+                                output = frameFile
+                                FileOutputStream(frameFile).use { stream ->
+                                    if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 90, stream)) {
+                                        throw IllegalStateException("无法压缩当前视频画面。")
+                                    }
+                                }
+                                mainHandler.post {
+                                    if (live && !isCurrentLiveSurface()) {
+                                        runCatching { frameFile.delete() }
+                                        result.success(null)
+                                    } else if (live) {
+                                        result.success(mapOf(
+                                            "path" to frameFile.absolutePath,
+                                            "bvid" to bvid,
+                                            "cid" to cid,
+                                            "positionMs" to position,
+                                        ))
+                                    } else {
+                                        result.success(frameFile.absolutePath)
+                                    }
+                                }
+                            } catch (error: Exception) {
+                                runCatching { output?.delete() }
+                                mainHandler.post {
+                                    unavailable("frame_capture_failed", error.message ?: "保存当前视频画面失败。")
+                                }
+                            } finally {
+                                bitmap.recycle()
                             }
                         }
+                    } catch (_: RejectedExecutionException) {
                         bitmap.recycle()
-                        mainHandler.post { result.success(output.absolutePath) }
-                    } catch (error: Throwable) {
-                        bitmap.recycle()
-                        mainHandler.post {
-                            result.error(
-                                "frame_capture_failed",
-                                error.message ?: "保存当前视频画面失败。",
-                                null,
-                            )
-                        }
+                        unavailable("frame_capture_unavailable", "播放器已关闭。")
                     }
-                }
-            },
-            mainHandler,
-        )
+                },
+                mainHandler,
+            )
+        } catch (_: IllegalArgumentException) {
+            bitmap.recycle()
+            unavailable("frame_capture_unavailable", "当前视频表面无法截取。")
+        }
     }
 
     /** 保存旧分P、重置播放器，并优先按 Flutter 兜底位置请求新分P的 DASH 地址。 */
@@ -1056,6 +1254,7 @@ class NativePlaybackController(
         partTitle: String,
         ownerName: String,
         initialPositionMs: Long?,
+        course: CoursePlaybackTarget?,
     ) {
         ensurePlayer()
         ensureTexture()
@@ -1064,6 +1263,8 @@ class NativePlaybackController(
         player?.stop()
         player?.clearMediaItems()
         currentBvid = bvid
+        clearLocalCourseGrant()
+        currentCourse = course
         canContinueAsGuest = false
         guestConsentGeneration = null
         failedVideoTracks = emptySet()
@@ -1114,6 +1315,10 @@ class NativePlaybackController(
         invalidatePlaybackRequests()
         player?.stop()
         player?.clearMediaItems()
+        if (!localCourseValid()) { revokeLocalCourse(); return }
+        currentCourse = null
+        ordinaryApiUserAgentAllowed = false
+        ordinaryApiUserAgent = null
         currentBvid = bvid
         currentCid = cid
         currentPageNumber = pageNumber
@@ -1175,6 +1380,8 @@ class NativePlaybackController(
             sourceFactory.createMediaSource(MediaItem.fromUri(Uri.fromFile(audioFile))),
         )
         // 音视频采用同一时间轴和初始位置，避免分离音轨丢失或续播后不同步。
+        hasRenderedVideoFrame = false
+        invalidateLiveFrameTimeline()
         nativePlayer.setMediaSource(
             mediaSource,
             pendingStartPositionMs,
@@ -1264,14 +1471,24 @@ class NativePlaybackController(
     /** 在单线程后台请求播放数据，并只让最新请求更新当前视频。 */
     private fun requestPlaybackSources(bvid: String, cid: Long, quality: Int) {
         val requestToken = createPlaybackRequestToken()
-        val diagnostic = PlaybackRequestDiagnostic(requestToken, wbiSigningEnabled, quality)
+        val course = currentCourse
+        val requestLinePreference = linePreference
+        val requestPreferNonPcdn = preferNonPcdn
+        val diagnostic = PlaybackRequestDiagnostic(requestToken, course == null && wbiSigningEnabled, quality)
         val explicitGuest = guestConsentGeneration?.takeIf(BilibiliSessionGate::isCurrent)
+        val requestUserAgent = OrdinaryPlaybackUserAgent.select(
+            ordinaryApiUserAgent, ordinaryApiUserAgentAllowed && course == null && !localSource,
+            explicitGuest != null, quality,
+        )
         diagnostic.guestSelected = explicitGuest != null
         diagnostic.sessionGeneration = explicitGuest ?: BilibiliSessionGate.generation()
         canContinueAsGuest = false
         playbackRequestExecutor.execute {
             val sourceResult = runCatching {
-                loadPlaybackSources(bvid, cid, quality, diagnostic)
+                applyPlaybackRoutePreference(
+                    loadPlaybackSources(bvid, cid, quality, diagnostic, course, requestUserAgent),
+                    requestLinePreference, requestPreferNonPcdn,
+                )
             }
             mainHandler.post {
                 if (!isCurrentPlaybackRequest(requestToken, bvid, cid, quality)) {
@@ -1288,7 +1505,7 @@ class NativePlaybackController(
                 }
                 channel.invokeMethod("playbackRequestDiagnostic", diagnostic.toMap(sourceResult.isSuccess))
                 sourceResult.onSuccess(::prepareMediaSources).onFailure { error ->
-                    canContinueAsGuest = error is BilibiliCookiePolicy.Unavailable &&
+                    canContinueAsGuest = course == null && error is BilibiliCookiePolicy.Unavailable &&
                         error.state == BilibiliCookiePolicy.State.UNKNOWN
                     guestOfferGeneration = diagnostic.sessionGeneration.takeIf { canContinueAsGuest }
                     reportError(describePlaybackFetchFailure(error))
@@ -1297,21 +1514,42 @@ class NativePlaybackController(
         }
     }
 
+    /** 同时排序视频、音频和解码后备轨道，配置固定在请求开始时避免异步串用。 */
+    private fun applyPlaybackRoutePreference(
+        sources: PlaybackSources, preference: String, preferNonPcdn: Boolean,
+    ): PlaybackSources = sources.copy(
+        videoUrls = PlaybackRoutePolicy.order(sources.videoUrls, preference, preferNonPcdn),
+        audioUrls = PlaybackRoutePolicy.order(sources.audioUrls, preference, preferNonPcdn),
+        videoAlternatives = sources.videoAlternatives.map { track ->
+            track.copy(urls = PlaybackRoutePolicy.order(track.urls, preference, preferNonPcdn))
+        },
+    )
+
     /** 请求播放 JSON，并挑选目标清晰度的 DASH 视频轨和最高质量音频轨。 */
     private fun loadPlaybackSources(
         bvid: String,
         cid: Long,
         quality: Int,
         diagnostic: PlaybackRequestDiagnostic,
+        course: CoursePlaybackTarget?,
+        requestUserAgent: String?,
     ): PlaybackSources {
         val useWbi = diagnostic.wbiEnabled
-        val responseText = requestPlaybackInfoJson(bvid, cid, quality, diagnostic)
+        val responseText = requestPlaybackInfoJson(bvid, cid, quality, diagnostic, course, requestUserAgent)
         diagnostic.stage = "parse"
         val root = JSONObject(responseText)
         val code = root.optInt("code", -1)
         diagnostic.apiCode = code
         if (code == -101) diagnostic.observeNavigation(code, false)
         if (code != 0) {
+            if (course != null) {
+                throw PlaybackSourceException(when (code) {
+                    -101, -401 -> "登录已失效，请在“我的”重新登录购买课程的账号。"
+                    -403 -> "当前账号没有本节课的播放权限，请确认已购买且课程未过期。"
+                    -404 -> "课程不存在或已下架。"
+                    else -> "课程播放请求失败（错误码：$code），请稍后重试。"
+                })
+            }
             if (code == -351) {
                 throw PlaybackSourceException(
                     if (useWbi) {
@@ -1331,8 +1569,24 @@ class NativePlaybackController(
         }
         val data = root.optJSONObject("data")
             ?: throw PlaybackSourceException("播放数据服务没有返回视频信息。")
+        val innerCode = data.optInt("code", 0)
+        if (course != null && data.has("paid_access") && !data.optBoolean("paid_access", false) && data.optInt("paid_access", 0) != 1) {
+            throw PlaybackSourceException("本节课未获得已购播放权限，请确认购买账号。")
+        }
+        if (course != null && innerCode != 0) {
+            throw PlaybackSourceException("课程播放请求未获授权（错误码：$innerCode），请确认购买账号。")
+        }
+        if (course != null && (data.optBoolean("is_drm", false) || data.optInt("is_drm", 0) != 0 || data.optInt("drm_tech_type", 0) != 0)) {
+            throw PlaybackSourceException("本节课需要受保护的官方播放能力，暂不能在原生播放器中打开。")
+        }
+        if (course != null && (data.optInt("is_preview", 0) != 0 || data.optBoolean("is_preview", false))) {
+            throw PlaybackSourceException("服务器仅提供试看内容，请确认已登录购买课程的账号。")
+        }
         val dash = data.optJSONObject("dash")
-            ?: throw PlaybackSourceException("该视频没有可用的 DASH 播放数据。")
+        if (dash == null) {
+            if (course != null) return loadCourseProgressiveSource(bvid, cid, data, course, quality, diagnostic)
+            throw PlaybackSourceException("该视频没有可用的 DASH 播放数据。")
+        }
         val returnedQuality = data.optInt("quality", quality).takeIf { it > 0 } ?: quality
         diagnostic.returnedQuality = returnedQuality
         val videoTracks = selectMediaTracks(dash.optJSONArray("video"), minOf(quality, returnedQuality))
@@ -1344,7 +1598,7 @@ class NativePlaybackController(
         if (videoTrack.urls.isEmpty() && !audioOnly) {
             throw PlaybackSourceException("没有当前设备可解码的安全视频轨道，请尝试其他清晰度或听视频。")
         }
-        val referer = buildVideoPageUrl(bvid)
+        val referer = course?.referer ?: buildVideoPageUrl(bvid)
             ?: throw PlaybackSourceException("无法生成视频页面地址。")
         return PlaybackSources(
             bvid = bvid,
@@ -1361,12 +1615,52 @@ class NativePlaybackController(
         )
     }
 
+    /** Some classroom episodes return a single muxed MP4/FLV instead of DASH. */
+    private fun loadCourseProgressiveSource(
+        bvid: String,
+        cid: Long,
+        data: JSONObject,
+        course: CoursePlaybackTarget,
+        quality: Int,
+        diagnostic: PlaybackRequestDiagnostic,
+    ): PlaybackSources {
+        val segments = data.optJSONArray("durl")
+            ?: throw PlaybackSourceException("课程没有返回可支持的播放数据，请稍后重试。")
+        if (segments.length() != 1) {
+            throw PlaybackSourceException("本节课返回多段媒体，当前版本暂不支持，未截取播放其中一段。")
+        }
+        val segment = segments.optJSONObject(0)
+            ?: throw PlaybackSourceException("课程播放数据不完整。")
+        val urls = linkedSetOf<String>()
+        segment.optString("url").takeIf(::isSafeMediaUrl)?.let(urls::add)
+        segment.optJSONArray("backup_url")?.let { backups ->
+            for (index in 0 until backups.length()) {
+                backups.optString(index).takeIf(::isSafeMediaUrl)?.let(urls::add)
+            }
+        }
+        if (urls.isEmpty()) throw PlaybackSourceException("课程没有可用的 HTTPS 媒体地址。")
+        val returnedQuality = data.optInt("quality", quality).takeIf { it > 0 } ?: quality
+        diagnostic.returnedQuality = returnedQuality
+        diagnostic.selectedQuality = returnedQuality
+        return PlaybackSources(
+            videoUrls = urls.toList(), audioUrls = emptyList(),
+            bvid = bvid, cid = cid,
+            videoRepresentation = PlaybackCacheRepresentation(id = returnedQuality, codec = "muxed"),
+            audioRepresentation = PlaybackCacheRepresentation(), referer = course.referer,
+            actualQuality = returnedQuality,
+            qualities = parseQualityOptions(data, JSONObject(), returnedQuality),
+            videoAlternatives = emptyList(), diagnostic = diagnostic,
+        )
+    }
+
     /** 按本次请求固定的开关选择旧接口或 WBI 接口，nav 与播放共用同一会话。 */
     private fun requestPlaybackInfoJson(
         bvid: String,
         cid: Long,
         quality: Int,
         diagnostic: PlaybackRequestDiagnostic,
+        course: CoursePlaybackTarget?,
+        requestUserAgent: String?,
     ): String {
         val useWbi = diagnostic.wbiEnabled
         val snapshot = if (diagnostic.guestSelected) {
@@ -1392,7 +1686,44 @@ class NativePlaybackController(
             throw BilibiliCookiePolicy.Unavailable(snapshot.state)
         }
         val cookie = snapshot.header
-        val referer = buildVideoPageUrl(bvid).orEmpty()
+        if (course != null && snapshot.state != BilibiliCookiePolicy.State.SESSION) {
+            throw PlaybackSourceException("请先登录购买课程的 B 站账号。")
+        }
+        val referer = course?.referer ?: buildVideoPageUrl(bvid).orEmpty()
+        if (course != null) {
+            try {
+                CoursePurchaseGate.verify(course.seasonId,
+                    ensureCurrent = { BilibiliSessionGate.isCurrent(diagnostic.sessionGeneration) },
+                    loadPage = { page ->
+                        diagnostic.stage = "purchase"
+                        val paid = JSONObject(requestPlaybackApiJson(
+                            Uri.parse("https://$PLAYBACK_API_HOST/pugv/pay/web/my/paid?pn=$page&ps=10"),
+                            referer, cookie, diagnostic,
+                        ))
+                        if (paid.optInt("code", -1) != 0) throw CoursePurchaseException("无法确认课程购买状态，请重新登录或重试。")
+                        val data = paid.optJSONObject("data") ?: throw CoursePurchaseException("课程购买状态数据不完整。")
+                        val total = data.optInt("total", -1)
+                        val raw = data.optJSONArray("data")
+                        if (raw == null && total != 0) throw CoursePurchaseException("课程购买状态数据不完整。")
+                        val items = (0 until (raw?.length() ?: 0)).map { index ->
+                            val item = raw?.optJSONObject(index) ?: throw CoursePurchaseException("课程购买状态数据不完整。")
+                            CoursePurchaseItem(item.optLong("id", 0L),
+                                item.optBoolean("is_expired", false) || item.optInt("is_expired", 0) == 1,
+                                item.optInt("status", 0) == -3)
+                        }
+                        CoursePurchasePage(total, items)
+                    })
+            } catch (error: CoursePurchaseException) {
+                throw PlaybackSourceException(error.message ?: "无法确认课程购买状态，请重试。")
+            }
+            val parameters = course.parameters(cid, quality, DASH_FEATURE_FLAG)
+            val endpoint = Uri.parse("https://$PLAYBACK_API_HOST/pugv/player/web/playurl?${WbiSigningPolicy.encodeQuery(parameters)}")
+            diagnostic.stage = "playurl"
+            diagnostic.wbiSigned = false
+            diagnostic.playurlAttempted = true
+            diagnostic.httpStatus = null
+            return requestPlaybackApiJson(endpoint, referer, cookie, diagnostic)
+        }
         val parameters = mapOf(
             "bvid" to bvid, "cid" to cid.toString(), "qn" to quality.toString(),
             "fnval" to DASH_FEATURE_FLAG.toString(), "fourk" to "1",
@@ -1421,7 +1752,7 @@ class NativePlaybackController(
         diagnostic.wbiSigned = useWbi && query.containsKey("w_rid") && query.containsKey("wts")
         diagnostic.playurlAttempted = true
         diagnostic.httpStatus = null
-        return requestPlaybackApiJson(endpoint, referer, cookie, diagnostic)
+        return requestPlaybackApiJson(endpoint, referer, cookie, diagnostic, requestUserAgent)
     }
 
     /** 读取固定官方 HTTPS API，禁止重定向携带会话，错误不回显响应正文。 */
@@ -1430,6 +1761,7 @@ class NativePlaybackController(
         referer: String,
         cookie: String,
         diagnostic: PlaybackRequestDiagnostic,
+        requestUserAgent: String? = null,
     ): String {
         val connection = URL(endpoint.toString()).openConnection() as HttpsURLConnection
         try {
@@ -1439,7 +1771,13 @@ class NativePlaybackController(
             connection.readTimeout = NETWORK_TIMEOUT_MS
             connection.setRequestProperty("Accept", "application/json")
             connection.setRequestProperty("Referer", referer)
-            connection.setRequestProperty("User-Agent", DESKTOP_USER_AGENT)
+            if (requestUserAgent == null) {
+                connection.setRequestProperty("User-Agent", DESKTOP_USER_AGENT)
+            } else {
+                OrdinaryPlaybackUserAgent.apply(
+                    connection, java.net.URI(endpoint.toString()), DESKTOP_USER_AGENT, requestUserAgent,
+                )
+            }
             cookie.takeIf { it.isNotBlank() }?.let { cookie ->
                 connection.setRequestProperty("Cookie", cookie)
             }
@@ -2596,7 +2934,7 @@ class NativePlaybackController(
             .setTitle(displayTitle)
             .setArtist(currentOwnerName.ifBlank { "未知 UP 主" })
             .build()
-        if (!bypassMediaCacheForPlayback) {
+        if (!bypassMediaCacheForPlayback && currentCourse == null) {
             val cache = ensureMediaCache()
             pinnedCacheEvictor?.pin(cache, buildSet {
                 if (!audioOnly) add(playbackCacheKey(sources, video = true))
@@ -2606,7 +2944,7 @@ class NativePlaybackController(
         val sourceFactory = ProgressiveMediaSource.Factory(
             createMediaDataSourceFactory(
                 referer = sources.referer,
-                bypassCache = bypassMediaCacheForPlayback,
+                bypassCache = bypassMediaCacheForPlayback || currentCourse != null,
             ),
         ).setLoadErrorHandlingPolicy(
             DefaultLoadErrorHandlingPolicy(MEDIA_MINIMUM_RETRY_COUNT),
@@ -2633,6 +2971,8 @@ class NativePlaybackController(
         }
         playbackPhase = PHASE_LOADING
         playbackMessage = "正在准备原生播放器…"
+        hasRenderedVideoFrame = false
+        invalidateLiveFrameTimeline()
         nativePlayer.setMediaSource(finalSource)
         if (pendingStartPositionMs > 0L) {
             nativePlayer.seekTo(pendingStartPositionMs)
@@ -2730,6 +3070,7 @@ class NativePlaybackController(
                 "phase" to playbackPhase,
                 "canContinueAsGuest" to canContinueAsGuest,
                 "isPlaying" to (nativePlayer?.isPlaying == true),
+                "playRequested" to nativePlayer?.playWhenReady,
                 "audioOnly" to audioOnly,
                 "sleepTimerRemainingMs" to sleepTimer.remainingMs(),
                 "positionMs" to position,
@@ -2910,6 +3251,7 @@ class NativePlaybackController(
 
     /** 清理播放器、系统媒体会话、纹理和未完成播放数据请求。 */
     private fun releasePlaybackResources() {
+        clearLocalCourseGrant()
         sleepTimer.configure(0L)
         ListeningMediaService.stop(activity.applicationContext)
         audioOnly = false
@@ -2932,6 +3274,9 @@ class NativePlaybackController(
         textureEntry?.release()
         textureEntry = null
         currentBvid = ""
+        currentCourse = null
+        ordinaryApiUserAgentAllowed = false
+        ordinaryApiUserAgent = null
         currentCid = 0L
         currentPageNumber = 1
         currentTitle = ""
@@ -3005,6 +3350,7 @@ class NativePlaybackController(
     /** 将 Flutter 传入的 BV 号转换为视频页 Referer，并验证格式。 */
     private fun buildVideoPageUrl(bvid: String?): String? {
         val normalized = bvid?.trim() ?: return null
+        CoursePlaybackTarget.seasonPage(normalized)?.let { return it }
         if (!BVID_PATTERN.matches(normalized)) {
             return null
         }

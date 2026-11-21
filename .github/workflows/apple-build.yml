@@ -57,7 +57,8 @@ jobs:
           - platform: ios
             os: macos-26
           - platform: macos
-            os: macos-26
+            # 标准 Intel 池避开 ARM 容量排队；同一 Xcode 与通用 Release 构建继续接受原门禁。
+            os: macos-26-intel
     steps:
       - uses: actions/checkout@v6
         with:
@@ -80,7 +81,7 @@ jobs:
           "$RUNNER_TEMP/subscription-gate-probe"
       - name: Check cache locking and subtitle lifecycle on macOS
         if: matrix.platform == 'macos'
-        run: flutter test --no-pub test/cache_file_lock_test.dart test/image_resource_cache_test.dart test/cached_player_overlay_service_test.dart test/windows_media_cache_service_test.dart test/desktop_disk_cache_session_test.dart
+        run: flutter test --no-pub test/cache_file_lock_test.dart test/image_resource_cache_test.dart test/cached_player_overlay_service_test.dart test/windows_media_cache_service_test.dart test/desktop_disk_cache_session_test.dart test/desktop_offline_cache_location_test.dart
       - name: Build iOS device archive (unsigned)
         if: matrix.platform == 'ios'
         run: |
@@ -100,6 +101,9 @@ jobs:
       - name: Verify unsigned Beta iOS bundle metadata
         if: matrix.platform == 'ios' && inputs.beta_number != ''
         run: python3 tool/beta_release.py ios --beta-number "$BETA_NUMBER" --source-sha "$(git rev-parse HEAD)" --ipa build/apple/FocuBili-ios-unsigned.ipa --output build/apple/ios-beta-verification.json
+      - name: Verify unsigned stable iOS bundle metadata
+        if: matrix.platform == 'ios' && inputs.beta_number == ''
+        run: python3 tool/stable_package_metadata.py --output build/apple/ios-stable-verification.json ios --ipa build/apple/FocuBili-ios-unsigned.ipa
       - name: Compile iOS simulator
         if: matrix.platform == 'ios'
         run: |
@@ -143,6 +147,8 @@ jobs:
           shasum -a 256 build/apple/FocuBili-macos-preview.dmg > build/apple/SHA256SUMS.txt
       - name: Verify normal macOS DMG contents and identity
         if: matrix.platform == 'macos'
+        env:
+          REQUIRE_MACOS_UNIVERSAL: ${{ inputs.beta_number == '' }}
         run: python3 tool/verify_macos_dmg.py
       - name: Smoke-test macOS launch
         if: matrix.platform == 'macos'

@@ -9,6 +9,31 @@ class PlaybackPreferencesService {
   /// 创建播放器配置服务；默认通过 SharedPreferences 保存开关。
   const PlaybackPreferencesService();
 
+  static const linePreferenceKey = 'playback_preferences.line_preference';
+  static const modeKey = 'playback_preferences.mode';
+  static const subtitlePositionKey = 'playback_preferences.subtitle_position';
+  static const subtitleOpacityKey = 'playback_preferences.subtitle_opacity';
+  static const autoEnableSubtitlesKey =
+      'playback_preferences.auto_enable_subtitles';
+  static const subtitlePriorityKey = 'playback_preferences.subtitle_priority';
+  static const appVolumeKey = 'playback_preferences.app_volume';
+  static const preferNonPcdnKey = 'playback_preferences.prefer_non_pcdn';
+
+  /// 播放链只读取线路字段；存储不可用时仍以默认策略播放，不受其他损坏偏好影响。
+  Future<PlaybackPreferences> loadRoutePreferences() async {
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      return PlaybackPreferences(
+        linePreference: PlaybackLinePreference.fromName(
+          preferences.get(linePreferenceKey),
+        ),
+        preferNonPcdn: preferences.get(preferNonPcdnKey) != false,
+      );
+    } catch (_) {
+      return const PlaybackPreferences();
+    }
+  }
+
   static const String _doubleTapSeekKey =
       'playback_preferences.enable_double_tap_seek';
   static const _speedsKey = 'playback_preferences.speeds';
@@ -31,6 +56,23 @@ class PlaybackPreferencesService {
   Future<PlaybackPreferences> load() async {
     final SharedPreferences preferences = await SharedPreferences.getInstance();
     return PlaybackPreferences(
+      mode: PlaybackMode.fromName(preferences.get(modeKey)),
+      subtitlePosition: _readUnitValue(preferences.get(subtitlePositionKey)),
+      subtitleOpacity: PlaybackPreferences.normalizeSubtitleOpacity(
+        switch (preferences.get(subtitleOpacityKey)) {
+          final num value => value.toDouble(),
+          _ => PlaybackPreferences.defaultSubtitleOpacity,
+        },
+      ),
+      autoEnableSubtitles: preferences.get(autoEnableSubtitlesKey) == true,
+      subtitlePriority: SubtitlePriority.fromName(
+        preferences.get(subtitlePriorityKey),
+      ),
+      appVolume: _readUnitValue(preferences.get(appVolumeKey)),
+      linePreference: PlaybackLinePreference.fromName(
+        preferences.get(linePreferenceKey),
+      ),
+      preferNonPcdn: preferences.get(preferNonPcdnKey) != false,
       longPressPlaybackSpeed:
           PlaybackPreferences.normalizeLongPressPlaybackSpeed(
             switch (preferences.get(longPressSpeedKey)) {
@@ -73,6 +115,94 @@ class PlaybackPreferencesService {
         preferences.getInt(_mobileDefaultQualityKey),
       ),
     );
+  }
+
+  /// 保存线路策略或 PCDN 偏好；失败后重新读取磁盘，避免内存保留未保存值。
+  /// 把持久化比例限制到 0–1，缺失和损坏值保持原有默认行为。
+  double _readUnitValue(Object? value) =>
+      value is num ? DoubleTapRegions.normalize(value.toDouble(), 0, 1, 1) : 1;
+
+  /// 保存播放模式，拒绝写入失败，避免界面与下次打开的模式不一致。
+  Future<void> saveMode(PlaybackMode mode) => _saveValue(modeKey, mode.name);
+
+  /// 保存字幕在可见视频区域中的相对位置。
+  Future<void> saveSubtitlePosition(double value) => _saveValue(
+    subtitlePositionKey,
+    PlaybackPreferences.normalizeSubtitlePosition(value),
+  );
+
+  Future<void> saveSubtitleOpacity(double value) => _saveValue(
+    subtitleOpacityKey,
+    PlaybackPreferences.normalizeSubtitleOpacity(value),
+  );
+
+  Future<void> saveAutoEnableSubtitles(bool enabled) =>
+      _saveValue(autoEnableSubtitlesKey, enabled);
+
+  Future<void> saveSubtitlePriority(SubtitlePriority priority) =>
+      _saveValue(subtitlePriorityKey, priority.name);
+
+  static const _lastAudibleAppVolumeKey =
+      'playback_preferences.last_audible_app_volume';
+
+  /// Older installations can have a persisted mute but no known audible level.
+  Future<double?> loadLastAudibleAppVolume() async {
+    final preferences = await SharedPreferences.getInstance();
+    final value = preferences.get(_lastAudibleAppVolumeKey);
+    return value is num && value.isFinite && value > 0
+        ? _readUnitValue(value)
+        : null;
+  }
+
+  /// 保存应用音量；单独记住解除静音的音量，不改变系统音量。
+  Future<void> saveAppVolume(double value, {double? lastAudibleVolume}) async {
+    final volume = _readUnitValue(value);
+    final audible = volume > 0 ? volume : lastAudibleVolume;
+    if (audible != null && audible.isFinite && audible > 0) {
+      await _saveValue(_lastAudibleAppVolumeKey, _readUnitValue(audible));
+    }
+    await _saveValue(appVolumeKey, volume);
+  }
+
+  /// 统一检查新偏好写入并在失败时恢复存储缓存。
+  Future<void> _saveValue(String key, Object value) async {
+    final preferences = await SharedPreferences.getInstance();
+    try {
+      final saved = switch (value) {
+        final String text => await preferences.setString(key, text),
+        final bool flag => await preferences.setBool(key, flag),
+        final double number => await preferences.setDouble(key, number),
+        _ => throw ArgumentError.value(value),
+      };
+      if (saved) return;
+    } catch (_) {
+      // 失败由下面统一报告。
+    }
+    await preferences.reload();
+    throw StateError('播放偏好保存失败');
+  }
+
+  /// 保存线路策略或 PCDN 偏好；失败后重新读取磁盘，避免内存保留未保存值。
+  Future<void> saveRoutePreference({
+    PlaybackLinePreference? line,
+    bool? preferNonPcdn,
+  }) async {
+    final preferences = await SharedPreferences.getInstance();
+    try {
+      final saved = line != null
+          ? await preferences.setString(linePreferenceKey, line.name)
+          : preferNonPcdn != null &&
+                await preferences.setBool(preferNonPcdnKey, preferNonPcdn);
+      if (saved) return;
+    } catch (_) {
+      // 下面恢复存储缓存，并向界面报告保存失败。
+    }
+    try {
+      await preferences.reload();
+    } catch (_) {
+      /* 保留原始失败原因。 */
+    }
+    throw StateError('播放线路设置保存失败');
   }
 
   /// 安全读取区域 JSON；旧版本和损坏配置均恢复默认范围。
@@ -119,25 +249,10 @@ class PlaybackPreferencesService {
   }
 
   /// 保存字幕字号并检查写入结果，失败时由字幕设置恢复最近成功的字号。
-  Future<void> saveSubtitleFontSize(double fontSize) async {
-    final preferences = await SharedPreferences.getInstance();
-    try {
-      if (await preferences.setDouble(
-        _subtitleFontSizeKey,
-        PlaybackPreferences.normalizeSubtitleFontSize(fontSize),
-      )) {
-        return;
-      }
-    } catch (_) {
-      // 下面统一从磁盘恢复偏好缓存，避免失败值被下一次读取误当作成功值。
-    }
-    try {
-      await preferences.reload();
-    } catch (_) {
-      // 平台存储不可读时由播放器维持最近一次成功值并提示用户。
-    }
-    throw StateError('字幕字号保存失败');
-  }
+  Future<void> saveSubtitleFontSize(double fontSize) => _saveValue(
+    _subtitleFontSizeKey,
+    PlaybackPreferences.normalizeSubtitleFontSize(fontSize),
+  );
 
   /// 立即保存笔记标记开关；写入失败交给设置页恢复原值。
   Future<void> saveShowNoteTimeMarkers(bool enabled) async {

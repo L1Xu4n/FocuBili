@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:focubili/features/profile/about_page.dart';
 import 'package:focubili/services/app_update_service.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 /// 为关于页测试提供固定的已安装版本。
 class _VersionProvider implements AppVersionProvider {
@@ -62,7 +63,7 @@ void main() {
       ),
     );
     await controller.initialize(checkOnStart: true);
-    Uri? openedUri;
+    final openedUris = <Uri>[];
 
     await tester.pumpWidget(
       MaterialApp(
@@ -70,7 +71,7 @@ void main() {
         home: AboutPage(
           controller: controller,
           externalUrlLauncher: (Uri uri) async {
-            openedUri = uri;
+            openedUris.add(uri);
             return true;
           },
         ),
@@ -87,14 +88,73 @@ void main() {
     expect(find.text('改进安装包下载入口'), findsOneWidget);
     expect(find.text('第五条更新简报'), findsOneWidget);
     expect(find.text('下载 Windows 安装包'), findsOneWidget);
-    expect(find.byKey(const Key('open-problem-diagnostics')), findsOneWidget);
-    await tester.ensureVisible(find.byKey(const Key('open-project-qq-group')));
-    await tester.tap(find.byKey(const Key('open-project-qq-group')));
-    await tester.pump();
-    expect(openedUri, Uri.parse('https://qm.qq.com/q/szv665wx7W'));
-    await tester.tap(find.byKey(const Key('open-release-page')));
-    await tester.pump();
-    expect(openedUri?.path, endsWith('/FocuBili-v0.3.0-x64.msix'));
+    final qq = find.byKey(const Key('open-project-qq-group'));
+    final support = find.byKey(const Key('open-support-focubili'));
+    final diagnostics = find.byKey(const Key('open-problem-diagnostics'));
+    final projectLinks = find.ancestor(of: qq, matching: find.byType(Card));
+    expect(diagnostics, findsOneWidget);
+    expect(
+      find.descendant(of: projectLinks, matching: support),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: support, matching: find.text('支持焦点哔哩')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: support, matching: find.text('给焦点哔哩的宣传视频投个币吧~')),
+      findsOneWidget,
+    );
+    expect(tester.getTopLeft(qq).dy, lessThan(tester.getTopLeft(support).dy));
+    expect(
+      tester.getTopLeft(support).dy,
+      lessThan(tester.getTopLeft(diagnostics).dy),
+    );
+
+    Future<void> open(Finder target) async {
+      await tester.ensureVisible(target);
+      await tester.tap(target);
+      await tester.pump();
+    }
+
+    await open(find.text('项目地址'));
+    await open(find.text('项目负责人'));
+    await open(qq);
+    expect(openedUris, [
+      Uri.parse('https://github.com/L1Xu4n/FocuBili'),
+      Uri.parse('https://github.com/L1Xu4n'),
+      Uri.parse('https://qm.qq.com/q/szv665wx7W'),
+    ]);
+    await open(support);
+    expect(openedUris, hasLength(4));
+    expect(
+      openedUris.last,
+      Uri.parse('https://www.bilibili.com/video/BV1dyaG6kEAu'),
+    );
+
+    await open(find.byKey(const Key('open-release-page')));
+    expect(openedUris.last.path, endsWith('/FocuBili-v0.3.0-x64.msix'));
+    controller.dispose();
+  });
+  testWidgets('正式版关于页显示完整版本和构建号', (tester) async {
+    PackageInfo.setMockInitialValues(
+      appName: '焦点哔哩',
+      packageName: 'com.focubili.app',
+      version: '1.9.0',
+      buildNumber: '2038',
+      buildSignature: '',
+    );
+    final controller = AppUpdateController(
+      versionProvider: const PlatformAppVersionProvider(),
+      preferencesService: _Preferences(),
+    );
+    await controller.initialize(checkOnStart: false);
+    await tester.pumpWidget(
+      MaterialApp(home: AboutPage(controller: controller)),
+    );
+    expect(find.text('版本 1.9.0+2038'), findsOneWidget);
+    expect(controller.result.currentVersion, '1.9.0+2038');
+    await tester.pumpWidget(const SizedBox.shrink());
     controller.dispose();
   });
 }

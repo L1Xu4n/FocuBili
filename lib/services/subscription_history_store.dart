@@ -31,6 +31,33 @@ class FileSubscriptionHistoryStore implements SubscriptionHistoryStore {
     );
   }
 
+  /// Export validates raw optional fields before the browsing parser can
+  /// normalize malformed values or discard a future item's public fields.
+  Future<SubscriptionHistoryBatch?> readForExport(String job, int batch) async {
+    final file = await _file(job, batch);
+    if (!await file.exists()) return null;
+    final values =
+        jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+    const fields = {
+      'bvid',
+      'title',
+      'coverUrl',
+      'sources',
+      'discoveredAt',
+      'publishedAt',
+      'readAt',
+      'collectionAdded',
+    };
+    for (final raw in values['items'] as List) {
+      if (raw is! Map ||
+          raw.keys.any((key) => !fields.contains(key)) ||
+          (raw['collectionAdded'] != null && raw['collectionAdded'] is! bool)) {
+        throw const FormatException('Invalid subscription history item');
+      }
+    }
+    return SubscriptionHistoryBatch.fromJson(values);
+  }
+
   @override
   Future<void> write(
     String job,

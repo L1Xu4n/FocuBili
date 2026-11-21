@@ -7,6 +7,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/playback_request_diagnostic.dart';
+import '../models/video_metadata_request_diagnostic.dart';
 import '../platform/app_platform.dart';
 import '../platform/platform_services.dart';
 import '../core/build_metadata.g.dart';
@@ -61,6 +62,20 @@ class DiagnosticDeviceInfo {
     final String release = (values['androidRelease'] as String? ?? '').trim();
     final int? apiLevel = (values['apiLevel'] as num?)?.toInt();
     final String model = (values['model'] as String? ?? '').trim();
+
+    String? eventTime(String key) {
+      final value = values[key];
+      if (value is! int || value <= 0 || value > 4102444800000) return null;
+      return formatDiagnosticDateTime(
+        DateTime.fromMillisecondsSinceEpoch(value),
+      );
+    }
+
+    final activityStart = eventTime('activityStartedAtMs');
+    final inputChange = eventTime('lastInputConfigurationChangeAtMs');
+    final activityCount = values['activityCreatesInProcess'];
+    final restoredState = values['restoredActivityState'];
+    final previousConfigChange = values['previousActivityChangedConfiguration'];
     return DiagnosticDeviceInfo(
       platformName: 'Android',
       systemVersion: release.isEmpty ? '未知' : release,
@@ -80,6 +95,13 @@ class DiagnosticDeviceInfo {
                 .toString()
                 .replaceAll(RegExp(r'[\r\n]'), ' ')
                 .substring(0, values[key].toString().length.clamp(0, 120)),
+        '当前 Android 界面创建时间': ?activityStart,
+        if (activityCount is int && activityCount > 0)
+          '本进程 Android 界面创建次数': '$activityCount',
+        if (restoredState is bool) '系统曾提供界面恢复状态': restoredState ? '是' : '否',
+        if (previousConfigChange is bool)
+          '上一界面因配置变更销毁': previousConfigChange ? '是' : '否',
+        '最近输入配置变更': ?inputChange,
       },
     );
   }
@@ -286,6 +308,7 @@ class ProblemDiagnosticEntry {
     'network' => '网络错误',
     'playback' => '播放错误',
     'playbackRequest' => '播放请求',
+    'videoMetadataRequest' => '视频资料请求',
     'app' => '应用错误',
     _ => '其他错误',
   };
@@ -457,29 +480,38 @@ class ProblemDiagnosticsService {
   }
 
   /// 读取当前设备已保存的最近错误，损坏记录会被自动忽略。
-  Future<List<ProblemDiagnosticEntry>> loadRecentErrors() async {
+  Future<List<ProblemDiagnosticEntry>> loadRecentErrors({
+    bool strict = false,
+  }) async {
     try {
       final SharedPreferences preferences = await _preferencesLoader();
       final String? rawJson = preferences.getString(_storageKey);
-      if (rawJson == null || rawJson.trim().isEmpty) {
+      if (rawJson == null) {
         return const <ProblemDiagnosticEntry>[];
       }
+      if (rawJson.trim().isEmpty && !strict) return const [];
       final Object? decoded = jsonDecode(rawJson);
       if (decoded is! List<Object?>) {
+        if (strict) throw const FormatException('Invalid diagnostics document');
         return const <ProblemDiagnosticEntry>[];
       }
       final List<ProblemDiagnosticEntry> records = <ProblemDiagnosticEntry>[];
       for (final Object? item in decoded) {
         if (item is! Map) {
+          if (strict) throw const FormatException('Invalid diagnostic record');
           continue;
         }
+        if (strict) _validateExportEntry(item);
         final ProblemDiagnosticEntry? record = ProblemDiagnosticEntry.tryParse(
           Map<String, dynamic>.from(item),
         );
-        if (record != null) {
-          records.add(record);
+        if (record == null && strict) {
+          throw const FormatException('Unsupported diagnostic record');
         }
-        if (records.length >= maximumRecentErrors) {
+        if (record != null && records.length < maximumRecentErrors) {
+          records.add(strict ? _sanitizeEntry(record) : record);
+        }
+        if (!strict && records.length >= maximumRecentErrors) {
           break;
         }
       }
@@ -489,9 +521,76 @@ class ProblemDiagnosticsService {
       );
       return List<ProblemDiagnosticEntry>.unmodifiable(records);
     } catch (_) {
+      if (strict) throw const FormatException('Unreadable diagnostics storage');
       // 诊断存储本身不可用时保持空列表，绝不影响正常播放、搜索和笔记功能。
       return const <ProblemDiagnosticEntry>[];
     }
+  }
+
+  static void _validateExportEntry(Map values) {
+    const fields = {
+      'occurredAt',
+      'category',
+      'operation',
+      'description',
+      'hasErrorCode',
+      'errorCode',
+      'additionalInfo',
+    };
+    final hasCode = values['hasErrorCode'];
+    final code = values['errorCode'];
+    if (values.keys.any((key) => !fields.contains(key)) ||
+        (hasCode != null && hasCode is! bool) ||
+        (hasCode == true && code == null) ||
+        (code != null &&
+            (code is! num ||
+                !code.isFinite ||
+                code != code.toInt() ||
+                code < -999999 ||
+                code > 999999)) ||
+        (hasCode != true && code != null && code != 0)) {
+      throw const FormatException('Invalid diagnostic fields');
+    }
+    final info = values['additionalInfo'];
+    if (info == null) return;
+    if (info is! Map || info.length > PlaybackRequestDiagnostic.maximumFields) {
+      throw const FormatException('Invalid diagnostic details');
+    }
+    final keys = <String>{};
+    for (final entry in info.entries) {
+      if (entry.key is! String || entry.value is! String) {
+        throw const FormatException('Invalid diagnostic details');
+      }
+      final key = (entry.key as String).trim();
+      final value = (entry.value as String).trim();
+      if (key.isEmpty ||
+          key.length > 40 ||
+          value.isEmpty ||
+          value.length > 120 ||
+          !keys.add(key)) {
+        throw const FormatException('Invalid diagnostic details');
+      }
+    }
+  }
+
+  Future<void> recordVideoMetadataRequest(
+    VideoMetadataRequestDiagnostic diagnostic, {
+    required bool details,
+  }) {
+    return record(
+      ProblemDiagnosticEntry(
+        occurredAt: _clock(),
+        category: 'videoMetadataRequest',
+        operation: details ? 'open_video_detail' : 'resolve_video_parts',
+        errorCode: int.tryParse(diagnostic.fields['api_code'] ?? '') == 0
+            ? null
+            : int.tryParse(diagnostic.fields['api_code'] ?? ''),
+        description: diagnostic.fields['outcome'] == 'success'
+            ? '视频资料请求成功。'
+            : '视频资料请求未完成，请结合阶段和状态码检查。',
+        additionalInfo: diagnostic.fields,
+      ),
+    );
   }
 
   /// 保存本次请求的安全执行事实，成功返回低画质也会留下诊断证据。
@@ -634,11 +733,12 @@ class ProblemDiagnosticsService {
   /// 读取诊断快照；页面进入和刷新时可同时更新 Android WebView 信息。
   Future<ProblemDiagnosticsSnapshot> loadSnapshot({
     bool refreshWebViewInfo = false,
+    bool strictStorage = false,
   }) async {
     final List<Object> values = await Future.wait<Object>(<Future<Object>>[
       _loadVersionSafely(),
       _loadDeviceInfoSafely(),
-      loadRecentErrors(),
+      loadRecentErrors(strict: strictStorage),
       _loadReminderDiagnosticsSafely(),
     ]);
     final DiagnosticDeviceInfo deviceInfo = values[1] as DiagnosticDeviceInfo;
@@ -658,8 +758,10 @@ class ProblemDiagnosticsService {
   }
 
   /// 按用户要求的固定格式生成可复制诊断文本，并在末尾明确写出隐私范围。
-  Future<String> buildCopyText() async {
-    final ProblemDiagnosticsSnapshot snapshot = await loadSnapshot();
+  Future<String> buildCopyText({bool strictStorage = false}) async {
+    final ProblemDiagnosticsSnapshot snapshot = await loadSnapshot(
+      strictStorage: strictStorage,
+    );
     final StringBuffer text = StringBuffer()
       ..writeln('FocuBili 问题诊断')
       ..writeln()
@@ -753,7 +855,7 @@ class ProblemDiagnosticsService {
     return text.toString().trimRight();
   }
 
-  /// 安全读取安装版本；插件不可用时回退到当前源码的版本标识。
+  /// 安全读取安装版本；插件不可用时使用构建版本标识。
   Future<String> _loadVersionSafely() async {
     try {
       final String version = (await _appVersionLoader()).trim();
@@ -936,6 +1038,7 @@ class ProblemDiagnosticsService {
       'network' => 'network',
       'playback' => 'playback',
       'playbackRequest' => 'playbackRequest',
+      'videoMetadataRequest' => 'videoMetadataRequest',
       'app' => 'app',
       _ => 'other',
     };

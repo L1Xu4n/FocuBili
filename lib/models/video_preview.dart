@@ -6,7 +6,13 @@ class VideoPart {
     required this.cid,
     required this.title,
     required this.duration,
+    this.courseEpisodeId,
+    this.courseAid,
   });
+
+  /// 课堂独有的真实章节与稿件编号，普通视频保持为空。
+  final int? courseEpisodeId;
+  final int? courseAid;
 
   final int pageNumber;
   final int cid;
@@ -120,8 +126,11 @@ class VideoSearchResult {
     required this.playCount,
     required this.danmakuCount,
     required this.episodeCountText,
+    this.ownerMid = 0,
+    this.favoriteCount,
     this.categoryId,
     this.tags = const [],
+    this.additionalReportedOwnerMids = const {},
   });
 
   final String bvid;
@@ -132,9 +141,13 @@ class VideoSearchResult {
   final DateTime? publishedAt;
   final int playCount;
   final int danmakuCount;
+  final int? favoriteCount;
   final String episodeCountText;
+  final int ownerMid;
   final int? categoryId;
   final List<String> tags;
+  // Same BV, conflicting returned identities: keep display and filtering separate.
+  final Set<int> additionalReportedOwnerMids;
 }
 
 /// 定义关键词视频搜索的排序方式。
@@ -201,11 +214,15 @@ class VideoSearchPage {
     required this.results,
     required this.page,
     required this.totalPages,
+    this.reportedPage,
   });
 
   final List<VideoSearchResult> results;
   final int page;
   final int totalPages;
+
+  /// Explicit server page, before the legacy fallback for missing values.
+  final int? reportedPage;
 
   /// 判断服务端是否仍有下一页结果可以加载。
   bool get hasMore => page < totalPages;
@@ -255,10 +272,18 @@ class VideoPreview {
     this.collection,
     this.tags = const <String>[],
     this.fromOfflineCache = false,
+    this.isKnownUnrestrictedUpload = false,
+    this.courseSeasonId,
+    this.requestedCourseEpisodeId,
   });
 
   final int aid;
   final String bvid;
+
+  /// 课堂使用独立的 `cheese:ss<id>` 本地键，避免笔记和进度与 UGC 混用。
+  final int? courseSeasonId;
+  final int? requestedCourseEpisodeId;
+  bool get isCourse => courseSeasonId != null;
 
   /// 标识当前视频分P的编号，原生层用它请求对应的播放数据。
   final int cid;
@@ -275,6 +300,10 @@ class VideoPreview {
   final List<String> tags;
   final Duration duration;
   final bool fromOfflineCache;
+
+  /// Only populated from current public upload rights, not from local caches.
+  /// Controls the optional API header, never whether playback itself is allowed.
+  final bool isKnownUnrestrictedUpload;
 
   /// 视频封面地址，仅用于低流量缩略图展示；为空时页面显示本地占位图。
   final String thumbnailUrl;
@@ -298,6 +327,9 @@ class VideoPreview {
       collection: collection,
       tags: List<String>.unmodifiable(values),
       fromOfflineCache: fromOfflineCache,
+      isKnownUnrestrictedUpload: isKnownUnrestrictedUpload,
+      courseSeasonId: courseSeasonId,
+      requestedCourseEpisodeId: requestedCourseEpisodeId,
       duration: duration,
       thumbnailUrl: thumbnailUrl,
       parts: parts,

@@ -1,8 +1,11 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
+
+import 'live_video_frame_playback_service.dart';
 
 /// 从 Flutter 已经绘制的视频画面中安全读取 PNG，避免再次调用播放器原生截图接口。
 class FlutterVideoFrameCapture {
@@ -39,6 +42,75 @@ class FlutterVideoFrameCapture {
     } finally {
       image?.dispose();
     }
+  }
+
+  /// 与旧的笔记锚点截图分开：退后台、换画面或只回读到空纹理时不生成附件。
+  Future<({Uint8List bytes, Duration position})?> captureLivePng({
+    required Duration Function() readPosition,
+    required bool Function() isCurrent,
+  }) async {
+    final boundary = _findBoundary();
+    if (boundary == null || !isCurrent()) return null;
+    ui.Image? image;
+    try {
+      await WidgetsBinding.instance.endOfFrame.timeout(
+        const Duration(seconds: 2),
+      );
+      if (!identical(_findBoundary(), boundary) ||
+          !boundary.hasSize ||
+          boundary.size.isEmpty ||
+          !isCurrent()) {
+        return null;
+      }
+      final longestEdge = boundary.size.longestSide;
+      final pixelRatio = math.min(1.0, 1280 / longestEdge);
+      final before = readPosition();
+      final timer = Stopwatch()..start();
+      image = await boundary.toImage(pixelRatio: pixelRatio);
+      final position = liveVideoFramePosition(before, readPosition());
+      if (timer.elapsed > const Duration(milliseconds: 350) ||
+          position == null ||
+          !isCurrent() ||
+          !identical(_findBoundary(), boundary)) {
+        return null;
+      }
+      // Some platform textures rasterize to transparent/opaque black, including
+      // readback restrictions. Never turn that placeholder into a valid image.
+      final rgba = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      if (rgba == null || !_hasVisiblePixels(rgba, image.width, image.height)) {
+        return null;
+      }
+      final png = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (png == null ||
+          !isCurrent() ||
+          !identical(_findBoundary(), boundary)) {
+        return null;
+      }
+      return (
+        bytes: png.buffer.asUint8List(png.offsetInBytes, png.lengthInBytes),
+        position: position,
+      );
+    } on Object {
+      return null;
+    } finally {
+      image?.dispose();
+    }
+  }
+
+  bool _hasVisiblePixels(ByteData data, int width, int height) {
+    for (var row = 0; row < 9; row++) {
+      for (var column = 0; column < 9; column++) {
+        final offset =
+            ((height - 1) * row ~/ 8 * width + (width - 1) * column ~/ 8) * 4;
+        if (data.getUint8(offset + 3) != 0 &&
+            (data.getUint8(offset) != 0 ||
+                data.getUint8(offset + 1) != 0 ||
+                data.getUint8(offset + 2) != 0)) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /// Native PiP source hosts use the actual on-screen video region.

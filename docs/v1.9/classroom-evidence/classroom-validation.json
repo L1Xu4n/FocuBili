@@ -1,0 +1,30 @@
+{
+  "date_utc": "2026-10-17",
+  "baseline": "5e128bdd1952b3f619500f69aa7bc8c33a88d0b4",
+  "reference_fork_head": "5e59f1a7ee61bb4a54b3d067edd869b86c87a01d",
+  "reference_core_commit": "e5c0cd11febc61056098be5964e69b6867c42cb7",
+  "host_platform": "Windows",
+  "flutter_analyze": "No issues found",
+  "flutter_version": "3.44.6",
+  "dart_version": "3.12.2",
+  "flutter_test_rounds_passed": [41, 61, 4, 2, 47, 34, 15],
+  "test_rounds_overlap": true,
+  "android_compile_debug_kotlin": "passed",
+  "android_jvm_course_tests": {"tests": 5, "failures": 0, "errors": 0},
+  "same_session_purchase_proof": "lookup and every Android/Desktop playurl",
+  "desktop_account_revocation": "generation fence, captured URL clearing, and stop after in-flight opens",
+  "screenshots": [
+    {"file": "classroom-purchased-mobile.png", "width": 390, "height": 844},
+    {"file": "classroom-purchased-tablet.png", "width": 1280, "height": 800, "text_scale": 1.3},
+    {"file": "classroom-login-mobile.png", "width": 390, "height": 844}
+  ],
+  "screenshot_data": "synthetic",
+  "real_account_read": false,
+  "real_paid_playback_tested": false,
+  "device_tested": false,
+  "apk_built": false,
+  "signing_material_created": false,
+  "pull_request_created": false,
+  "published": false,
+  "manual_validation": "required before claiming real course/device support"
+}

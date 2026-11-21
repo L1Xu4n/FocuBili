@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/layout/adaptive_two_column_list.dart';
 import '../../models/offline_download_task.dart';
@@ -69,6 +70,28 @@ class DownloadQueueView extends StatelessWidget {
     }
   }
 
+  Future<void> _copyDiagnostic(
+    BuildContext context,
+    OfflineDownloadTask task,
+  ) async {
+    final code = task.courseDiagnostic?.code;
+    if (code == null) return;
+    bool isCurrent() => queue.tasks.any(
+      (current) =>
+          current.id == task.id &&
+          current.status == DownloadTaskStatus.failed &&
+          current.courseDiagnostic?.code == code,
+    );
+    if (!isCurrent()) return;
+    await _run(context, () async {
+      await Clipboard.setData(ClipboardData(text: code));
+      if (!context.mounted || !isCurrent()) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('已复制故障编号，不含账号或下载地址。')));
+    });
+  }
+
   /// 按可用宽度显示一列或两列任务，标题与进度独占整行，操作按钮固定在卡片底部。
   @override
   Widget build(BuildContext context) => ListenableBuilder(
@@ -116,7 +139,9 @@ class DownloadQueueView extends StatelessWidget {
                         style: const TextStyle(fontWeight: FontWeight.w600),
                       ),
                       Text(
-                        'P${task.part.pageNumber} ${task.part.title}',
+                        task.courseMid == null
+                            ? 'P${task.part.pageNumber} ${task.part.title}'
+                            : '课程 · ${task.part.title}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -149,6 +174,14 @@ class DownloadQueueView extends StatelessWidget {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
+                      if (task.courseMid != null &&
+                          task.status == DownloadTaskStatus.failed &&
+                          task.courseDiagnostic != null)
+                        IconButton(
+                          tooltip: '复制故障编号',
+                          icon: const Icon(Icons.copy_outlined),
+                          onPressed: () => _copyDiagnostic(context, task),
+                        ),
                       if (task.status != DownloadTaskStatus.completed)
                         IconButton(
                           key: Key('toggle-download-${task.id}'),

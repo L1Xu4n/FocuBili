@@ -24,6 +24,7 @@ class DesktopDiskCacheSession {
   Future<void> _operations = Future.value();
   bool _stopped = false;
   bool _suspended = false;
+  bool _diskAllowed = true;
   int _threshold = defaultMediaCacheBytes;
   Object? _configurationError;
   Object? get configurationError => _configurationError;
@@ -94,7 +95,14 @@ class DesktopDiskCacheSession {
     }
   }
 
+  /// 付费课堂仅使用内存缓冲；采样器也不能重新开启磁盘写入。
+  Future<void> setDiskAllowed(bool allowed) => _serial(() async {
+    _diskAllowed = allowed;
+    if (!allowed) await _suspend('课堂使用内存缓冲。');
+  });
+
   Future<void> _enableDisk() async {
+    if (!_diskAllowed) return;
     // Preserve the previous metadata budgets while using disk packets. These
     // are memory metadata limits, never a claim about physical disk size.
     await _set('demuxer-max-bytes', _threshold.toString());

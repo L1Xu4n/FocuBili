@@ -69,6 +69,52 @@ void main() {
   /// 每项验证从独立本机偏好开始，防止上一项布局影响本项。
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
+  /// 抽屉关闭和全部隐藏都保留首屏自定义入口，新卡片由用户主动添加。
+  testWidgets('关闭与空抽屉不保留卡片空间且可重新开启', (tester) async {
+    _setWindow(tester, const Size(430, 900));
+    final controller = FocusTimerController(
+      tickInterval: const Duration(days: 1),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    final service = DashboardLayoutService();
+    await service.saveDrawerEnabled(false);
+    await tester.pumpWidget(_homeHost(controller, service));
+    await tester.pumpAndSettle();
+    expect(find.byType(EditableCardBoard), findsNothing);
+    expect(find.byKey(const Key('home-scroll-hint')), findsNothing);
+    expect(
+      find.byKey(const Key('home-start-search')).hitTestable(),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const Key('home-restore-drawer')));
+    await tester.pumpAndSettle();
+    expect(find.text('添加卡片'), findsOneWidget);
+    await _tapVisible(tester, find.text('完成'));
+    final cards = _board(tester).items;
+    expect(cards.where((c) => c.defaultHidden).map((c) => c.id), [
+      'home.favorites',
+      'home.followings',
+    ]);
+    await service.save(
+      'home',
+      DashboardLayout(
+        order: cards.map((c) => c.id),
+        hidden: cards.map((c) => c.id),
+      ),
+    );
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpWidget(_homeHost(controller, service));
+    await tester.pumpAndSettle();
+    expect(find.byType(EditableCardBoard), findsNothing);
+    expect(
+      find.byKey(const Key('home-start-search')).hitTestable(),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('home-restore-drawer')), findsOneWidget);
+    expect(find.byTooltip('自定义首页'), findsNothing);
+  });
+
   /// 首页底部可进入编辑，加回卡片追加末尾，重进后保留用户保存的最终布局。
   testWidgets('首页底部编辑排序隐藏加回并重进恢复', (tester) async {
     _setWindow(tester, const Size(430, 900));
@@ -88,7 +134,7 @@ void main() {
         tester.getBottomLeft(find.byKey(const Key('home-utility-actions'))).dy,
       ),
     );
-    expect(_board(tester).items, hasLength(7));
+    expect(_board(tester).items, hasLength(9));
     expect(_board(tester).items.every((card) => !card.required), isTrue);
     await _tapVisible(tester, custom);
     await _tapVisible(
@@ -117,7 +163,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     final restored = await service.load('home', []);
-    expect(restored.hidden, isEmpty);
+    expect(restored.hidden, {'home.favorites', 'home.followings'});
     expect(restored.order.last, 'home.continue_learning');
     expect(
       restored.order.where((id) => id != 'home.continue_learning'),
@@ -186,12 +232,14 @@ void main() {
     final restored = await service.load('home', []);
     expect(restored.order, saved.order);
     expect(restored.hidden, saved.hidden);
-    expect(_board(tester).items, hasLength(7));
+    expect(_board(tester).items, hasLength(9));
     expect(tester.takeException(), isNull);
+    await controller.endFocusEarly();
+    await tester.pump();
   });
 
-  /// 手机进入编辑后切宽屏，卡片共用两列区域；再切回手机仍保持编辑。
-  testWidgets('首页窗口切换保持编辑且全部卡片同区跨行布局', (tester) async {
+  /// 旋转时继续编辑同一份卡片，并切换到单列可滚动的右侧抽屉。
+  testWidgets('首页窗口切换保持编辑且所有卡片共用右侧抽屉', (tester) async {
     _setWindow(tester, const Size(430, 900));
     final controller = FocusTimerController(
       tickInterval: const Duration(days: 1),
@@ -204,24 +252,25 @@ void main() {
     tester.view.physicalSize = const Size(1280, 600);
     await tester.pumpAndSettle();
     expect(find.byType(EditableCardBoard), findsOneWidget);
-    expect(_board(tester).columnCount, 2);
+    expect(_board(tester).columnCount, 1);
     expect(find.text('完成'), findsOneWidget);
-    final primary = find.byKey(const Key('focus-workspace-primary'));
-    expect(
-      find.descendant(
-        of: primary,
-        matching: find.byKey(const Key('test-continue-learning')),
-      ),
-      findsNothing,
-    );
+    final dock = find.byKey(const Key('desktop-learning-dock'));
+    expect(dock, findsOneWidget);
     final continueRect = tester.getRect(
       find.byKey(const ValueKey('dashboard-card-home.continue_learning')),
     );
     final focusRect = tester.getRect(
       find.byKey(const ValueKey('dashboard-card-home.focus_session')),
     );
-    expect(continueRect.top, focusRect.top);
-    expect(continueRect.right, lessThan(focusRect.left));
+    expect(continueRect.left, focusRect.left);
+    expect(continueRect.bottom, lessThan(focusRect.top));
+    expect(
+      find.descendant(
+        of: dock,
+        matching: find.byKey(const Key('test-continue-learning')),
+      ),
+      findsOneWidget,
+    );
     await _tapVisible(tester, find.text('完成'));
     await _tapVisible(tester, find.text('自定义').last);
     tester.view.physicalSize = const Size(430, 900);
@@ -231,7 +280,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  /// 全部隐藏时底部入口仍可达，大字体矮屏欢迎区允许滚动到搜索动作。
+  /// 全部隐藏时顶部自定义入口仍可达，大字体矮屏欢迎区允许滚动到搜索动作。
   testWidgets('大字体矮首页保留搜索与空布局添加入口', (tester) async {
     _setWindow(tester, const Size(320, 430));
     final controller = FocusTimerController(
@@ -264,13 +313,10 @@ void main() {
       find.byKey(const Key('home-start-search')).hitTestable(),
       findsOneWidget,
     );
-    await _tapVisible(tester, find.text('自定义').last);
-    expect(tester.takeException(), isNull, reason: '大字体布局编辑区不溢出');
+    await _tapVisible(tester, find.byKey(const Key('home-restore-drawer')));
     await _tapVisible(tester, find.text('添加卡片'));
-    expect(
-      find.byKey(const ValueKey('dashboard-add-home.continue_learning')),
-      findsOneWidget,
-    );
+    expect(tester.takeException(), isNull, reason: '大字体布局编辑区不溢出');
+    expect(find.widgetWithText(ListTile, '继续学习'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

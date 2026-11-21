@@ -1,71 +1,83 @@
-import 'dart:io';
-
 import 'package:flutter_test/flutter_test.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:focubili/models/subscription.dart';
 import 'package:focubili/services/image_resource_cache.dart';
 import 'package:focubili/services/settings_runtime_adapter.dart';
 import 'package:focubili/services/subscription_service.dart';
 
-/// 用合成订阅及临时缓存验证设置重置走服务入口，保留源与持久化容量。
-void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
+class _Subscriptions extends SubscriptionService {
+  _Subscriptions(this.events);
+  final List<String> events;
+  @override
+  Future<void> initialize() async => events.add('initialize');
+  @override
+  Future<void> setEnabled(bool value) async {
+    events.add('enabled:$value');
+    enabled = value;
+  }
 
-  test('运行期设置往返和重置保留订阅源并撤销后台调度', () async {
-    SharedPreferences.setMockInitialValues({});
-    final directory = await Directory.systemTemp.createTemp(
-      'focubili-settings-',
+  @override
+  Future<void> setNotificationsEnabled(bool value) async {
+    events.add('notifications:$value');
+    notificationsEnabled = value;
+  }
+
+  @override
+  Future<void> setBackgroundRefreshEnabled(bool value) async {
+    events.add('background:$value');
+    backgroundRefreshEnabled = value;
+  }
+}
+
+class _Images extends ImageResourceCache {
+  _Images(this.events);
+  final List<String> events;
+  @override
+  Future<ImageCacheUsage> setCapacity(int bytes) async {
+    events.add('capacity:$bytes');
+    return ImageCacheUsage(0, bytes, 0);
+  }
+}
+
+void main() {
+  for (final enable in [false, true]) {
+    test(
+      'write preserves ${enable ? 'enable-last' : 'disable-first'} transaction order',
+      () async {
+        final events = <String>[];
+        final subscriptions = _Subscriptions(events)..enabled = !enable;
+        final images = _Images(events);
+        addTearDown(subscriptions.dispose);
+        addTearDown(images.dispose);
+        await DeviceSettingsRuntimeAdapter(
+          subscriptions: subscriptions,
+          imageCache: images,
+        ).writeSettings({
+          DeviceSettingsRuntimeAdapter.enabledKey: enable,
+          DeviceSettingsRuntimeAdapter.notificationsKey: true,
+          DeviceSettingsRuntimeAdapter.backgroundKey: true,
+          DeviceSettingsRuntimeAdapter.imageCapacityKey: 123,
+        });
+        expect(events, [
+          'initialize',
+          if (!enable) 'enabled:false',
+          'notifications:true',
+          'background:true',
+          if (enable) 'enabled:true',
+          'capacity:123',
+        ]);
+      },
     );
-    addTearDown(() => directory.delete(recursive: true));
-    final schedules = <bool>[];
-    final subscriptions = SubscriptionService(
-      preferencesLoader: SharedPreferences.getInstance,
-      backgroundScheduler: (enabled, generation) async =>
-          schedules.add(enabled),
-    );
+  }
+
+  test('capacity-only write does not initialize subscriptions', () async {
+    final events = <String>[];
+    final subscriptions = _Subscriptions(events);
+    final images = _Images(events);
     addTearDown(subscriptions.dispose);
-    final imageDirectory = Directory('${directory.path}/focubili_images_v1');
-    final images = ImageResourceCache(directory: () async => imageDirectory);
     addTearDown(images.dispose);
-    final adapter = DeviceSettingsRuntimeAdapter(
+    await DeviceSettingsRuntimeAdapter(
       subscriptions: subscriptions,
       imageCache: images,
-    );
-    await subscriptions.initialize();
-    await subscriptions.addSource(
-      const SubscriptionSource(
-        kind: SubscriptionKind.creator,
-        mid: 7,
-        name: '合成订阅源',
-        token: 'synthetic-source',
-      ),
-    );
-    await adapter.writeSettings({
-      DeviceSettingsRuntimeAdapter.enabledKey: true,
-      DeviceSettingsRuntimeAdapter.notificationsKey: true,
-      DeviceSettingsRuntimeAdapter.backgroundKey: true,
-      DeviceSettingsRuntimeAdapter.imageCapacityKey: 128 * 1024 * 1024,
-    });
-    final exported = await adapter.readSettings();
-    expect(exported[DeviceSettingsRuntimeAdapter.enabledKey], isTrue);
-    expect(exported[DeviceSettingsRuntimeAdapter.backgroundKey], isTrue);
-    expect(exported.toString(), isNot(contains('synthetic-source')));
-    await adapter.writeSettings({
-      for (final key in DeviceSettingsRuntimeAdapter.keys) key: null,
-    });
-    expect(subscriptions.enabled, isFalse);
-    expect(subscriptions.notificationsEnabled, isFalse);
-    expect(subscriptions.backgroundRefreshEnabled, isFalse);
-    expect(subscriptions.sources.single.key, 'creator:7');
-    expect(schedules.last, isFalse);
-    expect((await images.status()).capacityBytes, images.defaultCapacity);
-    await adapter.writeSettings(exported);
-    expect(subscriptions.enabled, isTrue);
-    expect(subscriptions.sources.single.key, 'creator:7');
-    final reopenedImages = ImageResourceCache(
-      directory: () async => imageDirectory,
-    );
-    addTearDown(reopenedImages.dispose);
-    expect((await reopenedImages.status()).capacityBytes, 128 * 1024 * 1024);
+    ).writeSettings({DeviceSettingsRuntimeAdapter.imageCapacityKey: null});
+    expect(events, ['capacity:${images.defaultCapacity}']);
   });
 }

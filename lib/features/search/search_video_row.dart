@@ -15,6 +15,8 @@ class SearchVideoRow extends StatelessWidget {
     required this.menu,
     required this.onTap,
     this.opening = false,
+    this.onLongPress,
+    this.selected = false,
   });
 
   final Key rowKey;
@@ -26,6 +28,8 @@ class SearchVideoRow extends StatelessWidget {
   final Widget Function(double width) thumbnailBuilder;
   final Widget menu;
   final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
+  final bool selected;
   final bool opening;
 
   /// 将图标与数字作为一个整体换行，避免统计文字挤出窄屏。
@@ -82,13 +86,21 @@ class SearchVideoRow extends StatelessWidget {
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.only(top: 5, right: 40),
+                padding: const EdgeInsets.only(
+                  top: 5,
+                  right: kMinInteractiveDimension,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Tooltip(
                       message: byline,
+                      // Hover still exposes the byline, but on touch the
+                      // row's long press must reach multi-select.
+                      triggerMode: onLongPress == null
+                          ? null
+                          : TooltipTriggerMode.manual,
                       child: Text(
                         byline,
                         maxLines: 1,
@@ -124,7 +136,13 @@ class SearchVideoRow extends StatelessWidget {
             ],
           ),
         ),
-        Positioned(right: 0, bottom: 0, width: 40, height: 40, child: menu),
+        Positioned(
+          right: 0,
+          bottom: 0,
+          width: kMinInteractiveDimension,
+          height: kMinInteractiveDimension,
+          child: menu,
+        ),
       ],
     );
   }
@@ -140,11 +158,15 @@ class SearchVideoRow extends StatelessWidget {
           160.0,
         );
         return Material(
-          color: Colors.transparent,
+          color: selected
+              ? Theme.of(context).colorScheme.secondaryContainer
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
           child: InkWell(
             key: rowKey,
             borderRadius: BorderRadius.circular(12),
             onTap: onTap,
+            onLongPress: onLongPress,
             child: Padding(
               // 右侧留出桌面滚动条区域，避免更多菜单被滚动条抢走点击。
               padding: const EdgeInsets.fromLTRB(2, 6, 12, 6),

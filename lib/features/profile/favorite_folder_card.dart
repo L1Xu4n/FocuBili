@@ -1,5 +1,8 @@
 import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import '../common/favorite_folder_privacy_badge.dart';
 
 /// 为账号收藏与本机收藏提供同一套自适应封面、名称和数量布局。
 class FavoriteFolderCard extends StatelessWidget {
@@ -10,15 +13,23 @@ class FavoriteFolderCard extends StatelessWidget {
     required this.count,
     this.coverUrl = '',
     this.available = true,
+    this.isPrivate,
     this.onTap,
-    this.actions,
+    this.onLongPress,
+    this.showTrailingIcon = true,
+    this.showTitleTooltip = true,
+    this.reorderHandle,
   });
   final String title;
   final int count;
   final String coverUrl;
   final bool available;
+  final bool? isPrivate;
   final VoidCallback? onTap;
-  final Widget? actions;
+  final VoidCallback? onLongPress;
+  final bool showTrailingIcon;
+  final bool showTitleTooltip;
+  final Widget? reorderHandle;
 
   /// 图片缺失时使用跟随明暗主题的占位图标，避免深色背景上的低对比图标。
   Widget _placeholder(BuildContext context) => ColoredBox(
@@ -37,77 +48,117 @@ class FavoriteFolderCard extends StatelessWidget {
     builder: (context, constraints) {
       final width = ((constraints.maxWidth - 24) * .30).clamp(72.0, 112.0);
       final largeText = MediaQuery.textScalerOf(context).scale(14) > 18;
-      return Card(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: available ? onTap : null,
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              children: [
-                SizedBox(
-                  width: width,
-                  height: width * 5 / 8,
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        coverUrl.isEmpty
-                            ? _placeholder(context)
-                            : AppNetworkImage(
-                                imageUrl: coverUrl,
-                                httpHeaders: const {
-                                  'Referer': 'https://www.bilibili.com/',
-                                },
-                                fit: BoxFit.cover,
-                                memCacheWidth: 256,
-                                placeholder: (context, _) =>
-                                    _placeholder(context),
-                                errorWidget: (context, _, error) =>
-                                    _placeholder(context),
-                              ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+      final manage = available ? onLongPress : null;
+      final name = Text(
+        title,
+        maxLines: largeText ? 3 : 2,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontWeight: FontWeight.w700),
+      );
+      final ink = InkWell(
+        onTap: available ? onTap : null,
+        onLongPress: manage,
+        onSecondaryTap: manage,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            children: [
+              SizedBox(
+                width: width,
+                height: width * 5 / 8,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Stack(
+                    fit: StackFit.expand,
                     children: [
-                      Tooltip(
-                        message: title,
-                        child: Text(
-                          title,
-                          maxLines: largeText ? 3 : 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.w700),
+                      coverUrl.isEmpty
+                          ? _placeholder(context)
+                          : AppNetworkImage(
+                              imageUrl: coverUrl,
+                              httpHeaders: const {
+                                'Referer': 'https://www.bilibili.com/',
+                              },
+                              fit: BoxFit.cover,
+                              memCacheWidth: 256,
+                              placeholder: (context, _) =>
+                                  _placeholder(context),
+                              errorWidget: (context, _, error) =>
+                                  _placeholder(context),
+                            ),
+                      if (isPrivate == true)
+                        const Positioned(
+                          right: 4,
+                          bottom: 4,
+                          child: FavoriteFolderPrivacyBadge(),
                         ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        available ? '$count 个视频' : '收藏夹已失效',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: available
-                              ? Theme.of(context).colorScheme.onSurfaceVariant
-                              : Theme.of(context).colorScheme.error,
-                        ),
-                      ),
                     ],
                   ),
                 ),
-                actions ??
-                    Icon(
-                      available
-                          ? Icons.chevron_right_rounded
-                          : Icons.block_rounded,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (showTitleTooltip)
+                      Tooltip(
+                        message: title,
+                        triggerMode: onLongPress == null
+                            ? null
+                            : TooltipTriggerMode.manual,
+                        child: name,
+                      )
+                    else
+                      name,
+                    const SizedBox(height: 6),
+                    Text(
+                      available ? '$count 个视频' : '收藏夹已失效',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: available
+                            ? Theme.of(context).colorScheme.onSurfaceVariant
+                            : Theme.of(context).colorScheme.error,
+                      ),
                     ),
-              ],
-            ),
+                  ],
+                ),
+              ),
+              if (showTrailingIcon)
+                Icon(
+                  available ? Icons.chevron_right_rounded : Icons.block_rounded,
+                ),
+            ],
           ),
         ),
+      );
+      final Widget body = manage == null
+          ? ink
+          : CallbackShortcuts(
+              bindings: {
+                const SingleActivator(
+                  LogicalKeyboardKey.f10,
+                  shift: true,
+                  includeRepeats: false,
+                ): manage,
+                const SingleActivator(
+                  LogicalKeyboardKey.contextMenu,
+                  includeRepeats: false,
+                ): manage,
+              },
+              child: ink,
+            );
+      // The dedicated handle is outside the row's tap/long-press hit area.
+      final handle = reorderHandle;
+      return Card(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        clipBehavior: Clip.antiAlias,
+        child: handle == null
+            ? body
+            : Row(
+                children: [
+                  Expanded(child: body),
+                  handle,
+                ],
+              ),
       );
     },
   );

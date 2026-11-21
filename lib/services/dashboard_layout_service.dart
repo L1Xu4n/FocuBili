@@ -18,6 +18,20 @@ class DashboardLayoutService {
   /// 返回稳定存储键，首页与个人中心互不覆盖。
   static String storageKey(String storageId) => 'dashboard.layout.$storageId';
 
+  /// 读取首页抽屉偏好，旧版本默认保持开启。
+  Future<bool> loadDrawerEnabled() async =>
+      (await _loader()).getBool('dashboard.home_drawer_enabled') ?? true;
+
+  /// 保存抽屉开关，失败时让页面保持原状态。
+  Future<void> saveDrawerEnabled(bool enabled) async {
+    if (!await (await _loader()).setBool(
+      'dashboard.home_drawer_enabled',
+      enabled,
+    )) {
+      throw StateError('无法保存首页设置');
+    }
+  }
+
   /// 等待已提交写入后读取，损坏格式回退默认并保留合法未知编号。
   Future<DashboardLayout> load(
     String storageId,

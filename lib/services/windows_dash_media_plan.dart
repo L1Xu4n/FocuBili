@@ -33,43 +33,64 @@ class WindowsDashMediaAttempt {
 
 /// 把播放源中的主备 CDN 排成有限且去重的自动重试顺序。
 abstract final class WindowsDashMediaPlan {
-  /// 先尝试主视频与兼容音频，再分别轮换视频、音频，最后补充同序号备线组合。
+  // Each failed media attempt can involve a decoder timeout. Keep the extra
+  // work bounded even when the API supplies many CDNs or audio representations.
+  static const _maxMixedBackupAttempts = 4;
+
+  /// 先尝试首选、同序备线和单侧替换，再有限地补试不同序号的备线。
   static List<WindowsDashMediaAttempt> build(DesktopPlaybackSources sources) {
-    if (sources.videoUrls.isEmpty || sources.audioUrls.isEmpty) {
+    final videos = sources.videoUrls.toSet().toList();
+    final audios = sources.audioUrls.toSet().toList();
+    if (sources.videoCodec == 'muxed' && audios.isEmpty) {
+      return List.unmodifiable([
+        for (final url in videos)
+          WindowsDashMediaAttempt(videoUrl: url, audioUrl: '', audioCodec: ''),
+      ]);
+    }
+    if (videos.isEmpty || audios.isEmpty) {
       return const <WindowsDashMediaAttempt>[];
     }
     final List<WindowsDashMediaAttempt> attempts = <WindowsDashMediaAttempt>[];
-    final Set<String> keys = <String>{};
-    final String primaryVideo = sources.videoUrls.first;
-    final String primaryAudio = sources.audioUrls.first;
+    final String primaryVideo = videos.first;
+    final String primaryAudio = audios.first;
 
-    /// 添加尚未出现的安全音视频地址组合。
+    // Each list is deduplicated above and the index ranges below do not overlap.
     void add(String videoUrl, String audioUrl) {
-      final String key = '$videoUrl\u0000$audioUrl';
-      if (keys.add(key)) {
-        attempts.add(
-          WindowsDashMediaAttempt(
-            videoUrl: videoUrl,
-            audioUrl: audioUrl,
-            audioCodec: sources.audioCodecByUrl[audioUrl] ?? sources.audioCodec,
-          ),
-        );
-      }
+      attempts.add(
+        WindowsDashMediaAttempt(
+          videoUrl: videoUrl,
+          audioUrl: audioUrl,
+          audioCodec: sources.audioCodecByUrl[audioUrl] ?? sources.audioCodec,
+        ),
+      );
     }
 
     add(primaryVideo, primaryAudio);
-    for (final String audioUrl in sources.audioUrls.skip(1)) {
+    final int pairedCount = videos.length < audios.length
+        ? videos.length
+        : audios.length;
+    for (int index = 1; index < pairedCount; index += 1) {
+      add(videos[index], audios[index]);
+    }
+    for (final String audioUrl in audios.skip(1)) {
       add(primaryVideo, audioUrl);
     }
-    for (final String videoUrl in sources.videoUrls.skip(1)) {
+    for (final String videoUrl in videos.skip(1)) {
       add(videoUrl, primaryAudio);
     }
-    final int pairedBackupCount =
-        sources.videoUrls.length < sources.audioUrls.length
-        ? sources.videoUrls.length
-        : sources.audioUrls.length;
-    for (int index = 1; index < pairedBackupCount; index += 1) {
-      add(sources.videoUrls[index], sources.audioUrls[index]);
+    var mixedBackups = 0;
+    // Iterate by combined rank, not by a full Cartesian product.
+    if (videos.length > 1 && audios.length > 1) {
+      crossBackup:
+      for (var sum = 3; sum <= videos.length + audios.length - 2; sum++) {
+        final firstVideo = (sum - audios.length + 1).clamp(1, videos.length);
+        for (var v = firstVideo; v < videos.length && v < sum; v++) {
+          final a = sum - v;
+          if (v == a) continue;
+          add(videos[v], audios[a]);
+          if (++mixedBackups == _maxMixedBackupAttempts) break crossBackup;
+        }
+      }
     }
     return List<WindowsDashMediaAttempt>.unmodifiable(attempts);
   }

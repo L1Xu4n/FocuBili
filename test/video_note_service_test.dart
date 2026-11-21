@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -42,6 +43,162 @@ Future<VideoNoteService> _createService() async {
 }
 
 void main() {
+  test('迟到的封面补全只改同视频缺失字段，不重建已删笔记也不碰旧截图', () async {
+    final store = await SharedPreferences.getInstance();
+    final note = _createNote();
+    const cover = 'https://example.invalid/cover.jpg';
+    final original = [
+      {...note.toJson(), 'body': '已保存的新正文', 'futureField': 9},
+      _createNote(id: 'with-cover', videoCoverUrl: 'existing').toJson(),
+      _createNote(id: 'other', bvid: 'BV1XX411x7h7').toJson(),
+    ];
+    await store.setString(VideoNoteService.storageKey, jsonEncode(original));
+    final service = await _createService();
+    expect(await service.fillMissingCovers(note.bvid, cover), {note.id});
+    final updated = jsonDecode(store.getString(VideoNoteService.storageKey)!);
+    expect(updated, [
+      {...original.first, 'videoCoverUrl': cover},
+      ...original.skip(1),
+    ]);
+    await service.deleteNote(note.id);
+    expect(await service.fillMissingCovers(note.bvid, cover), isEmpty);
+    expect((await service.loadNotes()).where((n) => n.id == note.id), isEmpty);
+  });
+
+  test('两个笔记服务同时编辑和补图时保持新正文与封面', () async {
+    final editor = await _createService();
+    final list = await _createService();
+    final note = _createNote();
+    await editor.saveNote(note);
+    const cover = 'https://example.invalid/cover.jpg';
+    for (final coverFirst in [true, false]) {
+      final edited = note.copyWith(body: '新正文 $coverFirst');
+      if (coverFirst) {
+        await Future.wait([
+          list.fillMissingCovers(note.bvid, cover),
+          editor.saveNote(edited),
+        ]);
+      } else {
+        await Future.wait([
+          editor.saveNote(edited),
+          list.fillMissingCovers(note.bvid, cover),
+        ]);
+      }
+      final result = (await editor.loadNotes()).single;
+      expect(result.body, edited.body);
+      expect(result.videoCoverUrl, cover);
+      await editor.deleteNote(note.id);
+      if (coverFirst) await editor.saveNote(note);
+    }
+  });
+
+  test(
+    'cancelled captures delete only unreferenced files and retain files when storage is unreadable',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'focubili-capture-cleanup-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final retained = await File(
+        '${directory.path}/retained.png',
+      ).writeAsBytes([1]);
+      final discarded = await File(
+        '${directory.path}/discarded.png',
+      ).writeAsBytes([2]);
+      final service = await _createService();
+      await service.saveNote(_createNote(framePath: retained.path));
+      await service.discardUnreferencedFrame(retained.path);
+      await service.discardUnreferencedFrame(discarded.path);
+      expect(await retained.exists(), isTrue);
+      expect(await discarded.exists(), isFalse);
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.setString(VideoNoteService.storageKey, '{broken');
+      await service.discardUnreferencedFrame(retained.path);
+      expect(await retained.exists(), isTrue);
+    },
+  );
+  test('legacy frame becomes one attachment at the note position', () {
+    final legacy = _createNote(framePath: '/legacy/frame.png').toJson()
+      ..remove('frames');
+    final parsed = VideoNote.tryParse(legacy)!;
+    expect(parsed.allFrames, [
+      VideoNoteFrame(path: '/legacy/frame.png', position: parsed.position),
+    ]);
+    expect(parsed.copyWith(body: 'edited').allFrames, parsed.allFrames);
+    expect(parsed.copyWith(clearFrame: true).allFrames, isEmpty);
+  });
+
+  test(
+    'frame order and individual positions survive saving and editing',
+    () async {
+      final service = await _createService();
+      const frames = [
+        VideoNoteFrame(
+          path: '/frame-c.png',
+          position: Duration(milliseconds: 30025),
+        ),
+        VideoNoteFrame(
+          path: '/frame-a.png',
+          position: Duration(milliseconds: 5030),
+        ),
+        VideoNoteFrame(
+          path: '/frame-b.png',
+          position: Duration(milliseconds: 30025),
+        ),
+      ];
+      await service.saveNote(_createNote().copyWith(frames: frames));
+      final loaded = (await service.loadNotes()).single;
+      expect(loaded.allFrames, frames);
+      expect(loaded.framePath, frames.first.path);
+      await service.saveNote(
+        loaded.copyWith(
+          body: 'edited',
+          frames: [frames[2], frames[0], frames[1]],
+        ),
+      );
+      expect((await service.loadNotes()).single.allFrames, [
+        frames[2],
+        frames[0],
+        frames[1],
+      ]);
+    },
+  );
+
+  test(
+    'removing frames only deletes files no remaining note references',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'focubili-frames-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final first = await File('${directory.path}/first.png').writeAsBytes([1]);
+      final shared = await File(
+        '${directory.path}/shared.png',
+      ).writeAsBytes([2]);
+      final last = await File('${directory.path}/last.png').writeAsBytes([3]);
+      final service = await _createService();
+      final note = _createNote().copyWith(
+        frames: [
+          for (final file in [first, shared, last])
+            VideoNoteFrame(path: file.path, position: Duration.zero),
+        ],
+      );
+      await service.saveNote(note);
+      await service.saveNote(
+        _createNote(id: 'shared-note', framePath: shared.path),
+      );
+      await service.saveNote(note.copyWith(frames: [note.allFrames.last]));
+      expect(await first.exists(), isFalse);
+      expect(await shared.exists(), isTrue);
+      expect(await last.exists(), isTrue);
+      await service.deleteNote(note.id);
+      expect(await last.exists(), isFalse);
+      expect(await shared.exists(), isTrue);
+      await service.deleteNote('shared-note');
+      expect(await shared.exists(), isFalse);
+    },
+  );
+
   /// 每项测试使用独立的内存偏好设置，避免笔记互相污染。
   setUp(() {
     SharedPreferences.setMockInitialValues(<String, Object>{});

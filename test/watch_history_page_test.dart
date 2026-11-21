@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:focubili/core/router/app_router.dart';
@@ -46,6 +47,7 @@ class _FakeWatchHistoryService extends WatchHistoryService {
   final bool throwWhenLoading;
   final Completer<List<WatchHistoryEntry>>? pendingLoad;
   final List<String> removeRequests = <String>[];
+  final batchRemoveRequests = <Set<String>>[];
   bool clearRequested = false;
   Map<String, String> backfilledThumbnails = const <String, String>{};
 
@@ -69,6 +71,14 @@ class _FakeWatchHistoryService extends WatchHistoryService {
         .where((WatchHistoryEntry entry) => entry.bvid != bvid)
         .toList(growable: false);
     return List<WatchHistoryEntry>.unmodifiable(_entries);
+  }
+
+  @override
+  Future<List<WatchHistoryEntry>> removeMany(Iterable<String> bvids) async {
+    final ids = bvids.toSet();
+    batchRemoveRequests.add(ids);
+    _entries = _entries.where((entry) => !ids.contains(entry.bvid)).toList();
+    return List.unmodifiable(_entries);
   }
 
   /// 记录清空请求并把测试内存列表替换为空列表。
@@ -325,6 +335,104 @@ void main() {
     expect(bilibiliService.lookupRequests, <String>[entry.bvid]);
     expect(observer.pushedRoutes.last.settings.name, AppRoutes.player);
     expect(observer.pushedRoutes.last.settings.arguments, same(preview));
+  });
+
+  testWidgets('观看记录多选随滚动扩展，筛选后不删除隐藏记录', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final entries = List.generate(
+      18,
+      (i) => _entry(bvid: 'BVrow$i', title: i < 12 ? '课程 $i' : '保留 $i'),
+    );
+    final historyService = _FakeWatchHistoryService(entries);
+    final bilibiliService = _FakeBilibiliService(
+      preview: VideoPreview.placeholder(),
+    );
+
+    await tester.pumpWidget(
+      _buildTestApp(
+        historyService: historyService,
+        bilibiliService: bilibiliService,
+      ),
+    );
+    await tester.pumpAndSettle();
+    final search = find.byKey(const Key('watch-history-search'));
+    Finder check(int index) =>
+        find.byKey(ValueKey('select-local-video-BVrow$index'));
+    await tester.longPress(find.text('课程 0'));
+    await tester.pumpAndSettle();
+    expect(find.text('已选 1 项'), findsOneWidget);
+    expect(find.text('清空'), findsNothing);
+    expect(tester.widget<Checkbox>(check(0)).value, isTrue);
+
+    // Hold at the viewport edge and let the scroll region reveal new rows.
+    final start = tester.getCenter(check(1));
+    final drag = await tester.startGesture(start);
+    await tester.pump(kLongPressTimeout + const Duration(milliseconds: 1));
+    await tester.pump();
+    final bottom = tester
+        .getRect(find.byKey(const Key('watch-history-list')))
+        .bottom;
+    await drag.moveTo(Offset(start.dx, bottom - 2));
+    for (var frame = 0; frame < 80; frame++) {
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    await drag.up();
+    await tester.pumpAndSettle();
+    expect(find.text('已选 1 项'), findsNothing);
+    expect(find.text('课程 8').hitTestable(), findsOneWidget);
+    expect(historyService.batchRemoveRequests, isEmpty);
+
+    // The selected IDs surviving a narrower search are the only ones the
+    // confirmation can remove. Exiting selection first is also non-mutating.
+    await tester.enterText(search, '课程 1');
+    await tester.pumpAndSettle();
+    expect(tester.widget<Checkbox>(check(1)).value, isTrue);
+    final visibleSelected = <String>{
+      for (final i in [1, 10, 11])
+        if (tester.widget<Checkbox>(check(i)).value!) 'BVrow$i',
+    };
+    await tester.tap(find.text('移除所选'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('不会影响 B 站账号'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(historyService.batchRemoveRequests, isEmpty);
+
+    await tester.tap(find.text('移除所选'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('移除'));
+    await tester.pumpAndSettle();
+    expect(historyService.batchRemoveRequests, [visibleSelected]);
+    expect(
+      await historyService.loadHistory(),
+      entries.where((entry) => !visibleSelected.contains(entry.bvid)).toList(),
+    );
+    expect(historyService.removeRequests, isEmpty);
+    expect(historyService.clearRequested, isFalse);
+    expect(bilibiliService.lookupRequests, isEmpty);
+    expect(find.byType(Checkbox), findsNothing);
+  });
+
+  testWidgets('返回键只退出本机观看记录多选，不删除或跳页', (tester) async {
+    final historyService = _FakeWatchHistoryService([_entry()]);
+    await tester.pumpWidget(
+      _buildTestApp(
+        historyService: historyService,
+        bilibiliService: _FakeBilibiliService(
+          preview: VideoPreview.placeholder(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.longPress(find.text('本机保存的视频标题'));
+    await tester.pumpAndSettle();
+    expect(find.text('已选 1 项'), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('本机观看记录'), findsOneWidget);
+    expect(find.byType(Checkbox), findsNothing);
+    expect(historyService.batchRemoveRequests, isEmpty);
   });
 
   /// 验证查询失败时不删除记录，并显示持续三秒的错误提示。

@@ -50,8 +50,10 @@ jobs:
       - name: Run Flutter tests
         run: flutter test --no-pub
 
-      - name: Check Beta publication tools without network or signing
-        run: python3 -m unittest discover -s tool -p test_beta_release.py -v
+      - name: Check publication tools without network or signing
+        run: |
+          python3 -m unittest discover -s tool -p test_beta_release.py -v
+          python3 -m unittest discover -s tool -p test_stable_package_metadata.py -v
 
   android:
     name: Android debug
@@ -110,7 +112,7 @@ jobs:
           assert package and version and suffix, 'APK/source version metadata missing'
           assert package[1] == 'com.focubili.app.preview', 'Unexpected debug package'
           assert package[2] == version[2], 'Unexpected versionCode'
-          assert package[3] == version[1] + suffix[1], 'Unexpected beta version'
+          assert package[3] == version[1] + suffix[1], 'Unexpected debug version'
           certificates = set(re.findall(r'^(?:Signer #\d+|V[\d.]+ Signer):? certificate SHA-256 digest: ([0-9a-fA-F]+)$', signature, re.M))
           assert len(certificates) == 1, 'Expected one verified APK signing certificate'
           digest = hashlib.sha256(apk.read_bytes()).hexdigest()
@@ -156,7 +158,7 @@ jobs:
         run: flutter pub get
 
       - name: Run Windows gesture, cache and history regressions
-        run: flutter test --no-pub test/player_action_feedback_test.dart test/player_feedback_layout_test.dart test/player_tap_gesture_test.dart test/subscription_migration_test.dart test/subscription_request_scope_test.dart test/cache_file_lock_test.dart test/image_resource_cache_test.dart test/cached_player_overlay_service_test.dart test/windows_media_cache_service_test.dart test/desktop_disk_cache_session_test.dart
+        run: flutter test --no-pub test/player_action_feedback_test.dart test/player_feedback_layout_test.dart test/player_tap_gesture_test.dart test/subscription_migration_test.dart test/subscription_request_scope_test.dart test/cache_file_lock_test.dart test/image_resource_cache_test.dart test/cached_player_overlay_service_test.dart test/windows_media_cache_service_test.dart test/desktop_disk_cache_session_test.dart test/desktop_offline_cache_location_test.dart
 
       - name: Build Windows debug application
         run: |

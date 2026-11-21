@@ -82,8 +82,10 @@ def main():
                 "lipo", "-archs", str(app / "Contents/MacOS/FocuBili")
             ).decode().strip().split()
             assert "arm64" in architectures, "Apple Silicon build missing"
-            if os.environ.get('REQUIRE_MACOS_HOTFIX_IDENTITY') == 'true':
+            hotfix = os.environ.get('REQUIRE_MACOS_HOTFIX_IDENTITY') == 'true'
+            if hotfix or os.environ.get('REQUIRE_MACOS_UNIVERSAL') == 'true':
                 assert set(architectures) == {'arm64', 'x86_64'}, 'Universal architecture mismatch'
+            if hotfix:
                 revision = run('git', 'rev-parse', 'HEAD').decode().strip()
                 identity = read_identity(
                     Path('lib/core/build_metadata.g.dart').read_text(), revision,

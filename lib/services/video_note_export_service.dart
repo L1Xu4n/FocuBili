@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
+import 'package:crypto/crypto.dart';
 
 import '../models/video_note.dart';
 
@@ -17,12 +18,14 @@ class VideoNoteExportPackage {
     required this.bytes,
     required this.noteCount,
     required this.imageCount,
+    this.missingImageCount = 0,
   });
 
   final String fileName;
   final Uint8List bytes;
   final int noteCount;
   final int imageCount;
+  final int missingImageCount;
 
   /// 返回导出文件扩展名，供系统文件选择器限制类型。
   String get extension => fileName.split('.').last.toLowerCase();
@@ -33,7 +36,7 @@ class VideoNoteExportService {
   /// 创建无状态导出服务；所有导出内容只在当前设备内生成。
   const VideoNoteExportService();
 
-  /// 生成导出文件：无图片时直接返回 md/json，有图片时返回含 images 目录的 zip。
+  /// Markdown 总是打包为 ZIP；JSON 无截图时保留单文件输出。
   Future<VideoNoteExportPackage> buildPackage(
     List<VideoNote> notes,
     VideoNoteExportFormat format,
@@ -41,71 +44,155 @@ class VideoNoteExportService {
     if (notes.isEmpty) {
       throw ArgumentError.value(notes, 'notes', '至少选择一条笔记。');
     }
-    final Map<String, Uint8List> images = <String, Uint8List>{};
-    final Map<String, String> imagePathsByNoteId = <String, String>{};
-    for (final VideoNote note in notes) {
-      final String? sourcePath = note.framePath;
-      if (sourcePath == null || sourcePath.trim().isEmpty) {
-        continue;
-      }
-      try {
-        final File file = File(sourcePath);
-        if (!await file.exists()) {
-          continue;
-        }
-        final String extension = _safeImageExtension(sourcePath);
-        final String archivePath = 'images/${_safeName(note.id)}.$extension';
-        images[archivePath] = await file.readAsBytes();
-        imagePathsByNoteId[note.id] = archivePath;
-      } catch (_) {
-        // 单张旧截图损坏时继续导出其余文字和可用图片，不让整个任务失败。
-      }
-    }
-    final String mainExtension = switch (format) {
-      VideoNoteExportFormat.markdown => 'md',
-      VideoNoteExportFormat.json => 'json',
-    };
-    final String mainName = 'focubili_notes.$mainExtension';
-    final String content = switch (format) {
-      VideoNoteExportFormat.markdown => _buildMarkdown(
-        notes,
-        imagePathsByNoteId,
-      ),
-      VideoNoteExportFormat.json => _buildJson(notes, imagePathsByNoteId),
-    };
-    final String timestamp = _fileTimestamp(DateTime.now());
-    if (images.isEmpty) {
+    final frames = await _readImages(notes);
+    final timestamp = _fileTimestamp(DateTime.now());
+    if (format == VideoNoteExportFormat.json && frames.images.isEmpty) {
       return VideoNoteExportPackage(
-        fileName: 'focubili_notes_$timestamp.$mainExtension',
-        bytes: Uint8List.fromList(utf8.encode(content)),
+        fileName: 'focubili_notes_$timestamp.json',
+        bytes: Uint8List.fromList(
+          utf8.encode(_buildJson(notes, frames.pathsByNoteId)),
+        ),
         noteCount: notes.length,
         imageCount: 0,
+        missingImageCount: frames.missingCount,
       );
     }
-    final Archive archive = Archive()
-      ..add(ArchiveFile.string(mainName, content));
-    for (final MapEntry<String, Uint8List> image in images.entries) {
-      archive.add(ArchiveFile.bytes(image.key, image.value));
+
+    final archive = Archive();
+    if (format == VideoNoteExportFormat.markdown) {
+      _addMarkdownFiles(archive, notes, frames.pathsByNoteId);
+      _addImages(archive, frames.images, prefix: 'notes/');
+    } else {
+      const mainName = 'focubili_notes.json';
+      archive.add(
+        ArchiveFile.string(mainName, _buildJson(notes, frames.pathsByNoteId)),
+      );
+      _addImages(archive, frames.images);
+      archive.add(
+        ArchiveFile.string(
+          'README.txt',
+          '主文件：$mainName\n图片目录：images/\n'
+              '由焦点哔哩本地导出，共 ${notes.length} 条笔记。',
+        ),
+      );
     }
-    archive.add(
-      ArchiveFile.string(
-        'README.txt',
-        '主文件：$mainName\n图片目录：images/\n'
-            '由焦点哔哩本地导出，共 ${notes.length} 条笔记。',
-      ),
-    );
     return VideoNoteExportPackage(
       fileName: 'focubili_notes_$timestamp.zip',
       bytes: ZipEncoder().encodeBytes(archive),
       noteCount: notes.length,
-      imageCount: images.length,
+      imageCount: frames.images.length,
+      missingImageCount: frames.missingCount,
     );
+  }
+
+  /// 在统一导出中同时写入 Markdown 和可回导的 JSON，并共用一份截图。
+  Future<int> addToUnifiedArchive(
+    Archive archive,
+    List<VideoNote> notes,
+  ) async {
+    final frames = await _readImages(notes);
+    _addMarkdownFiles(archive, notes, frames.pathsByNoteId);
+    archive.add(
+      ArchiveFile.string(
+        'notes/focubili_notes.json',
+        _buildJson(notes, frames.pathsByNoteId),
+      ),
+    );
+    _addImages(archive, frames.images, prefix: 'notes/');
+    return frames.missingCount;
+  }
+
+  Future<
+    ({
+      Map<String, Uint8List> images,
+      Map<String, List<String?>> pathsByNoteId,
+      int missingCount,
+    })
+  >
+  _readImages(List<VideoNote> notes) async {
+    final Map<String, Uint8List> images = <String, Uint8List>{};
+    final Map<String, List<String?>> imagePathsByNoteId =
+        <String, List<String?>>{};
+    int missingImageCount = 0;
+    for (int noteIndex = 0; noteIndex < notes.length; noteIndex++) {
+      final note = notes[noteIndex];
+      final paths = <String?>[];
+      imagePathsByNoteId[note.id] = paths;
+      final frames = note.allFrames;
+      for (int frameIndex = 0; frameIndex < frames.length; frameIndex++) {
+        final sourcePath = frames[frameIndex].path;
+        paths.add(null);
+        try {
+          final File file = File(sourcePath);
+          if (!await file.exists()) {
+            throw const FileSystemException('missing_frame');
+          }
+          final String extension = _safeImageExtension(sourcePath);
+          final String archivePath =
+              'images/${noteIndex + 1}_${_safeName(note.id)}_${frameIndex + 1}.$extension';
+          images[archivePath] = await file.readAsBytes();
+          paths[frameIndex] = archivePath;
+        } catch (_) {
+          missingImageCount++;
+        }
+      }
+    }
+    return (
+      images: images,
+      pathsByNoteId: imagePathsByNoteId,
+      missingCount: missingImageCount,
+    );
+  }
+
+  void _addImages(
+    Archive archive,
+    Map<String, Uint8List> images, {
+    String prefix = '',
+  }) {
+    for (final image in images.entries) {
+      archive.add(ArchiveFile.bytes('$prefix${image.key}', image.value));
+    }
+  }
+
+  void _addMarkdownFiles(
+    Archive archive,
+    List<VideoNote> notes,
+    Map<String, List<String?>> imagePathsByNoteId,
+  ) {
+    final byVideo = <String, List<VideoNote>>{};
+    for (final note in notes) {
+      (byVideo[note.bvid] ??= []).add(note);
+    }
+    final caseInsensitiveCounts = <String, int>{};
+    for (final id in byVideo.keys) {
+      caseInsensitiveCounts.update(
+        id.toLowerCase(),
+        (n) => n + 1,
+        ifAbsent: () => 1,
+      );
+    }
+    // Keep recognizable BV names when safe; avoid ambiguous names on Windows.
+    final canonicalId = RegExp(r'^BV[0-9A-Za-z]{10}$');
+    for (final group in byVideo.entries) {
+      final id = group.key;
+      final stem =
+          canonicalId.hasMatch(id) &&
+              caseInsensitiveCounts[id.toLowerCase()] == 1
+          ? id
+          : 'video-${sha256.convert(utf8.encode(id))}';
+      archive.add(
+        ArchiveFile.string(
+          'notes/$stem.md',
+          _buildMarkdown(group.value, imagePathsByNoteId),
+        ),
+      );
+    }
   }
 
   /// 生成通用 Markdown，元数据使用普通列表，截图使用相对路径便于其他软件读取。
   String _buildMarkdown(
     List<VideoNote> notes,
-    Map<String, String> imagePathsByNoteId,
+    Map<String, List<String?>> imagePathsByNoteId,
   ) {
     final StringBuffer buffer = StringBuffer('# 焦点哔哩时间点笔记\n\n');
     for (final VideoNote note in notes) {
@@ -127,11 +214,19 @@ class VideoNoteExportService {
           ..writeln(note.body)
           ..writeln();
       }
-      final String? imagePath = imagePathsByNoteId[note.id];
-      if (imagePath != null) {
-        buffer
-          ..writeln('![${_escapeMarkdown(note.title)}]($imagePath)')
-          ..writeln();
+      final frames = note.allFrames;
+      for (int index = 0; index < frames.length; index++) {
+        final imagePath = imagePathsByNoteId[note.id]![index];
+        buffer.writeln(
+          '### 画面 ${index + 1} · ${_formatPosition(frames[index].position)}\n',
+        );
+        if (imagePath == null) {
+          buffer.writeln('（画面文件缺失或无法读取）\n');
+        } else {
+          buffer
+            ..writeln('![${_escapeMarkdown(note.title)}]($imagePath)')
+            ..writeln();
+        }
       }
       buffer.writeln('---\n');
     }
@@ -141,18 +236,28 @@ class VideoNoteExportService {
   /// 生成带版本号的 JSON；笔记字段保持 VideoNote 结构，图片路径改为包内相对地址。
   String _buildJson(
     List<VideoNote> notes,
-    Map<String, String> imagePathsByNoteId,
+    Map<String, List<String?>> imagePathsByNoteId,
   ) {
     final Map<String, Object?> document = <String, Object?>{
       'format': 'focubili.video_notes',
-      'version': 1,
+      'version': 2,
       'exportedAt': DateTime.now().toUtc().toIso8601String(),
       'notes': notes
           .map((VideoNote note) {
             final Map<String, Object?> json = Map<String, Object?>.from(
               note.toJson(),
             );
-            json['framePath'] = imagePathsByNoteId[note.id];
+            final paths = imagePathsByNoteId[note.id]!;
+            final frames = note.allFrames;
+            json['framePath'] = paths.firstOrNull;
+            json['frames'] = <Map<String, Object?>>[
+              for (int index = 0; index < frames.length; index++)
+                <String, Object?>{
+                  'path': paths[index],
+                  'positionMs': frames[index].position.inMilliseconds,
+                  if (paths[index] == null) 'unavailable': true,
+                },
+            ];
             return json;
           })
           .toList(growable: false),
@@ -171,7 +276,11 @@ class VideoNoteExportService {
         .remainder(60)
         .toString()
         .padLeft(2, '0');
-    return hours > 0 ? '$hours:$minutes:$seconds' : '$minutes:$seconds';
+    final base = hours > 0 ? '$hours:$minutes:$seconds' : '$minutes:$seconds';
+    final milliseconds = position.inMilliseconds.remainder(1000);
+    return milliseconds == 0
+        ? base
+        : '$base.${milliseconds.toString().padLeft(3, '0')}';
   }
 
   /// 转义 Markdown 标题和元数据中最常见的控制字符。
@@ -200,7 +309,7 @@ class VideoNoteExportService {
   /// 把笔记编号清理为安全文件名，阻止路径分隔符进入 ZIP 条目。
   String _safeName(String value) {
     final String safe = value.replaceAll(RegExp(r'[^0-9A-Za-z_-]'), '_');
-    return safe.isEmpty ? 'note' : safe;
+    return safe.isEmpty ? 'note' : safe.substring(0, safe.length.clamp(0, 80));
   }
 
   /// 生成不含冒号的本地时间戳，确保 Android、Windows 等平台都能保存。

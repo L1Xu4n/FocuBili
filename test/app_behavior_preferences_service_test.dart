@@ -22,6 +22,21 @@ void main() {
     expect(await service.loadAccountReadOnly(), isTrue);
     expect(await service.loadSearchHistoryEnabled(), isTrue);
     expect(await service.loadWatchHistoryEnabled(), isTrue);
+    expect(await service.loadNoteMarkdownEnabled(), isFalse);
+  });
+
+  test('笔记 Markdown 偏好可开启、关闭并重新读取', () async {
+    final service = AppBehaviorPreferencesService();
+    expect(await service.saveNoteMarkdownEnabled(true), isTrue);
+    expect(
+      await AppBehaviorPreferencesService().loadNoteMarkdownEnabled(),
+      isTrue,
+    );
+    expect(await service.saveNoteMarkdownEnabled(false), isTrue);
+    expect(
+      await AppBehaviorPreferencesService().loadNoteMarkdownEnabled(),
+      isFalse,
+    );
   });
 
   /// 验证三个行为开关均可独立写入并由同一服务重新读取。
@@ -39,10 +54,10 @@ void main() {
     expect(await service.loadWatchHistoryEnabled(), isFalse);
   });
 
-  /// New search rules default to learning content without a popularity threshold.
-  test('搜索过滤默认开启学习内容而不限制播放量', () async {
+  /// New installs preserve all results until the user chooses a filter.
+  test('搜索过滤默认保留所有内容而不限制播放量', () async {
     final filter = await const SearchContentFilterService().load();
-    expect(filter.learningOnly, isTrue);
+    expect(filter.learningOnly, isFalse);
     expect(filter.minimumPlayCount, 0);
   });
 

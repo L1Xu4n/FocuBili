@@ -1,3 +1,4 @@
+import 'video_tag_setting.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -16,10 +17,12 @@ import '../../services/windows_clipboard_link_service.dart';
 import '../../platform/app_platform.dart';
 import 'app_theme_mode_controller.dart';
 import 'app_text_size_page.dart';
+import 'http_user_agent_settings_page.dart';
 import 'playback_speeds_dialog.dart';
 import 'double_tap_regions_page.dart';
 import 'player_control_size_page.dart';
 import 'settings_search_section.dart';
+import 'unified_export_page.dart';
 import 'data_transfer_page.dart';
 
 /// 可选择的主题强调色预设，供设置页以色块形式展示。
@@ -87,9 +90,12 @@ class _PersonalizationSettingsPageState
   bool _windowsClipboardDetectionEnabled = false;
   bool _savingWindowsClipboardPreference = false;
   bool _accountReadOnly = true;
+  final _lineMenuKey =
+      GlobalKey<PopupMenuButtonState<PlaybackLinePreference>>();
   bool _searchHistoryEnabled = true;
   bool _watchHistoryEnabled = true;
   bool _wbiSigningEnabled = false;
+  bool _noteMarkdownEnabled = false;
   final TextEditingController _settingsSearch = TextEditingController();
   bool _savingBehaviorPreference = false;
   _SettingsLevel _settingsLevel = _SettingsLevel.overview;
@@ -167,6 +173,8 @@ class _PersonalizationSettingsPageState
           .loadWatchHistoryEnabled();
       final bool wbiSigningEnabled = await _behaviorPreferencesService
           .loadWbiSigningEnabled();
+      final bool noteMarkdownEnabled = await _behaviorPreferencesService
+          .loadNoteMarkdownEnabled();
       final bool hasDoNotDisturbAccess =
           widget.focusNotificationService.supportsDoNotDisturb
           ? await widget.focusNotificationService.hasDoNotDisturbAccess()
@@ -183,6 +191,7 @@ class _PersonalizationSettingsPageState
         _searchHistoryEnabled = searchHistoryEnabled;
         _watchHistoryEnabled = watchHistoryEnabled;
         _wbiSigningEnabled = wbiSigningEnabled;
+        _noteMarkdownEnabled = noteMarkdownEnabled;
         _hasDoNotDisturbAccess = hasDoNotDisturbAccess;
         _loading = false;
       });
@@ -266,6 +275,14 @@ class _PersonalizationSettingsPageState
     applyValue: (bool value) => _wbiSigningEnabled = value,
     saveValue: _behaviorPreferencesService.saveWbiSigningEnabled,
     failureMessage: 'WBI 签名设置保存失败，请稍后重试。',
+  );
+
+  Future<void> _setNoteMarkdownEnabled(bool enabled) => _saveBehaviorPreference(
+    enabled: enabled,
+    previous: _noteMarkdownEnabled,
+    applyValue: (bool value) => _noteMarkdownEnabled = value,
+    saveValue: _behaviorPreferencesService.saveNoteMarkdownEnabled,
+    failureMessage: '笔记 Markdown 设置保存失败，请稍后重试。',
   );
 
   /// 保存前台剪贴板检测开关；失败时恢复原值并显示说明。
@@ -519,6 +536,61 @@ class _PersonalizationSettingsPageState
     }
   }
 
+  Future<void> _editSubtitlePriority() async {
+    final priority = await showDialog<SubtitlePriority>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('字幕优先级'),
+        children: [
+          for (final choice in SubtitlePriority.values)
+            ListTile(
+              title: Text(choice.label),
+              selected: choice == _preferences.subtitlePriority,
+              trailing: choice == _preferences.subtitlePriority
+                  ? const Icon(Icons.check_rounded)
+                  : null,
+              onTap: () => Navigator.of(context).pop(choice),
+            ),
+        ],
+      ),
+    );
+    if (priority == null || priority == _preferences.subtitlePriority) return;
+    await _saveSubtitlePlaybackPreference(subtitlePriority: priority);
+  }
+
+  Future<void> _saveSubtitlePlaybackPreference({
+    bool? autoEnableSubtitles,
+    SubtitlePriority? subtitlePriority,
+  }) async {
+    if (!mounted || _saving) return;
+    setState(() => _saving = true);
+    try {
+      if (autoEnableSubtitles != null) {
+        await widget.preferencesService.saveAutoEnableSubtitles(
+          autoEnableSubtitles,
+        );
+      }
+      if (subtitlePriority != null) {
+        await widget.preferencesService.saveSubtitlePriority(subtitlePriority);
+      }
+      if (!mounted) return;
+      setState(() {
+        _preferences = _preferences.copyWith(
+          autoEnableSubtitles: autoEnableSubtitles,
+          subtitlePriority: subtitlePriority,
+        );
+      });
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('字幕设置保存失败，请重试。')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   /// Saves each add/delete immediately; closing the editor needs no confirmation.
   Future<void> _editPlaybackSpeeds() async {
     await showDialog<void>(
@@ -648,6 +720,37 @@ class _PersonalizationSettingsPageState
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(const SnackBar(content: Text('设置保存失败，请重试。')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// 保存单项线路偏好，成功后更新界面；失败维持原值并允许重试。
+  Future<void> _setPlaybackRoute({
+    PlaybackLinePreference? line,
+    bool? preferNonPcdn,
+  }) async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      await widget.preferencesService.saveRoutePreference(
+        line: line,
+        preferNonPcdn: preferNonPcdn,
+      );
+      if (mounted) {
+        setState(
+          () => _preferences = _preferences.copyWith(
+            linePreference: line,
+            preferNonPcdn: preferNonPcdn,
+          ),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('播放线路设置保存失败，请重试。')));
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -948,6 +1051,16 @@ class _PersonalizationSettingsPageState
       icon: Icons.admin_panel_settings_outlined,
       title: '账号与隐私',
       children: <Widget>[
+        ListTile(
+          key: const Key('open-unified-export'),
+          leading: const Icon(Icons.inventory_2_outlined),
+          title: const Text('统一导出'),
+          subtitle: const Text('笔记、清单、专注、收藏、历史、订阅和已载入字幕'),
+          trailing: const Icon(Icons.chevron_right_rounded),
+          onTap: () => Navigator.of(context).push<void>(
+            MaterialPageRoute(builder: (_) => const UnifiedExportPage()),
+          ),
+        ),
         SwitchListTile.adaptive(
           key: const Key('enable-account-read-only'),
           value: _accountReadOnly,
@@ -1005,6 +1118,66 @@ class _PersonalizationSettingsPageState
       children: <Widget>[
         _buildDefaultQualityTile(forWifi: true),
         _buildDefaultQualityTile(forWifi: false),
+        ListTile(
+          key: const Key('playback-line-preference'),
+          leading: const Icon(Icons.alt_route_rounded),
+          title: const Text('默认播放线路'),
+          enabled: !_saving,
+          onTap: _saving
+              ? null
+              : () => _lineMenuKey.currentState?.showButtonMenu(),
+          subtitle: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_preferences.linePreference.label),
+                const Text('下次加载生效 · 不可用时自动尝试其他线路'),
+              ],
+            ),
+          ),
+          trailing: PopupMenuButton<PlaybackLinePreference>(
+            key: _lineMenuKey,
+            enabled: !_saving,
+            tooltip: '选择默认播放线路',
+            icon: const Icon(Icons.arrow_drop_down),
+            initialValue: _preferences.linePreference,
+            onSelected: (value) => _setPlaybackRoute(line: value),
+            itemBuilder: (context) => [
+              for (final line in PlaybackLinePreference.values)
+                PopupMenuItem(
+                  value: line,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(line.label),
+                        Text(switch (line) {
+                          PlaybackLinePreference.smart => '优先尝试 B 站提供的镜像线路',
+                          PlaybackLinePreference.primary => '先试主线路，必要时切到备用线路',
+                          PlaybackLinePreference.backup => '先试备用线路，主线路仍可回退',
+                        }, style: Theme.of(context).textTheme.bodySmall),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        SwitchListTile.adaptive(
+          key: const Key('prefer-non-pcdn'),
+          value: _preferences.preferNonPcdn,
+          // 开关只改变候选顺序，不删除原地址作为最后兜底。
+          onChanged: _saving
+              ? null
+              : (value) => _setPlaybackRoute(preferNonPcdn: value),
+          secondary: const Icon(Icons.route_outlined),
+          title: const Text('优先避开 PCDN'),
+          subtitle: const Text('同一编码优先尝试其他线路，仍保留 PCDN 回退'),
+        ),
         SwitchListTile.adaptive(
           key: const Key('enable-wbi-signing'),
           value: _wbiSigningEnabled,
@@ -1035,6 +1208,33 @@ class _PersonalizationSettingsPageState
           title: const Text('显示笔记时间标记'),
           subtitle: const Text('在进度条上方显示当前分 P 的笔记，点击可打开。'),
         ),
+        SwitchListTile.adaptive(
+          key: const Key('enable-note-markdown'),
+          value: _noteMarkdownEnabled,
+          onChanged: _savingBehaviorPreference ? null : _setNoteMarkdownEnabled,
+          secondary: const Icon(Icons.text_snippet_outlined),
+          title: const Text('启用笔记 Markdown'),
+          subtitle: const Text('关闭后仅显示纯文本，不提供格式预览。'),
+        ),
+        SwitchListTile.adaptive(
+          key: const Key('auto-enable-subtitles-preference'),
+          value: _preferences.autoEnableSubtitles,
+          onChanged: _saving
+              ? null
+              : (value) =>
+                    _saveSubtitlePlaybackPreference(autoEnableSubtitles: value),
+          secondary: const Icon(Icons.subtitles_outlined),
+          title: const Text('默认开启字幕'),
+          subtitle: const Text('播放在线 B 站视频时自动选择可用字幕'),
+        ),
+        ListTile(
+          key: const Key('subtitle-priority-preference'),
+          leading: const Icon(Icons.low_priority_rounded),
+          title: const Text('字幕优先级'),
+          subtitle: Text(_preferences.subtitlePriority.label),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: _saving ? null : _editSubtitlePriority,
+        ),
         ListTile(
           key: const Key('playback-speeds-preference'),
           leading: const Icon(Icons.speed),
@@ -1063,8 +1263,8 @@ class _PersonalizationSettingsPageState
           // 双击开关函数立即更新界面并把选择保存到当前设备。
           onChanged: _saving ? null : _setDoubleTapSeekEnabled,
           secondary: const Icon(Icons.touch_app_outlined),
-          title: const Text('启用双击快进快退'),
-          subtitle: const Text('关闭后，双击视频画面的任何位置都会切换播放或暂停。'),
+          title: const Text('启用触摸双击快进快退'),
+          subtitle: const Text('关闭后，触摸双击视频画面只切换播放或暂停。'),
         ),
         ListTile(
           key: const Key('double-tap-regions-preference'),
@@ -1138,6 +1338,7 @@ class _PersonalizationSettingsPageState
         if ((widget.appPlatform ?? AppPlatformDetector.current).isMobile)
           _buildLayoutModeTile(),
         _buildThemeModeTile(themeModeController),
+        const VideoTagSetting(key: Key('video-tag-mode')),
         ListTile(
           key: const Key('ui-text-size-preference'),
           leading: const Icon(Icons.text_fields),
@@ -1185,6 +1386,18 @@ class _PersonalizationSettingsPageState
           secondary: const Icon(Icons.system_update_alt_rounded),
           title: const Text('启动时检查更新'),
           subtitle: const Text('每次启动从 GitHub Release 检查新的正式版本。'),
+        ),
+        ListTile(
+          key: const Key('open-http-user-agent-settings'),
+          leading: const Icon(Icons.http_rounded),
+          title: const Text('HTTP User-Agent'),
+          subtitle: const Text('普通网络请求的兼容标识 · 可恢复默认'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.of(context).push<void>(
+            MaterialPageRoute(
+              builder: (_) => const HttpUserAgentSettingsPage(),
+            ),
+          ),
         ),
         ListTile(
           key: const Key('open-cache-management'),

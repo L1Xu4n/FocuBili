@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'bilibili_course_link.dart';
+
 import '../models/player_enhancement.dart';
 
 /// 定义可替换的播放器增强 JSON 请求函数，组件测试不需要访问真实网络。
@@ -58,6 +60,9 @@ class BilibiliPublicPlayerEnhancementService
     required String bvid,
     required int cid,
   }) async {
+    if (BilibiliCourseLink.isStorageKey(bvid)) {
+      return const PlayerEnhancementMetadata();
+    }
     final Uri endpoint = Uri.https(_apiHost, _playerInfoPath, <String, String>{
       'bvid': bvid,
       'cid': cid.toString(),

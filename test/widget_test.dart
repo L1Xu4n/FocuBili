@@ -3,6 +3,8 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'subscription_compact_ui_test.dart'
+    show captureSubscriptionUi, loadBetaReviewFonts;
 import 'package:flutter/gestures.dart' show TapGestureRecognizer;
 import 'package:flutter/services.dart';
 import 'package:flutter/rendering.dart';
@@ -13,13 +15,17 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/app.dart';
 import 'package:focubili/features/focus/focus_timer_controller.dart';
 import 'package:focubili/features/player/player_page.dart';
+import 'package:focubili/features/player/widgets/player_subtitle_caption.dart';
+import 'package:focubili/features/player/widgets/player_subtitle_preview.dart';
 import 'package:focubili/features/player/widgets/player_timeline.dart';
 import 'package:focubili/features/player/widgets/player_action_feedback.dart';
 import 'package:focubili/features/profile/login_page.dart';
 import 'package:focubili/features/profile/user_profile_page.dart';
 import 'package:focubili/features/search/search_page.dart';
 import 'package:focubili/models/video_preview.dart';
+import 'package:focubili/models/app_favorite.dart';
 import 'package:focubili/models/focus_session.dart';
+import 'package:focubili/core/theme/app_theme.dart';
 import 'package:focubili/models/video_note.dart';
 import 'package:focubili/models/video_shot_preview.dart';
 import 'package:focubili/models/watch_history_entry.dart';
@@ -29,8 +35,11 @@ import 'package:focubili/models/playback_preferences.dart';
 import 'package:focubili/services/bilibili_service.dart';
 import 'package:focubili/services/bilibili_interaction_service.dart';
 import 'package:focubili/services/app_theme_mode_service.dart';
+import 'package:focubili/services/app_favorites_service.dart';
+import 'package:focubili/services/cache_lifecycle.dart';
 import 'package:focubili/services/device_status_service.dart';
 import 'package:focubili/services/danmaku_preferences_service.dart';
+import 'package:focubili/services/live_video_frame_playback_service.dart';
 import 'package:focubili/services/native_playback_service.dart';
 import 'package:focubili/services/listening_playback_service.dart';
 import 'package:focubili/services/player_overlay_service.dart';
@@ -46,11 +55,14 @@ import 'package:focubili/services/focus_preferences_service.dart';
 import 'package:focubili/services/watch_history_service.dart';
 import 'package:focubili/services/learning_list_service.dart';
 import 'package:focubili/services/video_shot_service.dart';
+import 'package:focubili/services/image_resource_cache.dart';
 import 'package:focubili/services/video_note_service.dart';
 import 'package:focubili/services/bilibili_player_enhancement_service.dart';
 import 'package:focubili/models/player_overlay_data.dart';
 import 'package:focubili/platform/app_platform.dart';
 import 'package:focubili/platform/platform_services.dart';
+
+import 'support/checkbox_sweep.dart';
 
 /// 提供可手动推进的时间，让播放器专注测试不必真实等待一分钟。
 class _PlayerFocusTestClock {
@@ -219,6 +231,17 @@ class _FakeVideoShotService implements VideoShotService {
   }
 }
 
+/// 保持图集传输未完成，用来区分元数据、解码和播放器 seek。
+class _PendingVideoShotCache extends ImageResourceCache {
+  final pending = Completer<CachedImageBytes>();
+
+  @override
+  Future<CachedImageBytes> load(
+    String url, {
+    Map<String, String> headers = const {},
+  }) => pending.future;
+}
+
 /// 返回固定关键词搜索 JSON，验证真实搜索结果转换不依赖外网。
 class _SearchJsonRequest {
   Uri? requestedUri;
@@ -316,7 +339,8 @@ class _FakeGuestPlaybackService extends _FakePlaybackService
 }
 
 /// 提供无 Android 平台依赖的播放器替身，让组件测试只检查 Flutter 控制层交互。
-class _FakePlaybackService implements PlaybackService {
+class _FakePlaybackService
+    implements PlaybackService, LiveVideoFramePlaybackService {
   /// 创建用于播放器组件测试的无网络服务替身。
   _FakePlaybackService({
     this.savedState,
@@ -327,6 +351,7 @@ class _FakePlaybackService implements PlaybackService {
     this.duration = _defaultDuration,
     this.textureId,
     this.frameCapturePath = 'C:\\fake-video-note-frame.jpg',
+    this.frameCaptureLoader,
     this.pauseGate,
   });
 
@@ -336,6 +361,7 @@ class _FakePlaybackService implements PlaybackService {
   final Duration duration;
   final int? textureId;
   final String? frameCapturePath;
+  final Future<String?> Function()? frameCaptureLoader;
   final Future<void> Function()? pauseGate;
   bool _isPlaying = false;
   bool audioOnly = false;
@@ -362,6 +388,7 @@ class _FakePlaybackService implements PlaybackService {
   int pauseRequests = 0;
   int seekByRequests = 0;
   int seekToRequests = 0;
+  final List<(String?, Duration)> seekToIdentities = [];
   int frameCaptureRequests = 0;
   final List<Duration> frameCapturePositions = <Duration>[];
   final List<int?> frameCaptureCids = <int?>[];
@@ -455,6 +482,7 @@ class _FakePlaybackService implements PlaybackService {
   @override
   Future<void> seekTo(Duration position) async {
     seekToRequests += 1;
+    seekToIdentities.add((openedBvid, position));
     if (emitLoadingDuringSeek) {
       _emit(phase: PlaybackPhase.loading);
       await Future<void>.delayed(Duration.zero);
@@ -501,7 +529,20 @@ class _FakePlaybackService implements PlaybackService {
     frameCaptureRequests += 1;
     frameCapturePositions.add(_position);
     frameCaptureCids.add(openedCid);
-    return frameCapturePath;
+    return frameCaptureLoader == null
+        ? frameCapturePath
+        : await frameCaptureLoader!();
+  }
+
+  @override
+  Future<LiveVideoFrame?> captureLiveVideoFrame() async {
+    final bvid = openedBvid;
+    final cid = openedCid;
+    final position = _position;
+    final path = await captureCurrentFrame();
+    return path == null || bvid == null || cid == null
+        ? null
+        : LiveVideoFrame(path: path, position: position, bvid: bvid, cid: cid);
   }
 
   /// 返回测试预先设置的最后观看分P和进度。
@@ -628,6 +669,7 @@ class _FakePlayerInteractionService extends BilibiliInteractionService {
   int coinCount = 0;
   int? lastCoinMultiply;
   String? createdFolderTitle;
+  bool? createdFolderIsPrivate;
   int? lastFavoriteMediaId;
   bool? lastFavoriteValue;
   Set<int> lastAddedFavoriteMediaIds = <int>{};
@@ -688,8 +730,10 @@ class _FakePlayerInteractionService extends BilibiliInteractionService {
   @override
   Future<BilibiliFavoriteFolder> createFavoriteFolder({
     required String title,
+    bool isPrivate = false,
   }) async {
     createdFolderTitle = title;
+    createdFolderIsPrivate = isPrivate;
     return BilibiliFavoriteFolder(mediaId: 999, title: title);
   }
 
@@ -808,11 +852,13 @@ class _FakePlayerOverlayService implements PlayerOverlayService {
   final SubtitleTrackLoadResult tracksResult;
   final SubtitleCueLoadResult cuesResult;
   final Future<SubtitleTrackLoadResult> Function(int cid)? tracksLoader;
-  final Future<SubtitleCueLoadResult> Function(int cid)? cuesLoader;
+  final Future<SubtitleCueLoadResult> Function(int cid, String trackId)?
+  cuesLoader;
   final List<int> subtitleTrackRequests = <int>[];
   final List<(String, int)> subtitleTrackIdentities = [];
   final List<int> subtitleCueRequests = <int>[];
   final List<(String, int)> subtitleCueIdentities = [];
+  final List<String> subtitleCueTrackIds = [];
   final DanmakuSegmentLoadResult danmakuResult;
   final Future<DanmakuSegmentLoadResult> Function(int segmentIndex)?
   danmakuLoader;
@@ -838,7 +884,8 @@ class _FakePlayerOverlayService implements PlayerOverlayService {
   }) async {
     subtitleCueRequests.add(cid);
     subtitleCueIdentities.add((bvid, cid));
-    return cuesLoader == null ? cuesResult : await cuesLoader!(cid);
+    subtitleCueTrackIds.add(trackId);
+    return cuesLoader == null ? cuesResult : await cuesLoader!(cid, trackId);
   }
 
   /// 记录段号并返回即时或延迟结果，用于覆盖正常加载与网络晚到两种弹幕场景。
@@ -1051,8 +1098,46 @@ class _DelayedFlagNotes extends VideoNoteService {
   }
 }
 
+class _DelayedWriteNotes extends VideoNoteService {
+  Completer<void>? saveGate;
+  int saveRequests = 0;
+
+  @override
+  Future<void> saveNote(VideoNote note) async {
+    saveRequests++;
+    await saveGate?.future;
+    await super.saveNote(note);
+  }
+}
+
+/// Set the view metrics the app actually sees, not just the render surface.
+void _setPlayerPortraitViewport(WidgetTester tester, Size size) {
+  tester.view.devicePixelRatio = 1;
+  tester.view.physicalSize = size;
+  addTearDown(tester.view.resetDevicePixelRatio);
+  addTearDown(tester.view.resetPhysicalSize);
+}
+
 /// 注册播放器已有功能及笔记旗标的必要回归。
 void main() {
+  Future<void> openPlayerTools(WidgetTester tester) async {
+    final trigger = find.byKey(const Key('more-settings-menu'));
+    if (trigger.hitTestable().evaluate().isEmpty) {
+      await tester.tap(find.byKey(const Key('player-surface')).first);
+      await tester.pump(const Duration(milliseconds: 350));
+      await tester.pumpAndSettle();
+    }
+    expect(trigger.hitTestable(), findsOneWidget);
+    await tester.tap(trigger);
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> tapPlayerTool(WidgetTester tester, String key) async {
+    final item = find.byKey(Key(key));
+    await tester.ensureVisible(item);
+    await tester.tap(item);
+  }
+
   /// 进入时读取已有标记，点击单笔记只打开正文，跨实例增删后及时更新。
   testWidgets('笔记旗标进入即显示点击不seek并随增删刷新', (tester) async {
     final service = _FakePlaybackService();
@@ -1098,8 +1183,7 @@ void main() {
     final notes = VideoNoteService();
     await notes.saveNote(_flagNote('同秒A', 42));
     await notes.saveNote(_flagNote('同秒B', 42));
-    await tester.binding.setSurfaceSize(const Size(920, 2000));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+    _setPlayerPortraitViewport(tester, const Size(920, 2000));
     await tester.pumpWidget(
       MaterialApp(
         home: PlayerPage(
@@ -1107,6 +1191,7 @@ void main() {
           video: _createCollectionVideo(),
           playbackService: service,
           videoNoteService: notes,
+          appPlatform: AppPlatform.linux,
         ),
       ),
     );
@@ -1114,8 +1199,11 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('player-note-flag-hit-0')));
     await tester.pumpAndSettle();
     expect(find.text('选择笔记'), findsOneWidget);
+    expect(find.semantics.byLabel('选择笔记'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('choose-note-同秒A')));
     await tester.pumpAndSettle();
+    expect(find.byKey(const Key('park-video-notes-barrier')), findsNothing);
+    expect(find.semantics.byLabel('时间点笔记'), findsOneWidget);
     await tester.enterText(
       find.byKey(const Key('note-body-field')),
       '当前尚未保存的草稿',
@@ -1233,7 +1321,9 @@ void main() {
     expect(video.collection?.title, '独立视频合集');
     expect(video.collection?.entries, hasLength(2));
     expect(video.collection?.entries.last.bvid, 'BV1Q541167Qg');
-    expect(video.tags, <String>['地理', '科普']);
+    expect(video.tags, isEmpty);
+    expect(requester.requestedUri?.path, '/x/web-interface/wbi/view');
+    expect(await service.loadVideoTags(video.bvid), <String>['地理', '科普']);
     expect(
       video.collection?.entries.last.thumbnailUrl,
       'https://i0.hdslb.com/two.jpg@320w_200h_1c.webp',
@@ -1796,8 +1886,8 @@ void main() {
     expect(find.text('0:05 / 3:32'), findsOneWidget);
   });
 
-  /// 验证快进产生的加载快照不会切换勿扰，但用户按下暂停和播放仍会正常关闭与开启。
-  testWidgets('专注播放快进不抖动勿扰且暂停播放正常切换', (WidgetTester tester) async {
+  /// 验证快进、视频暂停和播放不会切换专注会话的勿扰状态。
+  testWidgets('专注播放快进和暂停视频都不切换勿扰', (WidgetTester tester) async {
     const MethodChannel channel = MethodChannel(
       'com.focubili.app/test_player_seek_do_not_disturb',
     );
@@ -1877,7 +1967,9 @@ void main() {
     await tester.pump();
     await tester.tap(find.byKey(const Key('play-pause-button')));
     await tester.pump();
-    expect(doNotDisturbStates, <bool>[false, true]);
+    expect(doNotDisturbStates, isEmpty);
+    await focusController.endFocusEarly();
+    await tester.pump();
   });
 
   /// 验证控制栏菜单不再参与画面双击竞争，并在第一帧建立短动画菜单路由。
@@ -1996,6 +2088,103 @@ void main() {
       findsOneWidget,
     );
   });
+
+  for (final (label, size, scale, stacked) in <(String, Size, double, bool)>[
+    ('桌面', const Size(1200, 800), 1, false),
+    ('窄屏大字号', const Size(320, 568), 2, true),
+  ]) {
+    testWidgets('当前 P 已在学习清单：$label 的操作按钮居中', (tester) async {
+      await tester.binding.setSurfaceSize(size);
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final LearningListService learningListService = LearningListService();
+      final VideoPreview video = _createLongTitleVideo();
+      await learningListService.addVideo(video, part: video.parts.first);
+      await tester.pumpWidget(
+        MaterialApp(
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: TextScaler.linear(scale)),
+            child: child!,
+          ),
+          home: PlayerPage(
+            video: video,
+            playbackService: _FakePlaybackService(),
+            learningListService: learningListService,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final Finder learningButton = find.byKey(
+        const Key('current-video-learning-list-button'),
+      );
+      await tester.ensureVisible(learningButton);
+      await tester.tap(learningButton);
+      await tester.pumpAndSettle();
+
+      final Finder dialog = find.byType(AlertDialog);
+      expect(find.text('当前 P 已在学习清单'), findsOneWidget);
+      final Finder surface = find.descendant(
+        of: dialog,
+        matching: find.byWidgetPredicate(
+          (widget) => widget is Material && widget.type == MaterialType.card,
+        ),
+      );
+      final double centerX = tester.getCenter(surface).dx;
+      final Finder select = find.widgetWithText(TextButton, '选择其他 P');
+      final Finder keep = find.widgetWithText(TextButton, '保留');
+      final Finder remove = find.widgetWithText(FilledButton, '取消加入');
+      final Rect selectRect = tester.getRect(select);
+      final Rect keepRect = tester.getRect(keep);
+      final Rect removeRect = tester.getRect(remove);
+      if (stacked) {
+        expect(selectRect.center.dy, lessThan(keepRect.center.dy));
+        expect(keepRect.center.dy, lessThan(removeRect.center.dy));
+        for (final Rect rect in [selectRect, keepRect, removeRect]) {
+          expect(rect.center.dx, closeTo(centerX, 1));
+        }
+        final Finder scrollable = find.descendant(
+          of: dialog,
+          matching: find.byType(Scrollable),
+        );
+        final ScrollPosition position = tester
+            .state<ScrollableState>(scrollable)
+            .position;
+        expect(position.maxScrollExtent, greaterThan(0));
+        await tester.drag(scrollable, const Offset(0, -200));
+        await tester.pumpAndSettle();
+        expect(position.pixels, greaterThan(0));
+        expect(tester.getRect(remove), removeRect);
+      } else {
+        expect(selectRect.center.dy, closeTo(keepRect.center.dy, 1));
+        expect(keepRect.center.dy, closeTo(removeRect.center.dy, 1));
+        expect(selectRect.center.dx, lessThan(keepRect.center.dx));
+        expect(keepRect.center.dx, lessThan(removeRect.center.dx));
+        expect((selectRect.left + removeRect.right) / 2, closeTo(centerX, 1));
+      }
+
+      await tester.tap(keep);
+      await tester.pumpAndSettle();
+      expect(dialog, findsNothing);
+      expect(
+        (await learningListService.loadEntries()).single.partCid,
+        video.parts.first.cid,
+      );
+      await tester.tap(learningButton);
+      await tester.pumpAndSettle();
+      expect(dialog, findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(dialog, findsNothing);
+      expect(
+        (await learningListService.loadEntries()).single.partCid,
+        video.parts.first.cid,
+      );
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   /// 验证同一视频只有真正加入的分 P 显示已加入，切换分 P 不会复用旧按钮状态。
   testWidgets('播放器学习清单按钮按分P独立显示状态', (WidgetTester tester) async {
@@ -2388,21 +2577,125 @@ void main() {
     expect(service.openedInitialPositions.last, isNull);
   });
 
-  /// 验证首页创建的任务只在用户确认关联且当前分P实际播放后开始计时。
-  testWidgets('播放器确认关联首页专注并跟随真实播放状态', (WidgetTester tester) async {
+  /// 全局专注无需确认绑定；分P切换和播放器路由更替都保留同一会话。
+  testWidgets('专注跨分P与播放器更替连续计时无需重新确认', (tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final FocusTimerController controller = FocusTimerController(
+    final clock = _PlayerFocusTestClock(DateTime(2026, 10, 18, 10));
+    final controller = FocusTimerController(
+      clock: clock.call,
       tickInterval: const Duration(days: 1),
     );
     addTearDown(controller.dispose);
     await controller.initialize();
     await controller.startFocus(
-      goal: '关联当前课程',
+      goal: '连续学习',
       duration: const Duration(minutes: 25),
-      startImmediately: false,
     );
-    final _FakePlaybackService service = _FakePlaybackService();
+    final id = controller.activeSession!.id;
+    final first = _FakePlaybackService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          key: const ValueKey('first'),
+          video: _createMultiPartVideo(),
+          playbackService: first,
+          focusTimerController: controller,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('confirm-focus-video-association')),
+      findsNothing,
+    );
+    expect(controller.activeSession!.sourceBvid, _createMultiPartVideo().bvid);
+    clock.advance(const Duration(seconds: 15));
+    await tester.tap(find.byKey(const Key('part-2')));
+    await tester.pumpAndSettle();
+    expect(controller.activeSession!.sourcePartCid, 137649200);
+    expect(controller.activeSession!.id, id);
+    expect(controller.elapsedDuration, const Duration(seconds: 15));
+    final second = _FakePlaybackService();
+    const nextVideo = VideoPreview(
+      bvid: 'BVnextCourse',
+      cid: 100,
+      title: '下一门课',
+      ownerName: '作者',
+      parts: [
+        VideoPart(
+          pageNumber: 1,
+          cid: 100,
+          title: '第一节',
+          duration: Duration(minutes: 5),
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          key: const ValueKey('second'),
+          video: nextVideo,
+          playbackService: second,
+          focusTimerController: controller,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    clock.advance(const Duration(seconds: 15));
+    expect(controller.activeSession!.id, id);
+    expect(controller.activeSession!.sourceBvid, 'BVnextCourse');
+    expect(controller.elapsedDuration, const Duration(seconds: 30));
+    expect(controller.history, isEmpty);
+    await controller.endFocusEarly();
+    await tester.pump();
+  });
+
+  testWidgets('播放器取帧为空仍保留书签和独立会话', (tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final controller = FocusTimerController(
+      tickInterval: const Duration(days: 1),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await controller.startFocus(
+      goal: '无截图也能专注',
+      duration: const Duration(minutes: 25),
+    );
+    final video = _createMultiPartVideo();
+    final service = _FakePlaybackService(frameCapturePath: null);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: video,
+          playbackService: service,
+          focusTimerController: controller,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('confirm-focus-video-association')),
+      findsNothing,
+    );
+    expect(controller.activeSession!.sourceBvid, video.bvid);
+    expect(controller.activeSession!.sourceFramePath, null);
+    expect(controller.activeSession!.status, FocusSessionStatus.running);
+    await controller.endFocusEarly();
+    await tester.pump();
+  });
+
+  testWidgets('播放器真实完播不会提前结束专注会话', (tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final clock = _PlayerFocusTestClock(DateTime(2026, 10, 18, 10));
+    final controller = FocusTimerController(
+      clock: clock.call,
+      tickInterval: const Duration(days: 1),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    final service = _FakePlaybackService();
     await tester.pumpWidget(
       MaterialApp(
         home: PlayerPage(
@@ -2413,210 +2706,106 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-
-    expect(find.textContaining('是否将“关联当前课程”关联'), findsOneWidget);
-    await tester.tap(find.byKey(const Key('confirm-focus-video-association')));
-    await tester.pumpAndSettle();
-    expect(controller.activeSession?.sourceBvid, _createMultiPartVideo().bvid);
-    expect(controller.activeSession?.status, FocusSessionStatus.paused);
-    expect(find.textContaining('已关联视频：'), findsOneWidget);
-
+    await controller.startFocus(
+      goal: '跨课程学习',
+      duration: const Duration(minutes: 2),
+    );
+    final id = controller.activeSession!.id;
     await service.play();
     await tester.pump();
-    expect(controller.activeSession?.status, FocusSessionStatus.running);
+    clock.advance(const Duration(seconds: 30));
+    service.emitEnded();
+    await tester.pump();
+    await tester.pump();
+    expect(controller.activeSession!.id, id);
+    expect(controller.elapsedDuration, const Duration(seconds: 30));
+    expect(controller.history, isEmpty);
+    clock.advance(const Duration(seconds: 90));
+    controller.didChangeAppLifecycleState(AppLifecycleState.resumed);
+    await tester.pump();
+    await tester.pump();
+    expect(controller.activeSession, null);
+    expect(controller.history.single.status, FocusSessionStatus.completed);
   });
 
-  /// 验证 Windows 画面暂时无法读取时，确认操作仍会保存视频关联而不会阻断任务。
-  testWidgets('播放器取帧为空时仍可确认关联专注', (WidgetTester tester) async {
+  testWidgets('视频重复完播事件不重复归档，新会话不会消费旧完播', (tester) async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
-    final FocusTimerController controller = FocusTimerController(
+    final controller = FocusTimerController(
       tickInterval: const Duration(days: 1),
     );
     addTearDown(controller.dispose);
     await controller.initialize();
-    await controller.startFocus(
-      goal: '无截图也要关联',
-      duration: const Duration(minutes: 25),
-      startImmediately: false,
-    );
-    final VideoPreview video = _createMultiPartVideo();
-    final _FakePlaybackService service = _FakePlaybackService(
-      frameCapturePath: null,
-    );
+    final service = _FakePlaybackService();
     await tester.pumpWidget(
       MaterialApp(
         home: PlayerPage(
-          video: video,
+          video: _createMultiPartVideo(),
           playbackService: service,
           focusTimerController: controller,
         ),
       ),
     );
     await tester.pumpAndSettle();
-
-    await tester.tap(find.byKey(const Key('confirm-focus-video-association')));
-    await tester.pumpAndSettle();
-
-    expect(service.frameCaptureRequests, 1);
-    expect(controller.activeSession?.sourceBvid, video.bvid);
-    expect(controller.activeSession?.sourceFramePath, isNull);
-  });
-
-  /// 验证播放器把原生 ended 快照交给专注控制器，使当前分P模式按真实完播结束。
-  testWidgets('播放器当前分P专注收到真实完播后完成', (WidgetTester tester) async {
-    SharedPreferences.setMockInitialValues(<String, Object>{});
-    final VideoPreview video = _createMultiPartVideo();
-    final FocusTimerController controller = FocusTimerController(
-      tickInterval: const Duration(days: 1),
-    );
-    addTearDown(controller.dispose);
-    await controller.initialize();
     await controller.startFocus(
-      goal: '看完第一P',
+      goal: '第一轮',
       duration: const Duration(minutes: 2),
-      startImmediately: false,
-      sourceBvid: video.bvid,
-      sourceVideoTitle: video.title,
-      sourcePartCid: video.initialPart.cid,
-      sourcePartPageNumber: video.initialPart.pageNumber,
-      sourcePartTitle: video.initialPart.title,
-      completeOnPartEnd: true,
     );
-    final _FakePlaybackService playbackService = _FakePlaybackService();
-    await tester.pumpWidget(
-      MaterialApp(
-        home: PlayerPage(
-          video: video,
-          playbackService: playbackService,
-          focusTimerController: controller,
-        ),
-      ),
+    service.emitEnded();
+    service.emitEnded();
+    await tester.pump();
+    expect(controller.history, isEmpty);
+    await controller.endFocusEarly();
+    await tester.pump();
+    await controller.startFocus(
+      goal: '第二轮',
+      duration: const Duration(minutes: 2),
     );
-    await tester.pumpAndSettle();
-
-    await playbackService.play();
+    service.emitEnded();
     await tester.pump();
-    expect(controller.activeSession?.status, FocusSessionStatus.running);
-    playbackService.emitEnded();
+    expect(controller.activeSession!.goal, '第二轮');
+    expect(controller.history, hasLength(1));
+    await controller.endFocusEarly();
     await tester.pump();
-    await tester.pump();
-
-    expect(controller.activeSession, isNull);
-    expect(controller.history.single.status, FocusSessionStatus.completed);
-    expect(find.text('专注完成，视频已暂停'), findsOneWidget);
   });
 
-  /// 验证同一分P首次专注完成后，新任务不会消费旧 ended，而会等待下一次真实完播。
-  testWidgets('播放器同一分P再次专注等待新的真实完播', (WidgetTester tester) async {
+  testWidgets('专注暂停后播放视频不会恢复，主动继续无需正在播放', (tester) async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
-    final VideoPreview video = _createMultiPartVideo();
-    final FocusTimerController controller = FocusTimerController(
-      tickInterval: const Duration(days: 1),
-    );
-    addTearDown(controller.dispose);
-    await controller.initialize();
-    final _FakePlaybackService playbackService = _FakePlaybackService();
-    await tester.pumpWidget(
-      MaterialApp(
-        home: PlayerPage(
-          video: video,
-          playbackService: playbackService,
-          focusTimerController: controller,
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    /// 创建绑定当前分P的测试专注，避免两轮测试重复组装来源字段。
-    Future<void> startPartFocus(String goal) async {
-      await controller.startFocus(
-        goal: goal,
-        duration: const Duration(minutes: 2),
-        startImmediately: false,
-        sourceBvid: video.bvid,
-        sourceVideoTitle: video.title,
-        sourcePartCid: video.initialPart.cid,
-        sourcePartPageNumber: video.initialPart.pageNumber,
-        sourcePartTitle: video.initialPart.title,
-        completeOnPartEnd: true,
-      );
-      await tester.pump();
-    }
-
-    await startPartFocus('第一轮');
-    await playbackService.play();
-    await tester.pump();
-    playbackService.emitEnded();
-    await tester.pump();
-    await tester.pump();
-    expect(controller.activeSession, isNull);
-    expect(controller.history, hasLength(1));
-
-    await startPartFocus('第二轮');
-    expect(controller.activeSession, isNotNull);
-    expect(controller.history, hasLength(1));
-    playbackService.emitEnded();
-    await tester.pump();
-    expect(controller.activeSession, isNotNull);
-
-    await playbackService.play();
-    await tester.pump();
-    expect(controller.activeSession?.status, FocusSessionStatus.running);
-    playbackService.emitEnded();
-    await tester.pump();
-    await tester.pump();
-    expect(controller.activeSession, isNull);
-    expect(controller.history, hasLength(2));
-  });
-
-  /// 验证新建固定时长专注会重新同步当前播放状态，倒计时运行且手动继续有效。
-  testWidgets('播放器固定时长专注随播放计时并可继续', (WidgetTester tester) async {
-    SharedPreferences.setMockInitialValues(<String, Object>{});
-    final _PlayerFocusTestClock clock = _PlayerFocusTestClock(
-      DateTime(2026, 8, 12, 15),
-    );
-    final FocusTimerController controller = FocusTimerController(
+    final clock = _PlayerFocusTestClock(DateTime(2026, 8, 12, 15));
+    final controller = FocusTimerController(
       clock: clock.call,
       tickInterval: const Duration(days: 1),
     );
     addTearDown(controller.dispose);
     await controller.initialize();
-    final VideoPreview video = _createMultiPartVideo();
-    final _FakePlaybackService playbackService = _FakePlaybackService();
+    final service = _FakePlaybackService();
     await tester.pumpWidget(
       MaterialApp(
         home: PlayerPage(
-          video: video,
-          playbackService: playbackService,
+          video: _createMultiPartVideo(),
+          playbackService: service,
           focusTimerController: controller,
         ),
       ),
     );
     await tester.pumpAndSettle();
-    await playbackService.play();
-    await tester.pump();
-
     await controller.startFocus(
       goal: '专注一分钟',
       duration: const Duration(minutes: 1),
-      startImmediately: false,
-      sourceBvid: video.bvid,
-      sourceVideoTitle: video.title,
-      sourcePartCid: video.initialPart.cid,
-      sourcePartPageNumber: video.initialPart.pageNumber,
-      sourcePartTitle: video.initialPart.title,
     );
-    await tester.pump();
-    expect(controller.activeSession?.status, FocusSessionStatus.running);
-
     clock.advance(const Duration(seconds: 15));
-    expect(controller.remainingDuration, const Duration(seconds: 45));
     await controller.pauseFocus();
-    expect(controller.activeSession?.status, FocusSessionStatus.paused);
+    await service.play();
+    await tester.pump();
+    clock.advance(const Duration(seconds: 10));
+    expect(controller.activeSession!.status, FocusSessionStatus.paused);
+    expect(controller.remainingDuration, const Duration(seconds: 45));
+    await service.pause();
     await controller.resumeFocus();
-    expect(controller.activeSession?.status, FocusSessionStatus.running);
+    await tester.pump();
     clock.advance(const Duration(seconds: 5));
     expect(controller.remainingDuration, const Duration(seconds: 40));
+    await controller.endFocusEarly();
+    await tester.pump();
   });
 
   /// 验证全屏底栏选集会打开右侧双列面板，并能从面板切换分P。
@@ -2746,12 +2935,8 @@ void main() {
         .widget<PopupMenuButton<int>>(find.byKey(const Key('quality-menu')))
         .onSelected!(32);
     await tester.pump(const Duration(milliseconds: 100));
-    final dynamic menu = tester.state(
-      find.byKey(const Key('more-settings-menu')),
-    );
-    menu.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('playback-loop-menu-item')));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'playback-loop-menu-item');
     await tester.pump(const Duration(milliseconds: 300));
     final viewport = tester.getRect(
       find.byKey(const Key('player-feedback-viewport')),
@@ -3053,8 +3238,12 @@ void main() {
 
   /// 验证收藏面板展示已有目录，并能创建新目录后直接收藏当前视频。
   testWidgets('播放器收藏弹窗支持创建新收藏夹', (WidgetTester tester) async {
-    await tester.binding.setSurfaceSize(const Size(1080, 2400));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final imageKey = GlobalKey();
+    await loadBetaReviewFonts(tester);
     final _FakePlayerInteractionService interactionService =
         _FakePlayerInteractionService();
     final VideoPreview video = VideoPreview(
@@ -3075,11 +3264,22 @@ void main() {
       ],
     );
     await tester.pumpWidget(
-      MaterialApp(
-        home: PlayerPage(
-          video: video,
-          playbackService: _FakePlaybackService(),
-          interactionService: interactionService,
+      RepaintBoundary(
+        key: imageKey,
+        child: MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: const String.fromEnvironment('BETA3_CAPTURE_DIR').isEmpty
+              ? AppTheme.light()
+              : AppTheme.light().copyWith(
+                  textTheme: AppTheme.light().textTheme.apply(
+                    fontFamily: 'BetaReview',
+                  ),
+                ),
+          home: PlayerPage(
+            video: video,
+            playbackService: _FakePlaybackService(),
+            interactionService: interactionService,
+          ),
         ),
       ),
     );
@@ -3090,6 +3290,33 @@ void main() {
     expect(find.text('学习收藏'), findsOneWidget);
     await tester.tap(find.byKey(const Key('create-favorite-folder')));
     await tester.pumpAndSettle();
+    expect(find.text('公开，其他人可见'), findsOneWidget);
+    await captureSubscriptionUi(
+      tester,
+      imageKey,
+      'remote-folder-public',
+      settle: false,
+    );
+    await tester.tap(find.byKey(const Key('favorite-folder-private')));
+    await tester.pumpAndSettle();
+    expect(find.text('仅自己可见'), findsOneWidget);
+    await captureSubscriptionUi(
+      tester,
+      imageKey,
+      'remote-folder-private',
+      settle: false,
+    );
+    // Cancel does not create a folder or carry a privacy choice to the next one.
+    await tester.tap(find.widgetWithText(TextButton, '取消'));
+    await tester.pumpAndSettle();
+    expect(interactionService.createdFolderTitle, isNull);
+    await tester.tap(find.byKey(const Key('video-favorite-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('create-favorite-folder')));
+    await tester.pumpAndSettle();
+    expect(find.text('公开，其他人可见'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('favorite-folder-private')));
+    await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const Key('favorite-folder-name')),
       '新建目录',
@@ -3099,13 +3326,29 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(interactionService.createdFolderTitle, '新建目录');
+    expect(interactionService.createdFolderIsPrivate, isTrue);
     expect(interactionService.lastAddedFavoriteMediaIds, <int>{999});
     expect(interactionService.lastDeletedFavoriteMediaIds, isEmpty);
+    // An account change after editing is not consent to create in the next account.
+    await tester.tap(find.byKey(const Key('video-favorite-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('create-favorite-folder')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('favorite-folder-name')),
+      '切号前草稿',
+    );
+    await tester.pump();
+    CacheLifecycle.accountChanged();
+    await tester.tap(find.widgetWithText(FilledButton, '创建'));
+    await tester.pumpAndSettle();
+    expect(interactionService.createdFolderTitle, '新建目录');
+
     expect(find.text('68'), findsOneWidget);
   });
 
   /// 验证收藏弹窗可以在一次提交中同时新增和移除多个收藏夹。
-  testWidgets('播放器收藏弹窗支持多选并批量更新', (WidgetTester tester) async {
+  testWidgets('播放器 B 站收藏弹窗支持扫选并批量更新', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final _FakePlayerInteractionService interactionService =
@@ -3159,14 +3402,110 @@ void main() {
 
     await tester.tap(find.byKey(const Key('video-favorite-button')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('favorite-folder-111')));
-    await tester.tap(find.byKey(const Key('favorite-folder-222')));
+    final first = checkboxIn(find.byKey(const Key('favorite-folder-111')));
+    final second = checkboxIn(find.byKey(const Key('favorite-folder-222')));
+    final third = checkboxIn(find.byKey(const Key('favorite-folder-333')));
+    expect(tester.widget<Checkbox>(first).value, isTrue);
+    expect(tester.widget<Checkbox>(second).value, isFalse);
+    expect(tester.widget<Checkbox>(third).value, isTrue);
+    await sweepCheckboxes(tester, third, first);
+    expect(tester.widget<Checkbox>(first).value, isFalse);
+    expect(tester.widget<Checkbox>(second).value, isFalse);
+    expect(tester.widget<Checkbox>(third).value, isFalse);
+    expect(interactionService.lastDeletedFavoriteMediaIds, isEmpty);
+    expect(interactionService.lastAddedFavoriteMediaIds, isEmpty);
+    await tester.tap(second);
+    await tester.tap(third);
     await tester.tap(find.byKey(const Key('confirm-favorite-folders')));
     await tester.pumpAndSettle();
 
     expect(interactionService.lastAddedFavoriteMediaIds, <int>{222});
     expect(interactionService.lastDeletedFavoriteMediaIds, <int>{111});
     expect(find.text('67'), findsOneWidget);
+  });
+
+  testWidgets('播放器软件收藏弹窗扫选直到确认才写入本机', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1080, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final local = AppFavoritesService();
+    final firstFolder = (await local.createFolder('已收藏目录'))!;
+    final secondFolder = (await local.createFolder('备选目录'))!;
+    final thirdFolder = (await local.createFolder('另一个备选目录'))!;
+    const video = VideoPreview(
+      bvid: 'BV1GJ411x7h7',
+      cid: 137649199,
+      title: '软件收藏扫选测试',
+      ownerName: '测试作者',
+      parts: [
+        VideoPart(
+          pageNumber: 1,
+          cid: 137649199,
+          title: '第一 P',
+          duration: Duration(minutes: 1),
+        ),
+      ],
+    );
+    await local.addItem(
+      AppFavoriteItem(
+        folderId: firstFolder.id,
+        bvid: video.bvid,
+        title: video.title,
+        coverUrl: '',
+        ownerName: '',
+        durationText: '',
+        addedAt: DateTime(2026),
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: video,
+          playbackService: _FakePlaybackService(),
+          interactionService: _FakePlayerInteractionService(),
+          appFavoritesService: local,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final openPicker = find.byKey(
+      const Key('current-video-app-favorite-button'),
+    );
+    final first = checkboxIn(
+      find.byKey(Key('app-favorite-folder-${firstFolder.id}')),
+    );
+    final second = checkboxIn(
+      find.byKey(Key('app-favorite-folder-${secondFolder.id}')),
+    );
+    final third = checkboxIn(
+      find.byKey(Key('app-favorite-folder-${thirdFolder.id}')),
+    );
+
+    Future<void> openAndSweep() async {
+      await tester.ensureVisible(openPicker);
+      await tester.tap(openPicker);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(tester.widget<Checkbox>(first).value, isTrue);
+      expect(tester.widget<Checkbox>(second).value, isFalse);
+      expect(tester.widget<Checkbox>(third).value, isFalse);
+      await sweepCheckboxes(tester, second, third);
+      expect(tester.widget<Checkbox>(first).value, isTrue);
+      expect(tester.widget<Checkbox>(second).value, isTrue);
+      expect(tester.widget<Checkbox>(third).value, isTrue);
+      expect(await local.loadItems(secondFolder.id), isEmpty);
+      expect(await local.loadItems(thirdFolder.id), isEmpty);
+    }
+
+    await openAndSweep();
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    await openAndSweep();
+    await tester.tap(find.byKey(const Key('confirm-app-favorite-folders')));
+    await tester.pumpAndSettle();
+    for (final folder in [firstFolder, secondFolder, thirdFolder]) {
+      expect((await local.loadItems(folder.id)).single.bvid, video.bvid);
+    }
   });
 
   /// 验证结构化简介把 @UP 和链接标蓝，且外链必须确认风险后才交给默认浏览器启动器。
@@ -3345,6 +3684,132 @@ void main() {
     );
   });
 
+  for (final inFlight in [false, true]) {
+    testWidgets(inFlight ? '删除笔记等待在途自动保存后不复活记录' : '删除笔记取消尚未触发的自动保存', (
+      tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({});
+      await tester.binding.setSurfaceSize(const Size(1080, 2400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final notes = _DelayedWriteNotes();
+      await notes.saveNote(_flagNote('delete-race', 0));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PlayerPage(
+            video: _createCollectionVideo(),
+            interactionService: _FakePlayerInteractionService(),
+            playbackService: _FakePlaybackService(),
+            videoNoteService: notes,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('player-note-flag-hit-0')));
+      await tester.pumpAndSettle();
+      if (inFlight) {
+        notes.saveGate = Completer<void>();
+        addTearDown(() {
+          if (!notes.saveGate!.isCompleted) notes.saveGate!.complete();
+        });
+      }
+      await tester.enterText(
+        find.byKey(const Key('note-body-field')),
+        'edited before deletion',
+      );
+      await tester.tap(find.byKey(const Key('delete-video-note')));
+      await tester.pump(const Duration(milliseconds: 200));
+      if (inFlight) {
+        await tester.pump(const Duration(milliseconds: 900));
+        expect(notes.saveRequests, 2);
+      } else {
+        expect(notes.saveRequests, 1);
+      }
+      await tester.tap(find.widgetWithText(FilledButton, '删除'));
+      await tester.pump(const Duration(milliseconds: 100));
+      if (inFlight) {
+        expect(await notes.loadNotes(), hasLength(1));
+        notes.saveGate!.complete();
+      }
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+      expect(await notes.loadNotes(), isEmpty);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+      expect(await notes.loadNotes(), isEmpty);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('追加截图回包晚到时合集不等待且清理撤销画面', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    _setPlayerPortraitViewport(tester, const Size(1080, 2400));
+    final directory = await tester.runAsync(
+      () => Directory.systemTemp.createTemp('focubili-capture-race-'),
+    );
+    addTearDown(() => directory!.delete(recursive: true));
+    final captured = File('${directory!.path}/cancelled-frame.png');
+    await tester.runAsync(() => captured.writeAsBytes([1, 2, 3]));
+    final capture = Completer<String?>();
+    final playback = _FakePlaybackService(
+      frameCaptureLoader: () => capture.future,
+    );
+    final notes = VideoNoteService();
+    await notes.saveNote(_flagNote('capture-race', 0));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _createCollectionVideo(),
+          interactionService: _FakePlayerInteractionService(),
+          playbackService: playback,
+          bilibiliService: _CollectionSwitchVideoService(),
+          videoNoteService: notes,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final openNext = tester
+        .widget<InkWell>(
+          find.byKey(const Key('collection-preview-BV1Q541167Qg')),
+        )
+        .onTap!;
+    await tester.tap(find.byKey(const ValueKey('player-note-flag-hit-0')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('park-video-notes-barrier')), findsNothing);
+    await playback.seekTo(const Duration(seconds: 75));
+    await playback.play();
+    await tester.pump();
+    tester
+        .widget<OutlinedButton>(
+          find.byKey(const Key('append-video-note-frame')),
+        )
+        .onPressed!();
+    await tester.pump();
+    expect(playback.frameCaptureRequests, 1);
+
+    // User switches before PixelCopy returns. Actual storage writes can be
+    // drained, but there must be no wait for the frame read itself.
+    openNext();
+    await tester.pumpAndSettle();
+    expect(playback.openedBvid, 'BV1Q541167Qg');
+    expect(playback.openedCid, 137649300);
+    capture.complete(captured.path);
+    for (var attempt = 0; attempt < 25; attempt++) {
+      await tester.pump(const Duration(milliseconds: 20));
+      if (await tester.runAsync(captured.exists) == false) break;
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 10)),
+      );
+    }
+    expect(playback.seekToIdentities.map((request) => request.$1), [
+      'BV1GJ411x7h7',
+    ]);
+    expect((await notes.loadNotes()).single.allFrames, isEmpty);
+    expect(await tester.runAsync(captured.exists), isFalse);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   /// 验证竖屏笔记面板固定播放器，并保存标题、正文、时间点和可选当前画面。
   testWidgets('竖屏时间点笔记固定播放器并保存到本机', (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
@@ -3353,8 +3818,7 @@ void main() {
       preferencesLoader: () async => preferences,
     );
     final _FakePlaybackService playbackService = _FakePlaybackService();
-    await tester.binding.setSurfaceSize(const Size(1080, 2400));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+    _setPlayerPortraitViewport(tester, const Size(1080, 2400));
 
     await tester.pumpWidget(
       MaterialApp(
@@ -3370,6 +3834,7 @@ void main() {
 
     await tester.tap(find.byKey(const Key('portrait-note-button')));
     await tester.pumpAndSettle();
+    expect(find.byKey(const Key('park-video-notes-barrier')), findsNothing);
     expect(find.byKey(const Key('portrait-video-notes-panel')), findsOneWidget);
     expect(find.byKey(const Key('collapsing-player-scroll')), findsNothing);
     final TextField portraitTitleField = tester.widget<TextField>(
@@ -3454,6 +3919,36 @@ void main() {
       findsOneWidget,
     );
 
+    // 同一笔记追加另一时刻的画面，原笔记锚点和播放位置均保留。
+    tester
+        .widget<OutlinedButton>(
+          find.byKey(const Key('append-video-note-frame')),
+        )
+        .onPressed!();
+    await tester.pumpAndSettle();
+    final withTwoFrames = (await noteService.loadNotes()).single;
+    expect(withTwoFrames.position, Duration.zero);
+    expect(withTwoFrames.allFrames.map((frame) => frame.position), [
+      Duration.zero,
+      const Duration(seconds: 75),
+    ]);
+    expect(playbackService.frameCapturePositions, [
+      Duration.zero,
+      const Duration(seconds: 75),
+    ]);
+    expect(playbackService._position, const Duration(seconds: 75));
+    tester
+        .widget<IconButton>(find.byKey(const ValueKey('move-note-frame-up-1')))
+        .onPressed!();
+    await tester.pump(const Duration(milliseconds: 900));
+    await tester.pumpAndSettle();
+    expect(
+      (await noteService.loadNotes()).single.allFrames.map(
+        (frame) => frame.position,
+      ),
+      [const Duration(seconds: 75), Duration.zero],
+    );
+
     await tester.tap(find.byKey(const Key('delete-video-note')));
     await tester.pumpAndSettle();
     expect(find.text('确定删除“关键观点”吗？此操作无法撤销。'), findsOneWidget);
@@ -3468,8 +3963,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final service = _FakePlaybackService(frameCapturePath: null);
     final notes = VideoNoteService();
-    await tester.binding.setSurfaceSize(const Size(1080, 2400));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+    _setPlayerPortraitViewport(tester, const Size(1080, 2400));
     await tester.pumpWidget(
       MaterialApp(
         home: PlayerPage(
@@ -3483,6 +3977,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('portrait-note-button')));
     await tester.pumpAndSettle();
+    expect(find.byKey(const Key('park-video-notes-barrier')), findsNothing);
     await tester.enterText(
       find.byKey(const Key('note-title-field')),
       'Screenshot failure',
@@ -3499,6 +3994,23 @@ void main() {
     expect(saved.framePath, isNull);
     expect(service.frameCaptureRequests, 1);
     expect(find.textContaining('笔记文字已保存，截图未成功'), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const Key('note-body-field')),
+      'Keep edited text after append failure',
+    );
+    tester
+        .widget<OutlinedButton>(
+          find.byKey(const Key('append-video-note-frame')),
+        )
+        .onPressed!();
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 900));
+    await tester.pumpAndSettle();
+    expect(
+      (await notes.loadNotes()).single.body,
+      'Keep edited text after append failure',
+    );
+    expect(service.frameCaptureRequests, 2);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
@@ -4046,7 +4558,10 @@ void main() {
   testWidgets('学习清单最后一项完播后显示已完成学习', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    SharedPreferences.setMockInitialValues(<String, Object>{});
+    // 本例验证手动完成操作，连播另由来源队列回归覆盖。
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'playback_preferences.mode': 'pause',
+    });
     final SharedPreferences preferences = await SharedPreferences.getInstance();
     final LearningListService learningListService = LearningListService(
       preferencesLoader: () async => preferences,
@@ -4096,7 +4611,10 @@ void main() {
   testWidgets('下一学习任务 CID 失效时保留当前完成界面与下一项进度', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    SharedPreferences.setMockInitialValues(<String, Object>{});
+    // 本例保留完播画面，单独验证手动继续时的无效 CID 防护。
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'playback_preferences.mode': 'pause',
+    });
     final preferences = await SharedPreferences.getInstance();
     final learning = LearningListService(
       preferencesLoader: () async => preferences,
@@ -4165,7 +4683,10 @@ void main() {
   testWidgets('继续学习会在当前播放器内打开下一条任务', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    SharedPreferences.setMockInitialValues(<String, Object>{});
+    // 保持结束画面，验证用户主动点击继续学习的旧入口。
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'playback_preferences.mode': 'pause',
+    });
     final SharedPreferences preferences = await SharedPreferences.getInstance();
     final LearningListService learningListService = LearningListService(
       preferencesLoader: () async => preferences,
@@ -4661,16 +5182,18 @@ void main() {
     expect(find.byKey(const Key('playback-completion-prompt')), findsNothing);
   });
 
-  /// 验证横向拖动无需等待长按即可预览，并只在松手时提交一次进度跳转。
-  testWidgets('横向拖动立即预览并一次性跳转进度', (WidgetTester tester) async {
+  /// 验证横向拖动不等待长按即可显示真实加载状态，只在松手时提交一次跳转。
+  testWidgets('横向拖动立即提示预览正在加载并一次性跳转进度', (WidgetTester tester) async {
     final _FakePlaybackService service = _FakePlaybackService();
     final _FakeVideoShotService videoShotService = _FakeVideoShotService();
+    final cache = _PendingVideoShotCache();
     await tester.pumpWidget(
       MaterialApp(
         home: PlayerPage(
           video: VideoPreview.placeholder(),
           playbackService: service,
           videoShotService: videoShotService,
+          videoShotImageCache: cache,
         ),
       ),
     );
@@ -4686,7 +5209,8 @@ void main() {
     expect(service._speed, 1);
     expect(find.textContaining('跳转至'), findsOneWidget);
     expect(videoShotService.requests, 1);
-    expect(find.byKey(const Key('video-shot-frame')), findsOneWidget);
+    expect(find.byKey(const Key('video-shot-loading')), findsOneWidget);
+    expect(find.byKey(const Key('video-shot-frame')), findsNothing);
 
     await gesture.up();
     await tester.pumpAndSettle();
@@ -4694,6 +5218,11 @@ void main() {
     expect(service.seekToRequests, 1);
     expect(service._position, greaterThan(Duration.zero));
     expect(service._speed, 1);
+    expect(find.byKey(const Key('video-shot-loading')), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+    cache.pending.completeError(const ImageCacheCancelled());
+    await tester.pump();
+    cache.dispose();
   });
 
   /// 验证长视频横向拖动会按时长提高速度，但单次跳转仍限制在十分钟内。
@@ -5053,8 +5582,8 @@ void main() {
     expect(find.byKey(const Key('player-network-type')), findsNothing);
   });
 
-  /// 验证“当前分P”专注的左上角时间跟随播放器快进后的真实剩余进度，而不是旧计划倒计时。
-  testWidgets('当前分P专注左上角同步真实播放剩余时间', (WidgetTester tester) async {
+  /// 验证播放器快进只改变视频进度，不改变会话的计划倒计时。
+  testWidgets('播放器快进不改变专注会话剩余时间', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     SharedPreferences.setMockInitialValues(<String, Object>{});
@@ -5098,7 +5627,7 @@ void main() {
       tester
           .widget<Text>(find.byKey(const Key('fullscreen-focus-remaining')))
           .data,
-      '02:32',
+      '03:32',
     );
 
     await playbackService.seekTo(const Duration(minutes: 2));
@@ -5107,7 +5636,7 @@ void main() {
       tester
           .widget<Text>(find.byKey(const Key('fullscreen-focus-remaining')))
           .data,
-      '01:32',
+      '03:32',
     );
     await focusController.endFocusEarly();
     await tester.pump();
@@ -5186,12 +5715,8 @@ void main() {
       tester.widget<IconButton>(find.byTooltip('进入全屏')).onPressed!();
       await tester.pumpAndSettle();
     }
-    final dynamic menu = tester.state(
-      find.byKey(const Key('more-settings-menu')),
-    );
-    menu.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('字幕'));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'player-subtitle-menu-item');
     await tester.pumpAndSettle();
   }
 
@@ -5217,6 +5742,183 @@ void main() {
       ),
     ],
   );
+
+  const englishSubtitle = SubtitleTrack(
+    id: 'en',
+    language: 'en',
+    label: '测试英文字幕',
+    isLocked: false,
+  );
+  const aiSubtitle = SubtitleTrack(
+    id: 'ai',
+    language: 'ai-zh',
+    label: '测试自动字幕',
+    isLocked: false,
+    sourceType: 1,
+  );
+  const multipleSubtitleTracks = SubtitleTrackLoadResult(
+    status: SubtitleLoadStatus.available,
+    message: '',
+    tracks: [
+      englishSubtitle,
+      SubtitleTrack(
+        id: 'locked',
+        language: 'zh-Hans',
+        label: '锁定字幕',
+        isLocked: true,
+        sourceType: 1,
+      ),
+      aiSubtitle,
+      subtitleTrack,
+    ],
+  );
+
+  for (final (priority, failAi, expectedTracks) in [
+    (SubtitlePriority.chineseCcFirst, false, ['101']),
+    (SubtitlePriority.chineseAiFirst, false, ['ai']),
+    (SubtitlePriority.chineseAiFirst, true, ['ai', '101']),
+    (SubtitlePriority.trackOrder, false, ['en']),
+  ]) {
+    testWidgets('自动字幕 ${priority.name}${failAi ? ' 回退' : ''} 从恢复分 P 读取', (
+      tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({
+        PlaybackPreferencesService.autoEnableSubtitlesKey: true,
+        PlaybackPreferencesService.subtitlePriorityKey: priority.name,
+      });
+      final overlays = _FakePlayerOverlayService(
+        tracksResult: multipleSubtitleTracks,
+        cuesResult: subtitleCues,
+        cuesLoader: (_, id) async => failAi && id == 'ai'
+            ? const SubtitleCueLoadResult.empty()
+            : subtitleCues,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PlayerPage(
+            video: _createMultiPartVideo(),
+            playbackService: _FakePlaybackService(),
+            initialPartCid: 137649200,
+            playerOverlayService: overlays,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(overlays.subtitleTrackRequests, [137649200]);
+      expect(overlays.subtitleCueTrackIds, expectedTracks);
+      expect(find.byKey(const Key('active-subtitle')), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
+  for (final manualTrack in [false, true]) {
+    testWidgets('手动${manualTrack ? '选轨' : '关闭'}优先于迟到的自动字幕，换分 P 后恢复自动选择', (
+      tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({
+        PlaybackPreferencesService.autoEnableSubtitlesKey: true,
+      });
+      await tester.binding.setSurfaceSize(const Size(1080, 2400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final pending = Completer<SubtitleCueLoadResult>();
+      final overlays = _FakePlayerOverlayService(
+        tracksResult: multipleSubtitleTracks,
+        cuesResult: subtitleCues,
+        cuesLoader: (cid, id) => cid == 137649199 && id == subtitleTrack.id
+            ? pending.future
+            : Future.value(subtitleCues),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PlayerPage(
+            video: _createMultiPartVideo(),
+            playbackService: _FakePlaybackService(),
+            playerOverlayService: overlays,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(overlays.subtitleCueTrackIds, ['101']);
+      await openSubtitleMenu(tester);
+      await tester.tap(find.text(manualTrack ? englishSubtitle.label : '关闭字幕'));
+      await tester.pumpAndSettle();
+      pending.complete(
+        const SubtitleCueLoadResult(
+          status: SubtitleLoadStatus.available,
+          message: '',
+          cues: [
+            SubtitleCue(
+              from: Duration.zero,
+              to: Duration(minutes: 1),
+              content: '已失效的自动字幕',
+            ),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('已失效的自动字幕'), findsNothing);
+      expect(
+        find.byKey(const Key('active-subtitle')),
+        manualTrack ? findsOneWidget : findsNothing,
+      );
+
+      // A track refresh during the same part preserves the manual choice.
+      await openSubtitleMenu(tester);
+      await tester.tap(find.byTooltip('刷新字幕列表'));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('active-subtitle')),
+        manualTrack ? findsOneWidget : findsNothing,
+      );
+      await tester.tap(find.byTooltip('关闭字幕设置'));
+      await tester.pumpAndSettle();
+      final exitFullscreen = find.byTooltip('退出全屏');
+      if (exitFullscreen.evaluate().isNotEmpty) {
+        tester.widget<IconButton>(exitFullscreen).onPressed!();
+        await tester.pumpAndSettle();
+      }
+      await tester.tap(find.byKey(const Key('part-2')));
+      await tester.pumpAndSettle();
+      expect(overlays.subtitleCueRequests.last, 137649200);
+      expect(overlays.subtitleCueTrackIds.last, '101');
+      expect(find.byKey(const Key('active-subtitle')), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
+  testWidgets('字幕会话清理撤销在途自动请求，仍可手动选择', (tester) async {
+    SharedPreferences.setMockInitialValues({
+      PlaybackPreferencesService.autoEnableSubtitlesKey: true,
+    });
+    final pending = Completer<SubtitleCueLoadResult>();
+    var reads = 0;
+    final overlays = _FakePlayerOverlayService(
+      tracksResult: subtitleTracks,
+      cuesResult: subtitleCues,
+      cuesLoader: (_, _) async => ++reads == 1 ? pending.future : subtitleCues,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlayerPage(
+          video: _createMultiPartVideo(),
+          playbackService: _FakePlaybackService(),
+          playerOverlayService: overlays,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(reads, 1);
+    CacheLifecycle.clearSubtitles();
+    pending.complete(subtitleCues);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('active-subtitle')), findsNothing);
+    expect(reads, 1);
+    await openSubtitleMenu(tester);
+    await tester.tap(find.text(subtitleTrack.label));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('active-subtitle')), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 
   Future<void> captureSubtitleLayout(WidgetTester tester, String name) async {
     if (Platform.environment['FOCUBILI_LAYOUT_CAPTURE'] != '1') return;
@@ -5304,8 +6006,7 @@ void main() {
           'C:/Users/L1XU4N/flutter/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf',
         ),
       ]) {
-        if (Platform.environment['FOCUBILI_LAYOUT_CAPTURE'] == '1' &&
-            File(font.$2).existsSync()) {
+        if (File(font.$2).existsSync()) {
           final loader = FontLoader(font.$1)
             ..addFont(
               Future.value(
@@ -5567,7 +6268,7 @@ void main() {
       final overlays = _FakePlayerOverlayService(
         tracksResult: subtitleTracks,
         cuesResult: currentCues,
-        cuesLoader: (_) async =>
+        cuesLoader: (_, _) async =>
             ++reads == 1 ? pendingCues.future : currentCues,
       );
       await tester.pumpWidget(
@@ -5651,12 +6352,8 @@ void main() {
         )
         .onPressed!();
     await tester.pumpAndSettle();
-    final dynamic menu = tester.state(
-      find.byKey(const Key('more-settings-menu')),
-    );
-    menu.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('listening-menu-item')));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'listening-menu-item');
     await tester.pump(const Duration(milliseconds: 300));
     final progress = find.byKey(const Key('listening-time-progress'));
     final center = tester.getCenter(progress);
@@ -5703,12 +6400,8 @@ void main() {
     await tester.tap(find.byKey(const Key('danmaku-toggle')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('danmaku-canvas')), findsOneWidget);
-    final dynamic menu = tester.state(
-      find.byKey(const Key('more-settings-menu')),
-    );
-    menu.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('listening-menu-item')));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'listening-menu-item');
     await tester.pumpAndSettle();
     expect(service.audioOnly, isTrue);
     expect(find.byKey(const Key('danmaku-canvas')), findsNothing);
@@ -5717,16 +6410,14 @@ void main() {
     expect(find.byKey(const Key('listening-return-video')), findsNothing);
     expect(find.byKey(const Key('listening-time-progress')), findsOneWidget);
     expect(find.text('00:00/03:32'), findsOneWidget);
-    menu.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('sleep-timer-menu-item')));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'sleep-timer-menu-item');
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('sleep-timer-15-minutes')));
     await tester.pumpAndSettle();
     expect(service.timerDuration, const Duration(minutes: 15));
-    menu.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('sleep-timer-menu-item')));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'sleep-timer-menu-item');
     await tester.pumpAndSettle();
     expect(find.text('剩余时间：15:00 后暂停'), findsOneWidget);
     service.timerDuration = const Duration(minutes: 14, seconds: 59);
@@ -5736,9 +6427,8 @@ void main() {
     await tester.tap(find.byKey(const Key('sleep-timer-off')));
     await tester.pumpAndSettle();
     expect(service.timerDuration, isNull);
-    menu.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('listening-menu-item')));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'listening-menu-item');
     await tester.pumpAndSettle();
     expect(service.audioOnly, isFalse);
     expect(find.byKey(const Key('danmaku-canvas')), findsOneWidget);
@@ -6038,7 +6728,7 @@ void main() {
       final overlays = _FakePlayerOverlayService(
         tracksResult: subtitleTracks,
         cuesResult: subtitleCues,
-        cuesLoader: (cid) => pendingCues.future,
+        cuesLoader: (_, _) => pendingCues.future,
       );
       await tester.pumpWidget(
         MaterialApp(
@@ -6080,6 +6770,8 @@ void main() {
   /// 验证字幕可选择、同分 P 列表稳定复用，字号实时更新且保存到本机。
   testWidgets('播放器可以选择并显示字幕', (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues({});
+    final notes = VideoNoteService();
+    await notes.saveNote(_flagNote('字幕预览旗标', 42));
     await const PlaybackPreferencesService().saveControlScale(2);
     await tester.binding.setSurfaceSize(const Size(1080, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -6089,6 +6781,7 @@ void main() {
       label: '中文（简体）',
       isLocked: false,
     );
+    final playback = _FakePlaybackService();
     final _FakePlayerOverlayService overlayService = _FakePlayerOverlayService(
       tracksResult: const SubtitleTrackLoadResult(
         status: SubtitleLoadStatus.available,
@@ -6111,12 +6804,14 @@ void main() {
       MaterialApp(
         home: PlayerPage(
           video: VideoPreview.placeholder(),
-          playbackService: _FakePlaybackService(),
+          playbackService: playback,
           playerOverlayService: overlayService,
+          videoNoteService: notes,
         ),
       ),
     );
     await tester.pumpAndSettle();
+    expect(overlayService.subtitleTrackRequests, isEmpty);
     final IconButton fullscreenButton = tester.widget<IconButton>(
       find.byWidgetPredicate(
         (Widget widget) => widget is IconButton && widget.tooltip == '进入全屏',
@@ -6124,12 +6819,8 @@ void main() {
     );
     fullscreenButton.onPressed!();
     await tester.pumpAndSettle();
-    final dynamic moreMenuState = tester.state(
-      find.byKey(const Key('more-settings-menu')),
-    );
-    moreMenuState.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('字幕'));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'player-subtitle-menu-item');
     await tester.pumpAndSettle();
     await tester.tap(find.text('中文（简体）'));
     await tester.pumpAndSettle();
@@ -6138,6 +6829,19 @@ void main() {
     expect(find.text('真实字幕内容'), findsOneWidget);
     await openSubtitleMenu(tester);
     expect(overlayService.subtitleTrackRequests, hasLength(1));
+    await tester.tap(find.byTooltip('调整字幕外观'));
+    await tester.pumpAndSettle();
+    PlayerSubtitlePreview preview() => tester.widget<PlayerSubtitlePreview>(
+      find.byType(PlayerSubtitlePreview),
+    );
+    final strip = tester.getSize(
+      find.byKey(const Key('player-timeline-annotations')),
+    );
+    expect(strip.height, greaterThan(0));
+    expect(preview().viewport.bottomOverlayHeight, strip.height + 4);
+    await notes.deleteNote('字幕预览旗标');
+    await tester.pumpAndSettle();
+    expect(preview().viewport.bottomOverlayHeight, 0);
     final slider = tester.widget<Slider>(
       find.byKey(const Key('subtitle-font-size-slider')),
     );
@@ -6151,10 +6855,45 @@ void main() {
       28,
     );
     slider.onChangeEnd!(28);
+    final position = tester.widget<Slider>(
+      find.byKey(const Key('subtitle-position-slider')),
+    );
+    final opacity = tester.widget<Slider>(
+      find.byKey(const Key('subtitle-opacity-slider')),
+    );
+    final activeSubtitle = find.byKey(const Key('active-subtitle'));
+    final previousTop = tester.getTopLeft(activeSubtitle).dy;
+    position.onChanged!(0);
+    opacity.onChanged!(.55);
+    await tester.pump();
+    expect(tester.getTopLeft(activeSubtitle).dy, lessThan(previousTop));
+    final activeCaption = tester.widget<PlayerSubtitleCaption>(
+      find.byKey(const Key('active-subtitle-caption')),
+    );
+    final sampleCaption = tester.widget<PlayerSubtitleCaption>(
+      find.byKey(const Key('subtitle-appearance-preview')),
+    );
+    expect(activeCaption.opacity, .55);
+    expect(sampleCaption.opacity, .55);
+    expect(sampleCaption.text, activeCaption.text);
+    expect(sampleCaption.fontSize, activeCaption.fontSize);
+    position.onChangeEnd!(0);
+    opacity.onChangeEnd!(.55);
     await tester.pumpAndSettle();
+    final preferences = await const PlaybackPreferencesService().load();
+    expect(preferences.subtitleFontSize, 28);
+    expect(preferences.subtitlePosition, 0);
+    expect(preferences.subtitleOpacity, .55);
+    // Resizing/rotating while the sheet is open keeps playback geometry live.
+    await tester.binding.setSurfaceSize(const Size(640, 360));
+    await tester.pumpAndSettle();
+    final frame = tester.getRect(
+      find.byKey(const Key('subtitle-preview-frame')),
+    );
+    final surface = tester.getRect(find.byKey(const Key('player-surface')));
     expect(
-      (await const PlaybackPreferencesService().load()).subtitleFontSize,
-      28,
+      frame.width / frame.height,
+      closeTo(surface.width / surface.height, .001),
     );
     await tester.tap(find.byTooltip('关闭字幕设置'));
     await tester.pumpAndSettle();
@@ -6169,6 +6908,19 @@ void main() {
       find.byKey(const Key('player-feedback-viewport')),
     );
     expect(subtitleBounds.top, greaterThanOrEqualTo(feedbackBounds.top));
+    final playerBounds = tester.getRect(
+      find.byKey(const Key('player-surface')),
+    );
+    final rightTap = Offset(playerBounds.right - 12, playerBounds.center.dy);
+    await tester.tapAt(rightTap);
+    await tester.pump(const Duration(milliseconds: 80));
+    await tester.tapAt(rightTap);
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(playback.seekByRequests, 1);
+    final feedback = find.byType(PlayerSeekFeedback);
+    expect(feedback, findsOneWidget);
+    expect(tester.getRect(feedback).height, greaterThan(0));
+    expect(tester.getRect(feedback).overlaps(subtitleBounds), isFalse);
     expect(subtitleBounds.bottom, lessThanOrEqualTo(feedbackBounds.bottom));
     expect(
       feedbackBounds.bottom,
@@ -6403,13 +7155,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final dynamic moreMenuState = tester.state(
-      find.byKey(const Key('more-settings-menu')),
-    );
-    // 测试环境直接调用 Flutter 菜单状态，避免外层播放手势抢占模拟点击。
-    moreMenuState.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('danmaku-settings-menu-item')));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'danmaku-settings-menu-item');
     await tester.pumpAndSettle();
     expect(find.text('屏蔽关键词'), findsOneWidget);
 
@@ -6444,12 +7191,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final dynamic moreMenuState = tester.state(
-      find.byKey(const Key('more-settings-menu')),
-    );
-    moreMenuState.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('danmaku-settings-menu-item')));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'danmaku-settings-menu-item');
     await tester.pumpAndSettle();
 
     final Finder opacitySlider = find.byKey(
@@ -6502,12 +7245,9 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    final dynamic moreMenuState = tester.state(
-      find.byKey(const Key('more-settings-menu')),
-    );
-    moreMenuState.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('playback-loop-menu-item')));
+    await openPlayerTools(tester);
+    expect(find.byKey(const Key('listening-menu-item')), findsNothing);
+    await tapPlayerTool(tester, 'playback-loop-menu-item');
     await tester.pump();
 
     service.emitEnded();
@@ -6531,12 +7271,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    final dynamic moreMenuState = tester.state(
-      find.byKey(const Key('more-settings-menu')),
-    );
-    moreMenuState.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('sleep-timer-menu-item')));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'sleep-timer-menu-item');
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('sleep-timer-2-plays')));
     await tester.pumpAndSettle();
@@ -6546,9 +7282,8 @@ void main() {
     expect(service.seekToRequests, 1);
     expect(service.playRequests, 1);
 
-    moreMenuState.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('sleep-timer-menu-item')));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'sleep-timer-menu-item');
     await tester.pumpAndSettle();
     expect(find.text('剩余次数：1 次后暂停（含当前这一轮）'), findsOneWidget);
     tester.state<NavigatorState>(find.byType(Navigator)).pop();
@@ -6575,12 +7310,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    final dynamic moreMenuState = tester.state(
-      find.byKey(const Key('more-settings-menu')),
-    );
-    moreMenuState.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('sleep-timer-menu-item')));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'sleep-timer-menu-item');
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('sleep-timer-custom-play-count')));
     await tester.pumpAndSettle();
@@ -6619,12 +7350,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    final dynamic moreMenuState = tester.state(
-      find.byKey(const Key('more-settings-menu')),
-    );
-    moreMenuState.showButtonMenu();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('sleep-timer-menu-item')));
+    await openPlayerTools(tester);
+    await tapPlayerTool(tester, 'sleep-timer-menu-item');
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('sleep-timer-custom-duration')));
     await tester.pumpAndSettle();
@@ -6639,9 +7366,13 @@ void main() {
     await tester.enterText(input, '25');
     await tester.tap(find.byKey(const Key('sleep-timer-custom-confirm')));
     await tester.pumpAndSettle();
-    moreMenuState.showButtonMenu();
-    await tester.pumpAndSettle();
-    expect(find.textContaining('定时关闭：约 25 分钟后'), findsOneWidget);
+    await openPlayerTools(tester);
+    final timer = find.byKey(const Key('sleep-timer-menu-item'));
+    await tester.ensureVisible(timer);
+    expect(
+      find.descendant(of: timer, matching: find.text('约 25 分钟后暂停')),
+      findsOneWidget,
+    );
   });
 
   /// 验证全屏锁定后只有解锁按钮可操作，其他控制层完全隐藏且不接收触摸。
@@ -6816,6 +7547,8 @@ void main() {
     expect(find.byKey(const Key('collapsing-player-scroll')), findsNothing);
     expect(find.byKey(const Key('video-description')), findsOneWidget);
     expect(tester.takeException(), isNull);
+    await focusController.endFocusEarly();
+    await tester.pump();
   });
 
   /// 验证平板播放器的填充和拉伸选项确实改变 Texture 的 BoxFit，而不是被外层画幅抵消。
@@ -6836,25 +7569,23 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(find.byKey(const Key('video-fit-contain')), findsOneWidget);
-    await tester.tap(find.byKey(const Key('more-settings-menu')));
-    await tester.pump(const Duration(milliseconds: 300));
+    await openPlayerTools(tester);
     final Finder coverItem = find.byKey(const Key('video-fit-mode-cover'));
     await tester.ensureVisible(coverItem);
     await tester.pump(const Duration(milliseconds: 100));
     await tester.tap(coverItem);
-    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pumpAndSettle();
     expect(
       tester.widget<FittedBox>(find.byKey(const Key('video-fit-cover'))).fit,
       BoxFit.cover,
     );
 
-    await tester.tap(find.byKey(const Key('more-settings-menu')));
-    await tester.pump(const Duration(milliseconds: 300));
+    await openPlayerTools(tester);
     final Finder stretchItem = find.byKey(const Key('video-fit-mode-stretch'));
     await tester.ensureVisible(stretchItem);
     await tester.pump(const Duration(milliseconds: 100));
     await tester.tap(stretchItem);
-    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pumpAndSettle();
     expect(
       tester.widget<FittedBox>(find.byKey(const Key('video-fit-stretch'))).fit,
       BoxFit.fill,

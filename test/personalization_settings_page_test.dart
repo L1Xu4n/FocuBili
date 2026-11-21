@@ -55,6 +55,67 @@ Future<void> _openSettingsLevel(WidgetTester tester, Key entryKey) async {
 
 /// 注册设置页专注勿扰开关、说明和系统权限入口测试。
 void main() {
+  /// 从设置搜索进入线路菜单并持久化备用优先，窄屏下不溢出。
+  testWidgets('播放线路可搜索、选择并保存', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: PersonalizationSettingsPage(appPlatform: AppPlatform.android),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('settings-search')), '线路');
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('智能优选'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('备用线路优先'));
+    await tester.pumpAndSettle();
+    expect(
+      (await const PlaybackPreferencesService().load()).linePreference,
+      PlaybackLinePreference.backup,
+    );
+    await tester.tap(find.byKey(const Key('prefer-non-pcdn')));
+    await tester.pumpAndSettle();
+    expect(
+      (await const PlaybackPreferencesService().load()).preferNonPcdn,
+      isFalse,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('窄屏大字可点击整项线路设置，查看切换后保留其他线路', (tester) async {
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: const TextScaler.linear(2)),
+          child: child!,
+        ),
+        home: const PersonalizationSettingsPage(
+          appPlatform: AppPlatform.windows,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('settings-search')), '线路');
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('默认播放线路'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('主线路仍可回退'), findsOneWidget);
+    await tester.tap(find.text('备用线路优先').last);
+    await tester.pumpAndSettle();
+    expect(find.text('备用线路优先'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   /// 笔记开关可以搜索、即时保存；失败后保留原值。
   for (final fail in [false, true]) {
     testWidgets('笔记标记开关搜索并${fail ? '失败回滚' : '立即保存'}', (tester) async {
@@ -86,6 +147,45 @@ void main() {
       if (fail) expect(find.text('设置保存失败，请重试。'), findsOneWidget);
     });
   }
+
+  testWidgets('笔记 Markdown 默认关闭，可搜索、开启并在重开设置后关闭', (tester) async {
+    const page = MaterialApp(
+      home: PersonalizationSettingsPage(appPlatform: AppPlatform.windows),
+    );
+    final search = find.byKey(const Key('settings-search'));
+    final toggle = find.byKey(const Key('enable-note-markdown'));
+    await tester.pumpWidget(page);
+    await tester.pumpAndSettle();
+    await _openSettingsLevel(tester, const Key('open-playback-focus-settings'));
+    expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
+    await tester.tap(find.byKey(const Key('settings-level-back-button')));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(search, 'mD 笔记格式');
+    await tester.pumpAndSettle();
+    expect(find.text('启用笔记 Markdown'), findsOneWidget);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
+    expect(
+      await AppBehaviorPreferencesService().loadNoteMarkdownEnabled(),
+      isTrue,
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpWidget(page);
+    await tester.pumpAndSettle();
+    await tester.enterText(search, 'Markdown');
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
+    expect(
+      await AppBehaviorPreferencesService().loadNoteMarkdownEnabled(),
+      isFalse,
+    );
+  });
 
   TestWidgetsFlutterBinding.ensureInitialized();
   const MethodChannel channel = MethodChannel(
@@ -234,6 +334,30 @@ void main() {
     expect(updateController.result.releaseHighlights, isEmpty);
     expect(find.byKey(const Key('settings-update-dot')), findsOneWidget);
     expect(find.text('新版本：优化平板播放器和账号卡片'), findsOneWidget);
+  });
+
+  testWidgets('设置搜索可开启默认字幕并更改轨道优先级', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: PersonalizationSettingsPage(appPlatform: AppPlatform.android),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('settings-search')), '字幕');
+    await tester.pumpAndSettle();
+    final auto = find.byKey(const Key('auto-enable-subtitles-preference'));
+    expect(tester.widget<SwitchListTile>(auto).value, isFalse);
+    await tester.tap(auto);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('subtitle-priority-preference')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('中文字幕（AI）优先'));
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(auto).value, isTrue);
+    final preferences = await const PlaybackPreferencesService().load();
+    expect(preferences.autoEnableSubtitles, isTrue);
+    expect(preferences.subtitlePriority, SubtitlePriority.chineseAiFirst);
+    expect(tester.takeException(), isNull);
   });
 
   /// 验证设置页分别保存 Wi-Fi 和移动网络清晰度，并展示向下回退说明。

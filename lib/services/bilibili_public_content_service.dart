@@ -582,10 +582,17 @@ class BilibiliHttpPublicContentService
         continue;
       }
       final Map<Object?, Object?> stats = _readObject(item['stat']);
+      final owner = _readObject(item['owner']);
       videos.add(
         CreatorVideo(
           bvid: bvid,
           title: _readText(item['title'], '未命名视频'),
+          ownerMid:
+              _readPositiveInt(item['mid']) ??
+              _readPositiveInt(owner['mid']) ??
+              0,
+          ownerName: _readText(item['author'], _readText(owner['name'], '')),
+          tags: _readKnownCreatorTags(item['tag'] ?? item['tags']),
           coverUrl: _normalizeThumbnailUrl(
             _readText(item['pic'] ?? item['cover'], ''),
           ),
@@ -605,6 +612,22 @@ class BilibiliHttpPublicContentService
       );
     }
     return videos;
+  }
+
+  /// Only explicit tags from the same page are eligible; no detail lookup.
+  List<String> _readKnownCreatorTags(Object? raw) {
+    final Iterable<String> tags = switch (raw) {
+      String text => text.split(','),
+      List values => values.map(
+        (value) => value is String
+            ? value
+            : _readText(_readObject(value)['tag_name'], ''),
+      ),
+      _ => const [],
+    };
+    return List.unmodifiable(
+      tags.map((tag) => tag.trim()).where((tag) => tag.isNotEmpty).toSet(),
+    );
   }
 
   /// 优先读取投稿接口的分P字段；字段缺失时只识别“全748集”一类明确标题。

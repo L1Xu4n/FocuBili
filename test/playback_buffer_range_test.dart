@@ -51,6 +51,8 @@ void main() {
         );
       }
       final snapshot = PlaybackSnapshot.fromPlatformMap({
+        'isPlaying': true,
+        'playRequested': false,
         'durationMs': 100000,
         'positionMs': 60000,
         'bufferedRanges': [
@@ -58,6 +60,12 @@ void main() {
         ],
       });
       expect(snapshot.bufferedRanges.single.start, const Duration(seconds: 60));
+      expect(snapshot.playRequested, isFalse);
+      expect(snapshot.copyWith(speed: 2.5).playRequested, isFalse);
+      expect(
+        snapshot.copyWith(playRequested: true).bufferedRanges,
+        hasLength(1),
+      );
       expect(
         snapshot.copyWith(isPlaying: true).bufferedRanges.single.end,
         const Duration(seconds: 70),

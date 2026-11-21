@@ -1,5 +1,7 @@
 part of 'player_page.dart';
 
+enum _SubtitleAutoState { pending, started, overridden }
+
 /// 封装字幕轨道、弹幕片段、弹幕配置持久化和播放画面文字叠加层。
 mixin _PlayerOverlayCoordinator
     on
@@ -18,18 +20,57 @@ mixin _PlayerOverlayCoordinator
   bool _danmakuPreferencesChangedByUser = false;
   bool _danmakuPersistenceWarningShown = false;
   SubtitleTrackLoadResult? _subtitleTrackResult;
-  SubtitleTrack? _selectedSubtitleTrack;
+  _VideoFitMode get _videoFitMode;
+  Size _subtitleSurfaceSize = Size.zero;
+  EdgeInsets _subtitleSurfaceInsets = EdgeInsets.zero;
+  double? _subtitleAnnotationHeight;
+  final _subtitlePreviewViewport = ValueNotifier<SubtitlePreviewViewport?>(
+    null,
+  );
+
+  // Read the rendered pane (including split desktop layouts), not the window.
+  // The preview models watching with controls dismissed, while retaining any
+  // persistent A/B, chapter, or note annotation strip.
+  void _measureSubtitlePreviewViewport() {
+    final size = _subtitleSurfaceSize;
+    if (!size.isFinite || size.isEmpty) return;
+    final edges = _subtitleSurfaceInsets;
+    final annotations = _subtitleAnnotationHeight;
+    _subtitlePreviewViewport.value = SubtitlePreviewViewport(
+      size: size,
+      edgeInsets: edges,
+      videoAspectRatio: _playbackSnapshot.videoAspectRatio > 0
+          ? _playbackSnapshot.videoAspectRatio
+          : 16 / 9,
+      videoFit: switch (_videoFitMode) {
+        _VideoFitMode.contain => BoxFit.contain,
+        _VideoFitMode.cover => BoxFit.cover,
+        _VideoFitMode.stretch => BoxFit.fill,
+      },
+      bottomOverlayHeight: annotations != null
+          ? annotations + _collapsedTimelineBottomPadding(_fullscreen, edges)
+          : 0,
+    );
+  }
+
+  final _subtitleSelection = ValueNotifier<SubtitleTrack?>(null);
+  SubtitleTrack? get _selectedSubtitleTrack => _subtitleSelection.value;
   List<SubtitleCue> _subtitleCues = const <SubtitleCue>[];
   bool _subtitleCuesLoading = false;
+  _SubtitleAutoState _subtitleAutoState = _SubtitleAutoState.pending;
+  int? _subtitleAutoSourceGeneration;
+  bool _refreshSubtitleTracksOnAutoStart = false;
   int _subtitleRequestToken = 0;
   int _subtitleTracksRequestToken = 0;
+  Future<SubtitleTrackLoadResult>? _subtitleTracksRequest;
+  bool _subtitleTracksRequestedManually = false;
   int _subtitleCuesRequestToken = 0;
   (String, int)? _subtitleTrackIdentity;
   (String, int)? _subtitleCueIdentity;
   @override
   bool _subtitleSelectorOpen = false;
-  int _subtitleFontRevision = 0;
-  Future<void> _subtitleFontSizeWrites = Future<void>.value();
+  final _subtitleStyleRevisions = <SubtitleAppearanceSetting, int>{};
+  Future<void> _subtitleStyleWrites = Future<void>.value();
   final Map<int, List<DanmakuEntry>> _rawDanmakuSegments =
       <int, List<DanmakuEntry>>{};
   final Map<int, List<DanmakuEntry>> _danmakuSegments =
@@ -64,6 +105,8 @@ mixin _PlayerOverlayCoordinator
 
   /// 释放弹幕帧时钟，供播放器 dispose 统一调用。
   void _disposePlayerOverlayCoordinator() {
+    _subtitleSelection.dispose();
+    _subtitlePreviewViewport.dispose();
     _danmakuFrameController.dispose();
   }
 
@@ -285,6 +328,7 @@ mixin _PlayerOverlayCoordinator
 
   /// 请求一段真实弹幕并建立时间索引；临时失败最多自动重试三次且带递增退避。
   Future<void> _loadDanmakuSegment(int segmentIndex) async {
+    if (_activeVideo.isCourse) return;
     final int failureCount = _danmakuSegmentFailureCounts[segmentIndex] ?? 0;
     final DateTime? retryAfter = _danmakuSegmentRetryAfter[segmentIndex];
     if (!_danmakuEnabled ||
@@ -424,28 +468,66 @@ mixin _PlayerOverlayCoordinator
   }
 
   /// 清空旧分P的字幕和进行中的请求，避免切换分P后短暂显示错误字幕。
-  void _clearSubtitlesForPart() {
+  void _clearSubtitlesForPart({bool allowAutoStart = true}) {
     _subtitleRequestToken += 1;
-    _subtitleTracksRequestToken++;
+    _subtitleAutoSourceGeneration = null;
+    _refreshSubtitleTracksOnAutoStart = false;
+    _subtitleTracksRequest = null;
     _subtitleCuesRequestToken++;
+    _subtitleAutoState = allowAutoStart
+        ? _SubtitleAutoState.pending
+        : _SubtitleAutoState.overridden;
     if (!mounted) {
       return;
     }
     setState(() {
       _subtitleTrackResult = null;
       _subtitleTrackIdentity = null;
-      _subtitleCueIdentity = null;
-      _selectedSubtitleTrack = null;
-      _subtitleCues = const <SubtitleCue>[];
       _subtitleCuesLoading = false;
+      _clearActiveSubtitle();
     });
   }
 
-  /// 失败刷新保留字幕；有效的新轨道列表使旧正文和迟到请求失效。
-  Future<SubtitleTrackLoadResult> _loadSubtitleTracks() async {
+  void _invalidateSubtitleSession() =>
+      _clearSubtitlesForPart(allowAutoStart: false);
+
+  /// 手动打开列表与自动选择可共用一次轨道请求。
+  Future<SubtitleTrackLoadResult> _loadSubtitleTracks({
+    bool automatic = false,
+    bool reuseAvailable = false,
+  }) {
+    final pending = _subtitleTracksRequest;
+    if (pending != null) {
+      if (!automatic) _subtitleTracksRequestedManually = true;
+      return pending;
+    }
+    final cached = _subtitleTrackResult;
+    if (reuseAvailable && cached?.status == SubtitleLoadStatus.available) {
+      return Future.value(cached!);
+    }
+    final tracksRequestToken = ++_subtitleTracksRequestToken;
+    _subtitleTracksRequestedManually = !automatic;
+    late final Future<SubtitleTrackLoadResult> request;
+    request = _fetchSubtitleTracks(tracksRequestToken).whenComplete(() {
+      if (identical(_subtitleTracksRequest, request)) {
+        _subtitleTracksRequest = null;
+      }
+    });
+    return _subtitleTracksRequest = request;
+  }
+
+  /// 保留刷新前仍有效的轨道，忽略旧视频或会话的迟到结果。
+  Future<SubtitleTrackLoadResult> _fetchSubtitleTracks(
+    int tracksRequestToken,
+  ) async {
+    if (_activeVideo.isCourse) {
+      return const SubtitleTrackLoadResult.unavailable(
+        message: '课堂字幕暂未接入，视频内嵌字幕不受影响。',
+      );
+    }
     final String bvid = _activeVideo.bvid;
     final int cid = _currentPart.cid;
-    final int requestToken = ++_subtitleTracksRequestToken;
+    final int requestToken = _subtitleRequestToken;
     SubtitleTrackLoadResult result;
     try {
       result = await _playerOverlayService.loadSubtitleTracks(
@@ -456,15 +538,13 @@ mixin _PlayerOverlayCoordinator
       result = const SubtitleTrackLoadResult.unavailable();
     }
     if (!mounted ||
-        requestToken != _subtitleTracksRequestToken ||
+        requestToken != _subtitleRequestToken ||
+        tracksRequestToken != _subtitleTracksRequestToken ||
         bvid != _activeVideo.bvid ||
         cid != _currentPart.cid) {
       return const SubtitleTrackLoadResult.unavailable(
         message: '视频已切换，请重新打开字幕设置。',
       );
-    }
-    if (result.status != SubtitleLoadStatus.unavailable) {
-      _disableSubtitles();
     }
     setState(() {
       // 临时失败保留同一视频成功读取过的列表，面板仍明确显示刷新失败。
@@ -474,11 +554,103 @@ mixin _PlayerOverlayCoordinator
         _subtitleTrackResult = result;
         _subtitleTrackIdentity = (bvid, cid);
       }
+      final selected = _selectedSubtitleTrack;
+      if (selected != null && !_subtitleTrackStillAvailable(selected)) {
+        _clearActiveSubtitle();
+      }
     });
     return result;
   }
 
-  /// 立即打开字幕面板，同一分 P 复用成功列表，并提供明确刷新与字号入口。
+  bool _subtitleTrackStillAvailable(SubtitleTrack track) =>
+      _subtitleTrackResult?.status == SubtitleLoadStatus.available &&
+      _subtitleTrackResult!.tracks.any(
+        (current) =>
+            !current.isLocked &&
+            current.id == track.id &&
+            current.documentId == track.documentId,
+      );
+
+  @override
+  void _cancelAutomaticSubtitlesForLocalSource() {
+    if (_subtitleAutoState != _SubtitleAutoState.started ||
+        _selectedSubtitleTrack != null) {
+      return;
+    }
+    _subtitleAutoState = _SubtitleAutoState.pending;
+    _subtitleAutoSourceGeneration = null;
+    // A fresh track response creates a new cue-cache session on return online.
+    _refreshSubtitleTracksOnAutoStart = true;
+    if (_subtitleTracksRequest != null && !_subtitleTracksRequestedManually) {
+      _subtitleTracksRequestToken++;
+      _subtitleTracksRequest = null;
+    }
+  }
+
+  @override
+  void _maybeAutoEnableSubtitles() {
+    if (_subtitleAutoState != _SubtitleAutoState.pending ||
+        !_playbackPreferences.autoEnableSubtitles ||
+        _activeVideo.isCourse) {
+      return;
+    }
+    _subtitleAutoState = _SubtitleAutoState.started;
+    final sourceGeneration = _sourceGeneration;
+    _subtitleAutoSourceGeneration = sourceGeneration;
+    final refresh = _refreshSubtitleTracksOnAutoStart;
+    _refreshSubtitleTracksOnAutoStart = false;
+    unawaited(_autoSelectSubtitle(sourceGeneration, refreshTracks: refresh));
+  }
+
+  Future<void> _autoSelectSubtitle(
+    int sourceGeneration, {
+    required bool refreshTracks,
+  }) async {
+    final generation = _subtitleRequestToken;
+    bool isCurrent() =>
+        mounted &&
+        generation == _subtitleRequestToken &&
+        sourceGeneration == _subtitleAutoSourceGeneration &&
+        _subtitleAutoState == _SubtitleAutoState.started;
+    final pending = _subtitleTracksRequest;
+    if (refreshTracks && pending != null) {
+      // Preserve any manual fetch that shared the original automatic request.
+      await pending;
+      if (!isCurrent()) return;
+    }
+    final result = await _loadSubtitleTracks(
+      automatic: true,
+      reuseAvailable: !refreshTracks,
+    );
+    if (!isCurrent() || result.status != SubtitleLoadStatus.available) return;
+    final available = result.tracks.where((track) => !track.isLocked);
+    final priority = _playbackPreferences.subtitlePriority;
+    final aiFirst = priority == SubtitlePriority.chineseAiFirst;
+    final candidates = priority == SubtitlePriority.trackOrder
+        ? available
+        : <SubtitleTrack>[
+            ...available.where(
+              (track) => track.isChinese && track.isAi == aiFirst,
+            ),
+            ...available.where(
+              (track) => track.isChinese && track.isAi != aiFirst,
+            ),
+            ...available.where((track) => !track.isChinese),
+          ];
+    for (final track in candidates) {
+      if (!isCurrent()) return;
+      final status = await _selectSubtitleTrack(
+        track,
+        automaticSourceGeneration: sourceGeneration,
+      );
+      if (status == SubtitleLoadStatus.available ||
+          status == SubtitleLoadStatus.loginRequired) {
+        return;
+      }
+    }
+  }
+
+  /// 立即打开字幕面板，同一分 P 复用成功列表，并提供刷新与外观入口。
   Future<void> _showSubtitleSelector() async {
     _showPlayerControls();
     if (_subtitleSelectorOpen) return;
@@ -491,7 +663,6 @@ mixin _PlayerOverlayCoordinator
             _subtitleTrackResult?.status == SubtitleLoadStatus.available
         ? _subtitleTrackResult
         : null;
-    final selectedId = _selectedSubtitleTrack?.id;
 
     /// 列表加载、选项点击和面板返回均核对打开时的视频身份与代次。
     bool isCurrentVideo() =>
@@ -499,6 +670,8 @@ mixin _PlayerOverlayCoordinator
         selectorToken == _subtitleRequestToken &&
         bvid == _activeVideo.bvid &&
         cid == _currentPart.cid;
+    _measureSubtitlePreviewViewport();
+    final sample = _activeSubtitleCue()?.content.trim();
     _subtitleSelectorOpen = true;
     String? selectedTrackId;
     try {
@@ -506,23 +679,73 @@ mixin _PlayerOverlayCoordinator
         context: context,
         showDragHandle: true,
         isScrollControlled: true,
-        builder: (sheetContext) => PlayerSubtitleSheet(
-          videoLabel: videoLabel,
-          offValue: _subtitleOffValue,
-          initialResult: initialResult,
-          selectedTrackId: selectedId,
-          fontSize: _playbackPreferences.subtitleFontSize,
-          isCurrentVideo: isCurrentVideo,
-          // 旧面板不能借刷新入口加载新视频的数据。
-          reloadTracks: () async => isCurrentVideo()
-              ? _loadSubtitleTracks()
-              : const SubtitleTrackLoadResult.unavailable(
+        builder: (sheetContext) => ValueListenableBuilder(
+          valueListenable: _subtitleSelection,
+          builder: (context, selectedTrack, _) => PlayerSubtitleSheet(
+            videoLabel: videoLabel,
+            previewViewport: _subtitlePreviewViewport,
+            previewText: sample != null && sample.isNotEmpty ? sample : null,
+            offValue: _subtitleOffValue,
+            initialResult: initialResult,
+            selectedTrackId: selectedTrack?.id,
+            fontSize: _playbackPreferences.subtitleFontSize,
+            position: _playbackPreferences.subtitlePosition,
+            opacity: _playbackPreferences.subtitleOpacity,
+            onPreviewPosition: (value) => _previewSubtitleStyle(
+              SubtitleAppearanceSetting.position,
+              value,
+            ),
+            onPositionChanged: (value) =>
+                _commitSubtitleStyle(SubtitleAppearanceSetting.position, value),
+            onPreviewOpacity: (value) =>
+                _previewSubtitleStyle(SubtitleAppearanceSetting.opacity, value),
+            onOpacityChanged: (value) =>
+                _commitSubtitleStyle(SubtitleAppearanceSetting.opacity, value),
+            isCurrentVideo: isCurrentVideo,
+            // 旧面板不能借刷新入口加载新视频的数据。
+            reloadTracks: () async => isCurrentVideo()
+                ? _loadSubtitleTracks()
+                : const SubtitleTrackLoadResult.unavailable(
+                    message: '视频已切换，请重新打开字幕设置。',
+                  ),
+            onPreviewFontSize: (value) => _previewSubtitleStyle(
+              SubtitleAppearanceSetting.fontSize,
+              value,
+            ),
+            onCommitFontSize: (value) =>
+                _commitSubtitleStyle(SubtitleAppearanceSetting.fontSize, value),
+            loadCues: (track) async {
+              if (_activeVideo.isCourse) {
+                return const SubtitleCueLoadResult.unavailable(
+                  message: '课堂暂不支持独立字幕。',
+                );
+              }
+              if (!isCurrentVideo()) {
+                return const SubtitleCueLoadResult.unavailable(
                   message: '视频已切换，请重新打开字幕设置。',
-                ),
-          onPreviewFontSize: _previewSubtitleFontSize,
-          onCommitFontSize: _commitSubtitleFontSize,
-          diagnosticReport: () =>
-              SubtitleDiagnosticLog.instance.report(bvid: bvid, cid: cid),
+                );
+              }
+              if (_selectedSubtitleTrack?.id == track.id &&
+                  _subtitleCueIdentity == (bvid, cid) &&
+                  _subtitleCues.isNotEmpty) {
+                return SubtitleCueLoadResult(
+                  status: SubtitleLoadStatus.available,
+                  message: '',
+                  cues: List<SubtitleCue>.unmodifiable(_subtitleCues),
+                );
+              }
+              return _playerOverlayService.loadSubtitleCues(
+                bvid: bvid,
+                cid: cid,
+                trackId: track.id,
+              );
+            },
+            onSeek: (position) async {
+              if (isCurrentVideo()) await _seekNativeTo(position);
+            },
+            diagnosticReport: () =>
+                SubtitleDiagnosticLog.instance.report(bvid: bvid, cid: cid),
+          ),
         ),
       );
     } finally {
@@ -531,6 +754,7 @@ mixin _PlayerOverlayCoordinator
     }
     if (!isCurrentVideo() || selectedTrackId == null) return;
     if (selectedTrackId == _subtitleOffValue) {
+      _subtitleAutoState = _SubtitleAutoState.overridden;
       _disableSubtitles();
       return;
     }
@@ -543,59 +767,74 @@ mixin _PlayerOverlayCoordinator
       }
     }
     if (selectedTrack != null) {
+      _subtitleAutoState = _SubtitleAutoState.overridden;
       await _selectSubtitleTrack(selectedTrack);
     }
   }
 
-  /// 字号立即应用于当前画面，并记录用户修改以防初始偏好读取迟到覆盖。
-  void _previewSubtitleFontSize(double value) {
+  /// 立即应用外观配置，初始偏好迟到时仍保留预览值。
+  void _previewSubtitleStyle(SubtitleAppearanceSetting control, double value) {
     if (!mounted) return;
-    _savedSubtitleFontSize ??= _playbackPreferences.subtitleFontSize;
-    final size = PlaybackPreferences.normalizeSubtitleFontSize(value);
-    _subtitleFontRevision++;
-    _subtitleFontSizeOverride = size;
-    setState(
-      () => _playbackPreferences = _playbackPreferences.copyWith(
-        subtitleFontSize: size,
-      ),
+    final preferences = control.apply(_playbackPreferences, value);
+    _subtitleStyleOverrides[control] = control.read(preferences);
+    _subtitleStyleRevisions.update(
+      control,
+      (revision) => revision + 1,
+      ifAbsent: () => 1,
     );
+    setState(() => _playbackPreferences = preferences);
   }
 
-  /// 松手后串行保存字号，失败时仅回退当前这次修改，保留其他播放偏好。
-  Future<double> _commitSubtitleFontSize(double value) async {
-    final size = PlaybackPreferences.normalizeSubtitleFontSize(value);
-    if (_playbackPreferences.subtitleFontSize != size) {
-      _previewSubtitleFontSize(size);
+  /// 松手后串行保存，失败仅回退该设置的当前预览。
+  Future<double> _commitSubtitleStyle(
+    SubtitleAppearanceSetting control,
+    double value,
+  ) async {
+    final normalized = control.read(control.apply(_playbackPreferences, value));
+    if (control.read(_playbackPreferences) != normalized) {
+      _previewSubtitleStyle(control, normalized);
     }
-    final revision = _subtitleFontRevision;
-    final operation = _subtitleFontSizeWrites.then((_) async {
-      final previous =
-          _savedSubtitleFontSize ?? PlaybackPreferences.defaultSubtitleFontSize;
+    final revision = _subtitleStyleRevisions[control];
+    final operation = _subtitleStyleWrites.then((_) async {
       try {
-        await _playbackPreferencesService.saveSubtitleFontSize(size);
-        _savedSubtitleFontSize = size;
+        await switch (control) {
+          SubtitleAppearanceSetting.fontSize =>
+            _playbackPreferencesService.saveSubtitleFontSize(normalized),
+          SubtitleAppearanceSetting.position =>
+            _playbackPreferencesService.saveSubtitlePosition(normalized),
+          SubtitleAppearanceSetting.opacity =>
+            _playbackPreferencesService.saveSubtitleOpacity(normalized),
+        };
+        _savedSubtitleStyles[control] = normalized;
       } catch (_) {
-        if (mounted && revision == _subtitleFontRevision) {
-          _subtitleFontSizeOverride = previous;
+        if (mounted && revision == _subtitleStyleRevisions[control]) {
+          final previous = _savedSubtitleStyles[control];
+          // An unfinished initial read can still replace the default on failure.
+          _subtitleStyleOverrides.remove(control);
           setState(
-            () => _playbackPreferences = _playbackPreferences.copyWith(
-              subtitleFontSize: previous,
+            () => _playbackPreferences = control.apply(
+              _playbackPreferences,
+              previous ?? control.read(const PlaybackPreferences()),
             ),
           );
-          _showTransientSnackBar('字幕字号保存失败，已恢复上次设置。');
+          _showTransientSnackBar('${control.label}保存失败，已恢复上次设置。');
         }
       }
     });
-    _subtitleFontSizeWrites = operation;
+    _subtitleStyleWrites = operation;
     await operation;
-    return _playbackPreferences.subtitleFontSize;
+    return control.read(_playbackPreferences);
   }
 
   /// 读取当前视频的选中轨道；晚到的其他分 P 结果不能覆盖当前字幕。
-  Future<void> _selectSubtitleTrack(SubtitleTrack track) async {
-    if (track.isLocked) {
-      _showTransientSnackBar('此字幕当前不可用。');
-      return;
+  Future<SubtitleLoadStatus> _selectSubtitleTrack(
+    SubtitleTrack track, {
+    int? automaticSourceGeneration,
+  }) async {
+    final automatic = automaticSourceGeneration != null;
+    if (!_subtitleTrackStillAvailable(track)) {
+      if (!automatic) _showTransientSnackBar('此字幕当前不可用。');
+      return SubtitleLoadStatus.locked;
     }
     final int requestToken = ++_subtitleCuesRequestToken;
     final String bvid = _activeVideo.bvid;
@@ -614,9 +853,10 @@ mixin _PlayerOverlayCoordinator
     if (_selectedSubtitleTrack?.id == track.id &&
         _subtitleCueIdentity == (bvid, cid) &&
         _subtitleCues.isNotEmpty) {
-      return;
+      if (_subtitleCuesLoading) setState(() => _subtitleCuesLoading = false);
+      return SubtitleLoadStatus.available;
     }
-    setState(() => _subtitleCuesLoading = true);
+    if (!automatic) setState(() => _subtitleCuesLoading = true);
     SubtitleCueLoadResult result;
     try {
       result = await _playerOverlayService.loadSubtitleCues(
@@ -629,19 +869,28 @@ mixin _PlayerOverlayCoordinator
     }
     if (!mounted ||
         requestToken != _subtitleCuesRequestToken ||
+        (automatic &&
+            automaticSourceGeneration != _subtitleAutoSourceGeneration) ||
         bvid != _activeVideo.bvid ||
         cid != _currentPart.cid) {
-      return;
+      return SubtitleLoadStatus.unavailable;
     }
-    setState(() => _subtitleCuesLoading = false);
+    if (_subtitleCuesLoading) setState(() => _subtitleCuesLoading = false);
+    if (!_subtitleTrackStillAvailable(track)) {
+      return SubtitleLoadStatus.unavailable;
+    }
     if (result.status != SubtitleLoadStatus.available || result.cues.isEmpty) {
-      if (result.status == SubtitleLoadStatus.locked ||
-          result.status == SubtitleLoadStatus.loginRequired) {
-        _subtitleTrackResult = null;
-        _subtitleTrackIdentity = null;
+      if (!automatic) {
+        if (result.status == SubtitleLoadStatus.locked ||
+            result.status == SubtitleLoadStatus.loginRequired) {
+          _subtitleTrackResult = null;
+          _subtitleTrackIdentity = null;
+        }
+        _showTransientSnackBar(result.message);
       }
-      _showTransientSnackBar(result.message);
-      return;
+      return result.status == SubtitleLoadStatus.available
+          ? SubtitleLoadStatus.empty
+          : result.status;
     }
     final duration = _playbackSnapshot.duration > Duration.zero
         ? _playbackSnapshot.duration
@@ -666,10 +915,12 @@ mixin _PlayerOverlayCoordinator
       );
       // Duration is a clue, never proof that a document belongs to another video.
       // Imprecise metadata and legitimate trailing cues must remain usable.
-      _showTransientSnackBar('字幕时间超过当前分P时长，可能不匹配；可复制字幕诊断。');
+      if (!automatic) {
+        _showTransientSnackBar('字幕时间超过当前分P时长，可能不匹配；可复制字幕诊断。');
+      }
     }
     setState(() {
-      _selectedSubtitleTrack = track;
+      _subtitleSelection.value = track;
       _subtitleCueIdentity = (bvid, cid);
       _subtitleCues = List<SubtitleCue>.of(result.cues)
         ..sort(
@@ -677,7 +928,6 @@ mixin _PlayerOverlayCoordinator
               left.from.compareTo(right.from),
         );
     });
-    _showAdjustmentFeedback('字幕：${track.label}');
     SubtitleDiagnosticLog.instance.record(
       bvid: bvid,
       cid: cid,
@@ -690,18 +940,26 @@ mixin _PlayerOverlayCoordinator
         'cueCount': result.cues.length,
       },
     );
-    _scheduleSeekFeedbackClear();
+    if (!automatic) {
+      _showAdjustmentFeedback('字幕：${track.label}');
+      _scheduleSeekFeedbackClear();
+    }
+    return SubtitleLoadStatus.available;
   }
 
   /// 关闭当前字幕显示并撤销晚到的字幕请求，不改变播放器进度或原生播放状态。
   void _disableSubtitles() {
     _subtitleCuesRequestToken++;
     setState(() {
-      _selectedSubtitleTrack = null;
-      _subtitleCueIdentity = null;
-      _subtitleCues = const <SubtitleCue>[];
       _subtitleCuesLoading = false;
+      _clearActiveSubtitle();
     });
+  }
+
+  void _clearActiveSubtitle() {
+    _subtitleSelection.value = null;
+    _subtitleCueIdentity = null;
+    _subtitleCues = const <SubtitleCue>[];
   }
 
   /// 从已经排序的字幕列表二分查找当前播放位置对应的一条字幕，避免每次状态刷新遍历全表。
@@ -736,6 +994,7 @@ mixin _PlayerOverlayCoordinator
         !_playbackSnapshot.isInPictureInPicture) {
       return const IgnorePointer(
         child: Center(
+          heightFactor: 1,
           child: Text(
             '正在加载字幕…',
             key: Key('subtitle-loading'),
@@ -753,30 +1012,13 @@ mixin _PlayerOverlayCoordinator
         liveRegion: true,
         label: '字幕：${cue.content}',
         child: Center(
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.62),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-              child: Text(
-                cue.content,
-                key: const Key('active-subtitle'),
-                textScaler: AppTextScaleScope.subtitleScalerOf(context),
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: _playbackPreferences.subtitleFontSize,
-                  height: 1.28,
-                  shadows: const <Shadow>[
-                    Shadow(color: Colors.black, blurRadius: 3),
-                  ],
-                ),
-              ),
-            ),
+          heightFactor: 1,
+          child: PlayerSubtitleCaption(
+            key: const Key('active-subtitle-caption'),
+            textKey: const Key('active-subtitle'),
+            text: cue.content,
+            fontSize: _playbackPreferences.subtitleFontSize,
+            opacity: _playbackPreferences.subtitleOpacity,
           ),
         ),
       ),

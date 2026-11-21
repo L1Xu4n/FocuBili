@@ -26,19 +26,25 @@ abstract final class FocusVideoLauncher {
       if (!context.mounted) {
         return false;
       }
+      final player = buildPlayerPage(video, session);
       await Navigator.of(context).push<void>(
         MaterialPageRoute<void>(
           // 播放页构建函数恢复记录中的分P和最后观看位置。
-          builder: (BuildContext pageContext) =>
-              buildPlayerPage(video, session),
+          builder: (BuildContext pageContext) => player,
         ),
       );
       return true;
-    } on Object {
+    } on Object catch (error) {
       if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('暂时无法打开关联视频，请检查网络后重试')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              error is BilibiliLookupException
+                  ? error.message
+                  : '暂时无法打开关联视频，请检查网络后重试',
+            ),
+          ),
+        );
       }
       return false;
     }
@@ -46,6 +52,11 @@ abstract final class FocusVideoLauncher {
 
   /// 创建专注记录对应的播放器参数；零位置交给原生观看历史恢复，避免强制跳回开头。
   static PlayerPage buildPlayerPage(VideoPreview video, FocusSession session) {
+    if (video.isCourse &&
+        session.sourcePartCid != null &&
+        !video.parts.any((part) => part.cid == session.sourcePartCid)) {
+      throw const BilibiliLookupException('原课程章节已失效，请从课程目录重新选择。');
+    }
     return PlayerPage(
       video: video,
       initialPartCid: session.sourcePartCid,

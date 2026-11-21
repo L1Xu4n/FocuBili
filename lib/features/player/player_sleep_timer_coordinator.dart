@@ -216,22 +216,22 @@ mixin _PlayerSleepTimerCoordinator
       : '剩余次数：$_remainingSleepPlayCount 次后暂停（含当前这一轮）';
 
   /// 返回当前定时关闭设置的简短菜单文字。
-  String get _sleepTimerSummary {
+  String get _sleepTimerMenuStatus {
     if (_pauseAfterPlayCount != null) {
-      return '定时关闭：剩余 $_remainingSleepPlayCount 次';
+      return '剩余 $_remainingSleepPlayCount 次';
     }
     if (_playbackService is ListeningPlaybackService) {
       final remaining = _playbackSnapshot.sleepTimerRemaining;
       return remaining > Duration.zero
-          ? '定时关闭：约 ${(remaining.inMilliseconds / 60000).ceil()} 分钟后'
-          : '定时关闭';
+          ? '约 ${(remaining.inMilliseconds / 60000).ceil()} 分钟后暂停'
+          : '未设置';
     }
     final DateTime? deadline = _sleepTimerDeadline;
     if (deadline != null && deadline.isAfter(DateTime.now())) {
       final int minutes = deadline.difference(DateTime.now()).inMinutes + 1;
-      return '定时关闭：约 $minutes 分钟后';
+      return '约 $minutes 分钟后暂停';
     }
-    return '定时关闭';
+    return '未设置';
   }
 
   /// 显示快捷选项与自定义入口；“关闭”统一表示到点后暂停播放器。

@@ -5,6 +5,7 @@ mixin _PlayerControlsCoordinator
     on
         State<PlayerPage>,
         _PlayerPlaybackSession,
+        _PlayerAbRepeatCoordinator,
         _PlayerFocusCoordinator,
         _PlayerGestureCoordinator,
         _PlayerNotesWorkspace,
@@ -13,6 +14,7 @@ mixin _PlayerControlsCoordinator
         _PlayerSleepTimerCoordinator,
         _PlayerOverlayCoordinator {
   static const Duration _controlsAutoHideDelay = Duration(seconds: 5);
+  static const Duration _desktopControlsAutoHideDelay = Duration(seconds: 3);
   static const Duration _transientHintDuration = Duration(seconds: 3);
   static const AnimationStyle _playerPopupMenuAnimationStyle = AnimationStyle(
     duration: Duration(milliseconds: 100),
@@ -21,6 +23,7 @@ mixin _PlayerControlsCoordinator
     reverseCurve: Curves.easeIn,
   );
   static const double _expandedPartItemHeight = 76;
+  bool get _playerToolsOpen;
 
   /// 说明控制层已经安排自动隐藏，供播放快照协调器避免重复创建计时器。
   @override
@@ -29,13 +32,68 @@ mixin _PlayerControlsCoordinator
   /// 根据当前真实播放状态向原生播放器发送播放或暂停命令。
   @override
   void _togglePlayback({bool showControls = true}) {
-    if (showControls) _showPlayerControls();
-    unawaited(_setPlaybackActive(!_playing));
+    if (showControls) {
+      _desktopTapRecognizer?.cancelPendingTap();
+      _showPlayerControls();
+    }
+    unawaited(
+      _setPlaybackActive(!_playing, preserveControlsOnPause: !showControls),
+    );
+  }
+
+  /// Mouse and keyboard transport reveal the controls, but never replace a
+  /// source/seek transition or interfere with a playback prompt.
+  bool _toggleDesktopPlayback() {
+    final snapshot = _playbackSnapshot;
+    final hasMedia = switch (snapshot.phase) {
+      PlaybackPhase.ready || PlaybackPhase.ended => true,
+      PlaybackPhase.loading => snapshot.duration > Duration.zero,
+      _ => false,
+    };
+    if (!hasMedia ||
+        _controlsLocked ||
+        _externalNavigationSuspended ||
+        _changingPlaybackSource ||
+        _pendingQualitySelection != null ||
+        snapshot.isInPictureInPicture ||
+        snapshot.isRestoringPosition ||
+        _partSelectorExpanded ||
+        _abRepeatEditorVisible ||
+        _interactivePromptVisible ||
+        _completionPromptVisible ||
+        _isDraggingProgress ||
+        _horizontalScrubbing) {
+      return false;
+    }
+    _desktopTapRecognizer?.cancelPendingTap();
+    _desktopSuppressedEdge = null;
+    _desktopControlsHover = _desktopPointerEdge != null;
+    _showPlayerControls();
+    // A buffering video can report isPlaying=false even though it will resume
+    // by itself. Space/click should pause that intent, not issue another play.
+    final shouldPlay =
+        snapshot.phase == PlaybackPhase.ended ||
+        !(snapshot.playRequested ?? snapshot.isPlaying);
+    unawaited(_setPlaybackActive(shouldPlay));
+    return true;
   }
 
   /// 执行原生播放或暂停命令，并把平台异常转换为页面可读的错误。
   @override
-  Future<void> _setPlaybackActive(bool shouldPlay) async {
+  Future<void> _setPlaybackActive(
+    bool shouldPlay, {
+    bool preserveControlsOnPause = false,
+  }) async {
+    _hiddenGesturePauseSource =
+        !shouldPlay && preserveControlsOnPause && !_showControls
+        ? _sourceGeneration
+        : null;
+    if (!shouldPlay) {
+      _cancelTemporaryLongPress();
+      _stopPendingPlaybackNavigation();
+    }
+    _markAbRepeatManualFeedback(shouldPlay);
+    _abRepeatPlaybackIntent(shouldPlay);
     _finishFocusSeekTransition(syncCurrentSnapshot: false);
     try {
       if (shouldPlay) {
@@ -56,8 +114,14 @@ mixin _PlayerControlsCoordinator
       return;
     }
     if (_showControls) {
+      // An explicit hide wins over slight motion in the current desktop
+      // hotspot; crossing its edge arms pointer reveal again.
+      _desktopSuppressedEdge = _desktopPointerEdge;
+      _desktopControlsHover = false;
       _hideControls();
     } else {
+      _desktopSuppressedEdge = null;
+      _desktopControlsHover = _desktopPointerEdge != null;
       _showPlayerControls();
     }
   }
@@ -76,30 +140,41 @@ mixin _PlayerControlsCoordinator
 
   /// 隐藏控制层并停止自动收起倒计时。
   void _hideControls() {
+    _setDesktopTimelineHover(null);
+    _cancelProgressDrag();
     _stopControlsAutoHideTimer();
     if (_showControls) {
       setState(() => _showControls = false);
     }
   }
 
-  /// 在视频播放且控制层可见时，安排五秒后自动隐藏控制层。
+  /// 桌面空闲三秒、触屏空闲五秒后自动收起播放中的控制层。
   @override
   void _restartControlsAutoHideTimer() {
     _stopControlsAutoHideTimer();
     if (!_showControls ||
+        _playerToolsOpen ||
+        _abRepeatEditorVisible ||
         !_playing ||
         _playbackSnapshot.isInPictureInPicture ||
         _isDraggingProgress ||
+        _desktopControlsHover ||
         _temporarySpeedActive ||
         _horizontalScrubbing) {
       return;
     }
-    _controlsTimer = Timer(_controlsAutoHideDelay, () {
+    final delay = _appPlatform.isDesktop
+        ? _desktopControlsAutoHideDelay
+        : _controlsAutoHideDelay;
+    _controlsTimer = Timer(delay, () {
       if (mounted &&
           _showControls &&
+          !_playerToolsOpen &&
+          !_abRepeatEditorVisible &&
           _playing &&
           !_playbackSnapshot.isInPictureInPicture &&
           !_isDraggingProgress &&
+          !_desktopControlsHover &&
           !_temporarySpeedActive &&
           !_horizontalScrubbing) {
         setState(() {
@@ -125,12 +200,18 @@ mixin _PlayerControlsCoordinator
     final int targetMilliseconds = (_playbackSnapshot.position + offset)
         .inMilliseconds
         .clamp(0, _displayDuration.inMilliseconds);
-    _beginFocusSeekTransition();
     try {
-      await _playbackService.seekBy(offset);
-      _restartDanmakuPresentationFrom(
-        Duration(milliseconds: targetMilliseconds),
-      );
+      if (_abRepeatActive ||
+          _abRepeatSeek != null ||
+          _abRepeatCaptureDepth > 0) {
+        await _seekNativeTo(Duration(milliseconds: targetMilliseconds));
+      } else {
+        _beginFocusSeekTransition();
+        await _playbackService.seekBy(offset);
+        _restartDanmakuPresentationFrom(
+          Duration(milliseconds: targetMilliseconds),
+        );
+      }
     } on PlatformException catch (error) {
       _showPlaybackError('无法跳转进度：${error.message ?? error.code}');
     } catch (error) {
@@ -140,18 +221,50 @@ mixin _PlayerControlsCoordinator
 
   /// 执行绝对跳转并从目标时间重新生成弹幕，确保跳转前的历史弹幕不会出现在屏幕中段。
   @override
-  Future<void> _seekNativeTo(Duration position) async {
+  Future<void> _seekNativeTo(
+    Duration position, {
+    bool temporaryCapture = false,
+  }) async {
+    final bvid = _activeVideo.bvid;
+    final cid = _currentPart.cid;
+    final generation = _sourceGeneration;
+    final navigationGeneration = _partSwitchGeneration;
+    final captureSerial = temporaryCapture ? _abRepeatCaptureSerial : null;
+    if (temporaryCapture) {
+      await _drainAbRepeatSeek();
+    } else {
+      await _prepareAbRepeatManualSeek(position);
+    }
+    if (!mounted ||
+        bvid != _activeVideo.bvid ||
+        cid != _currentPart.cid ||
+        generation != _sourceGeneration ||
+        navigationGeneration != _partSwitchGeneration ||
+        (captureSerial != null && captureSerial != _abRepeatCaptureSerial) ||
+        _externalNavigationSuspended) {
+      return;
+    }
     _beginFocusSeekTransition();
-    await _playbackService.seekTo(position);
+    if (temporaryCapture) {
+      await _runTemporaryCaptureSeek(() => _playbackService.seekTo(position));
+    } else {
+      await _playbackService.seekTo(position);
+    }
+    if (!mounted ||
+        bvid != _activeVideo.bvid ||
+        cid != _currentPart.cid ||
+        generation != _sourceGeneration ||
+        navigationGeneration != _partSwitchGeneration ||
+        (captureSerial != null && captureSerial != _abRepeatCaptureSerial)) {
+      return;
+    }
     _restartDanmakuPresentationFrom(position);
   }
 
   /// 把进度条比例换算为真实毫秒位置，再请求原生播放器跳转。
   @override
   Future<void> _seekToProgress(double progress) async {
-    final Duration target = Duration(
-      milliseconds: (_displayDuration.inMilliseconds * progress).round(),
-    );
+    final Duration target = _positionForProgress(progress);
     try {
       await _seekNativeTo(target);
     } on PlatformException catch (error) {
@@ -162,19 +275,10 @@ mixin _PlayerControlsCoordinator
   }
 
   /// 请求原生播放器切换倍速，并让控制层继续显示以便用户确认选择。
-  Future<void> _changePlaybackSpeed(double speed) async {
+  Future<void> _changePlaybackSpeed(double speed) {
+    if (_temporarySpeedActive) setState(() => _temporarySpeedActive = false);
     _showPlayerControls();
-    try {
-      await _playbackService.setPlaybackSpeed(speed);
-      if (mounted) {
-        setState(() => _playbackSpeed = speed);
-        _syncDanmakuAnimation(_playbackSnapshot.copyWith(speed: speed));
-      }
-    } on PlatformException catch (error) {
-      _showPlaybackError('无法切换倍速：${error.message ?? error.code}');
-    } catch (error) {
-      _showPlaybackError('无法切换倍速：$error');
-    }
+    return _queuePlaybackSpeed(speed, temporary: false);
   }
 
   /// 请求原生播放器保留当前进度并切换到所选清晰度。
@@ -191,12 +295,15 @@ mixin _PlayerControlsCoordinator
     if (quality == _currentQuality || _pendingQualitySelection == quality) {
       return;
     }
+    _clearPlayerPointerForTransition();
     _showPlayerControls();
     setState(() {
       _pendingQualitySelection = quality;
       _qualitySelectionSawLoading = false;
     });
     try {
+      await _suspendAbRepeatForSource();
+      if (!mounted) return;
       await _playbackService.selectQuality(quality);
     } on PlatformException catch (error) {
       if (mounted) {
@@ -208,6 +315,8 @@ mixin _PlayerControlsCoordinator
         setState(() => _pendingQualitySelection = null);
       }
       _showMembershipQualityNotice(error.toString());
+    } finally {
+      if (mounted) _resumeAbRepeatAfterSource();
     }
   }
 
@@ -217,7 +326,7 @@ mixin _PlayerControlsCoordinator
     required bool useLocal,
   }) async {
     final position = _playbackSnapshot.position;
-    final speed = _playbackSpeed;
+    final speed = _normalPlaybackSpeed;
     final wasPlaying = _playing;
     _changingPlaybackSource = true;
     _openingResumePlan = PlaybackResumePlan.direct(
@@ -268,25 +377,6 @@ mixin _PlayerControlsCoordinator
   @override
   void _showPlayerNotice(String message) {
     if (mounted) _playerNotices.show(message, duration: _transientHintDuration);
-  }
-
-  /// 标记进度条正被手指拖动，并暂停自动隐藏以方便精确调整。
-  void _startProgressDrag(double value) {
-    _isDraggingProgress = true;
-    _stopControlsAutoHideTimer();
-  }
-
-  /// 只更新拖动过程中的本地显示，避免每一像素都向原生播放器发网络无关的命令。
-  void _updateProgressDrag(double value) {
-    setState(() => _progress = value);
-  }
-
-  /// 结束进度条拖动后把最终位置发送给原生播放器，并恢复自动隐藏策略。
-  void _finishProgressDrag(double value) {
-    _isDraggingProgress = false;
-    setState(() => _progress = value);
-    unawaited(_seekToProgress(value));
-    _restartControlsAutoHideTimer();
   }
 
   /// 根据当前进度生成“当前时间 / 总时长”的播放器文字。
@@ -378,13 +468,86 @@ mixin _PlayerControlsCoordinator
     );
   }
 
-  /// 处理桌面播放器快捷键；文本输入框获得焦点时完全交还键盘事件。
-  KeyEventResult _handlePlayerKeyEvent(FocusNode _, KeyEvent event) {
-    if (event is! KeyDownEvent || _isTextEditingFocused()) {
+  bool _isDesktopRouteShortcut(LogicalKeyboardKey key) =>
+      key == LogicalKeyboardKey.space || key == LogicalKeyboardKey.escape;
+
+  bool _desktopShortcutRouteIsCurrent() {
+    if (!mounted || _externalNavigationSuspended) return false;
+    final route = ModalRoute.of(context);
+    if (route?.isCurrent != true) return false;
+    final focusContext = FocusManager.instance.primaryFocus?.context;
+    final focusRoute = focusContext == null
+        ? null
+        : ModalRoute.of(focusContext);
+    return focusRoute == null || identical(focusRoute, route);
+  }
+
+  /// The notebook or A/B editor can explicitly handle Escape while editing
+  /// text, without letting the playback shortcut exit fullscreen.
+  KeyEventResult _handleDesktopEditorEscape(KeyEvent event) {
+    if (event is! KeyDownEvent ||
+        event.logicalKey != LogicalKeyboardKey.escape) {
+      return KeyEventResult.ignored;
+    }
+    final noteCanClose =
+        _notesOpen &&
+        !_notesParked &&
+        (_usesFloatingVideoNotes ||
+            _playerNotesLayout == _PlayerNotesLayout.workspace);
+    if ((!noteCanClose && !_abRepeatEditorVisible) ||
+        !_desktopShortcutRouteIsCurrent()) {
+      return KeyEventResult.ignored;
+    }
+    return _handlePlayerShortcut(event);
+  }
+
+  /// A route-level fallback after focused controls have had a chance to handle
+  /// Space/Escape (including dialogs and editable fields).
+  KeyEventResult _handleDesktopPlayerShortcut(KeyEvent event) {
+    if (event is! KeyDownEvent ||
+        !_isDesktopRouteShortcut(event.logicalKey) ||
+        !_desktopShortcutRouteIsCurrent()) {
+      return KeyEventResult.ignored;
+    }
+    return _handlePlayerShortcut(event);
+  }
+
+  /// 保留原有焦点快捷键，但桌面空格与 Esc 只由当前路由入口处理。
+  KeyEventResult _handlePlayerKeyEvent(FocusNode _, KeyEvent event) =>
+      _appPlatform.isDesktop && _isDesktopRouteShortcut(event.logicalKey)
+      ? KeyEventResult.ignored
+      : _handlePlayerShortcut(event);
+
+  KeyEventResult _handlePlayerShortcut(KeyEvent event) {
+    if (event is! KeyDownEvent || event.synthesized) {
       return KeyEventResult.ignored;
     }
     final LogicalKeyboardKey key = event.logicalKey;
+    if (key == LogicalKeyboardKey.escape && _notesOpen && !_notesParked) {
+      if (_usesFloatingVideoNotes) {
+        _parkVideoNotes(focusHandle: true);
+        return KeyEventResult.handled;
+      }
+      if (_playerNotesLayout == _PlayerNotesLayout.workspace) {
+        _closeVideoNotes();
+        return KeyEventResult.handled;
+      }
+    }
+    if (_notePeekHandleFocus.hasFocus && key == LogicalKeyboardKey.space) {
+      // Run the focused button action instead of the player's Space shortcut.
+      return KeyEventResult.ignored;
+    }
+    if (key == LogicalKeyboardKey.escape && _abRepeatEditorVisible) {
+      _closeAbRepeatEditor();
+      return KeyEventResult.handled;
+    }
+    if (_isTextEditingFocused()) return KeyEventResult.ignored;
     if (key == LogicalKeyboardKey.space) {
+      if (_appPlatform.isDesktop) {
+        return _toggleDesktopPlayback()
+            ? KeyEventResult.handled
+            : KeyEventResult.ignored;
+      }
       _togglePlayback();
       return KeyEventResult.handled;
     }
@@ -446,6 +609,8 @@ mixin _PlayerControlsCoordinator
     if (!_fullscreen) {
       return;
     }
+    _cancelTemporaryLongPress();
+    _clearPlayerPointerForTransition();
     _stopControlsAutoHideTimer();
     setState(() {
       _controlsLocked = !_controlsLocked;
@@ -523,6 +688,8 @@ mixin _PlayerControlsCoordinator
   void _handleBackPressed() {
     if (_controlsLocked) {
       _toggleControlsLock();
+    } else if (_abRepeatEditorVisible) {
+      _closeAbRepeatEditor();
     } else if (_notesOpen) {
       _closeVideoNotes();
     } else if (_fullscreen) {
@@ -541,6 +708,8 @@ mixin _PlayerControlsCoordinator
     }
     if (_controlsLocked) {
       _toggleControlsLock();
+    } else if (_abRepeatEditorVisible) {
+      _closeAbRepeatEditor();
     } else if (_notesOpen) {
       _closeVideoNotes();
     } else if (_fullscreen) {
@@ -555,6 +724,27 @@ mixin _PlayerControlsCoordinator
   /// 根据菜单操作打开字幕或弹幕设置，或切换播放器画面比例。
   void _handleMoreSettingsSelection(_PlayerMoreMenuAction action) {
     switch (action) {
+      case _PlayerMoreMenuAction.blockVideo:
+        unawaited(
+          ContentBlockActions.video(
+            context,
+            bvid: _activeVideo.bvid,
+            title: _activeVideo.title,
+          ),
+        );
+        return;
+      case _PlayerMoreMenuAction.blockCreator:
+        unawaited(
+          ContentBlockActions.creator(
+            context,
+            mid: _activeVideo.ownerMid,
+            name: _activeVideo.ownerName,
+          ),
+        );
+        return;
+      case _PlayerMoreMenuAction.manageBlocklist:
+        unawaited(_openContentBlocklist());
+        return;
       case _PlayerMoreMenuAction.listening:
         unawaited(_toggleAudioOnly());
         return;
@@ -565,7 +755,13 @@ mixin _PlayerControlsCoordinator
         unawaited(_showDanmakuSettings());
         return;
       case _PlayerMoreMenuAction.playbackLoop:
-        _togglePlaybackLoop();
+        unawaited(_togglePlaybackLoop());
+        return;
+      case _PlayerMoreMenuAction.playlist:
+        unawaited(_showPlaylist());
+        return;
+      case _PlayerMoreMenuAction.abRepeat:
+        unawaited(_showAbRepeatSheet());
         return;
       case _PlayerMoreMenuAction.sleepTimer:
         unawaited(_showSleepTimerDialog());
@@ -582,16 +778,46 @@ mixin _PlayerControlsCoordinator
     }
   }
 
-  /// 切换当前播放页的无限循环，不写入全局偏好设置。
-  void _togglePlaybackLoop() {
-    setState(() {
-      _playbackLoopEnabled = !_playbackLoopEnabled;
-      if (_playbackLoopEnabled) {
-        _completedPlayCount = 0;
-      }
-    });
-    _showTransientSnackBar(_playbackLoopEnabled ? '已开启当前分P循环播放' : '已关闭循环播放');
-    _showPlayerControls();
+  Future<void> _openContentBlocklist() async {
+    final shouldResume = _playing;
+    _cancelNoteCaptureForExternalNavigation();
+    _clearAbRepeatForNavigation();
+    await _drainAbRepeatSeek();
+    if (!mounted) return;
+    await _playbackService.pause();
+    if (!mounted) return;
+    await _showStandardSystemUiForNestedRoute();
+    if (!mounted) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(builder: (_) => const ContentBlocklistPage()),
+    );
+    if (!mounted) return;
+    _resumePlayerSystemUiAfterNestedRoute();
+    await _restorePlaybackAfterNestedPlayer(shouldResume: shouldResume);
+    if (mounted && shouldResume && !_playing) {
+      await _playbackService.play();
+    }
+  }
+
+  /// 由列表协调器提供模式与来源面板。
+  Future<void> _showPlaylist();
+
+  /// 持久保存模式后应用到当前播放会话。
+  Future<void> _selectPlaybackMode(PlaybackMode mode);
+
+  bool _savingPlayerToolsLoop = false;
+
+  /// 旧循环快捷入口映射到单项循环，保存期间不提交第二次切换。
+  Future<void> _togglePlaybackLoop() async {
+    if (_savingPlayerToolsLoop) return;
+    setState(() => _savingPlayerToolsLoop = true);
+    try {
+      await _selectPlaybackMode(
+        _playbackLoopEnabled ? PlaybackMode.order : PlaybackMode.single,
+      );
+    } finally {
+      if (mounted) setState(() => _savingPlayerToolsLoop = false);
+    }
   }
 
   /// 保存用户选择的画面比例，并用三秒提示确认该设置只作用于渲染层。
@@ -613,6 +839,89 @@ mixin _PlayerControlsCoordinator
         return '填充画面';
       case _VideoFitMode.stretch:
         return '拉伸铺满';
+    }
+  }
+
+  // Legacy mute records do not know their previous gain. Come back quietly.
+  static const _unknownUnmuteAppVolume = 0.1;
+  double? _lastAudibleAppVolume;
+
+  /// macOS 使用应用增益，外接显示器不支持系统音量时也可调整。
+  Future<void> _showAppVolume() async {
+    final levels = await _playbackService.getSystemPlaybackLevels();
+    if (!mounted) return;
+    var value = levels.volume;
+    if (value > 0) {
+      _lastAudibleAppVolume = value;
+    } else if (_lastAudibleAppVolume == null) {
+      try {
+        _lastAudibleAppVolume = await _playbackPreferencesService
+            .loadLastAudibleAppVolume();
+      } catch (_) {
+        // A bad preference read must not block the manual volume controls.
+      }
+      if (!mounted) return;
+    }
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => StatefulBuilder(
+        builder: (context, refresh) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                IconButton(
+                  tooltip: value == 0 ? '取消静音' : '静音',
+                  icon: Icon(value == 0 ? Icons.volume_off : Icons.volume_up),
+                  // 静音也持久化，重开播放器不会突然发声。
+                  onPressed: () async {
+                    final next = value == 0
+                        ? _lastAudibleAppVolume ?? _unknownUnmuteAppVolume
+                        : 0.0;
+                    if (await _applyAppVolume(next, save: true) &&
+                        context.mounted) {
+                      refresh(() => value = next);
+                    }
+                  },
+                ),
+                Expanded(
+                  child: Slider(
+                    value: value,
+                    divisions: 100,
+                    label: '${(value * 100).round()}%',
+                    onChanged: (next) {
+                      refresh(() => value = next);
+                      unawaited(_applyAppVolume(next));
+                    },
+                    onChangeEnd: (next) =>
+                        unawaited(_applyAppVolume(next, save: true)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 应用增益并在松手时保存；异常明确反馈而不显示伪成功。
+  Future<bool> _applyAppVolume(double value, {bool save = false}) async {
+    try {
+      await _playbackService.setMediaVolume(value);
+      if (value > 0) _lastAudibleAppVolume = value;
+      if (save) {
+        await _playbackPreferencesService.saveAppVolume(
+          value,
+          lastAudibleVolume: _lastAudibleAppVolume,
+        );
+      }
+      if (mounted) setState(() => _volume = value);
+      return true;
+    } catch (_) {
+      if (mounted) _showTransientSnackBar('音量调整或保存失败，请重试');
+      return false;
     }
   }
 
@@ -694,7 +1003,6 @@ mixin _PlayerControlsCoordinator
   set _partsAscending(bool value);
 
   /// 由页面状态类提供当前画面比例模式。
-  _VideoFitMode get _videoFitMode;
   set _videoFitMode(_VideoFitMode value);
 
   /// 由页面状态类提供展开选集的滚动控制器。
@@ -708,9 +1016,6 @@ mixin _PlayerControlsCoordinator
 
   /// 由页面状态类提供播放器顶部显示的网络类型。
   set _networkType(DeviceNetworkType value);
-
-  /// 由页面状态类更新进度条是否正在拖动。
-  set _isDraggingProgress(bool value);
 
   /// 由页面状态类标记状态栏同步回调是否已经排队。
   bool get _playerStatusSyncScheduled;

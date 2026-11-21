@@ -43,6 +43,10 @@ class SubtitleTrack {
   final int? sourceType;
   bool get isAi => sourceType == 1;
 
+  static final _chineseLanguage = RegExp(r'^(?:ai-)?(?:zh|cmn|yue)(?:-|$)');
+  bool get isChinese =>
+      _chineseLanguage.hasMatch(language.toLowerCase().replaceAll('_', '-'));
+
   /// 从原生方法通道的安全字典解析轨道；无编号的异常条目会被忽略。
   static SubtitleTrack? tryParse(Map<Object?, Object?> values) {
     final String id = values['id']?.toString().trim() ?? '';

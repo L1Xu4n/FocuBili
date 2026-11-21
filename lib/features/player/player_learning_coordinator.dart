@@ -13,6 +13,7 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
   LearningListEntry? _learningListEntry;
   bool _learningListLoading = false;
   String? _addingLearningBvid;
+  bool _choosingLearningParts = false;
   int? _recordedLearningListPartCid;
   Duration _lastLearningListSavedPosition = Duration.zero;
   bool _learningProgressSaveInFlight = false;
@@ -42,6 +43,7 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
   Future<void> _switchActiveVideo(
     VideoPreview video, {
     LearningListEntry? learningEntry,
+    required bool fromBeginning,
   });
 
   /// 读取本机观看记录并按 BV 号索引，供合集封面显示“上次看过”。
@@ -86,6 +88,29 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
     });
   }
 
+  /// Keep the action locked, but let the visible picker own its feedback.
+  /// Its pending selection is not a background request on the player route.
+  Future<LearningBatchResult?> _showLearningPartPicker({
+    required VideoPreview video,
+    VideoPart? currentPart,
+    VideoPart? recentPart,
+    required Duration position,
+  }) async {
+    setState(() => _choosingLearningParts = true);
+    try {
+      return await LearningAddSheet.show(
+        context,
+        video: video,
+        currentPart: currentPart,
+        recentPart: recentPart,
+        position: position,
+        service: _learningListService,
+      );
+    } finally {
+      if (mounted) setState(() => _choosingLearningParts = false);
+    }
+  }
+
   /// 将当前分 P 加入学习清单；播放器已就绪时优先保存真实进度。
   Future<void> _addCurrentVideoToLearningList() async {
     if (_addingLearningBvid != null) {
@@ -97,13 +122,10 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
     final bool hasLivePlayback = _playbackSnapshot.phase == PlaybackPhase.ready;
     setState(() => _addingLearningBvid = bvid);
     try {
-      setState(() => _addingLearningBvid = null);
-      final result = await LearningAddSheet.show(
-        context,
+      final result = await _showLearningPartPicker(
         video: video,
         currentPart: part,
         position: hasLivePlayback ? _playbackSnapshot.position : Duration.zero,
-        service: _learningListService,
       );
       if (result == null) return;
       final entries = result.entries;
@@ -142,10 +164,14 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
     final String? confirmed = await showDialog<String>(
       context: context,
       builder: (BuildContext dialogContext) => AlertDialog(
+        clipBehavior: Clip.antiAlias,
+        scrollable: true,
         title: const Text('当前 P 已在学习清单'),
         content: Text(
           '确定把“${_activeVideo.title}”的 P${_currentPart.pageNumber} 移出学习清单吗？观看记录和笔记不会被删除。',
         ),
+        actionsAlignment: MainAxisAlignment.center,
+        actionsOverflowAlignment: OverflowBarAlignment.center,
         actions: <Widget>[
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop('select'),
@@ -204,7 +230,40 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
     }
   }
 
-  /// 查询合集条目的完整资料后加入学习清单；当前正在播放的视频无需重复查询。
+  /// 合集批量勾选只需一个分 P：优先当前播放的 P，其次上次观看的 P。
+  Future<LearningPartSelection> _resolveCollectionLearningSelection(
+    VideoCollectionEntry entry,
+  ) async {
+    final bvid = entry.bvid;
+    if (bvid == _activeVideo.bvid) {
+      return LearningPartSelection(
+        _activeVideo,
+        _currentPart,
+        position: _playbackSnapshot.phase == PlaybackPhase.ready
+            ? _playbackSnapshot.position
+            : Duration.zero,
+      );
+    }
+    final video = await _bilibiliService.lookupVideo(bvid);
+    if (video.bvid != bvid || video.parts.isEmpty) {
+      throw StateError('合集视频详情无效');
+    }
+    final history = _watchHistoryByBvid[bvid];
+    if (history != null) {
+      for (final part in video.parts) {
+        if (part.pageNumber == history.lastPartPageNumber) {
+          return LearningPartSelection(
+            video,
+            part,
+            position: history.lastPosition,
+          );
+        }
+      }
+    }
+    return LearningPartSelection(video, video.initialPart);
+  }
+
+  /// 查询合集条目的完整资料并选择分 P；当前视频无需重复查询。
   Future<void> _addCollectionVideoToLearningList(
     VideoCollectionEntry entry,
   ) async {
@@ -214,27 +273,37 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
     final String bvid = entry.bvid;
     setState(() => _addingLearningBvid = bvid);
     try {
-      final bool currentVideo = bvid == _activeVideo.bvid;
-      final VideoPreview video = currentVideo
+      final VideoPreview video = bvid == _activeVideo.bvid
           ? _activeVideo
           : await _bilibiliService.lookupVideo(bvid);
+      if (!mounted) return;
+      final bool currentVideo = bvid == _activeVideo.bvid;
       final bool hasLivePlayback =
           currentVideo && _playbackSnapshot.phase == PlaybackPhase.ready;
-      final List<LearningListEntry> entries = await _learningListService
-          .addVideo(
-            video,
-            part: hasLivePlayback ? _currentPart : null,
-            position: hasLivePlayback ? _playbackSnapshot.position : null,
-            status: hasLivePlayback && _playing
-                ? LearningListStatus.learning
-                : null,
-          );
-      if (!mounted) {
-        return;
+      final history = currentVideo ? null : _watchHistoryByBvid[bvid];
+      VideoPart? recentPart;
+      if (history != null) {
+        for (final part in video.parts) {
+          if (part.pageNumber == history.lastPartPageNumber) {
+            recentPart = part;
+            break;
+          }
+        }
       }
+      final result = await _showLearningPartPicker(
+        video: video,
+        currentPart: currentVideo ? _currentPart : null,
+        recentPart: recentPart,
+        position: hasLivePlayback
+            ? _playbackSnapshot.position
+            : recentPart != null
+            ? history!.lastPosition
+            : Duration.zero,
+      );
+      if (!mounted || result == null) return;
       if (_activeVideo.bvid == bvid) {
         final LearningListEntry? learningEntry = _entryForPart(
-          entries,
+          result.entries,
           bvid,
           _currentPart.cid,
         );
@@ -245,7 +314,7 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
               learningEntry?.position ?? Duration.zero;
         });
       }
-      _showPlayerNotice('已加入学习清单');
+      _showPlayerNotice('已加入所选分 P，已有进度已保留');
     } catch (_) {
       if (mounted) {
         _showPlayerNotice('加入学习清单失败，请检查网络后重试。');
@@ -446,20 +515,30 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
       return;
     }
     final String bvid = _activeVideo.bvid;
+    final VideoPart part = _currentPart;
+    final Duration duration = _displayDuration;
     setState(() => _addingLearningBvid = bvid);
     bool completionSaved = false;
     try {
       final List<LearningListEntry> beforeCompletion =
           await _learningListService.loadEntries();
+      // The list page hands the player the folder/search/filter it opened.
+      // Use fresh statuses, but never jump to a task outside that scope.
+      final learningScope = widget.learningContinuationScope;
+      final List<LearningListEntry> candidates = learningScope == null
+          ? beforeCompletion
+          : beforeCompletion
+                .where((entry) => learningScope.contains(entry.stableId))
+                .toList(growable: false);
       final LearningListEntry? next = _learningListService.nextIncompleteAfter(
-        beforeCompletion,
+        candidates,
         current,
       );
       final List<LearningListEntry> updatedEntries = await _learningListService
           .updateProgress(
             bvid,
-            part: _currentPart,
-            position: _displayDuration,
+            part: part,
+            position: duration,
             status: LearningListStatus.completed,
           );
       if (!mounted ||
@@ -483,16 +562,22 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
             completed?.position ?? _displayDuration;
       });
       if (next == null) {
-        _showPlayerNotice('学习清单已完成');
+        _showPlayerNotice('当前学习范围没有后续任务');
         return;
       }
       final VideoPreview nextVideo = next.bvid == _activeVideo.bvid
           ? _activeVideo
           : await _bilibiliService.lookupVideo(next.bvid);
-      if (!mounted || _activeVideo.bvid != bvid) {
+      if (!mounted ||
+          _activeVideo.bvid != bvid ||
+          _currentPart.cid != part.cid) {
         return;
       }
-      await _switchActiveVideo(nextVideo, learningEntry: next);
+      await _switchActiveVideo(
+        nextVideo,
+        learningEntry: next,
+        fromBeginning: false,
+      );
     } catch (_) {
       if (mounted) {
         if (completionSaved &&

@@ -1,3 +1,4 @@
+import 'course_cache_diagnostic.dart';
 import 'video_preview.dart';
 
 /// Describes a durable queue entry independently of completed library records.
@@ -11,21 +12,33 @@ class OfflineDownloadTask {
     required this.part,
     required this.quality,
     required this.createdAt,
+    this.completedAt,
+    this.courseMid,
+    this.cacheLocationId,
     this.status = DownloadTaskStatus.queued,
     this.receivedBytes = 0,
     this.totalBytes,
     this.error,
+    this.courseDiagnostic,
     this.bytesPerSecond = 0,
+    this.requireExactQuality = false,
   });
 
   final VideoPreview video;
   final VideoPart part;
   final int quality;
+  final bool requireExactQuality;
+  final int? courseMid;
+  // Fixed at enqueue; null also represents pre-feature tasks in the default root.
+  final String? cacheLocationId;
   final DateTime createdAt;
+  // Independent of enqueue and course authorization timestamps.
+  final DateTime? completedAt;
   final DownloadTaskStatus status;
   final int receivedBytes;
   final int? totalBytes;
   final String? error;
+  final CourseCacheDiagnostic? courseDiagnostic;
   // Transfer speed is transient; restored tasks always start at zero.
   final double bytesPerSecond;
 
@@ -35,7 +48,12 @@ class OfflineDownloadTask {
       : '${(bytesPerSecond / 1024).toStringAsFixed(1)} KB/s';
 
   /// Deduplicates the same BV/CID even when it is submitted from another page.
-  String get id => '${video.bvid}:${part.cid}';
+  String get id => courseMid == null
+      ? '${video.bvid}:${part.cid}'
+      : 'course:$courseMid:$courseEntryId';
+
+  String get courseEntryId =>
+      '${video.courseSeasonId}-${part.courseEpisodeId}-${part.courseAid}-${part.cid}';
 
   /// Returns bounded progress or null while the server has not supplied a size.
   double? get progress => totalBytes == null || totalBytes! <= 0
@@ -45,19 +63,29 @@ class OfflineDownloadTask {
   /// Applies a state transition while keeping immutable download identity.
   OfflineDownloadTask copyWith({
     DownloadTaskStatus? status,
+    DateTime? completedAt,
     int? receivedBytes,
     int? totalBytes,
     String? error,
+    CourseCacheDiagnostic? courseDiagnostic,
+    bool clearError = false,
     double? bytesPerSecond,
   }) => OfflineDownloadTask(
     video: video,
     part: part,
     quality: quality,
+    requireExactQuality: requireExactQuality,
+    courseMid: courseMid,
+    cacheLocationId: cacheLocationId,
     createdAt: createdAt,
     status: status ?? this.status,
+    completedAt: (status ?? this.status) == DownloadTaskStatus.completed
+        ? completedAt ?? this.completedAt
+        : null,
     receivedBytes: receivedBytes ?? this.receivedBytes,
     totalBytes: totalBytes ?? this.totalBytes,
     error: error,
+    courseDiagnostic: clearError ? null : courseDiagnostic,
     bytesPerSecond: (status ?? this.status) == DownloadTaskStatus.downloading
         ? bytesPerSecond ?? this.bytesPerSecond
         : 0,
@@ -73,8 +101,20 @@ class OfflineDownloadTask {
     'pageNumber': part.pageNumber,
     'partTitle': part.title,
     'durationMs': part.duration.inMilliseconds,
+    if (courseMid != null) ...{
+      'courseMid': courseMid,
+      'courseSeasonId': video.courseSeasonId,
+      'courseEpisodeId': part.courseEpisodeId,
+      'courseAid': part.courseAid,
+      if (status == DownloadTaskStatus.failed && courseDiagnostic != null)
+        'courseDiagnostic': courseDiagnostic!.code,
+    },
+    if (cacheLocationId != null) 'cacheLocationId': cacheLocationId,
     'quality': quality,
+    if (requireExactQuality) 'requireExactQuality': true,
     'createdAt': createdAt.toIso8601String(),
+    if (status == DownloadTaskStatus.completed && completedAt != null)
+      'completedAt': completedAt!.toUtc().toIso8601String(),
     'status': status.name,
     'receivedBytes': receivedBytes,
     'totalBytes': totalBytes,
@@ -88,7 +128,23 @@ class OfflineDownloadTask {
     final quality = (json['quality'] as num).toInt();
     final received = (json['receivedBytes'] as num).toInt();
     final total = (json['totalBytes'] as num?)?.toInt();
-    if (!RegExp(r'^BV[0-9A-Za-z]{10}$').hasMatch(bvid) ||
+    final courseMid = json['courseMid'] as int?;
+    final season = json['courseSeasonId'] as int?;
+    final episode = json['courseEpisodeId'] as int?;
+    final aid = json['courseAid'] as int?;
+    final ordinary =
+        courseMid == null &&
+        season == null &&
+        episode == null &&
+        aid == null &&
+        RegExp(r'^BV[0-9A-Za-z]{10}$').hasMatch(bvid);
+    final course =
+        (courseMid ?? 0) > 0 &&
+        (season ?? 0) > 0 &&
+        (episode ?? 0) > 0 &&
+        (aid ?? 0) > 0 &&
+        bvid == 'cheese:ss$season';
+    if ((!ordinary && !course) ||
         cid <= 0 ||
         quality <= 0 ||
         received < 0 ||
@@ -96,14 +152,18 @@ class OfflineDownloadTask {
       throw const FormatException('Invalid download task');
     }
     final part = VideoPart(
+      courseAid: aid,
+      courseEpisodeId: episode,
       pageNumber: (json['pageNumber'] as num).toInt(),
       cid: cid,
       title: json['partTitle'] as String,
       duration: Duration(milliseconds: (json['durationMs'] as num).toInt()),
     );
+    final status = DownloadTaskStatus.values.byName(json['status'] as String);
     return OfflineDownloadTask(
       video: VideoPreview(
         bvid: bvid,
+        courseSeasonId: season,
         cid: cid,
         title: json['title'] as String,
         ownerName: json['ownerName'] as String,
@@ -113,11 +173,21 @@ class OfflineDownloadTask {
       ),
       part: part,
       quality: quality,
+      requireExactQuality: ordinary && json['requireExactQuality'] == true,
+      courseMid: courseMid,
+      cacheLocationId: json['cacheLocationId'] as String?,
       createdAt: DateTime.parse(json['createdAt'] as String),
-      status: DownloadTaskStatus.values.byName(json['status'] as String),
+      status: status,
+      completedAt:
+          status == DownloadTaskStatus.completed && json['completedAt'] != null
+          ? DateTime.parse(json['completedAt'] as String)
+          : null,
       receivedBytes: received,
       totalBytes: total,
       error: json['error'] as String?,
+      courseDiagnostic: course && status == DownloadTaskStatus.failed
+          ? CourseCacheDiagnostic.fromCode(json['courseDiagnostic'])
+          : null,
     );
   }
 }

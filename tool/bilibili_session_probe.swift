@@ -64,6 +64,25 @@ private final class MemoryCookies: BilibiliCookieContainer {
             }
             return
         }
+        let detailPath = "/x/web-interface/wbi/view"
+        precondition(policy.paths.contains(detailPath))
+        precondition(policy.snapshot([cookie("SESSDATA", "synthetic-detail", path: "/x/web-interface")], path: detailPath).header == "SESSDATA=synthetic-detail")
+        precondition(policy.snapshot([cookie("buvid3", "synthetic-wrong-path", path: "/x/player")], path: detailPath).header.isEmpty)
+        let coursePlayviewPath = "/ogv/player/playview"
+        let courseSession = cookie("SESSDATA", "synthetic-course", path: "/ogv/player")
+        precondition(policy.snapshot([courseSession], path: coursePlayviewPath).header == "SESSDATA=synthetic-course")
+        precondition(policy.snapshot([courseSession], path: "/ogv/player/other").state == "unknown")
+        precondition(policy.snapshot([courseSession], path: path).header.isEmpty)
+        for (coursePath, scope) in [
+            ("/pugv/pay/web/my/paid", "/pugv/pay"),
+            ("/pugv/view/web/season", "/pugv/view/web/season"),
+            ("/pugv/view/web/ep/list", "/pugv/view/web/ep")
+        ] {
+            let local = cookie("SESSDATA", "synthetic-local-course", path: scope)
+            precondition(policy.snapshot([local], path: coursePath).header == "SESSDATA=synthetic-local-course")
+            precondition(policy.snapshot([local], path: coursePlayviewPath).header.isEmpty)
+            precondition(policy.snapshot([courseSession], path: coursePath).header.isEmpty)
+        }
         let root = cookie("SESSDATA", "synthetic-one")
         precondition(policy.snapshot([root, cookie("outside", "synthetic", domain: ".evil.invalid")], path: path).header == "SESSDATA=synthetic-one")
         precondition(policy.snapshot([root, cookie("buvid3", "synthetic", domain: "www.bilibili.com")], path: path).header == "SESSDATA=synthetic-one", "Host-only cookie leaked across hosts")

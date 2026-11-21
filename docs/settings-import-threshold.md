@@ -53,3 +53,12 @@ exit 0**; whitespace check **exit 0**.
 
 This is a local 1.8 fix for the release owner to integrate. No full suite,
 application build, real-device test, push, PR comment or publication was performed.
+
+## 1.9 integration
+
+The 1.9 importer already delegates to `SearchContentFilter.fromJsonStrict`,
+which validates the same upper bound and also validates the new keyword fields.
+The backport preserves this stricter validator rather than replacing it with the
+older two-field check. The 14 shared boundary regressions were added unchanged.
+On the integrated 1.9 tree, the same three-file command above completed with
+**25 passed, exit 0**. No real settings or account data was imported.

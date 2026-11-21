@@ -54,6 +54,7 @@ class _CustomFocusDurationDialogState
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      scrollable: true,
       title: const Text('自定义专注时间'),
       content: TextField(
         key: const Key('custom-focus-minutes-field'),
@@ -63,6 +64,8 @@ class _CustomFocusDurationDialogState
         decoration: InputDecoration(
           labelText: '分钟',
           helperText: '可填写 1 到 180 分钟',
+          helperMaxLines: 2,
+          errorMaxLines: 2,
           errorText: _errorText,
         ),
         onSubmitted: (_) => _confirm(),

@@ -37,6 +37,7 @@ Future<bool> showFocusInterruptionFlow(
       icon: Icon(
         nearCompletion ? Icons.emoji_events_rounded : Icons.favorite_rounded,
       ),
+      scrollable: true,
       title: Text(nearCompletion ? '马上就完成了' : '要不要再坚持一下？'),
       content: Text(message),
       actions: <Widget>[
@@ -442,6 +443,7 @@ class _TerminationReasonDialogState extends State<_TerminationReasonDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      scrollable: true,
       title: const Text('终止本次专注？'),
       content: TextField(
         key: const Key('focus-termination-reason'),
@@ -451,6 +453,7 @@ class _TerminationReasonDialogState extends State<_TerminationReasonDialog> {
         decoration: const InputDecoration(
           labelText: '终止原因（可选）',
           helperText: '只有确认终止才会计入“提前结束”',
+          helperMaxLines: 3,
         ),
       ),
       actions: <Widget>[

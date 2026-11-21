@@ -116,8 +116,8 @@ void main() {
     expect(restoredController.todayFocusedDuration(), Duration.zero);
   });
 
-  /// 验证视频暂停、切换到其他分P和手动打断期间都不会增加专注时长。
-  test('只有关联分P实际播放时才累计专注', () async {
+  /// 验证视频暂停和换P不影响会话计时，显式暂停仍由专注控制器管理。
+  test('专注会话不受关联分P播放状态限制', () async {
     final _MutableFocusClock clock = _MutableFocusClock(
       DateTime(2026, 7, 18, 11),
     );
@@ -128,75 +128,66 @@ void main() {
     addTearDown(controller.dispose);
     await controller.initialize();
     await controller.startFocus(
-      goal: '只统计播放时间',
+      goal: '连续会话计时',
       duration: const Duration(minutes: 25),
       sourceBvid: 'BV1TEST',
       sourceVideoTitle: '课程',
       sourcePartCid: 300,
       sourcePartPageNumber: 1,
       sourcePartTitle: '第一P',
-      startImmediately: false,
+      startImmediately: true,
     );
 
     clock.advance(const Duration(minutes: 3));
-    expect(controller.elapsedDuration, Duration.zero);
+    expect(controller.elapsedDuration, const Duration(minutes: 3));
     await controller.updatePlaybackState(
       bvid: 'BV1TEST',
       partCid: 300,
       isPlaying: true,
     );
     clock.advance(const Duration(minutes: 4));
-    expect(controller.elapsedDuration, const Duration(minutes: 4));
+    expect(controller.elapsedDuration, const Duration(minutes: 7));
     await controller.updatePlaybackState(
       bvid: 'BV1TEST',
       partCid: 300,
       isPlaying: false,
     );
     clock.advance(const Duration(minutes: 6));
-    expect(controller.elapsedDuration, const Duration(minutes: 4));
+    expect(controller.elapsedDuration, const Duration(minutes: 13));
     await controller.updatePlaybackState(
       bvid: 'BV1TEST',
       partCid: 301,
       isPlaying: true,
     );
     clock.advance(const Duration(minutes: 2));
-    expect(controller.elapsedDuration, const Duration(minutes: 4));
+    expect(controller.elapsedDuration, const Duration(minutes: 15));
   });
 
-  /// 验证当前分P模式即使估算时间归零也不完成，必须由同一 CID 的真实完播事件结束。
-  test('当前分P专注只在匹配分P真实完播时完成', () async {
-    final _MutableFocusClock clock = _MutableFocusClock(
-      DateTime(2026, 8, 3, 10),
-    );
-    final FocusTimerController controller = FocusTimerController(
+  /// 旧调用传入完播模式也仅提供计划时间；分P完播不结束新会话。
+  test('参考当前分P时长创建的专注按计划时间结束', () async {
+    final clock = _MutableFocusClock(DateTime(2026, 8, 3, 10));
+    final controller = FocusTimerController(
       clock: clock.call,
       tickInterval: const Duration(days: 1),
     );
     addTearDown(controller.dispose);
     await controller.initialize();
     await controller.startFocus(
-      goal: '看完当前分P',
+      goal: '连续学习',
       duration: const Duration(minutes: 1),
       sourceBvid: 'BV1PART',
       sourcePartCid: 9001,
-      sourcePartPageNumber: 3,
-      sourcePartTitle: '第三P',
       completeOnPartEnd: true,
     );
-
-    clock.advance(const Duration(minutes: 2));
-    controller.didChangeAppLifecycleState(AppLifecycleState.resumed);
-    expect(controller.activeSession, isNotNull);
-    expect(controller.remainingDuration, Duration.zero);
-    expect(
-      await controller.completeForPlaybackPart(bvid: 'BV1PART', partCid: 9002),
-      isFalse,
-    );
-    expect(controller.activeSession, isNotNull);
+    clock.advance(const Duration(seconds: 30));
     expect(
       await controller.completeForPlaybackPart(bvid: 'BV1PART', partCid: 9001),
-      isTrue,
+      false,
     );
+    expect(controller.activeSession, isNotNull);
+    clock.advance(const Duration(seconds: 30));
+    controller.didChangeAppLifecycleState(AppLifecycleState.resumed);
+    await Future<void>.delayed(Duration.zero);
     expect(controller.activeSession, isNull);
     expect(controller.history.single.status, FocusSessionStatus.completed);
   });
@@ -289,10 +280,10 @@ void main() {
     expect(playbackDndStates, <bool>[
       false,
       true,
-      false,
-      true,
-    ], reason: '初始化先确保恢复系统状态；真实暂停要恢复勿扰，继续播放时应再次开启。');
+    ], reason: '初始化恢复系统状态，视频暂停和播放不切换专注勿扰状态。');
 
+    await controller.pauseFocus();
+    await controller.resumeFocus();
     await controller.endFocusEarly();
     await Future<void>.delayed(Duration.zero);
     final MethodCall lastDndCall = calls.lastWhere(

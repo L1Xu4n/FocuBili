@@ -1,30 +1,42 @@
+import '../../services/course_cache_access.dart';
+import '../../services/course_cache_library.dart';
 import '../../services/cache_lifecycle.dart';
 import '../learning/learning_add_sheet.dart';
 import 'dart:async';
+import 'dart:ui' as ui;
+import '../../models/ab_repeat_range.dart';
+import '../../models/playback_queue.dart';
+import 'widgets/player_ab_repeat_sheet.dart';
+import 'widgets/player_ab_repeat_dock.dart';
 
 import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show ScrollCacheExtent;
+import 'package:flutter/rendering.dart' show RenderProxyBox, ScrollCacheExtent;
 import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 import 'widgets/player_tap_gesture.dart';
+import 'widgets/player_video_tags.dart';
 
+import '../../core/widgets/drag_checkbox_options.dart';
 import '../../core/layout/adaptive_layout.dart';
 import '../../core/layout/app_scroll_behavior.dart';
 import '../../core/layout/device_orientation_policy.dart';
+import '../../core/widgets/drag_selection_region.dart';
 import '../../features/common/watch_history_badge.dart';
 import '../../features/focus/focus_timer_controller.dart';
 import '../../features/focus/focus_timer_scope.dart';
-import '../../features/focus/focus_interruption_dialog.dart';
 import '../../features/focus/player_focus_sheet.dart';
 import '../../features/focus/player_focus_onboarding.dart';
 import '../../features/notes/video_note_composer.dart';
 import '../../features/profile/user_profile_page.dart';
+import '../../features/profile/content_blocklist_page.dart';
+import '../../features/search/content_block_actions.dart';
 import '../../models/video_note.dart';
 import '../../platform/app_platform.dart';
 import '../../models/video_preview.dart';
+import '../../models/offline_download_task.dart';
 import '../../models/app_favorite.dart';
 import '../../models/player_enhancement.dart';
 import '../../models/video_shot_preview.dart';
@@ -33,6 +45,7 @@ import '../../models/learning_list_entry.dart';
 import '../../services/device_status_service.dart';
 import '../../services/external_link_service.dart';
 import '../../services/native_playback_service.dart';
+import '../../services/live_video_frame_playback_service.dart';
 import '../../services/playback_service_factory.dart';
 import '../../services/playback_video_surface.dart';
 import '../../services/player_overlay_service.dart';
@@ -55,6 +68,7 @@ import '../../services/player_route_session.dart';
 import '../profile/offline_videos_page.dart';
 import '../../services/app_favorites_service.dart';
 import '../../services/video_shot_service.dart';
+import '../../services/image_resource_cache.dart';
 import '../../services/video_note_service.dart';
 import '../../models/player_overlay_data.dart';
 import '../../models/danmaku_preferences.dart';
@@ -70,7 +84,6 @@ import 'enhancements/interactive_video_overlay.dart';
 import 'enhancements/playback_completion_overlay.dart';
 import 'enhancements/player_enhancement_controller.dart';
 import 'enhancements/video_chapter_widgets.dart';
-import '../../core/theme/app_text_scale.dart';
 import 'playback_resume_plan.dart';
 import 'widgets/player_control_widgets.dart';
 import 'widgets/player_control_layout.dart';
@@ -79,6 +92,8 @@ import 'widgets/player_note_tile.dart';
 import 'widgets/fullscreen_video_transform.dart';
 import 'widgets/player_timeline.dart';
 import 'widgets/player_subtitle_sheet.dart';
+import 'widgets/player_subtitle_preview.dart';
+import 'widgets/player_subtitle_caption.dart';
 import 'widgets/player_action_feedback.dart';
 import 'widgets/player_feedback_layout.dart';
 import 'widgets/player_notice_controller.dart';
@@ -87,6 +102,7 @@ part 'player_collection_sheet.dart';
 part 'player_layout_widgets.dart';
 part 'player_danmaku_rendering.dart';
 part 'player_playback_session.dart';
+part 'player_ab_repeat_coordinator.dart';
 part 'player_learning_coordinator.dart';
 part 'player_focus_coordinator.dart';
 part 'player_gesture_coordinator.dart';
@@ -99,27 +115,19 @@ part 'player_controls_coordinator.dart';
 part 'player_listening_coordinator.dart';
 part 'player_sleep_timer_coordinator.dart';
 part 'player_video_coordinator.dart';
+part 'player_playlist_coordinator.dart';
 part 'player_controls_view.dart';
+part 'player_tools_panel.dart';
 part 'player_feedback_view.dart';
 part 'player_details_view.dart';
 part 'player_local_library.dart';
+part 'player_multi_part_cache.dart';
 part 'player_collection_view.dart';
 part 'player_page_view.dart';
+part 'player_desktop_pointer.dart';
 
 /// 标识播放器画面应保留比例、裁切填充，还是按容器比例拉伸。
 enum _VideoFitMode { contain, cover, stretch }
-
-/// 标识播放器右上角“更多”菜单中可执行的本地播放器设置。
-enum _PlayerMoreMenuAction {
-  listening,
-  subtitles,
-  danmakuSettings,
-  playbackLoop,
-  sleepTimer,
-  fitContain,
-  fitCover,
-  fitStretch,
-}
 
 /// 标识合集展开列表的四种本地排序方式，不改变服务端原始合集顺序。
 enum _CollectionEntryOrder { original, newest, oldest, mostPlayed }
@@ -136,12 +144,14 @@ class PlayerPage extends StatefulWidget {
     this.playbackService,
     this.watchHistoryService,
     this.learningListService,
+    this.learningContinuationScope,
     this.deviceStatusService,
     this.playerOverlayService,
     this.bilibiliService,
     this.publicContentService,
     this.interactionService,
     this.videoShotService,
+    this.videoShotImageCache,
     this.videoNoteService,
     this.danmakuPreferencesService,
     this.playbackPreferencesService,
@@ -154,20 +164,27 @@ class PlayerPage extends StatefulWidget {
     this.externalLinkLauncher,
     this.appPlatform,
     this.initialPartCid,
+    this.playbackQueue,
     this.initialPosition,
     this.initialPositionSource = PlayerInitialPositionSource.note,
   });
 
   final VideoPreview video;
+  final PlaybackQueue? playbackQueue;
   final PlaybackService? playbackService;
   final WatchHistoryService? watchHistoryService;
   final LearningListService? learningListService;
+
+  /// Stable IDs visible in the source learning list (folder, search or filter).
+  /// A null scope keeps the ordinary "continue through my learning list".
+  final Set<String>? learningContinuationScope;
   final DeviceStatusService? deviceStatusService;
   final PlayerOverlayService? playerOverlayService;
   final BilibiliService? bilibiliService;
   final BilibiliPublicContentService? publicContentService;
   final BilibiliInteractionService? interactionService;
   final VideoShotService? videoShotService;
+  final ImageResourceCache? videoShotImageCache;
   final VideoNoteService? videoNoteService;
   final DanmakuPreferencesService? danmakuPreferencesService;
   final PlaybackPreferencesService? playbackPreferencesService;
@@ -198,13 +215,15 @@ class _PlayerPageState extends State<PlayerPage>
         _PlayerFocusCoordinator,
         _PlayerGestureCoordinator,
         _PlayerNotesWorkspace,
+        _PlayerAbRepeatCoordinator,
         _PlayerNoteFlagsCoordinator,
         _PlayerViewportCoordinator,
         _PlayerOverlayCoordinator,
         _PlayerListeningCoordinator,
         _PlayerSleepTimerCoordinator,
         _PlayerControlsCoordinator,
-        _PlayerVideoCoordinator {
+        _PlayerVideoCoordinator,
+        _PlayerPlaylistCoordinator {
   @override
   late final PlaybackService _playbackService;
   @override
@@ -226,8 +245,16 @@ class _PlayerPageState extends State<PlayerPage>
   late final VideoNoteService _videoNoteService;
   @override
   late final ProblemDiagnosticsService _problemDiagnosticsService;
+  late VideoPreview _displayedVideo;
+  final _tagSession = PlayerTagSession();
   @override
-  late VideoPreview _activeVideo;
+  VideoPreview get _activeVideo => _displayedVideo;
+  @override
+  set _activeVideo(VideoPreview video) {
+    _displayedVideo = video;
+    _tagSession.bind(video);
+  }
+
   @override
   late VideoPart _currentPart;
   BilibiliInteractionState _interactionState = const BilibiliInteractionState();
@@ -251,6 +278,12 @@ class _PlayerPageState extends State<PlayerPage>
       <String, TapGestureRecognizer>{};
   @override
   bool _showControls = true;
+  final FocusNode _playerToolsTriggerFocus = FocusNode(
+    debugLabel: 'Player tools trigger',
+  );
+  _PlayerToolsSession? _playerToolsSession;
+  @override
+  bool get _playerToolsOpen => _playerToolsSession != null;
 
   /// 清理上一支视频的互动状态，并开始读取新视频对应的账号状态。
   @override
@@ -289,8 +322,6 @@ class _PlayerPageState extends State<PlayerPage>
     }
   }
 
-  @override
-  bool _isDraggingProgress = false;
   @override
   double _progress = 0;
   @override
@@ -387,6 +418,8 @@ class _PlayerPageState extends State<PlayerPage>
   }) {
     final partChanged = _currentPart.cid != part.cid;
     if (partChanged) {
+      _cancelHorizontalScrub();
+      _resetVideoShotPreview();
       _clearSubtitlesForPart();
       _clearDanmakuForPart();
     }
@@ -408,7 +441,7 @@ class _PlayerPageState extends State<PlayerPage>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _initializePlayerOverlayCoordinator(vsync: this);
-    CacheLifecycle.subtitles.addListener(_clearSubtitlesForPart);
+    CacheLifecycle.subtitles.addListener(_invalidateSubtitleSession);
     _activeVideo = widget.video;
     _currentPart = _activeVideo.initialPart;
     _notePartCid = _currentPart.cid;
@@ -418,6 +451,7 @@ class _PlayerPageState extends State<PlayerPage>
     _deviceStatusService =
         widget.deviceStatusService ?? const NativeDeviceStatusService();
     _bilibiliService = widget.bilibiliService ?? BilibiliVideoInfoService();
+    _tagSession.initialize(_bilibiliService);
     _publicContentService =
         widget.publicContentService ?? BilibiliHttpPublicContentService();
     _interactionService =
@@ -425,17 +459,23 @@ class _PlayerPageState extends State<PlayerPage>
     _videoShotService =
         widget.videoShotService ??
         (widget.playbackService == null
-            ? BilibiliVideoShotService()
+            ? BilibiliVideoShotService.shared
             : const EmptyVideoShotService());
     _videoNoteService = widget.videoNoteService ?? VideoNoteService();
     _initializePlayerNoteFlags();
     _appPlatform = widget.appPlatform ?? AppPlatformDetector.current;
+    if (_appPlatform.isDesktop) {
+      FocusManager.instance
+        ..addEarlyKeyEventHandler(_handleDesktopEditorEscape)
+        ..addLateKeyEventHandler(_handleDesktopPlayerShortcut);
+    }
     _problemDiagnosticsService = ProblemDiagnosticsService();
     _playbackPreferencesService =
         widget.playbackPreferencesService ?? const PlaybackPreferencesService();
     _offlineVideoService = widget.offlineVideoService ?? OfflineVideoService();
     _downloadQueue = widget.downloadQueue ?? OfflineDownloadQueue.instance;
     OfflineVideoService.revision.addListener(_refreshOfflinePartState);
+    CacheLifecycle.account.addListener(_refreshOfflinePartState);
     _downloadCompletionSubscription = _downloadQueue.completions.listen((_) {
       if (mounted) unawaited(_loadOfflineState());
     });
@@ -451,6 +491,7 @@ class _PlayerPageState extends State<PlayerPage>
               ? BilibiliPublicPlayerEnhancementService()
               : const EmptyPlayerEnhancementService()),
     )..addListener(_handlePlayerEnhancementChanged);
+    _initializePlaylist();
     _startPlayerPlaybackSession(widget.initialPosition);
     unawaited(_loadWatchHistoryBadges());
     unawaited(_loadCurrentLearningListEntry());
@@ -465,6 +506,10 @@ class _PlayerPageState extends State<PlayerPage>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    if (_appPlatform.isDesktop && ModalRoute.isCurrentOf(context) == false) {
+      _desktopTapRecognizer?.cancelPendingTap();
+    }
+    _restoreNotesForInlineLayout();
     _bindFocusController(
       widget.focusTimerController ?? FocusTimerScope.maybeOf(context),
     );
@@ -480,8 +525,12 @@ class _PlayerPageState extends State<PlayerPage>
   /// 返回应用时刷新本机笔记，兼容从外部笔记页面返回后的标记更新。
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _handleAbRepeatLifecycle(state);
     if (state == AppLifecycleState.resumed) {
       unawaited(_loadCurrentVideoNotes());
+    } else {
+      _desktopTapRecognizer?.cancelPendingTap();
+      _cancelTemporaryLongPress();
     }
   }
 
@@ -512,8 +561,19 @@ class _PlayerPageState extends State<PlayerPage>
   /// 离开页面前取消重试状态、订阅和计时器，释放原生资源并恢复竖屏与系统栏。
   @override
   void dispose() {
-    CacheLifecycle.subtitles.removeListener(_clearSubtitlesForPart);
+    if (_appPlatform.isDesktop) {
+      FocusManager.instance
+        ..removeEarlyKeyEventHandler(_handleDesktopEditorEscape)
+        ..removeLateKeyEventHandler(_handleDesktopPlayerShortcut);
+    }
+    _tagSession.dispose();
+    _playerToolsSession?.closeAfterOwnerDisposed();
+    _playerToolsTriggerFocus.dispose();
+    _disposePlaylist();
+    final abRepeatDrain = _disposeAbRepeat();
+    CacheLifecycle.subtitles.removeListener(_invalidateSubtitleSession);
     OfflineVideoService.revision.removeListener(_refreshOfflinePartState);
+    CacheLifecycle.account.removeListener(_refreshOfflinePartState);
     unawaited(_downloadCompletionSubscription?.cancel());
     _routeSession.detach();
     WidgetsBinding.instance.removeObserver(this);
@@ -527,11 +587,14 @@ class _PlayerPageState extends State<PlayerPage>
     _disposePlayerNotesWorkspace();
     _disposePlayerOverlayCoordinator();
     _disposeDescriptionRecognizers();
-    unawaited(_playbackService.dispose());
+    unawaited(abRepeatDrain.whenComplete(_playbackService.dispose));
     unawaited(_restoreSystemUi());
     super.dispose();
   }
 
   @override
-  Widget build(BuildContext context) => _buildPlayerPage(context);
+  Widget build(BuildContext context) {
+    _refreshPlayerTools();
+    return _buildPlayerPage(context);
+  }
 }

@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:photo_view/photo_view.dart';
 
 import '../../core/layout/adaptive_page_frame.dart';
@@ -9,9 +10,13 @@ import '../../features/player/player_page.dart';
 import '../../models/video_note.dart';
 import '../../models/video_preview.dart';
 import '../../services/bilibili_service.dart';
+import '../../services/local_export_service.dart';
 import '../../services/video_note_service.dart';
 import '../../services/video_note_share_service.dart';
+import 'video_note_body_editor.dart';
 import 'video_note_composer.dart';
+import 'video_note_frame_save.dart';
+import 'video_note_frames_view.dart';
 import 'video_note_share_preview.dart';
 
 /// 允许测试替换播放器目标页，同时保留视频、分P和时间点三项跳转参数。
@@ -32,6 +37,7 @@ class VideoNoteDetailPage extends StatefulWidget {
     this.videoService,
     this.playerBuilder,
     this.shareService = const VideoNoteShareService(),
+    this.localExportService = const LocalExportService(),
   });
 
   final VideoNote note;
@@ -39,6 +45,7 @@ class VideoNoteDetailPage extends StatefulWidget {
   final BilibiliService? videoService;
   final VideoNotePlayerBuilder? playerBuilder;
   final VideoNoteShareService shareService;
+  final LocalExportService localExportService;
 
   /// 创建负责详情编辑、截图预览和保存状态的页面状态。
   @override
@@ -51,6 +58,7 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
   late final TextEditingController _bodyController;
   late final BilibiliService _videoService;
   late VideoNote _note;
+  late List<VideoNoteFrame> _frames;
   bool _saving = false;
   bool _openingVideo = false;
   bool _allowPop = false;
@@ -60,6 +68,7 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
   void initState() {
     super.initState();
     _note = widget.note;
+    _frames = _note.allFrames;
     _titleController = TextEditingController(text: _note.title);
     _bodyController = TextEditingController(text: _note.body);
     _videoService = widget.videoService ?? BilibiliVideoInfoService();
@@ -80,7 +89,8 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
   /// 判断当前输入是否与最后一次保存内容不同，用于拦截误退出。
   bool get _hasUnsavedChanges {
     return _titleController.text.trim() != _note.title ||
-        _bodyController.text.trim() != _note.body;
+        _bodyController.text != _note.body ||
+        !listEquals(_frames, _note.allFrames);
   }
 
   /// 输入变化时刷新 PopScope，让返回按钮立即知道是否需要提醒保存。
@@ -103,8 +113,9 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
     try {
       final VideoNote updated = _note.copyWith(
         title: title,
-        body: _bodyController.text.trim(),
+        body: _bodyController.text,
         updatedAt: DateTime.now(),
+        frames: _frames,
       );
       await widget.noteService.saveNote(updated);
       if (!mounted) {
@@ -149,10 +160,18 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
         ],
       ),
     );
-    if (confirmed != true) {
+    if (confirmed != true || !mounted) {
       return;
     }
-    await widget.noteService.deleteNote(_note.id);
+    final messenger = ScaffoldMessenger.of(context)..hideCurrentSnackBar();
+    try {
+      await widget.noteService.deleteNote(_note.id);
+    } catch (_) {
+      if (mounted) {
+        messenger.showSnackBar(const SnackBar(content: Text('删除笔记失败，请稍后重试。')));
+      }
+      return;
+    }
     if (mounted) {
       setState(() => _allowPop = true);
       Navigator.of(context).pop(true);
@@ -206,6 +225,9 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
         return part;
       }
     }
+    if (video.isCourse) {
+      throw const BilibiliLookupException('原课程章节已失效，请从课程目录重新选择。');
+    }
     for (final VideoPart part in video.parts) {
       if (part.pageNumber == _note.partPageNumber) {
         return part;
@@ -241,14 +263,22 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
           builder: (BuildContext context) => destination,
         ),
       );
-    } catch (_) {
+    } catch (error) {
       if (!mounted) {
         return;
       }
       setState(() => _openingVideo = false);
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
-        ..showSnackBar(const SnackBar(content: Text('暂时无法打开这条笔记对应的视频。')));
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              error is BilibiliLookupException
+                  ? error.message
+                  : '暂时无法打开这条笔记对应的视频。',
+            ),
+          ),
+        );
     }
   }
 
@@ -256,8 +286,10 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
   Future<void> _openFrameFullscreen(String framePath) async {
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        builder: (BuildContext context) =>
-            VideoNoteFrameViewerPage(framePath: framePath),
+        builder: (BuildContext context) => VideoNoteFrameViewerPage(
+          framePath: framePath,
+          localExportService: widget.localExportService,
+        ),
       ),
     );
   }
@@ -267,6 +299,7 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
     final VideoNote draft = _note.copyWith(
       title: _titleController.text.trim(),
       body: _bodyController.text.trim(),
+      frames: _frames,
     );
     await showVideoNoteSharePreview(
       context,
@@ -308,65 +341,22 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
 
   /// 构建正文末尾的自适应截图；保持原始比例并允许点击进入全屏浏览。
   Widget _buildFrameSection() {
-    final String? framePath = _note.framePath;
-    if (framePath == null || framePath.isEmpty) {
-      return const SizedBox.shrink();
-    }
+    if (_frames.isEmpty) return const SizedBox.shrink();
     return Column(
       key: const Key('note-detail-frame-section'),
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        const SizedBox(height: 28),
-        Row(
-          children: <Widget>[
-            Text(
-              '视频截图',
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
-            ),
-            const Spacer(),
-            const Icon(Icons.open_in_full_rounded, size: 18),
-            const SizedBox(width: 6),
-            Text('点击放大', style: Theme.of(context).textTheme.bodySmall),
-          ],
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SizedBox(height: 20),
+        Text(
+          '视频截图 · ${_frames.length} 张',
+          style: Theme.of(context).textTheme.titleMedium,
         ),
-        const SizedBox(height: 12),
-        Align(
-          alignment: Alignment.center,
-          child: Material(
-            color: Colors.black,
-            borderRadius: BorderRadius.circular(16),
-            clipBehavior: Clip.antiAlias,
-            child: InkWell(
-              key: const Key('open-note-frame-fullscreen'),
-              // 截图点击函数进入支持缩放的全屏浏览页。
-              onTap: () => _openFrameFullscreen(framePath),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxWidth: MediaQuery.sizeOf(context).width - 40,
-                  maxHeight: MediaQuery.sizeOf(context).height * 0.72,
-                ),
-                child: Image.file(
-                  File(framePath),
-                  fit: BoxFit.contain,
-                  // 截图错误函数显示明确说明，仍保留笔记的文字内容。
-                  errorBuilder:
-                      (
-                        BuildContext context,
-                        Object error,
-                        StackTrace? stackTrace,
-                      ) {
-                        return const SizedBox(
-                          width: 280,
-                          height: 180,
-                          child: Center(child: Text('截图文件不存在')),
-                        );
-                      },
-                ),
-              ),
-            ),
-          ),
+        VideoNoteFramesView(
+          frames: _frames,
+          enabled: !_saving,
+          onChanged: (frames) => setState(() => _frames = frames),
+          onOpen: (frame) => _openFrameFullscreen(frame.path),
+          localExportService: widget.localExportService,
         ),
       ],
     );
@@ -484,21 +474,24 @@ class _VideoNoteDetailPageState extends State<VideoNoteDetailPage> {
           ),
         ),
         const Divider(height: 28),
-        TextField(
-          key: const Key('note-detail-body-field'),
+        VideoNoteBodyEditor(
           controller: _bodyController,
-          enabled: !_saving,
-          minLines: 8,
-          maxLines: null,
-          maxLength: 6000,
-          style: theme.textTheme.bodyLarge?.copyWith(height: 1.55),
-          decoration: const InputDecoration(
-            hintText: '写下此刻的想法…',
-            filled: false,
-            border: InputBorder.none,
-            enabledBorder: InputBorder.none,
-            focusedBorder: InputBorder.none,
-            contentPadding: EdgeInsets.zero,
+          field: TextField(
+            key: const Key('note-detail-body-field'),
+            controller: _bodyController,
+            enabled: !_saving,
+            minLines: 8,
+            maxLines: null,
+            maxLength: 6000,
+            style: theme.textTheme.bodyLarge?.copyWith(height: 1.55),
+            decoration: const InputDecoration(
+              hintText: '写下此刻的想法…',
+              filled: false,
+              border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              contentPadding: EdgeInsets.zero,
+            ),
           ),
         ),
         if (includeFrame) _buildFrameSection(),
@@ -700,9 +693,14 @@ class _NoteMetadataChip extends StatelessWidget {
 /// 以黑色背景全屏显示一张笔记视频截图，并允许缩放和平移。
 class VideoNoteFrameViewerPage extends StatefulWidget {
   /// 创建只读取本机截图文件的全屏浏览页。
-  const VideoNoteFrameViewerPage({super.key, required this.framePath});
+  const VideoNoteFrameViewerPage({
+    super.key,
+    required this.framePath,
+    this.localExportService = const LocalExportService(),
+  });
 
   final String framePath;
+  final LocalExportService localExportService;
 
   /// 创建负责读取原图尺寸和保存缩放矩阵的全屏截图浏览状态。
   @override
@@ -739,55 +737,66 @@ class _VideoNoteFrameViewerPageState extends State<VideoNoteFrameViewerPage> {
 
   /// 构建全屏图片查看器；初始完整居中，双击和双指缩放都由 PhotoView 处理。
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => VideoNoteFrameSave(
+    localExportService: widget.localExportService,
+    builder: (context, saveFrame) => _buildViewer(
+      context,
+      saveFrame == null ? null : () => saveFrame(widget.framePath),
+    ),
+  );
+
+  Widget _buildViewer(BuildContext context, VoidCallback? onSave) {
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         fit: StackFit.expand,
         children: <Widget>[
           Positioned.fill(
-            child: PhotoView(
-              key: const Key('fullscreen-note-frame-viewer'),
-              imageProvider: FileImage(File(widget.framePath)),
-              controller: _photoController,
-              scaleStateController: _scaleStateController,
-              backgroundDecoration: const BoxDecoration(color: Colors.black),
-              basePosition: Alignment.center,
-              initialScale: PhotoViewComputedScale.contained,
-              minScale: PhotoViewComputedScale.contained,
-              maxScale: PhotoViewComputedScale.contained * 6,
-              strictScale: true,
-              enablePanAlways: false,
-              filterQuality: FilterQuality.high,
-              gestureDetectorBehavior: HitTestBehavior.opaque,
-              semanticLabel: '时间点笔记视频截图',
-              // 截图加载函数在大文件解码期间显示居中进度，不闪烁旧画面。
-              loadingBuilder:
-                  (BuildContext context, ImageChunkEvent? progress) => Center(
-                    child: CircularProgressIndicator(
-                      value:
-                          progress?.expectedTotalBytes == null ||
-                              progress!.expectedTotalBytes == 0
-                          ? null
-                          : progress.cumulativeBytesLoaded /
-                                progress.expectedTotalBytes!,
-                    ),
-                  ),
-              // 全屏截图错误函数在文件缺失或损坏时显示说明并保留返回能力。
-              errorBuilder:
-                  (
-                    BuildContext context,
-                    Object error,
-                    StackTrace? stackTrace,
-                  ) => const ColoredBox(
-                    color: Colors.black,
-                    child: Center(
-                      child: Text(
-                        '截图文件不存在或已损坏',
-                        style: TextStyle(color: Colors.white),
+            child: GestureDetector(
+              onLongPress: onSave,
+              child: PhotoView(
+                key: const Key('fullscreen-note-frame-viewer'),
+                imageProvider: FileImage(File(widget.framePath)),
+                controller: _photoController,
+                scaleStateController: _scaleStateController,
+                backgroundDecoration: const BoxDecoration(color: Colors.black),
+                basePosition: Alignment.center,
+                initialScale: PhotoViewComputedScale.contained,
+                minScale: PhotoViewComputedScale.contained,
+                maxScale: PhotoViewComputedScale.contained * 6,
+                strictScale: true,
+                enablePanAlways: false,
+                filterQuality: FilterQuality.high,
+                gestureDetectorBehavior: HitTestBehavior.opaque,
+                semanticLabel: '时间点笔记视频截图',
+                // 截图加载函数在大文件解码期间显示居中进度，不闪烁旧画面。
+                loadingBuilder:
+                    (BuildContext context, ImageChunkEvent? progress) => Center(
+                      child: CircularProgressIndicator(
+                        value:
+                            progress?.expectedTotalBytes == null ||
+                                progress!.expectedTotalBytes == 0
+                            ? null
+                            : progress.cumulativeBytesLoaded /
+                                  progress.expectedTotalBytes!,
                       ),
                     ),
-                  ),
+                // 全屏截图错误函数在文件缺失或损坏时显示说明并保留返回能力。
+                errorBuilder:
+                    (
+                      BuildContext context,
+                      Object error,
+                      StackTrace? stackTrace,
+                    ) => const ColoredBox(
+                      color: Colors.black,
+                      child: Center(
+                        child: Text(
+                          '截图文件不存在或已损坏',
+                          style: TextStyle(color: Colors.white),
+                        ),
+                      ),
+                    ),
+              ),
             ),
           ),
           Positioned(
@@ -812,6 +821,13 @@ class _VideoNoteFrameViewerPageState extends State<VideoNoteFrameViewerPage> {
                       onPressed: _resetZoom,
                       icon: const Icon(Icons.center_focus_strong_rounded),
                       tooltip: '重置缩放',
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton.filledTonal(
+                      key: const Key('save-fullscreen-note-frame'),
+                      onPressed: onSave,
+                      icon: const Icon(Icons.save_alt_rounded),
+                      tooltip: videoNoteFrameSaveLabel,
                     ),
                   ],
                 ),

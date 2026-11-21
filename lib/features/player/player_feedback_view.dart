@@ -2,91 +2,208 @@ part of 'player_page.dart';
 
 /// 组合播放器的拖动预览、学习完播和互动剧情选择反馈。
 extension _PlayerFeedbackView on _PlayerPageState {
-  /// 裁切雪碧图中的一格并按统一宽度缩放，避免下载大量独立截图。
-  Widget _buildVideoShotFrame(VideoShotFrame frame) {
-    const double displayWidth = 176;
-    final double scale = displayWidth / frame.frameWidth;
-    final double displayHeight = frame.frameHeight * scale;
-    final double sheetWidth = frame.frameWidth * frame.sheetColumns * scale;
-    final double sheetHeight = frame.frameHeight * frame.sheetRows * scale;
-    return ClipRRect(
-      key: const Key('video-shot-frame'),
-      borderRadius: BorderRadius.circular(8),
-      child: ClipRect(
-        child: SizedBox(
-          width: displayWidth,
-          height: displayHeight,
-          child: Stack(
-            clipBehavior: Clip.hardEdge,
-            children: <Widget>[
-              Positioned(
-                left: -frame.column * frame.frameWidth * scale,
-                top: -frame.row * frame.frameHeight * scale,
-                width: sheetWidth,
-                height: sheetHeight,
-                child: AppNetworkImage(
-                  imageUrl: frame.imageUrl,
-                  width: sheetWidth,
-                  height: sheetHeight,
-                  fit: BoxFit.fill,
-                  errorWidget:
-                      (BuildContext context, String url, Object error) =>
-                          const ColoredBox(color: Colors.black26),
+  /// 等完整图集实际解码才画目标格；传输期间不用上一张图冒充。
+  Widget _buildVideoShotFrame(
+    VideoShotFrame frame, {
+    bool showUnavailable = true,
+    double displayWidth = 176,
+  }) {
+    final displayHeight = displayWidth * frame.frameHeight / frame.frameWidth;
+    final sheetPixelWidth = frame.frameWidth * frame.sheetColumns;
+    final decodeWidth =
+        (176 * frame.sheetColumns * MediaQuery.devicePixelRatioOf(context))
+            .ceil()
+            .clamp(1, 2048);
+    final smallerUrl = sheetPixelWidth > decodeWidth
+        ? frame.resizedPublicAtlasUrl(decodeWidth)
+        : null;
+
+    Widget atlas(String url, {required bool resized}) {
+      Widget unavailable() => resized
+          ? atlas(frame.imageUrl, resized: false)
+          : !showUnavailable
+          ? const SizedBox.shrink()
+          : const Padding(
+              padding: EdgeInsets.only(bottom: 4),
+              child: Text(
+                '预览暂不可用',
+                key: Key('video-shot-unavailable'),
+                style: TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+            );
+      return AppNetworkImage(
+        key: ValueKey((_activeVideo.bvid, _currentPart.cid, url)),
+        imageUrl: url,
+        cache: widget.videoShotImageCache,
+        memCacheWidth: decodeWidth,
+        excludeFromSemantics: true,
+        placeholder: (_, _) => const _VideoShotLoading(),
+        errorWidget: (_, _, _) => unavailable(),
+        frameBuilder: (context, child, number, _) {
+          if (number == null || child is! RawImage || child.image == null) {
+            return const _VideoShotLoading();
+          }
+          final image = child.image!;
+          final scale = image.width / sheetPixelWidth;
+          final rowHeight = frame.frameHeight * scale;
+          final rows = (image.height / rowHeight).round();
+          // 最后一页可以少于完整行数；比例错误或缺少目标格时不能拉伸假图。
+          if (rows > frame.sheetRows ||
+              frame.row >= rows ||
+              (rows * rowHeight - image.height).abs() > 1) {
+            return unavailable();
+          }
+          final width = image.width / frame.sheetColumns;
+          final height = image.height / rows;
+          return ClipRRect(
+            key: const Key('video-shot-frame'),
+            borderRadius: BorderRadius.circular(8),
+            child: CustomPaint(
+              size: Size(displayWidth, displayHeight),
+              painter: _VideoShotCellPainter(
+                image,
+                Rect.fromLTWH(
+                  frame.column * width,
+                  frame.row * height,
+                  width,
+                  height,
                 ),
               ),
-            ],
-          ),
+            ),
+          );
+        },
+      );
+    }
+
+    return atlas(smallerUrl ?? frame.imageUrl, resized: smallerUrl != null);
+  }
+
+  Widget _buildTimelineDragPreview({
+    required double width,
+    required EdgeInsets edgeInsets,
+    required double sideInset,
+  }) {
+    final sliderInsets = PlayerTimelineGeometry.safeInsets(edgeInsets);
+    final sliderTrack = PlayerTimelineGeometry.trackRect(
+      Size((width - sliderInsets.horizontal).clamp(0.0, double.infinity), 0),
+      offset: Offset(sliderInsets.left, 0),
+    );
+    final visualProgress = Directionality.of(context) == TextDirection.rtl
+        ? 1 - _progress
+        : _progress;
+    return _buildTimelinePreviewCard(
+      target: _positionForProgress(_progress),
+      x:
+          sliderTrack.left +
+          sliderTrack.width * visualProgress -
+          edgeInsets.left -
+          sideInset,
+      dragging: true,
+    );
+  }
+
+  Widget _buildTimelinePreviewCard({
+    required Duration target,
+    required double x,
+    required bool dragging,
+  }) {
+    final frame = _videoShotPreview?.frameFor(target);
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final showThumbnail =
+                constraints.maxHeight >= (dragging ? 54 : 92) &&
+                constraints.maxWidth >= (dragging ? 76 : 140);
+            return CustomSingleChildLayout(
+              delegate: _TimelinePreviewPosition(x),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: DecoratedBox(
+                  key: dragging
+                      ? const Key('timeline-drag-preview')
+                      : const Key('timeline-hover-preview'),
+                  decoration: BoxDecoration(
+                    color: Colors.black87,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 5,
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (showThumbnail)
+                          if (frame != null)
+                            _buildVideoShotFrame(
+                              frame,
+                              showUnavailable: !dragging,
+                              displayWidth: dragging
+                                  ? ((constraints.maxHeight - 40) *
+                                            frame.frameWidth /
+                                            frame.frameHeight)
+                                        .clamp(1.0, constraints.maxWidth - 16)
+                                        .clamp(1.0, 176.0)
+                                  : 176,
+                            )
+                          else if (_videoShotLoading)
+                            const _VideoShotLoading(),
+                        Text(
+                          _formatSeconds(target.inSeconds),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
         ),
       ),
     );
   }
 
-  /// 创建由统一提示区排列的拖动卡；无截图时仍显示准确目标时间。
+  /// 画面横滑的反馈独立于底部时间轴预览。
   Widget _buildSeekFeedback() {
-    if (_seekFeedback == null) return const SizedBox.shrink();
     final Duration target = Duration(
       milliseconds:
           (_displayDuration.inMilliseconds * _horizontalScrubTargetProgress)
               .round(),
     );
-    final VideoShotFrame? frame = _horizontalScrubbing
+    final message = _horizontalScrubbing
+        ? '跳转至 ${_formatSeconds((target.inMilliseconds / 1000).round())}'
+        : _seekFeedback;
+    if (message == null) return const SizedBox.shrink();
+    final frame = _horizontalScrubbing
         ? _videoShotPreview?.frameFor(target)
         : null;
+
     return Center(
       child: IgnorePointer(
-        child: AnimatedOpacity(
-          opacity: _seekFeedback == null ? 0 : 1,
-          duration: const Duration(milliseconds: 160),
-          child: FittedBox(
-            fit: BoxFit.scaleDown,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: Colors.black87,
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(8),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    if (frame != null) _buildVideoShotFrame(frame),
-                    if (_horizontalScrubbing && _videoShotLoading) ...<Widget>[
-                      const SizedBox(
-                        width: 22,
-                        height: 22,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                    ],
-                    Text(
-                      _seekFeedback ?? '',
-                      style: const TextStyle(color: Colors.white),
-                    ),
-                  ],
-                ),
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: Colors.black87,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  if (frame != null)
+                    _buildVideoShotFrame(frame)
+                  else if (_horizontalScrubbing && _videoShotLoading)
+                    const _VideoShotLoading(),
+                  Text(message, style: const TextStyle(color: Colors.white)),
+                ],
               ),
             ),
           ),
@@ -105,14 +222,18 @@ extension _PlayerFeedbackView on _PlayerPageState {
     final bool markedCompleted =
         currentEntry?.status == LearningListStatus.completed;
     return Center(
-      child: PlaybackCompletionOverlay(
-        markedCompleted: markedCompleted,
-        learningFinished: _completionLearningFinished,
-        processing: markingCompleted,
-        // 完成回调只更新当前学习任务，不改变播放器分P。
-        onMarkCompleted: () => unawaited(_markCurrentLearningCompleted()),
-        // 继续学习回调只在用户明确点击后按学习清单顺序打开下一条任务。
-        onContinueLearning: () => unawaited(_continueLearningAfterCompletion()),
+      child: TickerMode(
+        enabled: !_choosingLearningParts,
+        child: PlaybackCompletionOverlay(
+          markedCompleted: markedCompleted,
+          learningFinished: _completionLearningFinished,
+          processing: markingCompleted,
+          // 完成回调只更新当前学习任务，不改变播放器分P。
+          onMarkCompleted: () => unawaited(_markCurrentLearningCompleted()),
+          // 继续学习回调只在用户明确点击后按学习清单顺序打开下一条任务。
+          onContinueLearning: () =>
+              unawaited(_continueLearningAfterCompletion()),
+        ),
       ),
     );
   }
@@ -142,12 +263,15 @@ extension _PlayerFeedbackView on _PlayerPageState {
   }
 
   /// 让上下栏分别淡出并透传隐藏后的触摸，不影响提示可见性。
-  Widget _buildFadingControls(Widget child) {
+  Widget _buildFadingControls(
+    Widget child, {
+    required _DesktopControlsEdge desktopEdge,
+  }) {
     final visible =
         _showControls &&
         !_controlsLocked &&
         !_playbackSnapshot.isInPictureInPicture;
-    return IgnorePointer(
+    final controls = IgnorePointer(
       ignoring: !visible,
       child: AnimatedOpacity(
         opacity: visible ? 1 : 0,
@@ -155,7 +279,50 @@ extension _PlayerFeedbackView on _PlayerPageState {
         child: child,
       ),
     );
+    if (!_appPlatform.isDesktop) return controls;
+    // Measure the toolbar in its current layout. A GlobalKey would reparent
+    // its semantics while the portrait player moves out of the scroll header.
+    return Builder(
+      builder: (context) {
+        switch (desktopEdge) {
+          case _DesktopControlsEdge.top:
+            _desktopTopBarContext = context;
+          case _DesktopControlsEdge.bottom:
+            _desktopBottomBarContext = context;
+        }
+        return controls;
+      },
+    );
   }
+
+  Widget _buildCompactSeekBufferHint() => IgnorePointer(
+    child: Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox.square(
+              dimension: 16,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Colors.white,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                _playbackSnapshot.message ?? '正在准备播放…',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 
   /// 顶部状态、中央手势和底部字幕独立布局；听视频仍留在画面层。
   Widget _buildPlayerFeedback() {
@@ -203,16 +370,19 @@ extension _PlayerFeedbackView on _PlayerPageState {
           center: LayoutBuilder(
             builder: (context, constraints) {
               final hasGesture =
+                  _horizontalScrubbing ||
                   _seekFeedback != null ||
                   _doubleTapSeekSeconds != 0 ||
                   _playbackActionPlaying != null;
-              final Widget gesture = _seekFeedback != null
+              final liveScrub = _horizontalScrubbing || _seekFeedback != null;
+              final doubleTap = !liveScrub && _doubleTapSeekSeconds != 0;
+              final Widget gesture = liveScrub
                   ? _buildSeekFeedback()
-                  : _doubleTapSeekSeconds != 0
+                  : doubleTap
                   ? PlayerSeekFeedback(
                       key: ValueKey('seek-$_doubleTapFeedbackSequence'),
                       seconds: _doubleTapSeekSeconds,
-                      compact: true,
+                      foregroundOnly: true,
                     )
                   : _playbackActionPlaying != null
                   ? PlayerActionFeedback(
@@ -225,10 +395,31 @@ extension _PlayerFeedbackView on _PlayerPageState {
                 alignment: Alignment.center,
                 children: [if (playbackHintVisible) _buildPlaybackHint()],
               );
+              if (doubleTap && phase != PlaybackPhase.error) {
+                // A seek can start buffering before the first painted frame.
+                // Keep its glyphs in the same full-height lane in both phases;
+                // reserve the opposite side for the transient loading hint.
+                return Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    gesture,
+                    if (playbackHintVisible && constraints.maxWidth >= 56)
+                      FractionallySizedBox(
+                        alignment: _doubleTapSeekSeconds > 0
+                            ? Alignment.centerLeft
+                            : Alignment.centerRight,
+                        widthFactor: 1 - PlayerSeekFeedback.bandWidthFactor,
+                        child: constraints.maxHeight < 124
+                            ? _buildCompactSeekBufferHint()
+                            : hint,
+                      ),
+                  ],
+                );
+              }
               if (!playbackHintVisible) return gesture;
-              if (!hasGesture) return hint;
-              // Native seek may temporarily enter loading. Its spinner/retry
-              // row must not paint over the still-running direction animation.
+              // Retry keeps its full interactive area while the decorative
+              // seek band fades, as before.
+              if (!hasGesture || doubleTap) return hint;
               final height = (constraints.maxHeight * .45).clamp(0.0, 72.0);
               final gap = (constraints.maxHeight - height).clamp(0.0, 6.0);
               return Column(
@@ -250,11 +441,75 @@ extension _PlayerFeedbackView on _PlayerPageState {
             children: [
               if (_completionPromptVisible) _buildPlaybackCompletionPrompt(),
               if (_interactivePromptVisible) _buildInteractiveVideoPrompt(),
-              if (subtitleVisible) _buildSubtitleOverlay(),
             ],
           ),
+          subtitle: subtitleVisible
+              ? _buildSubtitleOverlay()
+              : const SizedBox.shrink(),
+          subtitlePosition: _playbackPreferences.subtitlePosition,
         );
       },
     );
   }
+}
+
+class _VideoShotLoading extends StatelessWidget {
+  const _VideoShotLoading();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Padding(
+      key: Key('video-shot-loading'),
+      padding: EdgeInsets.only(bottom: 4),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: Colors.white,
+            ),
+          ),
+          SizedBox(width: 7),
+          Text('正在加载预览', style: TextStyle(color: Colors.white70, fontSize: 12)),
+        ],
+      ),
+    );
+  }
+}
+
+class _VideoShotCellPainter extends CustomPainter {
+  const _VideoShotCellPainter(this.image, this.source);
+  final ui.Image image;
+  final Rect source;
+
+  @override
+  void paint(Canvas canvas, Size size) =>
+      canvas.drawImageRect(image, source, Offset.zero & size, Paint());
+
+  @override
+  bool shouldRepaint(_VideoShotCellPainter oldDelegate) =>
+      image != oldDelegate.image || source != oldDelegate.source;
+}
+
+class _TimelinePreviewPosition extends SingleChildLayoutDelegate {
+  const _TimelinePreviewPosition(this.x);
+
+  final double x;
+
+  @override
+  BoxConstraints getConstraintsForChild(BoxConstraints constraints) =>
+      constraints.loosen();
+
+  @override
+  Offset getPositionForChild(Size size, Size childSize) => Offset(
+    (x - childSize.width / 2).clamp(0.0, size.width - childSize.width),
+    size.height - childSize.height,
+  );
+
+  @override
+  bool shouldRelayout(_TimelinePreviewPosition oldDelegate) =>
+      x != oldDelegate.x;
 }

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -63,6 +65,13 @@ Future<LearningListService> _learningListService() async {
   return LearningListService(preferencesLoader: () async => preferences);
 }
 
+class _RejectSortWrite extends LearningListService {
+  @override
+  Future<void> saveNewestFirst(bool value) async {
+    throw const LearningListStorageException();
+  }
+}
+
 /// 为首页头像测试返回固定的已登录会话，不访问真实网络或设备 Cookie。
 class _FixedAuthService extends BilibiliAuthService {
   /// 创建固定会话替身，便于验证首页只在有效登录时显示头像。
@@ -82,6 +91,145 @@ void main() {
     SharedPreferences.setMockInitialValues(<String, Object>{});
     // 账号读取使用空内存容器，避免访问 Windows 凭据插件并留下超时计时器。
     FlutterSecureStorage.setMockInitialValues(<String, String>{});
+  });
+
+  testWidgets('最近加入优先持久化，分组和搜索生效，且不会改手动顺序', (tester) async {
+    final service = await _learningListService();
+    final folder = (await service.createFolder('数学')).folders.single;
+    final prefs = await SharedPreferences.getInstance();
+    const storage = 'focubili_learning_list_v2';
+    final snapshot = jsonDecode(prefs.getString(storage)!) as Map;
+    LearningListEntry entry(
+      int id,
+      int day, {
+      bool grouped = true,
+      LearningListStatus status = LearningListStatus.notStarted,
+    }) => LearningListEntry(
+      bvid: 'BV1Learning$id',
+      title: '数学视频 $id',
+      ownerName: '测试 UP 主',
+      thumbnailUrl: '',
+      partCid: id,
+      partPageNumber: 1,
+      partTitle: '第 $id 节',
+      position: Duration.zero,
+      duration: const Duration(minutes: 1),
+      status: status,
+      addedAt: DateTime(2026, 11, day),
+      updatedAt: DateTime(2026, 11, 19),
+      sortOrder: id,
+      folderId: grouped ? folder.id : null,
+    );
+    final old = entry(1, 1);
+    final fresh = entry(2, 5);
+    final tie = entry(3, 5);
+    final outside = entry(4, 7, grouped: false);
+    final completed = entry(5, 8, status: LearningListStatus.completed);
+    snapshot['entries'] = [
+      old,
+      fresh,
+      tie,
+      outside,
+      completed,
+    ].map((e) => e.toJson()).toList();
+    final original = jsonEncode(snapshot);
+    await prefs.setString(storage, original);
+    await tester.binding.setSurfaceSize(const Size(960, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    Future<void> showPage() async {
+      await tester.pumpWidget(
+        MaterialApp(home: LearningListPage(learningListService: service)),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    Finder row(LearningListEntry e) =>
+        find.byKey(Key('learning-list-${e.stableId}'));
+    void before(LearningListEntry a, LearningListEntry b) {
+      expect(
+        tester.getTopLeft(row(a)).dy,
+        lessThan(tester.getTopLeft(row(b)).dy),
+      );
+    }
+
+    Future<void> selectSort(String label) async {
+      await tester.tap(find.byKey(const Key('learning-list-sort')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.ancestor(
+          of: find.text(label),
+          matching: find.byType(CheckedPopupMenuItem<bool>),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    await showPage();
+    before(old, fresh);
+    expect(find.byType(ReorderableDragStartListener), findsWidgets);
+    await selectSort('最近加入优先');
+    before(outside, fresh);
+    before(fresh, tie);
+    before(tie, old);
+    before(old, completed);
+    expect(find.byType(ReorderableDragStartListener), findsNothing);
+
+    await tester.tap(find.byKey(Key('learning-folder-${folder.id}')));
+    await tester.pumpAndSettle();
+    expect(row(outside), findsNothing);
+    before(fresh, old);
+    await tester.tap(find.byKey(const Key('search-learning-list')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('learning-list-search-field')),
+      '视频 1',
+    );
+    await tester.pumpAndSettle();
+    expect(row(old), findsOneWidget);
+    expect(row(fresh), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await showPage();
+    before(fresh, old);
+    expect(await service.loadNewestFirst(), isTrue);
+    await selectSort('手动顺序');
+    before(old, fresh);
+    expect(await service.loadNewestFirst(), isFalse);
+    expect(prefs.getString(storage), original);
+  });
+
+  testWidgets('窄屏大字设置排序失败时保留手动顺序', (tester) async {
+    final service = _RejectSortWrite();
+    await service.addVideo(_learningVideo());
+    await tester.binding.setSurfaceSize(const Size(360, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: TextScaler.linear(1.5)),
+          child: child!,
+        ),
+        home: LearningListPage(learningListService: service),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final sort = find.byKey(const Key('learning-list-sort'));
+    await tester.ensureVisible(sort);
+    await tester.tap(sort);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.ancestor(
+        of: find.text('最近加入优先'),
+        matching: find.byType(CheckedPopupMenuItem<bool>),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('未保存，请检查设备存储后重试'), findsOneWidget);
+    expect(find.byTooltip('学习清单排序：手动顺序'), findsOneWidget);
+    expect(await service.loadNewestFirst(), isFalse);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('学习清单页面可以切换未开始、学习中和已完成状态', (WidgetTester tester) async {
@@ -225,10 +373,12 @@ void main() {
     expect(find.text('首页继续学习测试'), findsOneWidget);
   });
 
-  /// 验证首页一次上滑会把首屏吸附到卡片区，而不是停在半屏位置。
-  testWidgets('首页首屏上滑后吸附到卡片区', (WidgetTester tester) async {
-    await tester.binding.setSurfaceSize(const Size(420, 900));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+  /// 一次明确的上拉展开卡片，下拉同样不需要等待中途停靠。
+  testWidgets('首页卡片一次上拉打开一次下拉关闭', (WidgetTester tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(420, 900);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
     final LearningListService service = await _learningListService();
     final FocusTimerController focusController = FocusTimerController(
       tickInterval: const Duration(days: 1),
@@ -258,16 +408,7 @@ void main() {
     );
     expect(cardRect.top, lessThan(110));
 
-    // 轻微下滑只保留自然位移，不应立即把所有卡片推回屏幕底部。
-    await tester.drag(scrollView, const Offset(0, 40));
-    await tester.pumpAndSettle();
-    final Rect slightDownRect = tester.getRect(
-      find.byKey(const Key('continue-learning-empty')),
-    );
-    expect(slightDownRect.top, lessThan(180));
-
-    // 验证反向手势会播放回到首屏的完整吸附动画，而不是停在半屏位置。
-    await tester.drag(scrollView, const Offset(0, 180));
+    await tester.fling(scrollView, const Offset(0, 120), 2500);
     await tester.pumpAndSettle();
     final Rect returnedCardRect = tester.getRect(
       find.byKey(const Key('continue-learning-empty')),
@@ -303,7 +444,7 @@ void main() {
     await tester.pumpAndSettle();
 
     final Finder scrollView = find.byType(CustomScrollView);
-    // 越过欢迎区及 220 像素吸附窗口，模拟明确进入深层卡片的大幅手势。
+    // 单次拖动从首屏穿过首张卡片，松手后应停在已抵达的列表深处。
     await tester.drag(scrollView, const Offset(0, -1300));
     await tester.pumpAndSettle();
 

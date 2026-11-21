@@ -8,6 +8,11 @@ class DownloadInterrupted implements Exception {
 
 /// Owns cancellation for one transfer, including a blocked HTTP request.
 class DownloadControl {
+  DownloadControl({this.requireExactQuality = false});
+
+  /// True when the queue already resolved and advertised one exact tier.
+  final bool requireExactQuality;
+
   bool _interrupted = false;
   void Function()? _abort;
   final Completer<void> _interruption = Completer<void>();

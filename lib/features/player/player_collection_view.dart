@@ -209,12 +209,12 @@ extension _PlayerCollectionView on _PlayerPageState {
                 child: IconButton(
                   key: Key('add-learning-player-collection-${entry.bvid}'),
                   visualDensity: VisualDensity.compact,
-                  // 合集预览加入函数查询对应完整视频并自动继承该视频观看进度。
+                  // 合集预览加入函数查询完整视频后打开统一的分 P 选择。
                   onPressed: adding
                       ? null
                       : () =>
                             unawaited(_addCollectionVideoToLearningList(entry)),
-                  icon: adding
+                  icon: adding && !_choosingLearningParts
                       ? const SizedBox.square(
                           dimension: 16,
                           child: CircularProgressIndicator(strokeWidth: 2),
@@ -390,41 +390,45 @@ extension _PlayerCollectionView on _PlayerPageState {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           const SizedBox(height: 4),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  final scale = MediaQuery.textScalerOf(context).scale(12) / 12;
-                  final columns = constraints.maxWidth >= 4 * 64 * scale
-                      ? 4
-                      : 2;
-                  final width =
-                      (constraints.maxWidth - (columns - 1) * 8) / columns;
-                  final actions = <Widget>[
-                    _buildCurrentVideoLearningListButton(),
-                    _buildOfflineDownloadButton(),
-                    _buildAppFavoriteButton(),
-                    PlayerLibraryAction(
-                      key: const Key('portrait-note-button'),
-                      // 竖屏记笔记按钮函数在播放器下方打开编辑区，并固定播放器高度。
-                      onPressed: () => unawaited(_openVideoNotes()),
-                      icon: Icons.edit_note_rounded,
-                      tooltip: '记笔记',
-                      label: '记笔记',
+          LayoutBuilder(
+            key: const Key('player-library-actions'),
+            builder: (context, constraints) {
+              final showOfflineAction = !_activeVideo.isCourse;
+              final actions = <Widget>[
+                _buildCurrentVideoLearningListButton(),
+                if (showOfflineAction) _buildOfflineDownloadButton(),
+                _buildAppFavoriteButton(),
+                PlayerLibraryAction(
+                  key: const Key('portrait-note-button'),
+                  // 竖屏记笔记按钮函数在播放器下方打开编辑区，并固定播放器高度。
+                  onPressed: () => unawaited(_openVideoNotes()),
+                  icon: Icons.edit_note_rounded,
+                  tooltip: '记笔记',
+                  label: '记笔记',
+                ),
+              ];
+              final scale = MediaQuery.textScalerOf(context).scale(12) / 12;
+              // 课堂窄栏在大字号下改为纵向排列，避免留下单独一格的空位。
+              final columns =
+                  constraints.maxWidth >= actions.length * 64 * scale
+                  ? actions.length
+                  : showOfflineAction
+                  ? 2
+                  : 1;
+              return Column(
+                spacing: 4,
+                children: [
+                  for (var first = 0; first < actions.length; first += columns)
+                    Row(
+                      spacing: 8,
+                      children: [
+                        for (final action in actions.skip(first).take(columns))
+                          Expanded(child: action),
+                      ],
                     ),
-                  ];
-                  return Wrap(
-                    spacing: 8,
-                    runSpacing: 4,
-                    children: [
-                      for (final action in actions)
-                        SizedBox(width: width, child: action),
-                    ],
-                  );
-                },
-              ),
-            ],
+                ],
+              );
+            },
           ),
           Divider(
             height: 16,

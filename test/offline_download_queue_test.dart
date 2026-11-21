@@ -12,6 +12,8 @@ import 'package:focubili/services/offline_video_service.dart';
 
 /// Provides controllable transfers for testing queue lifecycle races.
 class QueueLibrary extends OfflineVideoService {
+  QueueLibrary({super.cacheLocations});
+
   final started = <int>[];
   final discarded = <int>[];
   final ready = <OfflineVideoDownload>[];
@@ -30,6 +32,7 @@ class QueueLibrary extends OfflineVideoService {
     int quality = 32,
     void Function(int, int?)? onProgress,
     DownloadControl? control,
+    String? cacheLocationId,
   }) {
     started.add((part ?? video.initialPart).cid);
     progress = onProgress;
@@ -45,7 +48,12 @@ class QueueLibrary extends OfflineVideoService {
 
   /// Records cleanup without touching real media files.
   @override
-  Future<void> discardPartial(String bvid, int cid, int quality) async {
+  Future<void> discardPartial(
+    String bvid,
+    int cid,
+    int quality, {
+    String? cacheLocationId,
+  }) async {
     discarded.add(cid);
   }
 }
@@ -77,6 +85,39 @@ VideoPreview fixture(int cid) => VideoPreview(
   ],
 );
 
+OfflineVideoDownload _cached(int cid, DateTime downloadedAt) =>
+    OfflineVideoDownload(
+      bvid: fixture(cid).bvid,
+      cid: cid,
+      title: 'Fixture',
+      coverUrl: '',
+      ownerName: 'UP',
+      filePath: '$cid.mp4',
+      sizeBytes: 100,
+      qualityId: 32,
+      qualityLabel: '480P',
+      duration: const Duration(seconds: 30),
+      downloadedAt: downloadedAt,
+      status: OfflineDownloadStatus.ready,
+    );
+
+OfflineDownloadTask _history(
+  int cid,
+  DateTime createdAt, {
+  DateTime? completedAt,
+  DownloadTaskStatus status = DownloadTaskStatus.completed,
+}) {
+  final video = fixture(cid);
+  return OfflineDownloadTask(
+    video: video,
+    part: video.initialPart,
+    quality: 32,
+    createdAt: createdAt,
+    completedAt: completedAt,
+    status: status,
+  );
+}
+
 /// Flushes microtasks until a specific state becomes observable, with a finite bound.
 Future<void> until(bool Function() condition) async {
   for (var i = 0; i < 100 && !condition(); i++) {
@@ -89,6 +130,117 @@ Future<void> until(bool Function() condition) async {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  test(
+    'restart expires completed history at fourteen days and keeps the media',
+    () async {
+      final now = DateTime.utc(2026, 11, 21);
+      final boundary = now.subtract(const Duration(days: 14));
+      final booked = boundary.subtract(const Duration(days: 20));
+      final persisted = [
+        _history(
+          1,
+          booked,
+          completedAt: boundary.subtract(const Duration(seconds: 1)),
+        ),
+        _history(2, booked, completedAt: boundary),
+        _history(
+          3,
+          booked,
+          completedAt: boundary.add(const Duration(seconds: 1)),
+        ),
+        _history(4, booked),
+        _history(5, booked),
+        for (final (i, status) in [
+          (6, DownloadTaskStatus.queued),
+          (7, DownloadTaskStatus.downloading),
+          (8, DownloadTaskStatus.paused),
+          (9, DownloadTaskStatus.failed),
+        ])
+          _history(i, booked, status: status),
+      ];
+      final library = QueueLibrary()
+        ..ready.addAll([
+          for (final cid in [1, 2, 3, 4]) _cached(cid, boundary),
+          _cached(5, boundary.add(const Duration(minutes: 1))),
+        ]);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        OfflineDownloadQueue.storageKey,
+        jsonEncode(persisted.map((task) => task.toJson()).toList()),
+      );
+      final queue = OfflineDownloadQueue(library: library, clock: () => now);
+      addTearDown(queue.close);
+      await queue.initialize();
+      expect(queue.tasks.map((task) => task.part.cid), [3, 5, 6, 7, 8, 9]);
+      expect(
+        queue.tasks[0].completedAt,
+        boundary.add(const Duration(seconds: 1)),
+      );
+      expect(queue.tasks[1].completedAt, library.ready.last.downloadedAt);
+      expect(queue.tasks.skip(2).map((task) => task.status), [
+        DownloadTaskStatus.paused, // Restore-on-start behavior, not retention.
+        DownloadTaskStatus.paused,
+        DownloadTaskStatus.paused,
+        DownloadTaskStatus.failed,
+      ]);
+      expect(library.ready.map((file) => file.cid), [1, 2, 3, 4, 5]);
+      expect(library.discarded, isEmpty);
+      final stored =
+          (jsonDecode(prefs.getString(OfflineDownloadQueue.storageKey)!)
+                  as List)
+              .map(
+                (entry) => OfflineDownloadTask.fromJson(
+                  Map<String, dynamic>.from(entry as Map),
+                ),
+              );
+      expect(stored.map((task) => task.part.cid), [3, 5, 6, 7, 8, 9]);
+      expect(stored.elementAt(1).completedAt, library.ready.last.downloadedAt);
+    },
+  );
+
+  testWidgets(
+    'the live timer prunes just one expired row and keeps active tasks',
+    (t) async {
+      var now = DateTime.utc(2026, 11, 21);
+      final recent = now.subtract(const Duration(days: 14, seconds: -1));
+      final library = QueueLibrary()..ready.add(_cached(1, recent));
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        OfflineDownloadQueue.storageKey,
+        jsonEncode([
+          _history(1, DateTime.utc(2026), completedAt: recent).toJson(),
+        ]),
+      );
+      final queue = OfflineDownloadQueue(library: library, clock: () => now);
+      await queue.initialize();
+      await queue.enqueue(fixture(2));
+      await queue.enqueue(fixture(3));
+      await t.pump();
+      expect(queue.tasks.map((task) => task.status), [
+        DownloadTaskStatus.completed,
+        DownloadTaskStatus.downloading,
+        DownloadTaskStatus.queued,
+      ]);
+      library.progress!(25, 100);
+      now = now.add(const Duration(seconds: 1));
+      await t.pump(const Duration(seconds: 1));
+      expect(queue.tasks.map((task) => task.part.cid), [2, 3]);
+      expect(queue.tasks.map((task) => task.status), [
+        DownloadTaskStatus.downloading,
+        DownloadTaskStatus.queued,
+      ]);
+      expect(queue.tasks.first.receivedBytes, 25);
+      expect(library.ready.single.cid, 1);
+      expect(library.discarded, isEmpty);
+      expect(
+        (jsonDecode(prefs.getString(OfflineDownloadQueue.storageKey)!) as List)
+            .map((entry) => entry['cid']),
+        [2, 3],
+      );
+      await queue.close();
+    },
+  );
 
   test(
     'speed excludes resumed bytes, decays on stalls and clears on pause',

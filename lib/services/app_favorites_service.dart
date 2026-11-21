@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/app_favorite.dart';
 import '../models/app_favorites_backup.dart';
@@ -13,9 +14,16 @@ class AppFavoritesService {
   /// Accepts an optional preference provider without reading account data.
   AppFavoritesService({AppFavoritesPreferencesLoader? preferencesLoader})
     : _preferencesLoader = preferencesLoader;
+
+  /// Notifies retained cover views after a complete successful local mutation.
+  static final ValueNotifier<int> contentsRevision = ValueNotifier(0);
+
+  /// Notifies retained views after a folder name is successfully saved.
+  static final ValueNotifier<int> folderNamesRevision = ValueNotifier(0);
+
   static const _foldersKey = 'app_favorites.folders_v1';
   static const _itemsPrefix = 'app_favorites.items_v1.';
-  static Future<void> _queue = Future<void>.value();
+  static Future<void>? _queue;
   static int _idSequence = 0;
   final AppFavoritesPreferencesLoader? _preferencesLoader;
   final Map<String, Future<int?>> _partCounts = {};
@@ -59,13 +67,24 @@ class AppFavoritesService {
   }
 
   /// Serializes complete mutations across all service instances, including failures.
-  Future<T> _mutate<T>(Future<T> Function() operation) {
-    final next = _queue.then((_) => operation());
-    _queue = next.then<void>(
-      (_) {},
-      onError: (Object error, StackTrace stack) {},
-    );
-    return next;
+  Future<T> _mutate<T>(
+    Future<T> Function() operation, {
+    bool notify = true,
+  }) async {
+    final previous = _queue;
+    final release = Completer<void>();
+    final tail = _queue = release.future;
+    try {
+      if (previous != null) await previous;
+      final result = await operation();
+      if (notify && result != null && result != false) contentsRevision.value++;
+      return result;
+    } finally {
+      // A completed Future can schedule late listeners in its original Zone.
+      // Drop the drained tail so later mutations never need that zone to run.
+      if (identical(_queue, tail)) _queue = null;
+      release.complete();
+    }
   }
 
   /// Uses only the injected or local preferences backend.
@@ -124,8 +143,76 @@ class AppFavoritesService {
       createdAt: old.createdAt,
       updatedAt: DateTime.now(),
     );
-    return _saveFolders(folders);
+    final saved = await _saveFolders(folders);
+    if (saved) folderNamesRevision.value++;
+    return saved;
   });
+
+  /// Reorders an exact set of current folders without modifying their metadata.
+  Future<bool> reorderFolders(List<String> orderedIds) {
+    final ids = List<String>.of(orderedIds);
+    return _mutate(() async {
+      final current = await loadFolders();
+      final ordered = _inOrder(current, (folder) => folder.id, ids);
+      if (ordered == null) return false;
+      return _saveOrder(_foldersKey, ordered.map((folder) => folder.toJson()));
+    });
+  }
+
+  /// Saves a manual order for one folder without replacing changed membership.
+  Future<bool> reorderItems(String folderId, List<String> orderedIds) {
+    final ids = List<String>.of(orderedIds);
+    return _mutate(() async {
+      if (!(await loadFolders()).any((folder) => folder.id == folderId)) {
+        return false;
+      }
+      final current = await loadItems(folderId);
+      final ordered = _inOrder(current, (item) => item.bvid, ids);
+      if (ordered == null) return false;
+      return _saveOrder('$_itemsPrefix$folderId', [
+        for (var i = 0; i < ordered.length; i++)
+          ordered[i].withSortIndex(i).toJson(),
+      ]);
+    });
+  }
+
+  /// Refuses duplicates or stale lists that could drop, add, or resurrect data.
+  List<T>? _inOrder<T>(
+    List<T> current,
+    String Function(T) idOf,
+    List<String> orderedIds,
+  ) {
+    if (orderedIds.length != current.length) return null;
+    final byId = {for (final item in current) idOf(item): item};
+    if (byId.length != current.length ||
+        orderedIds.toSet().length != current.length ||
+        !byId.keys.toSet().containsAll(orderedIds)) {
+      return null;
+    }
+    return [for (final id in orderedIds) byId[id]!];
+  }
+
+  /// SharedPreferences changes its memory cache even if the backend rejects
+  /// a write. Reload the durable values rather than displaying a phantom order.
+  Future<bool> _saveOrder(
+    String key,
+    Iterable<Map<String, Object?>> entries,
+  ) async {
+    final prefs = await _loadPreferences();
+    try {
+      if (await prefs.setString(key, jsonEncode(entries.toList()))) {
+        return true;
+      }
+    } catch (_) {
+      // A thrown write and a rejected write both need a cache refresh.
+    }
+    try {
+      await prefs.reload();
+    } catch (_) {
+      // The caller retains the last displayed data if storage is unavailable.
+    }
+    return false;
+  }
 
   /// Removes metadata before item cleanup; failed cleanup restores the folder list.
   Future<bool> deleteFolder(String id) => _mutate(() async {
@@ -147,14 +234,23 @@ class AppFavoritesService {
     }
   });
 
-  /// Restores the newest items first and refuses to discard damaged entries.
+  /// Restores manual order, with new or legacy items newest-first above it.
   Future<List<AppFavoriteItem>> loadItems(String folderId) async {
     final prefs = await _loadPreferences();
     final items = _decode(
       prefs.getString('$_itemsPrefix$folderId'),
       AppFavoriteItem.fromJson,
     );
-    items.sort((a, b) => b.addedAt.compareTo(a.addedAt));
+    items.sort((a, b) {
+      final aIndex = a.sortIndex;
+      final bIndex = b.sortIndex;
+      if (aIndex != null && bIndex != null && aIndex != bIndex) {
+        return aIndex.compareTo(bIndex);
+      }
+      if (aIndex == null && bIndex != null) return -1;
+      if (aIndex != null && bIndex == null) return 1;
+      return b.addedAt.compareTo(a.addedAt);
+    });
     return List.unmodifiable(items);
   }
 
@@ -185,13 +281,27 @@ class AppFavoritesService {
       });
 
   /// Removes a BV within the same queue as additions and folder deletions.
-  Future<bool> removeItem(String folderId, String bvid) => _mutate(() async {
-    final items = await loadItems(folderId);
-    return _saveItems(
-      folderId,
-      items.where((item) => item.bvid != bvid).toList(),
-    );
-  });
+  Future<bool> removeItem(String folderId, String bvid) async =>
+      await removeItems(folderId, [bvid]) != null;
+
+  /// Saves only the targeted folder once, in the same queue as backup and import.
+  /// Returns the number removed, or null if the folder no longer exists or saving failed.
+  Future<int?> removeItems(String folderId, Iterable<String> bvids) {
+    final ids = bvids.toSet();
+    return _mutate(() async {
+      if (!(await loadFolders()).any((folder) => folder.id == folderId)) {
+        return null;
+      }
+      final items = await loadItems(folderId);
+      final remaining = items
+          .where((item) => !ids.contains(item.bvid))
+          .toList();
+      if (remaining.length == items.length) return 0;
+      return await _saveItems(folderId, remaining)
+          ? items.length - remaining.length
+          : null;
+    });
+  }
 
   /// Counts saved items across all current folders.
   Future<int> totalItemCount() async {
@@ -219,7 +329,7 @@ class AppFavoritesService {
           items: items,
           exportedAt: DateTime.now(),
         );
-      });
+      }, notify: false);
 
   /// 同标识或同名目录合并，按目录内 BV 去重；本机名称、元数据和已有视频优先。
   Future<AppFavoritesBackupImportResult> importBackup(
@@ -244,6 +354,7 @@ class AppFavoritesService {
             !sourceIds.contains(folder.id),
       );
       final AppFavoriteFolder target;
+      final bool createTarget = byId.isEmpty && byName.isEmpty;
       if (byId.isNotEmpty) {
         target = byId.first;
       } else if (byName.isNotEmpty) {
@@ -272,6 +383,8 @@ class AppFavoritesService {
             durationText: item.durationText,
             addedAt: item.addedAt,
             partCount: item.partCount,
+            // Preserve rank for a fresh restore, not when merging two orders.
+            sortIndex: createTarget ? item.sortIndex : null,
           ),
         );
         imported++;

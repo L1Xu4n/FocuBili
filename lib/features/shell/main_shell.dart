@@ -3,13 +3,18 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../core/layout/adaptive_layout.dart';
+import '../../core/router/app_router.dart';
+import '../../services/subscription_service.dart';
 import '../home/home_page.dart';
 import '../profile/profile_page.dart';
 import '../search/search_page.dart';
+import '../subscriptions/subscription_updates_page.dart';
 
 /// 应用主框架，负责首页、搜索和“我的”三个一级页面的切换。
 class MainShell extends StatefulWidget {
-  const MainShell({super.key});
+  const MainShell({super.key, this.subscriptionService});
+
+  final SubscriptionService? subscriptionService;
 
   /// 创建主框架的可变状态，用于保存当前一级页面位置。
   @override
@@ -20,6 +25,10 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell>
     with SingleTickerProviderStateMixin {
   late final AnimationController _navigationController;
+  final _homePageKey = GlobalKey();
+  late final SubscriptionService _subscriptions =
+      widget.subscriptionService ?? SubscriptionService.instance;
+  static const _subscriptionDestinationIndex = 3;
   int _currentIndex = 0;
   int? _transitionFrom;
   int? _transitionTo;
@@ -107,12 +116,18 @@ class _MainShellState extends State<MainShell>
   }
 
   /// 创建需要挂载到主框架的三个一级页面，并保持它们的顺序稳定。
-  List<Widget> _buildPages({required bool workspace}) {
+  List<Widget> _buildPages({
+    required bool workspace,
+    required bool homeWorkspace,
+  }) {
     return <Widget>[
       HomePage(
+        key: _homePageKey,
+        workspace: homeWorkspace,
         onSearchRequested: _openSearch,
         onProfileRequested: _openProfile,
         refreshGeneration: _homeRefreshGeneration,
+        subscriptionService: _subscriptions,
       ),
       SearchPage(onBackRequested: workspace ? null : _openHome),
       ProfilePage(onBackRequested: workspace ? null : _openHome),
@@ -120,7 +135,11 @@ class _MainShellState extends State<MainShell>
   }
 
   /// 创建横屏平板和桌面宽窗口使用的左侧一级导航。
-  Widget _buildWorkspaceNavigation(Size windowSize) {
+  Widget _buildWorkspaceNavigation(
+    Size windowSize, {
+    required bool showSubscription,
+    required bool showAbout,
+  }) {
     final bool extended = AdaptiveLayout.usesExpandedWorkspace(windowSize);
     return NavigationRail(
       key: const Key('workspace-navigation-rail'),
@@ -133,33 +152,78 @@ class _MainShellState extends State<MainShell>
           : NavigationRailLabelType.all,
       leading: Padding(
         padding: const EdgeInsets.only(bottom: 12),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(12),
-          child: Image.asset(
-            'assets/icon/focubili_icon.png',
-            width: 42,
-            height: 42,
-          ),
-        ),
+        child: _buildWorkspaceLogo(showAbout: showAbout),
       ),
-      destinations: const <NavigationRailDestination>[
-        NavigationRailDestination(
+      destinations: <NavigationRailDestination>[
+        const NavigationRailDestination(
           icon: Icon(Icons.home_outlined),
           selectedIcon: Icon(Icons.home_rounded),
           label: Text('首页'),
         ),
-        NavigationRailDestination(
+        const NavigationRailDestination(
           icon: Icon(Icons.search_rounded),
           selectedIcon: Icon(Icons.manage_search_rounded),
           label: Text('搜索'),
         ),
-        NavigationRailDestination(
+        const NavigationRailDestination(
           icon: Icon(Icons.person_outline_rounded),
           selectedIcon: Icon(Icons.person_rounded),
           label: Text('我的'),
         ),
+        if (showSubscription) _buildWorkspaceSubscriptionDestination(),
       ],
-      onDestinationSelected: _selectPage,
+      scrollable: showSubscription,
+      onDestinationSelected: (index) {
+        if (index == _subscriptionDestinationIndex) {
+          Navigator.of(context).push<void>(
+            MaterialPageRoute(
+              builder: (_) => SubscriptionUpdatesPage(service: _subscriptions),
+            ),
+          );
+        } else {
+          _selectPage(index);
+        }
+      },
+    );
+  }
+
+  /// 宽屏首页复用品牌图标，保留原先平板简介中的关于入口。
+  Widget _buildWorkspaceLogo({required bool showAbout}) {
+    final radius = BorderRadius.circular(12);
+    final logo = ClipRRect(
+      borderRadius: radius,
+      child: Image.asset(
+        'assets/icon/focubili_icon.png',
+        width: 42,
+        height: 42,
+      ),
+    );
+    if (!showAbout) return logo;
+    return IconButton(
+      key: const Key('workspace-navigation-open-about'),
+      tooltip: '关于焦点哔哩',
+      style: IconButton.styleFrom(
+        padding: EdgeInsets.zero,
+        shape: RoundedRectangleBorder(borderRadius: radius),
+      ),
+      onPressed: () => Navigator.of(context).pushNamed(AppRoutes.about),
+      icon: logo,
+    );
+  }
+
+  /// 复用侧栏入口的悬停、按压和键盘焦点反馈，但打开独立路由。
+  NavigationRailDestination _buildWorkspaceSubscriptionDestination() {
+    final unread = _subscriptions.unreadCount;
+    const icon = Icon(Icons.rss_feed);
+    return NavigationRailDestination(
+      icon: KeyedSubtree(
+        key: const Key('workspace-navigation-open-subscription'),
+        child: unread == 0 ? icon : Badge.count(count: unread, child: icon),
+      ),
+      label: Text(
+        '焦点订阅',
+        semanticsLabel: unread == 0 ? '焦点订阅' : '焦点订阅，$unread 条未读',
+      ),
     );
   }
 
@@ -255,7 +319,14 @@ class _MainShellState extends State<MainShell>
                 constraints.maxHeight,
               );
               final bool workspace = AdaptiveLayout.usesWorkspace(windowSize);
-              final List<Widget> pages = _buildPages(workspace: workspace);
+              // 软键盘把可见区域压矮不是旋转，不能让宽竖屏首页切到右侧抽屉。
+              final bool homeWorkspace =
+                  workspace &&
+                  AdaptiveLayout.usesWorkspace(MediaQuery.sizeOf(context));
+              final List<Widget> pages = _buildPages(
+                workspace: workspace,
+                homeWorkspace: homeWorkspace,
+              );
               final Widget pageStack = ClipRect(
                 child: _buildPageStack(
                   pages: pages,
@@ -266,7 +337,23 @@ class _MainShellState extends State<MainShell>
               if (workspace) {
                 return Row(
                   children: <Widget>[
-                    _buildWorkspaceNavigation(windowSize),
+                    ListenableBuilder(
+                      listenable: _subscriptions,
+                      builder: (context, _) {
+                        // 平板只在首页接管旧简介的订阅和关于入口；不改变其他一级页。
+                        final bool showHomeActions =
+                            AdaptiveLayout.isDesktopPlatform(
+                              Theme.of(context).platform,
+                            ) ||
+                            (homeWorkspace && _currentIndex == 0);
+                        return _buildWorkspaceNavigation(
+                          windowSize,
+                          showSubscription:
+                              showHomeActions && _subscriptions.enabled,
+                          showAbout: showHomeActions,
+                        );
+                      },
+                    ),
                     const VerticalDivider(width: 1),
                     Expanded(child: pageStack),
                   ],

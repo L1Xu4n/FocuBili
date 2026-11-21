@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 
 import '../core/utils/bilibili_id_converter.dart';
+import 'bilibili_course_link.dart';
 
 /// 定义短链接展开函数，测试可以避免访问真实网络。
 typedef BilibiliShortLinkExpander = Future<Uri?> Function(Uri shortLink);
@@ -43,6 +44,10 @@ abstract final class BilibiliDeepLinkParser {
 
   /// 把外部 URI 转成播放器目标；非视频、无效编号和其他网站会安全返回空值。
   static BilibiliVideoDeepLinkTarget? parse(String rawLink) {
+    final course = BilibiliCourseLink.parse(rawLink);
+    if (course != null) {
+      return BilibiliVideoDeepLinkTarget(bvid: course.toString());
+    }
     final Uri? uri = Uri.tryParse(rawLink.trim());
     if (uri == null) {
       return null;

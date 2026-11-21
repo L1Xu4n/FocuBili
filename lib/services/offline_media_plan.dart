@@ -84,12 +84,20 @@ class OfflineMediaPlan {
   /// 优先解析音视频分离源；没有 DASH 时兼容原有单段合并媒体。
   factory OfflineMediaPlan.fromData(
     Map<Object?, Object?> data,
-    int requestedQuality,
-  ) {
+    int requestedQuality, {
+    bool Function(OfflineMediaTrack)? allowDashVideo,
+    bool Function(OfflineMediaTrack)? allowDashAudio,
+  }) {
     final dash = data['dash'];
     if (dash is Map) {
       final videos = _dashTracks(dash['video'], video: true);
       final audio = _dashTracks(dash['audio'], video: false);
+      if (allowDashVideo != null) {
+        videos.removeWhere((track) => !allowDashVideo(track));
+      }
+      if (allowDashAudio != null) {
+        audio.removeWhere((track) => !allowDashAudio(track));
+      }
       if (videos.isNotEmpty) {
         if (audio.isEmpty) {
           throw const OfflineMediaPlanException('没有取得完整音轨，请稍后重试缓存。');

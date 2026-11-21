@@ -4,9 +4,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/services/app_update_service.dart';
 
-class _Version implements AppVersionProvider {
+class _Version implements AppVersionProvider, AppUpdateInstallationProvider {
   @override
   Future<String> loadVersion() async => '1.7.0';
+
+  @override
+  Future<AppUpdateInstallation> loadUpdateInstallation() async =>
+      const AppUpdateInstallation(packageName: 'com.focubili.app');
 }
 
 Map<String, Object?> _release(String version, {bool prerelease = false}) => {
@@ -125,6 +129,8 @@ void main() {
     version = '1.7.1';
     prerelease = true;
     await updates.checkNow(manual: false);
+    expect(updates.result.status, AppUpdateStatus.failed);
+    expect(updates.availableUpdate?.latestVersion, '1.7.2');
     expect(updates.showUpdateBadge, isTrue);
     final otherPlatform = controller(platform: AppUpdateTargetPlatform.windows);
     await otherPlatform.initialize();

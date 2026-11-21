@@ -105,11 +105,10 @@ class _FeedbackLayoutDelegate extends MultiChildLayoutDelegate {
   /// 上下栏始终按真实尺寸布局，反馈不会绘制到控制栏或侧边入口上。
   @override
   void performLayout(Size size) {
-    final barConstraints = BoxConstraints(
-      minWidth: size.width,
-      maxWidth: size.width,
-      maxHeight: size.height,
-    );
+    // Scrolling to a detail (such as its tags) continuously collapses the
+    // clipped header, sometimes below a single control row. Measure the bars
+    // at natural height instead of forcing their Column to overflow.
+    final barConstraints = BoxConstraints.tightFor(width: size.width);
     final top = layoutChild(_FeedbackSlot.top, barConstraints);
     final bottom = layoutChild(_FeedbackSlot.bottom, barConstraints);
     final overlay = layoutChild(_FeedbackSlot.bottomOverlay, barConstraints);
@@ -287,7 +286,7 @@ class _PlayerFeedbackStackState extends State<PlayerFeedbackStack> {
   }
 }
 
-enum _FeedbackLane { top, center, bottom }
+enum _FeedbackLane { top, center, bottom, subtitle }
 
 /// 固定顶部状态和底部字幕的位置，手势只占用两者之间的余量。
 class PlayerFeedbackLanes extends StatelessWidget {
@@ -296,15 +295,19 @@ class PlayerFeedbackLanes extends StatelessWidget {
     required this.top,
     required this.center,
     required this.bottom,
+    this.subtitle = const SizedBox.shrink(),
+    this.subtitlePosition = 1,
   });
 
   final Widget top;
   final Widget center;
   final Widget bottom;
+  final Widget subtitle;
+  final double subtitlePosition;
 
   @override
   Widget build(BuildContext context) => CustomMultiChildLayout(
-    delegate: _FeedbackLanesDelegate(),
+    delegate: _FeedbackLanesDelegate(subtitlePosition),
     children: [
       LayoutId(id: _FeedbackLane.top, child: top),
       LayoutId(
@@ -312,11 +315,17 @@ class PlayerFeedbackLanes extends StatelessWidget {
         child: ClipRect(child: center),
       ),
       LayoutId(id: _FeedbackLane.bottom, child: bottom),
+      LayoutId(id: _FeedbackLane.subtitle, child: subtitle),
     ],
   );
 }
 
 class _FeedbackLanesDelegate extends MultiChildLayoutDelegate {
+  /// 字幕位置基于已经避开上下控制栏的可用区域。
+  _FeedbackLanesDelegate(this.subtitlePosition);
+  final double subtitlePosition;
+
+  /// 先测量通知和字幕，再把手势提示放在剩余空间较大的一侧。
   @override
   void performLayout(Size size) {
     final top = layoutChild(
@@ -337,20 +346,40 @@ class _FeedbackLanesDelegate extends MultiChildLayoutDelegate {
     );
     final upper = top.height > 0 ? top.height + 6 : 0.0;
     final lower = bottom.height > 0 ? bottom.height + 6 : 0.0;
+    final freeHeight = math.max(0.0, size.height - upper - lower);
+    final subtitle = layoutChild(
+      _FeedbackLane.subtitle,
+      BoxConstraints(maxWidth: size.width, maxHeight: freeHeight),
+    );
+    final subtitleTop =
+        upper +
+        math.max(0.0, freeHeight - subtitle.height) *
+            subtitlePosition.clamp(0.0, 1.0);
+    positionChild(
+      _FeedbackLane.subtitle,
+      Offset((size.width - subtitle.width) / 2, subtitleTop),
+    );
+    final above = subtitleTop - upper;
+    final below = size.height - lower - subtitleTop - subtitle.height;
+    final centerTop = subtitle.height == 0 || above >= below
+        ? upper
+        : subtitleTop + subtitle.height;
+    final centerHeight = subtitle.height == 0
+        ? freeHeight
+        : math.max(above, below);
     layoutChild(
       _FeedbackLane.center,
-      BoxConstraints.tight(
-        Size(size.width, math.max(0, size.height - upper - lower)),
-      ),
+      BoxConstraints.tight(Size(size.width, math.max(0, centerHeight))),
     );
     positionChild(
       _FeedbackLane.center,
-      Offset(0, math.min(size.height, upper)),
+      Offset(0, math.min(size.height, centerTop)),
     );
   }
 
   @override
-  bool shouldRelayout(covariant _FeedbackLanesDelegate oldDelegate) => false;
+  bool shouldRelayout(covariant _FeedbackLanesDelegate oldDelegate) =>
+      oldDelegate.subtitlePosition != subtitlePosition;
 }
 
 /// 共用短提示外观，支持两行文字和辅助功能播报。

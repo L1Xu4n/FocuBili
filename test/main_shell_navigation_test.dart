@@ -132,12 +132,24 @@ void main() {
 
     final Finder rail = find.byKey(const Key('workspace-navigation-rail'));
     expect(rail, findsOneWidget);
-    expect(find.byKey(const Key('focus-workspace-layout')), findsOneWidget);
+    expect(
+      find.byKey(const Key('workspace-navigation-open-about')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('workspace-navigation-open-subscription')),
+      findsNothing,
+    );
+    expect(find.byKey(const Key('desktop-dock-open')), findsOneWidget);
 
     await tester.tap(find.descendant(of: rail, matching: find.text('搜索')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('search-workspace-layout')), findsOneWidget);
     expect(find.byKey(const Key('search-back-button')), findsNothing);
+    expect(
+      find.byKey(const Key('workspace-navigation-open-about')),
+      findsNothing,
+    );
 
     await tester.tap(find.descendant(of: rail, matching: find.text('我的')));
     await tester.pumpAndSettle();

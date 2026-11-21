@@ -32,21 +32,43 @@ class _SearchContentFilterControlsState
     10000000,
   ];
   late final TextEditingController _count;
+  late final TextEditingController _titles;
+  late final TextEditingController _owners;
 
   /// Seeds the numeric input from persisted or previously edited settings.
   @override
   void initState() {
     super.initState();
     _count = TextEditingController(text: '${widget.value.minimumPlayCount}');
+    _titles = TextEditingController(
+      text: widget.value.titleKeywords.join('\n'),
+    );
+    _owners = TextEditingController(
+      text: widget.value.ownerKeywords.join('\n'),
+    );
   }
 
   /// Reflects an explicit reset without rewriting equivalent actively edited text.
   @override
   void didUpdateWidget(covariant SearchContentFilterControls oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.value.minimumPlayCount != widget.value.minimumPlayCount &&
-        int.tryParse(_count.text) != widget.value.minimumPlayCount) {
-      _count.text = '${widget.value.minimumPlayCount}';
+    // Controller listeners update the ancestor Form. Defer external resets until
+    // its current build has finished, while preserving IME text for equal drafts.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (int.tryParse(_count.text) != widget.value.minimumPlayCount &&
+          oldWidget.value.minimumPlayCount != widget.value.minimumPlayCount) {
+        _count.text = '${widget.value.minimumPlayCount}';
+      }
+      _syncKeywords(_titles, widget.value.titleKeywords);
+      _syncKeywords(_owners, widget.value.ownerKeywords);
+    });
+  }
+
+  void _syncKeywords(TextEditingController controller, List<String> keywords) {
+    if (SearchContentFilter.parseKeywords(controller.text).join('\n') !=
+        keywords.join('\n')) {
+      controller.text = keywords.join('\n');
     }
   }
 
@@ -54,6 +76,8 @@ class _SearchContentFilterControlsState
   @override
   void dispose() {
     _count.dispose();
+    _titles.dispose();
+    _owners.dispose();
     super.dispose();
   }
 
@@ -87,7 +111,8 @@ class _SearchContentFilterControlsState
       SwitchListTile.adaptive(
         key: const Key('search-learning-only'),
         contentPadding: EdgeInsets.zero,
-        title: const Text('仅显示学习内容'),
+        title: const Text('过滤明显娱乐内容'),
+        subtitle: const Text('可选实验规则，按标题和标签判断，可能误判；不会仅按分区屏蔽。'),
         value: widget.value.learningOnly,
         onChanged: (value) =>
             widget.onChanged(widget.value.copyWith(learningOnly: value)),
@@ -131,6 +156,42 @@ class _SearchContentFilterControlsState
             );
           }
         },
+      ),
+      const SizedBox(height: 24),
+      Text('关键词排除', style: Theme.of(context).textTheme.titleMedium),
+      const SizedBox(height: 8),
+      const Text('任一词命中即隐藏；英文不区分大小写，按字面包含匹配。每行一词，也可用逗号分隔。留空表示不限。'),
+      const SizedBox(height: 12),
+      TextFormField(
+        key: const Key('search-title-keywords'),
+        controller: _titles,
+        minLines: 1,
+        maxLines: 4,
+        decoration: const InputDecoration(
+          labelText: '排除标题关键词',
+          hintText: '例如：直播切片，剧透',
+        ),
+        onChanged: (text) => widget.onChanged(
+          widget.value.copyWith(
+            titleKeywords: SearchContentFilter.parseKeywords(text),
+          ),
+        ),
+      ),
+      const SizedBox(height: 12),
+      TextFormField(
+        key: const Key('search-owner-keywords'),
+        controller: _owners,
+        minLines: 1,
+        maxLines: 4,
+        decoration: const InputDecoration(
+          labelText: '排除 UP 名关键词',
+          hintText: '例如：某某工作室',
+        ),
+        onChanged: (text) => widget.onChanged(
+          widget.value.copyWith(
+            ownerKeywords: SearchContentFilter.parseKeywords(text),
+          ),
+        ),
       ),
     ],
   );

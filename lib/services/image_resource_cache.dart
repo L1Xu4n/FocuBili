@@ -312,6 +312,66 @@ class ImageResourceCache extends ChangeNotifier {
     if (expected != _revision) throw const ImageCacheCancelled();
   }
 
+  /// Reads the configured capacity without repairing or creating cache data.
+  /// Unrelated object/lease corruption is left for the normal cache lifecycle.
+  Future<int> readCapacity() async {
+    final dir = (await _directory()).absolute;
+    if (dir.uri.pathSegments.where((s) => s.isNotEmpty).last !=
+        'focubili_images_v1') {
+      throw const FileSystemException('Unsafe image cache directory');
+    }
+    final prior = _locks[dir.path] ?? Future<void>.value();
+    final done = Completer<void>();
+    _locks[dir.path] = done.future;
+    await prior;
+    CacheFileLock? lock;
+    try {
+      final type = await FileSystemEntity.type(dir.path, followLinks: false);
+      if (type != FileSystemEntityType.directory &&
+          type != FileSystemEntityType.notFound) {
+        throw const FileSystemException('Unsafe image cache directory');
+      }
+      if (type == FileSystemEntityType.notFound) return _defaultReadCapacity();
+      for (final name in ['cache.lock', 'index.json']) {
+        final metadataType = await FileSystemEntity.type(
+          '${dir.path}/$name',
+          followLinks: false,
+        );
+        if (metadataType != FileSystemEntityType.file &&
+            metadataType != FileSystemEntityType.notFound) {
+          throw const FileSystemException('Unsafe image cache metadata');
+        }
+      }
+      lock = await CacheFileLock.acquireExisting('${dir.path}/cache.lock');
+      final file = File('${dir.path}/index.json');
+      if (await FileSystemEntity.type(file.path, followLinks: false) ==
+          FileSystemEntityType.notFound) {
+        return _defaultReadCapacity();
+      }
+      final decoded = jsonDecode(await file.readAsString());
+      if (decoded is! Map ||
+          decoded['capacity'] is! int ||
+          (decoded['capacity'] as int) < 0) {
+        throw const FormatException('Invalid image cache capacity');
+      }
+      return decoded['capacity'] as int;
+    } finally {
+      try {
+        await lock?.release();
+      } finally {
+        done.complete();
+        if (identical(_locks[dir.path], done.future)) _locks.remove(dir.path);
+      }
+    }
+  }
+
+  int _defaultReadCapacity() {
+    if (defaultCapacity < 0) {
+      throw const FormatException('Invalid default image cache capacity');
+    }
+    return defaultCapacity;
+  }
+
   Future<ImageCacheUsage> status() => _locked((dir, index) async {
     await _repair(dir, index);
     await _trim(dir, index);

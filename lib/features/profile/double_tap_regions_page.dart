@@ -20,7 +20,7 @@ Future<DoubleTapRegions?> showDoubleTapRegionsEditor({
       DoubleTapRegionsPage(regions: regions, service: service),
 );
 
-/// 拖动画面上的分割线调整区域，双击验证真实全屏的命中规则。
+/// 拖动画面上的分割线调整区域，模拟播放器的触摸双击手势。
 class DoubleTapRegionsPage extends StatefulWidget {
   /// 接收当前配置和保存服务；离开未保存时保留原设置。
   const DoubleTapRegionsPage({
@@ -299,7 +299,7 @@ class _DoubleTapRegionsPageState extends State<DoubleTapRegionsPage> {
           const Text('自定义双击触发区', style: TextStyle(fontWeight: FontWeight.w600)),
           const SizedBox(height: 4),
           Text(
-            '拖动画面上的分割线来调节 · 双击试用',
+            '拖线调节 · 模拟触摸双击。桌面鼠标双击共用边缘范围，其余区域切换全屏。',
             style: TextStyle(
               color: Theme.of(context).colorScheme.onSurfaceVariant,
               fontSize: 12,

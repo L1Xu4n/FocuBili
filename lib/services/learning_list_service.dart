@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/learning_list_entry.dart';
+import '../models/learning_subject_folder.dart';
 import '../models/video_preview.dart';
 import '../models/watch_history_entry.dart';
 import 'watch_history_service.dart';
@@ -21,6 +22,7 @@ class LearningListService {
        _watchHistoryService = watchHistoryService ?? WatchHistoryService();
 
   static const String _storageKey = 'focubili_learning_list_v2';
+  static const String _newestFirstKey = 'focubili_learning_list_newest_first';
   static const String _legacyStorageKey = 'focubili_learning_list_v1';
 
   /// 限制本机最多保存的任务数，避免长期使用后偏好设置无限增长。
@@ -49,41 +51,195 @@ class LearningListService {
     }
   }
 
-  /// 读取合法任务，失败时标记 readFailed 并保留磁盘原数据。
-  Future<List<LearningListEntry>> loadEntries() =>
+  /// 排序偏好独立于任务数据，不覆盖用户手动排列。
+  Future<bool> loadNewestFirst() async =>
+      (await _preferencesLoader()).getBool(_newestFirstKey) ?? false;
+
+  Future<void> saveNewestFirst(bool value) => _serialized(() async {
+    final preferences = await _preferencesLoader();
+    try {
+      if (!await preferences.setBool(_newestFirstKey, value)) {
+        throw const LearningListStorageException();
+      }
+    } catch (_) {
+      await preferences.reload();
+      rethrow;
+    }
+  });
+
+  /// 一次读取分组与条目，损坏数据不覆盖磁盘原值。
+  Future<LearningListState> loadState() =>
       _serialized(() async {
         try {
-          final entries = await _loadStrict();
+          final state = await _loadStateStrict();
           readFailed = false;
-          return entries;
+          return state;
         } catch (_) {
           readFailed = true;
-          return const <LearningListEntry>[];
+          return const LearningListState();
         }
       }).catchError((Object _) {
         readFailed = true;
-        return const <LearningListEntry>[];
+        return const LearningListState();
       });
 
-  Future<List<LearningListEntry>> _loadStrict() async {
+  Future<List<LearningListEntry>> loadEntries() async =>
+      (await loadState()).entries;
+
+  Future<List<LearningListEntry>> _loadStrict() async =>
+      (await _loadStateStrict()).entries;
+
+  Future<LearningListState> _loadStateStrict() async {
     final preferences = await _preferencesLoader();
     final current = preferences.getString(_storageKey);
     final legacy = current == null
         ? preferences.getString(_legacyStorageKey)
         : null;
-    final entries = _decodeEntries(current ?? legacy);
-    _sortEntries(entries);
-    if (legacy != null) {
-      final migrated = _rebuildLegacySortOrders(entries);
-      if (!await preferences.setString('${_legacyStorageKey}_backup', legacy)) {
+    final state = _decodeState(current ?? legacy);
+    final raw = current ?? legacy;
+    final needsMigration =
+        legacy != null || (raw != null && jsonDecode(raw) is List);
+    final entries = legacy != null
+        ? _rebuildLegacySortOrders(state.entries)
+        : state.entries;
+    if (needsMigration) {
+      final originalKey = legacy != null ? _legacyStorageKey : _storageKey;
+      final migrationBackup = '${originalKey}_migration_backup';
+      if (preferences.getString(migrationBackup) == null &&
+          !await preferences.setString(migrationBackup, raw!)) {
         throw const LearningListStorageException();
       }
-      await _writeEntries(migrated, preferences: preferences);
-      // Only remove the original after a verified v2 write. The backup remains.
-      await preferences.remove(_legacyStorageKey);
-      return List.unmodifiable(migrated);
+      if (!await preferences.setString('${originalKey}_backup', raw!)) {
+        throw const LearningListStorageException();
+      }
+      await _writeState(
+        LearningListState(entries: entries, folders: state.folders),
+        preferences: preferences,
+      );
+      if (legacy != null) await preferences.remove(_legacyStorageKey);
     }
-    return List.unmodifiable(entries);
+    return LearningListState(entries: entries, folders: state.folders);
+  }
+
+  static const int maximumFolders = 30;
+
+  /// 新建一级分组，拒绝空名称、重复名称和超出容量的分组。
+  Future<LearningListState> createFolder(
+    String name, {
+    String iconId = LearningSubjectFolder.defaultIconId,
+    String colorId = LearningSubjectFolder.defaultColorId,
+  }) => _serialized(() async {
+    final state = await _loadStateStrict();
+    final normalized = _validateFolderName(name, state.folders);
+    if (state.folders.length >= maximumFolders) {
+      throw ArgumentError('最多创建 $maximumFolders 个学科分组');
+    }
+    final ids = state.folders.map((folder) => folder.id).toSet();
+    var id = DateTime.now().microsecondsSinceEpoch.toString();
+    while (ids.contains(id)) {
+      id = '${id}_';
+    }
+    final updated = LearningListState(
+      entries: state.entries,
+      folders: [
+        ...state.folders,
+        LearningSubjectFolder(
+          id: id,
+          name: normalized,
+          iconId: iconId,
+          colorId: colorId,
+        ),
+      ],
+    );
+    await _writeState(updated);
+    return updated;
+  });
+
+  /// 重命名仅修改分组显示名称，条目的 BV/CID、状态、进度和顺序不变。
+  Future<LearningListState> renameFolder(
+    String id,
+    String name, {
+    String? iconId,
+    String? colorId,
+  }) => _serialized(() async {
+    final state = await _loadStateStrict();
+    if (!state.folders.any((folder) => folder.id == id)) {
+      throw ArgumentError('学科分组已不存在，请刷新后重试');
+    }
+    final normalized = _validateFolderName(
+      name,
+      state.folders,
+      excludingId: id,
+    );
+    final updated = LearningListState(
+      entries: state.entries,
+      folders: [
+        for (final folder in state.folders)
+          folder.id == id
+              ? folder.rename(normalized, iconId: iconId, colorId: colorId)
+              : folder,
+      ],
+    );
+    await _writeState(updated);
+    return updated;
+  });
+
+  /// 删除分组与条目退回未分组使用同一写入；学习记录不受影响。
+  Future<LearningListState> deleteFolder(String id) => _serialized(() async {
+    final state = await _loadStateStrict();
+    final updated = LearningListState(
+      folders: state.folders.where((folder) => folder.id != id).toList(),
+      entries: [
+        for (final entry in state.entries)
+          entry.folderId == id ? entry.copyWith(clearFolder: true) : entry,
+      ],
+    );
+    await _writeState(updated);
+    return updated;
+  });
+
+  /// 单项与多选共用移动操作；移动不重建任务，也不覆盖播放器刚写入的进度。
+  Future<LearningListState> moveEntries(Set<String> ids, String? folderId) =>
+      _serialized(() async {
+        final state = await _loadStateStrict();
+        if (folderId != null &&
+            !state.folders.any((folder) => folder.id == folderId)) {
+          throw ArgumentError('学科分组已不存在，请刷新后重试');
+        }
+        final updated = LearningListState(
+          folders: state.folders,
+          entries: [
+            for (final entry in state.entries)
+              ids.contains(entry.stableId)
+                  ? entry.copyWith(
+                      folderId: folderId,
+                      clearFolder: folderId == null,
+                    )
+                  : entry,
+          ],
+        );
+        await _writeState(updated);
+        return updated;
+      });
+
+  String _validateFolderName(
+    String value,
+    List<LearningSubjectFolder> folders, {
+    String? excludingId,
+  }) {
+    final name = value.trim();
+    if (name.isEmpty ||
+        name.runes.length > LearningSubjectFolder.maximumNameCharacters) {
+      throw ArgumentError('分组名称需为 1 到 30 个字');
+    }
+    if (folders.any(
+      (folder) =>
+          folder.id != excludingId &&
+          folder.name.toLowerCase() == name.toLowerCase(),
+    )) {
+      throw ArgumentError('已存在同名学科分组');
+    }
+    return name;
   }
 
   /// 读取首页应突出的一条未完成任务，严格遵循用户当前的手动学习顺序。
@@ -158,6 +314,7 @@ class LearningListService {
     ]);
     if (!result.persisted) throw const LearningListStorageException();
     if (result.capacityExceeded) throw const LearningListCapacityException();
+    if (result.failedItems.isNotEmpty) throw ArgumentError('分 P 已失效');
     return result.entries;
   }
 
@@ -166,17 +323,27 @@ class LearningListService {
     List<VideoPart> parts,
   ) => addBatch([for (final part in parts) LearningPartSelection(video, part)]);
 
-  /// Atomic capacity check; duplicates never replace progress, status or order.
+  /// Validate all changes and capacity before committing one updated list.
+  /// [removeIds] contains exact saved tasks, not video IDs. Duplicates never
+  /// replace progress, status or order, even when also requested for removal.
   Future<LearningBatchResult> addBatch(
-    List<LearningPartSelection> selections,
-  ) => _serialized(() async {
+    List<LearningPartSelection> selections, {
+    String? folderId,
+    Set<String> removeIds = const {},
+  }) => _serialized(() async {
     List<LearningListEntry> entries;
     try {
-      entries = List.of(await _loadStrict());
+      final state = await _loadStateStrict();
+      if (folderId != null &&
+          !state.folders.any((folder) => folder.id == folderId)) {
+        return const LearningBatchResult(persisted: false);
+      }
+      entries = List.of(state.entries);
     } catch (_) {
       return const LearningBatchResult(persisted: false);
     }
     final existing = entries.map((e) => e.stableId).toSet();
+    final removed = existing.intersection(removeIds);
     final added = <String>[];
     final duplicates = <String>[];
     final failed = <String>[];
@@ -204,34 +371,44 @@ class LearningListService {
         addedAt: now,
         updatedAt: now,
         sortOrder: order,
+        folderId: folderId,
       );
       if (LearningListEntry.tryParse(entry.toJson()) == null ||
           !video.parts.any((p) => p.cid == part.cid)) {
         failed.add('${video.bvid}:${part.cid}');
       } else if (!existing.add(entry.stableId)) {
         duplicates.add(entry.stableId);
+        removed.remove(entry.stableId);
       } else {
         pending.add(entry);
         added.add(entry.stableId);
         order++;
       }
     }
-    if (entries.length + pending.length > maximumEntries) {
+    // A rejected confirmation must not save a subset behind the form.
+    final capacityExceeded =
+        entries.length - removed.length + pending.length > maximumEntries;
+    if (failed.isNotEmpty || capacityExceeded) {
       return LearningBatchResult(
         entries: entries,
         existingIds: duplicates,
         failedItems: failed,
-        capacityExceeded: true,
+        capacityExceeded: capacityExceeded,
         persisted: true,
       );
     }
     try {
-      if (pending.isNotEmpty) {
-        entries = List.of(await _saveEntries([...entries, ...pending]));
+      if (pending.isNotEmpty || removed.isNotEmpty) {
+        entries = await _saveEntries([
+          for (final entry in entries)
+            if (!removed.contains(entry.stableId)) entry,
+          ...pending,
+        ]);
       }
       return LearningBatchResult(
         entries: entries,
         addedIds: added,
+        removedIds: removed.toList(),
         existingIds: duplicates,
         failedItems: failed,
         persisted: true,
@@ -337,15 +514,18 @@ class LearningListService {
 
   /// 按拖拽得到的稳定标识重新排列未完成任务，已完成任务始终保持在末尾分区。
   Future<List<LearningListEntry>> reorderIncomplete(
-    List<String> orderedStableIds,
-  ) => _serialized(() async {
+    List<String> orderedStableIds, {
+    String? folderId,
+    bool withinFolder = false,
+  }) => _serialized(() async {
     final List<LearningListEntry> entries = List<LearningListEntry>.of(
       await _loadStrict(),
     );
     final List<LearningListEntry> activeEntries = entries
         .where(
           (LearningListEntry entry) =>
-              entry.status != LearningListStatus.completed,
+              entry.status != LearningListStatus.completed &&
+              (!withinFolder || entry.folderId == folderId),
         )
         .toList(growable: false);
     final Map<String, LearningListEntry> activeById =
@@ -367,9 +547,23 @@ class LearningListService {
       }
     }
     final DateTime now = DateTime.now();
+    int folderIndex = 0;
+    final fullOrder = withinFolder
+        ? [
+            for (final entry in entries)
+              if (entry.status != LearningListStatus.completed)
+                entry.folderId == folderId ? reordered[folderIndex++] : entry,
+          ]
+        : reordered;
     final List<LearningListEntry> ranked = <LearningListEntry>[
-      for (int index = 0; index < reordered.length; index += 1)
-        reordered[index].copyWith(sortOrder: index, updatedAt: now),
+      for (int index = 0; index < fullOrder.length; index += 1)
+        fullOrder[index].copyWith(
+          // 全局位置槽重新编号，旧数据排序号重复时组内拖动也能生效。
+          sortOrder: index,
+          updatedAt: !withinFolder || fullOrder[index].folderId == folderId
+              ? now
+              : fullOrder[index].updatedAt,
+        ),
       ...entries.where(
         (LearningListEntry entry) =>
             entry.status == LearningListStatus.completed,
@@ -522,9 +716,21 @@ class LearningListService {
         : left.stableId.compareTo(right.stableId);
   }
 
-  /// 把任务序列化写入本机，重读验证后才返回；失败时向调用方报告。
+  /// 所有修改均保留同一快照内的分组，避免播放器更新进度时丢失分组。
   Future<void> _writeEntries(
     List<LearningListEntry> entries, {
+    SharedPreferences? preferences,
+  }) async {
+    final target = preferences ?? await _preferencesLoader();
+    final state = _decodeState(target.getString(_storageKey));
+    await _writeState(
+      LearningListState(entries: entries, folders: state.folders),
+      preferences: target,
+    );
+  }
+
+  Future<void> _writeState(
+    LearningListState state, {
     SharedPreferences? preferences,
   }) async {
     final target = preferences ?? await _preferencesLoader();
@@ -533,7 +739,11 @@ class LearningListService {
         !await target.setString('${_storageKey}_backup', previous)) {
       throw const LearningListStorageException();
     }
-    final encoded = jsonEncode(entries.map((e) => e.toJson()).toList());
+    final encoded = jsonEncode({
+      'schemaVersion': 3,
+      'entries': state.entries.map((entry) => entry.toJson()).toList(),
+      'folders': state.folders.map((folder) => folder.toJson()).toList(),
+    });
     try {
       if (!await target.setString(_storageKey, encoded)) {
         throw const LearningListStorageException();
@@ -544,6 +754,46 @@ class LearningListService {
       }
     } catch (_) {
       await target.reload();
+      throw const LearningListStorageException();
+    }
+  }
+
+  LearningListState _decodeState(String? raw) {
+    if (raw == null) return const LearningListState();
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is List) {
+        return LearningListState(entries: _decodeEntries(raw));
+      }
+      if (decoded is! Map ||
+          decoded['schemaVersion'] != 3 ||
+          decoded['entries'] is! List ||
+          decoded['folders'] is! List) {
+        throw const LearningListStorageException();
+      }
+      final folders = <LearningSubjectFolder>[];
+      final ids = <String>{};
+      for (final item in decoded['folders'] as List) {
+        if (item is! Map) continue;
+        final folder = LearningSubjectFolder.tryParse(
+          Map<String, dynamic>.from(item),
+        );
+        if (folder != null && ids.add(folder.id)) folders.add(folder);
+      }
+      if ((decoded['folders'] as List).isNotEmpty && folders.isEmpty) {
+        throw const LearningListStorageException();
+      }
+      final entries = _decodeEntries(jsonEncode(decoded['entries']));
+      return LearningListState(
+        folders: folders,
+        entries: [
+          for (final entry in entries)
+            entry.folderId != null && !ids.contains(entry.folderId)
+                ? entry.copyWith(clearFolder: true)
+                : entry,
+        ],
+      );
+    } catch (_) {
       throw const LearningListStorageException();
     }
   }
@@ -572,6 +822,7 @@ class LearningListService {
       if (decoded.isNotEmpty && entries.isEmpty) {
         throw const LearningListStorageException();
       }
+      _sortEntries(entries);
       return entries;
     } catch (_) {
       throw const LearningListStorageException();
@@ -596,6 +847,7 @@ class LearningBatchResult {
   const LearningBatchResult({
     this.entries = const [],
     this.addedIds = const [],
+    this.removedIds = const [],
     this.existingIds = const [],
     this.failedItems = const [],
     this.capacityExceeded = false,
@@ -603,6 +855,7 @@ class LearningBatchResult {
   });
   final List<LearningListEntry> entries;
   final List<String> addedIds;
+  final List<String> removedIds;
   final List<String> existingIds;
   final List<String> failedItems;
   final bool capacityExceeded;
@@ -619,4 +872,11 @@ class LearningListCapacityException implements Exception {
   const LearningListCapacityException();
   @override
   String toString() => '学习清单最多100条，请先移除不需要的任务';
+}
+
+/// 同一版本化存储值内的一致分组与任务快照。
+class LearningListState {
+  const LearningListState({this.entries = const [], this.folders = const []});
+  final List<LearningListEntry> entries;
+  final List<LearningSubjectFolder> folders;
 }

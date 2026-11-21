@@ -6,7 +6,33 @@ extension _PlayerPageView on _PlayerPageState {
   Widget _buildCollapsingPlayerBody({
     required Widget player,
     required double playerHeight,
+    Widget? abEditor,
   }) {
+    if (abEditor != null) {
+      // Keep the seek bar visible while the editor/details scroll. When a
+      // keyboard leaves less than one player height, give the fields the space.
+      return LayoutBuilder(
+        builder: (context, constraints) => Column(
+          children: [
+            if (constraints.maxHeight > playerHeight)
+              SizedBox(
+                width: double.infinity,
+                height: playerHeight,
+                child: player,
+              ),
+            Expanded(
+              child: SingleChildScrollView(
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                child: Column(
+                  children: [abEditor, _buildNonFullscreenDetails()],
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     return CustomScrollView(
       key: const Key('collapsing-player-scroll'),
       slivers: <Widget>[
@@ -33,7 +59,7 @@ extension _PlayerPageView on _PlayerPageState {
             .toDouble();
         final Widget sideContent;
         if (_notesOpen) {
-          sideContent = _buildPortraitVideoNotesPanel();
+          sideContent = _buildInlineVideoNotesPanel();
         } else if (_partSelectorExpanded) {
           sideContent = _buildExpandedPartSelector();
         } else {
@@ -102,12 +128,10 @@ extension _PlayerPageView on _PlayerPageState {
             key: const Key('player-surface'),
             behavior: HitTestBehavior.opaque,
             dragStartBehavior: DragStartBehavior.down,
-            // 长按开始函数仅临时切换到三倍速，横向快进由独立拖动手势负责。
-            onLongPressStart: gesturesEnabled
-                ? _startTemporaryTripleSpeed
-                : null,
+            // 长按开始函数应用预设临时倍速，横向快进由独立拖动手势负责。
+            onLongPressStart: gesturesEnabled ? _startTemporarySpeed : null,
             // 长按结束函数恢复原倍速，不改变播放位置。
-            onLongPressEnd: gesturesEnabled ? _stopTemporaryTripleSpeed : null,
+            onLongPressEnd: gesturesEnabled ? _stopTemporarySpeed : null,
             // 长按取消函数恢复界面状态且不提交未确认的进度。
             onLongPressCancel: gesturesEnabled
                 ? _cancelTemporaryLongPress
@@ -158,7 +182,12 @@ extension _PlayerPageView on _PlayerPageState {
                           GestureRecognizerFactoryWithHandlers<
                             PlayerTapGestureRecognizer
                           >(
-                            () => PlayerTapGestureRecognizer(debugOwner: this),
+                            () => PlayerTapGestureRecognizer(
+                              debugOwner: this,
+                              supportedDevices: _appPlatform.isDesktop
+                                  ? _nonMousePointerKinds
+                                  : null,
+                            ),
                             (recognizer) => recognizer
                               ..gestureSettings = playerTouchGestureSettings
                               ..onSingleTap = _toggleControls
@@ -166,6 +195,10 @@ extension _PlayerPageView on _PlayerPageState {
                               ..onDoubleTap = () =>
                                   _handleDoubleTap(constraints.biggest),
                           ),
+                      if (_appPlatform.isDesktop)
+                        PlayerMouseTapGestureRecognizer: _mouseTapGestures(
+                          constraints.biggest,
+                        ),
                     }
                   : const {},
               child: Stack(
@@ -205,6 +238,21 @@ extension _PlayerPageView on _PlayerPageState {
   Widget _buildPlayerPage(BuildContext context) {
     final controlSize = PlayerControlSize(_playbackPreferences.controlScale);
     final bool inPictureInPicture = _playbackSnapshot.isInPictureInPicture;
+    final bool fullscreenLayout = _fullscreen || inPictureInPicture;
+    final Size screenSize = MediaQuery.sizeOf(context);
+    final bool landscapeLayout = screenSize.width > screenSize.height;
+    final bool floatingNotes = !inPictureInPicture && _usesFloatingVideoNotes;
+    final bool expandedFloatingNotes =
+        floatingNotes && _notesOpen && !_notesParked;
+    final bool workspaceLayout =
+        !fullscreenLayout && AdaptiveLayout.usesWorkspace(screenSize);
+    // Small portrait players may have no room between the two control bars
+    // at large text sizes. Editing in the page leaves the video and seek bar free.
+    final bool editAbBelowVideo =
+        !fullscreenLayout &&
+        screenSize.width < AdaptiveLayout.tabletBreakpoint &&
+        (!_notesOpen || floatingNotes) &&
+        !_partSelectorExpanded;
     // 错误或选集展开时关闭画面手势，避免画面层干扰重试与选集按钮点击。
     final bool enableSurfaceGestures =
         _playbackSnapshot.phase != PlaybackPhase.error &&
@@ -218,7 +266,34 @@ extension _PlayerPageView on _PlayerPageState {
             AdaptiveLayout.usesWorkspace(MediaQuery.sizeOf(context));
         final bool showPlayerStatus = _fullscreen || workspacePlayer;
         _schedulePlayerStatusVisibility(showPlayerStatus);
-        return Listener(
+        final feedbackSideInset =
+            _fullscreen && (_showControls || _controlsLocked)
+            ? 16 + 48 * controlSize.scale
+            : 16.0;
+        final edgeInsets = MediaQuery.paddingOf(context);
+        final timelineDragging =
+            _isDraggingProgress &&
+            _showControls &&
+            !_controlsLocked &&
+            !inPictureInPicture &&
+            _displayDuration > Duration.zero;
+        // Capture the actual pane without moving its feedback/semantics subtree
+        // between the collapsing player and the notes workspace.
+        _subtitleSurfaceSize = constraints.biggest;
+        _subtitleSurfaceInsets = edgeInsets;
+        if (!_showTimelineChapters &&
+            !_showTimelineFlags &&
+            _abRepeatRange == null) {
+          _subtitleAnnotationHeight = null;
+        }
+        if (_subtitleSelectorOpen) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && _subtitleSelectorOpen) {
+              _measureSubtitlePreviewViewport();
+            }
+          });
+        }
+        final playerSurface = Listener(
           // 指针被系统取消时优先撤销预览，避免取消事件被拖动识别器当作普通松手。
           onPointerCancel: _handlePlayerPointerCancel,
           child: ColoredBox(
@@ -238,6 +313,10 @@ extension _PlayerPageView on _PlayerPageState {
                     _playbackSnapshot.phase != PlaybackPhase.error &&
                     _playbackSnapshot.phase != PlaybackPhase.loading)
                   IgnorePointer(child: _buildListeningSurface()),
+                if (_doubleTapSeekSeconds != 0 &&
+                    _seekFeedback == null &&
+                    !inPictureInPicture)
+                  PlayerSeekBackdrop(seconds: _doubleTapSeekSeconds),
                 Align(
                   alignment: Alignment.bottomCenter,
                   child: IgnorePointer(
@@ -281,11 +360,42 @@ extension _PlayerPageView on _PlayerPageState {
                 PlayerFeedbackViewport(
                   controlsVisible:
                       _showControls && !_controlsLocked && !inPictureInPicture,
-                  edgeInsets: MediaQuery.paddingOf(context),
-                  sideInset: _fullscreen && (_showControls || _controlsLocked)
-                      ? 16 + 48 * controlSize.scale
-                      : 16,
-                  feedback: _buildPlayerFeedback(),
+                  edgeInsets: edgeInsets,
+                  sideInset: feedbackSideInset,
+                  // 编辑器占用控制栏之间的可滚动区域，不增加底栏高度或遮住进度条。
+                  feedback: Stack(
+                    children: [
+                      _buildPlayerFeedback(),
+                      if (_timelineHover case final hover?
+                          when hover.width == constraints.maxWidth)
+                        _buildTimelinePreviewCard(
+                          target: _positionForProgress(hover.progress),
+                          x: hover.x - edgeInsets.left - feedbackSideInset,
+                          dragging: false,
+                        ),
+                      if (_abRepeatEditorVisible &&
+                          !editAbBelowVideo &&
+                          !inPictureInPicture &&
+                          !_controlsLocked)
+                        if (_fullscreen)
+                          Positioned.fill(
+                            child: _buildAbRepeatEditor(floating: true),
+                          )
+                        else
+                          Align(
+                            alignment: Alignment.topCenter,
+                            child: SingleChildScrollView(
+                              child: _buildAbRepeatEditor(),
+                            ),
+                          ),
+                      if (timelineDragging)
+                        _buildTimelineDragPreview(
+                          width: constraints.maxWidth,
+                          edgeInsets: edgeInsets,
+                          sideInset: feedbackSideInset,
+                        ),
+                    ],
+                  ),
                   bottomOverlay: _buildChapterProgressOverlay(
                     inPictureInPicture: inPictureInPicture,
                   ),
@@ -317,6 +427,7 @@ extension _PlayerPageView on _PlayerPageState {
                         ],
                       ),
                     ),
+                    desktopEdge: _DesktopControlsEdge.top,
                   ),
                   bottomControls: _buildFadingControls(
                     SafeArea(
@@ -331,15 +442,17 @@ extension _PlayerPageView on _PlayerPageState {
                               !_controlsLocked &&
                               !inPictureInPicture)
                             _buildTimelineAnnotations(),
-                          PlayerProgressSlider(
-                            scale: controlSize.scale,
-                            sliderKey: const Key('player-progress-slider'),
-                            value: _progress,
-                            duration: _playbackSnapshot.duration,
-                            bufferedRanges: _playbackSnapshot.bufferedRanges,
-                            onChangeStart: _startProgressDrag,
-                            onChanged: _updateProgressDrag,
-                            onChangeEnd: _finishProgressDrag,
+                          _withTimelinePointerRegion(
+                            PlayerProgressSlider(
+                              scale: controlSize.scale,
+                              sliderKey: const Key('player-progress-slider'),
+                              value: _progress,
+                              duration: _playbackSnapshot.duration,
+                              bufferedRanges: _playbackSnapshot.bufferedRanges,
+                              onChangeStart: _startProgressDrag,
+                              onChanged: _updateProgressDrag,
+                              onChangeEnd: _finishProgressDrag,
+                            ),
                           ),
                           PlayerControlGroups(
                             playbackControls: <Widget>[
@@ -353,14 +466,12 @@ extension _PlayerPageView on _PlayerPageState {
                                     : Icons.play_arrow_rounded,
                                 tooltip: _playing ? '暂停' : '播放',
                               ),
-                              if (_activeVideo.parts.length > 1) ...<Widget>[
+                              if (_hasPlaylistNavigation) ...<Widget>[
                                 PlayerCompactIconButton(
                                   scale: controlSize.scale,
                                   key: const Key('previous-part-button'),
                                   // 上一集函数切换到当前分P之前的一集。
-                                  onPressed: _currentPartIndex > 0
-                                      ? _playPreviousPart
-                                      : () {},
+                                  onPressed: _playPreviousPart,
                                   icon: Icons.skip_previous_rounded,
                                   tooltip: '上一集',
                                 ),
@@ -368,12 +479,7 @@ extension _PlayerPageView on _PlayerPageState {
                                   scale: controlSize.scale,
                                   key: const Key('next-part-button'),
                                   // 下一集函数切换到当前分P之后的一集。
-                                  onPressed:
-                                      _currentPartIndex >= 0 &&
-                                          _currentPartIndex <
-                                              _activeVideo.parts.length - 1
-                                      ? _playNextPart
-                                      : () {},
+                                  onPressed: _playNextPart,
                                   icon: Icons.skip_next_rounded,
                                   tooltip: '下一集',
                                 ),
@@ -493,6 +599,7 @@ extension _PlayerPageView on _PlayerPageState {
                         ],
                       ),
                     ),
+                    desktopEdge: _DesktopControlsEdge.bottom,
                   ),
                 ),
                 if (_partSelectorExpanded && _fullscreen)
@@ -554,8 +661,6 @@ extension _PlayerPageView on _PlayerPageState {
                     !_controlsLocked &&
                     !inPictureInPicture)
                   _buildFullscreenVideoNoteButton(),
-                if (_fullscreen && _notesOverlayMounted)
-                  _buildFullscreenVideoNotesPanel(constraints.maxWidth),
                 if (inPictureInPicture && _appPlatform == AppPlatform.linux)
                   Positioned(
                     left: 0,
@@ -590,18 +695,14 @@ extension _PlayerPageView on _PlayerPageState {
             ),
           ),
         );
+        return _withDesktopPointerRegion(playerSurface);
       },
     );
 
-    final bool fullscreenLayout = _fullscreen || inPictureInPicture;
     final double aspectRatio = _playbackSnapshot.videoAspectRatio > 0
         ? _playbackSnapshot.videoAspectRatio
         : 16 / 9;
-    final Size screenSize = MediaQuery.sizeOf(context);
-    final bool landscapeLayout = screenSize.width > screenSize.height;
     _schedulePlayerSystemUiSync(landscapeLayout: landscapeLayout);
-    final bool workspaceLayout =
-        !fullscreenLayout && AdaptiveLayout.usesWorkspace(screenSize);
     final extraControlRow = screenSize.width < 6 * controlSize.button
         ? controlSize.button
         : 0.0;
@@ -622,11 +723,11 @@ extension _PlayerPageView on _PlayerPageState {
       pageBody = SizedBox.expand(child: player);
     } else if (workspaceLayout) {
       pageBody = _buildWorkspacePlayerBody(player: player);
-    } else if (_notesOpen) {
+    } else if (_notesOpen && !floatingNotes) {
       pageBody = Column(
         children: <Widget>[
           SizedBox(width: double.infinity, height: playerHeight, child: player),
-          Expanded(child: _buildPortraitVideoNotesPanel()),
+          Expanded(child: _buildInlineVideoNotesPanel()),
         ],
       );
     } else if (_partSelectorExpanded) {
@@ -640,6 +741,15 @@ extension _PlayerPageView on _PlayerPageState {
       pageBody = _buildCollapsingPlayerBody(
         player: player,
         playerHeight: playerHeight,
+        abEditor: _abRepeatEditorVisible && editAbBelowVideo
+            ? Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 600),
+                  child: _buildAbRepeatEditor(),
+                ),
+              )
+            : null,
       );
     }
     final Scaffold pageScaffold = Scaffold(
@@ -649,7 +759,34 @@ extension _PlayerPageView on _PlayerPageState {
         left: !fullscreenLayout,
         right: !fullscreenLayout,
         bottom: false,
-        child: pageBody,
+        child: LayoutBuilder(
+          builder: (context, bounds) => Stack(
+            fit: StackFit.expand,
+            children: [
+              ExcludeFocus(
+                excluding: expandedFloatingNotes,
+                child: ExcludeSemantics(
+                  excluding: expandedFloatingNotes,
+                  child: pageBody,
+                ),
+              ),
+              if (expandedFloatingNotes)
+                Semantics(
+                  key: const Key('park-video-notes-barrier'),
+                  container: true,
+                  button: true,
+                  label: '收起时间点笔记',
+                  onTap: _parkVideoNotes,
+                  excludeSemantics: true,
+                  child: ModalBarrier(onDismiss: _parkVideoNotes),
+                ),
+              if (floatingNotes && _notesOverlayMounted)
+                _buildFullscreenVideoNotesPanel(context, bounds),
+              if (floatingNotes && _notesOpen && _notesParked)
+                _buildParkedVideoNoteHandle(context),
+            ],
+          ),
+        ),
       ),
     );
     return PopScope(
@@ -662,7 +799,10 @@ extension _PlayerPageView on _PlayerPageState {
         child: MouseRegion(
           key: const Key('player-mouse-region'),
           cursor: _playerMouseCursor,
-          child: pageScaffold,
+          child: PlayerSeekFeedbackClock(
+            sequence: _doubleTapFeedbackSequence,
+            child: pageScaffold,
+          ),
         ),
       ),
     );

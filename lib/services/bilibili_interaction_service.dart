@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'app_behavior_preferences_service.dart';
 import 'bilibili_auth_service.dart';
+import 'cache_lifecycle.dart';
 
 /// 保存一次 B 站互动接口的 HTTP 状态和 JSON 正文，测试时可替换真实网络。
 class BilibiliInteractionResponse {
@@ -107,6 +108,19 @@ class BilibiliFavoriteFolder {
   final int mediaCount;
   final bool containsVideo;
 }
+
+/// Only metadata that this editor is allowed to change.
+typedef FavoriteFolderEditable = ({
+  String title,
+  bool isPrivate,
+  bool canRename,
+});
+
+typedef _FavoriteFolderEditSnapshot = ({
+  FavoriteFolderEditable editable,
+  String intro,
+  String cover,
+});
 
 /// 表示互动请求失败；消息不包含 Cookie、账号或请求正文。
 class BilibiliInteractionException implements Exception {
@@ -313,9 +327,10 @@ class BilibiliInteractionService {
     return _parseFavoriteFolders(data['list']);
   }
 
-  /// 创建一个公开收藏夹，并返回可立即用于收藏当前视频的目录摘要。
+  /// 按用户确认的可见性创建一个收藏夹，并返回可立即用于收藏当前视频的目录摘要。
   Future<BilibiliFavoriteFolder> createFavoriteFolder({
     required String title,
+    bool isPrivate = false,
   }) async {
     final String normalizedTitle = title.trim();
     if (normalizedTitle.isEmpty) {
@@ -328,7 +343,7 @@ class BilibiliInteractionService {
       <String, String>{
         'title': normalizedTitle,
         'intro': '',
-        'privacy': '0',
+        'privacy': isPrivate ? '1' : '0',
         'cover': '',
       },
     );
@@ -337,6 +352,139 @@ class BilibiliInteractionService {
       throw const BilibiliInteractionException('收藏夹已创建，但没有返回可用编号，请重新打开列表。');
     }
     return BilibiliFavoriteFolder(mediaId: mediaId, title: normalizedTitle);
+  }
+
+  /// Reads authoritative owner, flags and fields before offering the editor.
+  Future<FavoriteFolderEditable> loadFavoriteFolderForEdit({
+    required int mediaId,
+    required int expectedMid,
+    required bool Function() isCurrent,
+  }) async {
+    final session = await _openFolderEditorSession(
+      mediaId,
+      expectedMid,
+      isCurrent,
+    );
+    return (await _readFolderForEdit(mediaId, session, isCurrent)).editable;
+  }
+
+  /// Applies only a user's explicit edit. Re-read server metadata to avoid
+  /// overwriting changed descriptions/covers or editing a stale visibility.
+  Future<FavoriteFolderEditable> editFavoriteFolder({
+    required int mediaId,
+    required int expectedMid,
+    required FavoriteFolderEditable original,
+    required String title,
+    required bool isPrivate,
+    required bool Function() isCurrent,
+  }) async {
+    final normalizedTitle = title.trim();
+    if (normalizedTitle.isEmpty ||
+        (title != original.title && normalizedTitle.runes.length > 20)) {
+      throw const BilibiliInteractionException('收藏夹名称须为 1 至 20 个字符。');
+    }
+    final session = await _openFolderEditorSession(
+      mediaId,
+      expectedMid,
+      isCurrent,
+    );
+    final latest = await _readFolderForEdit(mediaId, session, isCurrent);
+    if (latest.editable != original) {
+      throw const BilibiliInteractionException('收藏夹已在别处更改，请关闭后重新打开。');
+    }
+    if (!latest.editable.canRename && title != original.title) {
+      throw const BilibiliInteractionException('B 站默认收藏夹不支持改名。');
+    }
+    final updated = (
+      canRename: latest.editable.canRename,
+      title: title == original.title ? original.title : normalizedTitle,
+      isPrivate: isPrivate,
+    );
+    if (updated == original) return original;
+    await _postData(
+      Uri.https(_apiHost, '/x/v3/fav/folder/edit'),
+      session,
+      {
+        'media_id': '$mediaId',
+        'title': updated.title,
+        'privacy': isPrivate ? '1' : '0',
+        'intro': latest.intro,
+        'cover': latest.cover,
+      },
+      isCurrent: isCurrent,
+      requireExplicitCode: true,
+    );
+    if (!isCurrent() || !_matchesCurrentScope(session)) {
+      throw const BilibiliInteractionException('账号已变化，无法确认当前显示状态。');
+    }
+    return updated;
+  }
+
+  Future<_InteractionSession> _openFolderEditorSession(
+    int mediaId,
+    int expectedMid,
+    bool Function() isCurrent,
+  ) async {
+    if (mediaId <= 0 || expectedMid <= 0 || !isCurrent()) throw _staleSession;
+    if (await _behaviorPreferencesService.loadAccountReadOnly()) {
+      throw const BilibiliInteractionException(
+        '账号只读已开启，请先在“设置 - 账号与隐私”中关闭后再操作。',
+      );
+    }
+    if (!isCurrent()) throw _staleSession;
+    final session = await _openSession();
+    if (!isCurrent() || session.accountMid != expectedMid) throw _staleSession;
+    return session;
+  }
+
+  Future<_FavoriteFolderEditSnapshot> _readFolderForEdit(
+    int mediaId,
+    _InteractionSession session,
+    bool Function() isCurrent,
+  ) async {
+    int? integer(Object? value) => switch (value) {
+      int number => number,
+      String text => int.tryParse(text.trim(), radix: 10),
+      _ => null,
+    };
+    final data = await _getData(
+      Uri.https(_apiHost, '/x/v3/fav/folder/info', {'media_id': '$mediaId'}),
+      session,
+      requireExplicitCode: true,
+    );
+    if (!isCurrent() || !_matchesCurrentScope(session)) throw _staleSession;
+    final upper = data['upper'];
+    final owners = [
+      if (integer(data['mid']) case final mid? when mid > 0) mid,
+      if (upper is Map)
+        if (integer(upper['mid']) case final mid? when mid > 0) mid,
+    ];
+    if (integer(data['id']) != mediaId ||
+        owners.isEmpty ||
+        owners.any((mid) => mid != session.accountMid)) {
+      throw const BilibiliInteractionException('只能编辑当前账号自己创建的收藏夹。');
+    }
+    final attr = integer(data['attr']);
+    if (attr == null || attr < 0) {
+      throw const BilibiliInteractionException('未能确认收藏夹可见性，暂不能编辑。');
+    }
+    final title = data['title'], intro = data['intro'], cover = data['cover'];
+    if (title is! String ||
+        title.trim().isEmpty ||
+        !data.containsKey('intro') ||
+        (intro != null && intro is! String) ||
+        cover is! String) {
+      throw const BilibiliInteractionException('收藏夹资料不完整，未修改原有设置。');
+    }
+    return (
+      editable: (
+        title: title,
+        isPrivate: (attr & 1) != 0,
+        canRename: (attr & 2) != 0,
+      ),
+      intro: intro as String? ?? '',
+      cover: cover,
+    );
   }
 
   /// 把视频加入或移出用户明确选择的单个收藏夹。
@@ -379,6 +527,50 @@ class BilibiliInteractionService {
     );
   }
 
+  /// 只向用户指定账号的一个夹追加。单个请求复用匹配的会话，不移除其他收藏。
+  /// 已在目标夹返回 false；无法核实归属、已切号或失效时不发写请求。
+  Future<bool> addToVerifiedFavoriteFolder({
+    required int aid,
+    required int mediaId,
+    required int expectedMid,
+    required bool Function() isCurrent,
+  }) async {
+    if (aid <= 0 || mediaId <= 0 || expectedMid <= 0 || !isCurrent()) {
+      throw const BilibiliInteractionException('当前视频、账号或收藏夹不可用。');
+    }
+    final session = await _openSession();
+    if (session.accountMid != expectedMid || !isCurrent()) {
+      throw const BilibiliInteractionException('账号已变化，未继续收藏。');
+    }
+    final data = await _getData(
+      _favoriteFolderEndpoint(session: session, aid: aid),
+      session,
+    );
+    final target = _parseFavoriteFolders(
+      data['list'],
+    ).where((f) => f.mediaId == mediaId).firstOrNull;
+    if (!isCurrent() || target == null) {
+      throw const BilibiliInteractionException('账号或收藏夹已不可用。');
+    }
+    if (target.containsVideo) return false;
+    final current = await _openSession();
+    if (!isCurrent() ||
+        current.accountMid != expectedMid ||
+        current.generation != session.generation ||
+        current.revision != session.revision ||
+        current.cookieHeader != session.cookieHeader) {
+      throw const BilibiliInteractionException('账号已变化，未继续收藏。');
+    }
+    await _setFavoriteFolders(
+      current,
+      aid: aid,
+      addMediaIds: [mediaId],
+      deleteMediaIds: const [],
+      isCurrent: isCurrent,
+    );
+    return true;
+  }
+
   /// 把视频加入或移出当前账号的第一个可用收藏夹。
   Future<void> setFavorited({
     required int aid,
@@ -410,6 +602,7 @@ class BilibiliInteractionService {
     required int aid,
     required Iterable<int> addMediaIds,
     required Iterable<int> deleteMediaIds,
+    bool Function()? isCurrent,
   }) async {
     await _postData(
       Uri.https(_apiHost, '/x/v3/fav/resource/deal'),
@@ -421,29 +614,44 @@ class BilibiliInteractionService {
         'del_media_ids': deleteMediaIds.join(','),
         'platform': 'web',
       },
+      isCurrent: isCurrent,
     );
   }
 
   /// 打开已验证会话并提取 CSRF；未登录或 Cookie 不完整时不发起写请求。
   Future<_InteractionSession> _openSession() async {
-    final BilibiliSessionState state = await _authService.loadCurrentSession();
-    if (!state.isActive) {
+    final session = await _authService.withVerifiedInteractionSession((
+      mid,
+      cookieHeader,
+      generation,
+      revision,
+    ) {
+      final match = _csrfPattern.firstMatch(cookieHeader);
+      final csrf = match == null
+          ? ''
+          : Uri.decodeComponent(match.group(2)!.trim());
+      if (csrf.isEmpty) {
+        throw const BilibiliInteractionException('当前登录会话缺少安全校验信息，请重新登录。');
+      }
+      return _InteractionSession(
+        cookieHeader: cookieHeader,
+        csrf: csrf,
+        accountMid: mid,
+        generation: generation,
+        revision: revision,
+      );
+    });
+    if (session == null) {
       throw const BilibiliInteractionException('请先登录 B 站后再执行此操作。');
     }
-    final String cookieHeader = (await _authService.readCookieHeader()).trim();
-    final RegExpMatch? csrfMatch = _csrfPattern.firstMatch(cookieHeader);
-    final String csrf = csrfMatch == null
-        ? ''
-        : Uri.decodeComponent(csrfMatch.group(2)!.trim());
-    if (csrf.isEmpty) {
-      throw const BilibiliInteractionException('当前登录会话缺少安全校验信息，请重新登录。');
-    }
-    return _InteractionSession(
-      cookieHeader: cookieHeader,
-      csrf: csrf,
-      accountMid: state.account!.mid,
-    );
+    if (!_matchesCurrentScope(session)) throw _staleSession;
+    return session;
   }
+
+  bool _matchesCurrentScope(_InteractionSession session) =>
+      session.generation == _authService.accountMutationGeneration &&
+      session.revision == CacheLifecycle.account.value &&
+      CacheLifecycle.accountScope == 'mid:${session.accountMid}';
 
   /// 读取可用收藏夹编号；取消收藏时优先选择当前确实包含该视频的目录。
   Future<int> _loadFavoriteMediaId(
@@ -559,21 +767,30 @@ class BilibiliInteractionService {
   /// 请求 GET 接口并返回成功 data 对象，统一处理 B 站业务错误码。
   Future<Map<Object?, Object?>> _getData(
     Uri endpoint,
-    _InteractionSession session,
-  ) async {
-    final Object? rawData = await _getRawData(endpoint, session);
+    _InteractionSession session, {
+    bool requireExplicitCode = false,
+  }) async {
+    final Object? rawData = await _getRawData(
+      endpoint,
+      session,
+      requireExplicitCode: requireExplicitCode,
+    );
     return rawData is Map
         ? Map<Object?, Object?>.from(rawData)
         : const <Object?, Object?>{};
   }
 
   /// 请求 GET 接口并保留 data 的原始类型，兼容布尔型状态响应。
-  Future<Object?> _getRawData(Uri endpoint, _InteractionSession session) async {
+  Future<Object?> _getRawData(
+    Uri endpoint,
+    _InteractionSession session, {
+    bool requireExplicitCode = false,
+  }) async {
     final BilibiliInteractionResponse response = await _request(
       endpoint,
       cookieHeader: session.cookieHeader,
     );
-    return _parseData(response);
+    return _parseData(response, requireExplicitCode: requireExplicitCode);
   }
 
   /// 尝试读取可选 GET 状态；单个接口失败时返回空值，让其他状态继续加载。
@@ -598,14 +815,33 @@ class BilibiliInteractionService {
   }
 
   /// 请求 POST 接口并自动附加 csrf 与 csrf_token 字段。
+  static const _staleSession = BilibiliInteractionException(
+    '账号已切换，此次操作未提交。请重新打开后再试。',
+  );
+
   Future<Map<Object?, Object?>> _postData(
     Uri endpoint,
     _InteractionSession session,
-    Map<String, String> fields,
-  ) async {
+    Map<String, String> fields, {
+    bool Function()? isCurrent,
+    bool requireExplicitCode = false,
+  }) async {
     if (await _behaviorPreferencesService.loadAccountReadOnly()) {
       throw const BilibiliInteractionException(
         '账号只读已开启，请先在“设置 - 账号与隐私”中关闭后再操作。',
+      );
+    }
+    // Recheck after the asynchronous read-only preference. Even a logout and
+    // login into the same account invalidates a previously confirmed write.
+    if (!_matchesCurrentScope(session)) throw _staleSession;
+    final currentCookie = (await _authService.readCookieHeader()).trim();
+    if (!_matchesCurrentScope(session) ||
+        currentCookie != session.cookieHeader) {
+      throw _staleSession;
+    }
+    if (isCurrent != null && !isCurrent()) {
+      throw BilibiliInteractionException(
+        requireExplicitCode ? '操作已停止，未提交修改。' : '操作已停止，未继续收藏。',
       );
     }
     final Map<String, String> payload = <String, String>{
@@ -618,14 +854,20 @@ class BilibiliInteractionService {
       cookieHeader: session.cookieHeader,
       body: Uri(queryParameters: payload).query,
     );
-    final Object? rawData = _parseData(response);
+    final Object? rawData = _parseData(
+      response,
+      requireExplicitCode: requireExplicitCode,
+    );
     return rawData is Map
         ? Map<Object?, Object?>.from(rawData)
         : const <Object?, Object?>{};
   }
 
   /// 校验 HTTP 和业务响应，只把稳定错误文字交给界面。
-  Object? _parseData(BilibiliInteractionResponse response) {
+  Object? _parseData(
+    BilibiliInteractionResponse response, {
+    bool requireExplicitCode = false,
+  }) {
     if (response.statusCode != HttpStatus.ok) {
       throw BilibiliInteractionException(
         'B 站互动服务暂时不可用（HTTP ${response.statusCode}）。',
@@ -641,7 +883,14 @@ class BilibiliInteractionService {
       throw const BilibiliInteractionException('B 站互动响应格式不正确，请稍后重试。');
     }
     final Map<Object?, Object?> root = Map<Object?, Object?>.from(decoded);
-    final int code = _readInteger(root['code']);
+    final rawCode = root['code'];
+    if (requireExplicitCode &&
+        rawCode is! int &&
+        !(rawCode is String &&
+            int.tryParse(rawCode.trim(), radix: 10) != null)) {
+      throw const BilibiliInteractionException('B 站未返回明确结果，请重新打开收藏夹查看。');
+    }
+    final int code = _readInteger(rawCode);
     if (code != 0) {
       if (code == -101) {
         throw const BilibiliInteractionException('登录已过期，请重新登录后再试。');
@@ -740,9 +989,12 @@ class _InteractionSession {
     required this.cookieHeader,
     required this.csrf,
     required this.accountMid,
+    required this.generation,
+    required this.revision,
   });
 
   final String cookieHeader;
   final String csrf;
   final int accountMid;
+  final int generation, revision;
 }

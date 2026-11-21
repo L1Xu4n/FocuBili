@@ -8,6 +8,8 @@ import '../../services/media_cache_service_factory.dart';
 import '../../services/image_resource_cache.dart';
 import '../../services/cached_player_overlay_service.dart';
 import '../../services/cache_lifecycle.dart';
+import '../../services/offline_cache_locations.dart';
+import 'offline_cache_location_dialog.dart';
 
 /// 按平台展示 Android Media3 边播缓存或 Windows media_kit 播放缓冲。
 class CacheManagementPage extends StatefulWidget {
@@ -459,6 +461,24 @@ class _CacheManagementPageState extends State<CacheManagementPage> {
                   physics: const AlwaysScrollableScrollPhysics(),
                   padding: const EdgeInsets.all(16),
                   children: <Widget>[
+                    if (OfflineCacheLocations.instance.supported) ...[
+                      Card(
+                        child: ListTile(
+                          key: const Key('offline-cache-location'),
+                          leading: const Icon(Icons.folder_open_outlined),
+                          title: const Text('离线缓存位置'),
+                          subtitle: const Text('选择新下载的存放位置'),
+                          trailing: const Icon(Icons.chevron_right_rounded),
+                          onTap: () => unawaited(
+                            showOfflineCacheLocationDialog(
+                              context,
+                              OfflineCacheLocations.instance,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
                     if (status != null) ...<Widget>[
                       _buildUsageCard(status),
                       const SizedBox(height: 12),

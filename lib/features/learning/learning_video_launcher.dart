@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../../models/learning_list_entry.dart';
 import '../../models/video_preview.dart';
+import '../../models/playback_queue.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/learning_list_service.dart';
 import '../player/player_page.dart';
@@ -15,6 +16,7 @@ abstract final class LearningVideoLauncher {
     LearningListEntry entry, {
     BilibiliService? service,
     LearningListService? learningListService,
+    List<LearningListEntry>? playlist,
   }) async {
     final String bvid = entry.bvid.trim();
     if (bvid.isEmpty) {
@@ -48,6 +50,7 @@ abstract final class LearningVideoLauncher {
             entry,
             videoService: videoService,
             learningListService: learningListService,
+            playlist: playlist,
           ),
         ),
       );
@@ -62,18 +65,32 @@ abstract final class LearningVideoLauncher {
     }
   }
 
-  /// 按保存的 CID 创建带学习位置的播放器；CID 失效时拒绝套用旧进度。
+  /// 按保存的 CID 创建播放器；未传整份清单时只播放所选任务，不能进入视频自带合集。
   static PlayerPage buildPlayerPage(
     VideoPreview video,
     LearningListEntry entry, {
     BilibiliService? videoService,
     LearningListService? learningListService,
+    List<LearningListEntry>? playlist,
   }) {
     final VideoPart part = _findPart(video, entry);
     return PlayerPage(
       video: video,
+      playbackQueue: PlaybackQueue(
+        title: '学习清单',
+        items: (playlist ?? [entry]).map(
+          (item) => PlaybackQueueItem(
+            bvid: item.bvid,
+            title: '${item.title} · P${item.partPageNumber} ${item.partTitle}',
+            learningEntry: item,
+          ),
+        ),
+      ),
       bilibiliService: videoService,
       learningListService: learningListService,
+      learningContinuationScope: playlist
+          ?.map((entry) => entry.stableId)
+          .toSet(),
       initialPartCid: part.cid,
       initialPosition: entry.position > Duration.zero ? entry.position : null,
       initialPositionSource: PlayerInitialPositionSource.learning,

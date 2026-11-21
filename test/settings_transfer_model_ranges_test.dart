@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/models/danmaku_preferences.dart';
 import 'package:focubili/models/dashboard_layout.dart';
 import 'package:focubili/models/playback_preferences.dart';
+import 'package:focubili/services/app_behavior_preferences_service.dart';
 import 'package:focubili/services/app_theme_mode_service.dart';
 import 'package:focubili/services/danmaku_preferences_service.dart';
 import 'package:focubili/services/dashboard_layout_service.dart';
@@ -194,6 +195,9 @@ void main() {
         'playback_preferences.long_press_speed': 2.5,
         'playback_preferences.control_scale': 1.15,
         'playback_preferences.subtitle_font_size': 24.0,
+        PlaybackPreferencesService.subtitleOpacityKey: .65,
+        PlaybackPreferencesService.autoEnableSubtitlesKey: true,
+        PlaybackPreferencesService.subtitlePriorityKey: 'chineseAiFirst',
         'playback_preferences.wifi_default_quality': 112,
         'playback_preferences.mobile_default_quality': 16,
         'appearance.theme_mode': 'dark',
@@ -226,6 +230,10 @@ void main() {
         expect(preferences.get(entry.key), entry.value, reason: entry.key);
       }
       expect((await DanmakuPreferencesService().load()).fontSize, 15.5);
+      final playback = await const PlaybackPreferencesService().load();
+      expect(playback.subtitleOpacity, .65);
+      expect(playback.autoEnableSubtitles, isTrue);
+      expect(playback.subtitlePriority, SubtitlePriority.chineseAiFirst);
     },
   );
 
@@ -250,6 +258,9 @@ void main() {
         'playback_preferences.long_press_speed': [0.99, 5.01, 2.1],
         'playback_preferences.control_scale': [0.79, 2.01, 1.03],
         'playback_preferences.subtitle_font_size': [11.99, 36.01, 16.5],
+        PlaybackPreferencesService.subtitleOpacityKey: [.299, 1.01, '0.8'],
+        PlaybackPreferencesService.autoEnableSubtitlesKey: ['true', 1],
+        PlaybackPreferencesService.subtitlePriorityKey: ['unknown', 1],
         'playback_preferences.wifi_default_quality': [
           0,
           17,
@@ -391,6 +402,7 @@ void main() {
         'app_behavior.search_history_enabled',
         'app_behavior.watch_history_enabled',
         'app_behavior.wbi_signing_enabled',
+        AppBehaviorPreferencesService.noteMarkdownEnabledKey,
         'app_update.check_on_start',
         'windows_clipboard_link_detection.enabled',
         'focus_preferences.enable_do_not_disturb',
@@ -445,6 +457,17 @@ void main() {
         expect(playback.showNoteTimeMarkers, value);
         expect(playback.enableTwoFingerVideoTransform, value);
         expect(playback.preferOfflineCache, value);
+        expect(
+          await AppBehaviorPreferencesService().loadNoteMarkdownEnabled(),
+          value,
+        );
+        expect(
+          service.parseSettings(await service.exportSettings()),
+          containsPair(
+            AppBehaviorPreferencesService.noteMarkdownEnabledKey,
+            value,
+          ),
+        );
       }
     },
   );

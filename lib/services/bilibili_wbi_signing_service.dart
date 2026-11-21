@@ -127,11 +127,7 @@ class BilibiliWbiSigningService {
       if (code is int && code != 0 && code != -101) {
         throw WbiSigningException(apiCode: code);
       }
-      final images = root['data']['wbi_img'] as Map<String, dynamic>;
-      final key = deriveMixinKey(
-        _keyFromUrl(images['img_url']),
-        _keyFromUrl(images['sub_url']),
-      );
+      final key = mixinKeyFromNavImages(root['data']['wbi_img']);
       _cachedKey = key;
       _cachedAt = _clock();
       return key;
@@ -143,6 +139,15 @@ class BilibiliWbiSigningService {
     } catch (_) {
       throw const WbiSigningException();
     }
+  }
+
+  /// Reuses the signing material from an already verified nav response.
+  static String mixinKeyFromNavImages(Object? images) {
+    if (images is! Map) throw const WbiSigningException();
+    return deriveMixinKey(
+      _keyFromUrl(images['img_url']),
+      _keyFromUrl(images['sub_url']),
+    );
   }
 
   /// 只解析材料文件名，不下载图片，不把服务端 URL 当成新的请求地址。

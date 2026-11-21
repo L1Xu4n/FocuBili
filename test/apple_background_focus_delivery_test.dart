@@ -308,6 +308,11 @@ void main() {
         );
         expect(host.completions.last, {'runId': 'run-two', 'success': true});
       }
+      // 1.9 keeps a session ticking without an attached video. Stop this
+      // injected controller before widget-test timer invariants are checked.
+      if (focus.hasActiveSession) {
+        await focus.endFocusEarly(reason: 'Synthetic test cleanup');
+      }
       await tester.pumpWidget(const SizedBox.shrink());
     });
   }

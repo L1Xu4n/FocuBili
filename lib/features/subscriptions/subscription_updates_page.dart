@@ -4,17 +4,23 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show FloatingHeaderSnapConfiguration;
 import 'package:focubili/features/common/app_network_image.dart';
 
+import '../../core/widgets/drag_selection_region.dart';
 import '../../models/subscription.dart';
+import '../../services/image_resource_cache.dart';
 import '../../models/public_profile.dart';
 import '../../services/subscription_service.dart';
+import '../../services/subscription_source_visits.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/focus_notification_service.dart';
 import '../../services/learning_list_service.dart';
+import '../common/discovery_blocklist.dart';
+import '../common/selection_range_snapshot.dart';
 import '../learning/learning_add_sheet.dart';
 import '../player/player_page.dart';
 import '../profile/user_profile_page.dart';
 import '../profile/collection_detail_page.dart';
-import 'subscription_feed_tile.dart';
+import 'subscription_source_rail.dart';
+import 'subscription_timeline_tile.dart';
 import 'subscription_history_page.dart';
 
 class SubscriptionUpdatesPage extends StatefulWidget {
@@ -22,10 +28,12 @@ class SubscriptionUpdatesPage extends StatefulWidget {
     super.key,
     this.service,
     this.videoService,
+    this.coverCache,
     this.learningService,
     this.notificationService = const FocusNotificationService(),
   });
   final SubscriptionService? service;
+  final ImageResourceCache? coverCache;
   final BilibiliService? videoService;
   final LearningListService? learningService;
   final FocusNotificationService notificationService;
@@ -35,7 +43,9 @@ class SubscriptionUpdatesPage extends StatefulWidget {
 }
 
 class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
-    with TickerProviderStateMixin {
+    with
+        TickerProviderStateMixin,
+        DiscoveryBlocklistState<SubscriptionUpdatesPage> {
   late final SubscriptionService _service =
       widget.service ?? SubscriptionService.instance;
   late final BilibiliService _videos =
@@ -45,13 +55,38 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
   bool _unreadOnly = false, _todayOnly = false, _busy = false;
   bool _settingsOpen = false;
   String? _sourceKey;
+  final _scrollController = ScrollController();
   final Set<String> _selected = {};
-  bool get _selecting => _selected.isNotEmpty;
+  final _selectionRange = SelectionRangeSnapshot();
+  bool _selecting = false;
 
   @override
   void initState() {
     super.initState();
     unawaited(_service.initialize());
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _endSelection() {
+    _selecting = false;
+    _selected.clear();
+    _selectionRange.clear();
+  }
+
+  void _updateSelectionRange(DragSelectionUpdate update, List<String> ids) {
+    if (!_selecting || _busy || !discoveryBlocklistActionsReady) return;
+    final next = _selectionRange.apply(update, ids, _selected);
+    if (next == null) return;
+    setState(
+      () => _selected
+        ..clear()
+        ..addAll(next),
+    );
   }
 
   void _message(String message) {
@@ -63,7 +98,7 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
   }
 
   Future<void> _action(Future<void> Function() action) async {
-    if (_busy) return;
+    if (_busy || !discoveryBlocklistActionsReady) return;
     setState(() => _busy = true);
     try {
       await action();
@@ -91,9 +126,26 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
     }
   }
 
+  bool _isUpdateBlocked(SubscriptionFeedItem item) =>
+      discoveryBlocklist.isNotEmpty &&
+      blocksSubscriptionUpdate(discoveryBlocklist, item);
+
   Future<void> _play(SubscriptionFeedItem item) => _action(() async {
+    if (_isUpdateBlocked(item)) return;
+    if (item.readAt == null) {
+      // Save the tap independently of whether the player can open.
+      unawaited(
+        _service
+            .markRead(item.bvid)
+            .onError<SubscriptionStorageException>(
+              (_, _) {}, // The service already exposes the storage error.
+            ),
+      );
+    }
     final video = await _videos.lookupVideo(item.bvid);
-    if (!mounted) return;
+    if (!mounted || !discoveryBlocklistActionsReady || _isUpdateBlocked(item)) {
+      return;
+    }
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
         builder: (_) => PlayerPage(video: video, bilibiliService: _videos),
@@ -102,23 +154,35 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
   });
 
   Future<void> _addLearning(SubscriptionFeedItem item) => _action(() async {
+    if (_isUpdateBlocked(item)) return;
     final video = await _videos.lookupVideo(item.bvid);
-    if (!mounted) return;
+    if (!mounted || !discoveryBlocklistActionsReady || _isUpdateBlocked(item)) {
+      return;
+    }
     final result = await LearningAddSheet.show(
       context,
       video: video,
       service: _learning,
+      canConfirm: () =>
+          mounted && discoveryBlocklistActionsReady && !_isUpdateBlocked(item),
     );
     if (result != null) _message('已加入所选分 P。');
   });
 
   Future<void> _addSelected() => _action(() async {
-    final ids = Set<String>.of(_selected);
+    final targets = _service.feed
+        .where(
+          (item) => _selected.contains(item.bvid) && !_isUpdateBlocked(item),
+        )
+        .toList();
+    if (targets.isEmpty) return;
     final selections = <LearningPartSelection>[];
     var failed = 0;
-    for (final id in ids) {
+    for (final item in targets) {
+      if (!discoveryBlocklistActionsReady) return;
+      if (_isUpdateBlocked(item)) continue;
       try {
-        final video = await _videos.lookupVideo(id);
+        final video = await _videos.lookupVideo(item.bvid);
         // Batch selection adds the first part. Existing tasks retain all progress.
         if (video.parts.isEmpty) {
           failed++;
@@ -130,13 +194,25 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
       }
       if (!mounted) return;
     }
-    final result = await _learning.addBatch(selections);
+    if (!discoveryBlocklistActionsReady) return;
+    final stillVisible = _service.feed
+        .where((item) => !_isUpdateBlocked(item))
+        .map((item) => item.bvid)
+        .toSet();
+    final eligible = selections
+        .where((item) => stillVisible.contains(item.video.bvid))
+        .toList();
+    if (eligible.isEmpty && selections.isNotEmpty) {
+      _message('所选更新已隐藏，未加入学习清单。');
+      return;
+    }
+    final result = await _learning.addBatch(eligible);
     if (!mounted) return;
     if (!result.persisted) {
       _message('学习清单未保存，请重试。');
       return;
     }
-    setState(_selected.clear);
+    setState(_endSelection);
     _message(
       '已加入 ${result.addedIds.length} 项，已有 ${result.existingIds.length} 项'
       '${failed > 0 ? '，$failed 项详情读取失败' : ''}'
@@ -144,17 +220,64 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
     );
   });
 
-  void _toggle(SubscriptionFeedItem item) => setState(() {
-    if (!_selected.remove(item.bvid)) _selected.add(item.bvid);
-  });
+  void _toggle(SubscriptionFeedItem item) {
+    if (_busy || !discoveryBlocklistActionsReady || _isUpdateBlocked(item)) {
+      return;
+    }
+    setState(() {
+      _selecting = true;
+      _selectionRange.clear();
+      if (!_selected.remove(item.bvid)) _selected.add(item.bvid);
+    });
+  }
 
   String _date(DateTime date) {
     final local = date.toLocal();
-    return '--${local.year}年${local.month.toString().padLeft(2, '0')}月${local.day.toString().padLeft(2, '0')}日--';
+    final today = DateTime.now();
+    final yesterday = DateTime(today.year, today.month, today.day - 1);
+    final prefix = DateUtils.isSameDay(local, today)
+        ? '今天 · '
+        : DateUtils.isSameDay(local, yesterday)
+        ? '昨天 · '
+        : local.year == today.year
+        ? ''
+        : '${local.year}年';
+    return '$prefix${local.month}月${local.day}日';
   }
 
-  List<SubscriptionFeedItem> _visibleItems() {
-    final today = _date(DateTime.now());
+  bool _visibleInGlobalFilters(SubscriptionFeedItem item, DateTime today) =>
+      (!_unreadOnly || item.readAt == null) &&
+      (!_todayOnly ||
+          DateUtils.isSameDay(
+            (item.publishedAt ?? item.discoveredAt).toLocal(),
+            today,
+          ));
+
+  List<SubscriptionFeedItem> _railFeed() {
+    if (!discoveryBlocklistReady) return const [];
+    final today = DateTime.now();
+    return _service.feed
+        .where(
+          (item) =>
+              !_isUpdateBlocked(item) && _visibleInGlobalFilters(item, today),
+        )
+        .toList();
+  }
+
+  bool _canConfirmSource(SubscriptionSource source, Set<String> presented) =>
+      mounted &&
+      discoveryBlocklistActionsReady &&
+      _service.sources.any(
+        (s) => s.key == source.key && s.token == source.token,
+      ) &&
+      _railFeed()
+          .where((e) => e.sources.containsKey(source.key))
+          .map(SubscriptionSourceVisits.event)
+          .toSet()
+          .containsAll(presented);
+
+  List<SubscriptionFeedItem> _itemsForFilters() {
+    final today = DateTime.now();
     // A deleted source cannot strand the feed behind an invisible filter.
     final key = _service.sources.any((s) => s.key == _sourceKey)
         ? _sourceKey
@@ -163,21 +286,38 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
     return _service.feed
         .where(
           (item) =>
-              (!_unreadOnly || item.readAt == null) &&
-              (!_todayOnly ||
-                  _date(item.publishedAt ?? item.discoveredAt) == today) &&
+              _visibleInGlobalFilters(item, today) &&
               (key == null || item.sources.containsKey(key)),
         )
         .toList();
   }
 
-  double _filterHeight(BuildContext context) {
+  bool get _hasHiddenUnread =>
+      discoveryBlocklist.isNotEmpty &&
+      _service.feed.any(
+        (item) => item.readAt == null && _isUpdateBlocked(item),
+      );
+
+  Future<void> _markVisibleRead() => _action(() async {
+    // Re-evaluate even if this callback came from the previous frame.
+    if (!_hasHiddenUnread) {
+      await _service.markAllRead();
+      return;
+    }
+    final ids = {
+      for (final item in _itemsForFilters())
+        if (item.readAt == null && !_isUpdateBlocked(item)) item.bvid,
+    };
+    if (ids.isNotEmpty) await _service.markReadBatch(ids);
+  });
+
+  double _filterHeight(BuildContext context, String markReadLabel) {
     final available = MediaQuery.sizeOf(context).width.clamp(0.0, 900.0) - 32;
     final scaler = MediaQuery.textScalerOf(context);
     var rows = 1;
     var used = 0.0;
     var lineHeight = 48.0;
-    final labels = ['仅未读', '今日发布', '全部标为已读'];
+    final labels = ['仅未读', '今日发布', markReadLabel];
     for (var i = 0; i < labels.length; i++) {
       final painter = TextPainter(
         text: TextSpan(
@@ -201,14 +341,35 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
     }
     return 8 +
         rows * lineHeight +
-        (_service.sources.isEmpty ? 0 : 64 + scaler.scale(14));
+        (_service.sources.isEmpty ? 0 : 40 + scaler.scale(14));
   }
 
-  Widget _filters(List<SubscriptionFeedItem> items) => Padding(
+  Widget _filters({
+    required String markReadLabel,
+    required VoidCallback? markRead,
+  }) => Padding(
     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (_service.sources.isNotEmpty)
+          Expanded(
+            child: SubscriptionSourceRail(
+              sources: _service.sources,
+              retainedFeed: _service.feed,
+              actionsReady: discoveryBlocklistActionsReady,
+              visibleFeed: _railFeed(),
+              canConfirm: _canConfirmSource,
+              selected: _sourceKey,
+              onSelect: (key) {
+                if (!mounted) return;
+                setState(() {
+                  _sourceKey = key;
+                  _endSelection();
+                });
+              },
+            ),
+          ),
         Wrap(
           spacing: 8,
           crossAxisAlignment: WrapCrossAlignment.center,
@@ -218,7 +379,7 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
               selected: _unreadOnly,
               onSelected: (value) => setState(() {
                 _unreadOnly = value;
-                _selected.clear();
+                _endSelection();
               }),
             ),
             FilterChip(
@@ -226,84 +387,15 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
               selected: _todayOnly,
               onSelected: (value) => setState(() {
                 _todayOnly = value;
-                _selected.clear();
+                _endSelection();
               }),
             ),
             TextButton(
-              onPressed: _busy ? null : () => _action(_service.markAllRead),
-              child: const Text('全部标为已读'),
+              onPressed: _busy ? null : markRead,
+              child: Text(markReadLabel),
             ),
           ],
         ),
-        if (_service.sources.isNotEmpty)
-          Expanded(
-            child: ListView(
-              key: const Key('subscription-source-filters'),
-              scrollDirection: Axis.horizontal,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: ChoiceChip(
-                    label: const Text('全部来源'),
-                    selected: _sourceKey == null,
-                    onSelected: (_) => setState(() {
-                      _sourceKey = null;
-                      _selected.clear();
-                    }),
-                  ),
-                ),
-                for (final source in _service.sources)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 10),
-                    child: Semantics(
-                      selected: _sourceKey == source.key,
-                      child: InkWell(
-                        key: ValueKey('source-filter-${source.key}'),
-                        onTap: () => setState(() {
-                          _sourceKey = _sourceKey == source.key
-                              ? null
-                              : source.key;
-                          _selected.clear();
-                        }),
-                        borderRadius: BorderRadius.circular(12),
-                        child: Container(
-                          width: 96,
-                          padding: const EdgeInsets.all(4),
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(12),
-                            color: _sourceKey == source.key
-                                ? Theme.of(
-                                    context,
-                                  ).colorScheme.secondaryContainer
-                                : null,
-                          ),
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              SizedBox(
-                                height: 44,
-                                child: FittedBox(
-                                  child: SubscriptionSourceImage(
-                                    source: source,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                source.name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context).textTheme.labelSmall,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
       ],
     ),
   );
@@ -314,7 +406,7 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
     final rows = <({String key, WidgetBuilder builder})>[];
     String? previousDate;
     var readSection = false;
-    for (final item in items) {
+    for (final (index, item) in items.indexed) {
       if (!readSection && item.readAt != null) {
         readSection = true;
         previousDate = null;
@@ -342,49 +434,42 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
           key: '${readSection ? 'read' : 'unread'}-$date',
           builder: (context) => Padding(
             padding: const EdgeInsets.symmetric(vertical: 12),
-            child: Text(
-              date,
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.labelMedium,
+            child: Semantics(
+              header: true,
+              child: Text(
+                date,
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  color: Theme.of(context).colorScheme.primary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ),
           ),
         ));
       }
       rows.add((
         key: item.bvid,
-        builder: (context) => Card(
-          key: ValueKey('subscription-feed-${item.bvid}'),
-          color: _selected.contains(item.bvid)
-              ? Theme.of(context).colorScheme.secondaryContainer
-              : null,
-          clipBehavior: Clip.antiAlias,
-          child: SubscriptionFeedTile(
+        builder: (context) => DragSelectionTarget(
+          index: index,
+          builder: (context, handleKey) => SubscriptionTimelineTile(
+            key: ValueKey('subscription-feed-${item.bvid}'),
+            coverCache: widget.coverCache,
             item: item,
             selected: _selecting ? _selected.contains(item.bvid) : null,
-            onLongPress: _busy ? null : () => _toggle(item),
-            onTap: _busy
+            selectionHandleKey: handleKey,
+            enabled: !_busy && discoveryBlocklistActionsReady,
+            onLongPress: _selecting || _busy || !discoveryBlocklistActionsReady
+                ? null
+                : () => _toggle(item),
+            onTap: _busy || !discoveryBlocklistActionsReady
                 ? null
                 : () => _selecting ? _toggle(item) : unawaited(_play(item)),
-            actions: _selecting
-                ? null
-                : Wrap(
-                    spacing: 8,
-                    children: [
-                      if (item.readAt == null)
-                        TextButton(
-                          onPressed: _busy
-                              ? null
-                              : () =>
-                                    _action(() => _service.markRead(item.bvid)),
-                          child: const Text('标为已读'),
-                        ),
-                      TextButton.icon(
-                        onPressed: _busy ? null : () => _addLearning(item),
-                        icon: const Icon(Icons.playlist_add),
-                        label: const Text('加入学习清单'),
-                      ),
-                    ],
-                  ),
+            onRead: () => unawaited(
+              _action(() async {
+                if (!_isUpdateBlocked(item)) await _service.markRead(item.bvid);
+              }),
+            ),
+            onAdd: () => unawaited(_addLearning(item)),
           ),
         ),
       ));
@@ -393,7 +478,7 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
       key: 'retention',
       builder: (context) => const Padding(
         padding: EdgeInsets.symmetric(vertical: 20, horizontal: 12),
-        child: Text('已读记录会保留七天，到期后自动清除', textAlign: TextAlign.center),
+        child: Text('只保留最近 14 天的订阅更新，已读和未读相同', textAlign: TextAlign.center),
       ),
     ));
     return rows;
@@ -403,15 +488,33 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: _service,
     builder: (context, _) {
-      final items = _visibleItems();
-      final visibleIds = items.map((e) => e.bvid).toSet();
+      final candidates = _itemsForFilters();
+      final items = !discoveryBlocklistReady
+          ? const <SubscriptionFeedItem>[]
+          : discoveryBlocklist.isNotEmpty
+          ? candidates.where((item) => !_isUpdateBlocked(item)).toList()
+          : candidates;
+      final hidden = discoveryBlocklistReady
+          ? candidates.length - items.length
+          : 0;
+      final hasHiddenUnread = _hasHiddenUnread;
+      final markReadLabel = hasHiddenUnread ? '显示项标为已读' : '全部标为已读';
+      final markRead =
+          !discoveryBlocklistActionsReady ||
+              (hasHiddenUnread && !items.any((item) => item.readAt == null))
+          ? null
+          : () => unawaited(_markVisibleRead());
+      final orderedIds = items.map((e) => e.bvid).toList();
+      final visibleIds = orderedIds.toSet();
       _selected.removeWhere((id) => !visibleIds.contains(id));
+      final batchEnabled =
+          !_busy && discoveryBlocklistActionsReady && _selected.isNotEmpty;
       final rows = _rows(items);
-      final height = _filterHeight(context);
+      final height = _filterHeight(context, markReadLabel);
       return PopScope(
         canPop: !_selecting,
         onPopInvokedWithResult: (didPop, _) {
-          if (!didPop && _selecting) setState(_selected.clear);
+          if (!didPop && _selecting) setState(_endSelection);
         },
         child: Scaffold(
           appBar: AppBar(
@@ -419,7 +522,7 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
                 ? IconButton(
                     tooltip: '退出多选',
                     icon: const Icon(Icons.close),
-                    onPressed: () => setState(_selected.clear),
+                    onPressed: () => setState(_endSelection),
                   )
                 : null,
             title: Text(_selecting ? '已选 ${_selected.length} 项' : '焦点订阅'),
@@ -427,9 +530,13 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
                 ? [
                     IconButton(
                       tooltip: _selected.length == items.length ? '取消全选' : '全选',
-                      onPressed: _busy
+                      onPressed:
+                          _busy ||
+                              !discoveryBlocklistActionsReady ||
+                              items.isEmpty
                           ? null
                           : () => setState(() {
+                              _selectionRange.clear();
                               if (_selected.length == items.length) {
                                 _selected.clear();
                               } else {
@@ -440,17 +547,22 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
                     ),
                     IconButton(
                       tooltip: '标为已读',
-                      onPressed: _busy
+                      onPressed: !batchEnabled
                           ? null
                           : () => _action(() async {
-                              await _service.markReadBatch(Set.of(_selected));
-                              if (mounted) setState(_selected.clear);
+                              await _service.markReadBatch({
+                                for (final item in _service.feed)
+                                  if (_selected.contains(item.bvid) &&
+                                      !_isUpdateBlocked(item))
+                                    item.bvid,
+                              });
+                              if (mounted) setState(_endSelection);
                             }),
                       icon: const Icon(Icons.done_all),
                     ),
                     IconButton(
                       tooltip: '加入学习清单',
-                      onPressed: _busy ? null : _addSelected,
+                      onPressed: batchEnabled ? _addSelected : null,
                       icon: const Icon(Icons.playlist_add),
                     ),
                   ]
@@ -472,67 +584,95 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
           body: Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 900),
-              child: RefreshIndicator(
-                onRefresh: () => _service.refresh(manual: true),
-                child: CustomScrollView(
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  slivers: [
-                    if (_service.storageError != null)
-                      SliverToBoxAdapter(
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Text(_service.storageError!),
+              child: DragSelectionRegion(
+                controller: _scrollController,
+                itemCount: orderedIds.length,
+                enabled: _selecting && !_busy && discoveryBlocklistActionsReady,
+                checkedAt: (index) => _selected.contains(orderedIds[index]),
+                onDragUpdate: (update) =>
+                    _updateSelectionRange(update, orderedIds),
+                builder: (context, dragging) => RefreshIndicator(
+                  onRefresh: () => _service.refresh(manual: true),
+                  notificationPredicate: (notification) =>
+                      !dragging && notification.depth == 0,
+                  child: CustomScrollView(
+                    controller: _scrollController,
+                    physics: dragging
+                        ? const NeverScrollableScrollPhysics()
+                        : const AlwaysScrollableScrollPhysics(),
+                    slivers: [
+                      if (_service.storageError != null)
+                        SliverToBoxAdapter(
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Text(_service.storageError!),
+                          ),
                         ),
-                      ),
-                    if (!_service.enabled)
-                      const SliverToBoxAdapter(
-                        child: Padding(
-                          padding: EdgeInsets.all(16),
-                          child: Text('焦点订阅尚未开启，请在右上角设置中选择学习来源。'),
+                      if (!_service.enabled)
+                        const SliverToBoxAdapter(
+                          child: Padding(
+                            padding: EdgeInsets.all(16),
+                            child: Text('焦点订阅尚未开启，请在右上角设置中选择学习来源。'),
+                          ),
                         ),
-                      ),
-                    if (_service.refreshing || _busy)
-                      const SliverToBoxAdapter(
-                        child: LinearProgressIndicator(),
-                      ),
-                    SliverPersistentHeader(
-                      floating: true,
-                      delegate: _SubscriptionFilterHeader(
-                        extent: height,
-                        vsync: this,
-                        child: Material(
-                          color: Theme.of(context).colorScheme.surface,
-                          child: _filters(items),
+                      if (_service.refreshing || _busy)
+                        const SliverToBoxAdapter(
+                          child: LinearProgressIndicator(),
                         ),
-                      ),
-                    ),
-                    if (items.isEmpty)
-                      const SliverToBoxAdapter(
-                        child: Padding(
-                          padding: EdgeInsets.all(28),
-                          child: Text(
-                            '暂无匹配的更新。UP 主和合集读取部分内容建立基线；历史视频可在订阅源设置中单独导入。',
+                      if (!discoveryBlocklistActionsReady)
+                        SliverToBoxAdapter(
+                          child: buildDiscoveryBlocklistStatus(),
+                        ),
+                      SliverPersistentHeader(
+                        floating: true,
+                        delegate: _SubscriptionFilterHeader(
+                          extent: height,
+                          vsync: this,
+                          child: Material(
+                            color: Theme.of(context).colorScheme.surface,
+                            child: _filters(
+                              markReadLabel: markReadLabel,
+                              markRead: markRead,
+                            ),
                           ),
                         ),
                       ),
-                    SliverPadding(
-                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 24),
-                      sliver: SliverList.builder(
-                        itemCount: rows.length,
-                        findChildIndexCallback: (key) => key is ValueKey<String>
-                            ? rows.indexWhere((row) => row.key == key.value) < 0
-                                  ? null
-                                  : rows.indexWhere(
-                                      (row) => row.key == key.value,
-                                    )
-                            : null,
-                        itemBuilder: (_, index) => KeyedSubtree(
-                          key: ValueKey(rows[index].key),
-                          child: rows[index].builder(context),
+                      if (hidden > 0)
+                        SliverToBoxAdapter(
+                          child: DiscoveryBlocklistNotice(hiddenCount: hidden),
+                        ),
+                      if (discoveryBlocklistReady &&
+                          items.isEmpty &&
+                          hidden == 0)
+                        const SliverToBoxAdapter(
+                          child: Padding(
+                            padding: EdgeInsets.all(28),
+                            child: Text(
+                              '暂无匹配的更新。UP 主和合集读取部分内容建立基线；历史视频可在订阅源设置中单独导入。',
+                            ),
+                          ),
+                        ),
+                      SliverPadding(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 24),
+                        sliver: SliverList.builder(
+                          itemCount: rows.length,
+                          findChildIndexCallback: (key) =>
+                              key is ValueKey<String>
+                              ? rows.indexWhere((row) => row.key == key.value) <
+                                        0
+                                    ? null
+                                    : rows.indexWhere(
+                                        (row) => row.key == key.value,
+                                      )
+                              : null,
+                          itemBuilder: (context, index) => KeyedSubtree(
+                            key: ValueKey(rows[index].key),
+                            child: rows[index].builder(context),
+                          ),
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -597,15 +737,47 @@ class SubscriptionSettingsPage extends StatefulWidget {
 class _SubscriptionSettingsPageState extends State<SubscriptionSettingsPage> {
   SubscriptionService get _service => widget.service;
   bool _busy = false;
+  final _scrollController = ScrollController();
   final Set<String> _selected = {};
-  bool get _selecting => _selected.isNotEmpty;
-  void _toggleSource(SubscriptionSource source) => setState(() {
-    if (!_selected.remove(source.key)) _selected.add(source.key);
-  });
+  final _selectionRange = SelectionRangeSnapshot();
+  bool _selecting = false;
+
+  void _endSelection() {
+    _selecting = false;
+    _selected.clear();
+    _selectionRange.clear();
+  }
+
+  void _updateSelectionRange(DragSelectionUpdate update, List<String> ids) {
+    if (!_selecting || _busy) return;
+    final next = _selectionRange.apply(update, ids, _selected);
+    if (next == null) return;
+    setState(
+      () => _selected
+        ..clear()
+        ..addAll(next),
+    );
+  }
+
+  void _toggleSource(SubscriptionSource source) {
+    if (_busy) return;
+    setState(() {
+      _selecting = true;
+      _selectionRange.clear();
+      if (!_selected.remove(source.key)) _selected.add(source.key);
+    });
+  }
+
   @override
   void initState() {
     super.initState();
     unawaited(_service.initialize());
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
   }
 
   void _message(String message) {
@@ -721,6 +893,7 @@ class _SubscriptionSettingsPageState extends State<SubscriptionSettingsPage> {
       _deleteSources({source.key});
 
   Future<void> _deleteSources(Set<String> keys) async {
+    if (keys.isEmpty) return;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialog) => AlertDialog(
@@ -741,18 +914,24 @@ class _SubscriptionSettingsPageState extends State<SubscriptionSettingsPage> {
     if (confirmed == true && mounted) {
       await _action(() async {
         await _service.deleteSources(keys);
-        if (mounted) setState(_selected.clear);
+        if (mounted) setState(_endSelection);
       });
     }
   }
 
   @override
-  Widget build(BuildContext context) => ListenableBuilder(
-    listenable: _service,
-    builder: (context, _) => PopScope(
+  Widget build(BuildContext context) =>
+      ListenableBuilder(listenable: _service, builder: _buildSettings);
+
+  Widget _buildSettings(BuildContext context, Widget? _) {
+    final sources = _service.sources;
+    final orderedIds = sources.map((source) => source.key).toList();
+    _selected.retainAll(orderedIds);
+    final batchEnabled = !_busy && _selected.isNotEmpty;
+    return PopScope(
       canPop: !_selecting,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && _selecting) setState(_selected.clear);
+        if (!didPop && _selecting) setState(_endSelection);
       },
       child: Scaffold(
         appBar: AppBar(
@@ -760,30 +939,29 @@ class _SubscriptionSettingsPageState extends State<SubscriptionSettingsPage> {
               ? IconButton(
                   tooltip: '退出多选',
                   icon: const Icon(Icons.close),
-                  onPressed: () => setState(_selected.clear),
+                  onPressed: () => setState(_endSelection),
                 )
               : null,
           title: Text(_selecting ? '已选 ${_selected.length} 个来源' : '焦点订阅设置'),
           actions: _selecting
               ? [
                   IconButton(
-                    tooltip: '全选',
+                    tooltip: _selected.length == sources.length ? '取消全选' : '全选',
                     icon: const Icon(Icons.select_all),
-                    onPressed: _busy
+                    onPressed: _busy || sources.isEmpty
                         ? null
                         : () => setState(() {
-                            if (_selected.length == _service.sources.length) {
+                            _selectionRange.clear();
+                            if (_selected.length == sources.length) {
                               _selected.clear();
                             } else {
-                              _selected.addAll(
-                                _service.sources.map((s) => s.key),
-                              );
+                              _selected.addAll(orderedIds);
                             }
                           }),
                   ),
                   PopupMenuButton<bool>(
                     tooltip: '批量暂停或恢复',
-                    enabled: !_busy,
+                    enabled: batchEnabled,
                     icon: const Icon(Icons.pause_circle_outline),
                     itemBuilder: (_) => const [
                       PopupMenuItem(value: true, child: Text('暂停所选')),
@@ -791,15 +969,15 @@ class _SubscriptionSettingsPageState extends State<SubscriptionSettingsPage> {
                     ],
                     onSelected: (paused) => _action(() async {
                       await _service.pauseSources(Set.of(_selected), paused);
-                      if (mounted) setState(_selected.clear);
+                      if (mounted) setState(_endSelection);
                     }),
                   ),
                   IconButton(
                     tooltip: '删除所选',
                     icon: const Icon(Icons.delete_outline),
-                    onPressed: _busy
-                        ? null
-                        : () => _deleteSources(Set.of(_selected)),
+                    onPressed: batchEnabled
+                        ? () => _deleteSources(Set.of(_selected))
+                        : null,
                   ),
                 ]
               : [
@@ -815,228 +993,261 @@ class _SubscriptionSettingsPageState extends State<SubscriptionSettingsPage> {
         body: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 900),
-            child: ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                SwitchListTile(
-                  title: const Text('开启焦点订阅'),
-                  value: _service.enabled,
-                  subtitle: const Text('启动、回到前台、手动及前台每小时检查更新。'),
-                  onChanged: _busy
-                      ? null
-                      : (value) => _action(() => _service.setEnabled(value)),
-                ),
-                if (_service.storageError != null)
-                  Text(
-                    _service.storageError!,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.error,
-                    ),
-                  ),
-                if (_service.enabled) ...[
+            child: DragSelectionRegion(
+              controller: _scrollController,
+              itemCount: orderedIds.length,
+              enabled: _selecting && !_busy,
+              checkedAt: (index) => _selected.contains(orderedIds[index]),
+              onDragUpdate: (update) =>
+                  _updateSelectionRange(update, orderedIds),
+              builder: (context, dragging) => ListView(
+                controller: _scrollController,
+                physics: dragging ? const NeverScrollableScrollPhysics() : null,
+                padding: const EdgeInsets.all(16),
+                children: [
                   SwitchListTile(
-                    title: const Text('系统通知（默认关闭）'),
-                    value: _service.notificationsEnabled,
-                    subtitle: const Text('明确开启时才请求权限；专注期间只更新角标。'),
-                    onChanged: _busy ? null : _notifications,
-                  ),
-                  SwitchListTile(
-                    key: const Key('subscription-background-switch'),
-                    title: Text(_service.backgroundCheckLabel),
-                    value: _service.backgroundRefreshEnabled,
-                    subtitle: Text(
-                      _service.backgroundRefreshSupported
-                          ? _service.backgroundCheckDescription
-                          : '${_service.backgroundCheckDescription}\n系统暂未允许原生后台检查，当前使用前台检查。',
-                    ),
-                    onChanged:
-                        _busy ||
-                            (!_service.backgroundRefreshSupported &&
-                                !_service.backgroundRefreshEnabled)
+                    title: const Text('开启焦点订阅'),
+                    value: _service.enabled,
+                    subtitle: const Text('启动、回到前台、手动及前台每小时检查更新。'),
+                    onChanged: _busy
                         ? null
-                        : _background,
+                        : (value) => _action(() => _service.setEnabled(value)),
                   ),
+                  if (_service.storageError != null)
+                    Text(
+                      _service.storageError!,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  if (_service.enabled) ...[
+                    SwitchListTile(
+                      title: const Text('系统通知（默认关闭）'),
+                      value: _service.notificationsEnabled,
+                      subtitle: const Text('明确开启时才请求权限；专注期间只更新角标。'),
+                      onChanged: _busy ? null : _notifications,
+                    ),
+                    SwitchListTile(
+                      key: const Key('subscription-background-switch'),
+                      title: Text(_service.backgroundCheckLabel),
+                      value: _service.backgroundRefreshEnabled,
+                      subtitle: Text(
+                        _service.backgroundRefreshSupported
+                            ? _service.backgroundCheckDescription
+                            : '${_service.backgroundCheckDescription}\n系统暂未允许原生后台检查，当前使用前台检查。',
+                      ),
+                      onChanged:
+                          _busy ||
+                              (!_service.backgroundRefreshSupported &&
+                                  !_service.backgroundRefreshEnabled)
+                          ? null
+                          : _background,
+                    ),
+                    Text(
+                      _service.lastBackgroundCheckAt == null
+                          ? '最近后台检查：尚无记录'
+                          : '最近后台检查：${_service.lastBackgroundCheckAt!.toLocal().toString().split('.').first}',
+                    ),
+                    if (_service.backgroundStatusText != null)
+                      Text(_service.backgroundStatusText!),
+                    FilledButton.tonalIcon(
+                      onPressed: _busy ? null : _addSource,
+                      icon: const Icon(Icons.add),
+                      label: const Text('添加 UP 主或 UGC 合集'),
+                    ),
+                  ],
+                  const SizedBox(height: 16),
                   Text(
-                    _service.lastBackgroundCheckAt == null
-                        ? '最近后台检查：尚无记录'
-                        : '最近后台检查：${_service.lastBackgroundCheckAt!.toLocal().toString().split('.').first}',
+                    '订阅源（${sources.length}/${_service.maxSources}）',
+                    style: Theme.of(context).textTheme.titleMedium,
                   ),
-                  if (_service.backgroundStatusText != null)
-                    Text(_service.backgroundStatusText!),
-                  FilledButton.tonalIcon(
-                    onPressed: _busy ? null : _addSource,
-                    icon: const Icon(Icons.add),
-                    label: const Text('添加 UP 主或 UGC 合集'),
-                  ),
-                ],
-                const SizedBox(height: 16),
-                Text(
-                  '订阅源（${_service.sources.length}/${_service.maxSources}）',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                if (_service.sources.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 12),
-                    child: Text('UP 主和合集只读取部分内容建立基线。历史导入与更新提醒相互独立。'),
-                  ),
-                for (final source in _service.sources)
-                  Card(
-                    key: ValueKey('subscription-source-${source.key}'),
-                    color: _selected.contains(source.key)
-                        ? Theme.of(context).colorScheme.secondaryContainer
-                        : null,
-                    child: InkWell(
-                      onTap: _busy ? null : () => _openSource(source),
-                      onLongPress: _busy ? null : () => _toggleSource(source),
-                      child: Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
+                  if (sources.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 12),
+                      child: Text('UP 主和合集只读取部分内容建立基线。历史导入与更新提醒相互独立。'),
+                    ),
+                  for (final (index, source) in sources.indexed)
+                    DragSelectionTarget(
+                      key: ValueKey(source.key),
+                      index: index,
+                      builder: (context, handleKey) => Card(
+                        key: ValueKey('subscription-source-${source.key}'),
+                        color: _selected.contains(source.key)
+                            ? Theme.of(context).colorScheme.secondaryContainer
+                            : null,
+                        child: InkWell(
+                          onTap: _busy ? null : () => _openSource(source),
+                          onLongPress: _busy || _selecting
+                              ? null
+                              : () => _toggleSource(source),
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                if (_selecting)
-                                  Icon(
-                                    _selected.contains(source.key)
-                                        ? Icons.check_circle
-                                        : Icons.radio_button_unchecked,
-                                  ),
-                                SubscriptionSourceImage(source: source),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        source.name,
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                        ),
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    if (_selecting)
+                                      SubscriptionSelectionHandle(
+                                        handleKey: handleKey,
+                                        checked: _selected.contains(source.key),
                                       ),
-                                      Text(
-                                        source.kind == SubscriptionKind.creator
-                                            ? 'UP主 ${source.mid}'
-                                            : 'UGC合集 ${source.seasonId} · UP主 ${source.mid}',
-                                      ),
-                                      Text(
-                                        source.paused
-                                            ? '已暂停 · 历史保留'
-                                            : _service
-                                                      .checkpoint(source.key)
-                                                      ?.error !=
-                                                  null
-                                            ? _service
+                                    SubscriptionSourceImage(source: source),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            source.name,
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                          Text(
+                                            source.kind ==
+                                                    SubscriptionKind.creator
+                                                ? 'UP主 ${source.mid}'
+                                                : 'UGC合集 ${source.seasonId} · UP主 ${source.mid}',
+                                          ),
+                                          Text(
+                                            source.paused
+                                                ? '已暂停 · 历史保留'
+                                                : _service
+                                                          .checkpoint(
+                                                            source.key,
+                                                          )
+                                                          ?.error !=
+                                                      null
+                                                ? _service
+                                                              .checkpoint(
+                                                                source.key,
+                                                              )
+                                                              ?.initialized ==
+                                                          true
+                                                      ? '更新检查失败 · 可重试此来源'
+                                                      : '获取已有内容失败 · 可重试此来源'
+                                                : _service
                                                           .checkpoint(
                                                             source.key,
                                                           )
                                                           ?.initialized ==
                                                       true
-                                                  ? '更新检查失败 · 请刷新重试'
-                                                  : '获取已有内容失败 · 请刷新重试'
-                                            : _service
-                                                      .checkpoint(source.key)
-                                                      ?.initialized ==
-                                                  true
-                                            ? '已订阅更新'
-                                            : source.kind ==
-                                                  SubscriptionKind.creator
-                                            ? '正在读取最近两页'
-                                            : '正在读取合集首尾内容',
-                                      ),
-                                      if (_service
-                                              .checkpoint(source.key)
-                                              ?.error !=
-                                          null)
-                                        Text(
-                                          _service
-                                              .checkpoint(source.key)!
-                                              .error!,
-                                        ),
-                                      if (_service
-                                              .checkpoint(source.key)
-                                              ?.partial ==
-                                          true)
-                                        Text(
-                                          '${source.kind == SubscriptionKind.collection ? '合集核对' : '补查更新'}中 · 下一页 ${_service.checkpoint(source.key)!.nextPage}',
-                                        ),
-                                      if (source.kind ==
-                                          SubscriptionKind.collection)
-                                        Text(
-                                          '最近检查：${_service.checkpoint(source.key)?.lastSuccess?.toLocal().toString() ?? '尚未完成'}。检查合集首尾各两页；中间位置新增或任意重排可能未覆盖，可单独导入历史。',
-                                        ),
-                                      if (!_selecting)
-                                        Wrap(
-                                          spacing: 12,
-                                          children: [
-                                            TextButton(
-                                              onPressed: () =>
-                                                  Navigator.of(
-                                                    context,
-                                                  ).push<void>(
-                                                    MaterialPageRoute(
-                                                      builder: (_) =>
-                                                          SubscriptionHistoryPage(
-                                                            service: _service,
-                                                            source: source,
-                                                          ),
-                                                    ),
-                                                  ),
-                                              child: const Text('历史内容'),
+                                                ? '已订阅更新'
+                                                : source.kind ==
+                                                      SubscriptionKind.creator
+                                                ? '正在读取最近两页'
+                                                : '正在读取合集首尾内容',
+                                          ),
+                                          if (_service
+                                                  .checkpoint(source.key)
+                                                  ?.error !=
+                                              null)
+                                            Text(
+                                              _service
+                                                  .checkpoint(source.key)!
+                                                  .error!,
                                             ),
-                                            if (_service
-                                                    .checkpoint(source.key)
-                                                    ?.blocked ==
-                                                true)
-                                              TextButton(
-                                                onPressed: () => _action(
-                                                  () => _service.retrySource(
-                                                    source.key,
+                                          if (_service
+                                                  .checkpoint(source.key)
+                                                  ?.partial ==
+                                              true)
+                                            Text(
+                                              '${source.kind == SubscriptionKind.collection ? '合集核对' : '补查更新'}中 · 下一页 ${_service.checkpoint(source.key)!.nextPage}',
+                                            ),
+                                          if (source.kind ==
+                                              SubscriptionKind.collection)
+                                            Text(
+                                              '最近检查：${_service.checkpoint(source.key)?.lastSuccess?.toLocal().toString() ?? '尚未完成'}。检查合集首尾各两页；中间位置新增或任意重排可能未覆盖，可单独导入历史。',
+                                            ),
+                                          if (!_selecting)
+                                            Wrap(
+                                              spacing: 12,
+                                              children: [
+                                                TextButton(
+                                                  onPressed: () =>
+                                                      Navigator.of(
+                                                        context,
+                                                      ).push<void>(
+                                                        MaterialPageRoute(
+                                                          builder: (_) =>
+                                                              SubscriptionHistoryPage(
+                                                                service:
+                                                                    _service,
+                                                                source: source,
+                                                              ),
+                                                        ),
+                                                      ),
+                                                  child: const Text('历史内容'),
+                                                ),
+                                                if (!source.paused &&
+                                                    _service
+                                                            .checkpoint(
+                                                              source.key,
+                                                            )
+                                                            ?.error !=
+                                                        null)
+                                                  TextButton(
+                                                    onPressed:
+                                                        !_service.enabled ||
+                                                            _service
+                                                                .refreshing ||
+                                                            _busy
+                                                        ? null
+                                                        : () => _action(
+                                                            () => _service
+                                                                .retrySource(
+                                                                  source.key,
+                                                                ),
+                                                          ),
+                                                    child: const Text('重试此来源'),
+                                                  ),
+                                                TextButton(
+                                                  onPressed: _busy
+                                                      ? null
+                                                      : () => _action(
+                                                          () => _service
+                                                              .pauseSource(
+                                                                source.key,
+                                                                !source.paused,
+                                                              ),
+                                                        ),
+                                                  child: Text(
+                                                    source.paused
+                                                        ? '恢复订阅'
+                                                        : '暂停',
                                                   ),
                                                 ),
-                                                child: const Text('重新检查'),
-                                              ),
-                                            TextButton(
-                                              onPressed: _busy
-                                                  ? null
-                                                  : () => _action(
-                                                      () =>
-                                                          _service.pauseSource(
-                                                            source.key,
-                                                            !source.paused,
-                                                          ),
-                                                    ),
-                                              child: Text(
-                                                source.paused ? '恢复订阅' : '暂停',
-                                              ),
+                                                TextButton(
+                                                  onPressed: _busy
+                                                      ? null
+                                                      : () => _delete(source),
+                                                  child: const Text('删除源'),
+                                                ),
+                                              ],
                                             ),
-                                            TextButton(
-                                              onPressed: _busy
-                                                  ? null
-                                                  : () => _delete(source),
-                                              child: const Text('删除源'),
-                                            ),
-                                          ],
-                                        ),
-                                    ],
-                                  ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ],
                             ),
-                          ],
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                if (_service.refreshing) const LinearProgressIndicator(),
-              ],
+                  if (_service.refreshing) const LinearProgressIndicator(),
+                ],
+              ),
             ),
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 /// Bilibili images can be absent or blocked without breaking source management.
@@ -1324,7 +1535,9 @@ class FocusSubscriptionButton extends StatefulWidget {
     super.key,
     required this.source,
     this.service,
+    this.addDirectly = false,
   });
+  final bool addDirectly;
   final SubscriptionSource source;
   final SubscriptionService? service;
   @override
@@ -1346,15 +1559,34 @@ class _FocusSubscriptionButtonState extends State<FocusSubscriptionButton> {
     if (_opening) return;
     setState(() => _opening = true);
     try {
-      await showDialog<void>(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) =>
-            _AddSourceDialog(service: _service, initialSource: widget.source),
-      );
+      final source = widget.source;
+      await _service.initialize();
+      if (!mounted || source.key != widget.source.key) return;
+      if (widget.addDirectly) {
+        await _service.addSource(source, enableFocus: true);
+        _showMessage('已添加到焦点订阅');
+      } else {
+        await showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) =>
+              _AddSourceDialog(service: _service, initialSource: source),
+        );
+      }
+    } catch (error) {
+      _showMessage(error is StateError ? error.message.toString() : '添加失败，请重试');
     } finally {
       if (mounted) setState(() => _opening = false);
     }
+  }
+
+  void _showMessage(String text) {
+    if (!mounted || ModalRoute.of(context)?.isCurrent == false) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(content: Text(text), duration: const Duration(seconds: 2)),
+      );
   }
 
   Future<void> _unsubscribe() async {
@@ -1399,7 +1631,11 @@ class _FocusSubscriptionButtonState extends State<FocusSubscriptionButton> {
       );
       return IconButton(
         key: const Key('focus-subscribe-button'),
-        tooltip: subscribed ? '取消焦点订阅' : '加入焦点订阅',
+        tooltip: subscribed
+            ? '取消焦点订阅'
+            : widget.addDirectly
+            ? '添加订阅源'
+            : '加入焦点订阅',
         onPressed: _opening || widget.source.mid <= 0
             ? null
             : subscribed

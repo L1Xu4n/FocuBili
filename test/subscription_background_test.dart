@@ -24,6 +24,9 @@ class AtomicSnapshots implements SubscriptionSnapshotStore {
   }
 
   @override
+  Future<String?> readForExport() => read();
+
+  @override
   Future<String?> recover(bool Function(String) validate) async {
     await queue;
     if (value != null && validate(value!)) return value;
@@ -115,7 +118,7 @@ void main() {
     () async {
       final ui = await create();
       expect(ui.backgroundRefreshEnabled, false);
-      expect(ui.maxSources, 50);
+      expect(ui.maxSources, 100);
       expect(content.calls, isEmpty);
       final old = source(1).toJson()..remove('imageUrl');
       expect(SubscriptionSource.fromJson(old).imageUrl, '');
@@ -343,16 +346,47 @@ void main() {
       );
     },
   );
-  test('50 sources accepted; 51st fails without changing snapshot', () async {
-    final ui = await create();
-    for (var mid = 1; mid <= 50; mid++) {
-      await ui.addSource(source(mid));
-    }
-    final before = store.value;
-    await expectLater(ui.addSource(source(51)), throwsStateError);
-    expect(ui.sources.length, 50);
-    expect(store.value, before);
-  });
+  test(
+    '100 mixed sources persist; 101st is rejected without a write',
+    () async {
+      final ui = await create();
+      for (var mid = 1; mid <= 50; mid++) {
+        await ui.addSource(source(mid));
+        await ui.addSource(source(mid, collection: true));
+      }
+      final paused = source(1).key;
+      await ui.pauseSource(paused, true);
+      final before = store.value;
+      final restored = await create();
+      expect(restored.sources, hasLength(100));
+      expect(
+        restored.sources.where((entry) => entry.paused).single.key,
+        paused,
+      );
+      expect((await restored.exportLocalData())['sources'], hasLength(100));
+
+      // A duplicate does not use another slot or modify the existing source.
+      await restored.addSource(source(1));
+      await expectLater(
+        restored.addSource(source(51)),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            contains('最多 100 个订阅源'),
+          ),
+        ),
+      );
+      expect(store.value, before);
+      expect(restored.sources, hasLength(100));
+      expect(content.calls, isEmpty);
+
+      await restored.deleteSource(paused);
+      await restored.addSource(source(51));
+      expect(restored.sources, hasLength(100));
+      expect(restored.sources.last.key, source(51).key);
+    },
+  );
 
   test(
     'two concurrent engines discover and claim each item only once',

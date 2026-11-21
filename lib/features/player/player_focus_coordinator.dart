@@ -9,9 +9,8 @@ mixin _PlayerFocusCoordinator on State<PlayerPage> {
   String? _lastFocusPlaybackBvid;
   int? _lastFocusPlaybackPartCid;
   bool? _lastFocusPlaybackPlaying;
+  bool? _lastFocusPlaybackReady;
   bool _focusSeekTransitionActive = false;
-  String? _dismissedAssociationCandidate;
-  bool _associationPromptOpen = false;
   bool _leaveRequestInProgress = false;
   bool _allowRoutePop = false;
 
@@ -79,9 +78,6 @@ mixin _PlayerFocusCoordinator on State<PlayerPage> {
     controller?.addListener(_handleFocusStateChanged);
     if (controller != null) {
       _syncFocusPlaybackState(_playbackSnapshot);
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        unawaited(_maybePromptFocusAssociation());
-      });
     }
   }
 
@@ -105,11 +101,6 @@ mixin _PlayerFocusCoordinator on State<PlayerPage> {
       }
       if (visualStateChanged && mounted) {
         setState(() {});
-      }
-      if (!active.hasVideoAssociation) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          unawaited(_maybePromptFocusAssociation());
-        });
       }
       return;
     }
@@ -166,6 +157,7 @@ mixin _PlayerFocusCoordinator on State<PlayerPage> {
     }
     final bool actuallyPlaying =
         snapshot.isPlaying && snapshot.phase == PlaybackPhase.ready;
+    final bool ready = snapshot.phase == PlaybackPhase.ready;
     if (_focusSeekTransitionActive &&
         _lastFocusPlaybackPlaying == true &&
         !actuallyPlaying &&
@@ -178,17 +170,25 @@ mixin _PlayerFocusCoordinator on State<PlayerPage> {
     }
     if (_lastFocusPlaybackBvid == _activeVideo.bvid &&
         _lastFocusPlaybackPartCid == _currentPart.cid &&
-        _lastFocusPlaybackPlaying == actuallyPlaying) {
+        _lastFocusPlaybackPlaying == actuallyPlaying &&
+        _lastFocusPlaybackReady == ready) {
       return;
     }
     _lastFocusPlaybackBvid = _activeVideo.bvid;
     _lastFocusPlaybackPartCid = _currentPart.cid;
     _lastFocusPlaybackPlaying = actuallyPlaying;
+    _lastFocusPlaybackReady = ready;
     unawaited(
       controller.updatePlaybackState(
         bvid: _activeVideo.bvid,
         partCid: _currentPart.cid,
         isPlaying: actuallyPlaying,
+        videoTitle: snapshot.phase == PlaybackPhase.ready
+            ? _activeVideo.title
+            : null,
+        partPageNumber: _currentPart.pageNumber,
+        partTitle: _currentPart.title,
+        position: snapshot.position,
       ),
     );
   }
@@ -218,59 +218,7 @@ mixin _PlayerFocusCoordinator on State<PlayerPage> {
     }
   }
 
-  /// 为首页创建且尚未关联的任务询问是否绑定当前真实视频分 P。
-  Future<void> _maybePromptFocusAssociation() async {
-    final FocusTimerController? controller = _boundFocusController;
-    final FocusSession? session = controller?.activeSession;
-    final String candidate = '${_activeVideo.bvid}:${_currentPart.cid}';
-    if (!mounted ||
-        controller == null ||
-        session == null ||
-        !session.isActive ||
-        session.hasVideoAssociation ||
-        _playbackSnapshot.phase != PlaybackPhase.ready ||
-        _associationPromptOpen ||
-        _dismissedAssociationCandidate == candidate ||
-        ModalRoute.of(context)?.isCurrent != true) {
-      return;
-    }
-    _associationPromptOpen = true;
-    final bool? confirmed = await showFocusVideoAssociationSheet(
-      context,
-      goal: session.goal,
-      videoTitle: _activeVideo.title,
-      partPageNumber: _currentPart.pageNumber,
-      partTitle: _currentPart.title,
-    );
-    _associationPromptOpen = false;
-    if (!mounted || controller.activeSession?.id != session.id) {
-      return;
-    }
-    if (confirmed == true) {
-      final String? framePath = await _captureFocusFrame();
-      await controller.associateVideo(
-        bvid: _activeVideo.bvid,
-        videoTitle: _activeVideo.title,
-        partCid: _currentPart.cid,
-        partPageNumber: _currentPart.pageNumber,
-        partTitle: _currentPart.title,
-        isPlaying: _playing,
-        framePath: framePath,
-        position: _playbackSnapshot.position,
-      );
-      _dismissedAssociationCandidate = null;
-      if (mounted) {
-        _showPlayerNotice(
-          '已关联视频：${_activeVideo.title}（P${_currentPart.pageNumber} ${_currentPart.title}）',
-        );
-      }
-      return;
-    }
-    _dismissedAssociationCandidate = candidate;
-    _showPlayerNotice('我们将在新的视频提示你关联');
-  }
-
-  /// 尝试保存播放器当前画面，失败时仍允许关联和退出。
+  /// 尝试保存播放器当前画面，失败时仍允许继续会话和退出。
   Future<String?> _captureFocusFrame() async {
     try {
       return await _playbackService.captureCurrentFrame();
@@ -310,6 +258,7 @@ mixin _PlayerFocusCoordinator on State<PlayerPage> {
     _lastFocusPlaybackBvid = null;
     _lastFocusPlaybackPartCid = null;
     _lastFocusPlaybackPlaying = null;
+    _lastFocusPlaybackReady = null;
   }
 
   /// 计算当前分 P 尚未播放的时长，并限制在专注模块允许的 1 到 180 分钟内。
@@ -385,33 +334,24 @@ mixin _PlayerFocusCoordinator on State<PlayerPage> {
     }
   }
 
-  /// 离开关联视频前鼓励继续；坚持退出时保存画面、原因并保持任务可继续。
+  /// 离开播放器只保存书签；应用前台浏览和换视频保持会话连续。
+  void _clearAbRepeatForNavigation();
+  void _cancelNoteCaptureForExternalNavigation();
+  Future<void> _drainAbRepeatSeek();
+
+  /// 离开前先完成已发出的区间 seek，随后保存书签并返回。
   Future<void> _requestLeavePlayer() async {
     if (_leaveRequestInProgress || !mounted) {
       return;
     }
     _leaveRequestInProgress = true;
-    final FocusTimerController? controller = _boundFocusController;
-    final FocusSession? session = controller?.activeSession;
-    bool mayLeave = true;
-    if (controller != null &&
-        session != null &&
-        session.isActive &&
-        session.sourceBvid == _activeVideo.bvid &&
-        session.sourcePartCid == _currentPart.cid) {
-      mayLeave = await showFocusInterruptionFlow(
-        context,
-        controller: controller,
-        kind: FocusInterruptionKind.playerExit,
-      );
-      if (mayLeave) {
-        await _saveFocusLastSeen();
-      }
-    }
+    _cancelNoteCaptureForExternalNavigation();
+    _clearAbRepeatForNavigation();
+    await _drainAbRepeatSeek();
+    if (!mounted) return;
+    await _saveFocusLastSeen();
     _leaveRequestInProgress = false;
-    if (!mounted || !mayLeave) {
-      return;
-    }
+    if (!mounted) return;
     setState(() => _allowRoutePop = true);
     Navigator.of(context).pop();
   }

@@ -14,6 +14,8 @@ mixin _PlayerListeningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
     final enabled = !_playbackSnapshot.audioOnly;
     setState(() => _switchingListening = true);
     try {
+      await _suspendAbRepeatForSource();
+      if (!mounted) return;
       await (service as ListeningPlaybackService).setAudioOnly(enabled);
       if (!mounted) return;
       _showTransientSnackBar(enabled ? '已切换为仅音频，可后台或锁屏收听' : '已恢复视频画面');
@@ -23,6 +25,7 @@ mixin _PlayerListeningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
       if (mounted) _showTransientSnackBar('当前媒体暂不能切换，请确认有独立音轨后重试');
     } finally {
       if (mounted) {
+        _resumeAbRepeatAfterSource();
         setState(() => _switchingListening = false);
         _showPlayerControls();
       }

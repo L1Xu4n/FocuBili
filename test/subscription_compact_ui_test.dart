@@ -10,6 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/features/subscriptions/subscription_feed_tile.dart';
 import 'package:focubili/core/theme/app_theme.dart';
+import 'package:focubili/services/image_resource_cache.dart';
 import 'package:focubili/features/subscriptions/subscription_home_card.dart';
 import 'package:focubili/features/subscriptions/subscription_updates_page.dart';
 import 'package:focubili/features/player/player_page.dart';
@@ -19,7 +20,7 @@ import 'package:focubili/models/video_preview.dart';
 
 import 'subscription_service_test.dart' show Content;
 import 'subscription_performance_probe_test.dart'
-    show CountingSnapshots, feedFixture;
+    show CountingSnapshots, feedFixture, feedFixtureClock;
 import 'refactor_r3_feedback_test.dart' show video, FeedbackPlayback;
 
 class _Videos implements BilibiliService {
@@ -34,27 +35,43 @@ class _Videos implements BilibiliService {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-const titles = [
-  '线性代数 · 用几何直觉理解矩阵与空间变换',
-  '从零写一个属于自己的番茄钟：布局、交互与状态管理',
-  '把知识连起来：我的阅读笔记与复习方法',
-  '为什么天空是蓝色的？一起做一个小实验',
-  '一周学习回顾：把复杂的问题拆成小步骤',
-];
+class _HeldVideo extends _Videos {
+  final result = Completer<VideoPreview>();
+
+  @override
+  Future<VideoPreview> lookupVideo(String input) {
+    calls.add(input);
+    return result.future;
+  }
+}
+
+const titles = ['用几何直觉理解矩阵', '从零写一个番茄钟', '把知识连起来', '为什么天空是蓝色的？', '一周学习回顾'];
 
 String uiFixture() {
   final data =
       jsonDecode(feedFixture(count: 5, sourceCount: 2)) as Map<String, dynamic>;
   final feed = data['feed'] as List;
+  final now = DateTime.now();
   for (var i = 0; i < feed.length; i++) {
+    final day = DateTime(
+      now.year,
+      now.month,
+      now.day - (i < 3 ? 0 : 1),
+      12,
+      5 - i,
+    );
+    feed[i]['discoveredAt'] = day.toIso8601String();
+    feed[i]['publishedAt'] = day.toIso8601String();
     feed[i]['title'] = titles[i];
-    feed[i]['sources'] = {'creator:1': i.isEven ? '数学与日常' : '一起慢慢学 · 系列课程'};
+    feed[i]['sources'] = {
+      i.isEven ? 'creator:1' : 'creator:2': i.isEven ? '数学与日常' : '一起慢慢学',
+    };
     feed[i]['coverUrl'] =
         'https://fixture.invalid/${i.isEven ? 'wide' : 'portrait'}';
   }
   final sources = data['sources'] as List;
   sources[0]['name'] = '数学与日常';
-  sources[1]['name'] = '一起慢慢学 · 从基础开始的完整系列课程';
+  sources[1]['name'] = '一起慢慢学';
   return jsonEncode(data);
 }
 
@@ -66,9 +83,14 @@ Future<void> captureSubscriptionUi(
 }) async {
   const directory = String.fromEnvironment('BETA3_CAPTURE_DIR');
   if (directory.isEmpty) return;
-  await tester.runAsync(
-    () => Future<void>.delayed(const Duration(milliseconds: 100)),
-  );
+  // Filesystem, resource locks and image decoding complete on the real event
+  // loop. Pump their intermediate futures before capturing the Flutter tree.
+  for (var i = 0; i < 12; i++) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 35)),
+    );
+    await tester.pump();
+  }
   if (settle) await tester.pumpAndSettle();
   await tester.runAsync(() async {
     final boundary =
@@ -115,6 +137,17 @@ Future<void> loadBetaReviewFonts(WidgetTester tester) async {
 
 // Synthetic image responses exercise landscape and portrait decoding without
 // external network access. These are review fixtures, never shipped in the app.
+class _FixtureCovers extends ImageResourceCache {
+  _FixtureCovers(this.bytes);
+  final Map<String, List<int>> bytes;
+  @override
+  Future<CachedImageBytes> load(
+    String url, {
+    Map<String, String> headers = const {},
+  }) async =>
+      CachedImageBytes(Uint8List.fromList(bytes[Uri.parse(url).path]!), url);
+}
+
 class _Images extends HttpOverrides {
   final Map<String, List<int>> bytes;
   _Images(this.bytes);
@@ -152,6 +185,8 @@ class _Response extends Stream<List<int>> implements HttpClientResponse {
   _Response(this.bytes);
   @override
   int get statusCode => 200;
+  @override
+  HttpHeaders get headers => _Headers();
   @override
   int get contentLength => bytes.length;
   @override
@@ -199,12 +234,15 @@ void main() {
     (tester) async {
       await loadBetaReviewFonts(tester);
       final previous = HttpOverrides.current;
-      await tester.runAsync(() async {
-        HttpOverrides.global = _Images({
+      final bytes = (await tester.runAsync(
+        () async => {
           '/wide': await _image(320, 180, const Color(0xff427a86)),
           '/portrait': await _image(120, 320, const Color(0xff9f714a)),
-        });
-      });
+        },
+      ))!;
+      HttpOverrides.global = _Images(bytes);
+      final coverCache = _FixtureCovers(bytes);
+      addTearDown(coverCache.dispose);
       addTearDown(() => HttpOverrides.global = previous);
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
@@ -212,6 +250,7 @@ void main() {
       final content = Content();
       final service = SubscriptionService(
         snapshotStore: store,
+        clock: () => feedFixtureClock,
         contentService: content,
       );
       addTearDown(service.dispose);
@@ -250,7 +289,9 @@ void main() {
           ),
         );
         await tester.pumpWidget(
-          host(SubscriptionUpdatesPage(service: service)),
+          host(
+            SubscriptionUpdatesPage(service: service, coverCache: coverCache),
+          ),
         );
         await tester.pumpAndSettle();
         final image = tester.getRect(
@@ -293,6 +334,89 @@ void main() {
     },
   );
 
+  for (final home in [false, true]) {
+    testWidgets(
+      '${home ? 'home card' : 'timeline'} marks only the opened video before lookup completes',
+      (tester) async {
+        final store = CountingSnapshots()
+          ..value = feedFixture(count: 3, sourceCount: 1);
+        final videos = _HeldVideo();
+        final service = SubscriptionService(
+          snapshotStore: store,
+          clock: () => feedFixtureClock,
+        );
+        addTearDown(service.dispose);
+        await service.initialize();
+        await tester.pumpWidget(
+          MaterialApp(
+            home: home
+                ? Scaffold(
+                    body: SubscriptionHomeCard(
+                      service: service,
+                      videoService: videos,
+                    ),
+                  )
+                : SubscriptionUpdatesPage(
+                    service: service,
+                    videoService: videos,
+                  ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final first = home
+            ? find.byType(SubscriptionFeedTile).first
+            : find.byKey(const ValueKey('subscription-feed-fixture0'));
+        final second = home
+            ? find.byType(SubscriptionFeedTile).at(1)
+            : find.byKey(const ValueKey('subscription-feed-fixture1'));
+        if (!home) {
+          await tester.longPress(first);
+          await tester.pumpAndSettle();
+          await tester.tap(second);
+          await tester.pumpAndSettle();
+          expect(service.unreadCount, 3);
+          expect(videos.calls, isEmpty);
+          await tester.tap(find.byTooltip('退出多选'));
+          await tester.pumpAndSettle();
+        }
+
+        await tester.tap(first);
+        await tester.pump();
+        expect(videos.result.isCompleted, isFalse);
+        // A double tap onto another row while the first lookup is in flight
+        // is rejected by both entry points and must never mark that row read.
+        await tester.tap(second);
+        await tester.pump();
+        expect(videos.calls, ['fixture0']);
+        expect(service.unreadCount, 2);
+        expect(
+          service.feed
+              .where((item) => item.readAt != null)
+              .map((item) => item.bvid),
+          ['fixture0'],
+        );
+
+        videos.result.completeError(StateError('lookup failed'));
+        await tester.pumpAndSettle();
+        expect(service.unreadCount, 2);
+        final reopened = SubscriptionService(
+          snapshotStore: store,
+          clock: () => feedFixtureClock,
+        );
+        addTearDown(reopened.dispose);
+        await reopened.initialize();
+        expect(
+          reopened.feed
+              .where((item) => item.readAt != null)
+              .map((item) => item.bvid),
+          ['fixture0'],
+        );
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+
   testWidgets(
     'home card shares updates, refresh, read state and navigation; empty state is usable',
     (tester) async {
@@ -302,6 +426,7 @@ void main() {
       final videos = _Videos();
       final service = SubscriptionService(
         snapshotStore: store,
+        clock: () => feedFixtureClock,
         contentService: content,
       );
       addTearDown(service.dispose);
@@ -332,7 +457,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(videos.calls, ['fixture1']);
       expect(find.byType(PlayerPage), findsOneWidget);
-      expect(service.unreadCount, 4);
+      expect(service.unreadCount, 3);
       Navigator.of(tester.element(find.byType(PlayerPage))).pop();
       await tester.pumpAndSettle();
       service.setForeground(true);

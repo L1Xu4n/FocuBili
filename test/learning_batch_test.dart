@@ -40,6 +40,36 @@ class RejectingPreferences implements SharedPreferences {
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
   test(
+    'invalid part rejects the entire pending batch before writing',
+    () async {
+      final service = LearningListService();
+      final existing = video(1);
+      final pending = video(2);
+      await service.addVideo(existing, position: const Duration(seconds: 26));
+      final before = await service.loadEntries();
+      const stalePart = VideoPart(
+        pageNumber: 3,
+        cid: 999,
+        title: '旧 P',
+        duration: Duration(minutes: 3),
+      );
+      final result = await service.addBatch(
+        [
+          LearningPartSelection(existing, existing.initialPart),
+          LearningPartSelection(pending, pending.initialPart),
+          LearningPartSelection(pending, stalePart),
+        ],
+        removeIds: {'BV1:1'},
+      );
+      expect(result.removedIds, isEmpty);
+      expect(result.failedItems, ['BV2:999']);
+      expect(result.existingIds, ['BV1:1']);
+      expect(result.addedIds, isEmpty);
+      expect(await service.loadEntries(), before);
+    },
+  );
+
+  test(
     '98 + 5 is atomic: no clipping, then duplicate keeps progress',
     () async {
       final prefs = await SharedPreferences.getInstance();
@@ -50,11 +80,15 @@ void main() {
       ];
       expect((await service.addBatch(initial)).addedIds.length, 98);
       final before = prefs.getString('focubili_learning_list_v2');
-      final rejected = await service.addBatch([
-        for (var i = 99; i <= 103; i++)
-          LearningPartSelection(video(i), video(i).initialPart),
-      ]);
+      final rejected = await service.addBatch(
+        [
+          for (var i = 99; i <= 103; i++)
+            LearningPartSelection(video(i), video(i).initialPart),
+        ],
+        removeIds: {'BV2:2'},
+      );
       expect(rejected.capacityExceeded, true);
+      expect(rejected.removedIds, isEmpty);
       expect(rejected.addedIds, isEmpty);
       expect(prefs.getString('focubili_learning_list_v2'), before);
       await service.updateProgress(
@@ -68,6 +102,20 @@ void main() {
       expect(repeat.existingIds.length, 98);
       expect(repeat.entries.first.position.inSeconds, 33);
       expect(repeat.entries.first.status, LearningListStatus.learning);
+
+      await service.addBatch([
+        for (var i = 99; i <= 100; i++)
+          LearningPartSelection(video(i), video(i).initialPart),
+      ]);
+      final swap = await service.addBatch(
+        [LearningPartSelection(video(101), video(101).initialPart)],
+        removeIds: {'BV2:2'},
+      );
+      expect(swap.capacityExceeded, isFalse);
+      expect(swap.removedIds, ['BV2:2']);
+      expect(swap.addedIds, ['BV101:101']);
+      expect(swap.entries, hasLength(LearningListService.maximumEntries));
+      expect(swap.entries.first.toJson(), repeat.entries.first.toJson());
     },
   );
   test(
@@ -121,10 +169,13 @@ void main() {
         preferencesLoader: () async =>
             RejectingPreferences(prefs, 'focubili_learning_list_v2'),
       );
-      expect(
-        (await reject.addParts(video(2), video(2).parts)).persisted,
-        false,
+      final failure = await reject.addBatch(
+        [LearningPartSelection(video(2), video(2).initialPart)],
+        removeIds: {'BV1:1'},
       );
+      expect(failure.persisted, false);
+      expect(failure.addedIds, isEmpty);
+      expect(failure.removedIds, isEmpty);
       expect(prefs.getString('focubili_learning_list_v2'), before);
       await prefs.setString('focubili_learning_list_v2', '{broken');
       expect((await a.addParts(video(2), video(2).parts)).persisted, false);

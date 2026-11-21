@@ -8,17 +8,23 @@ class DashboardCardDefinition {
     required this.title,
     required this.icon,
     required this.builder,
+    this.editingBuilder,
     this.required = false,
     this.available = true,
     this.fullWidth = false,
+    this.defaultHidden = false,
   });
   final String id;
   final String title;
   final IconData icon;
   final WidgetBuilder builder;
+
+  /// 可选的受限编辑内容，仅此构建器自行开放安全的个性化操作。
+  final WidgetBuilder? editingBuilder;
   final bool required;
   final bool available;
   final bool fullWidth;
+  final bool defaultHidden;
 }
 
 /// 完整布局保留暂不可用以及新旧版本未知的编号。
@@ -45,9 +51,11 @@ class DashboardLayout {
         .toSet();
     return DashboardLayout(
       order: normalized,
-      hidden: hidden.where(
-        (id) => id.trim().isNotEmpty && !requiredIds.contains(id),
-      ),
+      hidden: {
+        ...hidden,
+        for (final card in cards)
+          if (card.defaultHidden && !order.contains(card.id)) card.id,
+      }.where((id) => id.trim().isNotEmpty && !requiredIds.contains(id)),
     );
   }
 

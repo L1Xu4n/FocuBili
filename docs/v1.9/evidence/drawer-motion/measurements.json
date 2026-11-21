@@ -1,0 +1,174 @@
+{
+  "fixture": {
+    "type": "Flutter widget harness",
+    "viewportLogicalPx": [
+      430,
+      900
+    ],
+    "captureStages": [
+      "closed",
+      "hold 42px",
+      "hold 280px",
+      "release slowly after 280px",
+      "release 120px fling at 2500px/s"
+    ]
+  },
+  "versions": {
+    "v1.8.1": [
+      {
+        "frame": "00-closed",
+        "pointer_up_px": null,
+        "scroll_offset_px": 0.0,
+        "nominal_open_offset_px": 772.0,
+        "max_offset_px": 898.0,
+        "search_top_px": 391.0,
+        "card_top_px": 772.0,
+        "search_hit_testable": true
+      },
+      {
+        "frame": "01-holding-42px",
+        "pointer_up_px": 42.0,
+        "scroll_offset_px": 42.0,
+        "nominal_open_offset_px": 772.0,
+        "max_offset_px": 898.0,
+        "search_top_px": 404.44,
+        "card_top_px": 730.0,
+        "search_hit_testable": false
+      },
+      {
+        "frame": "02-holding-280px",
+        "pointer_up_px": 280.0,
+        "scroll_offset_px": 280.0,
+        "nominal_open_offset_px": 772.0,
+        "max_offset_px": 898.0,
+        "search_top_px": 480.6,
+        "card_top_px": 492.0,
+        "search_hit_testable": false
+      },
+      {
+        "frame": "03-slow-release-280px",
+        "pointer_up_px": 280.0,
+        "scroll_offset_px": 772.0,
+        "nominal_open_offset_px": 772.0,
+        "max_offset_px": 898.0,
+        "search_top_px": null,
+        "card_top_px": 0.0,
+        "search_hit_testable": false
+      },
+      {
+        "frame": "04-first-fling-settled",
+        "pointer_up_px": 120.0,
+        "scroll_offset_px": 898.0,
+        "nominal_open_offset_px": 772.0,
+        "max_offset_px": 898.0,
+        "search_top_px": null,
+        "card_top_px": -126.0,
+        "search_hit_testable": false
+      }
+    ],
+    "v1.9.0-beta.2": [
+      {
+        "frame": "00-closed",
+        "pointer_up_px": null,
+        "scroll_offset_px": 0.0,
+        "nominal_open_offset_px": 772.0,
+        "max_offset_px": 898.0,
+        "search_top_px": 391.0,
+        "card_top_px": 772.0,
+        "search_hit_testable": true
+      },
+      {
+        "frame": "01-holding-42px",
+        "pointer_up_px": 42.0,
+        "scroll_offset_px": 42.0,
+        "nominal_open_offset_px": 772.0,
+        "max_offset_px": 898.0,
+        "search_top_px": 404.44,
+        "card_top_px": 730.0,
+        "search_hit_testable": false
+      },
+      {
+        "frame": "02-holding-280px",
+        "pointer_up_px": 280.0,
+        "scroll_offset_px": 280.0,
+        "nominal_open_offset_px": 772.0,
+        "max_offset_px": 898.0,
+        "search_top_px": 480.6,
+        "card_top_px": 492.0,
+        "search_hit_testable": false
+      },
+      {
+        "frame": "03-slow-release-280px",
+        "pointer_up_px": 280.0,
+        "scroll_offset_px": 386.0,
+        "nominal_open_offset_px": 772.0,
+        "max_offset_px": 898.0,
+        "search_top_px": 514.52,
+        "card_top_px": 386.0,
+        "search_hit_testable": false
+      },
+      {
+        "frame": "04-first-fling-settled",
+        "pointer_up_px": 120.0,
+        "scroll_offset_px": 386.0,
+        "nominal_open_offset_px": 772.0,
+        "max_offset_px": 898.0,
+        "search_top_px": 514.52,
+        "card_top_px": 386.0,
+        "search_hit_testable": false
+      }
+    ],
+    "v1.9.0-beta.3 candidate": [
+      {
+        "frame": "00-closed",
+        "pointer_up_px": null,
+        "scroll_offset_px": 0.0,
+        "nominal_open_offset_px": 772.0,
+        "max_offset_px": 898.0,
+        "search_top_px": 391.0,
+        "card_top_px": 772.0,
+        "search_hit_testable": true
+      },
+      {
+        "frame": "01-holding-42px",
+        "pointer_up_px": 42.0,
+        "scroll_offset_px": 42.0,
+        "nominal_open_offset_px": 772.0,
+        "max_offset_px": 898.0,
+        "search_top_px": 349.0,
+        "card_top_px": 730.0,
+        "search_hit_testable": false
+      },
+      {
+        "frame": "02-holding-280px",
+        "pointer_up_px": 280.0,
+        "scroll_offset_px": 280.0,
+        "nominal_open_offset_px": 772.0,
+        "max_offset_px": 898.0,
+        "search_top_px": 111.0,
+        "card_top_px": 492.0,
+        "search_hit_testable": false
+      },
+      {
+        "frame": "03-slow-release-280px",
+        "pointer_up_px": 280.0,
+        "scroll_offset_px": 772.0,
+        "nominal_open_offset_px": 772.0,
+        "max_offset_px": 898.0,
+        "search_top_px": null,
+        "card_top_px": 0.0,
+        "search_hit_testable": false
+      },
+      {
+        "frame": "04-first-fling-settled",
+        "pointer_up_px": 120.0,
+        "scroll_offset_px": 772.0,
+        "nominal_open_offset_px": 772.0,
+        "max_offset_px": 898.0,
+        "search_top_px": null,
+        "card_top_px": 0.0,
+        "search_hit_testable": false
+      }
+    ]
+  }
+}

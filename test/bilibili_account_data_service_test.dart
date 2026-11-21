@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -78,6 +79,213 @@ BilibiliAccountDataService _service(
 
 /// 集中验证账号数据服务只请求已验证会话对应的固定只读接口。
 void main() {
+  /// 分组读取完整成功才返回快照，成员接口错误不返回可误提交的部分结果。
+  test('关注分组完整读取与失败中止', () async {
+    final session = _FakeSessionProvider(state: _activeSession());
+    var fail = false;
+    final api = _RecordingAccountDataApi((endpoint) async {
+      if (endpoint.path == '/x/relation/tags') {
+        return _ok('{"code":0,"data":[{"tagid":12,"name":"学习","count":1}]}');
+      }
+      expect(endpoint.path, '/x/relation/tag');
+      expect(endpoint.queryParameters['mid'], '42');
+      if (fail) return _ok('{"code":-101}');
+      return _ok(
+        '{"code":0,"data":[{"mid":9,"uname":"UP","face":"","sign":""}]}',
+      );
+    });
+    final result = await _service(session, api).loadFollowingGroups();
+    expect(result.mid, 42);
+    expect(result.groups.single.remoteId, 12);
+    expect(result.groups.single.members.single.mid, 9);
+    fail = true;
+    await expectLater(
+      _service(session, api).loadFollowingGroups(),
+      throwsA(
+        isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          contains('登录已过期'),
+        ),
+      ),
+    );
+  });
+
+  test('空分组和 null 末页不会中断其他组，分组成员使用每页 20 个', () async {
+    final session = _FakeSessionProvider(state: _activeSession());
+    final api = _RecordingAccountDataApi((endpoint) async {
+      if (endpoint.path == '/x/relation/tags') {
+        return _ok('''
+          {"code":0,"data":[
+            {"tagid":-10,"name":"特别关注","count":0},
+            {"tagid":0,"name":"默认分组","count":99},
+            {"tagid":-20,"name":"全部关注","count":130},
+            {"tagid":12,"name":"学习","count":27},
+            {"tagid":13,"name":"没有总数"},
+            {"tagid":14,"name":"空分组","count":0}
+          ]}
+        ''');
+      }
+      expect(endpoint.path, '/x/relation/tag');
+      expect(endpoint.queryParameters['ps'], '20');
+      final id = endpoint.queryParameters['tagid'];
+      final page = int.parse(endpoint.queryParameters['pn']!);
+      if (id == '13') {
+        return _ok(
+          page == 1
+              ? '{"code":0,"data":[{"mid":101,"uname":"UP"}]}'
+              : '{"code":0,"data":null}',
+        );
+      }
+      expect(id, '12');
+      final ids = page == 1
+          ? List.generate(20, (index) => index + 1)
+          : List.generate(7, (index) => index + 21);
+      return _ok(
+        jsonEncode({
+          'code': 0,
+          'data': [
+            for (final uid in ids) {'mid': uid, 'uname': 'UP $uid'},
+          ],
+        }),
+      );
+    });
+    final snapshot = await _service(session, api).loadFollowingGroups();
+
+    expect(snapshot.groups.map((g) => g.remoteId), [-10, 12, 13, 14]);
+    expect(snapshot.groups.map((g) => g.members.length), [0, 27, 1, 0]);
+    expect(snapshot.groups[1].members.last.mid, 27);
+    expect(api.endpoints.skip(1).map((u) => u.queryParameters['pn']), [
+      '1',
+      '2',
+      '1',
+      '2',
+    ]);
+  });
+
+  test('总数未达到时拒绝提前结束或重复分页', () async {
+    final session = _FakeSessionProvider(state: _activeSession());
+    for (final secondPage in [
+      '{"code":0,"data":null}',
+      '{"code":0,"data":[]}',
+      '{"code":0,"data":[{"mid":9}]}',
+      '{"code":0}',
+    ]) {
+      final api = _RecordingAccountDataApi((endpoint) async {
+        if (endpoint.path == '/x/relation/tags') {
+          return _ok('{"code":0,"data":[{"tagid":12,"count":2}]}');
+        }
+        return _ok(
+          endpoint.queryParameters['pn'] == '1'
+              ? '{"code":0,"data":[{"mid":9}]}'
+              : secondPage,
+        );
+      });
+      await expectLater(
+        _service(session, api).loadFollowingGroups(),
+        throwsStateError,
+      );
+      expect(api.endpoints, hasLength(3));
+    }
+  });
+
+  test('自动镜像继续读取低估的总数并核实报零的分组', () async {
+    final session = _FakeSessionProvider(state: _activeSession());
+    final api = _RecordingAccountDataApi((endpoint) async {
+      if (endpoint.path == '/x/relation/tags') {
+        return _ok(
+          '{"code":0,"data":[{"tagid":12,"count":20},{"tagid":13,"count":0},'
+          '{"tagid":14,"count":0}]}',
+        );
+      }
+      expect(endpoint.queryParameters['ps'], '20');
+      final id = endpoint.queryParameters['tagid'];
+      final page = endpoint.queryParameters['pn'];
+      final data = switch ((id, page)) {
+        ('12', '1') => [
+          for (var mid = 1; mid <= 20; mid++) {'mid': mid},
+        ],
+        ('12', '2') => [
+          {'mid': 21},
+        ],
+        ('13', '1') => [
+          {'mid': 31},
+        ],
+        ('14', '1') => [],
+        _ => null,
+      };
+      return _ok(jsonEncode({'code': 0, 'data': data}));
+    });
+    final snapshot = await _service(
+      session,
+      api,
+    ).loadFollowingGroups(verifyMemberPagination: true);
+    expect(snapshot.groups.map((g) => g.members.length), [21, 1, 0]);
+    expect(snapshot.groups.first.members.last.mid, 21);
+    expect(
+      api.endpoints
+          .skip(1)
+          .map((u) => (u.queryParameters['tagid'], u.queryParameters['pn'])),
+      [
+        ('12', '1'),
+        ('12', '2'),
+        ('12', '3'),
+        ('13', '1'),
+        ('13', '2'),
+        ('14', '1'),
+      ],
+    );
+  });
+
+  test('自动镜像拒绝异常末页和不完整成员快照', () async {
+    final session = _FakeSessionProvider(state: _activeSession());
+    for (final (expectedCount, secondPage) in [
+      (2, '{"code":0,"data":null}'),
+      (2, '{"code":0,"data":[]}'),
+      (1, '{"code":0,"data":[{"mid":9},{"mid":10}]}'),
+      (1, '{"code":0}'),
+      (1, '{"code":-101}'),
+    ]) {
+      final api = _RecordingAccountDataApi((endpoint) async {
+        if (endpoint.path == '/x/relation/tags') {
+          return _ok('{"code":0,"data":[{"tagid":12,"count":$expectedCount}]}');
+        }
+        return _ok(
+          endpoint.queryParameters['pn'] == '1'
+              ? '{"code":0,"data":[{"mid":9}]}'
+              : secondPage,
+        );
+      });
+      await expectLater(
+        _service(
+          session,
+          api,
+        ).loadFollowingGroups(verifyMemberPagination: true),
+        throwsStateError,
+      );
+      expect(api.endpoints, hasLength(3));
+    }
+  });
+
+  test('完成远端读取后再次检查账号，不返回其他账号的分组', () async {
+    final session = _FakeSessionProvider(state: _activeSession());
+    final api = _RecordingAccountDataApi((endpoint) async {
+      session.state = _activeSession(mid: 43);
+      return _ok('{"code":0,"data":[{"tagid":12,"count":0}]}');
+    });
+    await expectLater(
+      _service(session, api).loadFollowingGroups(),
+      throwsA(
+        isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          contains('账号已变化'),
+        ),
+      ),
+    );
+    expect(session.loadCalls, 2);
+  });
+
   /// 验证未登录时服务不会读取 Cookie 或执行收藏夹网络请求。
   test('未登录状态阻止收藏夹请求', () async {
     final _FakeSessionProvider session = _FakeSessionProvider(
@@ -163,9 +371,42 @@ void main() {
     expect(result.items.single.mediaId, 1001);
     expect(result.items.single.coverUrl, 'https://i0.hdslb.com/folder.jpg');
     expect(result.items.single.isAvailable, isTrue);
+    expect(result.items.single.isPrivate, isTrue);
     expect(api.endpoints.single.path, '/x/v3/fav/folder/created/list-all');
     expect(api.endpoints.single.queryParameters['up_mid'], '42');
     expect(api.receivedCookies, <String>['SESSDATA=test-session']);
+  });
+
+  test('收藏夹 attr 仅用最低位判断私密，无有效 attr 时保持未知', () async {
+    final session = _FakeSessionProvider(state: _activeSession());
+    final api = _RecordingAccountDataApi(
+      (_) async => _ok('''
+      {"code":0,"data":{"list":[
+        {"id":1,"attr":0},
+        {"id":2,"attr":1},
+        {"id":3,"attr":2},
+        {"id":4,"attr":"3"},
+        {"id":5},
+        {"id":6,"attr":-1},
+        {"id":7,"attr":1.5},
+        {"id":8,"attr":"unknown"},
+        {"id":9,"attr":true}
+      ]}}
+    '''),
+    );
+    final result = await _service(session, api).loadFavoriteFolders();
+    expect(result.items.map((item) => item.isPrivate), [
+      false,
+      true,
+      false,
+      true,
+      null,
+      null,
+      null,
+      null,
+      null,
+    ]);
+    expect(api.endpoints, hasLength(1));
   });
 
   /// 验证收藏内容请求按页传递参数、保留失效项并过滤没有 BV 号的非法项。

@@ -43,37 +43,42 @@ enum BilibiliSessionStatus {
 /// 保存一次会话检查的结果，避免页面把“未登录”和“暂时不可用”混为一谈。
 class BilibiliSessionState {
   /// 创建携带状态、可选账号资料和可展示说明的会话检查结果。
-  const BilibiliSessionState({
-    required this.status,
-    this.account,
-    this.message,
-  });
+  const BilibiliSessionState({required this.status, this.account, this.message})
+    : transientTransportFailure = false;
 
   /// 创建本机没有登录 Cookie 时使用的未登录结果。
   const BilibiliSessionState.signedOut()
     : status = BilibiliSessionStatus.signedOut,
       account = null,
-      message = null;
+      message = null,
+      transientTransportFailure = false;
 
   /// 创建官方接口已经确认登录成功时使用的结果。
   const BilibiliSessionState.active(this.account)
     : status = BilibiliSessionStatus.active,
-      message = null;
+      message = null,
+      transientTransportFailure = false;
 
   /// 创建 Cookie 存在但官方接口明确拒绝登录时使用的过期结果。
   const BilibiliSessionState.expired({this.message = '登录已过期，请重新登录。'})
     : status = BilibiliSessionStatus.expired,
-      account = null;
+      account = null,
+      transientTransportFailure = false;
 
   /// 创建暂时无法验证会话时使用的结果，保留 Cookie 供稍后重试。
   const BilibiliSessionState.networkError({
     this.message = '暂时无法读取登录状态，请检查网络后重试。',
+    this.transientTransportFailure = false,
   }) : status = BilibiliSessionStatus.networkError,
        account = null;
 
   final BilibiliSessionStatus status;
   final BilibiliAccount? account;
   final String? message;
+
+  /// The remote check hit a transport fault, not a local identity/read fault.
+  /// This is only suitable for retaining an already-visible, read-only view.
+  final bool transientTransportFailure;
 
   /// 判断该结果是否包含已被官方确认的账号资料。
   bool get isActive =>
@@ -160,6 +165,9 @@ class BilibiliAuthService {
        _requestTimeout = requestTimeout;
 
   static int _loginGeneration = 0;
+
+  /// Opaque epoch for app-initiated login/logout/replacement, not a credential.
+  int get accountMutationGeneration => _loginGeneration;
   static Future<void> _accountWrites = Future.value();
 
   final BilibiliCookieStore _cookieStore;
@@ -176,10 +184,27 @@ class BilibiliAuthService {
   };
   String? _checkedWebSession;
   BilibiliSessionState? _checkedWebSessionState;
+  bool _checkedWebSessionWasActive = false;
 
   /// 正常页面每次都验证当前会话，保留现有账号读取接口。
   Future<BilibiliSessionState> loadCurrentSession() =>
       _loadScopedSession(reuseUnchangedSession: false);
+
+  /// Use the exact in-memory cookie passed to this check's /nav request.
+  /// Only the interaction service receives it, never a page or persisted state.
+  Future<T?> withVerifiedInteractionSession<T>(
+    T Function(int mid, String cookieHeader, int generation, int revision)
+    create,
+  ) async {
+    T? snapshot;
+    await _loadScopedSession(
+      reuseUnchangedSession: false,
+      onVerified: (mid, cookie, generation, revision) {
+        snapshot = create(mid, cookie, generation, revision);
+      },
+    );
+    return snapshot;
+  }
 
   /// 登录页轮询复用未变化的已确认结果，手动检测和网络失败仍允许重试。
   Future<BilibiliSessionState> loadCurrentSessionForWebLogin({
@@ -189,12 +214,18 @@ class BilibiliAuthService {
   /// 限时读取 Cookie，并按调用场景决定是否复用本次页面生命周期内的验证结果。
   Future<BilibiliSessionState> _loadScopedSession({
     required bool reuseUnchangedSession,
+    void Function(int mid, String cookie, int generation, int revision)?
+    onVerified,
   }) async {
     await _accountWrites;
     final revision = CacheLifecycle.account.value;
     final generation = _loginGeneration;
+    String? verifiedCookie;
     final result = await _loadCurrentSession(
       reuseUnchangedSession: reuseUnchangedSession,
+      onVerifiedCookie: onVerified == null
+          ? null
+          : (cookie) => verifiedCookie = cookie,
     );
     if (revision != CacheLifecycle.account.value ||
         generation != _loginGeneration) {
@@ -203,7 +234,19 @@ class BilibiliAuthService {
       );
     }
     if (result.isActive) {
-      await CacheLifecycle.setAccount(result.account!.mid);
+      final mid = result.account!.mid;
+      final scope = 'mid:$mid';
+      // Publishing a newly verified scope advances the revision once.
+      final verifiedRevision =
+          revision + (CacheLifecycle.accountScope == scope ? 0 : 1);
+      await CacheLifecycle.setAccount(mid);
+      final cookie = verifiedCookie;
+      if (cookie != null &&
+          generation == _loginGeneration &&
+          verifiedRevision == CacheLifecycle.account.value &&
+          scope == CacheLifecycle.accountScope) {
+        onVerified?.call(mid, cookie, generation, verifiedRevision);
+      }
     } else if (result.status == BilibiliSessionStatus.signedOut ||
         result.status == BilibiliSessionStatus.expired) {
       await CacheLifecycle.setAccount(null);
@@ -213,14 +256,16 @@ class BilibiliAuthService {
 
   Future<BilibiliSessionState> _loadCurrentSession({
     required bool reuseUnchangedSession,
+    void Function(String)? onVerifiedCookie,
   }) async {
     try {
-      final String cookieHeader = await readCookieHeader().timeout(
+      final String cookieHeader = (await readCookieHeader().timeout(
         _requestTimeout,
-      );
+      )).trim();
       if (!_containsSessionCookie(cookieHeader)) {
         _checkedWebSession = null;
         _checkedWebSessionState = null;
+        _checkedWebSessionWasActive = false;
         return const BilibiliSessionState.signedOut();
       }
       final token = _sessionCookieValue(cookieHeader);
@@ -230,12 +275,25 @@ class BilibiliAuthService {
         return _checkedWebSessionState!;
       }
       final state = await _requestCurrentSession(cookieHeader);
+      if (state.isActive) onVerifiedCookie?.call(cookieHeader);
       if (state.status == BilibiliSessionStatus.networkError) {
-        _checkedWebSession = null;
         _checkedWebSessionState = null;
+        // A transport failure cannot establish identity. Retain only the
+        // existing token equality signal, never a reusable active result.
+        if (state.transientTransportFailure &&
+            _checkedWebSessionWasActive &&
+            token == _checkedWebSession) {
+          return state;
+        }
+        _checkedWebSession = null;
+        _checkedWebSessionWasActive = false;
+        return BilibiliSessionState.networkError(
+          message: state.message ?? '暂时无法读取登录状态，请检查网络后重试。',
+        );
       } else {
         _checkedWebSession = token;
         _checkedWebSessionState = state;
+        _checkedWebSessionWasActive = state.isActive;
       }
       return state;
     } on PlatformException {
@@ -338,6 +396,12 @@ class BilibiliAuthService {
   /// 从当前平台的安全会话容器读取 Cookie 请求头，不创建额外明文副本。
   Future<String> readCookieHeader() => _cookieStore.readCookies();
 
+  /// For classroom metadata: never read the old cookie mid-replacement.
+  Future<String> readStableCookieHeader() async {
+    await _accountWrites;
+    return readCookieHeader();
+  }
+
   /// Capture only after local account writes finish; Apple additionally fences
   /// mutations performed by WKWebView itself, independent of Dart login state.
   Future<BilibiliPlaybackSession> capturePlaybackSession(String path) async {
@@ -405,6 +469,7 @@ class BilibiliAuthService {
         await write();
         _checkedWebSession = null;
         _checkedWebSessionState = null;
+        _checkedWebSessionWasActive = false;
       } finally {
         CacheLifecycle.accountChanged();
       }
@@ -460,20 +525,25 @@ class BilibiliAuthService {
       if (response.statusCode != HttpStatus.ok) {
         return BilibiliSessionState.networkError(
           message: '登录状态服务暂时不可用（HTTP ${response.statusCode}）。',
+          transientTransportFailure:
+              response.statusCode >= 500 && response.statusCode < 600,
         );
       }
       return _parseCurrentSession(response.body);
     } on SocketException {
       return const BilibiliSessionState.networkError(
         message: '无法连接到登录状态服务，请检查网络。',
+        transientTransportFailure: true,
       );
     } on HttpException {
       return const BilibiliSessionState.networkError(
         message: '登录状态网络响应异常，请稍后重试。',
+        transientTransportFailure: true,
       );
     } on TimeoutException {
       return const BilibiliSessionState.networkError(
         message: '验证登录状态超时，请检查网络后重试。',
+        transientTransportFailure: true,
       );
     } on FormatException {
       return const BilibiliSessionState.networkError(
@@ -568,6 +638,12 @@ class BilibiliPlaybackSession {
     }
     snapshot = next;
   }
+
+  /// Opaque request identity; never exported or persisted.
+  Object get scopeKey => (_localGeneration, snapshot.generation);
+
+  /// A native playback store selects cookies against each exact request path.
+  bool get hasScopedCookieHeaders => _native != null;
 
   Future<String> headerFor(String path) async {
     await _checkLocal();

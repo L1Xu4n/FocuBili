@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import '../services/bilibili_course_link.dart';
 import 'app_favorite.dart';
 
 /// 保存可在设备之间迁移的软件收藏夹及其视频，不包含账号会话。
@@ -21,6 +22,7 @@ class AppFavoritesBackup {
   static const format = 'focubili.app-favorites';
   static const version = 1;
   static const maxBytes = 20 * 1024 * 1024;
+  static final _videoId = RegExp(r'^BV[0-9A-Za-z]{10}$');
   final List<AppFavoriteFolder> folders;
   final Map<String, List<AppFavoriteItem>> items;
   final DateTime exportedAt;
@@ -95,11 +97,17 @@ class AppFavoritesBackup {
             throw const FormatException();
           }
           final bvid = _string(raw, 'bvid');
-          if (!RegExp(r'^BV[0-9A-Za-z]{10}$').hasMatch(bvid)) {
+          // 课堂收藏沿用播放器的本地课程标识，不会转换成普通 BV 号。
+          if (!_videoId.hasMatch(bvid) &&
+              !BilibiliCourseLink.isStorageKey(bvid)) {
             throw const FormatException();
           }
           final partCount = raw['partCount'];
+          final sortIndex = raw['sortIndex'];
           if (partCount != null && (partCount is! int || partCount <= 0)) {
+            throw const FormatException();
+          }
+          if (sortIndex != null && (sortIndex is! int || sortIndex < 0)) {
             throw const FormatException();
           }
           entries.add(
@@ -112,6 +120,7 @@ class AppFavoritesBackup {
               durationText: _optionalString(raw, 'durationText'),
               addedAt: _date(raw, 'addedAt'),
               partCount: partCount as int?,
+              sortIndex: sortIndex as int?,
             ),
           );
         }

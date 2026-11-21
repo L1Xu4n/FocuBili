@@ -31,6 +31,9 @@ class _AboutPageState extends State<AboutPage> {
     'https://github.com/L1Xu4n/FocuBili',
   );
   static final Uri _ownerUri = Uri.parse('https://github.com/L1Xu4n');
+  static final Uri _promoVideoUri = Uri.parse(
+    'https://www.bilibili.com/video/BV1dyaG6kEAu',
+  );
   static final Uri _qqGroupUri = Uri.parse('https://qm.qq.com/q/szv665wx7W');
 
   /// 连接应用级更新控制器，并在首次进入时补读本机版本信息。
@@ -79,7 +82,7 @@ class _AboutPageState extends State<AboutPage> {
     }
   }
 
-  /// 交给系统打开项目、负责人、QQ 群或 Release 链接，失败时展示对应提示。
+  /// 交给系统打开外部链接，失败时展示对应提示。
   Future<void> _open(Uri uri, {String failureMessage = '无法打开外部链接。'}) async {
     final ExternalUrlLauncher launcher =
         widget.externalUrlLauncher ?? _launchExternally;
@@ -239,6 +242,15 @@ class _AboutPageState extends State<AboutPage> {
                       _qqGroupUri,
                       failureMessage: '无法唤起 QQ，请确认已安装 QQ 后重试。',
                     ),
+                  ),
+                  const Divider(height: 1, indent: 56),
+                  ListTile(
+                    key: const Key('open-support-focubili'),
+                    leading: const Icon(Icons.monetization_on_outlined),
+                    title: const Text('支持焦点哔哩'),
+                    subtitle: const Text('给焦点哔哩的宣传视频投个币吧~'),
+                    trailing: const Icon(Icons.open_in_new_rounded),
+                    onTap: () => _open(_promoVideoUri),
                   ),
                 ],
               ),

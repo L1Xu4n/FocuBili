@@ -14,7 +14,7 @@ class AppFavoriteFolder {
   /// 文件夹名称，用户创建时可输入，展示时使用。
   final String name;
 
-  /// 文件夹创建时间，用于列表排序。
+  /// 文件夹创建时间。
   final DateTime createdAt;
 
   /// 最近一次变更时间，便于外部按更新时间刷新。
@@ -62,6 +62,7 @@ class AppFavoriteItem {
     required this.durationText,
     required this.addedAt,
     this.partCount,
+    this.sortIndex,
   });
 
   /// 所属文件夹标识，与 [AppFavoriteFolder.id] 对应。
@@ -82,9 +83,12 @@ class AppFavoriteItem {
   /// 视频时长文本，收藏时格式化保存。
   final String durationText;
 
-  /// 收藏时间，用于列表倒序排序。
+  /// 收藏时间，未手动排序的视频按此倒序排列。
   final DateTime addedAt;
   final int? partCount;
+
+  /// Optional position assigned by a manual reorder; null keeps newest-first.
+  final int? sortIndex;
 
   /// Updates only P-count metadata, keeping membership and collection time unchanged.
   AppFavoriteItem withPartCount(int count) => AppFavoriteItem(
@@ -96,6 +100,19 @@ class AppFavoriteItem {
     durationText: durationText,
     addedAt: addedAt,
     partCount: count > 0 ? count : null,
+    sortIndex: sortIndex,
+  );
+
+  AppFavoriteItem withSortIndex(int index) => AppFavoriteItem(
+    folderId: folderId,
+    bvid: bvid,
+    title: title,
+    coverUrl: coverUrl,
+    ownerName: ownerName,
+    durationText: durationText,
+    addedAt: addedAt,
+    partCount: partCount,
+    sortIndex: index,
   );
 
   /// Matches video metadata, not folder names, ignoring case and outer whitespace.
@@ -109,6 +126,7 @@ class AppFavoriteItem {
     final String? bvid = json['bvid'] as String?;
     final String? title = json['title'] as String?;
     final String? addedAt = json['addedAt'] as String?;
+    final sortIndex = json['sortIndex'];
     if (folderId == null || bvid == null || title == null || addedAt == null) {
       return null;
     }
@@ -122,6 +140,7 @@ class AppFavoriteItem {
       addedAt:
           DateTime.tryParse(addedAt) ?? DateTime.fromMillisecondsSinceEpoch(0),
       partCount: (json['partCount'] as num?)?.toInt(),
+      sortIndex: sortIndex is int && sortIndex >= 0 ? sortIndex : null,
     );
   }
 
@@ -135,5 +154,6 @@ class AppFavoriteItem {
     'durationText': durationText,
     'addedAt': addedAt.toIso8601String(),
     if (partCount != null) 'partCount': partCount,
+    if (sortIndex != null) 'sortIndex': sortIndex,
   };
 }

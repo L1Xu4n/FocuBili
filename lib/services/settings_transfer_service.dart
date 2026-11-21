@@ -1,13 +1,16 @@
+import 'video_tag_preferences.dart';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/danmaku_preferences.dart';
 import '../models/playback_preferences.dart';
 import '../models/search_content_filter.dart';
+import 'app_behavior_preferences_service.dart';
 import 'app_theme_mode_service.dart';
 import 'app_text_scale_service.dart';
 import 'image_resource_cache.dart';
 import 'media_cache_service.dart';
+import 'playback_preferences_service.dart';
 import 'settings_runtime_adapter.dart';
 
 /// 定义允许迁移的基础偏好类型，账号、协议和学习数据从不进入白名单。
@@ -29,6 +32,8 @@ class SettingsTransferService {
     'app_behavior.search_history_enabled': _SettingType.boolean,
     'app_behavior.watch_history_enabled': _SettingType.boolean,
     'app_behavior.wbi_signing_enabled': _SettingType.boolean,
+    AppBehaviorPreferencesService.noteMarkdownEnabledKey: _SettingType.boolean,
+    VideoTagPreferences.key: _SettingType.text,
     'appearance.theme_mode': _SettingType.text,
     'appearance.theme_color': _SettingType.integer,
     'appearance.text_scale': _SettingType.decimal,
@@ -39,6 +44,14 @@ class SettingsTransferService {
     'focus_preferences.enable_do_not_disturb': _SettingType.boolean,
     'playback_preferences.enable_double_tap_seek': _SettingType.boolean,
     'playback_preferences.speeds': _SettingType.stringList,
+    'playback_preferences.line_preference': _SettingType.text,
+    'playback_preferences.mode': _SettingType.text,
+    'playback_preferences.subtitle_position': _SettingType.decimal,
+    PlaybackPreferencesService.subtitleOpacityKey: _SettingType.decimal,
+    PlaybackPreferencesService.autoEnableSubtitlesKey: _SettingType.boolean,
+    PlaybackPreferencesService.subtitlePriorityKey: _SettingType.text,
+    'playback_preferences.app_volume': _SettingType.decimal,
+    'playback_preferences.prefer_non_pcdn': _SettingType.boolean,
     'playback_preferences.long_press_speed': _SettingType.decimal,
     'playback_preferences.double_tap_regions': _SettingType.json,
     'playback_preferences.action_animation': _SettingType.boolean,
@@ -51,6 +64,7 @@ class SettingsTransferService {
     'playback_preferences.mobile_default_quality': _SettingType.integer,
     'focubili_danmaku_preferences_v1': _SettingType.json,
     'dashboard.layout.home': _SettingType.json,
+    'dashboard.home_drawer_enabled': _SettingType.boolean,
     'dashboard.layout.profile': _SettingType.json,
     'windows_media_cache_capacity_bytes': _SettingType.integer,
     'search.content_filter_v2': _SettingType.json,
@@ -84,9 +98,15 @@ class SettingsTransferService {
     });
   }
 
+  /// 在将较大文本放进编辑框或 JSON 解码器前检查与文件相同的 UTF-8 上限。
+  static bool fitsTransferLimit(String source) =>
+      source.length <= maximumBytes &&
+      (source.length <= maximumBytes ~/ 3 ||
+          utf8.encode(source).length <= maximumBytes);
+
   /// 完整验证导入文件后返回待确认设置，未知键和错误类型不写入磁盘。
   Map<String, Object> parseSettings(String source) {
-    if (utf8.encode(source).length > maximumBytes) {
+    if (!fitsTransferLimit(source)) {
       throw const FormatException('设置文件过大');
     }
     final root = jsonDecode(source);
@@ -111,8 +131,8 @@ class SettingsTransferService {
 
   /// 合并已验证设置；缺失项目保持原值，失败时恢复本次触及的旧值。
   Future<void> importSettings(Map<String, Object> values) {
-    // Freeze confirmed values before the queue or storage can yield. This
-    // schema's only collection payload is a list of primitive strings.
+    // Freeze the confirmed input before entering the queue or awaiting storage.
+    // The only supported collection value is a list of primitive strings.
     final snapshot = Map<String, Object>.unmodifiable({
       for (final entry in values.entries)
         entry.key: entry.value is List
@@ -173,6 +193,14 @@ class SettingsTransferService {
         !supportedMediaCacheBytes.contains(value)) {
       throw const FormatException('视频缓存容量无效');
     }
+    if (key == 'playback_preferences.line_preference' &&
+        !PlaybackLinePreference.values.any((item) => item.name == value)) {
+      throw const FormatException('播放线路偏好无效');
+    }
+    if (key == PlaybackPreferencesService.subtitlePriorityKey &&
+        !SubtitlePriority.values.any((priority) => priority.name == value)) {
+      throw const FormatException('字幕优先级无效');
+    }
     if (key == 'playback_preferences.speeds') {
       final speeds = (value as List)
           .map((item) => double.parse(item as String))
@@ -183,6 +211,18 @@ class SettingsTransferService {
       }
     }
     final normalizedPlaybackNumber = switch (key) {
+      PlaybackPreferencesService.subtitlePositionKey =>
+        PlaybackPreferences.normalizeSubtitlePosition(
+          (value as num).toDouble(),
+        ),
+      PlaybackPreferencesService.subtitleOpacityKey =>
+        PlaybackPreferences.normalizeSubtitleOpacity((value as num).toDouble()),
+      'playback_preferences.app_volume' => DoubleTapRegions.normalize(
+        (value as num).toDouble(),
+        0,
+        1,
+        1,
+      ),
       'appearance.text_scale' => AppTextScaleService.normalize(
         (value as num).toDouble(),
       ),
@@ -206,9 +246,17 @@ class SettingsTransferService {
         PreferredPlaybackQuality.fromId(value as int).id != value) {
       throw const FormatException('默认清晰度无效');
     }
+    if (key == VideoTagPreferences.key &&
+        !VideoTagMode.values.any((m) => m.name == value)) {
+      throw const FormatException('视频标签模式无效');
+    }
     if (key == 'appearance.theme_mode' &&
         !{'light', 'dark', 'system'}.contains(value)) {
       throw const FormatException('主题模式无效');
+    }
+    if (key == 'playback_preferences.mode' &&
+        !PlaybackMode.values.any((mode) => mode.name == value)) {
+      throw const FormatException('播放模式无效');
     }
     if (key == 'appearance.layout_orientation' &&
         !{'adaptive', 'portrait', 'landscape'}.contains(value)) {
@@ -249,13 +297,7 @@ class SettingsTransferService {
           }
         }
       } else if (key == 'search.content_filter_v2') {
-        if (decoded['learningOnly'] is! bool ||
-            decoded['minimumPlayCount'] is! int ||
-            (decoded['minimumPlayCount'] as int) < 0 ||
-            (decoded['minimumPlayCount'] as int) >
-                SearchContentFilter.maximumPlayCount) {
-          throw const FormatException('搜索筛选结构无效');
-        }
+        SearchContentFilter.fromJsonStrict(decoded);
       } else {
         final fields = DanmakuPreferences().toJson();
         for (final entry in decoded.entries) {
@@ -313,6 +355,14 @@ class SettingsTransferService {
         }
       }
       if (runtime.isNotEmpty) await runtimeAdapter.writeSettings(runtime);
+      if (regular.containsKey(VideoTagPreferences.key)) {
+        VideoTagPreferences.changes.value++;
+      }
+      if (regular.containsKey(
+        AppBehaviorPreferencesService.noteMarkdownEnabledKey,
+      )) {
+        AppBehaviorPreferencesService.changes.value++;
+      }
     } catch (_) {
       var restored = true;
       for (final entry in old.entries) {

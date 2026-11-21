@@ -1,14 +1,17 @@
 import 'dart:async';
 import 'package:focubili/services/playback_preferences_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/features/player/player_page.dart';
 import 'package:focubili/features/player/widgets/player_control_widgets.dart';
 import 'package:focubili/features/player/widgets/player_action_feedback.dart';
 import 'package:focubili/services/native_playback_service.dart';
+import 'package:focubili/models/video_preview.dart';
 import 'player_action_feedback_test.dart' show GesturePlayback, doubleTap;
 import 'refactor_r3_feedback_test.dart' show video;
+import 'player_ab_repeat_test.dart' show AbPlayback, mountAb, unmountAb;
 
 class _LevelsPlayback extends GesturePlayback {
   final levels = <double>[];
@@ -25,8 +28,113 @@ class _DelayedSpeedPlayback extends _LevelsPlayback {
       value == 3 ? pendingSpeed.future : Future.value();
 }
 
+class _OutOfOrderSpeedPlayback extends _LevelsPlayback {
+  final slowBoost = Completer<void>();
+  final appliedSpeeds = <double>[];
+
+  @override
+  Future<void> setPlaybackSpeed(double speed) async {
+    if (speed == 3.25) await slowBoost.future;
+    rate = speed;
+    appliedSpeeds.add(speed);
+  }
+}
+
+class _PartSpeedPlayback extends AbPlayback {
+  final speedsAtOpen = <double>[];
+
+  @override
+  Future<void> openVideo(
+    VideoPreview video, {
+    VideoPart? part,
+    int quality = 64,
+    Duration? initialPosition,
+  }) async {
+    speedsAtOpen.add(current.speed);
+    await super.openVideo(
+      video,
+      part: part,
+      quality: quality,
+      initialPosition: initialPosition,
+    );
+  }
+}
+
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
+  testWidgets(
+    'mouse hold cancel and rapid re-hold restore the pre-hold speed',
+    (tester) async {
+      await const PlaybackPreferencesService().saveLongPressPlaybackSpeed(3.25);
+      final playback = _OutOfOrderSpeedPlayback();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PlayerPage(video: video, playbackService: playback),
+        ),
+      );
+      await tester.pumpAndSettle();
+      playback.rate = 1.5;
+      playback.controller.add(
+        const PlaybackSnapshot(
+          phase: PlaybackPhase.ready,
+          isPlaying: true,
+          position: Duration(seconds: 20),
+          duration: Duration(minutes: 2),
+          speed: 1.5,
+        ),
+      );
+      await tester.pump();
+      final center = tester.getCenter(find.byKey(const Key('player-surface')));
+      final first = await tester.startGesture(
+        center,
+        kind: PointerDeviceKind.mouse,
+      );
+      await tester.pump(const Duration(milliseconds: 650));
+      expect(find.text('3.25倍速中>>'), findsOneWidget);
+      await first.cancel();
+      await tester.pump();
+      final second = await tester.startGesture(
+        center,
+        kind: PointerDeviceKind.mouse,
+      );
+      await tester.pump(const Duration(milliseconds: 650));
+      await second.up();
+      await tester.pump();
+
+      // The boost only takes effect when its backend call completes. A UI-only
+      // request guard leaves actual playback at 3.25x in this order.
+      playback.slowBoost.complete();
+      await tester.pumpAndSettle();
+      expect(playback.appliedSpeeds, [3.25, 1.5]);
+      expect(playback.rate, 1.5);
+      expect(find.text('3.25倍速中>>'), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets('switching P while the pointer is still down ends the boost', (
+    tester,
+  ) async {
+    await const PlaybackPreferencesService().saveLongPressPlaybackSpeed(4.5);
+    final playback = _PartSpeedPlayback();
+    await mountAb(tester, playback);
+    playback.at(20, speed: 1.5);
+    await tester.pump();
+    final center = tester.getCenter(find.byKey(const Key('player-surface')));
+    final hold = await tester.startGesture(center);
+    await tester.pump(const Duration(milliseconds: 650));
+    expect(playback.current.speed, 4.5);
+    await tester.tap(find.byKey(const Key('next-part-button')));
+    await tester.pumpAndSettle();
+    expect(playback.currentCid, 102);
+    expect(playback.speedsAtOpen, [1.0, 1.5]);
+    expect(find.text('4.5倍速中>>'), findsNothing);
+    await hold.up();
+    await tester.pumpAndSettle();
+    expect(playback.current.speed, 1.5);
+    await unmountAb(tester);
+  });
+
   testWidgets('松开长按后迟到的倍速回包不能把UI改回三倍速', (tester) async {
     final playback = _DelayedSpeedPlayback();
     await tester.pumpWidget(
@@ -158,6 +266,8 @@ void main() {
       tester,
       Offset(surface.left + surface.width * .8, surface.center.dy),
     );
+    final glyphs = find.byKey(const Key('double-tap-seek-glyphs'));
+    final ready = tester.getRect(glyphs);
     playback.controller.add(
       const PlaybackSnapshot(
         phase: PlaybackPhase.loading,
@@ -167,14 +277,10 @@ void main() {
     );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
-    final seek = tester.getRect(
-      find.descendant(
-        of: find.byType(PlayerSeekFeedback),
-        matching: find.byType(DecoratedBox),
-      ),
-    );
+    final seek = tester.getRect(glyphs);
     final hint = tester.getRect(find.text('缓冲回归测试'));
-    expect(seek.bottom, lessThanOrEqualTo(hint.top));
+    expect(seek.center, ready.center);
+    expect(hint.right, lessThanOrEqualTo(seek.left));
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });

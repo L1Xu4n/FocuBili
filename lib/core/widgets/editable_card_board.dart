@@ -32,8 +32,11 @@ class EditableCardBoard extends StatefulWidget {
     this.service,
     this.scrollController,
     this.onEditingChanged,
+    this.onCloseRequested,
+    this.onLayoutChanged,
     this.columnCount,
     this.spacing = 16,
+    this.initialEditing = false,
   }) : assert(columnCount == null || columnCount > 0),
        assert(spacing >= 0);
 
@@ -43,9 +46,14 @@ class EditableCardBoard extends StatefulWidget {
   final ScrollController? scrollController;
   final ValueChanged<bool>? onEditingChanged;
 
+  /// 宿主可选的关闭操作，只在编辑时显示，并等待布局保存完成。
+  final VoidCallback? onCloseRequested;
+  final ValueChanged<DashboardLayout>? onLayoutChanged;
+
   /// 不指定时按宽度自动选择一至三列；全宽卡片始终独占一行。
   final int? columnCount;
   final double spacing;
+  final bool initialEditing;
 
   /// 创建维护布局、编辑状态和边缘滚动的状态对象。
   @override
@@ -89,6 +97,7 @@ class _EditableCardBoardState extends State<EditableCardBoard>
   @override
   void initState() {
     super.initState();
+    _editing = widget.initialEditing;
     _service = widget.service ?? DashboardLayoutService();
     _wiggle = AnimationController(
       vsync: this,
@@ -141,6 +150,7 @@ class _EditableCardBoardState extends State<EditableCardBoard>
         commitState.layout = _layout;
         _loading = false;
       });
+      widget.onLayoutChanged?.call(_layout);
     } catch (_) {
       if (!mounted || generation != _generation) return;
       setState(() {
@@ -175,6 +185,7 @@ class _EditableCardBoardState extends State<EditableCardBoard>
         commitState.layout = next;
         if (mounted && generation == _generation) {
           setState(() => _layout = next.reconcile(_cards));
+          widget.onLayoutChanged?.call(_layout);
         }
         result.complete(true);
       } catch (_) {
@@ -592,17 +603,38 @@ class _EditableCardBoardState extends State<EditableCardBoard>
             spacing: 12,
             children: _editing
                 ? [
-                    TextButton.icon(
-                      onPressed: _showAddCards,
-                      icon: const Icon(Icons.add, size: 18),
-                      label: const Text('添加卡片'),
-                    ),
+                    if (visible.isEmpty && widget.onCloseRequested != null)
+                      FilledButton.tonalIcon(
+                        onPressed: _showAddCards,
+                        icon: const Icon(Icons.add, size: 18),
+                        label: const Text('添加卡片'),
+                      )
+                    else
+                      TextButton.icon(
+                        onPressed: _showAddCards,
+                        icon: const Icon(Icons.add, size: 18),
+                        label: const Text('添加卡片'),
+                      ),
                     TextButton.icon(
                       key: const Key('dashboard-reset-layout'),
                       onPressed: _finishing ? null : _restoreDefaultLayout,
                       icon: const Icon(Icons.restore_rounded, size: 18),
                       label: const Text('恢复默认布局'),
                     ),
+                    if (widget.onCloseRequested != null)
+                      TextButton(
+                        onPressed: _finishing
+                            ? null
+                            : () async {
+                                Future<void> pending;
+                                do {
+                                  pending = _operations;
+                                  await pending;
+                                } while (!identical(pending, _operations));
+                                if (mounted) widget.onCloseRequested?.call();
+                              },
+                        child: const Text('关闭抽屉'),
+                      ),
                     TextButton(
                       onPressed: _finishing ? null : _finish,
                       child: const Text('完成'),

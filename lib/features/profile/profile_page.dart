@@ -10,6 +10,7 @@ import '../../services/bilibili_auth_service.dart';
 import '../../services/app_update_service.dart';
 import 'favorite_folders_page.dart';
 import 'app_favorite_folders_page.dart';
+import 'content_blocklist_page.dart';
 import 'followed_creators_page.dart';
 import 'login_page.dart';
 import 'offline_videos_page.dart';
@@ -495,6 +496,13 @@ class _ProfilePageState extends State<ProfilePage> {
         onTap: () => _openFavoriteFolders(),
       ),
       _ProfileTile(
+        icon: Icons.school_outlined,
+        title: '已购课程',
+        id: 'purchased-courses',
+        onTap: () =>
+            Navigator.of(context).pushNamed(AppRoutes.purchasedCourses),
+      ),
+      _ProfileTile(
         icon: Icons.subscriptions_outlined,
         title: '我的订阅',
         id: 'subscriptions',
@@ -507,6 +515,14 @@ class _ProfilePageState extends State<ProfilePage> {
         id: 'following',
         // 关注入口函数只展示当前账号已关注的 UP 主。
         onTap: () => _openFollowedCreators(),
+      ),
+      _ProfileTile(
+        icon: Icons.block_outlined,
+        title: '黑名单',
+        id: 'content-blocklist',
+        onTap: () => Navigator.of(context).push<void>(
+          MaterialPageRoute(builder: (_) => const ContentBlocklistPage()),
+        ),
       ),
       _ProfileTile(
         icon: Icons.rss_feed,

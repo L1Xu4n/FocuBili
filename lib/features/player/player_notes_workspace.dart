@@ -1,5 +1,17 @@
 part of 'player_page.dart';
 
+enum _PlayerNotesLayout { workspace, belowVideo, floating }
+
+/// Storage-only state shared by an in-flight write and a departing editor.
+class _PendingPlayerNoteWrite {
+  _PendingPlayerNoteWrite(this.id, this.framesRevision);
+
+  final String id;
+  final int framesRevision;
+  final result = Completer<VideoNote?>();
+  Future<VideoNote?> get future => result.future;
+}
+
 /// 封装播放器内时间点笔记的状态、持久化、截图流程和响应式界面。
 mixin _PlayerNotesWorkspace on State<PlayerPage> {
   /// 读取播放栏比例，让全屏笔记入口与其他操作保持同样大小。
@@ -11,6 +23,10 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
 
   final TextEditingController _noteTitleController = TextEditingController();
   final TextEditingController _noteBodyController = TextEditingController();
+  final ScrollController _sideNoteScrollController = ScrollController();
+  final FocusScopeNode _sideNoteFocusScope = FocusScopeNode(
+    debugLabel: 'Landscape time-point note editor',
+  );
   Timer? _notesPanelAnimationTimer;
   Timer? _noteAutoSaveTimer;
   List<VideoNote> _currentVideoNotes = const <VideoNote>[];
@@ -19,18 +35,33 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
   int _notePartCid = 0;
   bool _notesOpen = false;
   bool _notesOverlayMounted = false;
+  bool _notesParked = false;
+  double? _noteScrollOffsetBeforePark;
+  final FocusNode _notePeekHandleFocus = FocusNode(
+    debugLabel: 'Restore time-point notes',
+  );
   bool _notesLoading = false;
   bool _noteSaving = false;
   bool _noteAutoSaving = false;
   bool _noteAutoSavePending = false;
   bool _includeCurrentFrame = false;
-  String? _noteFramePath;
+  List<VideoNoteFrame> _noteFrames = const <VideoNoteFrame>[];
   bool _fullscreenNoteListCollapsed = false;
   int _noteDraftRevision = 0;
+  int _noteFramesRevision = 0;
   int _notesRequestGeneration = 0;
   StreamSubscription<String>? _noteChangesSubscription;
-  Completer<void>? _noteSaveCompletion;
-  bool _noteLastSaveSucceeded = false;
+  _PendingPlayerNoteWrite? _noteSaveCompletion;
+  VideoNote? _noteDraftIdentity;
+  int _noteDraftAccountRevision = CacheLifecycle.account.value;
+  String _noteDraftAccountScope = CacheLifecycle.accountScope;
+  bool get _noteDraftMatchesAccount =>
+      _noteDraftAccountRevision == CacheLifecycle.account.value &&
+      _noteDraftAccountScope == CacheLifecycle.accountScope;
+  static int _lastPlayerNoteIdentity = 0;
+  String? _deletingPlayerNoteId;
+  ({int draftRevision, VideoNoteFrame frame})? _provisionalLiveNoteFrame;
+  Object? _pendingLiveNoteFrame;
 
   /// 由播放器状态类提供当前笔记的本机持久化服务。
   VideoNoteService get _videoNoteService;
@@ -46,6 +77,9 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
 
   /// 由播放器状态类提供当前平台的播放服务。
   PlaybackService get _playbackService;
+
+  /// 播放导航代次也会在用户开始切换时变化，早于新视频真正替换旧视频。
+  int get _partSwitchGeneration;
 
   /// 由播放器状态类说明视频当前是否真实播放。
   bool get _playing;
@@ -69,7 +103,16 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
   Future<void> _changePart(VideoPart part);
 
   /// 跳转到笔记记录的真实播放位置。
-  Future<void> _seekNativeTo(Duration position);
+  Future<void> _seekNativeTo(
+    Duration position, {
+    bool temporaryCapture = false,
+  });
+  Future<int> _beginAbRepeatCapture();
+  bool _isCurrentAbRepeatCapture(int serial);
+  void _prepareAbRepeatCaptureRestore(Duration position);
+  void _endAbRepeatCapture();
+  bool get _canResumeAfterNoteCapture;
+  int get _sourceGeneration;
 
   /// 使用播放器统一的短提示显示笔记操作结果。
   void _showTransientSnackBar(String message);
@@ -79,10 +122,13 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
     _notesRequestGeneration++;
     unawaited(_noteChangesSubscription?.cancel());
     _notesPanelAnimationTimer?.cancel();
-    _flushVideoNoteAutoSave();
+    _flushVideoNoteAutoSave(updateUi: false);
     _noteAutoSaveTimer?.cancel();
     _noteTitleController.dispose();
     _noteBodyController.dispose();
+    _notePeekHandleFocus.dispose();
+    _sideNoteScrollController.dispose();
+    _sideNoteFocusScope.dispose();
   }
 
   /// 读取当前 BV 的全部笔记，并按视频时间点更新播放器内列表。
@@ -116,31 +162,105 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
     }
   }
 
+  _PlayerNotesLayout get _playerNotesLayout {
+    if (_fullscreen) return _PlayerNotesLayout.floating;
+    final size = MediaQuery.sizeOf(context);
+    if (AdaptiveLayout.usesWorkspace(size)) return _PlayerNotesLayout.workspace;
+    return size.width > size.height
+        ? _PlayerNotesLayout.floating
+        : _PlayerNotesLayout.belowVideo;
+  }
+
+  bool get _usesFloatingVideoNotes =>
+      _playerNotesLayout == _PlayerNotesLayout.floating;
+
+  /// Only the floating editor can park. Inline layouts resume the same draft.
+  void _restoreNotesForInlineLayout() {
+    if (_notesParked && !_usesFloatingVideoNotes) {
+      _notesParked = false;
+      _noteScrollOffsetBeforePark = null;
+    }
+  }
+
+  void _parkVideoNotes({bool focusHandle = false}) {
+    if (!_notesOpen || _notesParked || !_usesFloatingVideoNotes) return;
+    final scroll = _sideNoteScrollController.hasClients
+        ? _sideNoteScrollController.position
+        : null;
+    _noteScrollOffsetBeforePark = scroll != null && scroll.hasPixels
+        ? scroll.pixels
+        : null;
+    // Hide the IME without losing the selection, undo stack or scroll offset.
+    _sideNoteFocusScope.focusedChild?.unfocus();
+    _sideNoteFocusScope.unfocus();
+    _stopSideNoteScroll();
+    setState(() {
+      _notesParked = true;
+      _showControls = true;
+    });
+    if (focusHandle) _notePeekHandleFocus.requestFocus();
+    _restartControlsAutoHideTimer();
+  }
+
+  void _restoreParkedVideoNotes() {
+    if (!_notesOpen || !_notesParked) return;
+    // A closing keyboard may adjust the hidden caret's position. Reveal the
+    // last position the editor showed, not the one it laid out offscreen.
+    _stopSideNoteScroll(offset: _noteScrollOffsetBeforePark);
+    _noteScrollOffsetBeforePark = null;
+    setState(() => _notesParked = false);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_notesOpen || _notesParked || !_usesFloatingVideoNotes) {
+        return;
+      }
+      // Keep navigation inside the editor without reopening the IME.
+      _sideNoteFocusScope.requestScopeFocus();
+    });
+  }
+
+  void _stopSideNoteScroll({double? offset}) {
+    if (!_sideNoteScrollController.hasClients) return;
+    final position = _sideNoteScrollController.position;
+    if (!position.hasPixels) return;
+    // The keyboard may have changed the viewport and the maximum extent.
+    position.jumpTo(
+      offset != null && position.hasContentDimensions
+          ? offset.clamp(position.minScrollExtent, position.maxScrollExtent)
+          : position.pixels,
+    );
+  }
+
   /// 打开笔记工作区，并为新笔记锁定按钮按下时的视频位置。
   Future<void> _openVideoNotes({VideoNote? selectedNote}) async {
+    if (_notesOpen) {
+      _restoreParkedVideoNotes();
+      if (selectedNote != null && selectedNote.id != _editingVideoNote?.id) {
+        _flushVideoNoteAutoSave();
+        _selectVideoNote(selectedNote);
+      }
+      return;
+    }
     _stopControlsAutoHideTimer();
     _notesPanelAnimationTimer?.cancel();
-    if (_fullscreen) {
-      setState(() {
-        _notesOverlayMounted = true;
-        _notesOpen = false;
-        _notesLoading = true;
-        _showControls = true;
-        _fullscreenNoteListCollapsed = false;
-      });
-      // 下一帧打开函数让面板先在屏幕右侧完成布局，再平滑滑入可见区域。
+    _notesPanelAnimationTimer = null;
+    final floating = _usesFloatingVideoNotes;
+    setState(() {
+      _notesOverlayMounted = true;
+      _notesOpen = !floating;
+      _notesParked = false;
+      _noteScrollOffsetBeforePark = null;
+      _notesLoading = true;
+      _showControls = true;
+      _fullscreenNoteListCollapsed = false;
+    });
+    if (floating) {
+      // Mount offscreen before starting the entrance animation.
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _notesOverlayMounted) {
+        if (mounted &&
+            _notesOverlayMounted &&
+            _notesPanelAnimationTimer == null) {
           setState(() => _notesOpen = true);
         }
-      });
-    } else {
-      setState(() {
-        _notesOverlayMounted = false;
-        _notesOpen = true;
-        _notesLoading = true;
-        _showControls = true;
-        _fullscreenNoteListCollapsed = false;
       });
     }
     if (selectedNote == null) {
@@ -159,14 +279,18 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
     }
     _flushVideoNoteAutoSave();
     setState(() {
+      _pendingLiveNoteFrame = null;
       _noteDraftRevision += 1;
+      _noteDraftIdentity = null;
+      _noteDraftAccountRevision = CacheLifecycle.account.value;
+      _noteDraftAccountScope = CacheLifecycle.accountScope;
       _editingVideoNote = null;
       _noteTitleController.clear();
       _noteBodyController.clear();
       _notePosition = _playbackSnapshot.position;
       _notePartCid = _currentPart.cid;
       _includeCurrentFrame = false;
-      _noteFramePath = null;
+      _noteFrames = const <VideoNoteFrame>[];
     });
   }
 
@@ -177,20 +301,28 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
     }
     _flushVideoNoteAutoSave();
     _notesPanelAnimationTimer?.cancel();
+    final floating = _usesFloatingVideoNotes;
+    final animateClose = floating && _notesOverlayMounted && !_notesParked;
+    if (floating && _notesOverlayMounted) {
+      FocusManager.instance.primaryFocus?.unfocus();
+    }
     setState(() {
+      if (!animateClose) _notesOverlayMounted = false;
       _notesOpen = false;
+      _pendingLiveNoteFrame = null;
+      _notesParked = false;
+      _noteScrollOffsetBeforePark = null;
       _noteSaving = false;
       _showControls = true;
       _fullscreenNoteListCollapsed = false;
     });
-    if (_fullscreen && _notesOverlayMounted) {
+    if (animateClose) {
       _notesPanelAnimationTimer = Timer(_notesPanelAnimationDuration, () {
+        _notesPanelAnimationTimer = null;
         if (mounted && !_notesOpen) {
           setState(() => _notesOverlayMounted = false);
         }
       });
-    } else if (_notesOverlayMounted) {
-      setState(() => _notesOverlayMounted = false);
     }
     _restartControlsAutoHideTimer();
     _scheduleOrientationSync();
@@ -212,14 +344,18 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
     _noteAutoSaveTimer?.cancel();
     _noteAutoSaveTimer = null;
     setState(() {
+      _pendingLiveNoteFrame = null;
       _noteDraftRevision += 1;
+      _noteDraftIdentity = null;
+      _noteDraftAccountRevision = CacheLifecycle.account.value;
+      _noteDraftAccountScope = CacheLifecycle.accountScope;
       _editingVideoNote = note;
       _noteTitleController.text = note.title;
       _noteBodyController.text = note.body;
       _notePosition = note.position;
       _notePartCid = targetPart.cid;
-      _includeCurrentFrame = note.framePath != null;
-      _noteFramePath = note.framePath;
+      _includeCurrentFrame = note.allFrames.isNotEmpty;
+      _noteFrames = note.allFrames;
     });
   }
 
@@ -245,8 +381,132 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
 
   /// 更新“插入当前画面”选择，取消时只影响本次保存，不立即删除旧文件。
   void _setIncludeCurrentFrame(bool selected) {
-    setState(() => _includeCurrentFrame = selected);
+    setState(() {
+      _includeCurrentFrame = selected;
+      _noteFramesRevision++;
+    });
     _scheduleVideoNoteAutoSave();
+  }
+
+  void _setNoteFrames(List<VideoNoteFrame> frames) {
+    setState(() {
+      _noteFrames = List<VideoNoteFrame>.unmodifiable(frames);
+      _noteFramesRevision++;
+      _includeCurrentFrame = frames.isNotEmpty;
+    });
+    _scheduleVideoNoteAutoSave();
+  }
+
+  /// 取消本次读取，不阻塞切 P；原生晚返回的独占文件会被清理。
+  void _cancelLiveNoteFrame() {
+    if (_pendingLiveNoteFrame != null) {
+      setState(() => _pendingLiveNoteFrame = null);
+    }
+  }
+
+  /// 追加当前渲染帧；绝不借用需要暂停、跳转的历史锚点截图。
+  Future<void> _appendCurrentNoteFrame() async {
+    if (_pendingLiveNoteFrame != null ||
+        _noteSaveCompletion != null ||
+        !_noteDraftMatchesAccount) {
+      return;
+    }
+    if (_noteTitleController.text.trim().isEmpty) {
+      _showTransientSnackBar('请先填写笔记标题。');
+      return;
+    }
+    if (_currentPart.cid != _notePartCid) {
+      _showTransientSnackBar('请先回到这条笔记所属的分 P，再追加画面。');
+      return;
+    }
+    final bvid = _activeVideo.bvid;
+    final cid = _currentPart.cid;
+    final draft = _noteDraftRevision;
+    final navigation = _partSwitchGeneration;
+    final source = _sourceGeneration;
+    final operation = Object();
+    bool isCurrent() =>
+        mounted &&
+        identical(_pendingLiveNoteFrame, operation) &&
+        draft == _noteDraftRevision &&
+        navigation == _partSwitchGeneration &&
+        source == _sourceGeneration &&
+        bvid == _activeVideo.bvid &&
+        cid == _currentPart.cid &&
+        cid == _notePartCid;
+    setState(() => _pendingLiveNoteFrame = operation);
+    LiveVideoFrame? captured;
+    VideoNoteFrame? attachment;
+    bool retained = false;
+    try {
+      final service = _playbackService;
+      if (_playbackSnapshot.phase == PlaybackPhase.ready &&
+          !_playbackSnapshot.isRestoringPosition &&
+          !_playbackSnapshot.audioOnly &&
+          service is LiveVideoFramePlaybackService) {
+        try {
+          captured = await (service as LiveVideoFramePlaybackService)
+              .captureLiveVideoFrame();
+        } catch (_) {
+          // Optional capture failures must never interrupt or change playback.
+        }
+      }
+      if (!isCurrent()) return;
+      // Let text autosave continue while the device reads pixels. Only wait for
+      // actual writes before attaching; a slow read must not hold navigation.
+      await _noteSaveCompletion?.future;
+      if (!isCurrent()) return;
+      final frame = captured;
+      final valid =
+          frame != null &&
+          frame.bvid == bvid &&
+          frame.cid == cid &&
+          frame.path.isNotEmpty &&
+          !frame.position.isNegative &&
+          (_playbackSnapshot.duration <= Duration.zero ||
+              frame.position <= _playbackSnapshot.duration);
+      _noteAutoSaveTimer?.cancel();
+      _noteAutoSaveTimer = null;
+      if (valid) {
+        attachment = VideoNoteFrame(path: frame.path, position: frame.position);
+        _provisionalLiveNoteFrame = (draftRevision: draft, frame: attachment);
+        setState(() {
+          _noteFrames = [..._noteFrames, attachment!];
+          _includeCurrentFrame = true;
+          _noteFramesRevision++;
+        });
+      }
+      final saved = await _saveVideoNote(automatic: true);
+      retained = attachment != null && saved;
+      if (attachment != null &&
+          !retained &&
+          mounted &&
+          draft == _noteDraftRevision &&
+          bvid == _activeVideo.bvid) {
+        setState(() {
+          _noteFrames = _noteFrames
+              .where((frame) => !identical(frame, attachment))
+              .toList();
+          _includeCurrentFrame = _noteFrames.isNotEmpty;
+          _noteFramesRevision++;
+        });
+        // If the draft was still awaiting its first write, keep the text edit
+        // eligible to save after stripping the uncommitted picture.
+        if (isCurrent()) _scheduleVideoNoteAutoSave();
+      } else if (!valid && saved && isCurrent()) {
+        _showTransientSnackBar('当前画面无法截取，笔记文字已保存。');
+      }
+    } finally {
+      if (identical(_provisionalLiveNoteFrame?.frame, attachment)) {
+        _provisionalLiveNoteFrame = null;
+      }
+      if (identical(_pendingLiveNoteFrame, operation)) {
+        if (mounted) setState(() => _pendingLiveNoteFrame = null);
+      }
+      if (captured != null && !retained) {
+        await _videoNoteService.discardUnreferencedFrame(captured.path);
+      }
+    }
   }
 
   /// 在标题或正文停止输入片刻后自动保存，避免频繁写入本机偏好设置。
@@ -254,7 +514,7 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
     if (!_notesOpen) {
       return;
     }
-    if (_noteAutoSaving || _noteSaving) {
+    if (_noteSaveCompletion != null) {
       _noteAutoSavePending = true;
       return;
     }
@@ -264,6 +524,7 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
   /// 重置输入去抖计时器；空白草稿不会创建无意义的本机笔记。
   void _scheduleVideoNoteAutoSave() {
     _noteAutoSaveTimer?.cancel();
+    _noteAutoSaveTimer = null;
     if (_noteTitleController.text.trim().isEmpty &&
         _noteBodyController.text.trim().isEmpty) {
       return;
@@ -274,18 +535,140 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
     });
   }
 
-  /// 立即提交仍在等待去抖的草稿，供新建、关闭、换视频和离开播放器前调用。
-  void _flushVideoNoteAutoSave() {
-    final Timer? timer = _noteAutoSaveTimer;
-    if (timer == null) {
+  /// Allocate a new identity on the first save attempt, not on its response.
+  /// Subsequent snapshots of this draft must reuse its id and original anchor.
+  VideoNote _snapshotPlayerNote(String title, String body) {
+    final video = _activeVideo;
+    final now = DateTime.now();
+    final part = _findVideoNotePart(_notePartCid);
+    final base =
+        _editingVideoNote ??
+        (_noteDraftIdentity ??= () {
+          final time = now.microsecondsSinceEpoch;
+          _lastPlayerNoteIdentity = time > _lastPlayerNoteIdentity
+              ? time
+              : _lastPlayerNoteIdentity + 1;
+          return VideoNote(
+            id: '${video.bvid}-$_lastPlayerNoteIdentity',
+            bvid: video.bvid,
+            videoTitle: video.title,
+            ownerName: video.ownerName,
+            partCid: part.cid,
+            partPageNumber: part.pageNumber,
+            partTitle: part.title,
+            title: title,
+            body: body,
+            createdAt: now,
+            updatedAt: now,
+            position: _notePosition,
+            videoCoverUrl: video.thumbnailUrl,
+          );
+        }());
+    return base.copyWith(
+      title: title.isEmpty ? '未命名笔记' : title,
+      body: body,
+      updatedAt: now,
+      frames: _includeCurrentFrame ? List.of(_noteFrames) : const [],
+      clearFrame: !_includeCurrentFrame,
+    );
+  }
+
+  /// Freeze the final draft before a controller is cleared/disposed. A pending
+  /// edit has no debounce timer while storage is already busy.
+  void _flushVideoNoteAutoSave({bool updateUi = true}) {
+    final dirty = _noteAutoSaveTimer != null || _noteAutoSavePending;
+    _noteAutoSaveTimer?.cancel();
+    _noteAutoSaveTimer = null;
+    _noteAutoSavePending = false;
+    if (!dirty || !_noteDraftMatchesAccount) {
       return;
     }
-    timer.cancel();
-    _noteAutoSaveTimer = null;
-    if (_noteTitleController.text.trim().isNotEmpty ||
-        _noteBodyController.text.trim().isNotEmpty) {
-      unawaited(_saveVideoNote(automatic: true));
+    final title = _noteTitleController.text.trim();
+    final body = _noteBodyController.text;
+    if (title.isEmpty && body.trim().isEmpty) return;
+    if (_deletingPlayerNoteId != null &&
+        _deletingPlayerNoteId == _editingVideoNote?.id) {
+      return;
     }
+    final draft = _snapshotPlayerNote(title, body);
+    final previous = _noteSaveCompletion;
+    final expected = _editingVideoNote;
+    final account = _noteDraftAccountRevision;
+    final accountScope = _noteDraftAccountScope;
+    final draftRevision = _noteDraftRevision;
+    final framesRevision = _noteFramesRevision;
+    final includeFrames = _includeCurrentFrame;
+    final liveFrame = _provisionalLiveNoteFrame;
+    final provisional = liveFrame?.draftRevision == draftRevision
+        ? liveFrame?.frame
+        : null;
+    final operation = _PendingPlayerNoteWrite(draft.id, framesRevision);
+    final storage = _videoNoteService;
+    _noteSaveCompletion = operation;
+    unawaited(() async {
+      VideoNote? committed;
+      try {
+        final preceding = await previous?.future;
+        final matching = previous?.id == draft.id && preceding?.id == draft.id
+            ? preceding
+            : null;
+        var finalDraft = draft;
+        if (includeFrames &&
+            matching != null &&
+            previous?.framesRevision == framesRevision) {
+          // A historical capture may have finished inside the preceding save.
+          finalDraft = draft.copyWith(frames: matching.allFrames);
+        } else if (provisional != null &&
+            !(matching?.allFrames.contains(provisional) ?? false) &&
+            draft.allFrames.contains(provisional)) {
+          // An unwritten live attachment can be discarded by its capture owner.
+          finalDraft = draft.copyWith(
+            frames: draft.allFrames
+                .where((frame) => frame != provisional)
+                .toList(),
+          );
+        }
+        if (await storage.finishPendingDraft(
+          finalDraft,
+          expected: matching ?? expected,
+          accountRevision: account,
+          accountScope: accountScope,
+        )) {
+          committed = finalDraft;
+        }
+      } catch (_) {
+        if (updateUi &&
+            mounted &&
+            draftRevision == _noteDraftRevision &&
+            account == CacheLifecycle.account.value &&
+            accountScope == CacheLifecycle.accountScope) {
+          _showTransientSnackBar('保存笔记失败，请稍后再试。');
+        }
+      } finally {
+        if (identical(_noteSaveCompletion, operation)) {
+          _noteSaveCompletion = null;
+        }
+        operation.result.complete(committed);
+      }
+      if (updateUi &&
+          mounted &&
+          draftRevision == _noteDraftRevision &&
+          account == CacheLifecycle.account.value &&
+          accountScope == CacheLifecycle.accountScope) {
+        if (committed != null) {
+          setState(() {
+            _editingVideoNote = committed;
+            if (framesRevision == _noteFramesRevision) {
+              _noteFrames = committed!.allFrames;
+            }
+          });
+        }
+        if (_noteAutoSavePending && _noteSaveCompletion == null) {
+          _noteAutoSavePending = false;
+          _scheduleVideoNoteAutoSave();
+        }
+      }
+    }());
   }
 
   /// 等待原生播放器把目标时间点真正渲染到 Surface，再执行截图。
@@ -304,130 +687,161 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
 
   /// 暂停并跳到笔记锁定的分P和时间点截图，完成后恢复用户原来的播放位置。
   Future<String?> _captureFrameAtNotePosition() async {
+    final bvid = _activeVideo.bvid;
+    final draftRevision = _noteDraftRevision;
+    var generation = _partSwitchGeneration;
+    var sourceGeneration = _sourceGeneration;
+    int? captureSerial;
+    bool isCurrentCapture() =>
+        mounted &&
+        bvid == _activeVideo.bvid &&
+        draftRevision == _noteDraftRevision &&
+        generation == _partSwitchGeneration &&
+        sourceGeneration == _sourceGeneration &&
+        (captureSerial == null || _isCurrentAbRepeatCapture(captureSerial));
+    final targetPosition = _notePosition;
     final VideoPart returnPart = _currentPart;
     final Duration returnPosition = _playbackSnapshot.position;
     final bool shouldResume = _playing;
     final VideoPart targetPart = _findVideoNotePart(_notePartCid);
-    if (shouldResume) {
-      await _playbackService.pause();
-    }
+    captureSerial = await _beginAbRepeatCapture();
     try {
+      if (!isCurrentCapture()) return null;
+      if (shouldResume) await _playbackService.pause();
+      if (!isCurrentCapture()) return null;
       if (targetPart.cid != _currentPart.cid) {
+        generation++;
         await _changePart(targetPart);
+        if (generation == _partSwitchGeneration &&
+            _currentPart.cid == targetPart.cid) {
+          sourceGeneration = _sourceGeneration;
+        }
+        if (!isCurrentCapture() || _currentPart.cid != targetPart.cid) {
+          return null;
+        }
         await _playbackService.pause();
       }
-      await _seekNativeTo(_notePosition);
-      await _waitForNoteFramePosition(_notePosition);
-      return await _playbackService.captureCurrentFrame();
+      if (!isCurrentCapture()) return null;
+      await _seekNativeTo(targetPosition, temporaryCapture: true);
+      if (!isCurrentCapture()) return null;
+      await _waitForNoteFramePosition(targetPosition);
+      if (!isCurrentCapture()) return null;
+      final path = await _playbackService.captureCurrentFrame();
+      if (!isCurrentCapture()) {
+        if (path != null) {
+          await _videoNoteService.discardUnreferencedFrame(path);
+        }
+        return null;
+      }
+      return path;
     } finally {
-      if (returnPart.cid != _currentPart.cid) {
-        await _changePart(returnPart);
-        await _playbackService.pause();
-      }
-      await _seekNativeTo(returnPosition);
-      if (shouldResume) {
-        await _playbackService.play();
+      try {
+        if (isCurrentCapture() && returnPart.cid != _currentPart.cid) {
+          generation++;
+          await _changePart(returnPart);
+          if (generation == _partSwitchGeneration &&
+              _currentPart.cid == returnPart.cid) {
+            sourceGeneration = _sourceGeneration;
+          }
+          if (isCurrentCapture()) await _playbackService.pause();
+        }
+        if (isCurrentCapture() && returnPart.cid == _currentPart.cid) {
+          _prepareAbRepeatCaptureRestore(returnPosition);
+          await _seekNativeTo(returnPosition, temporaryCapture: true);
+          if (isCurrentCapture() &&
+              shouldResume &&
+              _canResumeAfterNoteCapture) {
+            await _playbackService.play();
+          }
+        }
+      } finally {
+        _endAbRepeatCapture();
       }
     }
   }
 
   /// 保存标题、正文、自动记录时间、视频位置和可选画面；自动保存不会反复弹出提示。
-  Future<void> _saveVideoNote({bool automatic = false}) async {
-    if (automatic) {
-      if (_noteSaving || _noteAutoSaving) {
-        _noteAutoSavePending = true;
-        return;
-      }
-    } else {
-      if (_noteSaving || _noteAutoSaving) {
-        return;
-      }
+  Future<bool> _saveVideoNote({bool automatic = false}) async {
+    if (_noteSaveCompletion != null || _noteSaving || _noteAutoSaving) {
+      if (automatic) _noteAutoSavePending = true;
+      return false;
     }
+    if (!_noteDraftMatchesAccount) return false;
     final String enteredTitle = _noteTitleController.text.trim();
-    final String body = _noteBodyController.text.trim();
+    final String body = _noteBodyController.text;
     if (enteredTitle.isEmpty && !automatic) {
       _showTransientSnackBar('请先填写笔记标题。');
-      return;
+      return false;
     }
-    if (enteredTitle.isEmpty && body.isEmpty) {
-      return;
+    if (enteredTitle.isEmpty && body.trim().isEmpty) {
+      return false;
     }
     if (automatic) {
       _noteAutoSaving = true;
     } else {
       _noteSaving = true;
     }
-    final String title = enteredTitle.isEmpty ? '未命名笔记' : enteredTitle;
-    final completion = Completer<void>();
+    _noteAutoSaveTimer?.cancel();
+    _noteAutoSaveTimer = null;
+    _noteAutoSavePending = false;
+    final includeFrame = _includeCurrentFrame;
+    final notePosition = _notePosition;
+    final noteDraft = _snapshotPlayerNote(enteredTitle, body);
+    final framesRevision = _noteFramesRevision;
+    final draftRevision = _noteDraftRevision;
+    final account = _noteDraftAccountRevision;
+    final accountScope = _noteDraftAccountScope;
+    final completion = _PendingPlayerNoteWrite(noteDraft.id, framesRevision);
     _noteSaveCompletion = completion;
-    _noteLastSaveSucceeded = false;
-    final noteVideo = _activeVideo;
-    final VideoNote? existing = _editingVideoNote;
-    final int draftRevision = _noteDraftRevision;
-    final bool includeFrame = _includeCurrentFrame;
-    final int notePartCid = _notePartCid;
-    final VideoPart notePart = _findVideoNotePart(notePartCid);
-    final Duration notePosition = _notePosition;
-    // 自动保存只锁定保存按钮，不禁用输入框，避免输入过程中键盘失去焦点。
+    VideoNote? committed;
+    final frames = noteDraft.allFrames.toList();
+    // 自动保存只锁定保存按钮，不禁用输入框。
     setState(() {});
-    String? framePath = includeFrame ? _noteFramePath : null;
     bool frameFailed = false;
     try {
-      if (includeFrame && framePath == null && !automatic) {
+      if (includeFrame && frames.isEmpty && !automatic) {
         try {
-          framePath = await _captureFrameAtNotePosition();
+          final framePath = await _captureFrameAtNotePosition();
           frameFailed = framePath == null;
+          if (framePath != null) {
+            frames.add(VideoNoteFrame(path: framePath, position: notePosition));
+          }
         } catch (_) {
           // Optional screenshot failure must never discard a valid text note.
           frameFailed = true;
         }
       }
-      final DateTime now = DateTime.now();
-      final VideoNote note = existing == null
-          ? VideoNote(
-              id: '${noteVideo.bvid}-${now.microsecondsSinceEpoch}',
-              bvid: noteVideo.bvid,
-              videoTitle: noteVideo.title,
-              ownerName: noteVideo.ownerName,
-              partCid: notePart.cid,
-              partPageNumber: notePart.pageNumber,
-              partTitle: notePart.title,
-              title: title,
-              body: body,
-              createdAt: now,
-              updatedAt: now,
-              position: notePosition,
-              videoCoverUrl: noteVideo.thumbnailUrl,
-              framePath: framePath,
-            )
-          : existing.copyWith(
-              title: title,
-              body: body,
-              updatedAt: now,
-              position: notePosition,
-              framePath: framePath,
-              clearFrame: !includeFrame,
-            );
-      await _videoNoteService.saveNote(note);
-      _noteLastSaveSucceeded = true;
-      if (!mounted || noteVideo.bvid != _activeVideo.bvid) {
-        return;
+      final note = noteDraft.copyWith(frames: frames);
+      if (account != CacheLifecycle.account.value ||
+          accountScope != CacheLifecycle.accountScope) {
+        // A manual historical capture may have waited across account changes.
+        // Treat it as a failed save and let its owner clean up the new pixels.
+        for (final frame in frames.where(
+          (frame) => !noteDraft.allFrames.contains(frame),
+        )) {
+          await _videoNoteService.discardUnreferencedFrame(frame.path);
+        }
+        throw StateError('当前账号已变化，未保存旧笔记。');
       }
-      final bool retryAutomaticSave = _noteAutoSavePending;
+      await _videoNoteService.saveNote(note);
+      committed = note;
+      if (!mounted || note.bvid != _activeVideo.bvid) {
+        return true;
+      }
       setState(() {
-        if (draftRevision == _noteDraftRevision) {
+        if (draftRevision == _noteDraftRevision &&
+            account == CacheLifecycle.account.value &&
+            accountScope == CacheLifecycle.accountScope) {
           _editingVideoNote = note;
-          _noteFramePath = note.framePath;
+          if (framesRevision == _noteFramesRevision) {
+            _noteFrames = note.allFrames;
+          }
         }
         _noteSaving = false;
         _noteAutoSaving = false;
-        _noteAutoSavePending = false;
         _notesLoading = true;
       });
       await _loadCurrentVideoNotes();
-      if (retryAutomaticSave && mounted) {
-        _scheduleVideoNoteAutoSave();
-      }
       if (mounted && !automatic) {
         _showTransientSnackBar(
           frameFailed ? '笔记文字已保存，截图未成功；可再次保存以重试截图。' : '笔记已保存到本机。',
@@ -435,38 +849,33 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
       }
     } on PlatformException catch (error) {
       if (!mounted) {
-        return;
+        return committed != null;
       }
-      final bool retryAutomaticSave = _noteAutoSavePending;
       setState(() {
         _noteSaving = false;
         _noteAutoSaving = false;
-        _noteAutoSavePending = false;
       });
-      if (retryAutomaticSave && mounted) {
-        _scheduleVideoNoteAutoSave();
-      }
       _showTransientSnackBar(error.message ?? '截取当前视频画面失败。');
     } catch (_) {
       if (!mounted) {
-        return;
+        return committed != null;
       }
-      final bool retryAutomaticSave = _noteAutoSavePending;
       setState(() {
         _noteSaving = false;
         _noteAutoSaving = false;
-        _noteAutoSavePending = false;
       });
-      if (retryAutomaticSave && mounted) {
-        _scheduleVideoNoteAutoSave();
-      }
       _showTransientSnackBar('保存笔记失败，请稍后再试。');
     } finally {
-      completion.complete();
+      completion.result.complete(committed);
       if (identical(_noteSaveCompletion, completion)) {
         _noteSaveCompletion = null;
+        if (mounted && _noteAutoSavePending && _noteDraftMatchesAccount) {
+          _noteAutoSavePending = false;
+          _scheduleVideoNoteAutoSave();
+        }
       }
     }
+    return committed != null;
   }
 
   /// 删除正在编辑的笔记及其画面文件，并回到新的当前时间点草稿。
@@ -497,43 +906,77 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
     if (confirmed != true || !mounted) {
       return;
     }
-    setState(() => _noteSaving = true);
+    _cancelLiveNoteFrame();
+    if (_editingVideoNote?.id != note.id ||
+        !_noteDraftMatchesAccount ||
+        _deletingPlayerNoteId != null) {
+      return;
+    }
+    // An accepted deletion owns this id from now on; leaving while an old
+    // save is finishing must not cancel deletion or re-save the dirty draft.
+    final revision = _noteDraftRevision;
+    final account = _noteDraftAccountRevision;
+    final accountScope = _noteDraftAccountScope;
+    final storage = _videoNoteService;
+    final previous = _noteSaveCompletion;
+    final deletion = _PendingPlayerNoteWrite(note.id, _noteFramesRevision);
+    _noteAutoSaveTimer?.cancel();
+    _noteAutoSaveTimer = null;
+    _noteAutoSavePending = false;
+    _noteSaveCompletion = deletion;
+    setState(() {
+      _deletingPlayerNoteId = note.id;
+      _noteSaving = true;
+    });
+    bool succeeded = false;
     try {
-      await _videoNoteService.deleteNote(note.id);
-      if (!mounted) {
+      await previous?.future;
+      if (account != CacheLifecycle.account.value ||
+          accountScope != CacheLifecycle.accountScope) {
         return;
       }
-      setState(() {
-        _noteDraftRevision += 1;
-        _noteSaving = false;
-        _notesLoading = true;
-      });
+      await storage.deleteNote(note.id);
+      succeeded = true;
+    } catch (_) {
+      if (mounted && account == CacheLifecycle.account.value) {
+        _showTransientSnackBar('删除笔记失败，请稍后再试。');
+      }
+    } finally {
+      if (identical(_noteSaveCompletion, deletion)) _noteSaveCompletion = null;
+      deletion.result.complete(null);
+      if (mounted) {
+        setState(() {
+          _deletingPlayerNoteId = null;
+          _noteSaving = false;
+        });
+      }
+    }
+    if (succeeded &&
+        mounted &&
+        revision == _noteDraftRevision &&
+        account == CacheLifecycle.account.value) {
       _startNewVideoNote();
       await _loadCurrentVideoNotes();
-      if (mounted) {
-        _showTransientSnackBar('笔记已删除。');
-      }
-    } catch (_) {
-      if (!mounted) {
-        return;
-      }
-      setState(() => _noteSaving = false);
-      _showTransientSnackBar('删除笔记失败，请稍后再试。');
+      if (mounted) _showTransientSnackBar('笔记已删除。');
     }
   }
 
   /// 创建播放器笔记编辑器，并把保存、删除、画面选择等操作连接到本机服务。
   Widget _buildVideoNoteComposer({required bool compact}) {
     return VideoNoteComposer(
+      key: ValueKey<int>(_noteDraftRevision),
       titleController: _noteTitleController,
       bodyController: _noteBodyController,
       position: _notePosition,
       partPageNumber: _findVideoNotePart(_notePartCid).pageNumber,
       createdAt: _editingVideoNote?.createdAt,
       includeFrame: _includeCurrentFrame,
-      framePath: _noteFramePath,
-      saving: _noteSaving || _noteAutoSaving,
-      inputEnabled: !_noteSaving,
+      frames: _noteFrames,
+      onFramesChanged: _setNoteFrames,
+      onAddFrame: () => unawaited(_appendCurrentNoteFrame()),
+      addingFrame: _pendingLiveNoteFrame != null,
+      saving: _noteSaving || _noteAutoSaving || _deletingPlayerNoteId != null,
+      inputEnabled: !_noteSaving && _deletingPlayerNoteId == null,
       onIncludeFrameChanged: _setIncludeCurrentFrame,
       // 保存函数自动写入记录时间、视频时间点和用户选择的当前画面。
       onSave: () => unawaited(_saveVideoNote()),
@@ -620,8 +1063,8 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
     );
   }
 
-  /// 创建播放器下方的竖屏笔记工作区，打开后页面不再使用可折叠播放器。
-  Widget _buildPortraitVideoNotesPanel() {
+  /// 创建视频下方或工作台右侧的内嵌笔记工作区。
+  Widget _buildInlineVideoNotesPanel() {
     return Material(
       key: const Key('portrait-video-notes-panel'),
       color: Theme.of(context).colorScheme.surface,
@@ -696,105 +1139,217 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
   }
 
   /// 创建约占播放器三分之二宽度的笔记本，保留左侧视频画面供边看边记。
-  Widget _buildFullscreenVideoNotesPanel(double playerWidth) {
-    final double panelWidth = playerWidth * 0.64;
-    final double expandedListWidth = playerWidth * 0.17;
+  Widget _buildFullscreenVideoNotesPanel(
+    BuildContext context,
+    BoxConstraints bounds,
+  ) {
+    final padding = MediaQuery.paddingOf(context);
+    final right = padding.right + 10;
+    final top = padding.top + 10;
+    final height = (bounds.maxHeight - top - padding.bottom - 10).clamp(
+      0.0,
+      double.infinity,
+    );
+    // On tight landscape windows the editor needs room for its actions, and
+    // the video still needs an accessible outside area on the left.
+    final usableWidth = (bounds.maxWidth - right - padding.left - 48).clamp(
+      0.0,
+      double.infinity,
+    );
+    final double panelWidth = (bounds.maxWidth * 0.64)
+        .clamp(288.0, double.infinity)
+        .clamp(0.0, usableWidth);
+    final double expandedListWidth = (bounds.maxWidth * 0.17).clamp(
+      64.0,
+      (panelWidth * 0.40).clamp(64.0, double.infinity),
+    );
+    final expanded = _notesOpen && !_notesParked;
     return Positioned(
       key: const Key('fullscreen-video-notes-panel'),
-      top: 10,
-      right: 10,
-      bottom: 10,
+      top: top,
+      right: right,
+      height: height,
       width: panelWidth,
       child: AnimatedSlide(
         key: const Key('fullscreen-video-notes-slide'),
-        offset: _notesOpen ? Offset.zero : const Offset(1.08, 0),
+        offset: expanded
+            ? Offset.zero
+            : Offset(1.08 + right / (panelWidth > 0 ? panelWidth : 1), 0),
         duration: _notesPanelAnimationDuration,
-        curve: _notesOpen ? Curves.easeOutCubic : Curves.easeInCubic,
-        child: Material(
-          key: const Key('fullscreen-video-notes-material'),
-          elevation: 18,
-          color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.9),
-          borderRadius: BorderRadius.circular(18),
-          clipBehavior: Clip.antiAlias,
-          child: SafeArea(
-            top: false,
-            left: false,
-            right: false,
-            bottom: false,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                SizedBox(
-                  width: _fullscreenNoteListCollapsed ? 46 : expandedListWidth,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: <Widget>[
-                      if (_fullscreenNoteListCollapsed) ...<Widget>[
-                        const SizedBox(height: 6),
-                        IconButton(
-                          key: const Key('expand-fullscreen-note-list'),
-                          // 展开按钮函数恢复左侧笔记标题和时间点列表。
-                          onPressed: _toggleFullscreenNoteList,
-                          icon: const Icon(Icons.chevron_right_rounded),
-                          tooltip: '展开笔记列表',
-                        ),
-                        Text(
-                          '${_currentVideoNotes.length}',
-                          textAlign: TextAlign.center,
-                          style: Theme.of(context).textTheme.labelSmall,
-                        ),
-                      ] else ...<Widget>[
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(5, 6, 8, 3),
-                          child: Row(
-                            children: <Widget>[
-                              IconButton(
-                                key: const Key('collapse-fullscreen-note-list'),
-                                // 收起按钮函数仅保留一条窄边栏，为标题和正文增加空间。
-                                onPressed: _toggleFullscreenNoteList,
-                                visualDensity: VisualDensity.compact,
-                                constraints: const BoxConstraints.tightFor(
-                                  width: 32,
-                                  height: 32,
-                                ),
-                                padding: EdgeInsets.zero,
-                                iconSize: 20,
-                                icon: const Icon(Icons.chevron_left_rounded),
-                                tooltip: '收起笔记列表',
+        curve: expanded ? Curves.easeOutCubic : Curves.easeInCubic,
+        child: IgnorePointer(
+          ignoring: !expanded,
+          child: ExcludeFocus(
+            excluding: !expanded,
+            child: ExcludeSemantics(
+              excluding: !expanded,
+              child: FocusScope(
+                node: _sideNoteFocusScope,
+                child: _buildSideNoteEditor(
+                  showList: height >= 84 && panelWidth >= 205,
+                  expandedListWidth: expandedListWidth,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSideNoteEditor({
+    required bool showList,
+    required double expandedListWidth,
+  }) {
+    return Material(
+      key: const Key('fullscreen-video-notes-material'),
+      elevation: 18,
+      color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.9),
+      borderRadius: BorderRadius.circular(18),
+      clipBehavior: Clip.antiAlias,
+      // Blank space inside the panel must not dismiss it.
+      child: Listener(
+        behavior: HitTestBehavior.opaque,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            if (showList)
+              SizedBox(
+                width: _fullscreenNoteListCollapsed ? 46 : expandedListWidth,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    if (_fullscreenNoteListCollapsed) ...<Widget>[
+                      const SizedBox(height: 6),
+                      IconButton(
+                        key: const Key('expand-fullscreen-note-list'),
+                        // 展开按钮函数恢复左侧笔记标题和时间点列表。
+                        onPressed: _toggleFullscreenNoteList,
+                        icon: const Icon(Icons.chevron_right_rounded),
+                        tooltip: '展开笔记列表',
+                      ),
+                      Text(
+                        '${_currentVideoNotes.length}',
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.labelSmall,
+                      ),
+                    ] else ...<Widget>[
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(5, 6, 8, 3),
+                        child: Row(
+                          children: <Widget>[
+                            IconButton(
+                              key: const Key('collapse-fullscreen-note-list'),
+                              // 收起按钮函数仅保留一条窄边栏，为标题和正文增加空间。
+                              onPressed: _toggleFullscreenNoteList,
+                              visualDensity: VisualDensity.compact,
+                              constraints: const BoxConstraints.tightFor(
+                                width: 32,
+                                height: 32,
                               ),
-                              const SizedBox(width: 3),
-                              Expanded(
-                                child: Text(
-                                  '笔记',
-                                  style: Theme.of(context).textTheme.titleSmall
-                                      ?.copyWith(fontWeight: FontWeight.w800),
-                                ),
+                              padding: EdgeInsets.zero,
+                              iconSize: 20,
+                              icon: const Icon(Icons.chevron_left_rounded),
+                              tooltip: '收起笔记列表',
+                            ),
+                            const SizedBox(width: 3),
+                            Expanded(
+                              child: Text(
+                                '笔记',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.titleSmall
+                                    ?.copyWith(fontWeight: FontWeight.w800),
                               ),
-                              Text(
-                                '${_currentVideoNotes.length}',
-                                style: Theme.of(context).textTheme.labelSmall,
-                              ),
-                            ],
-                          ),
+                            ),
+                            Text(
+                              '${_currentVideoNotes.length}',
+                              style: Theme.of(context).textTheme.labelSmall,
+                            ),
+                          ],
                         ),
-                        Expanded(child: _buildFullscreenVideoNoteList()),
-                      ],
+                      ),
+                      Expanded(
+                        child: TickerMode(
+                          enabled: _notesOpen && !_notesParked,
+                          child: _buildFullscreenVideoNoteList(),
+                        ),
+                      ),
                     ],
+                  ],
+                ),
+              ),
+            if (showList)
+              VerticalDivider(
+                width: 1,
+                color: Theme.of(context).colorScheme.outlineVariant,
+              ),
+            Expanded(
+              child: SingleChildScrollView(
+                key: const Key('side-video-note-composer-scroll'),
+                controller: _sideNoteScrollController,
+                padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                child: _buildVideoNoteComposer(compact: true),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildParkedVideoNoteHandle(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final safe = MediaQuery.paddingOf(context);
+    const border = BorderRadius.horizontal(left: Radius.circular(16));
+    return Positioned(
+      top: safe.top,
+      right: safe.right,
+      bottom: safe.bottom,
+      child: Align(
+        // Leave the progress strip and bottom-row controls unobstructed.
+        alignment: const Alignment(1, -0.22),
+        child: Material(
+          color: scheme.primaryContainer,
+          elevation: 5,
+          borderRadius: border,
+          clipBehavior: Clip.antiAlias,
+          child: Semantics(
+            container: true,
+            button: true,
+            label: '继续编辑时间点笔记',
+            onTap: _restoreParkedVideoNotes,
+            child: Tooltip(
+              message: '继续编辑时间点笔记',
+              excludeFromSemantics: true,
+              child: InkWell(
+                excludeFromSemantics: true,
+                key: const Key('restore-parked-video-notes'),
+                focusNode: _notePeekHandleFocus,
+                onTap: _restoreParkedVideoNotes,
+                child: SizedBox(
+                  width: 48,
+                  height: 72,
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.chevron_left_rounded,
+                          color: scheme.onPrimaryContainer,
+                        ),
+                        Icon(
+                          Icons.edit_note_rounded,
+                          color: scheme.onPrimaryContainer,
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-                VerticalDivider(
-                  width: 1,
-                  color: Theme.of(context).colorScheme.outlineVariant,
-                ),
-                Expanded(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-                    keyboardDismissBehavior:
-                        ScrollViewKeyboardDismissBehavior.onDrag,
-                    child: _buildVideoNoteComposer(compact: true),
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         ),

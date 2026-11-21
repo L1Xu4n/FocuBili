@@ -31,9 +31,12 @@ class Content implements BilibiliPublicContentService {
   int? failPage;
   Completer<void>? hold;
   int? holdMid;
+  int? holdPage;
   Future<CreatorContentPage<CreatorVideo>> page(int mid, int index) async {
     calls.add('$mid:$index');
-    if (hold != null && (holdMid == null || holdMid == mid)) {
+    if (hold != null &&
+        (holdMid == null || holdMid == mid) &&
+        (holdPage == null || holdPage == index)) {
       await hold!.future;
     }
     if (index == failPage) throw StateError('429 / network');
@@ -94,6 +97,36 @@ void main() {
     service.setForeground(true);
     await service.refresh(manual: true);
   }
+
+  test(
+    'source and focus opt-in are saved atomically without notifications',
+    () async {
+      var reject = false;
+      final prefs = await SharedPreferences.getInstance();
+      final service = SubscriptionService(
+        contentService: Content(),
+        preferencesLoader: () async => reject
+            ? RejectingPreferences(prefs, SubscriptionService.storageKey)
+            : prefs,
+      );
+      addTearDown(service.dispose);
+      await service.initialize();
+      reject = true;
+      await expectLater(
+        service.addSource(source(1), enableFocus: true),
+        throwsA(isA<SubscriptionStorageException>()),
+      );
+      expect(service.sources, isEmpty);
+      expect(service.enabled, isFalse);
+
+      reject = false;
+      await service.addSource(source(1), enableFocus: true);
+      final reopened = await create(Content());
+      expect(reopened.sources.single.key, 'creator:1');
+      expect(reopened.enabled, isTrue);
+      expect(reopened.notificationsEnabled, isFalse);
+    },
+  );
 
   test(
     'off by default, no network until explicit enabled + foreground',
@@ -160,25 +193,29 @@ void main() {
     },
   );
   test(
-    'collection scans every page: old publication added on page2, reordering silent',
+    'collection scans page 2 for recent additions and never reannounces after reordering',
     () async {
+      final now = DateTime.utc(2026, 10, 14);
       final c = Content()
         ..pages[1] = [
           [item('a')],
           [item('b')],
         ];
-      final s = await create(c);
+      final s = await create(c, clock: () => now);
       await baseline(s, [source(1, collection: true)]);
       c.pages[1] = [
         [item('a')],
-        [item('historical', publishedAt: DateTime(2010)), item('b')],
+        [
+          item('recent', publishedAt: now.subtract(const Duration(days: 9))),
+          item('b'),
+        ],
       ];
       await s.refresh(manual: true);
-      expect(s.feed.single.bvid, 'historical');
+      expect(s.feed.single.bvid, 'recent');
       expect(s.feed.single.collectionAdded, true);
-      await s.markRead('historical');
+      await s.markRead('recent');
       c.pages[1] = [
-        [item('b'), item('historical')],
+        [item('b'), item('recent')],
         [item('a')],
       ];
       await s.refresh(manual: true);
@@ -221,6 +258,88 @@ void main() {
       expect(s.checkpoint('collection:1:100')!.partial, false);
     },
   );
+  test(
+    'explicit source retry resumes a transient failure without waiting for backoff',
+    () async {
+      var now = DateTime(2026);
+      final c = Content()
+        ..pages[1] = [
+          [item('old1')],
+          [item('old2')],
+        ]
+        ..pages[2] = [
+          [item('other-source')],
+        ];
+      final s = await create(c, clock: () => now);
+      await baseline(s, [source(1), source(2)]);
+      c.pages[1] = [
+        [item('new1')],
+        [item('new2')],
+        [item('new3')],
+        [item('new4'), item('old2')],
+      ];
+      c.failPage = 4;
+      await s.refresh(manual: true);
+      expect(s.checkpoint('creator:1')!.nextPage, 4);
+      expect(s.checkpoint('creator:1')!.retryAt, isNotNull);
+      expect(s.feed.map((item) => item.bvid), ['new1', 'new2', 'new3']);
+
+      c.failPage = null;
+      c.calls.clear();
+      now = now.add(const Duration(seconds: 30));
+      await s.retrySource('creator:1');
+      expect(c.calls, ['1:1', '1:3', '1:4']);
+      expect(s.checkpoint('creator:1')!.lastSuccess, now);
+      expect(s.checkpoint('creator:1')!.partial, isFalse);
+      expect(s.checkpoint('creator:1')!.retryAt, isNull);
+      expect(s.feed.map((item) => item.bvid), ['new4', 'new1', 'new2', 'new3']);
+    },
+  );
+
+  test(
+    'mark all read suppresses a pending notification even after display eviction',
+    () async {
+      final c = Content()
+        ..pages[1] = [
+          [item('old1')],
+          [item('old2')],
+        ];
+      final s = await create(c);
+      await s.setNotificationsEnabled(true);
+      await baseline(s, [source(1)]);
+      final notifications = <String>[];
+      s.notifyItems = (items) async {
+        notifications.addAll(items.map((item) => item.bvid));
+        return true;
+      };
+      c.pages[1] = [
+        [item('read-before-notify'), item('old1')],
+        [
+          for (var i = 0; i < SubscriptionService.displayLimit; i++)
+            item('new-$i'),
+        ],
+      ];
+      c.holdPage = 2;
+      final gate = c.hold = Completer<void>();
+      final round = s.refresh(manual: true);
+      await Future<void>.delayed(Duration.zero);
+      expect(c.calls.last, '1:2');
+      expect(s.feed.single.bvid, 'read-before-notify');
+      await s.markAllRead();
+      expect(s.unreadCount, 0);
+      gate.complete();
+      await round;
+
+      expect(s.feed, hasLength(SubscriptionService.displayLimit));
+      expect(
+        s.feed.map((item) => item.bvid),
+        isNot(contains('read-before-notify')),
+      );
+      expect(notifications, hasLength(SubscriptionService.displayLimit));
+      expect(notifications, isNot(contains('read-before-notify')));
+    },
+  );
+
   test(
     'initial partial baseline persists across restart and never emits historical cards',
     () async {

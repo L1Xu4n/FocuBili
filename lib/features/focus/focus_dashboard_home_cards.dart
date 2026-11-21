@@ -31,9 +31,15 @@ extension _FocusDashboardHomeCards on _FocusDashboardState {
         id: 'home.focus_session',
         title: '专注任务',
         icon: Icons.timer_outlined,
-        available: ready,
+        available: ready || widget.controller.loadFailed,
         // 同一编号在准备和计时状态之间切换，不因状态变化重置布局。
-        builder: (context) => activeSession == null
+        builder: (context) => widget.controller.loadFailed
+            ? Card(
+                child: FocusStorageNotice(
+                  onRetry: widget.controller.initialize,
+                ),
+              )
+            : activeSession == null
             ? _buildReadyCard(context)
             : _buildActiveCard(context, activeSession),
       ),
@@ -43,6 +49,8 @@ extension _FocusDashboardHomeCards on _FocusDashboardState {
         icon: Icons.insights_rounded,
         available: ready,
         builder: _buildTodaySummary,
+        editingBuilder: (context) =>
+            _buildTodaySummary(context, allowNavigation: false),
       ),
       DashboardCardDefinition(
         id: 'home.recent_history',
@@ -64,6 +72,30 @@ extension _FocusDashboardHomeCards on _FocusDashboardState {
         available: _subscriptions.enabled,
         builder: (_) => SubscriptionHomeCard(service: _subscriptions),
       ),
+      DashboardCardDefinition(
+        id: 'home.favorites',
+        title: '我的收藏',
+        icon: Icons.bookmarks_outlined,
+        defaultHidden: true,
+        builder: (_) => const HomeCollectionCard(favorites: true),
+        editingBuilder: (_) => const HomeCollectionCard(
+          favorites: true,
+          showCustomization: true,
+          allowNavigation: false,
+        ),
+      ),
+      DashboardCardDefinition(
+        id: 'home.followings',
+        title: '我的关注',
+        icon: Icons.people_outline,
+        defaultHidden: true,
+        builder: (_) => const HomeCollectionCard(favorites: false),
+        editingBuilder: (_) => const HomeCollectionCard(
+          favorites: false,
+          showCustomization: true,
+          allowNavigation: false,
+        ),
+      ),
     ];
   }
 
@@ -77,10 +109,13 @@ extension _FocusDashboardHomeCards on _FocusDashboardState {
     return EditableCardBoard(
       key: _homeBoardKey,
       storageId: 'home',
+      initialEditing: _editingHomeCards,
       items: _homeCardDefinitions(activeSession, finishedSession),
       service: _homeLayouts,
       scrollController: _scrollController,
       onEditingChanged: _handleHomeEditingChanged,
+      onCloseRequested: _closeEmptyDrawer,
+      onLayoutChanged: _homeLayoutChanged,
       columnCount: columns,
       spacing: 14,
     );

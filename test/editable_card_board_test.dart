@@ -556,4 +556,60 @@ void main() {
     );
     debugDefaultTargetPlatformOverride = null;
   });
+
+  testWidgets('首笔拖动尚未保存时再次拖动沿用预览，最终保存两次重排', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    final service = DelayedService();
+    await tester.pumpWidget(
+      host(
+        items: [card('a'), card('b'), card('c')],
+        service: service,
+        columns: 1,
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('自定义'));
+    await tester.pump();
+    final firstTop = tester
+        .getTopLeft(find.byKey(const ValueKey('dashboard-card-a')))
+        .dy;
+
+    Future<void> dragCard(String id, String target) async {
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.byKey(ValueKey('dashboard-drag-$id'))),
+        kind: PointerDeviceKind.mouse,
+      );
+      await gesture.moveBy(const Offset(8, 0));
+      await tester.pump();
+      await gesture.moveTo(
+        tester.getCenter(find.byKey(ValueKey('dashboard-card-$target'))),
+      );
+      await tester.pump();
+      await gesture.up();
+      await tester.pump(const Duration(milliseconds: 80));
+    }
+
+    await dragCard('a', 'b');
+    expect(service.accepted, hasLength(1));
+    expect(
+      tester.getTopLeft(find.byKey(const ValueKey('dashboard-card-b'))).dy,
+      firstTop,
+    );
+    await dragCard('c', 'b');
+    expect(service.accepted, hasLength(1));
+    expect(
+      tester.getTopLeft(find.byKey(const ValueKey('dashboard-card-c'))).dy,
+      firstTop,
+    );
+    service.gate.complete();
+    await tester.pumpAndSettle();
+    expect(service.accepted, hasLength(2));
+    expect((await service.load('home', [])).order, ['c', 'b', 'a']);
+    expect(
+      tester.getTopLeft(find.byKey(const ValueKey('dashboard-card-c'))).dy,
+      firstTop,
+    );
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  });
 }
