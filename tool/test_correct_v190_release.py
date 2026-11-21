@@ -28,11 +28,7 @@ class FakeGithub:
             "id": correction.OLD_ID, "tag_name": correction.TAG, "target_commitish": "master",
             "name": correction.TITLE, "body": OLD_NOTES, "draft": False,
             "prerelease": False, "immutable": False,
-            "assets": [
-                {"name": n, "id": i, "digest": d, "size": 200, "download_count": 7,
-                 "state": "uploaded", "content_type": "asset/type", "label": n}
-                for n, (i, d) in correction.OLD_ASSETS.items()
-            ],
+            "assets": [],
         }
         self.items = {correction.OLD_ID: self.original}
         self.actions = []
@@ -40,6 +36,7 @@ class FakeGithub:
         self.fail_after = None
         self.corrupt = None
         self.archive_ignores_target_commitish = False
+        self.rest_returns_crlf = False
 
     def refs(self):
         return self.refs_.copy()
@@ -48,7 +45,10 @@ class FakeGithub:
         return deepcopy(list(self.items.values()))
 
     def release(self, release_id):
-        return deepcopy(self.items[release_id])
+        row = deepcopy(self.items[release_id])
+        if self.rest_returns_crlf:
+            row["body"] = row["body"].replace("\n", "\r\n")
+        return row
 
     def latest(self):
         return self.latest_id
@@ -129,10 +129,8 @@ class CorrectionTest(unittest.TestCase):
         self.assertEqual(gh.original["tag_name"], correction.ARCHIVE)
         self.assertIs(gh.original["prerelease"], True)
         self.assertIn(OLD_NOTES, gh.original["body"])
-        self.assertEqual(
-            {a["name"]: (a["id"], a["digest"]) for a in gh.original["assets"]},
-            correction.OLD_ASSETS,
-        )
+        self.assertIn("原安装包已由维护者移除", gh.original["body"])
+        self.assertEqual(gh.original["assets"], [])
         self.assertEqual(gh.latest_id, DRAFT_ID)
         published = gh.items[DRAFT_ID]
         self.assertIs(published["draft"], False)
@@ -141,7 +139,7 @@ class CorrectionTest(unittest.TestCase):
         self.assertEqual(len(published["assets"]), 6)
         self.assertEqual(len(gh.items), 2)
 
-    def test_happy_path_preserves_original_asset_ids_despite_downloads(self):
+    def test_happy_path_preserves_owner_cleared_archive_without_recreating_files(self):
         gh = FakeGithub()
         self.run_correction(gh)
         self.assert_corrected(gh)
@@ -156,6 +154,15 @@ class CorrectionTest(unittest.TestCase):
         self.run_correction(gh)
         self.assert_corrected(gh)
         self.assertEqual(gh.original["target_commitish"], "master")
+
+    def test_crlf_normalization_applies_to_original_archived_draft_and_published_notes(self):
+        gh = FakeGithub()
+        gh.rest_returns_crlf = True
+        self.run_correction(gh)
+        self.assert_corrected(gh)
+        gh.actions.clear()
+        self.run_correction(gh)
+        self.assertEqual(gh.actions, [])
 
     def test_resumes_after_each_remote_mutation_commits_then_errors(self):
         for checkpoint in range(1, 13):
@@ -179,14 +186,14 @@ class CorrectionTest(unittest.TestCase):
         changes = [
             lambda gh: gh.original.update(immutable=True),
             lambda gh: gh.original.update(body="Unexpected notes"),
-            lambda gh: gh.original["assets"][0].update(id=9999),
-            lambda gh: gh.original["assets"][0].update(digest="sha256:" + "9" * 64),
+            lambda gh: gh.original.update(id=9999),
+            lambda gh: gh.original.update(target_commitish="other"),
+            lambda gh: gh.original.pop("assets"),
             lambda gh: gh.refs_.update({correction.MASTER: "f" * 40}),
             lambda gh: gh.refs_.update({T: "f" * 40}),
             lambda gh: gh.refs_.update({A: "f" * 40}),
             lambda gh: gh.items.update({50: {"id": 50, "tag_name": correction.ARCHIVE}}),
             lambda gh: setattr(gh, "latest_id", 50),
-            lambda gh: setattr(gh, "corrupt", (correction.TAG, next(iter(correction.OLD_ASSETS)))),
         ]
         for update in changes:
             with self.subTest(update=update):
@@ -205,17 +212,29 @@ class CorrectionTest(unittest.TestCase):
         self.assertEqual(gh.refs_[T], correction.OLD_TAG)
         self.assertEqual(gh.original["tag_name"], correction.TAG)
 
-    def test_broken_archive_download_never_rotates_tag(self):
+    def test_any_original_assets_including_exact_old_packages_are_rejected(self):
+        known = [{"name": n, "id": i, "digest": d, "size": 200,
+                  "state": "uploaded"} for n, (i, d) in correction.OLD_ASSETS.items()]
+        for unexpected in (known[:1], known, [{"id": 9999}]):
+            with self.subTest(unexpected=unexpected):
+                gh = FakeGithub()
+                gh.original["assets"] = unexpected
+                with self.assertRaisesRegex(RuntimeError, "must contain no assets"):
+                    self.run_correction(gh)
+                self.assertEqual(gh.actions, [])
+
+    def test_late_asset_in_empty_archive_stops_without_rotating_tag(self):
         gh = FakeGithub()
-        gh.corrupt = (correction.ARCHIVE, next(iter(correction.OLD_ASSETS)))
-        with self.assertRaisesRegex(RuntimeError, "Corrupt asset"):
+        gh.fail_after = 9  # Archive PATCH landed; the canonical tag has not moved.
+        with self.assertRaises(Interrupted):
             self.run_correction(gh)
+        gh.original["assets"] = [{"id": 9999}]
+        gh.actions.clear()
+        with self.assertRaisesRegex(RuntimeError, "must contain no assets"):
+            self.run_correction(gh)
+        self.assertEqual(gh.actions, [])
         self.assertEqual(gh.refs_[T], correction.OLD_TAG)
         self.assertEqual(gh.refs_[A], correction.OLD_TAG)
-        self.assertEqual(gh.original["tag_name"], correction.ARCHIVE)
-        gh.corrupt = None
-        self.run_correction(gh)
-        self.assert_corrected(gh)
 
     def test_unexpected_partial_draft_stops_without_clobber(self):
         gh = FakeGithub()
