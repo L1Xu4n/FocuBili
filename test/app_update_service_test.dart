@@ -137,6 +137,35 @@ void main() {
     expect(result.downloadActionLabel, '查看 Release');
   });
 
+  test(
+    'stable updater accepts build-numbered APK without changing its tag',
+    () async {
+      const tag = 'v1.9.1';
+      const name = 'FocuBili-v1.9.1-build33-android.apk';
+      const url =
+          'https://github.com/L1Xu4n/FocuBili/releases/download/$tag/$name';
+      final result =
+          await AppUpdateService(
+            targetPlatform: AppUpdateTargetPlatform.android,
+            releaseLoader: () async => <String, Object?>{
+              'tag_name': tag,
+              'assets': [
+                {'name': name, 'browser_download_url': url},
+              ],
+            },
+          ).check(
+            currentVersion: '1.9.0+32',
+            installation: const AppUpdateInstallation(
+              packageName: 'com.focubili.app',
+            ),
+          );
+
+      expect(result.status, AppUpdateStatus.available);
+      expect(result.latestVersion, '1.9.1');
+      expect(result.downloadUrl.toString(), url);
+    },
+  );
+
   test('Release 未按约定提供摘要标记时不会把整篇正文显示到 App', () async {
     final AppUpdateResult result = await AppUpdateService(
       releaseLoader: () async => <String, Object?>{

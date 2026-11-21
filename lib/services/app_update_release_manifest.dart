@@ -31,6 +31,8 @@ class AppUpdateReleaseManifest {
         (raw['buildNumber'] as int) > 2147483647) {
       return null;
     }
+    final legacyPrefix = 'FocuBili-v$version-';
+    final numberedPrefix = "${legacyPrefix}build${raw['buildNumber']}-";
     final entries = raw['assets'];
     final android = raw['android'];
     if (entries is! List ||
@@ -44,18 +46,26 @@ class AppUpdateReleaseManifest {
         android['versionCode'] != raw['buildNumber'] ||
         (android.containsKey('sourceSha') &&
             android['sourceSha'] != raw['sourceSha']) ||
-        android['file'] != 'FocuBili-v$version-android-preview.apk' ||
+        (android['file'] != '${legacyPrefix}android-preview.apk' &&
+            android['file'] != '${numberedPrefix}android-preview.apk') ||
         !_hex(android['certificateSha256'], 64) ||
         !_fileFields(android)) {
       return null;
     }
+    final numbered = android['file'] == '${numberedPrefix}android-preview.apk';
+    final prefix = numbered ? numberedPrefix : legacyPrefix;
+    final buildMarker = RegExp(r'^build[0-9]+-');
     final assets = <Map<String, Object?>>[];
     final names = <String>{};
     for (final entry in entries) {
       if (entry is! Map ||
           entry.keys.any((key) => key is! String) ||
           !_fileFields(entry) ||
-          !(entry['file'] as String).startsWith('FocuBili-v$version-') ||
+          !(entry['file'] as String).startsWith(prefix) ||
+          (!numbered &&
+              buildMarker.hasMatch(
+                (entry['file'] as String).substring(legacyPrefix.length),
+              )) ||
           !{
             'android',
             'windows',

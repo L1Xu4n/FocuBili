@@ -17,9 +17,10 @@ const _preview = AppUpdateInstallation(
 const _stable = AppUpdateInstallation(packageName: 'com.focubili.app');
 const _root = 'https://github.com/L1Xu4n/FocuBili/releases/download';
 
-Map<String, Object?> _manifest(int beta) {
+Map<String, Object?> _manifest(int beta, {bool numbered = false}) {
   final version = '1.9.0-beta.$beta';
-  final file = 'FocuBili-v$version-android-preview.apk';
+  final infix = numbered ? '-build${2030 + beta}' : '';
+  final file = 'FocuBili-v$version$infix-android-preview.apk';
   return {
     'format': 'focubili.beta-release',
     'version': 1,
@@ -42,7 +43,7 @@ Map<String, Object?> _manifest(int beta) {
       {'platform': 'android', 'file': file, 'bytes': 100, 'sha256': 'a' * 64},
       {
         'platform': 'windows',
-        'file': 'FocuBili-v$version-windows-x64-setup.exe',
+        'file': 'FocuBili-v$version$infix-windows-x64-setup.exe',
         'bytes': 200,
         'sha256': 'c' * 64,
       },
@@ -62,8 +63,13 @@ Map<String, Object?> _asset(
   'browser_download_url': '$_root/$tag/$file',
 };
 
-Map<String, Object?> _release(int beta, {bool manifest = true}) {
+Map<String, Object?> _release(
+  int beta, {
+  bool manifest = true,
+  bool numbered = false,
+}) {
   final tag = 'v1.9.0-beta.$beta';
+  final infix = numbered ? '-build${2030 + beta}' : '';
   return {
     'tag_name': tag,
     'draft': false,
@@ -73,11 +79,11 @@ Map<String, Object?> _release(int beta, {bool manifest = true}) {
       if (manifest) _asset(tag, 'beta-release-manifest.json', 2048),
       _asset(
         tag,
-        'FocuBili-$tag-android-preview.apk',
+        'FocuBili-$tag$infix-android-preview.apk',
         100,
         digest: 'sha256:${'a' * 64}',
       ),
-      _asset(tag, 'FocuBili-$tag-windows-x64-setup.exe', 200),
+      _asset(tag, 'FocuBili-$tag$infix-windows-x64-setup.exe', 200),
     ],
   };
 }
@@ -182,6 +188,37 @@ Future<AppUpdateResult> _check(
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  test('numbered Beta manifest keeps verified Android download', () async {
+    final result = await _check(
+      _betaClient([
+        _release(2, numbered: true),
+      ], manifest: _manifest(2, numbered: true)),
+    );
+    expect(result.status, AppUpdateStatus.available);
+    expect(
+      result.downloadUrl?.toString(),
+      '$_root/v1.9.0-beta.2/FocuBili-v1.9.0-beta.2-build2032-android-preview.apk',
+    );
+  });
+
+  test(
+    'numbered Beta manifest rejects mixed or mismatched build filenames',
+    () async {
+      for (final invalidName in [
+        'FocuBili-v1.9.0-beta.2-windows-x64-setup.exe',
+        'FocuBili-v1.9.0-beta.2-build2033-windows-x64-setup.exe',
+      ]) {
+        final manifest = _manifest(2, numbered: true);
+        ((manifest['assets'] as List)[1] as Map)['file'] = invalidName;
+        final result = await _check(
+          _betaClient([_release(2, numbered: true)], manifest: manifest),
+        );
+        expect(result.status, AppUpdateStatus.available);
+        expect(result.downloadUrl, isNull);
+      }
+    },
+  );
 
   test(
     'Android bridge missing signature keeps discovery but only offers Release',

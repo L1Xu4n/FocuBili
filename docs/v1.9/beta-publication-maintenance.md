@@ -14,16 +14,16 @@ The default branch's caller workflow must also receive the matching maintenance 
 
 ## Public assets and retained CI evidence
 
-For `v1.9.x-beta.N`, public Release assets are exactly:
+For future enabled sources with version `v1.9.x-beta.N` and verified preview build number `B`, public Release assets are exactly (previously published releases retain their original filenames):
 
-1. `FocuBili-v1.9.x-beta.N-android-preview.apk`
-2. `FocuBili-v1.9.x-beta.N-windows-x64-setup.exe`
-3. `FocuBili-v1.9.x-beta.N-windows-x64-portable.zip`
-4. `FocuBili-v1.9.x-beta.N-macos.dmg`
-5. `FocuBili-v1.9.x-beta.N-linux-amd64.deb`
-6. `FocuBili-v1.9.x-beta.N-ios-unsigned.ipa`
+1. `FocuBili-v1.9.x-beta.N-buildB-android-preview.apk`
+2. `FocuBili-v1.9.x-beta.N-buildB-windows-x64-setup.exe`
+3. `FocuBili-v1.9.x-beta.N-buildB-windows-x64-portable.zip`
+4. `FocuBili-v1.9.x-beta.N-buildB-macos.dmg`
+5. `FocuBili-v1.9.x-beta.N-buildB-linux-amd64.deb`
+6. `FocuBili-v1.9.x-beta.N-buildB-ios-unsigned.ipa`
 
-The candidate CI artifact remains nine files: those six, the Linux `tar.gz`, `beta-release-manifest.json`, and `SHA256SUMS.txt`. Staging, all-platform verification, exact-source push-CI gates, APK signing/identity checks, and candidate checksums stay in place. `public-files` validates the six regular nonempty package files and emits their paths. The publish job reads that list into a quoted Bash array before tag creation; it does not expand `release/*` for public upload. The ordinary stable publisher is unchanged.
+The candidate CI artifact remains nine files: those six, the Linux `tar.gz`, `beta-release-manifest.json`, and `SHA256SUMS.txt`. Staging, all-platform verification, exact-source push-CI gates, APK signing/identity checks, and candidate checksums stay in place. `public-files` validates the six regular nonempty package files and emits their paths. The publish job reads that list into a quoted Bash array before tag creation; it does not expand `release/*` for public upload. Android-only and Android/Windows test runs also package numbered deliverables in a separate CI artifact, without renaming producer artifacts or publishing a Release. Builds of trusted older sources retain their legacy filenames.
 
 The release remains a draft prerelease during upload verification, then a public prerelease with `latest=false`. The stable publisher lock, token permissions, latest-ID/tag check, existing-release refusal, and existing-tag source check are unchanged. Failed partial drafts still require explicit owner inspection; this patch neither resumes nor replaces them automatically.
 

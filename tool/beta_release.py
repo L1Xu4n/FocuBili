@@ -15,6 +15,8 @@ import subprocess
 import tempfile
 import zipfile
 
+from release_asset_names import asset_prefix
+
 REPOSITORY = "L1Xu4n/FocuBili"
 PACKAGE = "com.focubili.app.preview"
 CERTIFICATE = "65ef1fb301fb1121c1803e752f5b1eb24e55846502d8b5478f0fc11f58e9a8a9"
@@ -252,42 +254,45 @@ def checked_file(folder, record):
     return path
 
 
-def stage(value, source, output):
-    source, output = Path(source), Path(output)
-    require(not output.exists(), "Release output must be new")
+def staged_prefix(value):
+    return asset_prefix(value["releaseVersion"], value["buildNumber"], beta=True)
+
+
+def staging_ci(value, source, limited):
     ci = json.loads((source / "ci-verification.json").read_text(encoding="utf-8"))
-    require(ci["sourceSha"] == value["sourceSha"] and
-            set(ci["runs"]) == {"ci.yml", "apple-build.yml", "linux-build.yml"} and
+    workflows = {"ci.yml"} if limited else {"ci.yml", "apple-build.yml", "linux-build.yml"}
+    expected_modes = {} if limited is None else {limited: True}
+    actual_modes = {key: ci[key] for key in ("androidOnly", "androidWindowsOnly") if key in ci}
+    require(ci["sourceSha"] == value["sourceSha"] and actual_modes == expected_modes and
+            set(ci["runs"]) == workflows and
             all(type(number) is int and number > 0 for number in ci["runs"].values()), "Exact-source CI evidence missing")
-    artifacts = []
-    prefix = "FocuBili-v" + value["releaseVersion"]
+    return ci
+
+
+def staged_android(value, source, prefix):
     android = json.loads((source / "android/android-beta-verification.json").read_text(encoding="utf-8"))
     require(android["sourceSha"] == value["sourceSha"] and android["package"] == PACKAGE and
             android["versionCode"] == value["buildNumber"] and android["versionName"] == value["releaseVersion"] and
             android["certificateSha256"] == CERTIFICATE, "Android evidence does not match Beta plan")
-    artifacts.append(("android", checked_file(source / "android", android), prefix + "-android-preview.apk"))
-    for platform, filename, endings in [
-        ("windows", "windows-package-verification.json", ["windows-x64-setup.exe", "windows-x64-portable.zip"]),
-        ("linux", "linux-beta-verification.json", ["linux-amd64.deb", "linux-x64.tar.gz"]),
-        ("ios", "ios-beta-verification.json", ["ios-unsigned.ipa"]),
-    ]:
-        record = json.loads((source / platform / filename).read_text(encoding="utf-8"))
-        require(record["sourceSha"] == value["sourceSha"] and record["version"] == value["baseVersion"] and
-                record["build"] == str(value["buildNumber"]), "Cross-source or cross-version platform evidence")
-        require(len(record["files"]) == len(endings), "Missing platform artifacts")
-        if platform == "linux":
-            require(record["debVersion"] == value["debVersion"], "Incorrect Debian Beta ordering")
-        for item, ending in zip(record["files"], endings):
-            path = checked_file(source / platform, item)
-            require(path.name.endswith(ending.split("-", 1)[-1]), "Unexpected platform artifact type")
-            artifacts.append((platform, path, prefix + "-" + ending))
-    mac = json.loads((source / "macos/macos-package-verification.json").read_text(encoding="utf-8"))
-    require(mac["source_sha"] == value["sourceSha"] and mac["version"] == value["baseVersion"] and
-            mac["build"] == str(value["buildNumber"]) and mac["bundle_id"] == "com.focubili.app" and
-            mac["normal_app_matches_dmg"] is True and mac["adhoc_signature_verified"] is True and
-            mac["sandbox_and_network_entitlements_verified"] is True and mac["architectures"], "macOS verification missing")
-    dmg = checked_file(source / "macos", {"file": mac["dmg_name"], "bytes": mac["dmg_size"], "sha256": mac["dmg_sha256"]})
-    artifacts.append(("macos", dmg, prefix + "-macos.dmg"))
+    filename = prefix + "-android-preview.apk"
+    file_to_copy = ("android", checked_file(source / "android", android), filename)
+    return file_to_copy, {**android, "file": filename}
+
+
+def staged_platform(value, source, prefix, platform, filename, endings):
+    record = json.loads((source / platform / filename).read_text(encoding="utf-8"))
+    require(record["sourceSha"] == value["sourceSha"] and record["version"] == value["baseVersion"] and
+            record["build"] == str(value["buildNumber"]), "Cross-source or cross-version platform evidence")
+    require(len(record["files"]) == len(endings), "Missing platform artifacts")
+    if platform == "linux":
+        require(record["debVersion"] == value["debVersion"], "Incorrect Debian Beta ordering")
+    for item, ending in zip(record["files"], endings):
+        path = checked_file(source / platform, item)
+        require(path.name.endswith(ending.split("-", 1)[-1]), "Unexpected platform artifact type")
+        yield platform, path, prefix + "-" + ending
+
+
+def copy_staged(artifacts, output):
     # Verify every input before creating any releasable output.
     output.mkdir(parents=True)
     assets = []
@@ -295,20 +300,64 @@ def stage(value, source, output):
         destination = output / name
         shutil.copyfile(path, destination)
         assets.append({"platform": platform, **file_record(destination)})
-    android = {**android, "file": prefix + "-android-preview.apk"}
+    return assets
+
+
+def write_checksums(output):
+    checksums = [f"{file_record(path)['sha256']}  {path.name}" for path in sorted(output.iterdir())]
+    (output / "SHA256SUMS.txt").write_text("\n".join(checksums) + "\n", encoding="utf-8")
+
+
+def stage_limited(value, source, output, mode):
+    require(mode in ("androidOnly", "androidWindowsOnly"), "A limited build mode is required")
+    source, output = Path(source), Path(output)
+    require(not output.exists(), "Release output must be new")
+    ci = staging_ci(value, source, mode)
+    prefix = staged_prefix(value)
+    artifact, android = staged_android(value, source, prefix)
+    artifacts = [artifact]
+    if mode == "androidWindowsOnly":
+        artifacts.extend(staged_platform(value, source, prefix, "windows", "windows-package-verification.json",
+                                         ["windows-x64-setup.exe", "windows-x64-portable.zip"]))
+    assets = copy_staged(artifacts, output)
+    save(output / "beta-release-manifest.json", {**value, "assets": assets, "android": android, "verification": ci})
+    write_checksums(output)
+    return {"tag": value["tag"], "assetCount": len(assets)}
+
+
+def stage(value, source, output):
+    source, output = Path(source), Path(output)
+    require(not output.exists(), "Release output must be new")
+    ci = staging_ci(value, source, None)
+    prefix = staged_prefix(value)
+    artifact, android = staged_android(value, source, prefix)
+    artifacts = [artifact]
+    for platform, filename, endings in [
+        ("windows", "windows-package-verification.json", ["windows-x64-setup.exe", "windows-x64-portable.zip"]),
+        ("linux", "linux-beta-verification.json", ["linux-amd64.deb", "linux-x64.tar.gz"]),
+        ("ios", "ios-beta-verification.json", ["ios-unsigned.ipa"]),
+    ]:
+        artifacts.extend(staged_platform(value, source, prefix, platform, filename, endings))
+    mac = json.loads((source / "macos/macos-package-verification.json").read_text(encoding="utf-8"))
+    require(mac["source_sha"] == value["sourceSha"] and mac["version"] == value["baseVersion"] and
+            mac["build"] == str(value["buildNumber"]) and mac["bundle_id"] == "com.focubili.app" and
+            mac["normal_app_matches_dmg"] is True and mac["adhoc_signature_verified"] is True and
+            mac["sandbox_and_network_entitlements_verified"] is True and mac["architectures"], "macOS verification missing")
+    dmg = checked_file(source / "macos", {"file": mac["dmg_name"], "bytes": mac["dmg_size"], "sha256": mac["dmg_sha256"]})
+    artifacts.append(("macos", dmg, prefix + "-macos.dmg"))
+    assets = copy_staged(artifacts, output)
     manifest = {**value, "android": android, "assets": assets, "verification": ci,
                 "macosArchitectures": mac["architectures"],
                 "limitations": ["Android preview cannot replace archived 5bd1 Beta4", "Desktop IDs and data paths are shared with stable",
                                 "macOS ad-hoc signed, not notarized", "iOS unsigned; not TestFlight"]}
     save(output / "beta-release-manifest.json", manifest)
-    checksums = [f"{file_record(path)['sha256']}  {path.name}" for path in sorted(output.iterdir())]
-    (output / "SHA256SUMS.txt").write_text("\n".join(checksums) + "\n", encoding="utf-8")
+    write_checksums(output)
     return manifest
 
 
 def public_files(value, folder):
     # The nine-file CI candidate is retained intact; only these six packages are public.
-    prefix = "FocuBili-v" + value["releaseVersion"] + "-"
+    prefix = staged_prefix(value) + "-"
     paths = [Path(folder) / (prefix + ending) for ending in [
         "android-preview.apk", "windows-x64-setup.exe", "windows-x64-portable.zip",
         "macos.dmg", "linux-amd64.deb", "ios-unsigned.ipa",
@@ -362,7 +411,7 @@ def verify_upload(value, folder, draft):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["plan", "build", "inventory", "wait-ci", "android", "windows", "ios", "linux", "stage", "public-files", "verify-upload"])
+    parser.add_argument("command", choices=["plan", "build", "inventory", "wait-ci", "android", "windows", "ios", "linux", "stage", "stage-limited", "public-files", "verify-upload"])
     parser.add_argument("--beta-number")
     parser.add_argument("--source-sha")
     parser.add_argument("--plan")
@@ -377,6 +426,7 @@ def main():
     parser.add_argument("--file-version")
     parser.add_argument("--ipa")
     parser.add_argument("--draft", action="store_true")
+    parser.add_argument("--limited", choices=["androidOnly", "androidWindowsOnly"])
     arguments = parser.parse_args()
     if arguments.command == "wait-ci":
         require(SHA.fullmatch(arguments.source_sha or "") is not None, "Invalid source SHA")
@@ -407,6 +457,9 @@ def main():
             return
         elif arguments.command == "verify-upload":
             result = verify_upload(value, arguments.folder, arguments.draft)
+        elif arguments.command == "stage-limited":
+            print(json.dumps(stage_limited(value, arguments.folder, arguments.output, arguments.limited)))
+            return
         else:
             result = stage(value, arguments.folder, arguments.output)
             print(json.dumps({"tag": result["tag"], "assetCount": len(result["assets"])}))

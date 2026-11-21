@@ -294,10 +294,38 @@ class BetaReleaseTests(unittest.TestCase):
     def test_staging_keeps_identity_hashes_and_marks_platform_limitations(self):
         result = beta.stage(self.value, self.staged_inputs(), self.root / "release")
         self.assertEqual(len(result["assets"]), 7)
-        self.assertEqual(result["android"]["file"], "FocuBili-v1.9.0-beta.1-android-preview.apk")
+        self.assertEqual(result["android"]["file"], "FocuBili-v1.9.0-beta.1-build2026-android-preview.apk")
         self.assertEqual(len(list((self.root / "release").iterdir())), 9)
         self.assertIn("macOS ad-hoc signed, not notarized", result["limitations"])
         self.assertTrue((self.root / "release/SHA256SUMS.txt").is_file())
+
+    def test_limited_staging_uses_the_same_numbered_names_and_no_extra_platforms(self):
+        source = self.staged_inputs()
+        for mode, count in [("androidOnly", 1), ("androidWindowsOnly", 3)]:
+            with self.subTest(mode=mode):
+                out = self.root / mode
+                beta.save(source / "ci-verification.json", {
+                    "sourceSha": "a" * 40, "runs": {"ci.yml": 1}, mode: True})
+                self.assertEqual(beta.stage_limited(self.value, source, out, mode)["assetCount"], count)
+                manifest = json.loads((out / "beta-release-manifest.json").read_text())
+                self.assertEqual(len(manifest["assets"]), count)
+                self.assertTrue(all(a["file"].startswith("FocuBili-v1.9.0-beta.1-build2026-")
+                                    for a in manifest["assets"]))
+                self.assertEqual((out / manifest["android"]["file"]).read_bytes(), b"synthetic apk")
+                self.assertTrue((out / "SHA256SUMS.txt").is_file())
+
+    def test_limited_staging_requires_matching_ci_scope_and_verification_bytes(self):
+        source = self.staged_inputs()
+        mode = "androidWindowsOnly"
+        out = self.root / "limited"
+        with self.assertRaisesRegex(ValueError, "Exact-source CI evidence"):
+            beta.stage_limited(self.value, source, out, mode)
+        beta.save(source / "ci-verification.json", {
+            "sourceSha": "a" * 40, "runs": {"ci.yml": 1}, mode: True})
+        (source / "windows/FocuBili-v1.9.0-windows-x64-portable.zip").write_bytes(b"tampered")
+        with self.assertRaisesRegex(ValueError, "Artifact digest"):
+            beta.stage_limited(self.value, source, out, mode)
+        self.assertFalse(out.exists())
 
     def test_staging_is_all_or_fail_on_missing_platform(self):
         source = self.staged_inputs()
@@ -346,7 +374,7 @@ class BetaReleaseTests(unittest.TestCase):
     def publication_inputs(self):
         folder = self.root / "publication"
         folder.mkdir()
-        prefix = "FocuBili-v1.9.0-beta.1-"
+        prefix = "FocuBili-v1.9.0-beta.1-build2026-"
         endings = ["android-preview.apk", "windows-x64-setup.exe", "windows-x64-portable.zip",
                    "macos.dmg", "linux-amd64.deb", "ios-unsigned.ipa"]
         assets = []

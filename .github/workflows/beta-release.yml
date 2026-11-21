@@ -151,6 +151,53 @@ jobs:
       source_sha: ${{ inputs.source_sha }}
       beta_number: ${{ inputs.beta_number }}
 
+  assemble-limited:
+    if: inputs.android_only || inputs.android_windows_only
+    needs: [prepare, android-windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: focubili-beta-metadata
+          path: metadata
+      - uses: actions/download-artifact@v4
+        with:
+          name: focubili-release-android
+          path: staging/android
+      - uses: actions/download-artifact@v4
+        if: inputs.android_windows_only
+        with:
+          name: focubili-release-windows
+          path: staging/windows
+      - name: Prepare numbered packages for limited testing only
+        id: numbered
+        env:
+          MODE: ${{ inputs.android_windows_only && 'androidWindowsOnly' || 'androidOnly' }}
+        shell: bash
+        run: |
+          # A trusted older source still builds using its original raw CI artifact names.
+          if ! test -f tool/release_asset_names.py; then
+            echo 'This source predates numbered filenames; use the existing build artifacts.'
+            exit 0
+          fi
+          build_tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          python3 tool/beta_release.py android --plan metadata/beta-plan.json --apk staging/android/app-release.apk --aapt "$build_tools/aapt" --apksigner "$build_tools/apksigner" --output staging/android/android-beta-verification.json
+          cp metadata/ci-verification.json staging/
+          python3 tool/beta_release.py stage-limited --plan metadata/beta-plan.json --folder staging --output release --limited "$MODE"
+          echo 'ready=true' >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        if: steps.numbered.outputs.ready == 'true'
+        with:
+          name: focubili-beta-limited-${{ inputs.source_sha }}
+          path: release/*
+          if-no-files-found: error
+          retention-days: 14
+
   assemble:
     if: ${{ !inputs.android_only && !inputs.android_windows_only }}
     needs: [prepare, android-windows, apple, linux]
