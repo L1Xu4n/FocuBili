@@ -90,27 +90,42 @@ void main() {
     return LearningListService(preferencesLoader: () async => prefs);
   }
 
-  Widget host(LearningListService service, {double scale = 1, int count = 5}) =>
-      MaterialApp(
-        builder: (context, child) => MediaQuery(
-          data: MediaQuery.of(
+  void setViewport(WidgetTester tester, Size size) {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = size;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+  }
+
+  Finder summary(int added, int remaining) =>
+      find.text('新增 $added · 剩余容量 $remaining');
+
+  Widget host(
+    LearningListService service, {
+    double scale = 1,
+    int count = 5,
+    VideoPart? currentPart,
+  }) => MaterialApp(
+    builder: (context, child) => MediaQuery(
+      data: MediaQuery.of(
+        context,
+      ).copyWith(textScaler: TextScaler.linear(scale)),
+      child: child!,
+    ),
+    home: Builder(
+      builder: (context) => Scaffold(
+        body: TextButton(
+          onPressed: () => LearningAddSheet.show(
             context,
-          ).copyWith(textScaler: TextScaler.linear(scale)),
-          child: child!,
-        ),
-        home: Builder(
-          builder: (context) => Scaffold(
-            body: TextButton(
-              onPressed: () => LearningAddSheet.show(
-                context,
-                video: partsVideo(count),
-                service: service,
-              ),
-              child: const Text('选择 P'),
-            ),
+            video: partsVideo(count),
+            service: service,
+            currentPart: currentPart,
           ),
+          child: const Text('选择 P'),
         ),
-      );
+      ),
+    ),
+  );
   testWidgets('98 tasks + all5 disabled, cancel unchanged, large text fits', (
     tester,
   ) async {
@@ -126,7 +141,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('全部 P'));
     await tester.pumpAndSettle();
-    expect(find.text('剩余容量 2'), findsOneWidget);
+    expect(summary(5, 2), findsOneWidget);
     final button = tester.widget<FilledButton>(
       find.widgetWithText(FilledButton, '超过100条上限'),
     );
@@ -146,7 +161,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('全部 P'));
       await tester.pumpAndSettle();
-      expect(find.text('剩余容量 99'), findsOneWidget);
+      expect(summary(4, 99), findsOneWidget);
       await tester.tap(find.widgetWithText(FilledButton, '确认加入'));
       await tester.pumpAndSettle();
       expect((await s.loadEntries()).map((e) => e.partCid), [
@@ -166,9 +181,15 @@ void main() {
   bool checked(WidgetTester tester, int page) =>
       tester.widget<Checkbox>(optionCheckbox(page)).value!;
 
-  Future<TestGesture> longPressCheckbox(WidgetTester tester, int page) async {
+  Future<TestGesture> longPressCheckbox(
+    WidgetTester tester,
+    int page,
+    PointerDeviceKind kind,
+  ) async {
     final gesture = await tester.startGesture(
       tester.getCenter(optionCheckbox(page)),
+      kind: kind,
+      buttons: kPrimaryButton,
     );
     await tester.pump(kLongPressTimeout + const Duration(milliseconds: 1));
     await tester.pump();
@@ -204,7 +225,7 @@ void main() {
     final existing = (await s.loadEntries()).single;
     await open(tester, s);
 
-    expect(find.text('剩余容量 99'), findsOneWidget);
+    expect(summary(1, 99), findsOneWidget);
     expect(find.textContaining('已存在'), findsNothing);
     expect(find.textContaining('保留学习进度'), findsNothing);
     expect(checked(tester, 1), isTrue); // Keep the existing default-P behavior.
@@ -249,38 +270,196 @@ void main() {
     );
   });
 
-  testWidgets('a skipped-row drag paints the whole range; reverse can clear', (
+  testWidgets('new-part count tracks row toggles and current/all/clear', (
     tester,
   ) async {
-    await tester.binding.setSurfaceSize(const Size(400, 800));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
     final s = await service();
-    await open(tester, s);
-    TestGesture gesture = await longPressCheckbox(tester, 2);
-    final p5 = tester.getCenter(optionCheckbox(5));
-    final p3 = tester.getCenter(optionCheckbox(3));
-    await gesture.moveTo(p5);
-    await tester.pump();
-    expect([
-      for (var p = 1; p <= 5; p++) checked(tester, p),
-    ], everyElement(true));
-    await gesture.moveTo(p3);
-    await gesture.up();
+    final lesson = partsVideo();
+    final current = lesson.parts[1];
+    await s.addParts(lesson, [current, lesson.parts[3]]);
+    final before = await s.loadEntries();
+    setViewport(tester, const Size(480, 800));
+    await tester.pumpWidget(host(s, currentPart: current));
+    await tester.tap(find.text('选择 P'));
     await tester.pumpAndSettle();
-    expect(checked(tester, 5), isTrue);
 
-    gesture = await longPressCheckbox(tester, 4);
-    await gesture.moveTo(tester.getCenter(optionCheckbox(2)));
-    await gesture.up();
+    expect(summary(0, 98), findsOneWidget);
+    expect(checked(tester, 2), isTrue);
+    expect(checked(tester, 4), isTrue);
+    expect(find.textContaining('已存在'), findsNothing);
+    expect(find.textContaining('保留学习进度'), findsNothing);
+
+    await tester.tap(optionCheckbox(1));
+    await tester.pump();
+    expect(summary(1, 98), findsOneWidget);
+    await tester.tap(find.text('P4 第4课'));
+    await tester.pump();
+    expect(checked(tester, 4), isFalse);
+    expect(summary(1, 98), findsOneWidget);
+
+    await tester.tap(find.text('全部 P'));
+    await tester.pump();
+    expect(summary(3, 98), findsOneWidget);
+    await tester.tap(find.text('清空选择'));
+    await tester.pump();
+    expect(summary(0, 98), findsOneWidget);
+    expect(checked(tester, 2), isFalse);
+    await tester.tap(find.text('当前 P'));
+    await tester.pump();
+    expect(summary(0, 98), findsOneWidget);
+    expect(checked(tester, 2), isTrue);
+    expect(checked(tester, 4), isTrue);
+    expect(checked(tester, 1), isFalse);
+    expect(await s.loadEntries(), before);
+
+    await tester.tap(find.widgetWithText(TextButton, '取消'));
     await tester.pumpAndSettle();
-    expect(
-      [for (var p = 1; p <= 5; p++) checked(tester, p)],
-      [true, false, false, false, true],
-    );
-    await tester.tap(find.widgetWithText(FilledButton, '确认加入'));
-    await tester.pumpAndSettle();
-    expect((await s.loadEntries()).map((entry) => entry.partCid), [101, 105]);
+    expect(await s.loadEntries(), before);
   });
+
+  final folderField = find.byKey(const Key('add-learning-folder'));
+
+  List<String?> visibleFolderOptions(WidgetTester tester) => tester
+      .widget<DropdownButton<String>>(
+        find.descendant(
+          of: folderField,
+          matching: find.byType(DropdownButton<String>),
+        ),
+      )
+      .items!
+      .map((item) => item.value)
+      .toList();
+
+  testWidgets('no folders: picker stays usable and adds ungrouped', (
+    tester,
+  ) async {
+    setViewport(tester, const Size(320, 560));
+    final s = await service();
+    await tester.pumpWidget(host(s, scale: 1.6));
+    await tester.tap(find.text('选择 P'));
+    await tester.pumpAndSettle();
+
+    expect(summary(1, 100), findsOneWidget);
+    expect(find.text('新增任务的学科分组'), findsOneWidget);
+    expect(folderField.hitTestable(), findsOneWidget);
+    expect(visibleFolderOptions(tester), ['']);
+    await tester.tap(folderField);
+    await tester.pumpAndSettle();
+    expect(find.text('未分组').hitTestable(), findsOneWidget);
+    await tester.tap(find.text('未分组').hitTestable());
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      optionCheckbox(3),
+      72,
+      scrollable: find.descendant(
+        of: find.byKey(const Key('learning-part-options')),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(optionCheckbox(3));
+    await tester.pump();
+    expect(checked(tester, 3), isTrue);
+    final confirm = find.widgetWithText(FilledButton, '确认加入');
+    expect(confirm.hitTestable(), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.tap(confirm);
+    await tester.pumpAndSettle();
+    final entries = await s.loadEntries();
+    expect(entries.map((entry) => entry.partCid), [101, 103]);
+    expect(entries.map((entry) => entry.folderId), everyElement(isNull));
+  });
+
+  testWidgets(
+    'folder picker keeps existing choices and saves new parts there',
+    (tester) async {
+      setViewport(tester, const Size(480, 800));
+      final s = await service();
+      final lesson = partsVideo();
+      final math = (await s.createFolder('数学')).folders.single;
+      final physics = (await s.createFolder('物理')).folders.last;
+      await s.addBatch([
+        LearningPartSelection(lesson, lesson.parts[1]),
+      ], folderId: physics.id);
+      await open(tester, s);
+
+      expect(find.text('未分组'), findsOneWidget);
+      expect(visibleFolderOptions(tester), ['', math.id, physics.id]);
+      expect(summary(1, 99), findsOneWidget);
+      await tester.tap(folderField);
+      await tester.pumpAndSettle();
+      expect(find.text('数学').hitTestable(), findsOneWidget);
+      expect(find.text('物理').hitTestable(), findsOneWidget);
+      await tester.tap(find.text('数学').hitTestable());
+      await tester.pumpAndSettle();
+      expect(find.text('数学'), findsOneWidget);
+      expect(summary(1, 99), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilledButton, '确认加入'));
+      await tester.pumpAndSettle();
+
+      final entries = await s.loadEntries();
+      expect(
+        {for (final entry in entries) entry.partCid: entry.folderId},
+        {101: math.id, 102: physics.id},
+      );
+    },
+  );
+
+  const pointerLayouts = [
+    (PointerDeviceKind.touch, TargetPlatform.android, Size(400, 800)),
+    (PointerDeviceKind.touch, TargetPlatform.windows, Size(900, 700)),
+    (PointerDeviceKind.mouse, TargetPlatform.windows, Size(900, 700)),
+  ];
+  for (final (kind, platform, layout) in pointerLayouts) {
+    testWidgets(
+      '${platform.name} ${kind.name} sweeps skipped rows and clears',
+      (tester) async {
+        setViewport(tester, layout);
+        final s = await service();
+        final lesson = partsVideo();
+        await s.addParts(lesson, [lesson.parts[2]]);
+        await open(tester, s);
+        expect(summary(1, 99), findsOneWidget);
+        TestGesture gesture = await longPressCheckbox(tester, 2, kind);
+        expect(checked(tester, 2), isTrue);
+        expect(summary(2, 99), findsOneWidget);
+        final p5 = tester.getCenter(optionCheckbox(5));
+        final p3 = tester.getCenter(optionCheckbox(3));
+        await gesture.moveTo(p5);
+        await tester.pump();
+        expect([
+          for (var p = 1; p <= 5; p++) checked(tester, p),
+        ], everyElement(true));
+        expect(summary(4, 99), findsOneWidget);
+        await gesture.moveTo(p3);
+        await gesture.up();
+        await tester.pumpAndSettle();
+        expect(checked(tester, 5), isTrue);
+        expect(summary(4, 99), findsOneWidget);
+
+        gesture = await longPressCheckbox(tester, 4, kind);
+        expect(summary(3, 99), findsOneWidget);
+        await gesture.moveTo(tester.getCenter(optionCheckbox(2)));
+        await tester.pump();
+        expect(summary(2, 99), findsOneWidget);
+        await gesture.up();
+        await tester.pumpAndSettle();
+        expect(
+          [for (var p = 1; p <= 5; p++) checked(tester, p)],
+          [true, false, false, false, true],
+        );
+        await tester.tap(find.widgetWithText(FilledButton, '确认加入'), kind: kind);
+        await tester.pumpAndSettle();
+        expect((await s.loadEntries()).map((entry) => entry.partCid), [
+          103,
+          101,
+          105,
+        ]);
+      },
+      variant: TargetPlatformVariant({platform}),
+    );
+  }
 
   testWidgets('prechecked duplicates do not use the last available slot', (
     tester,
@@ -293,7 +472,7 @@ void main() {
       LearningPartSelection(lesson, lesson.parts[3]),
     ]);
     await open(tester, s);
-    expect(find.text('剩余容量 1'), findsOneWidget);
+    expect(summary(1, 1), findsOneWidget);
     expect(checked(tester, 4), isTrue);
     final confirm = find.widgetWithText(FilledButton, '确认加入');
     expect(tester.widget<FilledButton>(confirm).onPressed, isNotNull);
@@ -321,65 +500,80 @@ void main() {
     );
   });
 
-  testWidgets(
-    'edge drag crosses recycled rows, scrolls back, and cancels cleanly',
-    (tester) async {
-      await tester.binding.setSurfaceSize(const Size(320, 560));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      final s = await service();
-      await open(tester, s, count: 60);
-      final Finder list = find.byKey(const Key('learning-part-options'));
-      final ScrollController controller = tester
-          .widget<ListView>(list)
-          .controller!;
-      final Rect viewport = tester.getRect(list);
-      final point = tester.getCenter(optionCheckbox(2));
+  for (final (kind, platform, _) in pointerLayouts) {
+    testWidgets(
+      '${platform.name} ${kind.name} edge drag scrolls both ways',
+      (tester) async {
+        await tester.binding.setSurfaceSize(
+          platform == TargetPlatform.windows
+              ? const Size(900, 600)
+              : const Size(320, 560),
+        );
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final s = await service();
+        await open(tester, s, count: 60);
+        final Finder list = find.byKey(const Key('learning-part-options'));
+        final ScrollController controller = tester
+            .widget<ListView>(list)
+            .controller!;
+        final Rect viewport = tester.getRect(list);
+        final point = tester.getCenter(optionCheckbox(2));
 
-      // A quick swipe on a checkbox is scrolling, not a selection gesture.
-      await tester.dragFrom(point, const Offset(0, -180));
-      await tester.pumpAndSettle();
-      expect(controller.offset, greaterThan(0));
-      controller.jumpTo(0);
-      await tester.pumpAndSettle();
-      expect(checked(tester, 2), isFalse);
+        // A quick swipe on a checkbox is scrolling, not a selection gesture.
+        if (kind == PointerDeviceKind.touch) {
+          await tester.dragFrom(point, const Offset(0, -180), kind: kind);
+          await tester.pumpAndSettle();
+          expect(controller.offset, greaterThan(0));
+          controller.jumpTo(0);
+          await tester.pumpAndSettle();
+          expect(checked(tester, 2), isFalse);
+        } else {
+          final quick = await tester.startGesture(point, kind: kind);
+          await quick.moveBy(const Offset(0, -120));
+          await quick.up();
+          await tester.pumpAndSettle();
+          expect(checked(tester, 2), isFalse);
+        }
 
-      final down = await longPressCheckbox(tester, 2);
-      await down.moveTo(Offset(point.dx, viewport.bottom - 2));
-      for (var frame = 0; frame < 65; frame++) {
-        await tester.pump(const Duration(milliseconds: 16));
-      }
-      expect(controller.offset, greaterThan(650));
-      expect(optionCheckbox(2), findsNothing);
-      final capped = [
-        for (var p = 3; p <= 60; p++)
-          if (optionCheckbox(p).hitTestable().evaluate().isNotEmpty &&
-              checked(tester, p))
-            p,
-      ];
-      expect(capped.last, greaterThanOrEqualTo(15));
-      await down.up();
-      await tester.pumpAndSettle();
-      final double bottom = controller.offset;
+        final down = await longPressCheckbox(tester, 2, kind);
+        await down.moveTo(Offset(point.dx, viewport.bottom - 2));
+        for (var frame = 0; frame < 65; frame++) {
+          await tester.pump(const Duration(milliseconds: 16));
+        }
+        expect(controller.offset, greaterThan(650));
+        expect(optionCheckbox(2), findsNothing);
+        final capped = [
+          for (var p = 3; p <= 60; p++)
+            if (optionCheckbox(p).hitTestable().evaluate().isNotEmpty &&
+                checked(tester, p))
+              p,
+        ];
+        expect(capped.last, greaterThanOrEqualTo(15));
+        await down.up();
+        await tester.pumpAndSettle();
+        final double bottom = controller.offset;
 
-      final up = await longPressCheckbox(tester, capped.first);
-      await up.moveTo(Offset(point.dx, viewport.top + 2));
-      for (var frame = 0; frame < 35; frame++) {
-        await tester.pump(const Duration(milliseconds: 16));
-      }
-      expect(controller.offset, lessThan(bottom - 300));
-      expect(checked(tester, 10), isFalse);
-      await up.cancel();
-      await tester.pump();
-      final double canceled = controller.offset;
-      await tester.pump(const Duration(milliseconds: 300));
-      expect(controller.offset, canceled);
-      expect(tester.takeException(), isNull);
+        final up = await longPressCheckbox(tester, capped.first, kind);
+        await up.moveTo(Offset(point.dx, viewport.top + 2));
+        for (var frame = 0; frame < 35; frame++) {
+          await tester.pump(const Duration(milliseconds: 16));
+        }
+        expect(controller.offset, lessThan(bottom - 300));
+        expect(checked(tester, 10), isFalse);
+        await up.cancel();
+        await tester.pump();
+        final double canceled = controller.offset;
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(controller.offset, canceled);
+        expect(tester.takeException(), isNull);
 
-      await tester.tap(find.widgetWithText(TextButton, '取消'));
-      await tester.pumpAndSettle();
-      expect(await s.loadEntries(), isEmpty);
-    },
-  );
+        await tester.tap(find.widgetWithText(TextButton, '取消'));
+        await tester.pumpAndSettle();
+        expect(await s.loadEntries(), isEmpty);
+      },
+      variant: TargetPlatformVariant({platform}),
+    );
+  }
 
   test(
     'invalid CID refuses saved position and leaves original task intact',
@@ -529,7 +723,7 @@ void main() {
     expect(await learning.loadEntries(), isEmpty);
     await tester.tap(find.text('全部 P'));
     await tester.pumpAndSettle();
-    expect(find.text('剩余容量 100'), findsOneWidget);
+    expect(summary(10, 100), findsOneWidget);
     await tester.tap(find.widgetWithText(FilledButton, '确认加入'));
     await tester.pumpAndSettle();
     final entries = await learning.loadEntries();

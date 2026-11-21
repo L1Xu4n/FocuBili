@@ -10,6 +10,7 @@ import 'package:focubili/core/router/app_router.dart';
 import 'package:focubili/core/widgets/editable_card_board.dart';
 import 'package:focubili/features/home/home_page.dart';
 import 'package:focubili/features/focus/focus_statistics_page.dart';
+import 'package:focubili/features/focus/home_drawer_hero_depth.dart';
 import 'package:focubili/features/focus/focus_timer_scope.dart';
 import 'package:focubili/features/focus/focus_timer_controller.dart';
 import 'package:focubili/features/profile/about_page.dart';
@@ -75,6 +76,7 @@ Future<void> _mount(
   SubscriptionService? subscriptions,
   TargetPlatform? platform,
   bool useMainShell = false,
+  bool reduceMotion = true,
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
@@ -93,7 +95,7 @@ Future<void> _mount(
       onGenerateRoute: useMainShell ? AppRouter.onGenerateRoute : null,
       builder: (context, child) => MediaQuery(
         data: MediaQuery.of(context).copyWith(
-          disableAnimations: true,
+          disableAnimations: reduceMotion,
           textScaler: TextScaler.linear(scale),
         ),
         child: FocusTimerScope(
@@ -541,6 +543,158 @@ void main() {
       await _tap(tester, open);
       expect(find.text('完成'), findsOneWidget);
       await _tap(tester, find.text('完成'));
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  for (final scenario in [
+    (platform: TargetPlatform.android, size: const Size(900, 640)),
+    (platform: TargetPlatform.iOS, size: const Size(1024, 768)),
+  ]) {
+    testWidgets('横屏 ${scenario.platform} 在宽屏触摸抽屉并旋回手机布局', (tester) async {
+      SharedPreferences.setMockInitialValues({
+        SubscriptionOnboardingService.choiceKey: 'declined',
+        SubscriptionService.storageKey: feedFixture(count: 3, sourceCount: 1),
+      });
+      final subscriptions = SubscriptionService(clock: () => feedFixtureClock);
+      addTearDown(subscriptions.dispose);
+      await _mount(
+        tester,
+        size: scenario.size,
+        platform: scenario.platform,
+        scale: 2,
+        useMainShell: true,
+        subscriptions: subscriptions,
+        reduceMotion: false,
+      );
+      final open = find.byKey(const Key('desktop-dock-open'));
+      final collapse = find.byKey(const Key('desktop-dock-collapse'));
+      final dock = find.byKey(const Key('desktop-learning-dock'));
+      final scroll = find.byKey(
+        const PageStorageKey('desktop-learning-dock-scroll'),
+      );
+      final search = find.byKey(const Key('home-start-search'));
+      final about = find.byKey(const Key('workspace-navigation-open-about'));
+      final rail = find.byKey(const Key('workspace-navigation-rail'));
+      final hero = find.byKey(const Key('focus-home-hero'));
+      final subscription = _subscriptionRailAction();
+      expect(open, findsOneWidget);
+      expect(tester.getSize(open).height, greaterThanOrEqualTo(48));
+      expect(search.hitTestable(), findsOneWidget);
+      expect(hero, findsNothing);
+      expect(dock, findsNothing);
+      expect(subscription, findsOneWidget);
+      expect(about, findsOneWidget);
+
+      final closedCenter = tester.getCenter(search);
+      await _tap(tester, open);
+      final openCenter = tester.getCenter(search);
+      expect(openCenter.dx, lessThan(closedCenter.dx));
+      expect(
+        tester.getTopRight(search).dx,
+        lessThan(tester.getTopLeft(dock).dx),
+      );
+      expect(tester.getSize(collapse).width, greaterThanOrEqualTo(48));
+      expect(search.hitTestable(), findsOneWidget);
+
+      final controller = tester
+          .widget<SingleChildScrollView>(scroll)
+          .controller!;
+      final rect = tester.getRect(scroll);
+      await tester.dragFrom(
+        Offset(rect.right - 30, rect.bottom - 50),
+        const Offset(0, -180),
+      );
+      await _settle(tester);
+      expect(controller.offset, greaterThan(0));
+      expect(tester.getCenter(search), openCenter);
+      await _tap(tester, collapse);
+      expect(dock, findsNothing);
+      expect(tester.getCenter(search), closedCenter);
+      await _tap(tester, open);
+      expect(controller.offset, greaterThan(0));
+
+      await _tap(tester, subscription);
+      expect(find.byType(SubscriptionUpdatesPage), findsOneWidget);
+      expect(await tester.binding.handlePopRoute(), isTrue);
+      await _settle(tester);
+      expect(dock, findsOneWidget);
+      await _tap(tester, about);
+      expect(find.byType(AboutPage), findsOneWidget);
+      expect(await tester.binding.handlePopRoute(), isTrue);
+      await _settle(tester);
+      await _tap(tester, search);
+      expect(find.byKey(const Key('search-workspace-layout')), findsOneWidget);
+      expect(subscription, findsNothing);
+      expect(about, findsNothing);
+      await _tap(tester, find.descendant(of: rail, matching: find.text('首页')));
+      expect(dock, findsOneWidget);
+
+      // A landscape split below the threshold keeps phone gestures; width
+      // alone cannot force the right dock when rotating back to portrait.
+      tester.view.physicalSize = const Size(899, 640);
+      await _settle(tester);
+      expect(rail, findsNothing);
+      expect(open, findsNothing);
+      expect(dock, findsNothing);
+      expect(hero, findsOneWidget);
+      expect(find.byType(HomeDrawerHeroDepth), findsOneWidget);
+      expect(find.byKey(const Key('home-subscription-button')), findsOneWidget);
+      tester.view.physicalSize = const Size(920, 1050);
+      await _settle(tester);
+      expect(hero, findsOneWidget);
+      expect(open, findsNothing);
+      addTearDown(tester.view.resetViewInsets);
+      tester.view.viewInsets = const FakeViewPadding(bottom: 330);
+      await _settle(tester);
+      expect(hero, findsOneWidget);
+      expect(open, findsNothing);
+      expect(subscription, findsNothing);
+      tester.view.resetViewInsets();
+      await _settle(tester);
+      final touchDockHint = find.byKey(const Key('home-scroll-hint'));
+      expect(touchDockHint, findsOneWidget);
+      final start = tester.getCenter(search) + const Offset(0, 140);
+      await tester.flingFrom(start, const Offset(0, -290), 1250);
+      await _settle(tester);
+      expect(
+        find.byKey(const Key('focus-ready-card')).hitTestable(),
+        findsOneWidget,
+      );
+      tester.view.physicalSize = scenario.size;
+      await _settle(tester);
+      expect(dock, findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('横屏 ${scenario.platform} 全隐藏后搜索仍可点且可恢复编辑', (tester) async {
+      SharedPreferences.setMockInitialValues(
+        _prefs(allHidden: true, enabled: false),
+      );
+      await _mount(
+        tester,
+        size: scenario.size,
+        platform: scenario.platform,
+        useMainShell: true,
+        scale: 2,
+      );
+      final search = find.byKey(const Key('home-start-search'));
+      final rail = find.byKey(const Key('workspace-navigation-rail'));
+      final restore = find.byKey(const Key('home-restore-drawer'));
+      expect(find.byKey(const Key('desktop-learning-dock')), findsNothing);
+      expect(search.hitTestable(), findsOneWidget);
+      expect(find.text('启用抽屉'), findsOneWidget);
+      await _tap(tester, search);
+      expect(find.byKey(const Key('search-workspace-layout')), findsOneWidget);
+      await _tap(tester, find.descendant(of: rail, matching: find.text('首页')));
+      await _tap(tester, restore);
+      expect(find.byKey(const Key('desktop-learning-dock')), findsOneWidget);
+      expect(find.text('添加卡片'), findsOneWidget);
+      expect(find.text('完成'), findsOneWidget);
+      await _tap(tester, find.text('完成'));
+      expect(find.byKey(const Key('desktop-learning-dock')), findsNothing);
+      expect(search.hitTestable(), findsOneWidget);
+      expect(restore, findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   }

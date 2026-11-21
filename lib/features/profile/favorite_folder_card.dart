@@ -2,6 +2,8 @@ import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../common/favorite_folder_privacy_badge.dart';
+
 /// 为账号收藏与本机收藏提供同一套自适应封面、名称和数量布局。
 class FavoriteFolderCard extends StatelessWidget {
   /// 接收收藏夹资料及可选管理操作，保持本机与账号收藏的操作边界。
@@ -11,6 +13,7 @@ class FavoriteFolderCard extends StatelessWidget {
     required this.count,
     this.coverUrl = '',
     this.available = true,
+    this.isPrivate,
     this.onTap,
     this.onLongPress,
     this.showTrailingIcon = true,
@@ -21,6 +24,7 @@ class FavoriteFolderCard extends StatelessWidget {
   final int count;
   final String coverUrl;
   final bool available;
+  final bool? isPrivate;
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
   final bool showTrailingIcon;
@@ -81,6 +85,12 @@ class FavoriteFolderCard extends StatelessWidget {
                               errorWidget: (context, _, error) =>
                                   _placeholder(context),
                             ),
+                      if (isPrivate == true)
+                        const Positioned(
+                          right: 4,
+                          bottom: 4,
+                          child: FavoriteFolderPrivacyBadge(),
+                        ),
                     ],
                   ),
                 ),

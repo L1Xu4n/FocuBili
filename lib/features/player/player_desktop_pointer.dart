@@ -17,7 +17,7 @@ final _nonMousePointerKinds = PointerDeviceKind.values
 
 extension _PlayerDesktopPointer on _PlayerPageState {
   GestureRecognizerFactoryWithHandlers<PlayerMouseTapGestureRecognizer>
-  _mouseTapGestures() {
+  _mouseTapGestures(Size playerSize) {
     final source = _sourceGeneration;
     final navigation = _partSwitchGeneration;
     final fullscreen = _fullscreen;
@@ -43,8 +43,18 @@ extension _PlayerDesktopPointer on _PlayerPageState {
         ..onSingleTap = () {
           if (current()) _toggleDesktopPlayback();
         }
-        ..onDoubleTap = () {
-          if (current()) unawaited(_toggleFullscreen());
+        ..onDoubleTapDown = (details) {
+          if (!current() || playerSize.isEmpty) return;
+          final position = details.localPosition;
+          // The touch switch only changes touch behavior. Both input types
+          // use the same saved geometry, including the centered height band.
+          _handleDoubleTapAction(
+            _playbackPreferences.doubleTapRegions.actionAt(
+              position.dx / playerSize.width,
+              position.dy / playerSize.height,
+            ),
+            onCenter: () => unawaited(_toggleFullscreen()),
+          );
         };
     });
   }
@@ -83,11 +93,25 @@ extension _PlayerDesktopPointer on _PlayerPageState {
       },
       child: Listener(
         onPointerHover: (event) {
-          if (event.kind != PointerDeviceKind.mouse || event.buttons != 0) {
+          // MouseTracker can synthesize updates when the player is relaid
+          // out (including fullscreen transitions) under a stationary cursor.
+          // Only real movement should reveal controls or extend the timer.
+          if (event.kind != PointerDeviceKind.mouse ||
+              event.buttons != 0 ||
+              event.synthesized ||
+              event.delta == Offset.zero ||
+              !_desktopControlsAvailable ||
+              _externalNavigationSuspended ||
+              ModalRoute.isCurrentOf(context) == false) {
             return;
           }
-          _recordDesktopPointerEdge(_desktopControlsEdgeAt(event.position));
+          final edge = _desktopControlsEdgeAt(event.position);
+          _recordDesktopPointerEdge(edge);
           _holdDesktopControlsOnEdge(mayReveal: true);
+          if (edge == null) {
+            // Motion over the picture reveals the bar but does not pin it.
+            _showPlayerControls();
+          }
         },
         onPointerDown: (event) {
           if (event.kind == PointerDeviceKind.mouse) {

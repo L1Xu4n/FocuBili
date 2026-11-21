@@ -1263,7 +1263,7 @@ class _PersonalizationSettingsPageState
           // 双击开关函数立即更新界面并把选择保存到当前设备。
           onChanged: _saving ? null : _setDoubleTapSeekEnabled,
           secondary: const Icon(Icons.touch_app_outlined),
-          title: const Text('启用双击快进快退'),
+          title: const Text('启用触摸双击快进快退'),
           subtitle: const Text('关闭后，触摸双击视频画面只切换播放或暂停。'),
         ),
         ListTile(

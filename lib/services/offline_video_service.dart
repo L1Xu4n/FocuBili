@@ -377,7 +377,8 @@ class OfflineVideoService {
         } on OfflineMediaPlanException catch (error) {
           throw OfflineVideoException(error.message);
         }
-        if (info.quality < quality) {
+        if (info.quality < quality ||
+            (control?.requireExactQuality == true && info.quality != quality)) {
           throw const OfflineVideoException('所选下载清晰度当前不可用，请删除任务后选择其他清晰度。');
         }
         control?.check();

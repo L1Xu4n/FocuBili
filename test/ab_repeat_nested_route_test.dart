@@ -64,6 +64,20 @@ class NestedDownloadQueue extends ChangeNotifier
   List<OfflineDownloadTask> get tasks => List.unmodifiable(entries);
 
   @override
+  Future<OfflineDownloadTask?> enqueueOrdinaryIfMissing(
+    VideoPreview video, {
+    required VideoPart part,
+    required int quality,
+  }) async {
+    if (entries.any(
+      (task) => task.video.bvid == video.bvid && task.part.cid == part.cid,
+    )) {
+      return null;
+    }
+    return enqueue(video, part: part, quality: quality);
+  }
+
+  @override
   Future<OfflineDownloadTask> enqueue(
     VideoPreview video, {
     VideoPart? part,
@@ -180,9 +194,17 @@ Future<BuildContext> openNested(WidgetTester tester, NestedRoute route) async {
       await tester.tap(
         find.byKey(const Key('current-video-offline-download-button')).first,
       );
-      // The covered download button stays busy until this dialog is answered.
+      // The real multi-P selector sets the current part before choosing quality.
+      // Pump explicit route transitions: the video download action stays busy.
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
+      final selectQuality = find.byKey(const Key('confirm-offline-parts'));
+      expect(selectQuality, findsOneWidget);
+      await tester.tap(selectQuality);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
       await tester.tap(find.byKey(const Key('download-quality-64')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));

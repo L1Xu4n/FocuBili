@@ -209,6 +209,20 @@ class WindowsPlaybackService
   final Set<Future<void>> _pendingMediaOpens = {};
   Future<void> Function()? _activeSessionValidator;
 
+  /// Wait before registering a media command. Course-account revocation may
+  /// wait for commands already registered in [_pendingMediaOpens]; a command
+  /// cannot join that set and then wait for the stop that drains it.
+  Future<bool> _waitForAccountStop(int generation) async {
+    while (_isCurrentSourceRequest(generation)) {
+      final stop = _accountChangeStop;
+      await stop;
+      if (identical(stop, _accountChangeStop)) {
+        return _isCurrentSourceRequest(generation);
+      }
+    }
+    return false;
+  }
+
   Future<bool> _validateActiveSession(int generation) async {
     if (!_isCurrentSourceRequest(generation)) return false;
     final validate = _activeSessionValidator;
@@ -232,6 +246,7 @@ class WindowsPlaybackService
 
   Future<void> _openPlayerMedia(Media media, {required bool play}) async {
     final generation = _sourceGeneration;
+    if (!await _waitForAccountStop(generation)) return;
     if (!await _validateActiveSession(generation)) return;
     final fence = Completer<void>();
     _pendingMediaOpens.add(fence.future);
@@ -247,6 +262,9 @@ class WindowsPlaybackService
   /// A later explicit pause wins even if an already-issued play finishes last.
   Future<void> _playPlayerMedia(int generation) async {
     if (!_isCurrentSourceRequest(generation) || !_shouldPlayAfterFallback) {
+      return;
+    }
+    if (!await _waitForAccountStop(generation) || !_shouldPlayAfterFallback) {
       return;
     }
     if (!await _validateActiveSession(generation)) return;
@@ -530,9 +548,8 @@ class WindowsPlaybackService
       _courseAccountRevision = video?.isCourse == true
           ? CacheLifecycle.account.value
           : null;
-      await _accountChangeStop;
-      if (!_isCurrentSourceRequest(generation)) return;
     }
+    if (!await _waitForAccountStop(generation)) return;
     final file = File(filePath);
     if (!await file.exists()) throw StateError('离线文件不存在');
     final audioFile = audioFilePath == null ? null : File(audioFilePath);
@@ -1155,6 +1172,9 @@ class WindowsPlaybackService
       phaseOverride: PlaybackPhase.loading,
       message: resumePosition > Duration.zero ? '正在恢复上次播放位置…' : '正在请求播放数据…',
     );
+    // Record the caller's intent above, not after this wait: a pause issued
+    // while the revoked source is stopping must remain the final intent.
+    if (!await _waitForAccountStop(generation)) return;
     try {
       final DesktopPlaybackSources sources = video.isCourse
           ? await _sourceService.loadCourse(

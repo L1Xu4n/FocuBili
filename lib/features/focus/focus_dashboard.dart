@@ -45,6 +45,7 @@ class FocusDashboard extends StatefulWidget {
     this.onOpenLearningList,
     this.layoutService,
     this.subscriptionService,
+    this.workspace,
   });
 
   final FocusTimerController controller;
@@ -65,6 +66,9 @@ class FocusDashboard extends StatefulWidget {
   /// 可注入的首页布局存储，业务服务和专注计时不受布局编辑影响。
   final DashboardLayoutService? layoutService;
   final SubscriptionService? subscriptionService;
+
+  /// 主框架根据安全区域内的窗口判断工作台，确保首页与侧栏同步。
+  final bool? workspace;
 
   /// 创建保存目标输入和预设时长选择的页面状态。
   @override
@@ -142,7 +146,11 @@ class _FocusDashboardState extends State<FocusDashboard> {
   bool get _canRestoreDrawer =>
       _homeLayoutLoaded && !_restoringDrawer && !_closingDrawer;
 
-  // Collapsing the desktop dock is transient; it never changes saved cards.
+  bool get _usesHomeWorkspace =>
+      widget.workspace ??
+      AdaptiveLayout.usesWorkspace(MediaQuery.sizeOf(context));
+
+  // 收起工作台抽屉是临时操作，不改变已保存的卡片。
   bool _desktopDockOpen = false;
   bool _desktopDockVisited = false;
   void _toggleDesktopDock() {
@@ -346,7 +354,14 @@ class _FocusDashboardState extends State<FocusDashboard> {
     if (editing && _scrollController.hasClients) {
       _scrollController.jumpTo(_scrollController.offset);
     }
-    setState(() => _editingHomeCards = editing);
+    setState(() {
+      _editingHomeCards = editing;
+      if (editing && !_usesHomeWorkspace) {
+        // 正在手机布局里编辑时旋转，不把未完成的操作藏进收起的侧边抽屉。
+        _desktopDockOpen = true;
+        _desktopDockVisited = true;
+      }
+    });
     if (!editing && _allAvailableCardsHidden(_homeLayout)) {
       unawaited(_closeEmptyDrawer());
     }
@@ -885,28 +900,14 @@ class _FocusDashboardState extends State<FocusDashboard> {
         final FocusSession? finishedSession =
             widget.controller.lastFinishedSession;
         final bool useHomeHero = widget.onOpenProfile != null;
-        final bool workspace =
-            useHomeHero &&
-            AdaptiveLayout.usesWorkspace(MediaQuery.sizeOf(context));
-        final bool desktopWorkspace =
-            workspace &&
-            AdaptiveLayout.isDesktopPlatform(Theme.of(context).platform);
-        if (desktopWorkspace &&
-            _homeLayoutStatus == _HomeLayoutStatus.loading) {
-          // 首次读取偏好时不要闪现可能已关闭的工作台和卡片。
-          return const SizedBox.expand();
-        }
-        if (desktopWorkspace) {
+        if (useHomeHero && _usesHomeWorkspace) {
+          if (_homeLayoutStatus == _HomeLayoutStatus.loading) {
+            // 首次读取偏好时不要闪现可能已关闭的工作台和卡片。
+            return const SizedBox.expand();
+          }
           return _hasHomeDrawer
               ? _buildDesktopDock(context, activeSession, finishedSession)
               : _buildMinimalWorkspaceHome(context);
-        }
-        if (workspace) {
-          return _buildWorkspaceDashboard(
-            context,
-            activeSession,
-            finishedSession,
-          );
         }
         return LayoutBuilder(
           builder: (context, constraints) => _buildScrollDashboard(

@@ -1,11 +1,13 @@
 """Verify the packaged normal app before the standalone runtime probe is built."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import plistlib
 import re
 import subprocess
 import tempfile
+from macos_build_identity import read_identity, verify_bundle_identity
 
 
 def run(*args):
@@ -80,6 +82,16 @@ def main():
                 "lipo", "-archs", str(app / "Contents/MacOS/FocuBili")
             ).decode().strip().split()
             assert "arm64" in architectures, "Apple Silicon build missing"
+            hotfix = os.environ.get('REQUIRE_MACOS_HOTFIX_IDENTITY') == 'true'
+            if hotfix or os.environ.get('REQUIRE_MACOS_UNIVERSAL') == 'true':
+                assert set(architectures) == {'arm64', 'x86_64'}, 'Universal architecture mismatch'
+            if hotfix:
+                revision = run('git', 'rev-parse', 'HEAD').decode().strip()
+                identity = read_identity(
+                    Path('lib/core/build_metadata.g.dart').read_text(), revision,
+                    version + '+' + build,
+                )
+                verify_bundle_identity(info, identity)
         finally:
             run("hdiutil", "detach", str(mount))
     evidence = {
@@ -90,6 +102,8 @@ def main():
         "bundle_id": info["CFBundleIdentifier"],
         "version": info["CFBundleShortVersionString"],
         "build": str(info["CFBundleVersion"]),
+        "build_time": info.get('FocuBiliBuildTime'),
+        "bundle_source_sha": info.get('FocuBiliSourceRevision'),
         "architectures": architectures,
         "normal_app_manifest": expected,
         "normal_app_matches_dmg": True,

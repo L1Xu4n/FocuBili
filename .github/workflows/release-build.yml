@@ -142,6 +142,17 @@ jobs:
           cert_sha256="$(printf '%s\n' "$signer_output" | sed -nE 's/^(Signer #[0-9]+|V[0-9.]+ Signer):? certificate SHA-256 digest: //p' | tr '[:lower:]' '[:upper:]' | sort -u)"
           test "$cert_sha256" = "$ANDROID_RELEASE_CERT_SHA256"
 
+      - name: Verify signed stable Android identity
+        if: inputs.beta_number == ''
+        shell: bash
+        run: |
+          apk='build/app/outputs/flutter-apk/app-release.apk'
+          build_tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          version="$(sed -nE 's/^version: ([0-9]+\.[0-9]+\.[0-9]+)\+[0-9]+$/\1/p' pubspec.yaml)"
+          build="$(sed -nE 's/^version: [0-9]+\.[0-9]+\.[0-9]+\+([0-9]+)$/\1/p' pubspec.yaml)"
+          test -n "$version" && test -n "$build"
+          "$build_tools/aapt" dump badging "$apk" | grep -F "package: name='com.focubili.app' versionCode='$build' versionName='$version'"
+
       - name: Verify signed Beta preview identity
         if: inputs.beta_number != ''
         env:
@@ -216,6 +227,16 @@ jobs:
           python tool/beta_release.py windows --beta-number $env:BETA_NUMBER --source-sha (git rev-parse HEAD) --folder build/windows/x64/installer --executable $executable --product-version $identity.ProductVersion --file-version $numericVersion --output build/windows/x64/installer/windows-package-verification.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Verify stable Windows metadata and portable bytes
+        if: inputs.beta_number == ''
+        shell: pwsh
+        run: |
+          $executable = 'build/windows/x64/runner/Release/FocuBili.exe'
+          $identity = (Get-Item -LiteralPath $executable).VersionInfo
+          $numericVersion = "$($identity.FileMajorPart).$($identity.FileMinorPart).$($identity.FileBuildPart).$($identity.FilePrivatePart)"
+          python tool/stable_package_metadata.py --output build/windows/x64/installer/windows-stable-verification.json windows --folder build/windows/x64/installer --executable $executable --product-version $identity.ProductVersion --file-version $numericVersion
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Upload Windows release packages
         uses: actions/upload-artifact@v4
         with:
@@ -224,5 +245,6 @@ jobs:
             build/windows/x64/installer/*-setup.exe
             build/windows/x64/installer/*-portable.zip
             build/windows/x64/installer/windows-package-verification.json
+            build/windows/x64/installer/windows-stable-verification.json
           if-no-files-found: error
           retention-days: 7

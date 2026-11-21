@@ -14,6 +14,7 @@ mixin _PlayerControlsCoordinator
         _PlayerSleepTimerCoordinator,
         _PlayerOverlayCoordinator {
   static const Duration _controlsAutoHideDelay = Duration(seconds: 5);
+  static const Duration _desktopControlsAutoHideDelay = Duration(seconds: 3);
   static const Duration _transientHintDuration = Duration(seconds: 3);
   static const AnimationStyle _playerPopupMenuAnimationStyle = AnimationStyle(
     duration: Duration(milliseconds: 100),
@@ -147,7 +148,7 @@ mixin _PlayerControlsCoordinator
     }
   }
 
-  /// 在视频播放且控制层可见时，安排五秒后自动隐藏控制层。
+  /// 桌面空闲三秒、触屏空闲五秒后自动收起播放中的控制层。
   @override
   void _restartControlsAutoHideTimer() {
     _stopControlsAutoHideTimer();
@@ -162,7 +163,10 @@ mixin _PlayerControlsCoordinator
         _horizontalScrubbing) {
       return;
     }
-    _controlsTimer = Timer(_controlsAutoHideDelay, () {
+    final delay = _appPlatform.isDesktop
+        ? _desktopControlsAutoHideDelay
+        : _controlsAutoHideDelay;
+    _controlsTimer = Timer(delay, () {
       if (mounted &&
           _showControls &&
           !_playerToolsOpen &&

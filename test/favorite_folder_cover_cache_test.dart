@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:ui' show PointerDeviceKind;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:focubili/features/profile/favorite_folder_card.dart';
 import 'package:focubili/features/profile/favorite_folders_page.dart';
+import 'package:focubili/features/profile/favorite_videos_page.dart';
 import 'package:focubili/models/account_collection.dart';
 import 'package:focubili/services/bilibili_account_data_service.dart';
 import 'package:focubili/services/cache_lifecycle.dart';
@@ -35,12 +37,18 @@ class _Service extends BilibiliAccountDataService {
   }
 }
 
-FavoriteFolder _folder(String name, {int count = 1}) => FavoriteFolder(
-  mediaId: 1001,
+FavoriteFolder _folder(
+  String name, {
+  int count = 1,
+  int id = 1001,
+  bool? isPrivate,
+}) => FavoriteFolder(
+  mediaId: id,
   title: name,
   coverUrl: '',
   mediaCount: count,
   isAvailable: true,
+  isPrivate: isPrivate,
 );
 
 AccountDataPage<FavoriteVideo> _coverPage(String url) =>
@@ -64,6 +72,58 @@ AccountDataPage<FavoriteVideo> _coverPage(String url) =>
     );
 
 void main() {
+  for (final size in [const Size(370, 760), const Size(1180, 800)]) {
+    testWidgets('B站私密锁锚定封面右下角，公开与未知没有锁：$size', (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = size;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final service = _Service()
+        ..folders = [
+          _folder('私密空收藏', count: 0, isPrivate: true),
+          _folder('公开收藏', count: 0, id: 1002, isPrivate: false),
+          _folder('旧接口未返回可见性', count: 0, id: 1003),
+        ];
+      final semantics = tester.ensureSemantics();
+      try {
+        await tester.pumpWidget(
+          MaterialApp(home: FavoriteFoldersPage(accountDataService: service)),
+        );
+        await tester.pumpAndSettle();
+        final lock = find.byIcon(Icons.lock_outline_rounded);
+        final card = find.byKey(const Key('favorite-folder-1001'));
+        final cover = find.descendant(
+          of: card,
+          matching: find.byType(ClipRRect),
+        );
+        expect(find.byIcon(Icons.folder_outlined), findsNWidgets(3));
+        expect(lock, findsOneWidget);
+        expect(find.bySemanticsLabel(RegExp('私密收藏夹')), findsOneWidget);
+        final bounds = tester.getRect(cover);
+        final position = tester.getCenter(lock);
+        expect(bounds.right - position.dx, lessThan(16));
+        expect(bounds.bottom - position.dy, lessThan(16));
+
+        final pointer = await tester.createGesture(
+          kind: PointerDeviceKind.mouse,
+        );
+        await pointer.addPointer(location: position);
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pumpAndSettle();
+        expect(find.text('私密收藏夹'), findsOneWidget);
+        await pointer.removePointer();
+        await tester.pumpAndSettle();
+        expect(service.coverCalls, 0);
+        await tester.tapAt(position);
+        await tester.pumpAndSettle();
+        expect(find.byType(FavoriteVideosPage), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      } finally {
+        semantics.dispose();
+      }
+    });
+  }
+
   testWidgets(
     'reopening reuses covers; explicit refresh updates or clears them',
     (tester) async {

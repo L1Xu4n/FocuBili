@@ -13,12 +13,14 @@ import '../../models/video_preview.dart';
 import '../../models/playback_queue.dart';
 import '../../services/bilibili_account_data_service.dart';
 import '../../services/bilibili_service.dart';
+import '../../services/bilibili_interaction_service.dart';
 import '../../services/cache_lifecycle.dart';
 import '../../services/learning_list_service.dart';
 import '../common/discovery_batch_selection.dart';
 import '../common/video_batch_actions.dart';
+import 'favorite_folder_edit_dialog.dart';
 
-/// 展示一个收藏夹内的只读视频列表，并在用户点击后查询公开详情进入播放器。
+/// 展示收藏夹内容；只有本账号自建收藏夹入口可打开资料编辑器。
 class FavoriteVideosPage extends StatefulWidget {
   /// 创建指定收藏夹的视频页面；服务可注入以支持测试和安全替换。
   const FavoriteVideosPage({
@@ -27,6 +29,9 @@ class FavoriteVideosPage extends StatefulWidget {
     this.accountDataService,
     this.bilibiliService,
     this.learningListService,
+    this.editableOwnerMid,
+    this.interactionService,
+    this.onFolderEdited,
   });
 
   /// 当前页面读取的收藏夹基本资料。
@@ -38,6 +43,11 @@ class FavoriteVideosPage extends StatefulWidget {
   /// 可选的公开视频详情服务，未传入时使用默认公开视频查询实现。
   final BilibiliService? bilibiliService;
   final LearningListService? learningListService;
+
+  // Set by account-created-folder entry points, never by read-only previews.
+  final int? editableOwnerMid;
+  final BilibiliInteractionService? interactionService;
+  final ValueChanged<FavoriteFolder>? onFolderEdited;
 
   /// 创建管理首次读取、分页、刷新和打开播放器状态的页面状态。
   @override
@@ -54,6 +64,8 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
   late int _sourceAccount;
   var _loadGeneration = 0;
   bool _batchBusy = false;
+  bool _editing = false;
+  late FavoriteFolder _folder;
 
   bool get _sourceCurrent => _sourceAccount == CacheLifecycle.account.value;
   final TextEditingController _searchController = TextEditingController();
@@ -76,6 +88,7 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
       videoService: _bilibiliService,
       accountService: _accountDataService,
     );
+    _folder = widget.folder;
     _sourceAccount = CacheLifecycle.account.value;
     CacheLifecycle.account.addListener(_accountChanged);
     unawaited(_loadFirstPage());
@@ -85,6 +98,7 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
   void didUpdateWidget(covariant FavoriteVideosPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.folder.mediaId == oldWidget.folder.mediaId) return;
+    _folder = widget.folder;
     _sourceAccount = CacheLifecycle.account.value;
     _accountChanged();
     unawaited(_loadFirstPage());
@@ -109,6 +123,37 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
     _scrollController.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  Future<void> _editFolder() async {
+    final mid = widget.editableOwnerMid;
+    if (_editing || mid == null || !_sourceCurrent || !_folder.isAvailable) {
+      return;
+    }
+    final originalId = _folder.mediaId;
+    bool current() =>
+        mounted &&
+        _sourceCurrent &&
+        _folder.mediaId == originalId &&
+        widget.editableOwnerMid == mid;
+    _editing = true;
+    try {
+      final edited = await showFavoriteFolderEditDialog(
+        context,
+        service: widget.interactionService ?? BilibiliInteractionService(),
+        mediaId: originalId,
+        ownerMid: mid,
+        isCurrent: current,
+      );
+      if (edited == null || !current()) return;
+      setState(() {
+        _folder = _folder.withEditedMetadata(edited.title, edited.isPrivate);
+      });
+      widget.onFolderEdited?.call(_folder);
+      _showMessage('已保存收藏夹设置');
+    } finally {
+      _editing = false;
+    }
   }
 
   /// 读取收藏夹第 1 页；刷新失败时保留原有已成功显示的视频列表。
@@ -198,7 +243,7 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
       if (!mounted || generation != _loadGeneration || !_sourceCurrent) return;
       setState(() => _openingBvid = null);
       final service = _accountDataService;
-      final folder = widget.folder;
+      final folder = _folder;
       final account = _sourceAccount;
       final queue = PlaybackQueue(
         title: folder.title,
@@ -709,8 +754,18 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
       },
       child: Scaffold(
         appBar: AppBar(
-          title: Text(widget.folder.title),
+          title: Text(_folder.title),
           actions: <Widget>[
+            if (!_batchSelection.active &&
+                _sourceCurrent &&
+                _folder.isAvailable &&
+                (widget.editableOwnerMid ?? 0) > 0)
+              IconButton(
+                key: const Key('edit-bilibili-favorite-folder'),
+                tooltip: '编辑收藏夹',
+                icon: const Icon(Icons.edit_outlined),
+                onPressed: () => unawaited(_editFolder()),
+              ),
             if (!_batchSelection.active && _canStartBatch)
               IconButton(
                 tooltip: '多选视频',

@@ -21,7 +21,8 @@ import 'subscription_performance_probe_test.dart'
 
 // Render production MainShell with synthetic local records. Run with:
 // FOCUBILI_PREVIEW_FONT=/path/to/CJK-Regular.otf flutter test test/desktop_dock_preview_test.dart
-// Optional: FOCUBILI_PREVIEW_FONT_BOLD, FOCUBILI_PREVIEW_BRIGHTNESS=light,
+// Optional: FOCUBILI_PREVIEW_DEVICE=tablet, FOCUBILI_PREVIEW_FONT_BOLD,
+// FOCUBILI_PREVIEW_BRIGHTNESS=light,
 // FOCUBILI_PREVIEW_DIR (default: build/desktop-dock).
 void main() {
   final font = Platform.environment['FOCUBILI_PREVIEW_FONT'];
@@ -31,9 +32,13 @@ void main() {
   );
 
   final light = Platform.environment['FOCUBILI_PREVIEW_BRIGHTNESS'] == 'light';
+  final tablet = Platform.environment['FOCUBILI_PREVIEW_DEVICE'] == 'tablet';
+  final device = tablet ? 'tablet' : 'desktop';
 
-  testWidgets('真实桌面首页截图', (tester) async {
-    tester.view.physicalSize = const Size(1600, 1000);
+  testWidgets('真实宽屏首页截图（$device）', (tester) async {
+    tester.view.physicalSize = tablet
+        ? const Size(1024, 768)
+        : const Size(1600, 1000);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
@@ -100,7 +105,7 @@ void main() {
     });
     final base = light ? AppTheme.light() : AppTheme.dark();
     final theme = base.copyWith(
-      platform: TargetPlatform.linux,
+      platform: tablet ? TargetPlatform.iOS : TargetPlatform.linux,
       textTheme: base.textTheme.apply(fontFamily: 'DockSC'),
       primaryTextTheme: base.primaryTextTheme.apply(fontFamily: 'DockSC'),
     );
@@ -137,7 +142,7 @@ void main() {
         final data = await img.toByteData(format: ui.ImageByteFormat.png);
         await output.create(recursive: true);
         await File(
-          '${output.path}/FocuBili-desktop-dock-$which.png',
+          '${output.path}/FocuBili-$device-dock-$which.png',
         ).writeAsBytes(data!.buffer.asUint8List());
         img.dispose();
       });

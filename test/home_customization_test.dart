@@ -238,8 +238,8 @@ void main() {
     await tester.pump();
   });
 
-  /// 手机进入编辑后切宽屏，卡片共用两列区域；再切回手机仍保持编辑。
-  testWidgets('首页窗口切换保持编辑且全部卡片同区跨行布局', (tester) async {
+  /// 旋转时继续编辑同一份卡片，并切换到单列可滚动的右侧抽屉。
+  testWidgets('首页窗口切换保持编辑且所有卡片共用右侧抽屉', (tester) async {
     _setWindow(tester, const Size(430, 900));
     final controller = FocusTimerController(
       tickInterval: const Duration(days: 1),
@@ -252,24 +252,25 @@ void main() {
     tester.view.physicalSize = const Size(1280, 600);
     await tester.pumpAndSettle();
     expect(find.byType(EditableCardBoard), findsOneWidget);
-    expect(_board(tester).columnCount, 2);
+    expect(_board(tester).columnCount, 1);
     expect(find.text('完成'), findsOneWidget);
-    final primary = find.byKey(const Key('focus-workspace-primary'));
-    expect(
-      find.descendant(
-        of: primary,
-        matching: find.byKey(const Key('test-continue-learning')),
-      ),
-      findsNothing,
-    );
+    final dock = find.byKey(const Key('desktop-learning-dock'));
+    expect(dock, findsOneWidget);
     final continueRect = tester.getRect(
       find.byKey(const ValueKey('dashboard-card-home.continue_learning')),
     );
     final focusRect = tester.getRect(
       find.byKey(const ValueKey('dashboard-card-home.focus_session')),
     );
-    expect(continueRect.top, focusRect.top);
-    expect(continueRect.right, lessThan(focusRect.left));
+    expect(continueRect.left, focusRect.left);
+    expect(continueRect.bottom, lessThan(focusRect.top));
+    expect(
+      find.descendant(
+        of: dock,
+        matching: find.byKey(const Key('test-continue-learning')),
+      ),
+      findsOneWidget,
+    );
     await _tapVisible(tester, find.text('完成'));
     await _tapVisible(tester, find.text('自定义').last);
     tester.view.physicalSize = const Size(430, 900);

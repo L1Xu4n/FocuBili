@@ -162,16 +162,26 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
       return;
     }
     final tap = _lastDoubleTapPosition ?? playerSize.center(Offset.zero);
-    switch (_playbackPreferences.doubleTapRegions.actionAt(
-      tap.dx / playerSize.width,
-      tap.dy / playerSize.height,
-    )) {
+    _handleDoubleTapAction(
+      _playbackPreferences.doubleTapRegions.actionAt(
+        tap.dx / playerSize.width,
+        tap.dy / playerSize.height,
+      ),
+      onCenter: () => _togglePlayback(showControls: false),
+    );
+  }
+
+  void _handleDoubleTapAction(
+    DoubleTapAction action, {
+    required VoidCallback onCenter,
+  }) {
+    switch (action) {
       case DoubleTapAction.rewind:
         _seekBy(-5, showFeedback: true);
       case DoubleTapAction.forward:
         _seekBy(5, showFeedback: true);
       case DoubleTapAction.togglePlayback:
-        _togglePlayback(showControls: false);
+        onCenter();
     }
   }
 

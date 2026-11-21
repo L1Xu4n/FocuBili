@@ -30,6 +30,7 @@ class HomePage extends StatefulWidget {
     this.layoutService,
     this.subscriptionService,
     this.refreshGeneration = 0,
+    this.workspace,
   });
 
   final VoidCallback onSearchRequested;
@@ -38,6 +39,7 @@ class HomePage extends StatefulWidget {
   final BilibiliService? videoService;
   final BilibiliAuthService? authService;
   final int refreshGeneration;
+  final bool? workspace;
 
   /// 首页卡片布局存储，与学习清单和计时业务分开维护。
   final DashboardLayoutService? layoutService;
@@ -314,6 +316,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       child: FocusDashboard(
         controller: FocusTimerScope.of(context),
         layoutService: widget.layoutService,
+        workspace: widget.workspace,
         subscriptionService: widget.subscriptionService,
         onOpenVideo: widget.onSearchRequested,
         onOpenProfile: widget.onProfileRequested,

@@ -104,6 +104,50 @@ void main() {
   );
 
   test(
+    'legacy course history uses first observation, not authorization age',
+    () async {
+      final downloaded = access.now;
+      await queue.enqueue(video, part: part, quality: 64);
+      await _waitFor(
+        () => queue.tasks.single.status == DownloadTaskStatus.completed,
+      );
+      await queue.close();
+
+      final prefs = await SharedPreferences.getInstance();
+      final stored =
+          jsonDecode(prefs.getString(OfflineDownloadQueue.storageKey)!) as List;
+      (stored.single as Map).remove('completedAt');
+      await prefs.setString(
+        OfflineDownloadQueue.storageKey,
+        jsonEncode(stored),
+      );
+      final firstSeen = downloaded.add(const Duration(days: 21));
+      var now = firstSeen;
+      queue = OfflineDownloadQueue(
+        library: ordinary,
+        courseLibrary: courses,
+        clock: () => now,
+      );
+      await queue.initialize();
+      expect(queue.tasks.single.completedAt, firstSeen);
+      expect((await courses.entries()).single.hasMedia, isTrue);
+
+      await queue.close();
+      now = firstSeen.add(const Duration(days: 14));
+      queue = OfflineDownloadQueue(
+        library: ordinary,
+        courseLibrary: courses,
+        clock: () => now,
+      );
+      await queue.initialize();
+      expect(queue.tasks, isEmpty);
+      final receipt = (await courses.entries()).single;
+      final playback = await courses.open(receipt);
+      expect(await File(playback.video).readAsBytes(), transfer.payload);
+    },
+  );
+
+  test(
     'same CID uses isolated identity, shares FIFO, retains guarded receipt on task deletion',
     () async {
       final regular = await queue.enqueue(fixture(part.cid));

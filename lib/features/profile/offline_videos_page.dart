@@ -11,6 +11,7 @@ import '../../core/layout/adaptive_page_frame.dart';
 import '../../core/layout/adaptive_two_column_list.dart';
 import '../../core/widgets/drag_selection_region.dart';
 import '../../models/offline_video_download.dart';
+import '../../models/video_preview.dart';
 import '../../services/offline_video_service.dart';
 import '../../services/offline_download_queue.dart';
 import '../../models/offline_download_task.dart';
@@ -27,7 +28,23 @@ class OfflineVideosPage extends StatefulWidget {
     this.downloadQueue,
     this.initialQueue = false,
     this.includeCourses,
-  });
+    this.playerBuilder,
+  }) : _group = null;
+
+  const OfflineVideosPage._parts({
+    required OfflineVideoService this.offlineVideoService,
+    required OfflineDownloadQueue this.downloadQueue,
+    required _SavedParts group,
+    required this.playerBuilder,
+  }) : _group = group,
+       includeCourses = false,
+       initialQueue = false;
+
+  final _SavedParts? _group;
+
+  /// Optional wrapper around the configured offline route, allowing widget tests
+  /// to inspect routing without initializing the native media backend.
+  final Widget Function(PlayerPage player)? playerBuilder;
   final OfflineDownloadQueue? downloadQueue;
   final bool initialQueue;
   final bool? includeCourses;
@@ -40,23 +57,96 @@ class OfflineVideosPage extends StatefulWidget {
   State<OfflineVideosPage> createState() => _OfflineVideosPageState();
 }
 
+class _SavedParts {
+  _SavedParts(List<OfflineVideoDownload> downloads)
+    : videos = List.of(downloads) {
+    // Use another saved record’s metadata if an older record has none.
+    final missing = {for (final video in downloads) video.cid};
+    for (final video in downloads) {
+      for (final part in video.parts) {
+        if (part.pageNumber > 0 && missing.remove(part.cid)) {
+          metadata[part.cid] = part;
+        }
+      }
+      if (missing.isEmpty) break;
+    }
+    videos.sort((a, b) {
+      final byPage = (part(a)?.pageNumber ?? 0x7fffffff).compareTo(
+        part(b)?.pageNumber ?? 0x7fffffff,
+      );
+      return byPage != 0 ? byPage : a.cid.compareTo(b.cid);
+    });
+  }
+
+  final List<OfflineVideoDownload> videos;
+  final metadata = <int, VideoPart>{};
+
+  String get bvid => videos.first.bvid;
+  String get title => videos
+      .map((video) => video.originalTitle.trim())
+      .firstWhere(
+        (title) => title.isNotEmpty,
+        orElse: () => videos.first.title,
+      );
+  VideoPart? part(OfflineVideoDownload video) => metadata[video.cid];
+}
+
 class _CacheRow {
-  const _CacheRow.video(OfflineVideoDownload this.video) : course = null;
-  const _CacheRow.course(CourseCacheEntry this.course) : video = null;
+  const _CacheRow.video(OfflineVideoDownload this.video, [this.part])
+    : course = null,
+      group = null;
+  const _CacheRow.course(CourseCacheEntry this.course)
+    : video = null,
+      group = null,
+      part = null;
+  const _CacheRow.group(_SavedParts this.group)
+    : video = null,
+      course = null,
+      part = null;
 
   final OfflineVideoDownload? video;
   final CourseCacheEntry? course;
+  final _SavedParts? group;
+  final VideoPart? part;
 
-  String get id => video != null
-      ? '${video!.bvid}:${video!.cid}'
-      : 'course:${course!.mid}:${course!.id}';
+  String get id => switch (this) {
+    _CacheRow(:final video?) => '${video.bvid}:${video.cid}',
+    _CacheRow(:final group?) => 'group:${group.bvid}',
+    _ => 'course:${course!.mid}:${course!.id}',
+  };
 
-  bool matches(String query) =>
-      (video != null
-              ? '${video!.title} ${video!.ownerName} ${video!.bvid}'
-              : '${course!.courseTitle} ${course!.chapterTitle}')
-          .toLowerCase()
-          .contains(query);
+  static final _partNumber = RegExp(r'^(?:p\s*)?(\d+)$');
+
+  bool matches(String query, {bool partsOnly = false}) {
+    if (group case final group?) {
+      return group.title.toLowerCase().contains(query) ||
+          group.videos.any(
+            (video) => _CacheRow.video(video, group.part(video)).matches(query),
+          );
+    }
+    if (video case final video?) {
+      final part =
+          this.part ??
+          video.parts.where((part) => part.cid == video.cid).firstOrNull;
+      final partNumber = _partNumber.firstMatch(query);
+      final numberMatches =
+          partNumber != null &&
+          part?.pageNumber == int.tryParse(partNumber[1]!);
+      if (partsOnly) {
+        return numberMatches ||
+            (part?.title.trim().isNotEmpty == true ? part!.title : video.title)
+                .toLowerCase()
+                .contains(query);
+      }
+      return numberMatches ||
+          '${video.originalTitle} ${video.title} ${video.ownerName} ${video.bvid} ${part?.title ?? ''}'
+              .toLowerCase()
+              .contains(query);
+    }
+    return '${course!.courseTitle} ${course!.chapterTitle}'
+        .toLowerCase()
+        .contains(query);
+  }
 }
 
 /// 管理离线视频列表、占用空间统计和删除行为。
@@ -64,6 +154,7 @@ class _OfflineVideosPageState extends State<OfflineVideosPage>
     with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   late final OfflineVideoService _offlineVideoService;
   List<OfflineVideoDownload> _downloads = const <OfflineVideoDownload>[];
+  List<_CacheRow> _videoRows = const [];
   bool _isLoading = true;
   int _totalSizeBytes = 0;
   late final OfflineDownloadQueue _queue;
@@ -76,19 +167,42 @@ class _OfflineVideosPageState extends State<OfflineVideosPage>
   bool _selecting = false, _batchBusy = false;
   int _downloadGeneration = 0, _courseScopeEpoch = 0;
 
+  bool get _inGroup => widget._group != null;
   bool get _showSelection => _selecting && _showingLibrary;
   String get _needle => _query.trim().toLowerCase();
   Iterable<_CacheRow> get _inventory sync* {
-    yield* _downloads.map(_CacheRow.video);
+    yield* _videoRows;
     yield* _courseEntries.map(_CacheRow.course);
   }
+
+  Iterable<_CacheRow> _makeVideoRows(
+    List<OfflineVideoDownload> downloads,
+  ) sync* {
+    final byBvid = <String, List<OfflineVideoDownload>>{};
+    for (final video in downloads) {
+      (byBvid[video.bvid] ??= []).add(video);
+    }
+    for (final videos in byBvid.values) {
+      final parts = _SavedParts(videos);
+      if (!_inGroup && videos.length > 1) {
+        yield _CacheRow.group(parts);
+      } else {
+        for (final video in parts.videos) {
+          yield _CacheRow.video(video, parts.part(video));
+        }
+      }
+    }
+  }
+
+  bool _matches(_CacheRow row, String query) =>
+      row.matches(query, partsOnly: _inGroup);
 
   int get _hiddenSelectionCount {
     final needle = _needle;
     if (needle.isEmpty || _selectedIds.isEmpty) return 0;
     return _inventory
-        .where((row) => _selectedIds.contains(row.id) && !row.matches(needle))
-        .length;
+        .where((row) => _selectedIds.contains(row.id) && !_matches(row, needle))
+        .fold<int>(0, (sum, row) => sum + (row.group?.videos.length ?? 1));
   }
 
   late final CourseCacheLibrary _courses;
@@ -359,13 +473,19 @@ class _OfflineVideosPageState extends State<OfflineVideosPage>
   Future<void> _loadDownloads() async {
     final generation = ++_downloadGeneration;
     try {
-      final List<OfflineVideoDownload> downloads = await _offlineVideoService
-          .loadDownloads();
-      final int totalSizeBytes = await _offlineVideoService.totalSizeBytes();
+      final all = await _offlineVideoService.loadDownloads();
+      final group = widget._group;
+      final downloads = group == null
+          ? List<OfflineVideoDownload>.of(all)
+          : all.where((video) => video.bvid == group.bvid).toList();
+      final totalSizeBytes = group == null
+          ? await _offlineVideoService.totalSizeBytes()
+          : downloads.fold<int>(0, (sum, video) => sum + video.sizeBytes);
       if (!mounted || generation != _downloadGeneration) return;
       setState(() {
         _isLoading = false;
         _downloads = downloads;
+        _videoRows = _makeVideoRows(downloads).toList();
         _totalSizeBytes = totalSizeBytes;
         _pruneSelection();
       });
@@ -377,25 +497,46 @@ class _OfflineVideosPageState extends State<OfflineVideosPage>
     }
   }
 
-  /// 打开离线播放页，返回后保留当前列表。
-  Future<void> _playDownload(OfflineVideoDownload download) async {
+  Future<void> _openGroup(_SavedParts group) async {
     await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (BuildContext context) => PlayerPage(
-          video: download.toPreview(),
-          initialPartCid: download.cid,
-          forceOffline: true,
+      MaterialPageRoute(
+        builder: (_) => OfflineVideosPage._parts(
           offlineVideoService: _offlineVideoService,
           downloadQueue: _queue,
+          group: group,
+          playerBuilder: widget.playerBuilder,
         ),
       ),
     );
+    if (mounted) await _refresh();
+  }
+
+  /// 打开离线播放页，返回后刷新列表。
+  Future<void> _playDownload(OfflineVideoDownload download) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (context) {
+          final player = PlayerPage(
+            video: download.toPreview(),
+            initialPartCid: download.cid,
+            forceOffline: true,
+            offlineVideoService: _offlineVideoService,
+            downloadQueue: _queue,
+          );
+          return widget.playerBuilder?.call(player) ?? player;
+        },
+      ),
+    );
+    if (mounted) await _loadDownloads();
   }
 
   /// 确认后删除一条离线视频。
-  Future<void> _deleteDownload(OfflineVideoDownload download) async {
+  Future<void> _deleteDownload(
+    OfflineVideoDownload download,
+    String title,
+  ) async {
     try {
-      if (!await _confirmDelete(download.title) || !mounted) return;
+      if (!await _confirmDelete(title) || !mounted) return;
       final bool deleted = await _offlineVideoService.delete(
         download.bvid,
         cid: download.cid,
@@ -407,9 +548,17 @@ class _OfflineVideosPageState extends State<OfflineVideosPage>
         _showMessage('删除失败，请稍后重试。');
         return;
       }
-      await _queue.remove('${download.bvid}:${download.cid}');
+      var queueSynced = true;
+      try {
+        // Cache management must never cancel an active or paused download.
+        await _queue.reconcileDeleted({'${download.bvid}:${download.cid}'});
+      } catch (_) {
+        queueSynced = false;
+      }
       await _loadDownloads();
-      _showMessage('已删除离线缓存');
+      if (mounted) {
+        _showMessage(queueSynced ? '已删除离线缓存' : '已删除离线缓存，下载队列未能同步。');
+      }
     } catch (_) {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -460,10 +609,19 @@ class _OfflineVideosPageState extends State<OfflineVideosPage>
 
   Future<void> _deleteSelected() async {
     if (!_showSelection || _batchBusy || _selectedIds.isEmpty) return;
-    final chosen = _inventory
+    final selectedRows = _inventory
         .where((row) => _selectedIds.contains(row.id))
         .toList();
-    if (chosen.isEmpty) return;
+    if (selectedRows.isEmpty) return;
+    final groups = selectedRows.where((row) => row.group != null).length;
+    // Capture exact CIDs before confirmation, never expand again after a queue update.
+    final chosen = [
+      for (final row in selectedRows)
+        if (row.group case final group?)
+          ...group.videos.map(_CacheRow.video)
+        else
+          row,
+    ];
     final hidden = _hiddenSelectionCount;
     final account = CacheLifecycle.account.value;
     final courseScope = _courseScopeEpoch;
@@ -481,6 +639,7 @@ class _OfflineVideosPageState extends State<OfflineVideosPage>
           title: const Text('删除所选离线缓存'),
           content: Text(
             '将删除本机的 ${chosen.length} 条所选缓存，且无法恢复。'
+            '${groups > 0 ? '\n包括 $groups 个分P组当前已选中的全部缓存。' : ''}'
             '${hidden > 0 ? '\n其中 $hidden 条不在当前搜索结果中。' : ''}',
           ),
           actions: [
@@ -555,6 +714,15 @@ class _OfflineVideosPageState extends State<OfflineVideosPage>
       setState(() {
         _selectedIds.removeAll(removedVideos);
         _selectedIds.removeAll(removedCourses);
+        for (final row in selectedRows) {
+          final group = row.group;
+          if (group != null &&
+              group.videos.every(
+                (video) => removedVideos.contains(_CacheRow.video(video).id),
+              )) {
+            _selectedIds.remove(row.id);
+          }
+        }
         if (_selectedIds.isEmpty) _selecting = false;
       });
       final removed = removedVideos.length + removedCourses.length;
@@ -693,20 +861,52 @@ class _OfflineVideosPageState extends State<OfflineVideosPage>
   /// 创建单个离线视频卡片，点击进入播放器并提供删除入口。
   Widget _buildDownloadCard(
     OfflineVideoDownload video,
+    VideoPart? part,
     String selectionId,
     Key handleKey,
   ) => _buildCacheCard(
     selectionId: selectionId,
     handleKey: handleKey,
     id: '${video.bvid}-${video.cid}',
-    title: video.title,
-    subtitle: video.ownerName,
-    detail: video.partLabel,
+    title: _inGroup
+        ? (part?.title.trim().isNotEmpty == true ? part!.title : video.title)
+        : video.title,
+    subtitle: _inGroup
+        ? (part == null ? '分P编号未知' : 'P${part.pageNumber}')
+        : video.ownerName,
+    detail: _inGroup ? '' : video.partLabel,
     summary: '${video.qualityLabel} · ${_formatBytes(video.sizeBytes)}',
     coverUrl: video.coverUrl,
     open: () => unawaited(_playDownload(video)),
-    remove: () => unawaited(_deleteDownload(video)),
+    remove: () => unawaited(
+      _deleteDownload(
+        video,
+        _inGroup && part != null
+            ? 'P${part.pageNumber} ${part.title.trim().isEmpty ? video.title : part.title}'
+            : video.title,
+      ),
+    ),
   );
+
+  Widget _buildGroupCard(_SavedParts group, Key handleKey) {
+    final cover = group.videos.firstWhere(
+      (video) => video.coverUrl.isNotEmpty,
+      orElse: () => group.videos.first,
+    );
+    return _buildCacheCard(
+      id: 'group-${group.bvid}',
+      selectionId: 'group:${group.bvid}',
+      handleKey: handleKey,
+      title: group.title,
+      subtitle: cover.ownerName,
+      detail: '',
+      summary:
+          '${group.videos.length} P 已缓存 · ${_formatBytes(group.videos.fold<int>(0, (sum, video) => sum + video.sizeBytes))}',
+      coverUrl: cover.coverUrl,
+      open: () => unawaited(_openGroup(group)),
+      remove: null,
+    );
+  }
 
   Widget _buildCourseCard(
     CourseCacheEntry entry,
@@ -737,7 +937,7 @@ class _OfflineVideosPageState extends State<OfflineVideosPage>
     required String summary,
     required String coverUrl,
     required VoidCallback? open,
-    required VoidCallback remove,
+    required VoidCallback? remove,
   }) {
     final checked = _selectedIds.contains(selectionId);
     void change(bool value) {
@@ -783,7 +983,11 @@ class _OfflineVideosPageState extends State<OfflineVideosPage>
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                     const SizedBox(height: 2),
-                    Text(detail, style: Theme.of(context).textTheme.bodySmall),
+                    if (detail.isNotEmpty)
+                      Text(
+                        detail,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
                     Text(summary, style: Theme.of(context).textTheme.bodySmall),
                   ],
                 ),
@@ -800,6 +1004,11 @@ class _OfflineVideosPageState extends State<OfflineVideosPage>
                         ? null
                         : (value) => change(value == true),
                   ),
+                )
+              else if (remove == null)
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 12),
+                  child: Icon(Icons.chevron_right_rounded),
                 )
               else
                 IconButton(
@@ -821,26 +1030,31 @@ class _OfflineVideosPageState extends State<OfflineVideosPage>
       return const Center(child: CircularProgressIndicator());
     }
     if (_itemCount == 0) {
-      return const Center(
-        key: Key('offline-videos-empty'),
+      return Center(
+        key: const Key('offline-videos-empty'),
         child: SingleChildScrollView(
           child: Padding(
-            padding: EdgeInsets.all(24),
+            padding: const EdgeInsets.all(24),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
-                Icon(Icons.offline_pin_outlined, size: 44),
-                SizedBox(height: 12),
-                Text('还没有离线缓存'),
-                SizedBox(height: 6),
-                Text('在看视频时点击下载，即可在无网络时播放', textAlign: TextAlign.center),
+                const Icon(Icons.offline_pin_outlined, size: 44),
+                const SizedBox(height: 12),
+                Text(_inGroup ? '这个视频没有已缓存的分P' : '还没有离线缓存'),
+                if (!_inGroup) ...[
+                  const SizedBox(height: 6),
+                  const Text(
+                    '在看视频时点击下载，即可在无网络时播放',
+                    textAlign: TextAlign.center,
+                  ),
+                ],
               ],
             ),
           ),
         ),
       );
     }
-    final visible = _inventory.where((row) => row.matches(_needle)).toList();
+    final visible = _inventory.where((row) => _matches(row, _needle)).toList();
     if (visible.isEmpty) {
       return const Center(child: Text('没有匹配的离线视频'));
     }
@@ -868,8 +1082,10 @@ class _OfflineVideosPageState extends State<OfflineVideosPage>
             return DragSelectionTarget(
               key: ValueKey(row.id),
               index: index,
-              builder: (context, handleKey) => row.video != null
-                  ? _buildDownloadCard(row.video!, row.id, handleKey)
+              builder: (context, handleKey) => row.group != null
+                  ? _buildGroupCard(row.group!, handleKey)
+                  : row.video != null
+                  ? _buildDownloadCard(row.video!, row.part, row.id, handleKey)
                   : _buildCourseCard(row.course!, row.id, handleKey),
             );
           },
@@ -888,16 +1104,26 @@ class _OfflineVideosPageState extends State<OfflineVideosPage>
       },
       child: Scaffold(
         appBar: AppBar(
-          title: Text(_showSelection ? '已选 ${_selectedIds.length}' : '离线缓存'),
-          bottom: TabBar(
-            controller: _tabs,
-            tabs: const [
-              Tab(text: '已缓存'),
-              Tab(text: '下载队列'),
-            ],
+          title: Text(
+            _showSelection
+                ? '已选 ${_selectedIds.length}'
+                : widget._group?.title ?? '离线缓存',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
+          bottom: _inGroup
+              ? null
+              : TabBar(
+                  controller: _tabs,
+                  tabs: const [
+                    Tab(text: '已缓存'),
+                    Tab(text: '下载队列'),
+                  ],
+                ),
           actions: <Widget>[
-            if (!_showSelection && _queue.library.cacheLocations.supported)
+            if (!_inGroup &&
+                !_showSelection &&
+                _queue.library.cacheLocations.supported)
               IconButton(
                 key: const Key('offline-cache-location'),
                 tooltip: '离线缓存位置',
@@ -935,12 +1161,13 @@ class _OfflineVideosPageState extends State<OfflineVideosPage>
                 onPressed: _batchBusy ? null : _beginSelection,
                 icon: const Icon(Icons.checklist_rounded),
               ),
-              IconButton(
-                key: const Key('clear-offline-videos'),
-                tooltip: '清空全部',
-                onPressed: _batchBusy ? null : () => unawaited(_clearAll()),
-                icon: const Icon(Icons.delete_sweep_outlined),
-              ),
+              if (!_inGroup)
+                IconButton(
+                  key: const Key('clear-offline-videos'),
+                  tooltip: '清空全部',
+                  onPressed: _batchBusy ? null : () => unawaited(_clearAll()),
+                  icon: const Icon(Icons.delete_sweep_outlined),
+                ),
             ],
           ],
         ),
@@ -984,13 +1211,15 @@ class _OfflineVideosPageState extends State<OfflineVideosPage>
                   ),
                 ),
                 Expanded(
-                  child: TabBarView(
-                    controller: _tabs,
-                    children: [
-                      _buildBody(),
-                      DownloadQueueView(queue: _queue, query: _query),
-                    ],
-                  ),
+                  child: _inGroup
+                      ? _buildBody()
+                      : TabBarView(
+                          controller: _tabs,
+                          children: [
+                            _buildBody(),
+                            DownloadQueueView(queue: _queue, query: _query),
+                          ],
+                        ),
                 ),
               ],
             ),
@@ -1007,9 +1236,9 @@ class _OfflineVideosPageState extends State<OfflineVideosPage>
       builder: (context, constraints) {
         final search = TextField(
           key: const Key('offline-search'),
-          decoration: const InputDecoration(
-            prefixIcon: Icon(Icons.search),
-            hintText: '搜索离线视频或下载任务',
+          decoration: InputDecoration(
+            prefixIcon: const Icon(Icons.search),
+            hintText: _inGroup ? '搜索分P名称或编号' : '搜索离线视频或下载任务',
           ),
           onChanged: (value) => setState(() => _query = value),
         );

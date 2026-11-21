@@ -101,6 +101,9 @@ jobs:
       - name: Verify unsigned Beta iOS bundle metadata
         if: matrix.platform == 'ios' && inputs.beta_number != ''
         run: python3 tool/beta_release.py ios --beta-number "$BETA_NUMBER" --source-sha "$(git rev-parse HEAD)" --ipa build/apple/FocuBili-ios-unsigned.ipa --output build/apple/ios-beta-verification.json
+      - name: Verify unsigned stable iOS bundle metadata
+        if: matrix.platform == 'ios' && inputs.beta_number == ''
+        run: python3 tool/stable_package_metadata.py --output build/apple/ios-stable-verification.json ios --ipa build/apple/FocuBili-ios-unsigned.ipa
       - name: Compile iOS simulator
         if: matrix.platform == 'ios'
         run: |
@@ -144,6 +147,8 @@ jobs:
           shasum -a 256 build/apple/FocuBili-macos-preview.dmg > build/apple/SHA256SUMS.txt
       - name: Verify normal macOS DMG contents and identity
         if: matrix.platform == 'macos'
+        env:
+          REQUIRE_MACOS_UNIVERSAL: ${{ inputs.beta_number == '' }}
         run: python3 tool/verify_macos_dmg.py
       - name: Smoke-test macOS launch
         if: matrix.platform == 'macos'

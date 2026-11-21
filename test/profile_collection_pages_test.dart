@@ -603,7 +603,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('学习清单 · 选择更多分 P'));
     await tester.pumpAndSettle();
-    expect(find.text('剩余容量 99'), findsOneWidget);
+    expect(find.text('新增 0 · 剩余容量 99'), findsOneWidget);
     expect(find.textContaining('已存在'), findsNothing);
     final part = VideoPreview.placeholder().initialPart;
     final checkbox = find.descendant(
