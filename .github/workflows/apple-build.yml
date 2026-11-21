@@ -23,28 +23,46 @@ jobs:
   quality:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      FLUTTER_VERSION: '3.44.6'
     steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.source_sha || github.sha }}
-      # Automatic events also run ci.yml; keep complete checks for manual Apple runs.
-      - uses: subosito/flutter-action@v2
+      # workflow_call inherits workflow_dispatch from Beta. That caller must first
+      # pass exact-source push CI. Keep checks for direct dispatch and historical SHAs.
+      - name: Check for equivalent Dart quality on this commit
         if: github.event_name == 'workflow_dispatch'
+        id: dart_quality
+        env:
+          VERIFIED_BETA_HEAD: >-
+            ${{ (github.workflow_ref == 'L1Xu4n/FocuBili/.github/workflows/beta-release.yml@refs/heads/dev'
+                || github.workflow_ref == 'L1Xu4n/FocuBili/.github/workflows/beta-release.yml@refs/heads/master')
+                && inputs.source_sha != '' && inputs.source_sha == github.workflow_sha
+                && inputs.beta_number != '' }}
+        run: |
+          if [ "$VERIFIED_BETA_HEAD" = true ] &&
+            grep -qxF "  FLUTTER_VERSION: '$FLUTTER_VERSION'" .github/workflows/ci.yml; then
+            echo 'Reusing successful exact-source push Dart quality with the same Flutter SDK.'
+            echo 'reuse=true' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: subosito/flutter-action@v2
+        if: github.event_name == 'workflow_dispatch' && steps.dart_quality.outputs.reuse != 'true'
         with:
-          flutter-version: '3.44.6'
+          flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
       - run: python3 tool/check_apple_sources.py
       - run: python3 tool/check_platform_icons.py
       - run: python3 -m unittest discover -s tool -p test_verify_macos_dmg.py -v
       - run: python3 -m unittest discover -s tool -p test_native_subscription_probe.py -v
       - run: flutter pub get
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && steps.dart_quality.outputs.reuse != 'true'
       - run: dart format --output=none --set-exit-if-changed lib test
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && steps.dart_quality.outputs.reuse != 'true'
       - run: flutter analyze --no-pub
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && steps.dart_quality.outputs.reuse != 'true'
       - run: flutter test --no-pub
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && steps.dart_quality.outputs.reuse != 'true'
   apple:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
