@@ -35,6 +35,8 @@
 | iOS 真机 | `FocuBili-v*-ios-unsigned.ipa` | 未签名 device IPA，需自行签名并配置适用于设备的 provisioning profile 后安装 |
 | Ubuntu 24.04 系列 / amd64 | `FocuBili-v*-linux-amd64.deb` | 建议用 `sudo apt install ./实际包名.deb` 安装；支持范围与“未知错误”排查见 [Linux 平台说明](docs/LINUX_PLATFORMS.md) |
 
+后续正式包和 Beta 包名会带构建号，例如 `FocuBili-v1.9.1-build33-android.apk`、`FocuBili-v1.9.1-beta.1-build2039-android-preview.apk`。v1.9.0 正式版及此前发布的下载文件名和链接保持原样。
+
 iOS Release 提供的是未签名真机 IPA，需自行完成签名和设备 provisioning；它不是模拟器包，也不是 App Store / TestFlight 分发包。签名与安装限制参见 [Apple 平台说明](docs/APPLE_PLATFORMS.md)。
 
 Android 正式版与 Beta / debug 预览包的包名不同，数据不会自动跨包迁移。升级前请留意自己安装的版本，保留原应用及重要资料。各平台的实际验证范围、签名和安装限制以对应 Release 说明为准。
