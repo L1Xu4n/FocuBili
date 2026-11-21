@@ -75,13 +75,18 @@ Future<void> _tapSide(
   required Finder surface,
   required bool forward,
   required PointerDeviceKind kind,
+  bool center = false,
 }) async {
   final rect = tester.getRect(surface);
   final point = Offset(
     // Keep portrait taps outside the floating settings card at all font metrics.
     rect.left +
         rect.width *
-            (rect.width <= 360 ? (forward ? .94 : .06) : (forward ? .83 : .17)),
+            (center
+                ? .5
+                : rect.width <= 360
+                ? (forward ? .94 : .06)
+                : (forward ? .83 : .17)),
     // With Ahem at 180% the bottom bar is taller than with system CJK
     // fonts. Target the actual gesture lane, not a button occupying mid-height.
     surface.evaluate().single.widget.key == _surface
@@ -168,8 +173,7 @@ void main() {
         addTearDown(tester.view.resetDevicePixelRatio);
         await loadBetaReviewFonts(tester);
         final boundary = GlobalKey();
-        // A desktop mouse may operate the settings simulation, but its live
-        // video gesture is not the gesture being previewed.
+        // The settings simulation and actual desktop mouse share edge zones.
         final previewKind = platform.isDesktop
             ? PointerDeviceKind.mouse
             : PointerDeviceKind.touch;
@@ -183,7 +187,7 @@ void main() {
           textScale: textScale,
         );
         final preview = find.byKey(_preview);
-        expect(find.textContaining('桌面鼠标双击仅切全屏'), findsOneWidget);
+        expect(find.textContaining('桌面鼠标双击共用边缘范围'), findsOneWidget);
         await _tapSide(
           tester,
           surface: preview,
@@ -325,14 +329,25 @@ void main() {
         expect(find.byType(PlayerSeekFeedback), findsNothing);
 
         if (platform.isDesktop) {
-          // Use the same live surface and point as the touch assertion. A
-          // mouse pair must enter fullscreen, never seek or dispatch singles.
+          // Desktop edges produce the identical seek visual; center alone
+          // switches fullscreen without seeking or dispatching a single.
+          await _tapSide(
+            tester,
+            surface: surface,
+            forward: forward,
+            kind: PointerDeviceKind.mouse,
+          );
+          final mouseShape = paintedRect(tester, _background());
+          expect(mouseShape, realShape);
+          await tester.pump(const Duration(milliseconds: 1201));
+          expect(_background(), findsNothing);
           for (final fullscreen in [true, false]) {
             await _tapSide(
               tester,
               surface: surface,
               forward: forward,
               kind: PointerDeviceKind.mouse,
+              center: true,
             );
             await tester.pump(kDoubleTapTimeout);
             await tester.pumpAndSettle();
@@ -348,7 +363,7 @@ void main() {
             }
             expect(
               playback.offsets.map((offset) => offset.inSeconds),
-              forward ? [5, 5] : [-5, -5],
+              forward ? [5, 5, 5] : [-5, -5, -5],
             );
             expect(_background(), findsNothing);
             expect(find.byType(PlayerSeekFeedback), findsNothing);

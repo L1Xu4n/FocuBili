@@ -68,6 +68,9 @@ jobs:
       - name: Verify Beta Debian metadata and package bytes
         if: inputs.beta_number != ''
         run: python3 tool/beta_release.py linux --beta-number "$BETA_NUMBER" --source-sha "$(git rev-parse HEAD)" --folder build/linux-packages --output build/linux-packages/linux-beta-verification.json
+      - name: Verify stable Debian package metadata and bytes
+        if: inputs.beta_number == ''
+        run: python3 tool/stable_package_metadata.py --output build/linux-packages/linux-stable-verification.json linux --folder build/linux-packages
       - name: Install generated DEB
         run: |
           packages=(build/linux-packages/*.deb)
@@ -98,5 +101,6 @@ jobs:
             build/linux-packages/*.png
             build/linux-packages/native-subscription.json
             build/linux-packages/linux-beta-verification.json
+            build/linux-packages/linux-stable-verification.json
           if-no-files-found: warn
           retention-days: 30

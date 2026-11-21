@@ -30,10 +30,12 @@ class _HomeChoice {
     this.imageUrl = '',
     this.groupAvatarUrls = const [],
     this.needsRemoteCover = false,
+    this.isPrivate,
   });
   final String imageUrl;
   final List<String> groupAvatarUrls;
   final bool needsRemoteCover;
+  final bool? isPrivate;
   final String kind;
   final String id;
   final String label;
@@ -106,6 +108,9 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
   Map<String, String> _localFolderNames = {};
   Map<String, String> _localFolderCovers = {};
   Map<String, String> _remoteFolderCovers = {};
+  Set<String> _remotePrivateFolderIds = {};
+  Map<String, String> _remoteFolderTitles = {};
+  int _remoteFolderEditEpoch = 0;
   Future<AccountDataPage<FavoriteFolder>>? _remoteFoldersPending;
   AccountDataPage<FavoriteFolder>? _remoteFoldersSnapshot;
   DateTime? _remoteFoldersLoadedAt;
@@ -171,6 +176,8 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
     setState(() {
       _localFolderCovers = {};
       _remoteFolderCovers = {};
+      _remotePrivateFolderIds = {};
+      _remoteFolderTitles = {};
       _groupNamesMid = 0;
       _localGroupNames = {};
       _groupAvatars = {};
@@ -221,6 +228,8 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
         setState(() {
           _localFolderCovers = {};
           _remoteFolderCovers = {};
+          _remotePrivateFolderIds = {};
+          _remoteFolderTitles = {};
           _selected = [];
           _loading = true;
         });
@@ -396,10 +405,16 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
   /// 仅同账号和读取代次采用封面；暂时断网不清空已知封面。
   Future<void> _loadRemoteCovers(int mid, int generation) async {
     final revision = CacheLifecycle.account.value;
+    final editEpoch = _remoteFolderEditEpoch;
     try {
       final page = await _favoriteFolders();
       final identity = await _api.checkHomeCollectionIdentity();
-      if (!mounted || generation != _generation || mid != _mid) return;
+      if (!mounted ||
+          generation != _generation ||
+          mid != _mid ||
+          editEpoch != _remoteFolderEditEpoch) {
+        return;
+      }
       final rejected = _coverAccessRejected(page.status);
       if (!rejected && _keepFavoritesDisplay(identity, revision)) return;
       if (identity.mid != mid) {
@@ -408,7 +423,11 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
       }
       if (!page.isSuccess) {
         if (page.status != AccountDataLoadStatus.networkError) {
-          setState(() => _remoteFolderCovers = {});
+          setState(() {
+            _remoteFolderCovers = {};
+            _remotePrivateFolderIds = {};
+            _remoteFolderTitles = {};
+          });
         }
         return;
       }
@@ -417,10 +436,12 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
           .map((choice) => choice.id)
           .toSet();
       final covers = <String, String>{};
+      final privateIds = <String>{};
       final missing = <FavoriteFolder>[];
       for (final folder in page.items) {
         if (!folder.isAvailable) continue;
         final id = '${folder.mediaId}';
+        if (folder.isPrivate == true) privateIds.add(id);
         if (selectedIds.contains(id) &&
             folder.mediaCount > 0 &&
             folder.coverUrl.trim().isEmpty) {
@@ -432,11 +453,21 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
           covers[id] = folder.coverUrl;
         }
       }
-      setState(() => _remoteFolderCovers = covers);
+      setState(() {
+        _remoteFolderCovers = covers;
+        _remotePrivateFolderIds = privateIds;
+      });
       await _backfillSelectedCovers(missing, mid, generation);
     } catch (_) {
-      if (mounted && generation == _generation && mid == _mid) {
-        setState(() => _remoteFolderCovers = {});
+      if (mounted &&
+          generation == _generation &&
+          mid == _mid &&
+          editEpoch == _remoteFolderEditEpoch) {
+        setState(() {
+          _remoteFolderCovers = {};
+          _remotePrivateFolderIds = {};
+          _remoteFolderTitles = {};
+        });
       }
     }
   }
@@ -600,6 +631,7 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
   /// 本机条目按稳定 ID 取名称，远端及已删除的入口保留快照。
   String _label(_HomeChoice choice) => switch (choice.kind) {
     'local' => _localFolderNames[choice.id] ?? choice.label,
+    'remote' => _remoteFolderTitles[choice.id] ?? choice.label,
     'group' when _groupNamesMid == _mid =>
       _localGroupNames[choice.id] ?? choice.label,
     _ => choice.label,
@@ -641,6 +673,22 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
     if (mounted) await _load();
   }
 
+  void _noteFavoriteFolderEdit(FavoriteFolder updated) {
+    _remoteFolderEditEpoch++;
+    _remoteFoldersSnapshot = null;
+    _remoteFoldersLoadedAt = null;
+    _remoteFoldersPending = null;
+    final id = '${updated.mediaId}';
+    setState(() {
+      _remoteFolderTitles[id] = updated.title;
+      if (updated.isPrivate == true) {
+        _remotePrivateFolderIds.add(id);
+      } else {
+        _remotePrivateFolderIds.remove(id);
+      }
+    });
+  }
+
   /// 收藏总览提供本机与 B 站两条直接路径，关注直接打开现有总览。
   Future<void> _overview() async {
     if (!widget.favorites) {
@@ -655,8 +703,17 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
         builder: (context) => const HomeFavoriteSourceDialog(),
       );
       if (local != null && mounted) {
+        final account = CacheLifecycle.account.value;
         await _push(
-          local ? const AppFavoriteFoldersPage() : const FavoriteFoldersPage(),
+          local
+              ? const AppFavoriteFoldersPage()
+              : FavoriteFoldersPage(
+                  onFolderEdited: (updated) {
+                    if (mounted && account == CacheLifecycle.account.value) {
+                      _noteFavoriteFolderEdit(updated);
+                    }
+                  },
+                ),
         );
       }
     } finally {
@@ -714,15 +771,25 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
             await push(AppFavoriteDetailPage(folder: matches.first));
           }
         case 'remote':
+          final id = int.parse(choice.id);
+          final known = _remoteFoldersSnapshot?.items
+              .where((folder) => folder.mediaId == id)
+              .firstOrNull;
           await push(
             FavoriteVideosPage(
-              folder: FavoriteFolder(
-                mediaId: int.parse(choice.id),
-                title: choice.label,
-                coverUrl: '',
-                mediaCount: 0,
-                isAvailable: true,
-              ),
+              folder:
+                  known ??
+                  FavoriteFolder(
+                    mediaId: id,
+                    title: _label(choice),
+                    coverUrl: '',
+                    mediaCount: 0,
+                    isAvailable: true,
+                  ),
+              editableOwnerMid: openingMid,
+              onFolderEdited: (updated) {
+                if (current()) _noteFavoriteFolderEdit(updated);
+              },
             ),
           );
         case 'group':
@@ -847,6 +914,7 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
               folder.title,
               imageUrl: missing ? (_remoteFolderCovers[id] ?? '') : cover,
               needsRemoteCover: missing,
+              isPrivate: folder.isAvailable ? folder.isPrivate : null,
             ),
           );
         }
@@ -1088,6 +1156,7 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
                     ? HomeFavoriteCover(
                         key: ValueKey('home-cover-${choice.key}'),
                         remote: choice.kind == 'remote',
+                        isPrivate: _remotePrivateFolderIds.contains(choice.id),
                         cache: widget.imageCache,
                         coverUrl: choice.kind == 'local'
                             ? (_localFolderCovers[choice.id] ?? '')
@@ -1491,6 +1560,7 @@ class _HomeChoiceEditorState extends State<_HomeChoiceEditor> {
             _PickerFavoriteCover(
               key: ValueKey(choice.id),
               load: (valid) => _previewCover(choice, valid),
+              isPrivate: choice.isPrivate,
               cache: widget.imageCache,
             )
           else
@@ -1622,9 +1692,15 @@ class _HomeChoiceEditorState extends State<_HomeChoiceEditor> {
 
 /// Starts one optional lookup on mount, not during rebuilds or for every folder.
 class _PickerFavoriteCover extends StatefulWidget {
-  const _PickerFavoriteCover({super.key, required this.load, this.cache});
+  const _PickerFavoriteCover({
+    super.key,
+    required this.load,
+    this.cache,
+    this.isPrivate,
+  });
 
   final Future<String> Function(bool Function()) load;
+  final bool? isPrivate;
   final ImageResourceCache? cache;
 
   @override
@@ -1640,6 +1716,7 @@ class _PickerFavoriteCoverState extends State<_PickerFavoriteCover> {
     builder: (context, snapshot) => HomeFavoriteCover(
       coverUrl: snapshot.data ?? '',
       remote: true,
+      isPrivate: widget.isPrivate,
       cache: widget.cache,
     ),
   );
@@ -1663,6 +1740,7 @@ class _ChoiceAvatar extends StatelessWidget {
       return HomeFavoriteCover(
         coverUrl: imageUrl,
         remote: choice.kind == 'remote',
+        isPrivate: choice.isPrivate,
         cache: cache,
       );
     }

@@ -148,8 +148,8 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  /// 矮横屏平板首页把学习入口和专注状态同时放在左右两栏。
-  testWidgets('矮横屏首页使用学习和专注双栏', (WidgetTester tester) async {
+  /// 矮横屏平板继承宽屏首页，抽屉由用户打开后才占用右侧。
+  testWidgets('矮横屏首页按需打开右侧学习抽屉', (WidgetTester tester) async {
     _configureTestWindow(tester, const Size(1024, 600));
     final FocusTimerController controller = FocusTimerController(
       tickInterval: const Duration(days: 1),
@@ -171,10 +171,16 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('focus-workspace-layout')), findsOneWidget);
-    expect(find.byKey(const Key('focus-workspace-primary')), findsOneWidget);
-    expect(find.byKey(const Key('focus-workspace-secondary')), findsOneWidget);
+    final search = find.byKey(const Key('home-start-search'));
+    final open = find.byKey(const Key('desktop-dock-open'));
+    final dock = find.byKey(const Key('desktop-learning-dock'));
+    expect(tester.getCenter(search).dx, closeTo(512, 1));
+    expect(dock, findsNothing);
     expect(find.byKey(const Key('focus-home-hero')), findsNothing);
+    await tester.tap(open);
+    await tester.pumpAndSettle();
+    expect(dock, findsOneWidget);
+    expect(tester.getTopRight(search).dx, lessThan(tester.getTopLeft(dock).dx));
     expect(find.byKey(const Key('focus-ready-card')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });

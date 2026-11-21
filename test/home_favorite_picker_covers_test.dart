@@ -41,12 +41,14 @@ FavoriteFolder _folder(
   String cover = '',
   int count = 2,
   bool available = true,
+  bool? isPrivate,
 }) => FavoriteFolder(
   mediaId: id,
   title: '远端收藏夹$id',
   coverUrl: cover,
   mediaCount: count,
   isAvailable: available,
+  isPrivate: isPrivate,
 );
 
 FavoriteVideo _video(String cover, {bool available = true}) => FavoriteVideo(
@@ -99,9 +101,9 @@ void main() {
     addTearDown(images.dispose);
     final api = CoverAccount();
     api.next = () async => _page([
-      _folder(7),
-      _folder(8, cover: _metadata),
-      _folder(9, count: 0),
+      _folder(7, isPrivate: true),
+      _folder(8, cover: _metadata, isPrivate: false),
+      _folder(9, count: 0, isPrivate: true),
       _folder(10, available: false),
       _folder(11),
     ]);
@@ -119,6 +121,13 @@ void main() {
     expect(_cover(tester, 8), _metadata);
     expect(_inside(7, Image), findsOneWidget);
     expect(_inside(8, Image), findsOneWidget);
+    Finder privacy(int id) =>
+        find.descendant(of: _row(id), matching: find.byTooltip('私密收藏夹'));
+    expect(privacy(7), findsOneWidget);
+    expect(privacy(8), findsNothing);
+    expect(privacy(9), findsOneWidget);
+    expect(privacy(10), findsNothing);
+    expect(privacy(11), findsNothing);
     expect(images.requested, unorderedEquals([_metadata, _fallback]));
     for (final id in [9, 10, 11]) {
       expect(_cover(tester, id), '');

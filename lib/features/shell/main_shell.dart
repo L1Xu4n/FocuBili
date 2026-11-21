@@ -25,6 +25,7 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell>
     with SingleTickerProviderStateMixin {
   late final AnimationController _navigationController;
+  final _homePageKey = GlobalKey();
   late final SubscriptionService _subscriptions =
       widget.subscriptionService ?? SubscriptionService.instance;
   static const _subscriptionDestinationIndex = 3;
@@ -115,9 +116,14 @@ class _MainShellState extends State<MainShell>
   }
 
   /// 创建需要挂载到主框架的三个一级页面，并保持它们的顺序稳定。
-  List<Widget> _buildPages({required bool workspace}) {
+  List<Widget> _buildPages({
+    required bool workspace,
+    required bool homeWorkspace,
+  }) {
     return <Widget>[
       HomePage(
+        key: _homePageKey,
+        workspace: homeWorkspace,
         onSearchRequested: _openSearch,
         onProfileRequested: _openProfile,
         refreshGeneration: _homeRefreshGeneration,
@@ -132,6 +138,7 @@ class _MainShellState extends State<MainShell>
   Widget _buildWorkspaceNavigation(
     Size windowSize, {
     required bool showSubscription,
+    required bool showAbout,
   }) {
     final bool extended = AdaptiveLayout.usesExpandedWorkspace(windowSize);
     return NavigationRail(
@@ -145,7 +152,7 @@ class _MainShellState extends State<MainShell>
           : NavigationRailLabelType.all,
       leading: Padding(
         padding: const EdgeInsets.only(bottom: 12),
-        child: _buildWorkspaceLogo(),
+        child: _buildWorkspaceLogo(showAbout: showAbout),
       ),
       destinations: <NavigationRailDestination>[
         const NavigationRailDestination(
@@ -180,8 +187,8 @@ class _MainShellState extends State<MainShell>
     );
   }
 
-  /// 桌面在原应用图标位置提供关于入口，保留平板原来的静态图标。
-  Widget _buildWorkspaceLogo() {
+  /// 宽屏首页复用品牌图标，保留原先平板简介中的关于入口。
+  Widget _buildWorkspaceLogo({required bool showAbout}) {
     final radius = BorderRadius.circular(12);
     final logo = ClipRRect(
       borderRadius: radius,
@@ -191,9 +198,7 @@ class _MainShellState extends State<MainShell>
         height: 42,
       ),
     );
-    if (!AdaptiveLayout.isDesktopPlatform(Theme.of(context).platform)) {
-      return logo;
-    }
+    if (!showAbout) return logo;
     return IconButton(
       key: const Key('workspace-navigation-open-about'),
       tooltip: '关于焦点哔哩',
@@ -314,7 +319,14 @@ class _MainShellState extends State<MainShell>
                 constraints.maxHeight,
               );
               final bool workspace = AdaptiveLayout.usesWorkspace(windowSize);
-              final List<Widget> pages = _buildPages(workspace: workspace);
+              // 软键盘把可见区域压矮不是旋转，不能让宽竖屏首页切到右侧抽屉。
+              final bool homeWorkspace =
+                  workspace &&
+                  AdaptiveLayout.usesWorkspace(MediaQuery.sizeOf(context));
+              final List<Widget> pages = _buildPages(
+                workspace: workspace,
+                homeWorkspace: homeWorkspace,
+              );
               final Widget pageStack = ClipRect(
                 child: _buildPageStack(
                   pages: pages,
@@ -327,14 +339,20 @@ class _MainShellState extends State<MainShell>
                   children: <Widget>[
                     ListenableBuilder(
                       listenable: _subscriptions,
-                      builder: (context, _) => _buildWorkspaceNavigation(
-                        windowSize,
-                        showSubscription:
+                      builder: (context, _) {
+                        // 平板只在首页接管旧简介的订阅和关于入口；不改变其他一级页。
+                        final bool showHomeActions =
                             AdaptiveLayout.isDesktopPlatform(
                               Theme.of(context).platform,
-                            ) &&
-                            _subscriptions.enabled,
-                      ),
+                            ) ||
+                            (homeWorkspace && _currentIndex == 0);
+                        return _buildWorkspaceNavigation(
+                          windowSize,
+                          showSubscription:
+                              showHomeActions && _subscriptions.enabled,
+                          showAbout: showHomeActions,
+                        );
+                      },
                     ),
                     const VerticalDivider(width: 1),
                     Expanded(child: pageStack),

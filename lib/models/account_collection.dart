@@ -170,6 +170,8 @@ class FavoriteFolder {
     required this.coverUrl,
     required this.mediaCount,
     required this.isAvailable,
+    this.isPrivate,
+    this.ownerMid,
   });
 
   /// 收藏夹的完整 media_id，读取内容时必须使用此字段。
@@ -186,6 +188,21 @@ class FavoriteFolder {
 
   /// 标记收藏夹是否处于正常可读取状态，失效夹仍可由页面说明原因。
   final bool isAvailable;
+
+  /// 仅使用账号接口明确返回的可见性；未提供时为 null。
+  final bool? isPrivate;
+  final int? ownerMid;
+
+  FavoriteFolder withEditedMetadata(String title, bool isPrivate) =>
+      FavoriteFolder(
+        mediaId: mediaId,
+        title: title,
+        coverUrl: coverUrl,
+        mediaCount: mediaCount,
+        isAvailable: isAvailable,
+        isPrivate: isPrivate,
+        ownerMid: ownerMid,
+      );
 }
 
 /// 表示收藏夹中的一个视频条目，不包含播放地址或任何登录资料。

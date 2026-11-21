@@ -36,6 +36,11 @@ extension _PlayerLocalLibrary on _PlayerPageState {
         !video.isCourse || revision == CacheLifecycle.account.value;
     _updatePlayerState(() => _offlineDownloading = true);
     try {
+      if (!video.isCourse && video.parts.length > 1) {
+        await _selectOfflineParts(video);
+        if (mounted) await _loadOfflineState();
+        return;
+      }
       final lesson = video.isCourse
           ? await _downloadQueue.courseEntry(video, part)
           : null;
@@ -127,29 +132,7 @@ extension _PlayerLocalLibrary on _PlayerPageState {
               task.status.name == 'queued' || task.status.name == 'downloading'
               ? '已加入下载队列'
               : '下载任务已存在';
-          if (_fullscreen ||
-              AdaptiveLayout.usesWorkspace(MediaQuery.sizeOf(context))) {
-            _playerNotices.show(
-              message,
-              duration: const Duration(seconds: 4),
-              actionLabel: '查看队列',
-              onAction: () => unawaited(_openDownloadQueue()),
-            );
-          } else {
-            ScaffoldMessenger.of(context)
-              ..hideCurrentSnackBar()
-              ..showSnackBar(
-                SnackBar(
-                  duration: const Duration(seconds: 4),
-                  persist: false,
-                  content: Text(message),
-                  action: SnackBarAction(
-                    label: '查看队列',
-                    onPressed: () => unawaited(_openDownloadQueue()),
-                  ),
-                ),
-              );
-          }
+          _showOfflineQueueNotice(message);
         }
       }
       if (mounted) await _loadOfflineState();
@@ -164,6 +147,40 @@ extension _PlayerLocalLibrary on _PlayerPageState {
       }
     } finally {
       if (mounted) _updatePlayerState(() => _offlineDownloading = false);
+    }
+  }
+
+  void _showOfflineQueueNotice(String message) => _showOfflineNotice(
+    message,
+    actionLabel: '查看队列',
+    onAction: () => unawaited(_openDownloadQueue()),
+  );
+
+  void _showOfflineNotice(
+    String message, {
+    required String actionLabel,
+    required VoidCallback onAction,
+    Duration duration = const Duration(seconds: 4),
+  }) {
+    if (_fullscreen ||
+        AdaptiveLayout.usesWorkspace(MediaQuery.sizeOf(context))) {
+      _playerNotices.show(
+        message,
+        duration: duration,
+        actionLabel: actionLabel,
+        onAction: onAction,
+      );
+    } else {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            duration: duration,
+            persist: false,
+            content: Text(message),
+            action: SnackBarAction(label: actionLabel, onPressed: onAction),
+          ),
+        );
     }
   }
 
@@ -191,20 +208,23 @@ extension _PlayerLocalLibrary on _PlayerPageState {
 
   /// 创建“离线缓存”按钮，并根据下载状态切换图标与文字。
   Widget _buildOfflineDownloadButton() {
+    final managedAsParts =
+        !_activeVideo.isCourse && _activeVideo.parts.length > 1;
+    final cached = _currentVideoDownloaded && !managedAsParts;
     return PlayerLibraryAction(
-      tooltip: _currentVideoDownloaded ? '删除离线缓存' : '下载离线缓存',
+      tooltip: cached ? '删除离线缓存' : '下载离线缓存',
       key: const Key('current-video-offline-download-button'),
       busy: _offlineDownloading,
-      selected: _currentVideoDownloaded,
+      selected: cached,
       onPressed: _offlineDownloading
           ? null
           : () => unawaited(_toggleOfflineDownload()),
-      icon: _currentVideoDownloaded
+      icon: cached
           ? Icons.offline_pin_rounded
           : Icons.download_for_offline_outlined,
       label: _offlineDownloading
           ? '加入中…'
-          : _currentVideoDownloaded
+          : cached
           ? '已缓存'
           : '离线缓存',
     );

@@ -12,6 +12,7 @@ class OfflineDownloadTask {
     required this.part,
     required this.quality,
     required this.createdAt,
+    this.completedAt,
     this.courseMid,
     this.cacheLocationId,
     this.status = DownloadTaskStatus.queued,
@@ -20,15 +21,19 @@ class OfflineDownloadTask {
     this.error,
     this.courseDiagnostic,
     this.bytesPerSecond = 0,
+    this.requireExactQuality = false,
   });
 
   final VideoPreview video;
   final VideoPart part;
   final int quality;
+  final bool requireExactQuality;
   final int? courseMid;
   // Fixed at enqueue; null also represents pre-feature tasks in the default root.
   final String? cacheLocationId;
   final DateTime createdAt;
+  // Independent of enqueue and course authorization timestamps.
+  final DateTime? completedAt;
   final DownloadTaskStatus status;
   final int receivedBytes;
   final int? totalBytes;
@@ -58,6 +63,7 @@ class OfflineDownloadTask {
   /// Applies a state transition while keeping immutable download identity.
   OfflineDownloadTask copyWith({
     DownloadTaskStatus? status,
+    DateTime? completedAt,
     int? receivedBytes,
     int? totalBytes,
     String? error,
@@ -68,10 +74,14 @@ class OfflineDownloadTask {
     video: video,
     part: part,
     quality: quality,
+    requireExactQuality: requireExactQuality,
     courseMid: courseMid,
     cacheLocationId: cacheLocationId,
     createdAt: createdAt,
     status: status ?? this.status,
+    completedAt: (status ?? this.status) == DownloadTaskStatus.completed
+        ? completedAt ?? this.completedAt
+        : null,
     receivedBytes: receivedBytes ?? this.receivedBytes,
     totalBytes: totalBytes ?? this.totalBytes,
     error: error,
@@ -101,7 +111,10 @@ class OfflineDownloadTask {
     },
     if (cacheLocationId != null) 'cacheLocationId': cacheLocationId,
     'quality': quality,
+    if (requireExactQuality) 'requireExactQuality': true,
     'createdAt': createdAt.toIso8601String(),
+    if (status == DownloadTaskStatus.completed && completedAt != null)
+      'completedAt': completedAt!.toUtc().toIso8601String(),
     'status': status.name,
     'receivedBytes': receivedBytes,
     'totalBytes': totalBytes,
@@ -160,10 +173,15 @@ class OfflineDownloadTask {
       ),
       part: part,
       quality: quality,
+      requireExactQuality: ordinary && json['requireExactQuality'] == true,
       courseMid: courseMid,
       cacheLocationId: json['cacheLocationId'] as String?,
       createdAt: DateTime.parse(json['createdAt'] as String),
       status: status,
+      completedAt:
+          status == DownloadTaskStatus.completed && json['completedAt'] != null
+          ? DateTime.parse(json['completedAt'] as String)
+          : null,
       receivedBytes: received,
       totalBytes: total,
       error: json['error'] as String?,

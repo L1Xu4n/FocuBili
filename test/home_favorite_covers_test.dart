@@ -55,14 +55,19 @@ class CoverAccount extends BilibiliAccountDataService {
   }
 }
 
-FavoriteFolder folder(String cover, {int id = 7, bool available = true}) =>
-    FavoriteFolder(
-      mediaId: id,
-      title: '远端课程',
-      coverUrl: cover,
-      mediaCount: 2,
-      isAvailable: available,
-    );
+FavoriteFolder folder(
+  String cover, {
+  int id = 7,
+  bool available = true,
+  bool? isPrivate,
+}) => FavoriteFolder(
+  mediaId: id,
+  title: '远端课程',
+  coverUrl: cover,
+  mediaCount: 2,
+  isAvailable: available,
+  isPrivate: isPrivate,
+);
 Map<String, String> choice(String kind, String id, String label) => {
   'kind': kind,
   'id': id,
@@ -122,6 +127,32 @@ AppFavoriteItem item(String id, String bv, String cover, int minute) =>
     );
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
+  testWidgets('首页仅在当前账号名单确认私密时叠加锁，重用原请求', (tester) async {
+    final api = CoverAccount();
+    await seed(101, [choice('remote', '7', '远端课程')]);
+    await seed(202, [choice('remote', '7', '远端课程')]);
+    api.next = () async => AccountDataPage.success(
+      items: [folder('', isPrivate: api.mid == 101)],
+      page: 1,
+      hasMore: false,
+    );
+    await tester.pumpWidget(host(api));
+    await settle(tester);
+    Finder pinned() => find.byKey(const ValueKey('home-cover-remote:7'));
+    Finder lock() =>
+        find.descendant(of: pinned(), matching: find.byTooltip('私密收藏夹'));
+    expect(lock(), findsOneWidget);
+    expect(api.calls, 1);
+
+    api.mid = 202;
+    CacheLifecycle.accountChanged();
+    await settle(tester);
+    expect(pinned(), findsOneWidget);
+    expect(lock(), findsNothing);
+    expect(api.calls, 2);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('旧配置不含URL也显示分来源封面，重建不重复请求', (tester) async {
     final api = CoverAccount();
     final service = AppFavoritesService();

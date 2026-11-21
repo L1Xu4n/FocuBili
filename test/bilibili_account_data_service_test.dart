@@ -371,9 +371,42 @@ void main() {
     expect(result.items.single.mediaId, 1001);
     expect(result.items.single.coverUrl, 'https://i0.hdslb.com/folder.jpg');
     expect(result.items.single.isAvailable, isTrue);
+    expect(result.items.single.isPrivate, isTrue);
     expect(api.endpoints.single.path, '/x/v3/fav/folder/created/list-all');
     expect(api.endpoints.single.queryParameters['up_mid'], '42');
     expect(api.receivedCookies, <String>['SESSDATA=test-session']);
+  });
+
+  test('收藏夹 attr 仅用最低位判断私密，无有效 attr 时保持未知', () async {
+    final session = _FakeSessionProvider(state: _activeSession());
+    final api = _RecordingAccountDataApi(
+      (_) async => _ok('''
+      {"code":0,"data":{"list":[
+        {"id":1,"attr":0},
+        {"id":2,"attr":1},
+        {"id":3,"attr":2},
+        {"id":4,"attr":"3"},
+        {"id":5},
+        {"id":6,"attr":-1},
+        {"id":7,"attr":1.5},
+        {"id":8,"attr":"unknown"},
+        {"id":9,"attr":true}
+      ]}}
+    '''),
+    );
+    final result = await _service(session, api).loadFavoriteFolders();
+    expect(result.items.map((item) => item.isPrivate), [
+      false,
+      true,
+      false,
+      true,
+      null,
+      null,
+      null,
+      null,
+      null,
+    ]);
+    expect(api.endpoints, hasLength(1));
   });
 
   /// 验证收藏内容请求按页传递参数、保留失效项并过滤没有 BV 号的非法项。

@@ -6,22 +6,27 @@ import '../../core/layout/adaptive_page_frame.dart';
 import '../../core/layout/adaptive_two_column_list.dart';
 import '../../models/account_collection.dart';
 import '../../services/bilibili_account_data_service.dart';
+import '../../services/bilibili_interaction_service.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/cache_lifecycle.dart';
 import 'favorite_videos_page.dart';
 import 'favorite_folder_card.dart';
 
-/// 展示当前登录账号创建的收藏夹，并只允许用户进入查看其内容。
+/// 展示当前登录账号创建的收藏夹，并在详情中按权限提供编辑入口。
 class FavoriteFoldersPage extends StatefulWidget {
   /// 创建可注入只读账号服务的收藏夹页面，便于测试和安全替换实现。
   const FavoriteFoldersPage({
     super.key,
     this.accountDataService,
+    this.interactionService,
+    this.onFolderEdited,
     this.bilibiliService,
   });
 
   /// 可选的账号数据服务，未传入时复用当前 WebView 会话的默认服务。
   final BilibiliAccountDataService? accountDataService;
+  final BilibiliInteractionService? interactionService;
+  final ValueChanged<FavoriteFolder>? onFolderEdited;
 
   /// 可选的公开视频详情服务，会传给收藏内容页用于打开可播放视频。
   final BilibiliService? bilibiliService;
@@ -227,17 +232,43 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
     }
   }
 
-  /// 打开可用收藏夹的只读内容页；失效收藏夹只提示原因，不执行任何请求或写操作。
+  /// 打开可用收藏夹内容页；失效收藏夹只提示原因。
   Future<void> _openFolder(FavoriteFolder folder) async {
     if (!folder.isAvailable) {
       _showMessage('该收藏夹已失效，暂时无法读取内容。');
       return;
     }
+    final revision = CacheLifecycle.account.value;
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        // 内容页构建函数复用同一只读账号服务和公开视频详情服务。
+        // 详情页复用只读列表；明确保存时才进入独立互动服务。
         builder: (BuildContext context) => FavoriteVideosPage(
           folder: folder,
+          editableOwnerMid: folder.ownerMid,
+          interactionService: widget.interactionService,
+          onFolderEdited: (updated) {
+            final page = _page;
+            if (!mounted ||
+                revision != CacheLifecycle.account.value ||
+                page == null ||
+                !page.isSuccess) {
+              return;
+            }
+            _request++;
+            setState(() {
+              _isLoading = false;
+              _page = _snapshot.page = AccountDataPage.success(
+                items: [
+                  for (final item in page.items)
+                    if (item.mediaId == updated.mediaId) updated else item,
+                ],
+                page: page.page,
+                hasMore: page.hasMore,
+                totalCount: page.totalCount,
+              );
+            });
+            widget.onFolderEdited?.call(updated);
+          },
           accountDataService: _accountDataService,
           bilibiliService: _bilibiliService,
         ),
@@ -368,6 +399,7 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
             title: folder.title,
             count: folder.mediaCount,
             available: folder.isAvailable,
+            isPrivate: folder.isPrivate,
             coverUrl: folder.coverUrl.isNotEmpty
                 ? folder.coverUrl
                 : (_snapshot.covers[folder.mediaId]?.url ?? ''),

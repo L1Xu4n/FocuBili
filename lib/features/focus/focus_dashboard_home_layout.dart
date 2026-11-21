@@ -251,76 +251,7 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
     );
   }
 
-  /// 创建横屏工作台左栏的品牌说明和主要搜索动作。
-  Widget _buildWorkspaceIntro(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    return Card(
-      key: const Key('focus-workspace-intro'),
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Row(
-              children: <Widget>[
-                Icon(
-                  Icons.filter_center_focus_rounded,
-                  color: theme.colorScheme.primary,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    key: const Key('workspace-open-about'),
-                    onTap: () =>
-                        Navigator.of(context).pushNamed(AppRoutes.about),
-                    child: Text(
-                      '焦点哔哩',
-                      style: theme.textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                ),
-                // 保留首页文字节点，兼容已有的页面识别和无障碍测试。
-                const SizedBox.shrink(child: Text('首页')),
-              ],
-            ),
-            _buildSubscriptionIntroduction(),
-            const SizedBox(height: 42),
-            Text(
-              '今天要学点什么？',
-              style: theme.textTheme.headlineMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              '从一个明确的视频开始，把注意力留给真正想完成的事。',
-              style: theme.textTheme.bodyLarge?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 28),
-            FilledButton.icon(
-              key: const Key('home-start-search'),
-              // 工作台搜索按钮函数切换到左侧导航中的搜索页面。
-              onPressed: widget.onOpenVideo,
-              icon: const Icon(Icons.search_rounded),
-              label: const Text('开始搜索'),
-              style: FilledButton.styleFrom(minimumSize: const Size(176, 52)),
-            ),
-            // 保留旧入口文字节点，但工作台只绘制一个清晰的主要动作。
-            const SizedBox.shrink(child: Text('打开视频')),
-            if (!_hasHomeDrawer && _homeLayoutLoaded)
-              Center(child: _drawerRecoveryButton()),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// 桌面关闭抽屉后，以内容区域为中心，只保留欢迎语和两个文字动作。
+  /// 宽屏首页关闭抽屉后，以内容区域为中心，只保留欢迎语和两个文字动作。
   Widget _buildMinimalWorkspaceHome(
     BuildContext context, {
     bool showRestore = true,
@@ -396,7 +327,9 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
     FocusSession? activeSession,
     FocusSession? finishedSession,
   ) {
-    final colors = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final touch = !AdaptiveLayout.isDesktopPlatform(theme.platform);
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = (constraints.maxWidth * .37).clamp(364.0, 520.0);
@@ -415,6 +348,11 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
                       child: FilledButton.tonalIcon(
                         key: const Key('desktop-dock-open'),
                         onPressed: _toggleDesktopDock,
+                        style: touch
+                            ? FilledButton.styleFrom(
+                                minimumSize: const Size(48, 48),
+                              )
+                            : null,
                         iconAlignment: IconAlignment.end,
                         icon: const Icon(Icons.chevron_left_rounded, size: 18),
                         label: const Text('打开抽屉'),
@@ -426,7 +364,7 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
                       child: Tooltip(
                         message: '收起抽屉',
                         child: SizedBox(
-                          width: 44,
+                          width: touch ? 48 : 44,
                           height: 76,
                           child: Material(
                             color: Colors.transparent,
@@ -508,62 +446,6 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
           ],
         );
       },
-    );
-  }
-
-  /// 横屏左侧保留简介，所有可编辑卡片统一放在独立可滚动的右侧区域。
-  Widget _buildWorkspaceDashboard(
-    BuildContext context,
-    FocusSession? activeSession,
-    FocusSession? finishedSession,
-  ) {
-    return Padding(
-      key: const Key('focus-workspace-layout'),
-      padding: const EdgeInsets.all(20),
-      child: LayoutBuilder(
-        // 按真正剩余的卡片区域选择列数，避免把导航栏宽度算进卡片空间。
-        builder: (context, constraints) {
-          final double introWidth = constraints.maxWidth >= 1100 ? 340 : 300;
-          final double boardWidth = constraints.maxWidth - introWidth - 20;
-          final double scale = MediaQuery.textScalerOf(context).scale(16) / 16;
-          final int columns = boardWidth >= 760 * scale ? 2 : 1;
-          if (!_hasHomeDrawer) {
-            return Center(
-              child: SizedBox(
-                width: 520,
-                child: SingleChildScrollView(
-                  child: _buildWorkspaceIntro(context),
-                ),
-              ),
-            );
-          }
-          return Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              SizedBox(
-                width: introWidth,
-                child: SingleChildScrollView(
-                  key: const Key('focus-workspace-primary'),
-                  child: _buildWorkspaceIntro(context),
-                ),
-              ),
-              const SizedBox(width: 20),
-              Expanded(
-                child: SingleChildScrollView(
-                  key: const Key('focus-workspace-secondary'),
-                  controller: _scrollController,
-                  child: _buildHomeCardBoard(
-                    context,
-                    activeSession,
-                    finishedSession,
-                    columns: columns,
-                  ),
-                ),
-              ),
-            ],
-          );
-        },
-      ),
     );
   }
 

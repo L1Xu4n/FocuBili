@@ -22,18 +22,18 @@
 
 ## 下载与安装
 
-**[下载最新正式版](https://github.com/L1Xu4n/FocuBili/releases/latest)** · [v1.8.0 更新简报](docs/RELEASE_NOTES_v1.8.0.md) · [反馈问题](https://github.com/L1Xu4n/FocuBili/issues)
+**[下载最新正式版](https://github.com/L1Xu4n/FocuBili/releases/latest)** · [v1.9.0 更新说明](docs/RELEASE_NOTES_v1.9.0.md) · [反馈问题](https://github.com/L1Xu4n/FocuBili/issues)
 
 在 Release 页按设备选择安装包：
 
 | 平台 | 选择的文件 | 安装说明 |
 |---|---|---|
-| Android 7.0+ | `FocuBili-v1.8.0-android.apk` | 更新请直接覆盖安装，不要先卸载旧版 |
-| Windows 10 1809+ / x64 | `FocuBili-v1.8.0-windows-x64-setup.exe` | 使用安装器；没有商业代码签名时，系统可能显示“未知发布者” |
-| Windows 10 1809+ / x64 便携版 | [FocuBili-v1.8.0-windows-x64-portable.zip](https://github.com/L1Xu4n/FocuBili/releases/download/v1.8.0/FocuBili-v1.8.0-windows-x64-portable.zip) | 完整解压后运行 `FocuBili.exe`，保留同目录 DLL 和 `data/` |
-| macOS | `FocuBili-v1.8.0-macos-universal.dmg` | 打开后将 App 拖入 Applications；当前为 ad-hoc 签名、未公证，详见 [Apple 平台说明](docs/APPLE_PLATFORMS.md) |
-| iOS 真机 | [FocuBili-v1.8.0-ios-unsigned.ipa](https://github.com/L1Xu4n/FocuBili/releases/download/v1.8.0/FocuBili-v1.8.0-ios-unsigned.ipa) | 未签名 device IPA，需自行签名并配置适用于设备的 provisioning profile 后安装 |
-| Ubuntu 24.04 系列 / amd64 | `FocuBili-v1.8.0-linux-amd64.deb` | 建议用 `sudo apt install ./实际包名.deb` 安装；支持范围与“未知错误”排查见 [Linux 平台说明](docs/LINUX_PLATFORMS.md) |
+| Android 7.0+ | `FocuBili-v*-android.apk` | 更新请直接覆盖安装，不要先卸载旧版 |
+| Windows 10 1809+ / x64 | `FocuBili-v*-windows-x64-setup.exe` | 使用安装器；没有商业代码签名时，系统可能显示“未知发布者” |
+| Windows 10 1809+ / x64 便携版 | `FocuBili-v*-windows-x64-portable.zip` | 完整解压后运行 `FocuBili.exe`，保留同目录 DLL 和 `data/` |
+| macOS | `FocuBili-v*-macos-universal.dmg` | 打开后将 App 拖入 Applications；当前为 ad-hoc 签名、未公证，详见 [Apple 平台说明](docs/APPLE_PLATFORMS.md) |
+| iOS 真机 | `FocuBili-v*-ios-unsigned.ipa` | 未签名 device IPA，需自行签名并配置适用于设备的 provisioning profile 后安装 |
+| Ubuntu 24.04 系列 / amd64 | `FocuBili-v*-linux-amd64.deb` | 建议用 `sudo apt install ./实际包名.deb` 安装；支持范围与“未知错误”排查见 [Linux 平台说明](docs/LINUX_PLATFORMS.md) |
 
 iOS Release 提供的是未签名真机 IPA，需自行完成签名和设备 provisioning；它不是模拟器包，也不是 App Store / TestFlight 分发包。签名与安装限制参见 [Apple 平台说明](docs/APPLE_PLATFORMS.md)。
 
@@ -48,7 +48,7 @@ Android 正式版与 Beta / debug 预览包的包名不同，数据不会自动�
 - **学习与专注**：按视频分 P 整理学习清单，观看时进行专注计时，查看本机专注统计。
 - **播放与笔记**：画质、倍速、字幕、弹幕、时间点笔记和截图，以及离线缓存；Android 支持听视频和后台媒体控制。
 - **离线存储**：Windows、macOS 和 Linux 可在「离线缓存」右上角选择新下载的存放位置；已有缓存和任务保留在原目录。
-- **个性化**：首页与“我的”卡片排序、主题、自定义双击区域与长按倍速、横竖屏布局选择。
+- **个性化**：首页与“我的”卡片排序、主题、80%–200% 界面文字大小、自定义双击区域与长按倍速、横竖屏布局选择。
 - **本机数据管理**：软件收藏夹、观看记录、设置与登录信息迁移；关于和问题诊断显示构建号、BuildTime 及脱敏诊断信息。
 
 ## 开始使用
@@ -129,7 +129,7 @@ flutter build windows --release
 
 提交修改前请阅读 [贡献指南](CONTRIBUTING.md)，PR 目标为 `dev`。目录结构和第三方依赖可从 `lib/`、`packages/`、`third_party/` 与 `tool/` 查看；首次安装展示的完整声明见 [用户须知与使用协议](docs/USER_AGREEMENT.md)。
 
-发布说明中供 App 展示的摘要格式见 [v1.8.0 更新简报](docs/RELEASE_NOTES_v1.8.0.md)。以往更新见 [v1.7.1](docs/RELEASE_NOTES_v1.7.1.md)、[v1.7.0](docs/RELEASE_NOTES_v1.7.0.md) 和 [全部 Releases](https://github.com/L1Xu4n/FocuBili/releases)。
+发布说明中供 App 展示的摘要格式见 [v1.9.0 更新说明](docs/RELEASE_NOTES_v1.9.0.md)。以往更新见 [v1.7.1](docs/RELEASE_NOTES_v1.7.1.md)、[v1.7.0](docs/RELEASE_NOTES_v1.7.0.md) 和 [全部 Releases](https://github.com/L1Xu4n/FocuBili/releases)。
 
 ## 致谢
 

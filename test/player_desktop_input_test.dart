@@ -10,12 +10,15 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:focubili/features/player/player_page.dart';
+import 'package:focubili/features/player/widgets/player_control_widgets.dart';
 import 'package:focubili/features/player/widgets/player_timeline.dart';
+import 'package:focubili/models/playback_preferences.dart';
 import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/models/video_shot_preview.dart';
 import 'package:focubili/platform/app_platform.dart';
 import 'package:focubili/services/image_resource_cache.dart';
 import 'package:focubili/services/native_playback_service.dart';
+import 'package:focubili/services/playback_preferences_service.dart';
 import 'package:focubili/services/playback_video_surface.dart';
 import 'package:focubili/services/video_shot_service.dart';
 
@@ -58,10 +61,11 @@ class _Playback extends FeedbackPlayback {
     bool? playRequested,
     PlaybackPhase phase = PlaybackPhase.ready,
     bool inPictureInPicture = false,
+    Duration position = const Duration(seconds: 20),
   }) => controller.add(
     PlaybackSnapshot(
       phase: phase,
-      position: const Duration(seconds: 20),
+      position: position,
       duration: _duration,
       isPlaying: playing,
       playRequested: playRequested,
@@ -220,8 +224,10 @@ Future<void> _mount(
   Size size = const Size(1280, 720),
   String? fontFamily,
   TextScaler? textScaler,
+  Future<void> Function()? configurePreferences,
 }) async {
   SharedPreferences.setMockInitialValues({});
+  if (configurePreferences != null) await configurePreferences();
   t.view.devicePixelRatio = 1;
   t.view.physicalSize = size;
   addTearDown(t.view.resetPhysicalSize);
@@ -393,7 +399,7 @@ void main() {
     AppPlatform.linux,
   ]) {
     testWidgets(
-      '${platform.name} mouse single toggles playback, double only fullscreen',
+      '${platform.name} mouse single toggles playback, center double toggles fullscreen',
       (t) async {
         final playback = _Playback();
         final metadata = _Metadata();
@@ -423,7 +429,7 @@ void main() {
         await t.pump(const Duration(seconds: 6));
         expect(_controlOpacity(t), 0);
 
-        final side = t.getRect(_surface).topLeft + const Offset(80, 220);
+        final side = t.getCenter(_surface);
         await mouse.down(side);
         await mouse.up();
         await t.pump(const Duration(milliseconds: 65));
@@ -440,8 +446,7 @@ void main() {
         expect(playback.offsets, isEmpty);
         expect(metadata.calls, isEmpty);
 
-        final fullscreenSide =
-            t.getRect(_surface).topLeft + const Offset(100, 200);
+        final fullscreenSide = t.getCenter(_surface);
         await mouse.down(fullscreenSide);
         await mouse.up();
         await t.pump(const Duration(milliseconds: 65));
@@ -455,6 +460,110 @@ void main() {
       },
     );
   }
+
+  for (final enableTouchSeek in [true, false]) {
+    testWidgets(
+      'mouse double click shares custom bounds independently of touch switch ($enableTouchSeek)',
+      (t) async {
+        final playback = _Playback();
+        await _mount(
+          t,
+          playback,
+          _Metadata(),
+          configurePreferences: () async {
+            const preferences = PlaybackPreferencesService();
+            await preferences.saveDoubleTapRegions(
+              const DoubleTapRegions(
+                leftWidth: .20,
+                rightWidth: .15,
+                height: .60,
+              ),
+            );
+            await preferences.saveDoubleTapSeekEnabled(enableTouchSeek);
+          },
+        );
+        final mouse = await _mouse(t, t.getCenter(_surface));
+        addTearDown(mouse.removePointer);
+
+        Future<void> doubleClick(double x, double y) async {
+          final rect = t.getRect(_surface);
+          final point = rect.topLeft + Offset(rect.width * x, rect.height * y);
+          await mouse.down(point);
+          await mouse.up();
+          await t.pump(const Duration(milliseconds: 65));
+          await mouse.down(point);
+          await mouse.up();
+          await t.pump();
+          expect(playback.commands, isEmpty);
+          await t.pump(kDoubleTapTimeout);
+          await t.pumpAndSettle();
+          expect(playback.commands, isEmpty);
+        }
+
+        await doubleClick(.15, .5);
+        expect(find.byTooltip('进入全屏'), findsOneWidget);
+        await doubleClick(.90, .5);
+        expect(find.byTooltip('进入全屏'), findsOneWidget);
+        expect(playback.offsets, [
+          const Duration(seconds: -5),
+          const Duration(seconds: 5),
+        ]);
+
+        // x=.24 would seek at the default width, but not at the saved .20.
+        await doubleClick(.24, .5);
+        expect(find.byTooltip('退出全屏'), findsOneWidget);
+        await doubleClick(.90, .5);
+        await doubleClick(.15, .5);
+        expect(find.byTooltip('退出全屏'), findsOneWidget);
+        // Outside the saved height band, an edge click belongs to fullscreen.
+        await doubleClick(.15, .15);
+        expect(find.byTooltip('进入全屏'), findsOneWidget);
+        expect(playback.offsets, [
+          const Duration(seconds: -5),
+          const Duration(seconds: 5),
+          const Duration(seconds: 5),
+          const Duration(seconds: -5),
+        ]);
+        expect(playback.seeks, isEmpty);
+      },
+    );
+  }
+
+  testWidgets(
+    'narrow desktop mouse seeks clamp visible progress at both ends',
+    (t) async {
+      final playback = _Playback();
+      await _mount(t, playback, _Metadata(), size: const Size(420, 760));
+      final mouse = await _mouse(t, t.getCenter(_surface));
+      addTearDown(mouse.removePointer);
+
+      for (final (second, zone, offset, expected) in [
+        (1, .17, -5, 0.0),
+        (119, .83, 5, 1.0),
+      ]) {
+        playback.emit(true, position: Duration(seconds: second));
+        await t.pumpAndSettle();
+        final rect = t.getRect(_surface);
+        final point = Offset(rect.left + rect.width * zone, rect.center.dy);
+        await mouse.down(point);
+        await mouse.up();
+        await t.pump(const Duration(milliseconds: 65));
+        await mouse.down(point);
+        await mouse.up();
+        await t.pump();
+        expect(playback.offsets.last, Duration(seconds: offset));
+        expect(
+          t
+              .widget<PlayerProgressSlider>(find.byType(PlayerProgressSlider))
+              .value,
+          expected,
+        );
+        await t.pump(kDoubleTapTimeout);
+        expect(playback.commands, isEmpty);
+        expect(find.byTooltip('进入全屏'), findsOneWidget);
+      }
+    },
+  );
 
   testWidgets(
     'Space and Escape work when the active desktop player loses focus',
@@ -621,6 +730,81 @@ void main() {
     expect(_controlOpacity(t), 1);
     expect(playback.commands, ['pause']);
     expect(playback.seeks, isEmpty);
+  });
+
+  for (final fullscreen in [false, true]) {
+    testWidgets(
+      'real center/corner mouse motion reveals and resets three-second desktop hide (fullscreen=$fullscreen)',
+      (t) async {
+        final playback = _VisualPlayback();
+        await _mount(t, playback, _Metadata());
+        if (fullscreen) {
+          await t.tap(find.byTooltip('进入全屏'));
+          await t.pumpAndSettle();
+        }
+        final picture = t.getRect(find.byKey(const Key('video-fit-contain')));
+        final center = picture.center;
+        final corner = Offset(
+          picture.left + picture.width * .28,
+          picture.top + picture.height * .32,
+        );
+        final mouse = await _mouse(t, center);
+        addTearDown(mouse.removePointer);
+
+        // Pointer attachment is not movement: entering fullscreen under
+        // a stationary cursor does not pin the controls.
+        await t.pump(const Duration(seconds: 3));
+        expect(_controlOpacity(t), 0);
+        await mouse.moveTo(center);
+        await t.pump();
+        expect(_controlOpacity(t), 0);
+        await t.sendEventToBinding(
+          PointerHoverEvent(
+            kind: PointerDeviceKind.mouse,
+            position: center + const Offset(2, 0),
+            delta: const Offset(2, 0),
+            synthesized: true,
+          ),
+        );
+        await t.pump();
+        expect(_controlOpacity(t), 0);
+
+        await mouse.moveTo(corner);
+        await t.pump();
+        expect(_controlOpacity(t), 1);
+        await t.pump(const Duration(milliseconds: 2999));
+        expect(_controlOpacity(t), 1);
+        // Movement in a different area extends the window by three seconds.
+        await mouse.moveTo(center);
+        await t.pump(const Duration(milliseconds: 1));
+        expect(_controlOpacity(t), 1);
+        await t.pump(const Duration(milliseconds: 2998));
+        expect(_controlOpacity(t), 1);
+        await mouse.moveTo(
+          center,
+        ); // zero-distance notifications don't reset it
+        await t.pump(const Duration(milliseconds: 1));
+        expect(_controlOpacity(t), 0);
+        expect(playback.commands, isEmpty);
+        expect(playback.offsets, isEmpty);
+      },
+    );
+  }
+
+  testWidgets('mobile controls keep the five-second auto-hide delay', (
+    t,
+  ) async {
+    await _mount(
+      t,
+      _Playback(),
+      _Metadata(),
+      platform: AppPlatform.android,
+      size: const Size(420, 760),
+    );
+    await t.pump(const Duration(seconds: 3));
+    expect(_controlOpacity(t), 1);
+    await t.pump(const Duration(seconds: 2));
+    expect(_controlOpacity(t), 0);
   });
 
   testWidgets('desktop top hover reveals and holds controls while playing', (

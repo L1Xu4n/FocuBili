@@ -1,0 +1,153 @@
+name: Verified macOS 1.8 hotfix package
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact reviewed master commit (40 hex characters)
+        required: true
+        type: string
+      upload_candidate:
+        description: Upload a non-installable Mac candidate for independent public-download verification
+        required: false
+        default: false
+        type: boolean
+permissions:
+  contents: read
+concurrency:
+  group: macos-1.8-hotfix-package
+  cancel-in-progress: false
+jobs:
+  package:
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require reviewed master source and unchanged release tag
+        run: |
+          python3 - <<'PY'
+          import os, re, subprocess
+          from pathlib import Path
+          revision = os.environ['SOURCE_SHA']
+          assert re.fullmatch('[0-9a-f]{40}', revision)
+          assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == revision
+          subprocess.run(['git', 'merge-base', '--is-ancestor', revision, 'origin/master'], check=True)
+          assert subprocess.check_output(['git', 'rev-parse', 'v1.8.0^{}'], text=True).strip() == '5a76dbba192660f652fbd09d38c78eea6a10ffb5'
+          assert re.search(r'^version: 1\.8\.0\+27\s*$', Path('pubspec.yaml').read_text(), re.M)
+          PY
+      - run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.6'
+          cache: true
+      - run: flutter pub get
+      - name: Verify package identity and Apple session regressions
+        run: |
+          python3 -m unittest discover -s tool -p 'test*macos*.py' -v
+          python3 tool/check_apple_sources.py
+          python3 tool/run_apple_cookie_probe.py
+          flutter test --no-pub test/desktop_playback_412_regression_test.dart test/windows_playback_session_boundary_test.dart
+      - name: Build normal application with signed provenance
+        run: |
+          dart tool/write_build_metadata.dart
+          python3 tool/macos_build_identity.py
+          flutter build macos --release --no-pub
+          mkdir -p build/apple/dmg
+          ditto build/macos/Build/Products/Release/FocuBili.app build/apple/dmg/FocuBili.app
+          codesign --verify --deep --strict build/apple/dmg/FocuBili.app
+          ln -s /Applications build/apple/dmg/Applications
+          printf '%s\n' 'Developer build, ad-hoc signed, not notarized. macOS may restrict launch. Use a Developer ID signed/notarized build for trusted distribution; do not disable system security globally.' > build/apple/dmg/README.txt
+          hdiutil create -volname FocuBili -srcfolder build/apple/dmg -ov -format UDZO build/apple/FocuBili-macos-preview.dmg
+          rm -rf build/apple/dmg
+          shasum -a 256 build/apple/FocuBili-macos-preview.dmg > build/apple/SHA256SUMS.txt
+      - name: Verify exact DMG bytes, version, source, time, architecture and signature
+        env:
+          REQUIRE_MACOS_HOTFIX_IDENTITY: 'true'
+        run: python3 tool/verify_macos_dmg.py
+      - name: Smoke-test normal application launch
+        run: |
+          open -n "$PWD/build/macos/Build/Products/Release/FocuBili.app"
+          sleep 15
+          pgrep -f '/FocuBili.app/Contents/MacOS/FocuBili'
+          screencapture -x build/apple/macos-launch.png
+          pkill -f '/FocuBili.app/Contents/MacOS/FocuBili' || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: focubili-macos-1.8.0-build27-${{ inputs.source_sha }}
+          path: build/apple/
+          if-no-files-found: error
+          retention-days: 90
+  candidate:
+    needs: package
+    if: ${{ inputs.upload_candidate && github.ref == 'refs/heads/master' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      WORKFLOW_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: focubili-macos-1.8.0-build27-${{ inputs.source_sha }}
+          path: candidate-package
+      - name: Verify run-bound package and upload only an ineligible candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, shutil, subprocess
+          from pathlib import Path
+          repository = 'L1Xu4n/FocuBili'
+          assert os.environ['GITHUB_REPOSITORY'] == repository
+          assert os.environ['GITHUB_REF'] == 'refs/heads/master'
+          assert os.environ['GITHUB_EVENT_NAME'] == 'workflow_dispatch'
+          source = os.environ['SOURCE_SHA']
+          assert os.environ['WORKFLOW_SHA'] == source
+          def api(path):
+              return json.loads(subprocess.check_output(['gh', 'api', 'repos/' + repository + '/' + path], text=True))
+          assert api('commits/master')['sha'] == source
+          run_id = int(os.environ['GITHUB_RUN_ID'])
+          artifacts = api(f'actions/runs/{run_id}/artifacts')['artifacts']
+          matching = [a for a in artifacts if a['name'] == 'focubili-macos-1.8.0-build27-' + source and not a['expired']]
+          assert len(matching) == 1
+          artifact = matching[0]
+          assert artifact['workflow_run']['id'] == run_id and artifact['workflow_run']['head_sha'] == source
+          folder = Path('candidate-package')
+          record = json.loads((folder / 'macos-package-verification.json').read_text())
+          assert record['source_sha'] == record['bundle_source_sha'] == source
+          assert record['version'] == '1.8.0' and record['build'] == '27'
+          assert record['bundle_id'] == 'com.focubili.app'
+          assert record['build_time'].endswith('Z')
+          assert set(record['architectures']) == {'arm64', 'x86_64'}
+          assert all(record[k] is True for k in ['normal_app_matches_dmg', 'adhoc_signature_verified', 'sandbox_and_network_entitlements_verified'])
+          package = folder / 'FocuBili-macos-preview.dmg'
+          assert record['dmg_name'] == package.name and package.stat().st_size == record['dmg_size']
+          checksum = hashlib.sha256(package.read_bytes()).hexdigest()
+          assert checksum == record['dmg_sha256']
+          release = api('releases/tags/v1.8.0')
+          assert release['id'] == 416289257 and not release['draft'] and not release['prerelease']
+          old = next(a for a in release['assets'] if a['id'] == 652740760)
+          assert old['name'] == 'FocuBili-v1.8.0-macos-universal.dmg' and old['size'] == 51526820
+          name = 'FocuBili-v1.8.0-macos-universal-build27.dmg.candidate'
+          assert not any(a['name'] == name for a in release['assets']), 'Candidate already exists; inspect it before retrying'
+          target = folder / name
+          shutil.copyfile(package, target)
+          label = json.dumps({'v': '1.8.0+27', 's': source, 't': record['build_time'], 'h': checksum, 'r': run_id, 'a': artifact['id']}, separators=(',', ':'))
+          assert len(label.encode()) <= 255
+          subprocess.run(['gh', 'release', 'upload', 'v1.8.0', str(target) + '#' + label, '--repo', repository], check=True)
+          uploaded = [a for a in api('releases/tags/v1.8.0')['assets'] if a['name'] == name]
+          assert len(uploaded) == 1
+          uploaded = uploaded[0]
+          assert uploaded['size'] == record['dmg_size'] and uploaded['label'] == label
+          assert uploaded.get('digest') in (None, 'sha256:' + checksum)
+          print('MAC_CANDIDATE_UPLOADED_FOR_PUBLIC_HASH_VERIFICATION')
+          print(json.dumps({k: uploaded.get(k) for k in ['id', 'name', 'size', 'digest', 'label']}))
+          PY

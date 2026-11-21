@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:focubili/features/player/player_page.dart';
+import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/features/profile/offline_videos_page.dart';
 import 'package:focubili/models/offline_download_task.dart';
 import 'package:focubili/models/offline_video_download.dart';
@@ -55,8 +57,41 @@ class _CourseFixtures extends CourseCacheLibrary {
   }
 }
 
-OfflineVideoDownload _video(int cid) {
-  final clip = fixture(cid);
+VideoPreview _clip(int cid, {String? bvid}) {
+  final source = fixture(cid);
+  return VideoPreview(
+    bvid: bvid ?? 'BV1GJ411x7h$cid',
+    cid: cid,
+    title: source.title,
+    ownerName: source.ownerName,
+    parts: source.parts,
+  );
+}
+
+const _groupBvid = 'BV1GJ411x7h7';
+const _partMetadata = [
+  VideoPart(
+    pageNumber: 2,
+    cid: 88,
+    title: '微分基础',
+    duration: Duration(minutes: 1),
+  ),
+  VideoPart(
+    pageNumber: 3,
+    cid: 31,
+    title: '未缓存环节',
+    duration: Duration(minutes: 1),
+  ),
+  VideoPart(
+    pageNumber: 4,
+    cid: 10,
+    title: '积分练习',
+    duration: Duration(minutes: 1),
+  ),
+];
+
+OfflineVideoDownload _video(int cid, {bool grouped = false}) {
+  final clip = _clip(cid, bvid: grouped ? _groupBvid : null);
   return OfflineVideoDownload(
     bvid: clip.bvid,
     cid: cid,
@@ -70,7 +105,8 @@ OfflineVideoDownload _video(int cid) {
     duration: clip.duration,
     downloadedAt: DateTime(2026),
     status: OfflineDownloadStatus.ready,
-    parts: clip.parts,
+    originalTitle: grouped ? '数学专题' : '',
+    parts: grouped ? _partMetadata : clip.parts,
   );
 }
 
@@ -97,7 +133,7 @@ OfflineDownloadTask _complete(CourseCacheEntry row) => OfflineDownloadTask(
 );
 
 Finder _videoCard(int cid) =>
-    find.byKey(Key('offline-video-${fixture(cid).bvid}-$cid'));
+    find.byKey(Key('offline-video-${_clip(cid).bvid}-$cid'));
 Finder _courseCard(CourseCacheEntry row) =>
     find.byKey(Key('offline-video-course-${row.id}'));
 Finder _checkbox(Finder card) =>
@@ -121,6 +157,7 @@ Future<void> _showPage(
   _VideoFixtures videos,
   OfflineDownloadQueue queue, {
   bool courses = false,
+  Widget Function(PlayerPage player)? playerBuilder,
   Size size = const Size(420, 880),
 }) async {
   await tester.binding.setSurfaceSize(size);
@@ -131,6 +168,7 @@ Future<void> _showPage(
         offlineVideoService: videos,
         downloadQueue: queue,
         includeCourses: courses,
+        playerBuilder: playerBuilder,
       ),
     ),
   );
@@ -144,6 +182,206 @@ Future<void> _close(WidgetTester tester, OfflineDownloadQueue queue) async {
 
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  testWidgets(
+    'completed same-BV saved Ps group and exact search opens an offline CID',
+    (tester) async {
+      final videos = _VideoFixtures()
+        ..ready.addAll([
+          _video(10, grouped: true),
+          _video(2),
+          _video(88, grouped: true),
+        ]);
+      final queue = OfflineDownloadQueue(library: videos);
+      PlayerPage? opened;
+      await _showPage(
+        tester,
+        videos,
+        queue,
+        playerBuilder: (player) {
+          opened = player;
+          return const Scaffold(body: Text('本地播放器测试替身'));
+        },
+      );
+      final group = find.byKey(const Key('offline-video-group-$_groupBvid'));
+      expect(group, findsOneWidget);
+      expect(_videoCard(2), findsOneWidget);
+      expect(find.text('数学专题'), findsOneWidget);
+      expect(find.text('2 P 已缓存 · 84 B'), findsOneWidget);
+      expect(
+        find.descendant(of: group, matching: find.byTooltip('删除')),
+        findsNothing,
+      );
+
+      await tester.enterText(_search, '积分');
+      await tester.pumpAndSettle();
+      expect(group, findsOneWidget);
+      expect(_videoCard(2), findsNothing);
+      await tester.tap(group);
+      await tester.pumpAndSettle();
+      expect(find.text('下载队列'), findsNothing);
+      expect(find.byTooltip('清空全部'), findsNothing);
+      expect(
+        tester.getTopLeft(find.text('微分基础')).dy,
+        lessThan(tester.getTopLeft(find.text('积分练习')).dy),
+      );
+      expect(find.text('未缓存环节'), findsNothing);
+      await tester.enterText(_search, 'P03');
+      await tester.pumpAndSettle();
+      expect(find.text('没有匹配的离线视频'), findsOneWidget);
+      await tester.enterText(_search, 'p 04');
+      await tester.pumpAndSettle();
+      expect(find.text('积分练习'), findsOneWidget);
+      expect(find.text('微分基础'), findsNothing);
+      await tester.tap(find.text('积分练习'));
+      await tester.pump();
+      final player = opened!;
+      expect(player.video.bvid, _groupBvid);
+      expect(player.initialPartCid, 10);
+      expect(player.forceOffline, isTrue);
+      await _close(tester, queue);
+    },
+  );
+
+  testWidgets(
+    'child sweep toggles and deletes only explicitly selected cached P',
+    (tester) async {
+      final videos = _VideoFixtures()
+        ..ready.addAll([
+          _video(10, grouped: true),
+          _video(88, grouped: true),
+          _video(2),
+        ]);
+      final queue = OfflineDownloadQueue(library: videos);
+      PlayerPage? opened;
+      await _showPage(
+        tester,
+        videos,
+        queue,
+        playerBuilder: (player) {
+          opened = player;
+          return const Scaffold(body: Text('本地播放器测试替身'));
+        },
+      );
+      final group = find.byKey(const Key('offline-video-group-$_groupBvid'));
+      await tester.tap(group);
+      await tester.pumpAndSettle();
+      final p2 = find.byKey(const Key('offline-video-$_groupBvid-88'));
+      final p4 = find.byKey(const Key('offline-video-$_groupBvid-10'));
+      await tester.longPress(p2);
+      await tester.pumpAndSettle();
+      await _sweep(tester, _checkbox(p4), _checkbox(p2));
+      expect(find.text('已选 2'), findsOneWidget);
+      await _sweep(tester, _checkbox(p4), _checkbox(p4));
+      expect(find.text('已选 1'), findsOneWidget);
+      await tester.tap(_delete);
+      await tester.pumpAndSettle();
+      expect(find.textContaining('将删除本机的 1 条'), findsOneWidget);
+      expect(videos.attempts, isEmpty);
+      await tester.tap(_confirm);
+      await tester.pumpAndSettle();
+      expect(videos.attempts, [88]);
+      expect(p2, findsNothing);
+      expect(p4, findsOneWidget);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(group, findsNothing);
+      // The root singleton now goes straight to the offline player, not a second list.
+      await tester.tap(p4);
+      await tester.pump();
+      expect(opened!.initialPartCid, 10);
+      await _close(tester, queue);
+    },
+  );
+
+  testWidgets(
+    'child per-part delete confirms its P and keeps a paused same-CID task',
+    (tester) async {
+      final videos = _VideoFixtures()..ready.add(_video(10, grouped: true));
+      final paused = OfflineDownloadTask(
+        video: _clip(88, bvid: _groupBvid),
+        part: _partMetadata.first,
+        quality: 64,
+        createdAt: DateTime(2026),
+        status: DownloadTaskStatus.paused,
+      );
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        OfflineDownloadQueue.storageKey,
+        jsonEncode([paused.toJson()]),
+      );
+      final queue = OfflineDownloadQueue(library: videos);
+      await queue.initialize();
+      expect(queue.tasks.single.status, DownloadTaskStatus.paused);
+      // A ready record becomes readable after the paused queue was restored.
+      videos.ready.add(_video(88, grouped: true));
+      await _showPage(tester, videos, queue);
+      await tester.tap(
+        find.byKey(const Key('offline-video-group-$_groupBvid')),
+      );
+      await tester.pumpAndSettle();
+      final delete = find.byKey(
+        const Key('delete-offline-video-$_groupBvid-88'),
+      );
+      await tester.tap(delete);
+      await tester.pumpAndSettle();
+      expect(find.textContaining('P2 微分基础'), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, '取消'));
+      await tester.pumpAndSettle();
+      expect(videos.attempts, isEmpty);
+      await tester.tap(delete);
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, '删除'));
+      await tester.pumpAndSettle();
+      expect(videos.attempts, [88]);
+      expect(videos.ready.map((video) => video.cid), [10]);
+      expect(queue.tasks.single.status, DownloadTaskStatus.paused);
+      expect(videos.discarded, isEmpty);
+      await _close(tester, queue);
+    },
+  );
+
+  testWidgets(
+    'root sweep and confirmation capture exact group members before newly cached P appears',
+    (tester) async {
+      final videos = _VideoFixtures()
+        ..ready.addAll([
+          _video(10, grouped: true),
+          _video(88, grouped: true),
+          _video(2),
+        ]);
+      final queue = OfflineDownloadQueue(library: videos);
+      await _showPage(tester, videos, queue);
+      final group = find.byKey(const Key('offline-video-group-$_groupBvid'));
+      await tester.tap(find.byTooltip('多选管理'));
+      await tester.pumpAndSettle();
+      await _sweep(tester, _checkbox(group), _checkbox(_videoCard(2)));
+      expect(find.text('已选 2'), findsOneWidget);
+      await _sweep(tester, _checkbox(_videoCard(2)), _checkbox(group));
+      expect(find.text('已选 0'), findsOneWidget);
+      await _sweep(tester, _checkbox(group), _checkbox(_videoCard(2)));
+
+      await tester.enterText(_search, '学习视频 2');
+      await tester.pumpAndSettle();
+      expect(find.text('所选中有 2 条不在搜索结果中'), findsOneWidget);
+      await tester.tap(_delete);
+      await tester.pumpAndSettle();
+      expect(find.textContaining('将删除本机的 3 条'), findsOneWidget);
+      expect(find.textContaining('包括 1 个分P组'), findsOneWidget);
+      expect(videos.attempts, isEmpty);
+      videos.ready.add(_video(31, grouped: true));
+      await tester
+          .widget<RefreshIndicator>(find.byType(RefreshIndicator))
+          .onRefresh();
+      await tester.pumpAndSettle();
+      expect(find.textContaining('将删除本机的 3 条'), findsOneWidget);
+      await tester.tap(_confirm);
+      await tester.pumpAndSettle();
+      expect(videos.attempts, [88, 10, 2]);
+      expect(videos.ready.map((video) => video.cid), [31]);
+      await _close(tester, queue);
+    },
+  );
 
   testWidgets(
     'phone checkbox sweep paints and unpaints exact parts without deleting',
@@ -178,7 +416,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(Checkbox), findsNothing);
       expect(
-        find.byKey(Key('delete-offline-video-${fixture(2).bvid}-2')),
+        find.byKey(Key('delete-offline-video-${_clip(2).bvid}-2')),
         findsOneWidget,
       );
       await _close(tester, queue);
@@ -197,7 +435,7 @@ void main() {
             ..ready.addAll([_video(1), _video(2), _video(3)])
             ..failures.add(2);
       final ready = [1, 2, 3].map((cid) {
-        final v = fixture(cid);
+        final v = _clip(cid);
         return OfflineDownloadTask(
           video: v,
           part: v.initialPart,
@@ -211,10 +449,13 @@ void main() {
         OfflineDownloadQueue.storageKey,
         jsonEncode(ready.map((task) => task.toJson()).toList()),
       );
-      final queue = OfflineDownloadQueue(library: videos);
+      final queue = OfflineDownloadQueue(
+        library: videos,
+        clock: () => DateTime(2026, 1, 2),
+      );
       await _showPage(tester, videos, queue, size: const Size(1130, 680));
       // A different part of the same BV is actively downloading.
-      final active = await queue.enqueue(fixture(8));
+      final active = await queue.enqueue(_clip(8, bvid: _clip(1).bvid));
       // Make the real queue progress bar determinate on the task tab.
       await tester.pump();
       expect(videos.progress, isNotNull);

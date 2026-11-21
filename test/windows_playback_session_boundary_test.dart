@@ -20,30 +20,34 @@ class ErrorStreams extends QuietLocalStreams {
 class SessionSources extends BilibiliDesktopPlaybackSourceService {
   bool current = true;
   int validations = 0;
+  final requestedQualities = <int>[];
   Future<void> Function()? validateHook;
   @override
   Future<DesktopPlaybackSources> load({
     required String bvid,
     required int cid,
     required int quality,
-  }) async => DesktopPlaybackSources(
-    videoUrls: const [
-      'https://video.bilivideo.com/synthetic.m4s',
-      'https://backup.bilivideo.com/synthetic.m4s',
-    ],
-    audioUrls: const ['https://audio.bilivideo.com/synthetic.m4s'],
-    referer: '',
-    cookieHeader: '',
-    actualQuality: 64,
-    qualities: const [],
-    videoCodec: 'avc1',
-    audioCodec: 'mp4a',
-    validateSession: () async {
-      validations++;
-      await validateHook?.call();
-      if (!current) throw const BilibiliPlaybackSessionException('changing');
-    },
-  );
+  }) async {
+    requestedQualities.add(quality);
+    return DesktopPlaybackSources(
+      videoUrls: const [
+        'https://video.bilivideo.com/synthetic.m4s',
+        'https://backup.bilivideo.com/synthetic.m4s',
+      ],
+      audioUrls: const ['https://audio.bilivideo.com/synthetic.m4s'],
+      referer: '',
+      cookieHeader: '',
+      actualQuality: 64,
+      qualities: const [],
+      videoCodec: 'avc1',
+      audioCodec: 'mp4a',
+      validateSession: () async {
+        validations++;
+        await validateHook?.call();
+        if (!current) throw const BilibiliPlaybackSessionException('changing');
+      },
+    );
+  }
 }
 
 class HeldPlayer extends ListeningPlayer {
@@ -227,6 +231,39 @@ void main() {
       await service.dispose();
     },
   );
+  test('quality change waits for a revoked session to stop', () async {
+    final player = HeldPlayer();
+    final sources = SessionSources()
+      ..validateHook = () async {
+        if (player.plays > 0) {
+          player.stopGate ??= Completer<void>();
+          throw TimeoutException('synthetic timeout');
+        }
+      };
+    final service = WindowsPlaybackService(
+      player: player,
+      sourceService: sources,
+    );
+    final old = service.openVideo(VideoPreview.placeholder());
+    await player.stopping.future.timeout(const Duration(seconds: 5));
+    sources.validateHook = null;
+    final replacement = service.selectQuality(80);
+    try {
+      await Future<void>.delayed(Duration.zero);
+      expect(sources.requestedQualities, [64]);
+      expect(player.opened, hasLength(1));
+      await service.pause();
+    } finally {
+      player.stopGate!.complete();
+      await old;
+      await replacement;
+    }
+    expect(sources.requestedQualities, [64, 80]);
+    expect(player.opened, hasLength(2));
+    expect(player.state.playing, isFalse);
+    await service.dispose();
+  });
+
   test(
     'late fallback rejection cannot overwrite the replacement video',
     () async {

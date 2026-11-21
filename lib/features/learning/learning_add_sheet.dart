@@ -407,42 +407,39 @@ class _PartSelectionState extends State<_PartSelection> {
                                 ?.copyWith(fontWeight: FontWeight.w700),
                           ),
                           const SizedBox(height: 8),
-                          Text('剩余容量 $remaining'),
-                          if (widget.folders.isNotEmpty) ...[
-                            const SizedBox(height: 12),
-                            DropdownButtonFormField<String>(
-                              key: const Key('add-learning-folder'),
-                              initialValue: '',
-                              isExpanded: true,
-                              isDense: false,
-                              itemHeight: null,
-                              decoration: const InputDecoration(
-                                labelText: '新增任务的学科分组',
-                              ),
-                              items: [
-                                const DropdownMenuItem(
-                                  value: '',
-                                  child: Text('未分组'),
-                                ),
-                                for (final folder in widget.folders)
-                                  DropdownMenuItem(
-                                    value: folder.id,
-                                    child: Text(
-                                      folder.name,
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                              ],
-                              onChanged: _saving
-                                  ? null
-                                  : (value) => setState(
-                                      () => _folderId = value == ''
-                                          ? null
-                                          : value,
-                                    ),
+                          Text('新增 $added · 剩余容量 $remaining'),
+                          const SizedBox(height: 12),
+                          DropdownButtonFormField<String>(
+                            key: const Key('add-learning-folder'),
+                            initialValue: '',
+                            isExpanded: true,
+                            isDense: false,
+                            itemHeight: null,
+                            decoration: const InputDecoration(
+                              labelText: '新增任务的学科分组',
                             ),
-                          ],
+                            items: [
+                              const DropdownMenuItem(
+                                value: '',
+                                child: Text('未分组'),
+                              ),
+                              for (final folder in widget.folders)
+                                DropdownMenuItem(
+                                  value: folder.id,
+                                  child: Text(
+                                    folder.name,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                            ],
+                            onChanged: _saving
+                                ? null
+                                : (value) => setState(
+                                    () =>
+                                        _folderId = value == '' ? null : value,
+                                  ),
+                          ),
                           Wrap(
                             spacing: 8,
                             children: [

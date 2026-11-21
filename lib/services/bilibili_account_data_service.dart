@@ -289,7 +289,10 @@ class BilibiliAccountDataService {
     }
     final List<FavoriteFolder> folders = <FavoriteFolder>[];
     for (final Object? item in rawList) {
-      final FavoriteFolder? folder = _parseFavoriteFolder(item);
+      final FavoriteFolder? folder = _parseFavoriteFolder(
+        item,
+        session.account!.mid,
+      );
       if (folder != null) {
         folders.add(folder);
       }
@@ -593,18 +596,28 @@ class BilibiliAccountDataService {
   }
 
   /// 从收藏夹接口项中提取可安全展示的最小资料，缺少编号的非法项会被忽略。
-  FavoriteFolder? _parseFavoriteFolder(Object? value) {
+  FavoriteFolder? _parseFavoriteFolder(Object? value, int ownerMid) {
     final Map<Object?, Object?>? item = _asObject(value);
     final int? mediaId = _readPositiveInt(item?['id']);
     if (item == null || mediaId == null) {
       return null;
     }
+    // Bit 0 of the folder's attr controls privacy independently of the
+    // default-folder bit. Missing or malformed attrs do not imply privacy.
+    final rawAttr = item['attr'];
+    final attr = switch (rawAttr) {
+      int value => value,
+      String value => int.tryParse(value.trim(), radix: 10),
+      _ => null,
+    };
     return FavoriteFolder(
       mediaId: mediaId,
       title: _readText(item['title'], '未命名收藏夹'),
       coverUrl: _normalizeHttpsUrl(_readText(item['cover'], '')),
       mediaCount: _readNonNegativeInt(item['media_count']) ?? 0,
       isAvailable: (_readInteger(item['state'] ?? item['status']) ?? 0) >= 0,
+      isPrivate: attr == null || attr < 0 ? null : (attr & 1) != 0,
+      ownerMid: ownerMid,
     );
   }
 

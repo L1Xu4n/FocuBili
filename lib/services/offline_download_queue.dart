@@ -22,9 +22,11 @@ class OfflineDownloadQueue extends ChangeNotifier {
     CourseCacheLibrary? courseLibrary,
     OfflineVideoPreferencesLoader? preferencesLoader,
     Future<void> Function(List<OfflineDownloadTask>)? publishProgress,
+    DateTime Function()? clock,
   }) : library = library ?? OfflineVideoService(),
        _preferencesLoader = preferencesLoader ?? SharedPreferences.getInstance,
        _publishProgress = publishProgress,
+       _clock = clock ?? DateTime.now,
        courses = courseLibrary ?? CourseCacheLibrary.instance {
     CacheLifecycle.account.addListener(_accountChanged);
   }
@@ -40,6 +42,7 @@ class OfflineDownloadQueue extends ChangeNotifier {
   }
 
   static const storageKey = 'focubili_download_queue_v3';
+  static const _completedRetention = Duration(days: 14);
   static const _previousStorageKey = 'focubili_download_queue_v2';
   final OfflineVideoService library;
   final CourseCacheLibrary courses;
@@ -72,12 +75,17 @@ class OfflineDownloadQueue extends ChangeNotifier {
     );
   }
 
-  Future<List<CourseCacheEntry>> _courseFiles() async {
-    if (_courseMid == null) return const [];
+  Future<List<CourseCacheEntry>?> _courseFiles() async {
+    final mid = _courseMid;
+    if (mid == null) return null;
     try {
-      return await courses.entries();
+      final revision = CacheLifecycle.account.value;
+      final files = await courses.entries();
+      return revision == CacheLifecycle.account.value && mid == _courseMid
+          ? files
+          : null;
     } on CourseCacheFailure {
-      return const [];
+      return null; // Unavailable private storage is not an empty cache.
     }
   }
 
@@ -112,10 +120,12 @@ class OfflineDownloadQueue extends ChangeNotifier {
   }
 
   final OfflineVideoPreferencesLoader _preferencesLoader;
+  final DateTime Function() _clock;
   final Future<void> Function(List<OfflineDownloadTask>)? _publishProgress;
   final List<OfflineDownloadTask> _tasks = [];
   final _completions = StreamController<OfflineDownloadTask>.broadcast();
   Timer? _speedTimer;
+  Timer? _retentionTimer;
   final _speedClock = Stopwatch();
   int? _speedSampleBytes;
   Future<void>? _initialization;
@@ -168,20 +178,26 @@ class OfflineDownloadQueue extends ChangeNotifier {
         await _resolveCourseAccount();
       }
       final courseFiles = await _courseFiles();
+      final now = _clock();
       _tasks.clear();
       for (final task in restored) {
+        if (_historyExpired(task, now)) continue;
         final int? ready;
+        DateTime? downloadedAt;
         if (task.courseMid == null) {
-          ready = completed
+          final entry = completed
               .where(
                 (file) =>
                     file.bvid == task.video.bvid &&
                     file.cid == task.part.cid &&
-                    file.cacheLocationId == task.cacheLocationId,
+                    file.cacheLocationId == task.cacheLocationId &&
+                    (task.status == DownloadTaskStatus.completed ||
+                        !file.downloadedAt.isBefore(task.createdAt)),
               )
-              .firstOrNull
-              ?.sizeBytes;
-        } else if (!_visible(task)) {
+              .firstOrNull;
+          ready = entry?.sizeBytes;
+          downloadedAt = entry?.downloadedAt;
+        } else if (!_visible(task) || courseFiles == null) {
           _tasks.add(
             task.status == DownloadTaskStatus.completed ||
                     task.status == DownloadTaskStatus.failed
@@ -205,30 +221,100 @@ class OfflineDownloadQueue extends ChangeNotifier {
           if (!await _locationAvailable(task)) _tasks.add(task);
           continue;
         }
-        _tasks.add(
-          ready != null
-              ? task.copyWith(
-                  status: DownloadTaskStatus.completed,
-                  receivedBytes: ready,
-                  totalBytes: ready,
-                )
-              : task.copyWith(
-                  status: task.status == DownloadTaskStatus.failed
-                      ? DownloadTaskStatus.failed
-                      : DownloadTaskStatus.paused,
-                  error: task.error,
-                  courseDiagnostic: task.courseDiagnostic,
-                ),
-        );
+        final restoredTask = ready != null
+            ? task.copyWith(
+                status: DownloadTaskStatus.completed,
+                // Course receipts record authorization checks, not completion.
+                completedAt: task.completedAt ?? downloadedAt ?? now,
+                receivedBytes: ready,
+                totalBytes: ready,
+              )
+            : task.copyWith(
+                status: task.status == DownloadTaskStatus.failed
+                    ? DownloadTaskStatus.failed
+                    : DownloadTaskStatus.paused,
+                error: task.error,
+                courseDiagnostic: task.courseDiagnostic,
+              );
+        if (!_historyExpired(restoredTask, now)) _tasks.add(restoredTask);
       }
       _storageError = null;
       await _save();
+      _scheduleRetention();
       _emit();
     } catch (_) {
       _storageError = '下载队列读取失败，原始记录已保留。';
       notifyListeners();
       rethrow;
     }
+  }
+
+  bool _historyExpired(OfflineDownloadTask task, DateTime now) =>
+      task.status == DownloadTaskStatus.completed &&
+      task.completedAt != null &&
+      !now.isBefore(task.completedAt!.add(_completedRetention));
+
+  /// Keep history current while the queue lives even if no page is open.
+  void _scheduleRetention({Duration? retryAfter}) {
+    _retentionTimer?.cancel();
+    _retentionTimer = null;
+    if (_closing) return;
+    final now = _clock();
+    Duration? earliest;
+    for (final task in _tasks) {
+      if (task.status != DownloadTaskStatus.completed ||
+          task.completedAt == null) {
+        continue;
+      }
+      final remaining = task.completedAt!
+          .add(_completedRetention)
+          .difference(now);
+      if (earliest == null || remaining < earliest) earliest = remaining;
+    }
+    if (earliest == null) return;
+    // The periodic ceiling also rechecks large clock jumps on a live device.
+    final delay =
+        retryAfter ??
+        (earliest.isNegative
+            ? Duration.zero
+            : earliest > const Duration(days: 1)
+            ? const Duration(days: 1)
+            : earliest);
+    _retentionTimer = Timer(delay, () {
+      if (_closing) return;
+      unawaited(
+        _command(_expireHistory).then<void>(
+          (_) => _scheduleRetention(),
+          onError: (Object _, StackTrace _) =>
+              _scheduleRetention(retryAfter: const Duration(minutes: 1)),
+        ),
+      );
+    });
+  }
+
+  /// Changes only queue records; never invokes the media or partial-file APIs.
+  Future<void> _expireHistory() async {
+    final now = _clock();
+    final expired = <int, OfflineDownloadTask>{};
+    for (var i = 0; i < _tasks.length; i++) {
+      if (_historyExpired(_tasks[i], now)) expired[i] = _tasks[i];
+    }
+    if (expired.isEmpty) return;
+    for (final index in expired.keys.toList().reversed) {
+      _tasks.removeAt(index);
+    }
+    try {
+      await _save();
+    } catch (_) {
+      for (final entry in expired.entries) {
+        // Do not undo any concurrent transfer progress.
+        if (_find(entry.value.id) == null) {
+          _tasks.insert(entry.key.clamp(0, _tasks.length), entry.value);
+        }
+      }
+      rethrow;
+    }
+    _emit();
   }
 
   /// Serializes user commands across all entry points of this shared queue.
@@ -270,6 +356,41 @@ class OfflineDownloadQueue extends ChangeNotifier {
     int? expectedAccountRevision,
     bool revalidateCourse = false,
   }) => _command(() async {
+    return (await _enqueue(
+      video,
+      part: part,
+      quality: quality,
+      expectedAccountRevision: expectedAccountRevision,
+      revalidateCourse: revalidateCourse,
+    ))!;
+  });
+
+  /// Adds an ordinary part only when it has neither a durable task nor media.
+  /// The check runs inside the queue command to handle submissions from other screens.
+  Future<OfflineDownloadTask?> enqueueOrdinaryIfMissing(
+    VideoPreview video, {
+    required VideoPart part,
+    required int quality,
+  }) => _command(() {
+    if (video.isCourse) {
+      throw const OfflineVideoException('课程请使用独立下载入口。');
+    }
+    return _enqueue(
+      video,
+      part: part,
+      quality: quality,
+      skipExistingOrdinary: true,
+    );
+  });
+
+  Future<OfflineDownloadTask?> _enqueue(
+    VideoPreview video, {
+    VideoPart? part,
+    required int quality,
+    int? expectedAccountRevision,
+    bool revalidateCourse = false,
+    bool skipExistingOrdinary = false,
+  }) async {
     final target = part ?? video.initialPart;
     if (!video.isCourse &&
             !RegExp(r'^BV[0-9A-Za-z]{10}$').hasMatch(video.bvid) ||
@@ -290,6 +411,11 @@ class OfflineDownloadQueue extends ChangeNotifier {
         ? '${video.bvid}:${target.cid}'
         : 'course:$mid:${video.courseSeasonId}-${target.courseEpisodeId}-${target.courseAid}-${target.cid}';
     final existing = _find(taskId);
+    if (skipExistingOrdinary &&
+        (existing != null ||
+            await library.isDownloaded(video.bvid, cid: target.cid))) {
+      return null;
+    }
     if (existing != null && existing.status != DownloadTaskStatus.completed) {
       return existing;
     }
@@ -327,7 +453,8 @@ class OfflineDownloadQueue extends ChangeNotifier {
       video: video,
       part: target,
       quality: quality,
-      createdAt: DateTime.now(),
+      requireExactQuality: skipExistingOrdinary,
+      createdAt: _clock(),
       courseMid: mid,
       cacheLocationId: locationId,
     );
@@ -351,7 +478,7 @@ class OfflineDownloadQueue extends ChangeNotifier {
     _emit();
     _pump();
     return task;
-  });
+  }
 
   /// Interrupts the active request before acknowledging a pause to the UI.
   Future<void> pause(String id) => _command(() async {
@@ -445,34 +572,65 @@ class OfflineDownloadQueue extends ChangeNotifier {
 
   /// Finds a current immutable task by BV/CID identity.
   Future<void> reconcileCompleted() => _command(() async {
+    await _expireHistory();
+    _scheduleRetention();
     final files = await library.loadDownloads();
-    final ready = files.map((file) => '${file.bvid}:${file.cid}').toSet();
+    final ready = <(String, String?), (DateTime?,)>{
+      for (final file in files)
+        ('${file.bvid}:${file.cid}', file.cacheLocationId): (
+          file.downloadedAt,
+        ),
+    };
     final courseFiles = await _courseFiles();
-    ready.addAll(
-      courseFiles
-          .where((file) => file.hasMedia)
-          .map((file) => 'course:${file.mid}:${file.id}'),
-    );
+    for (final file in (courseFiles ?? const <CourseCacheEntry>[]).where(
+      (file) => file.hasMedia,
+    )) {
+      ready[('course:${file.mid}:${file.id}', file.cacheLocationId)] = (null,);
+    }
     final before = List<OfflineDownloadTask>.of(_tasks);
-    final removed = <String>{};
+    final removed = <OfflineDownloadTask>{};
+    final migrations = <OfflineDownloadTask, OfflineDownloadTask>{};
+    final now = _clock();
     for (final task in before) {
-      if (_visible(task) &&
-          task.status == DownloadTaskStatus.completed &&
-          !ready.contains(task.id) &&
-          await _locationAvailable(task)) {
-        removed.add(task.id);
+      if (!_visible(task) ||
+          task.status != DownloadTaskStatus.completed ||
+          (task.courseMid != null && courseFiles == null)) {
+        continue;
+      }
+      final file = ready[(task.id, task.cacheLocationId)];
+      if (file == null) {
+        if (await _locationAvailable(task)) removed.add(task);
+      } else if (task.completedAt == null) {
+        final upgraded = task.copyWith(completedAt: file.$1 ?? now);
+        if (_historyExpired(upgraded, now)) {
+          removed.add(task);
+        } else {
+          migrations[task] = upgraded;
+        }
       }
     }
-    _tasks.removeWhere((task) => removed.contains(task.id));
-    if (_tasks.length == before.length) return;
+    if (removed.isEmpty && migrations.isEmpty) return;
+    _tasks.removeWhere(removed.contains);
+    for (var i = 0; i < _tasks.length; i++) {
+      _tasks[i] = migrations[_tasks[i]] ?? _tasks[i];
+    }
     try {
       await _save();
     } catch (_) {
-      _tasks
-        ..clear()
-        ..addAll(before);
+      // Roll back only this command's rows, not unrelated transfer updates.
+      for (var i = 0; i < before.length; i++) {
+        final task = before[i];
+        final replacement = migrations[task];
+        if (removed.contains(task) && _find(task.id) == null) {
+          _tasks.insert(i.clamp(0, _tasks.length), task);
+        } else if (replacement != null &&
+            identical(_find(task.id), replacement)) {
+          _replace(task);
+        }
+      }
       rethrow;
     }
+    _scheduleRetention();
     _emit();
   });
 
@@ -556,7 +714,9 @@ class OfflineDownloadQueue extends ChangeNotifier {
     );
     if (queued.isEmpty) return;
     final task = queued.first;
-    final control = DownloadControl();
+    final control = DownloadControl(
+      requireExactQuality: task.requireExactQuality,
+    );
     _activeId = task.id;
     _control = control;
     _running = _run(task, control);
@@ -624,6 +784,7 @@ class OfflineDownloadQueue extends ChangeNotifier {
       }
       final completed = task.copyWith(
         status: DownloadTaskStatus.completed,
+        completedAt: _clock(),
         receivedBytes: bytes,
         totalBytes: bytes,
       );
@@ -665,6 +826,7 @@ class OfflineDownloadQueue extends ChangeNotifier {
     } catch (_) {
       // Keep the in-memory state and surface storageError; do not start more work.
     }
+    _scheduleRetention();
     _emit();
   }
 
@@ -743,8 +905,10 @@ class OfflineDownloadQueue extends ChangeNotifier {
 
   /// Stops transfers and flushes queued writes before tests or application shutdown.
   Future<void> close() async {
+    _retentionTimer?.cancel();
     await _commands;
     _closing = true;
+    _retentionTimer?.cancel();
     CacheLifecycle.account.removeListener(_accountChanged);
     _control?.interrupt();
     await _running;

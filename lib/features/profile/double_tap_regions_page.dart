@@ -299,7 +299,7 @@ class _DoubleTapRegionsPageState extends State<DoubleTapRegionsPage> {
           const Text('自定义双击触发区', style: TextStyle(fontWeight: FontWeight.w600)),
           const SizedBox(height: 4),
           Text(
-            '拖线调节 · 模拟触摸双击（桌面鼠标双击仅切全屏）',
+            '拖线调节 · 模拟触摸双击。桌面鼠标双击共用边缘范围，其余区域切换全屏。',
             style: TextStyle(
               color: Theme.of(context).colorScheme.onSurfaceVariant,
               fontSize: 12,

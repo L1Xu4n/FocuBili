@@ -6,6 +6,7 @@ import 'package:focubili/models/offline_video_download.dart';
 import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/services/bilibili_cookie_store.dart';
 import 'package:focubili/services/offline_video_service.dart';
+import 'package:focubili/services/download_control.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// 使用内存字符串模拟平台 Cookie 容器，确保测试不会接触真实账号会话。
@@ -100,6 +101,39 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues(<String, Object>{});
   });
+
+  test(
+    'exact batch quality rejects later higher or lower media without transfer',
+    () async {
+      final root = await Directory.systemTemp.createTemp(
+        'offline_exact_quality_',
+      );
+      addTearDown(() => root.delete(recursive: true));
+      var actual = 80;
+      var transfers = 0;
+      final service = OfflineVideoService(
+        directoryLoader: () async => root,
+        cookieStore: _MemoryCookieStore(),
+        requestText: (_, _) async => _playResponse(
+          'https://node.bilivideo.com/ordinary.mp4',
+          quality: actual,
+        ),
+        downloadFile: (_, _, _, _) async => ++transfers,
+      );
+      for (actual in [80, 32]) {
+        await expectLater(
+          service.download(
+            _preview(),
+            quality: 64,
+            control: DownloadControl(requireExactQuality: true),
+          ),
+          throwsA(isA<OfflineVideoException>()),
+        );
+      }
+      expect(transfers, 0);
+      expect(await service.loadDownloads(), isEmpty);
+    },
+  );
 
   test('下载清晰度兼容旧的单文件接口实际档位', () async {
     final service = OfflineVideoService(

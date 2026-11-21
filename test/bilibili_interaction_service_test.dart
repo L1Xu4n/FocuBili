@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:focubili/services/app_behavior_preferences_service.dart';
 import 'package:focubili/services/bilibili_auth_service.dart';
 import 'package:focubili/services/bilibili_interaction_service.dart';
+import 'package:focubili/services/cache_lifecycle.dart';
 
 /// 为互动服务测试提供可控的账号只读状态。
 class _InteractionBehaviorPreferences extends AppBehaviorPreferencesService {
@@ -156,6 +158,203 @@ class _HeldFinalCookies extends _InteractionCookieStore {
 }
 
 void main() {
+  const info = '/x/v3/fav/folder/info';
+  const edit = '/x/v3/fav/folder/edit';
+  String folderInfo({
+    Object? attr = 2,
+    int mid = 42,
+    int id = 7,
+    String title = '原标题',
+    bool includeIntro = true,
+    String intro = '保留简介',
+  }) => jsonEncode({
+    'code': 0,
+    'data': {
+      'id': id,
+      'upper': {'mid': mid},
+      'attr': attr,
+      'title': title,
+      'cover': 'https://i0.hdslb.com/a.jpg?x=1',
+      if (includeIntro) 'intro': intro,
+    },
+  });
+
+  test('收藏夹编辑仅提交确认字段并保持最新非编辑元数据', () async {
+    final responses = <String, String>{info: folderInfo()};
+    final requests = _RecordedInteractionRequest(responses: responses);
+    final service = _createInteractionService(request: requests);
+    final original = await service.loadFavoriteFolderForEdit(
+      mediaId: 7,
+      expectedMid: 42,
+      isCurrent: () => true,
+    );
+    expect(original, (title: '原标题', isPrivate: false, canRename: true));
+    responses[info] = folderInfo(intro: '后来从官网更新的简介');
+    final updated = await service.editFavoriteFolder(
+      mediaId: 7,
+      expectedMid: 42,
+      original: original,
+      title: '新标题',
+      isPrivate: true,
+      isCurrent: () => true,
+    );
+    expect(updated, (title: '新标题', isPrivate: true, canRename: true));
+    expect(requests.endpoints.map((endpoint) => endpoint.path), [
+      info,
+      info,
+      edit,
+    ]);
+    expect(requests.endpoints.first.queryParameters, {'media_id': '7'});
+    expect(_formFields(requests.bodies.last), {
+      'media_id': '7',
+      'title': '新标题',
+      'privacy': '1',
+      'intro': '后来从官网更新的简介',
+      'cover': 'https://i0.hdslb.com/a.jpg?x=1',
+      'csrf': 'csrf-token',
+      'csrf_token': 'csrf-token',
+    });
+  });
+
+  test('默认收藏夹只改可见性并保留名称', () async {
+    final requests = _RecordedInteractionRequest(
+      responses: {info: folderInfo(attr: 0)},
+    );
+    final service = _createInteractionService(request: requests);
+    final original = await service.loadFavoriteFolderForEdit(
+      mediaId: 7,
+      expectedMid: 42,
+      isCurrent: () => true,
+    );
+    expect(original.canRename, isFalse);
+    await expectLater(
+      service.editFavoriteFolder(
+        mediaId: 7,
+        expectedMid: 42,
+        original: original,
+        title: '不允许的名称',
+        isPrivate: true,
+        isCurrent: () => true,
+      ),
+      throwsA(isA<BilibiliInteractionException>()),
+    );
+    expect(requests.bodies.whereType<String>(), isEmpty);
+    await service.editFavoriteFolder(
+      mediaId: 7,
+      expectedMid: 42,
+      original: original,
+      title: original.title,
+      isPrivate: true,
+      isCurrent: () => true,
+    );
+    expect(_formFields(requests.bodies.last)['title'], original.title);
+    expect(_formFields(requests.bodies.last)['privacy'], '1');
+  });
+
+  test('不属于本账号、未确认可见性或资料不完整的收藏夹不写入', () async {
+    for (final response in [
+      folderInfo(mid: 99),
+      folderInfo(id: 8),
+      folderInfo(attr: null),
+      folderInfo(includeIntro: false),
+      folderInfo(title: '已在官网改名'),
+      '{"data":{}}',
+    ]) {
+      final requests = _RecordedInteractionRequest(responses: {info: response});
+      final service = _createInteractionService(request: requests);
+      await expectLater(
+        service.editFavoriteFolder(
+          mediaId: 7,
+          expectedMid: 42,
+          original: (title: '原标题', isPrivate: false, canRename: true),
+          title: '新标题',
+          isPrivate: true,
+          isCurrent: () => true,
+        ),
+        throwsA(isA<BilibiliInteractionException>()),
+      );
+      expect(requests.bodies.whereType<String>(), isEmpty);
+    }
+  });
+
+  test('账号只读或编辑失效不发写请求；缺失响应码不报告保存成功', () async {
+    final readOnly = _RecordedInteractionRequest();
+    const original = (title: '原标题', isPrivate: false, canRename: true);
+    Future<FavoriteFolderEditable> save(
+      BilibiliInteractionService service,
+      bool Function() current,
+    ) => service.editFavoriteFolder(
+      mediaId: 7,
+      expectedMid: 42,
+      original: original,
+      title: '新标题',
+      isPrivate: true,
+      isCurrent: current,
+    );
+    await expectLater(
+      save(
+        _createInteractionService(request: readOnly, readOnly: true),
+        () => true,
+      ),
+      throwsA(isA<BilibiliInteractionException>()),
+    );
+    expect(readOnly.endpoints, isEmpty);
+    final stale = _RecordedInteractionRequest(responses: {info: folderInfo()});
+    await expectLater(
+      save(_createInteractionService(request: stale), () => false),
+      throwsA(isA<BilibiliInteractionException>()),
+    );
+    expect(stale.endpoints, isEmpty);
+    final malformed = _RecordedInteractionRequest(
+      responses: {info: folderInfo(), edit: '{"data":{}}'},
+    );
+    await expectLater(
+      save(_createInteractionService(request: malformed), () => true),
+      throwsA(isA<BilibiliInteractionException>()),
+    );
+    expect(malformed.endpoints.map((endpoint) => endpoint.path), [info, edit]);
+  });
+
+  test('确认后读取资料期间切换账号 不会发出编辑请求', () async {
+    final entered = Completer<void>(), release = Completer<void>();
+    final requests = <String?>[];
+    final auth = BilibiliAuthService(
+      cookieStore: _InteractionCookieStore(
+        cookies: 'SESSDATA=fixture; bili_jct=fixture',
+      ),
+      api: _InteractionAuthApi(),
+    );
+    final service = BilibiliInteractionService(
+      authService: auth,
+      behaviorPreferencesService: _InteractionBehaviorPreferences(
+        readOnly: false,
+      ),
+      request: (endpoint, {required cookieHeader, body}) async {
+        requests.add(body);
+        entered.complete();
+        await release.future;
+        return BilibiliInteractionResponse(statusCode: 200, body: folderInfo());
+      },
+    );
+    final operation = service.editFavoriteFolder(
+      mediaId: 7,
+      expectedMid: 42,
+      original: (title: '原标题', isPrivate: false, canRename: true),
+      title: '新标题',
+      isPrivate: true,
+      isCurrent: () => true,
+    );
+    final asserted = expectLater(
+      operation,
+      throwsA(isA<BilibiliInteractionException>()),
+    );
+    await entered.future;
+    CacheLifecycle.accountChanged();
+    release.complete();
+    await asserted;
+    expect(requests, [null]);
+  });
+
   test(
     'native cookie rotation while verifying account cannot make a private write',
     () async {

@@ -196,7 +196,9 @@ extension _PlayerPageView on _PlayerPageState {
                                   _handleDoubleTap(constraints.biggest),
                           ),
                       if (_appPlatform.isDesktop)
-                        PlayerMouseTapGestureRecognizer: _mouseTapGestures(),
+                        PlayerMouseTapGestureRecognizer: _mouseTapGestures(
+                          constraints.biggest,
+                        ),
                     }
                   : const {},
               child: Stack(
