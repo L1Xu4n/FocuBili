@@ -1191,6 +1191,7 @@ void main() {
           video: _createCollectionVideo(),
           playbackService: service,
           videoNoteService: notes,
+          appPlatform: AppPlatform.linux,
         ),
       ),
     );
@@ -1198,9 +1199,11 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('player-note-flag-hit-0')));
     await tester.pumpAndSettle();
     expect(find.text('选择笔记'), findsOneWidget);
+    expect(find.semantics.byLabel('选择笔记'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('choose-note-同秒A')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('park-video-notes-barrier')), findsNothing);
+    expect(find.semantics.byLabel('时间点笔记'), findsOneWidget);
     await tester.enterText(
       find.byKey(const Key('note-body-field')),
       '当前尚未保存的草稿',

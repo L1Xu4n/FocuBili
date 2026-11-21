@@ -45,6 +45,25 @@ class _SurfacePlayback extends GesturePlayback implements PlaybackVideoSurface {
   );
 }
 
+class _BufferedSeekPlayback extends _SurfacePlayback {
+  void emit(PlaybackPhase phase) => controller.add(
+    PlaybackSnapshot(
+      phase: phase,
+      isPlaying: true,
+      position: const Duration(seconds: 30),
+      duration: const Duration(minutes: 2),
+      message: phase == PlaybackPhase.loading ? '视频缓冲中' : null,
+    ),
+  );
+
+  @override
+  Future<void> seekBy(Duration offset) async {
+    await super.seekBy(offset);
+    // Emulate the native backend entering buffering before the first frame.
+    emit(PlaybackPhase.loading);
+  }
+}
+
 const _surface = Key('player-surface');
 const _viewport = Key('player-feedback-viewport');
 const _preview = Key('double-tap-region-preview');
@@ -338,6 +357,110 @@ void main() {
             expect(playback.pauseCommands, 0);
           }
         }
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+  }
+
+  for (final size in [const Size(900, 850), const Size(420, 760)]) {
+    testWidgets(
+      'desktop letterboxed seek stays centered on its first buffered frame at $size',
+      (tester) async {
+        tester.view.physicalSize = size;
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        const window = MethodChannel('window_manager');
+        const protection = MethodChannel('com.focubili.app/windows_experience');
+        final messenger =
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+        messenger.setMockMethodCallHandler(
+          window,
+          (call) async => call.method == 'isMaximized' ? false : null,
+        );
+        messenger.setMockMethodCallHandler(protection, (_) async => true);
+        addTearDown(() {
+          messenger.setMockMethodCallHandler(window, null);
+          messenger.setMockMethodCallHandler(protection, null);
+        });
+        final playback = _BufferedSeekPlayback();
+        await _mount(
+          tester,
+          boundary: GlobalKey(),
+          page: PlayerPage(
+            video: video,
+            appPlatform: AppPlatform.windows,
+            playbackService: playback,
+            offlineVideoService: ReviewOfflineLibrary(),
+            playerOverlayService: AbOverlay(),
+          ),
+          textScale: 1.2,
+        );
+        await tester.tap(find.byTooltip('进入全屏'));
+        await tester.pumpAndSettle();
+        final surface = find.byKey(_surface);
+        expect(tester.getSize(surface), size);
+        Focus.of(tester.element(surface)).requestFocus();
+        await tester.pump();
+        final picture = paintedRect(
+          tester,
+          find.byKey(const Key('video-fit-contain')),
+        );
+        final lane = paintedRect(tester, find.byKey(_viewport));
+        expect(
+          picture.top,
+          greaterThan(lane.top + 36),
+          reason: 'the test must reproduce a substantial top letterbox',
+        );
+        final glyphs = find.byKey(const Key('double-tap-seek-glyphs'));
+        Rect? previousOnSameSide;
+        for (final seconds in [-5, -10, -15, 5, 10]) {
+          final forward = seconds > 0;
+          await tester.sendKeyEvent(
+            forward
+                ? LogicalKeyboardKey.arrowRight
+                : LogicalKeyboardKey.arrowLeft,
+          );
+          await tester.pump();
+          expect(
+            find.text(forward ? '快进 $seconds 秒' : '快退 ${-seconds} 秒'),
+            findsOneWidget,
+          );
+          expect(find.text('视频缓冲中'), findsOneWidget);
+          final first = paintedRect(tester, glyphs);
+          expect(first.top, greaterThan(picture.top));
+          expect(
+            first.center.dy,
+            closeTo(lane.center.dy, .1),
+            reason: 'buffering must not move the seek feedback up',
+          );
+          final loading = paintedRect(tester, find.text('视频缓冲中'));
+          if (forward) {
+            expect(first.center.dx, greaterThan(lane.center.dx));
+            expect(loading.right, lessThanOrEqualTo(first.left));
+          } else {
+            expect(first.center.dx, lessThan(lane.center.dx));
+            expect(loading.left, greaterThanOrEqualTo(first.right));
+          }
+          if (seconds != -5 && seconds != 5) {
+            expect(first.center.dx, closeTo(previousOnSameSide!.center.dx, .1));
+            expect(first.center.dy, closeTo(previousOnSameSide.center.dy, .1));
+          }
+          previousOnSameSide = first;
+          playback.emit(PlaybackPhase.ready);
+          await tester.pump(const Duration(milliseconds: 80));
+          final ready = paintedRect(tester, glyphs);
+          expect(ready.center, first.center);
+          expect(ready.size, first.size);
+        }
+        expect(playback.offsets.map((offset) => offset.inSeconds), [
+          -5,
+          -5,
+          -5,
+          5,
+          5,
+        ]);
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox.shrink());
       },

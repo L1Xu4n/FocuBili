@@ -29,6 +29,14 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
   int _playbackSpeedRequest = 0;
   Future<void> _playbackSpeedCommands = Future.value();
   double get _normalPlaybackSpeed => _requestedNormalSpeed ?? _playbackSpeed;
+  double? _progressDragStart;
+  int? _progressPointer;
+  bool _progressPointerReleased = false;
+  bool _progressPointerCanceled = false;
+
+  @override
+  bool get _isDraggingProgress => _progressDragStart != null;
+
   double _horizontalScrubStartProgress = 0;
   double _horizontalScrubTargetProgress = 0;
   double _horizontalScrubStartX = 0;
@@ -36,9 +44,12 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
   double _horizontalSeekMaximumOffsetSeconds = 0;
   VideoShotPreview? _videoShotPreview;
   bool _videoShotLoading = false;
-  final GlobalKey _desktopBottomBarKey = GlobalKey();
+  BuildContext? _desktopTopBarContext;
+  BuildContext? _desktopBottomBarContext;
   PlayerMouseTapGestureRecognizer? _desktopTapRecognizer;
-  bool _desktopBottomHover = false;
+  bool _desktopControlsHover = false;
+  _DesktopControlsEdge? _desktopPointerEdge;
+  _DesktopControlsEdge? _desktopSuppressedEdge;
   _DesktopTimelinePoint? _desktopTimelineHover;
   int _videoShotRequestToken = 0;
   double _brightness = 1;
@@ -52,7 +63,7 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
   @override
   PlaybackService get _playbackService;
 
-  /// 由播放器状态类提供用于读取横滑预览图的服务。
+  /// 由播放器状态类提供拖动和悬停共用的预览图服务。
   VideoShotService get _videoShotService;
 
   /// 由播放器状态类提供当前正在展示的视频资料。
@@ -301,6 +312,7 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
             details.localPosition.dy >=
                 playerSize.height - protectedBottomHeight);
     if (_temporarySpeedActive ||
+        _isDraggingProgress ||
         startsInFullscreenSafetyZone ||
         durationSeconds <= 0 ||
         playerSize.width <= 0) {
@@ -330,7 +342,7 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
     unawaited(_loadVideoShotPreview());
   }
 
-  /// 首次横向拖动时按需读取当前分 P 预览图，并忽略切视频后的晚到结果。
+  /// 首次预览时按需读取当前分 P 预览图，并忽略切视频后的晚到结果。
   Future<void> _loadVideoShotPreview() async {
     if (_videoShotPreview != null || _videoShotLoading) {
       return;
@@ -362,23 +374,126 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
     }
   }
 
-  /// Seek, navigation and viewport transitions drop a pending mouse click and hover.
+  /// Navigation and viewport transitions invalidate unfinished slider drags.
   @override
-  void _clearDesktopPointerForTransition() {
+  void _clearPlayerPointerForTransition() {
+    _cancelProgressDrag();
+    _clearDesktopPointer();
+  }
+
+  void _clearDesktopPointer() {
     _desktopTapRecognizer?.cancelPendingTap();
-    final releaseControls = _desktopBottomHover;
-    _desktopBottomHover = false;
+    final releaseControls = _desktopControlsHover;
+    _desktopControlsHover = false;
+    _desktopPointerEdge = null;
+    _desktopSuppressedEdge = null;
     _setDesktopTimelineHover(null);
     if (releaseControls) _restartControlsAutoHideTimer();
   }
 
   /// 切换分 P 或视频时清除旧截图，避免把上一支视频的画面当成新进度预览。
   void _resetVideoShotPreview() {
+    _cancelProgressDrag();
     _desktopTimelineHover = null;
-    _desktopBottomHover = false;
+    _desktopControlsHover = false;
+    _desktopPointerEdge = null;
+    _desktopSuppressedEdge = null;
     _videoShotRequestToken += 1;
     _videoShotPreview = null;
     _videoShotLoading = false;
+  }
+
+  /// Match the preview target to the exact millisecond used by the seek.
+  Duration _positionForProgress(double value) =>
+      Duration(milliseconds: (_displayDuration.inMilliseconds * value).round());
+
+  void _recordProgressPointer(PointerDownEvent event) {
+    if (event.buttons != kPrimaryButton ||
+        (_progressPointer != null && !_progressPointerCanceled)) {
+      return;
+    }
+    _progressPointer = event.pointer;
+    _progressPointerCanceled = false;
+    _progressPointerReleased = false;
+  }
+
+  void _endProgressPointer(int pointer, {required bool canceled}) {
+    if (_progressPointer != pointer) return;
+    if (canceled) {
+      _cancelProgressDrag();
+    } else {
+      _progressPointerReleased = true;
+    }
+    // Flutter's Slider reports onChangeEnd for both releases and cancellations.
+    // The Listener sees the pointer first; the recognizer still needs this
+    // release state for the rest of the event dispatch.
+    scheduleMicrotask(() {
+      if (_progressPointer != pointer) return;
+      _progressPointer = null;
+      _progressPointerReleased = false;
+      _progressPointerCanceled = false;
+      if (mounted) _cancelProgressDrag();
+    });
+  }
+
+  void _startProgressDrag(double value) {
+    if (_progressPointerCanceled) return;
+    if (_progressPointer == null) {
+      // A focused arrow key or a semantics adjustment is a complete, paired
+      // Slider action without a physical pointer or any preview work.
+      _progressDragStart = value;
+      return;
+    }
+    _clearDesktopPointer();
+    _cancelHorizontalScrub();
+    _stopControlsAutoHideTimer();
+    _seekFeedbackTimer?.cancel();
+    setState(() {
+      _progressDragStart = value;
+      _seekFeedback = null;
+    });
+    // A quick tap can complete in this same dispatch and needs no preview.
+    scheduleMicrotask(() {
+      if (mounted && _isDraggingProgress && _displayDuration > Duration.zero) {
+        unawaited(_loadVideoShotPreview());
+      }
+    });
+  }
+
+  void _updateProgressDrag(double value) {
+    if (_progressPointerCanceled) return;
+    setState(() => _progress = value);
+  }
+
+  void _finishProgressDrag(double value) {
+    if (!_isDraggingProgress) return;
+    if (_progressPointer != null &&
+        (!_progressPointerReleased || _progressPointerCanceled)) {
+      _cancelProgressDrag();
+      return;
+    }
+    setState(() {
+      _progressDragStart = null;
+      _progress = value;
+    });
+    unawaited(_seekToProgress(value));
+    _restartControlsAutoHideTimer();
+  }
+
+  void _cancelProgressDrag() {
+    if (_progressPointer != null) _progressPointerCanceled = true;
+    final start = _progressDragStart;
+    if (start == null || !mounted) return;
+    final snapshot = _playbackSnapshot;
+    final latest = snapshot.duration > Duration.zero
+        ? (snapshot.position.inMilliseconds / snapshot.duration.inMilliseconds)
+              .clamp(0.0, 1.0)
+        : start;
+    setState(() {
+      _progressDragStart = null;
+      _progress = latest;
+    });
+    _restartControlsAutoHideTimer();
   }
 
   /// 拖动过程中只更新本地进度预览，松手前不会反复打断播放器。

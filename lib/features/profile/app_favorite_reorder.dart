@@ -1,13 +1,16 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
+import 'package:flutter/services.dart';
 
 typedef _FavoriteDrag = ({Object owner, String id});
 
-/// Local-only reordering for the existing adaptive single- and two-column lists.
-/// The viewport is the drop target so scrolling beneath a stationary pointer
-/// never commits to a row that was previously under it.
+/// Previews local favorite order in the existing adaptive list. The viewport,
+/// not a moving card, accepts the drop, so dragging across columns or holding
+/// at a scroll edge does not leave a stale per-card drop target.
 class AppFavoriteReorder extends StatefulWidget {
   const AppFavoriteReorder({
     super.key,
@@ -20,7 +23,7 @@ class AppFavoriteReorder extends StatefulWidget {
 
   final List<String> ids;
   final bool enabled;
-  final ValueChanged<List<String>> onReorder;
+  final Future<void> Function(List<String>) onReorder;
   final VoidCallback? onDragStarted;
   final Widget Function(BuildContext context, AppFavoriteReorderState reorder)
   builder;
@@ -31,34 +34,39 @@ class AppFavoriteReorder extends StatefulWidget {
 
 class AppFavoriteReorderState extends State<AppFavoriteReorder> {
   static const _edgeZone = 48.0;
-  final _bounds = <String, GlobalKey>{};
-  final _highlight = ValueNotifier<String?>(null);
+  final _slots = <int, GlobalKey>{};
+  final _cards = <String, GlobalKey>{};
+  List<String>? _preview;
+  List<String>? _saving;
   String? _dragging;
+  int? _target;
   Offset? _pointer;
   ScrollableState? _scrollable;
   EdgeDraggingAutoScroller? _autoScroller;
 
-  bool get _enabled => widget.enabled && widget.ids.length > 1;
+  List<String> get ids => _preview ?? _saving ?? widget.ids;
+  bool get _enabled =>
+      widget.enabled && widget.ids.length > 1 && _saving == null;
 
   @override
   void didUpdateWidget(covariant AppFavoriteReorder oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!widget.enabled || !listEquals(widget.ids, oldWidget.ids)) {
-      _finish();
-    }
+    final orderChanged = !listEquals(widget.ids, oldWidget.ids);
+    if (!widget.enabled || orderChanged) _resetDrag();
+    if (orderChanged) _saving = null;
     final ids = widget.ids.toSet();
-    _bounds.removeWhere((id, _) => !ids.contains(id));
+    _cards.removeWhere((id, _) => !ids.contains(id));
+    _slots.removeWhere((index, _) => index >= ids.length);
   }
 
   @override
   void dispose() {
-    _autoScroller?.stopAutoScroll();
-    _highlight.dispose();
+    _resetDrag();
     super.dispose();
   }
 
-  String? _rowAt(Offset pointer) {
-    for (final entry in _bounds.entries) {
+  int? _slotAt(Offset pointer) {
+    for (final entry in _slots.entries) {
       final box = entry.value.currentContext?.findRenderObject();
       if (box is RenderBox &&
           box.attached &&
@@ -70,20 +78,39 @@ class AppFavoriteReorderState extends State<AppFavoriteReorder> {
     return null;
   }
 
+  List<String> _orderWith(String source, int target) {
+    final order = widget.ids.toList();
+    order.insert(target, order.removeAt(order.indexOf(source)));
+    return order;
+  }
+
+  Future<void> _commit(List<String> order) async {
+    setState(() {
+      _resetDrag();
+      // Keep the final preview in place while the service saves and reloads.
+      _saving = order;
+    });
+    try {
+      await widget.onReorder(order);
+    } finally {
+      if (mounted && identical(_saving, order)) setState(() => _saving = null);
+    }
+  }
+
   void _move(String source, String target) {
-    if (!_enabled || source == target) return;
-    final ids = widget.ids.toList();
-    final from = ids.indexOf(source);
-    final to = ids.indexOf(target);
-    if (from == -1 || to == -1) return;
-    ids.insert(to, ids.removeAt(from));
-    widget.onReorder(ids);
+    if (!_enabled || _dragging != null || source == target) return;
+    final index = widget.ids.indexOf(target);
+    if (index != -1 && widget.ids.contains(source)) {
+      unawaited(_commit(_orderWith(source, index)));
+    }
   }
 
   void _start(BuildContext context, String id) {
-    if (!_enabled || _dragging != null) return;
-    _dragging = id;
-    _scrollable = Scrollable.of(context);
+    setState(() {
+      _dragging = id;
+      _target = widget.ids.indexOf(id);
+      _scrollable = Scrollable.of(context);
+    });
     widget.onDragStarted?.call();
   }
 
@@ -97,9 +124,6 @@ class AppFavoriteReorderState extends State<AppFavoriteReorder> {
         // Flutter stores the supplied rect relative to the scroll origin.
         // Re-anchor it after each step even if the user's pointer is stationary.
         _scrollAtPointer();
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (identical(_autoScroller, scroller)) _updateHighlight();
-        });
       },
     );
     return scroller;
@@ -123,32 +147,55 @@ class AppFavoriteReorderState extends State<AppFavoriteReorder> {
     );
   }
 
-  void _updateHighlight() {
+  void _updatePreview() {
     final pointer = _pointer;
-    if (!mounted || pointer == null) return;
-    final id = _rowAt(pointer);
-    _highlight.value = id == _dragging ? null : id;
+    final source = _dragging;
+    if (!mounted || !_enabled || pointer == null || source == null) return;
+    final slot = _slotAt(pointer);
+    // Read the stable display slot, not the ID of whichever card currently
+    // occupies it. Repeated moves in one slot must not reorder back and forth.
+    if (slot == null || slot == _target) return;
+    setState(() {
+      _target = slot;
+      _preview = _orderWith(source, slot);
+    });
   }
 
-  void _leave() {
+  void _stopTracking() {
     _pointer = null;
-    _highlight.value = null;
     _autoScroller?.stopAutoScroll();
     _autoScroller = null;
   }
 
-  void _finish() {
-    _leave();
+  void _resetDrag() {
+    _stopTracking();
     _dragging = null;
+    _target = null;
+    _preview = null;
     _scrollable = null;
   }
 
   void _end(String id) {
-    if (mounted && _dragging == id) _finish();
+    if (mounted && _dragging == id) setState(_resetDrag);
   }
 
   @override
-  Widget build(BuildContext context) => DragTarget<_FavoriteDrag>(
+  Widget build(BuildContext context) =>
+      NotificationListener<ScrollUpdateNotification>(
+        onNotification: (notification) {
+          if (notification.depth == 0 && _pointer != null) {
+            // The pointer can be stationary while new slots scroll under it.
+            // Measure after layout, including during an auto-scroll step.
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => _updatePreview(),
+            );
+          }
+          return false;
+        },
+        child: _dropTarget(),
+      );
+
+  Widget _dropTarget() => DragTarget<_FavoriteDrag>(
     onWillAcceptWithDetails: (details) =>
         _enabled && identical(details.data.owner, this),
     onMove: (details) {
@@ -158,105 +205,213 @@ class AppFavoriteReorderState extends State<AppFavoriteReorder> {
         return;
       }
       _pointer = details.offset;
-      _updateHighlight();
+      _updatePreview();
       _scrollAtPointer();
     },
     onLeave: (data) {
-      if (identical(data?.owner, this) && data?.id == _dragging) _leave();
+      if (!identical(data?.owner, this) || data?.id != _dragging) return;
+      _stopTracking();
+      if (_preview != null) {
+        setState(() {
+          _preview = null;
+          _target = widget.ids.indexOf(_dragging!);
+        });
+      }
     },
     onAcceptWithDetails: (details) {
       if (!identical(details.data.owner, this) ||
           _dragging != details.data.id) {
         return;
       }
-      final target = _rowAt(details.offset);
-      _finish();
-      if (target != null) _move(details.data.id, target);
+      final order = _preview;
+      if (_enabled && order != null && !listEquals(order, widget.ids)) {
+        unawaited(_commit(order));
+      } else {
+        _end(details.data.id);
+      }
     },
     builder: (context, _, _) => widget.builder(context, this),
   );
 
-  /// Builds an isolated handle (not an ancestor of the row's tap/long press).
-  /// Keep row bounds under the list and the drag avatar in Flutter's overlay.
+  /// Reparents only the card (not the measured slot) as the draft order changes.
+  /// The source still lays out invisibly to reserve its normal size in the list.
   Widget row({
-    required BuildContext context,
+    required int index,
     required String id,
     required String title,
     required Key handleKey,
-    required Widget Function(Widget? handle) builder,
+    required Widget Function(Widget? handle, {required bool preview}) builder,
   }) {
-    if (!_enabled) return builder(null);
-    final index = widget.ids.indexOf(id);
-    final previous = index > 0 ? widget.ids[index - 1] : null;
-    final following = index + 1 < widget.ids.length
-        ? widget.ids[index + 1]
-        : null;
-    final scheme = Theme.of(context).colorScheme;
-    final handle = LongPressDraggable<_FavoriteDrag>(
-      key: handleKey,
-      data: (owner: this, id: id),
-      dragAnchorStrategy: pointerDragAnchorStrategy,
-      maxSimultaneousDrags: 1,
-      hitTestBehavior: HitTestBehavior.opaque,
-      allowedButtonsFilter: (buttons) =>
-          buttons == kPrimaryButton && _enabled && _dragging == null,
-      onDragStarted: () => _start(context, id),
-      // Unlike onDragEnd, these also fire when the source row was recycled.
-      onDragCompleted: () => _end(id),
-      onDraggableCanceled: (_, _) => _end(id),
-      feedback: FractionalTranslation(
-        translation: const Offset(-1, -.5),
-        child: Material(
-          elevation: 4,
-          color: scheme.secondaryContainer,
-          borderRadius: BorderRadius.circular(10),
-          child: SizedBox(
-            width: 164,
-            child: Padding(
-              padding: const EdgeInsets.all(10),
-              child: Text(
-                title,
-                style: TextStyle(color: scheme.onSecondaryContainer),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+    final previous = index > 0 ? ids[index - 1] : null;
+    final following = index + 1 < ids.length ? ids[index + 1] : null;
+    return SizedBox(
+      key: _slots.putIfAbsent(index, GlobalKey.new),
+      width: double.infinity,
+      child: LayoutBuilder(
+        key: _cards.putIfAbsent(id, GlobalKey.new),
+        builder: (context, constraints) {
+          final dragging = id == _dragging;
+          final theme = Theme.of(context);
+          final scheme = theme.colorScheme;
+          final rtl = Directionality.of(context) == TextDirection.rtl;
+          final handle = _enabled
+              ? _FavoriteDragHandle(
+                  key: handleKey,
+                  canStart: () => mounted && _enabled && _dragging == null,
+                  data: (owner: this, id: id),
+                  onDragStarted: () => _start(context, id),
+                  // Unlike onDragEnd, these fire if the row scrolled away.
+                  onDragCompleted: () => _end(id),
+                  onDraggableCanceled: (_, _) => _end(id),
+                  feedback: FractionalTranslation(
+                    translation: Offset(rtl ? 0 : -1, -.5),
+                    child: Transform.translate(
+                      // Keep the handle aligned with the pointer on either side.
+                      offset: Offset(rtl ? -28 : 28, 0),
+                      child: SizedBox(
+                        key: ValueKey('app-favorite-reorder-proxy-$id'),
+                        width: constraints.maxWidth,
+                        child: Theme(
+                          data: theme.copyWith(
+                            cardTheme: theme.cardTheme.copyWith(
+                              color: scheme.secondaryContainer,
+                              elevation: 8,
+                            ),
+                          ),
+                          child: builder(_handleIcon, preview: true),
+                        ),
+                      ),
+                    ),
+                  ),
+                  child: Semantics(
+                    label: '拖动排序：$title',
+                    tooltip: '拖动排序（触屏长按）',
+                    customSemanticsActions: {
+                      if (previous != null)
+                        const CustomSemanticsAction(label: '上移'): () =>
+                            _move(id, previous),
+                      if (following != null)
+                        const CustomSemanticsAction(label: '下移'): () =>
+                            _move(id, following),
+                    },
+                    child: const MouseRegion(
+                      cursor: SystemMouseCursors.grab,
+                      child: _handleIcon,
+                    ),
+                  ),
+                )
+              : null;
+          final card = builder(handle, preview: false);
+          return Stack(
+            children: [
+              Visibility(
+                visible: !dragging,
+                maintainState: true,
+                maintainAnimation: true,
+                maintainSize: true,
+                child: card,
               ),
-            ),
-          ),
-        ),
-      ),
-      child: Semantics(
-        label: '拖动排序：$title',
-        tooltip: '长按拖动排序',
-        customSemanticsActions: {
-          if (previous != null)
-            const CustomSemanticsAction(label: '上移'): () => _move(id, previous),
-          if (following != null)
-            const CustomSemanticsAction(label: '下移'): () =>
-                _move(id, following),
+              if (dragging)
+                Positioned.fill(
+                  child: Padding(
+                    padding: const EdgeInsets.all(4),
+                    child: DecoratedBox(
+                      key: ValueKey('app-favorite-reorder-gap-$id'),
+                      decoration: BoxDecoration(
+                        color: scheme.primary.withValues(alpha: .08),
+                        border: Border.all(color: scheme.primary, width: 2),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          );
         },
-        child: const MouseRegion(
-          cursor: SystemMouseCursors.grab,
-          child: SizedBox.square(
-            dimension: 48,
-            child: Icon(Icons.drag_handle_rounded),
-          ),
-        ),
       ),
     );
-    return ValueListenableBuilder<String?>(
-      key: _bounds.putIfAbsent(id, GlobalKey.new),
-      valueListenable: _highlight,
-      child: builder(handle),
-      builder: (context, target, child) => DecoratedBox(
-        position: DecorationPosition.foreground,
-        decoration: BoxDecoration(
-          border: target == id
-              ? Border.all(color: scheme.primary, width: 2)
-              : null,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: child,
-      ),
-    );
+  }
+
+  static const _handleIcon = SizedBox.square(
+    dimension: 48,
+    child: Icon(Icons.drag_handle_rounded),
+  );
+}
+
+class _FavoriteDragHandle extends Draggable<_FavoriteDrag> {
+  const _FavoriteDragHandle({
+    super.key,
+    required this.canStart,
+    required super.data,
+    required super.onDragStarted,
+    required super.onDragCompleted,
+    required super.onDraggableCanceled,
+    required super.feedback,
+    required super.child,
+  }) : super(
+         dragAnchorStrategy: pointerDragAnchorStrategy,
+         hitTestBehavior: HitTestBehavior.opaque,
+         maxSimultaneousDrags: 1,
+       );
+
+  final bool Function() canStart;
+
+  @override
+  MultiDragGestureRecognizer createRecognizer(
+    GestureMultiDragStartCallback onStart,
+  ) {
+    return _FavoriteDragRecognizer(
+        allowedButtonsFilter: (buttons) =>
+            buttons == kPrimaryButton && canStart(),
+      )
+      ..onStart = (position) {
+        if (!canStart()) return null;
+        final drag = onStart(position);
+        if (drag != null) unawaited(HapticFeedback.selectionClick());
+        return drag;
+      };
+  }
+}
+
+class _FavoriteDragRecognizer extends DelayedMultiDragGestureRecognizer {
+  _FavoriteDragRecognizer({super.allowedButtonsFilter});
+
+  @override
+  MultiDragPointerState createNewPointerState(PointerDownEvent event) {
+    return event.kind == PointerDeviceKind.mouse
+        ? _MouseDragPointer(event.position, event.kind, gestureSettings)
+        : super.createNewPointerState(event);
+  }
+}
+
+class _MouseDragPointer extends MultiDragPointerState {
+  _MouseDragPointer(super.initialPosition, super.kind, super.gestureSettings);
+
+  GestureMultiDragStartCallback? _starter;
+
+  bool get _hasMoved =>
+      pendingDelta!.distance > computeHitSlop(kind, gestureSettings);
+
+  @override
+  void checkForResolutionAfterMove() {
+    if (!_hasMoved) return;
+    final starter = _starter;
+    if (starter == null) {
+      resolve(GestureDisposition.accepted);
+    } else {
+      _starter = null;
+      starter(initialPosition);
+    }
+  }
+
+  @override
+  void accepted(GestureMultiDragStartCallback starter) {
+    // A lone recognizer can win on pointer down. Still wait for real movement
+    // in that case, so clicking the desktop handle does not lift the card.
+    if (_hasMoved) {
+      starter(initialPosition);
+    } else {
+      _starter = starter;
+    }
   }
 }

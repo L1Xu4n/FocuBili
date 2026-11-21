@@ -5,10 +5,13 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show LogicalKeyboardKey;
+import 'package:flutter/semantics.dart' show SemanticsNode;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:focubili/features/player/player_page.dart';
+import 'package:focubili/features/player/widgets/player_timeline.dart';
 import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/models/video_shot_preview.dart';
 import 'package:focubili/platform/app_platform.dart';
@@ -135,6 +138,17 @@ final _shot = find.byKey(const Key('video-shot-frame'));
 final _loading = find.byKey(const Key('video-shot-loading'));
 final _unavailable = find.byKey(const Key('video-shot-unavailable'));
 final _targetTime = find.textContaining('跳转至 ');
+final _slider = find.byKey(const Key('player-progress-slider'));
+final _dragCard = find.byKey(const Key('timeline-drag-preview'));
+
+Offset _trackAt(WidgetTester t, double fraction) {
+  final slider = t.getRect(_slider);
+  final track = PlayerTimelineGeometry.trackRect(
+    slider.size,
+    offset: slider.topLeft,
+  );
+  return Offset(track.left + track.width * fraction, track.center.dy);
+}
 
 Future<void> _mount(
   WidgetTester t,
@@ -218,95 +232,130 @@ Future<void> _remove(WidgetTester t, _Atlases cache) async {
 }
 
 void main() {
-  testWidgets('a 110s picture swipe shows the 109s cell and seeks to 110s', (
-    t,
-  ) async {
-    const green = Color(0xFF00FF00);
-    const red = Color(0xFFFF0000);
-    final atlas = await _atlas(
+  for (final method in [
+    'picture swipe',
+    'embedded slider',
+    'fullscreen slider',
+  ]) {
+    testWidgets('a 110s $method shows the 109s cell and seeks to 110s', (
       t,
-      Colors.black,
-      w: 160,
-      h: 90,
-      paintCells: (canvas) {
-        canvas.drawRect(
-          const Rect.fromLTWH(80, 9, 16, 9),
-          Paint()..color = green,
-        );
-        canvas.drawRect(
-          const Rect.fromLTWH(96, 9, 16, 9),
-          Paint()..color = red,
-        );
-      },
-    );
-    final metadata = BilibiliVideoShotService(
-      requestJson: (_) async => jsonEncode({
-        'code': 0,
-        'data': {
-          'image': [_first],
-          'img_x_len': 10,
-          'img_y_len': 10,
-          'img_x_size': 16,
-          'img_y_size': 9,
-          // Captured videoshot index prefix. Green is 109s; red is 117s.
-          'index': [
-            0,
-            0,
-            8,
-            14,
-            19,
-            25,
-            34,
-            40,
-            46,
-            56,
-            63,
-            70,
-            80,
-            87,
-            93,
-            100,
-            109,
-            117,
-            124,
-          ],
+    ) async {
+      const green = Color(0xFF00FF00);
+      const red = Color(0xFFFF0000);
+      final atlas = await _atlas(
+        t,
+        Colors.black,
+        w: 160,
+        h: 90,
+        paintCells: (canvas) {
+          canvas.drawRect(
+            const Rect.fromLTWH(80, 9, 16, 9),
+            Paint()..color = green,
+          );
+          canvas.drawRect(
+            const Rect.fromLTWH(96, 9, 16, 9),
+            Paint()..color = red,
+          );
         },
-      }),
-    );
-    // This fixture's long video uses 600s / 75% of the surface width.
-    // _begin's 8% swipe moves from 46s to 110s exactly.
-    final p = _Playback(position: const Duration(seconds: 46));
-    final cache = _Atlases((_) => atlas);
-    await _mount(t, p, metadata, cache);
-    final swipe = await _begin(t);
-    await _pumpImages(t);
-    expect(find.text('跳转至 1:50'), findsOneWidget);
-    final cell = find.descendant(of: _shot, matching: find.byType(CustomPaint));
-    final painter = t.widget<CustomPaint>(cell).painter!;
-    final size = t.getSize(cell);
-    final rgba = await t.runAsync(() async {
-      final recorder = ui.PictureRecorder();
-      painter.paint(Canvas(recorder), size);
-      final picture = recorder.endRecording();
-      final image = await picture.toImage(
-        size.width.ceil(),
-        size.height.ceil(),
       );
-      picture.dispose();
-      final bytes = (await image.toByteData(
-        format: ui.ImageByteFormat.rawRgba,
-      ))!;
-      final center = (image.height ~/ 2 * image.width + image.width ~/ 2) * 4;
-      image.dispose();
-      return bytes.getUint32(center);
+      final metadata = BilibiliVideoShotService(
+        requestJson: (_) async => jsonEncode({
+          'code': 0,
+          'data': {
+            'image': [_first],
+            'img_x_len': 10,
+            'img_y_len': 10,
+            'img_x_size': 16,
+            'img_y_size': 9,
+            // Captured videoshot index prefix. Green is 109s; red is 117s.
+            'index': [
+              0,
+              0,
+              8,
+              14,
+              19,
+              25,
+              34,
+              40,
+              46,
+              56,
+              63,
+              70,
+              80,
+              87,
+              93,
+              100,
+              109,
+              117,
+              124,
+            ],
+          },
+        }),
+      );
+      // This fixture's long video uses 600s / 75% of the surface width.
+      // _begin's 8% swipe moves from 46s to 110s exactly.
+      final p = _Playback(position: const Duration(seconds: 46));
+      final cache = _Atlases((_) => atlas);
+      await _mount(t, p, metadata, cache);
+      final TestGesture drag;
+      final sliderDrag = method != 'picture swipe';
+      if (sliderDrag) {
+        if (method == 'fullscreen slider') {
+          await t.tap(find.byTooltip('进入全屏'));
+          t.view.physicalSize = const Size(850, 390);
+          await t.pumpAndSettle();
+          expect(find.byTooltip('退出全屏'), findsOneWidget);
+        }
+        drag = await t.startGesture(_trackAt(t, .4));
+        await drag.moveTo(_trackAt(t, 110 / _duration.inSeconds));
+        await t.pump();
+      } else {
+        drag = await _begin(t);
+      }
+      await _pumpImages(t);
+      if (sliderDrag) {
+        expect(
+          find.descendant(of: _dragCard, matching: find.text('1:50')),
+          findsOneWidget,
+        );
+        expect(
+          t.getRect(_dragCard).bottom,
+          lessThanOrEqualTo(t.getRect(_slider).top),
+        );
+      } else {
+        expect(find.text('跳转至 1:50'), findsOneWidget);
+      }
+      final cell = find.descendant(
+        of: _shot,
+        matching: find.byType(CustomPaint),
+      );
+      final painter = t.widget<CustomPaint>(cell).painter!;
+      final size = t.getSize(cell);
+      final rgba = await t.runAsync(() async {
+        final recorder = ui.PictureRecorder();
+        painter.paint(Canvas(recorder), size);
+        final picture = recorder.endRecording();
+        final image = await picture.toImage(
+          size.width.ceil(),
+          size.height.ceil(),
+        );
+        picture.dispose();
+        final bytes = (await image.toByteData(
+          format: ui.ImageByteFormat.rawRgba,
+        ))!;
+        final center = (image.height ~/ 2 * image.width + image.width ~/ 2) * 4;
+        image.dispose();
+        return bytes.getUint32(center);
+      });
+      expect(rgba, 0x00FF00FF, reason: '109s is green; 117s is red');
+      expect(p.seeks, isEmpty);
+      await drag.up();
+      await t.pump();
+      expect(p.seeks, [const Duration(seconds: 110)]);
+      expect(_dragCard, findsNothing);
+      await _remove(t, cache);
     });
-    expect(rgba, 0x00FF00FF, reason: '109s is green; 117s is red');
-    expect(p.seeks, isEmpty);
-    await swipe.up();
-    await t.pump();
-    expect(p.seeks, [const Duration(seconds: 110)]);
-    await _remove(t, cache);
-  });
+  }
 
   for (final desktop in [false, true]) {
     testWidgets(
@@ -467,30 +516,116 @@ void main() {
     },
   );
 
+  for (final badAtlas in [false, true]) {
+    testWidgets(
+      'slider falls back to time only and never seeks on cancel (badAtlas=$badAtlas)',
+      (t) async {
+        final p = _Playback();
+        final metadata = _Metadata((_) => badAtlas ? _oneAtlas(_first) : null);
+        final cache = _Atlases((_) => throw const ImageCacheFailure());
+        await _mount(t, p, metadata, cache);
+        final initial = t.widget<Slider>(_slider).value;
+        final drag = await t.startGesture(_trackAt(t, .2));
+        await drag.moveTo(_trackAt(t, .4));
+        await t.pumpAndSettle();
+        for (final fraction in [.45, .5]) {
+          await drag.moveTo(_trackAt(t, fraction));
+          await _pumpImages(t, 2);
+        }
+        expect(
+          find.descendant(of: _dragCard, matching: find.text('01:25:01')),
+          findsOneWidget,
+        );
+        expect(_shot, findsNothing);
+        expect(_loading, findsNothing);
+        expect(_unavailable, findsNothing);
+        expect(cache.urls, badAtlas ? [_first] : isEmpty);
+        expect(metadata.calls, [5001]);
+        expect(p.seeks, isEmpty);
+        await drag.cancel();
+        await t.pumpAndSettle();
+        expect(_dragCard, findsNothing);
+        expect(p.seeks, isEmpty);
+        expect(t.widget<Slider>(_slider).value, closeTo(initial, .00001));
+        await _remove(t, cache);
+      },
+    );
+  }
+
   testWidgets(
-    'no thumbnails are fetched or shown during a real bottom slider drag',
+    'changing part closes a dragging slider and ignores its pending metadata',
     (t) async {
       final p = _Playback();
-      final metadata = _Metadata((_) => _twoAtlases);
+      final pending = Completer<VideoShotPreview>();
+      final metadata = _Metadata((_) => pending.future);
       final cache = _Atlases(
         (_) => throw StateError('unexpected image request'),
       );
       await _mount(t, p, metadata, cache);
-      final slider = find.byKey(const Key('player-progress-slider'));
-      final rect = t.getRect(slider);
-      final drag = await t.startGesture(rect.center);
-      await drag.moveBy(Offset(rect.width * .16, 0));
+      final drag = await t.startGesture(_trackAt(t, .2));
+      await drag.moveTo(_trackAt(t, .4));
       await t.pump();
-      expect(_shot, findsNothing);
-      expect(_loading, findsNothing);
-      expect(cache.urls, isEmpty);
-      expect(metadata.calls, isEmpty);
-      expect(p.seeks, isEmpty);
+      expect(_dragCard, findsOneWidget);
+      await t.tap(find.byKey(const Key('part-2')), pointer: 92);
+      await _pumpImages(t);
+      expect(p.parts, [5001, 5002]);
+      expect(_dragCard, findsNothing);
+      pending.complete(_oneAtlas(_late));
       await drag.up();
-      await t.pump();
-      expect(p.seeks, hasLength(1));
-      expect(metadata.calls, isEmpty);
+      await _pumpImages(t);
+      expect(p.seeks, isEmpty);
+      expect(cache.urls, isEmpty);
+      expect(_dragCard, findsNothing);
       await _remove(t, cache);
+    },
+  );
+
+  testWidgets(
+    'timeline accessibility gestures and keyboard seek without preview',
+    (t) async {
+      final p = _Playback(position: const Duration(seconds: 100));
+      final metadata = _Metadata((_) => null);
+      final cache = _Atlases(
+        (_) => throw StateError('unexpected image request'),
+      );
+      final semantics = t.ensureSemantics();
+      await _mount(t, p, metadata, cache, desktop: true);
+      final owner = t.binding.renderViews.single.owner!.semanticsOwner!;
+      int sliderNodeId() {
+        final matches = <int>[];
+        void collect(SemanticsNode node) {
+          if (node.getSemanticsData().hasAction(ui.SemanticsAction.increase)) {
+            matches.add(node.id);
+          }
+          node.visitChildren((child) {
+            collect(child);
+            return true;
+          });
+        }
+
+        collect(t.getSemantics(_slider));
+        return matches.single;
+      }
+
+      owner.performAction(sliderNodeId(), ui.SemanticsAction.increase);
+      await t.pumpAndSettle();
+      expect(p.seeks, [const Duration(milliseconds: 610150)]);
+      owner.performAction(sliderNodeId(), ui.SemanticsAction.decrease);
+      await t.pumpAndSettle();
+      expect(p.seeks.last, const Duration(seconds: 100));
+      owner.performAction(sliderNodeId(), ui.SemanticsAction.focus);
+      await t.pump();
+      await t.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await t.pumpAndSettle();
+      expect(p.seeks, [
+        const Duration(milliseconds: 610150),
+        const Duration(seconds: 100),
+        const Duration(milliseconds: 610150),
+      ]);
+      expect(metadata.calls, isEmpty);
+      expect(_dragCard, findsNothing);
+      await _remove(t, cache);
+      semantics.dispose();
     },
   );
 

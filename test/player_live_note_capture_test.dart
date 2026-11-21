@@ -61,9 +61,10 @@ LiveVideoFrame _sample({int cid = 101}) => LiveVideoFrame(
 Future<void> _mount(
   WidgetTester tester,
   _CapturePlayback p,
-  _Notes notes,
-) async {
-  tester.view.physicalSize = const Size(480, 900);
+  _Notes notes, {
+  Size viewport = const Size(480, 900),
+}) async {
+  tester.view.physicalSize = viewport;
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
@@ -136,6 +137,33 @@ void main() {
     expect(p.onlineOpens, 1);
     await unmountAb(tester);
   });
+
+  testWidgets(
+    'wide inline notes attach the playing frame to the draft anchor',
+    (tester) async {
+      final p = _CapturePlayback();
+      final notes = _Notes();
+      await _mount(tester, p, notes, viewport: const Size(1024, 560));
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('player-workspace-side-pane')),
+          matching: find.byKey(_body),
+        ),
+        findsOneWidget,
+      );
+      await _appendFrame(tester);
+      expect(p.liveCaptures, 1);
+      p.result.complete(_sample());
+      await tester.pumpAndSettle();
+      final note = (await notes.loadNotes()).single;
+      expect(note.position, const Duration(seconds: 20));
+      expect(note.allFrames.single.position, _sample().position);
+      expect(p.current.isPlaying, isTrue);
+      expect(p.seeks, isEmpty);
+      expect(p.pauses, 0);
+      await unmountAb(tester);
+    },
+  );
 
   for (final invalidMedia in [false, true]) {
     testWidgets(

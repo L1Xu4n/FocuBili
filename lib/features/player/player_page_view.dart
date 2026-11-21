@@ -58,7 +58,9 @@ extension _PlayerPageView on _PlayerPageState {
             )
             .toDouble();
         final Widget sideContent;
-        if (_partSelectorExpanded) {
+        if (_notesOpen) {
+          sideContent = _buildInlineVideoNotesPanel();
+        } else if (_partSelectorExpanded) {
           sideContent = _buildExpandedPartSelector();
         } else {
           sideContent = SingleChildScrollView(
@@ -237,9 +239,9 @@ extension _PlayerPageView on _PlayerPageState {
     final bool fullscreenLayout = _fullscreen || inPictureInPicture;
     final Size screenSize = MediaQuery.sizeOf(context);
     final bool landscapeLayout = screenSize.width > screenSize.height;
-    final bool sideNotes =
-        !inPictureInPicture && (landscapeLayout || _fullscreen);
-    final bool expandedSideNotes = sideNotes && _notesOpen && !_notesParked;
+    final bool floatingNotes = !inPictureInPicture && _usesFloatingVideoNotes;
+    final bool expandedFloatingNotes =
+        floatingNotes && _notesOpen && !_notesParked;
     final bool workspaceLayout =
         !fullscreenLayout && AdaptiveLayout.usesWorkspace(screenSize);
     // Small portrait players may have no room between the two control bars
@@ -247,7 +249,7 @@ extension _PlayerPageView on _PlayerPageState {
     final bool editAbBelowVideo =
         !fullscreenLayout &&
         screenSize.width < AdaptiveLayout.tabletBreakpoint &&
-        (!_notesOpen || sideNotes) &&
+        (!_notesOpen || floatingNotes) &&
         !_partSelectorExpanded;
     // 错误或选集展开时关闭画面手势，避免画面层干扰重试与选集按钮点击。
     final bool enableSurfaceGestures =
@@ -267,6 +269,12 @@ extension _PlayerPageView on _PlayerPageState {
             ? 16 + 48 * controlSize.scale
             : 16.0;
         final edgeInsets = MediaQuery.paddingOf(context);
+        final timelineDragging =
+            _isDraggingProgress &&
+            _showControls &&
+            !_controlsLocked &&
+            !inPictureInPicture &&
+            _displayDuration > Duration.zero;
         // Capture the actual pane without moving its feedback/semantics subtree
         // between the collapsing player and the notes workspace.
         _subtitleSurfaceSize = constraints.biggest;
@@ -358,9 +366,10 @@ extension _PlayerPageView on _PlayerPageState {
                       _buildPlayerFeedback(),
                       if (_timelineHover case final hover?
                           when hover.width == constraints.maxWidth)
-                        _buildTimelineHoverCard(
-                          progress: hover.progress,
+                        _buildTimelinePreviewCard(
+                          target: _positionForProgress(hover.progress),
                           x: hover.x - edgeInsets.left - feedbackSideInset,
+                          dragging: false,
                         ),
                       if (_abRepeatEditorVisible &&
                           !editAbBelowVideo &&
@@ -377,6 +386,12 @@ extension _PlayerPageView on _PlayerPageState {
                               child: _buildAbRepeatEditor(),
                             ),
                           ),
+                      if (timelineDragging)
+                        _buildTimelineDragPreview(
+                          width: constraints.maxWidth,
+                          edgeInsets: edgeInsets,
+                          sideInset: feedbackSideInset,
+                        ),
                     ],
                   ),
                   bottomOverlay: _buildChapterProgressOverlay(
@@ -410,6 +425,7 @@ extension _PlayerPageView on _PlayerPageState {
                         ],
                       ),
                     ),
+                    desktopEdge: _DesktopControlsEdge.top,
                   ),
                   bottomControls: _buildFadingControls(
                     SafeArea(
@@ -424,7 +440,7 @@ extension _PlayerPageView on _PlayerPageState {
                               !_controlsLocked &&
                               !inPictureInPicture)
                             _buildTimelineAnnotations(),
-                          _withTimelineMouseHover(
+                          _withTimelinePointerRegion(
                             PlayerProgressSlider(
                               scale: controlSize.scale,
                               sliderKey: const Key('player-progress-slider'),
@@ -581,9 +597,7 @@ extension _PlayerPageView on _PlayerPageState {
                         ],
                       ),
                     ),
-                    regionKey: _appPlatform.isDesktop
-                        ? _desktopBottomBarKey
-                        : null,
+                    desktopEdge: _DesktopControlsEdge.bottom,
                   ),
                 ),
                 if (_partSelectorExpanded && _fullscreen)
@@ -679,7 +693,7 @@ extension _PlayerPageView on _PlayerPageState {
             ),
           ),
         );
-        return _withDesktopPointerRegion(playerSurface, constraints.maxHeight);
+        return _withDesktopPointerRegion(playerSurface);
       },
     );
 
@@ -707,11 +721,11 @@ extension _PlayerPageView on _PlayerPageState {
       pageBody = SizedBox.expand(child: player);
     } else if (workspaceLayout) {
       pageBody = _buildWorkspacePlayerBody(player: player);
-    } else if (_notesOpen && !sideNotes) {
+    } else if (_notesOpen && !floatingNotes) {
       pageBody = Column(
         children: <Widget>[
           SizedBox(width: double.infinity, height: playerHeight, child: player),
-          Expanded(child: _buildPortraitVideoNotesPanel()),
+          Expanded(child: _buildInlineVideoNotesPanel()),
         ],
       );
     } else if (_partSelectorExpanded) {
@@ -748,13 +762,13 @@ extension _PlayerPageView on _PlayerPageState {
             fit: StackFit.expand,
             children: [
               ExcludeFocus(
-                excluding: expandedSideNotes,
+                excluding: expandedFloatingNotes,
                 child: ExcludeSemantics(
-                  excluding: expandedSideNotes,
+                  excluding: expandedFloatingNotes,
                   child: pageBody,
                 ),
               ),
-              if (expandedSideNotes)
+              if (expandedFloatingNotes)
                 Semantics(
                   key: const Key('park-video-notes-barrier'),
                   container: true,
@@ -764,9 +778,9 @@ extension _PlayerPageView on _PlayerPageState {
                   excludeSemantics: true,
                   child: ModalBarrier(onDismiss: _parkVideoNotes),
                 ),
-              if (sideNotes && _notesOverlayMounted)
+              if (floatingNotes && _notesOverlayMounted)
                 _buildFullscreenVideoNotesPanel(context, bounds),
-              if (sideNotes && _notesOpen && _notesParked)
+              if (floatingNotes && _notesOpen && _notesParked)
                 _buildParkedVideoNoteHandle(context),
             ],
           ),

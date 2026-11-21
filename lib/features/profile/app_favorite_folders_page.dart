@@ -617,31 +617,31 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
     }
     final query = _searchController.text.trim().toLowerCase();
     if (query.isNotEmpty) return _buildVideoResults(query);
-    final folders = _folders;
+    final folders = {for (final folder in _folders) folder.id: folder};
     return RefreshIndicator(
       onRefresh: _loadFolders,
       child: AppFavoriteReorder(
-        ids: [for (final folder in folders) folder.id],
+        ids: folders.keys.toList(),
         enabled: !_transferring && !_reordering,
-        onReorder: (ids) => unawaited(_reorderFolders(ids)),
+        onReorder: _reorderFolders,
         builder: (context, reorder) => AdaptiveTwoColumnList(
           key: const Key('app-favorite-folders-list'),
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-          itemCount: folders.length,
+          itemCount: reorder.ids.length,
           mainAxisSpacing: 8,
           itemBuilder: (context, index) {
-            final folder = folders[index];
+            final folder = folders[reorder.ids[index]]!;
             final items = _items[folder.id] ?? const <AppFavoriteItem>[];
             final covers = items.where((item) => item.coverUrl.isNotEmpty);
             return reorder.row(
-              context: context,
+              index: index,
               id: folder.id,
               title: folder.name,
               handleKey: Key('reorder-app-favorite-folder-${folder.id}'),
-              builder: (handle) => Builder(
+              builder: (handle, {required preview}) => Builder(
                 builder: (rowContext) => FavoriteFolderCard(
-                  key: Key('app-favorite-folder-${folder.id}'),
+                  key: preview ? null : Key('app-favorite-folder-${folder.id}'),
                   title: folder.name,
                   count: items.length,
                   coverUrl: covers.isEmpty ? '' : covers.first.coverUrl,
@@ -650,8 +650,8 @@ class _AppFavoriteFoldersPageState extends State<AppFavoriteFoldersPage> {
                   // card as it moves between the two adaptive columns.
                   showTitleTooltip: false,
                   reorderHandle: handle,
-                  onTap: () => unawaited(_openFolder(folder)),
-                  onLongPress: _transferring
+                  onTap: preview ? null : () => unawaited(_openFolder(folder)),
+                  onLongPress: preview || _transferring
                       ? null
                       : () => unawaited(_showFolderMenu(rowContext, folder)),
                 ),

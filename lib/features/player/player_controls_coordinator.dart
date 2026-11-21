@@ -64,8 +64,14 @@ mixin _PlayerControlsCoordinator
       return;
     }
     if (_showControls) {
+      // An explicit hide wins over slight motion in the current desktop
+      // hotspot; crossing its edge arms pointer reveal again.
+      _desktopSuppressedEdge = _desktopPointerEdge;
+      _desktopControlsHover = false;
       _hideControls();
     } else {
+      _desktopSuppressedEdge = null;
+      _desktopControlsHover = _desktopPointerEdge != null;
       _showPlayerControls();
     }
   }
@@ -84,6 +90,8 @@ mixin _PlayerControlsCoordinator
 
   /// 隐藏控制层并停止自动收起倒计时。
   void _hideControls() {
+    _setDesktopTimelineHover(null);
+    _cancelProgressDrag();
     _stopControlsAutoHideTimer();
     if (_showControls) {
       setState(() => _showControls = false);
@@ -100,7 +108,7 @@ mixin _PlayerControlsCoordinator
         !_playing ||
         _playbackSnapshot.isInPictureInPicture ||
         _isDraggingProgress ||
-        _desktopBottomHover ||
+        _desktopControlsHover ||
         _temporarySpeedActive ||
         _horizontalScrubbing) {
       return;
@@ -113,7 +121,7 @@ mixin _PlayerControlsCoordinator
           _playing &&
           !_playbackSnapshot.isInPictureInPicture &&
           !_isDraggingProgress &&
-          !_desktopBottomHover &&
+          !_desktopControlsHover &&
           !_temporarySpeedActive &&
           !_horizontalScrubbing) {
         setState(() {
@@ -203,9 +211,7 @@ mixin _PlayerControlsCoordinator
   /// 把进度条比例换算为真实毫秒位置，再请求原生播放器跳转。
   @override
   Future<void> _seekToProgress(double progress) async {
-    final Duration target = Duration(
-      milliseconds: (_displayDuration.inMilliseconds * progress).round(),
-    );
+    final Duration target = _positionForProgress(progress);
     try {
       await _seekNativeTo(target);
     } on PlatformException catch (error) {
@@ -236,7 +242,7 @@ mixin _PlayerControlsCoordinator
     if (quality == _currentQuality || _pendingQualitySelection == quality) {
       return;
     }
-    _clearDesktopPointerForTransition();
+    _clearPlayerPointerForTransition();
     _showPlayerControls();
     setState(() {
       _pendingQualitySelection = quality;
@@ -318,26 +324,6 @@ mixin _PlayerControlsCoordinator
   @override
   void _showPlayerNotice(String message) {
     if (mounted) _playerNotices.show(message, duration: _transientHintDuration);
-  }
-
-  /// 标记进度条正被手指拖动，并暂停自动隐藏以方便精确调整。
-  void _startProgressDrag(double value) {
-    _clearDesktopPointerForTransition();
-    _isDraggingProgress = true;
-    _stopControlsAutoHideTimer();
-  }
-
-  /// 只更新拖动过程中的本地显示，避免每一像素都向原生播放器发网络无关的命令。
-  void _updateProgressDrag(double value) {
-    setState(() => _progress = value);
-  }
-
-  /// 结束进度条拖动后把最终位置发送给原生播放器，并恢复自动隐藏策略。
-  void _finishProgressDrag(double value) {
-    _isDraggingProgress = false;
-    setState(() => _progress = value);
-    unawaited(_seekToProgress(value));
-    _restartControlsAutoHideTimer();
   }
 
   /// 根据当前进度生成“当前时间 / 总时长”的播放器文字。
@@ -429,16 +415,50 @@ mixin _PlayerControlsCoordinator
     );
   }
 
-  /// 处理桌面播放器快捷键；文本输入框获得焦点时完全交还键盘事件。
-  KeyEventResult _handlePlayerKeyEvent(FocusNode _, KeyEvent event) {
-    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+  bool _isDesktopRouteShortcut(LogicalKeyboardKey key) =>
+      key == LogicalKeyboardKey.space || key == LogicalKeyboardKey.escape;
+
+  /// Space and Escape still work when a desktop click or a layout change
+  /// leaves focus on the route instead of inside the player's Focus widget.
+  KeyEventResult _handleDesktopPlayerShortcut(KeyEvent event) {
+    if (event is! KeyDownEvent ||
+        !_isDesktopRouteShortcut(event.logicalKey) ||
+        !mounted ||
+        _externalNavigationSuspended) {
+      return KeyEventResult.ignored;
+    }
+    final route = ModalRoute.of(context);
+    if (route?.isCurrent != true) return KeyEventResult.ignored;
+    final focusContext = FocusManager.instance.primaryFocus?.context;
+    final focusRoute = focusContext == null
+        ? null
+        : ModalRoute.of(focusContext);
+    if (focusRoute != null && !identical(focusRoute, route)) {
+      return KeyEventResult.ignored;
+    }
+    return _handlePlayerShortcut(event);
+  }
+
+  /// 保留原有焦点快捷键，但桌面空格与 Esc 只由当前路由入口处理。
+  KeyEventResult _handlePlayerKeyEvent(FocusNode _, KeyEvent event) =>
+      _appPlatform.isDesktop && _isDesktopRouteShortcut(event.logicalKey)
+      ? KeyEventResult.ignored
+      : _handlePlayerShortcut(event);
+
+  KeyEventResult _handlePlayerShortcut(KeyEvent event) {
+    if (event is! KeyDownEvent || event.synthesized) {
+      return KeyEventResult.ignored;
+    }
     final LogicalKeyboardKey key = event.logicalKey;
-    if (key == LogicalKeyboardKey.escape &&
-        _notesOpen &&
-        !_notesParked &&
-        _usesSideNotes) {
-      _parkVideoNotes(focusHandle: true);
-      return KeyEventResult.handled;
+    if (key == LogicalKeyboardKey.escape && _notesOpen && !_notesParked) {
+      if (_usesFloatingVideoNotes) {
+        _parkVideoNotes(focusHandle: true);
+        return KeyEventResult.handled;
+      }
+      if (_playerNotesLayout == _PlayerNotesLayout.workspace) {
+        _closeVideoNotes();
+        return KeyEventResult.handled;
+      }
     }
     if (_notePeekHandleFocus.hasFocus && key == LogicalKeyboardKey.space) {
       // Run the focused button action instead of the player's Space shortcut.
@@ -512,7 +532,7 @@ mixin _PlayerControlsCoordinator
       return;
     }
     _cancelTemporaryLongPress();
-    _clearDesktopPointerForTransition();
+    _clearPlayerPointerForTransition();
     _stopControlsAutoHideTimer();
     setState(() {
       _controlsLocked = !_controlsLocked;
@@ -918,9 +938,6 @@ mixin _PlayerControlsCoordinator
 
   /// 由页面状态类提供播放器顶部显示的网络类型。
   set _networkType(DeviceNetworkType value);
-
-  /// 由页面状态类更新进度条是否正在拖动。
-  set _isDraggingProgress(bool value);
 
   /// 由页面状态类标记状态栏同步回调是否已经排队。
   bool get _playerStatusSyncScheduled;

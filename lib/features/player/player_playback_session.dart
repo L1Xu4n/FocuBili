@@ -50,7 +50,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
 
   /// 由手势协调器为真实播放暂停切换提供短暂动画。
   void _showPlaybackActionFeedback(bool playing);
-  void _clearDesktopPointerForTransition();
+  void _clearPlayerPointerForTransition();
   bool _shouldAnimatePlaybackAction(
     PlaybackSnapshot previous,
     PlaybackSnapshot snapshot,
@@ -65,7 +65,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     _clearAbRepeatForNavigation();
     _externalNavigationSuspended = true;
     _sourceGeneration++;
-    _clearDesktopPointerForTransition();
+    _clearPlayerPointerForTransition();
     await _suspendAbRepeatForSource();
     final service = _playbackService;
     if (service is! NativePlaybackService || service.ownsPlatformChannel) {
@@ -120,7 +120,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     bool? useLocal,
   }) async {
     final generation = ++_sourceGeneration;
-    _clearDesktopPointerForTransition();
+    _clearPlayerPointerForTransition();
     await Future.wait([
       _suspendAbRepeatForSource(),
       _settleTemporaryPlaybackSpeed(),
@@ -548,7 +548,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     if (snapshot.phase == PlaybackPhase.error ||
         snapshot.isRestoringPosition ||
         snapshot.isInPictureInPicture) {
-      _clearDesktopPointerForTransition();
+      _clearPlayerPointerForTransition();
     }
     final sleepExpired =
         previousSnapshot.sleepTimerRemaining > Duration.zero &&
@@ -831,7 +831,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     if (!mounted) {
       return;
     }
-    _clearDesktopPointerForTransition();
+    _clearPlayerPointerForTransition();
     setState(() {
       _playbackSnapshot = _playbackSnapshot.copyWith(
         phase: PlaybackPhase.error,

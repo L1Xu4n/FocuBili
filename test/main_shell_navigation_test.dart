@@ -132,6 +132,14 @@ void main() {
 
     final Finder rail = find.byKey(const Key('workspace-navigation-rail'));
     expect(rail, findsOneWidget);
+    expect(
+      find.byKey(const Key('workspace-navigation-open-about')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const Key('workspace-navigation-open-subscription')),
+      findsNothing,
+    );
     expect(find.byKey(const Key('focus-workspace-layout')), findsOneWidget);
 
     await tester.tap(find.descendant(of: rail, matching: find.text('搜索')));

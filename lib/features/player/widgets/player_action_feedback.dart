@@ -177,19 +177,17 @@ class PlayerSeekFeedback extends StatelessWidget {
     super.key,
     required this.seconds,
     this.foregroundOnly = false,
-    this.fillWidth = false,
   });
 
   static const bandWidthFactor = .42;
 
   final int seconds;
   final bool foregroundOnly;
-  final bool fillWidth;
 
   Widget _glyphs(BuildContext context, double progress) => Align(
     alignment: _seekAlignment(seconds),
     child: FractionallySizedBox(
-      widthFactor: fillWidth ? 1 : bandWidthFactor,
+      widthFactor: bandWidthFactor,
       heightFactor: 1,
       child: LayoutBuilder(
         builder: (context, constraints) {
