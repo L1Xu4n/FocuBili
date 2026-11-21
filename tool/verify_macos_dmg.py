@@ -7,6 +7,7 @@ import plistlib
 import re
 import subprocess
 import tempfile
+from beta_release import plan
 from macos_build_identity import read_identity, verify_bundle_identity
 
 
@@ -31,8 +32,10 @@ def manifest(app):
     }
 
 
-def project_version(metadata=Path("pubspec.yaml")):
-    # The build workflow uses the project's version without CLI overrides.
+def project_version(metadata=Path("pubspec.yaml"), beta_number=None):
+    if beta_number:
+        value = plan(beta_number, run("git", "rev-parse", "HEAD").decode().strip(), metadata.read_text())
+        return value["baseVersion"], str(value["buildNumber"])
     match = re.search(
         r'''^version:\s*['"]?(\d+\.\d+\.\d+)\+(\d+)['"]?\s*(?:#.*)?$''',
         metadata.read_text(), re.MULTILINE,
@@ -42,7 +45,7 @@ def project_version(metadata=Path("pubspec.yaml")):
 
 
 def main():
-    version, build = project_version()
+    version, build = project_version(beta_number=os.environ.get("BETA_NUMBER"))
     dmg = Path("build/apple/FocuBili-macos-preview.dmg")
     normal = Path("build/macos/Build/Products/Release/FocuBili.app")
     expected = manifest(normal)

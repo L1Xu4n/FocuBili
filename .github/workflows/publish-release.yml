@@ -10,6 +10,8 @@ on:
       - tool/replace_linux_v181.py
       - tool/test_replace_linux_v181.py
       - tool/linux_v181_replacement_snapshot.json
+      - tool/correct_v190_release.py
+      - tool/test_correct_v190_release.py
   pull_request:
     branches: [dev, master]
     paths:
@@ -17,6 +19,8 @@ on:
       - tool/replace_linux_v181.py
       - tool/test_replace_linux_v181.py
       - tool/linux_v181_replacement_snapshot.json
+      - tool/correct_v190_release.py
+      - tool/test_correct_v190_release.py
   workflow_dispatch:
     inputs:
       linux_v181_phase:
@@ -46,6 +50,8 @@ jobs:
       - uses: actions/checkout@v6
       - name: Test reversible Linux asset replacement without network
         run: python3 -m unittest discover -s tool -p test_replace_linux_v181.py -v
+      - name: Test reversible v1.9.0 build-number correction without network
+        run: python3 -m unittest discover -s tool -p test_correct_v190_release.py -v
 
   replace-linux-v181:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
@@ -76,12 +82,15 @@ jobs:
 
   publish:
     if: "${{ github.event_name == 'push' && github.ref == 'refs/heads/master' && startsWith(github.event.head_commit.message, 'release: publish v') }}"
+    needs: validate-linux-v181-publisher
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     steps:
       - name: Checkout final release metadata
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Resolve version and successful build
         id: release
@@ -89,8 +98,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          version="$(sed -nE 's/^version: ([0-9]+\.[0-9]+\.[0-9]+)\+[0-9]+$/\1/p' pubspec.yaml)"
-          test -n "$version"
+          full_version="$(sed -nE 's/^version: ([0-9]+\.[0-9]+\.[0-9]+\+[0-9]+)$/\1/p' pubspec.yaml)"
+          test -n "$full_version"
+          version="${full_version%+*}"
           notes="docs/RELEASE_NOTES_v${version}.md"
           test -f "$notes"
           # Only the exact release commit may supply tests and installation packages.
@@ -122,6 +132,7 @@ jobs:
               time.sleep(30)
           PY
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'full_version=%s\n' "$full_version" >> "$GITHUB_OUTPUT"
           printf 'tag=v%s\n' "$version" >> "$GITHUB_OUTPUT"
           printf 'notes=%s\n' "$notes" >> "$GITHUB_OUTPUT"
 
@@ -154,7 +165,23 @@ jobs:
           test "$(find release -maxdepth 1 -type f | wc -l)" -eq 6
           sha256sum release/*
 
+      - name: Archive and correct the original v1.9.0 stable build
+        if: steps.release.outputs.full_version == '1.9.0+32'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tool/correct_v190_release.py
+
+      - name: Save v1.9.0 correction checkpoints
+        if: always() && steps.release.outputs.full_version == '1.9.0+32'
+        uses: actions/upload-artifact@v4
+        with:
+          name: v190-build32-correction-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/v190-correction/
+          retention-days: 90
+          if-no-files-found: warn
+
       - name: Create annotated release tag
+        if: steps.release.outputs.full_version != '1.9.0+32'
         env:
           TAG: ${{ steps.release.outputs.tag }}
           VERSION: ${{ steps.release.outputs.version }}
@@ -171,6 +198,7 @@ jobs:
           fi
 
       - name: Publish GitHub Release
+        if: steps.release.outputs.full_version != '1.9.0+32'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}

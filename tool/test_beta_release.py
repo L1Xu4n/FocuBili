@@ -18,7 +18,7 @@ class BetaReleaseTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="focubili-beta-test-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        self.value = beta.plan("1", "a" * 40, "version: 1.9.0+2026\n")
+        self.value = beta.plan("1", "a" * 40, "version: 1.9.0+32\nfocubili_beta_build_number: 2026\n")
 
     def apk(self, name="test.apk", arm64=True):
         path = self.root / name
@@ -54,7 +54,20 @@ class BetaReleaseTests(unittest.TestCase):
     def test_plan_refuses_archived_equal_lower_and_local_27(self):
         for code in [1, 27, 2023, 2024, 2025, 65536]:
             with self.subTest(code=code), self.assertRaises(ValueError):
-                beta.plan("1", "a" * 40, f"version: 1.9.0+{code}\n")
+                beta.plan("1", "a" * 40, f"version: 1.9.0+32\nfocubili_beta_build_number: {code}\n")
+
+    def test_preview_build_is_independent_and_requires_explicit_counter(self):
+        version = "version: 1.9.0+32"
+        counter = "focubili_beta_build_number: 2038"
+        value = beta.plan("13", "a" * 40, version + "\n" + counter)
+        self.assertEqual(value["buildNumber"], 2038)
+        self.assertEqual(value["debVersion"], "1.9.0~beta.13+2038")
+        for source in ("version: 1.9.0+2038", version + "\n" + counter + "\n" + counter):
+            with self.subTest(source=source), self.assertRaises(ValueError):
+                beta.plan("13", "a" * 40, source)
+        repository = Path(__file__).resolve().parents[1]
+        source = (repository / "pubspec.yaml").read_text(encoding="utf-8")
+        self.assertGreaterEqual(beta.plan("13", "a" * 40, source)["buildNumber"], 2038)
 
     def test_archived_preview_floor_tracks_all_known_apk_verification_records(self):
         repository = Path(__file__).resolve().parents[1]
@@ -88,12 +101,12 @@ class BetaReleaseTests(unittest.TestCase):
         for source in ["version: 1.8.0+2026", "version: 1.9.00+2026", "version: 1.9.0-beta.1+2026",
                        "version: 1.9.0+2026\nversion: 1.9.0+2026"]:
             with self.subTest(source=source), self.assertRaises(ValueError):
-                beta.plan("1", "a" * 40, source)
+                beta.plan("1", "a" * 40, source + "\nfocubili_beta_build_number: 2026")
         for number in ["0", "01", "1;echo", "-1"]:
             with self.subTest(number=number), self.assertRaises(ValueError):
-                beta.plan(number, "a" * 40, "version: 1.9.0+2026")
+                beta.plan(number, "a" * 40, "version: 1.9.0+32\nfocubili_beta_build_number: 2026")
         with self.assertRaises(ValueError):
-            beta.plan("1", "abc", "version: 1.9.0+2026")
+            beta.plan("1", "abc", "version: 1.9.0+32\nfocubili_beta_build_number: 2026")
 
     def test_build_injects_one_committed_counter_and_channel_on_every_platform(self):
         for platform in ["apk", "windows", "macos", "linux", "ios", "ios-simulator"]:
@@ -147,9 +160,12 @@ class BetaReleaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.inventory((2026,))
 
-    def test_inventory_counts_other_workflows_and_stable_package_codes(self):
-        with self.assertRaises(ValueError):
-            self.inventory((3000,), ["com.focubili.app"])
+    def test_inventory_records_stable_but_checks_only_preview_build_monotonicity(self):
+        result = self.inventory((2038, 2025), ["com.focubili.app", beta.PACKAGE], pages=True)
+        self.assertEqual(result["maximumKnownVersionCode"], beta.FLOOR)
+        self.assertEqual([item["versionCode"] for item in result["apks"]], [2038, 2025])
+        with self.assertRaisesRegex(ValueError, "maximum 2026"):
+            self.inventory((2038, 2026), ["com.focubili.app", beta.PACKAGE], pages=True)
 
     def test_inventory_reads_all_pages_before_accepting_counter(self):
         with self.assertRaises(ValueError):

@@ -15,6 +15,14 @@ class MacOSPackageMetadataTest(unittest.TestCase):
                 metadata.write_text(f'name: focubili\nversion: {version}+{build}\n')
                 self.assertEqual(validator.project_version(metadata), (version, build))
 
+    def test_beta_artifact_uses_preview_counter_and_stable_uses_app_counter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            metadata = Path(directory) / 'pubspec.yaml'
+            metadata.write_text('version: 1.9.0+32\nfocubili_beta_build_number: 2038\n')
+            with patch.object(validator, 'run', return_value=b'a' * 40):
+                self.assertEqual(validator.project_version(metadata, beta_number='13'), ('1.9.0', '2038'))
+            self.assertEqual(validator.project_version(metadata), ('1.9.0', '32'))
+
     def test_quoted_version_and_comment(self):
         with tempfile.TemporaryDirectory() as directory:
             metadata = Path(directory) / 'pubspec.yaml'
