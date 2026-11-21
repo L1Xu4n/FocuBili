@@ -879,8 +879,26 @@ void main() {
 
       await _tap(tester, search);
       expect(find.byKey(const Key('search-workspace-layout')), findsOneWidget);
-      expect(subscription, findsNothing);
+      expect(subscription.hitTestable(), findsOneWidget);
       expect(about, findsOneWidget);
+
+      await _tap(tester, profile);
+      final profilePage = find.byKey(const Key('profile-workspace-layout'));
+      expect(profilePage, findsOneWidget);
+      expect(subscription.hitTestable(), findsOneWidget);
+      await _tap(tester, subscription);
+      expect(find.byType(SubscriptionUpdatesPage), findsOneWidget);
+      expect(await tester.binding.handlePopRoute(), isTrue);
+      await _settle(tester);
+      expect(profilePage, findsOneWidget);
+      expect(subscription.hitTestable(), findsOneWidget);
+
+      await subscriptions.setEnabled(false);
+      await _settle(tester);
+      expect(subscription, findsNothing);
+      await subscriptions.setEnabled(true);
+      await _settle(tester);
+      expect(subscription.hitTestable(), findsOneWidget);
       await _tap(tester, find.descendant(of: rail, matching: find.text('首页')));
       expect(subscription, findsOneWidget);
 

@@ -197,7 +197,7 @@ class _MainShellState extends State<MainShell>
     );
   }
 
-  /// 仅在桌面首页补上已启用订阅的快捷入口，沿用已有的未读数据。
+  /// 在桌面侧栏提供已启用订阅的快捷入口，切换一级页面时保持可用。
   Widget _buildWorkspaceSubscription(
     Size windowSize, {
     required bool extended,
@@ -375,7 +375,6 @@ class _MainShellState extends State<MainShell>
                       builder: (context, _) => _buildWorkspaceNavigation(
                         windowSize,
                         showSubscription:
-                            _currentIndex == 0 &&
                             AdaptiveLayout.isDesktopPlatform(
                               Theme.of(context).platform,
                             ) &&
