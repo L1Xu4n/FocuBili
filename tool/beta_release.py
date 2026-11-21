@@ -49,9 +49,11 @@ def plan(beta, revision, pubspec=None):
     source = Path("pubspec.yaml").read_text(encoding="utf-8") if pubspec is None else pubspec
     matches = re.findall(r"^version: (1\.9\.(?:0|[1-9][0-9]*))\+([1-9][0-9]*)\s*$", source, re.M)
     require(len(matches) == 1, "Expected one committed numeric 1.9.x+build version")
-    base, build = matches[0]
-    build = int(build)
-    require(FLOOR < build <= 65535, "Committed build number must be 2026..65535 (archived Android floor and Windows resource limit)")
+    base = matches[0][0]
+    preview = re.findall(r"^focubili_beta_build_number:[ 	]*([1-9][0-9]*)[ 	]*$", source, re.M)
+    require(len(preview) == 1, "Expected one committed focubili_beta_build_number")
+    build = int(preview[0])
+    require(FLOOR < build <= 65535, "Committed Beta build number must be 2026..65535 (archived Android floor and Windows resource limit)")
     version = f"{base}-beta.{beta}"
     return {"format": "focubili.beta-release", "version": 1, "channel": "beta",
             "sourceSha": revision, "baseVersion": base, "betaNumber": int(beta),
@@ -67,7 +69,8 @@ def checkout_plan(beta, revision):
 def load_plan(path):
     value = json.loads(Path(path).read_text(encoding="utf-8"))
     expected = plan(value["betaNumber"], value["sourceSha"],
-                    f"version: {value['baseVersion']}+{value['buildNumber']}\n")
+                    f"version: {value['baseVersion']}+1\n"
+                    f"focubili_beta_build_number: {value['buildNumber']}\n")
     require(value == expected, "Plan schema or values differ from validated source metadata")
     return value
 
@@ -164,10 +167,13 @@ def inventory(value, aapt):
                 require(target.stat().st_size == asset.get("size"), "Published APK download is truncated")
                 metadata = apk_metadata(text(aapt, "dump", "badging", str(target)))
                 require(metadata["package"] in {PACKAGE, "com.focubili.app"}, "Unexpected published APK package")
-                maximum = max(maximum, metadata["versionCode"])
+                # Android compares version codes only within one application ID.
+                # Keep stable APKs in the audited inventory for provenance.
+                if metadata["package"] == PACKAGE:
+                    maximum = max(maximum, metadata["versionCode"])
                 records.append({"release": release.get("tag_name"), "assetId": asset_id, **metadata})
     require(value["buildNumber"] > maximum,
-            f"Build number must exceed every published Android code (maximum {maximum})")
+            f"Build number must exceed every published preview APK code (maximum {maximum})")
     return {"maximumKnownVersionCode": maximum, "archivedVersionCodeFloor": FLOOR,
             "sourceSha": value["sourceSha"], "apks": records}
 

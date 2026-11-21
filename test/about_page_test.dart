@@ -141,7 +141,7 @@ void main() {
       appName: '焦点哔哩',
       packageName: 'com.focubili.app',
       version: '1.9.0',
-      buildNumber: '2038',
+      buildNumber: '32',
       buildSignature: '',
     );
     final controller = AppUpdateController(
@@ -152,8 +152,8 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(home: AboutPage(controller: controller)),
     );
-    expect(find.text('版本 1.9.0+2038'), findsOneWidget);
-    expect(controller.result.currentVersion, '1.9.0+2038');
+    expect(find.text('版本 1.9.0+32'), findsOneWidget);
+    expect(controller.result.currentVersion, '1.9.0+32');
     await tester.pumpWidget(const SizedBox.shrink());
     controller.dispose();
   });

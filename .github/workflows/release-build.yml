@@ -212,8 +212,18 @@ jobs:
           }
 
       - name: Build Windows installer and portable package
+        env:
+          BETA_NUMBER: ${{ inputs.beta_number }}
         shell: pwsh
-        run: .\windows\installer\build_windows_packages.ps1
+        run: |
+          if ($env:BETA_NUMBER) {
+            $plan = python tool/beta_release.py plan --beta-number $env:BETA_NUMBER --source-sha (git rev-parse HEAD)
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $build = ($plan | ConvertFrom-Json).buildNumber
+            .\windows\installer\build_windows_packages.ps1 -BetaBuildNumber $build
+          } else {
+            .\windows\installer\build_windows_packages.ps1
+          }
 
       - name: Verify Beta Windows metadata and portable bytes
         if: inputs.beta_number != ''

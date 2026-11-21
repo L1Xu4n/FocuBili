@@ -15,16 +15,27 @@ void main() {
       expect(numeric, isNotNull);
       expect(numeric!.group(1), '1.9.0');
       final build = int.parse(numeric.group(2)!);
-      expect(build, 2038);
-      expect(build, greaterThan(2037), reason: 'next after signed Beta 12');
+      expect(build, 32);
+      expect(build, greaterThan(31), reason: 'next after stable v1.8.1');
+      final betaBuild = int.parse(
+        RegExp(
+          r'^focubili_beta_build_number:\s*([1-9][0-9]*)\s*$',
+          multiLine: true,
+        ).firstMatch(pubspec)!.group(1)!,
+      );
+      expect(
+        betaBuild,
+        greaterThan(2037),
+        reason: 'next after signed Beta 12 in the preview package',
+      );
       final archived =
           jsonDecode(
                 File('docs/beta5/apk-verification.json').readAsStringSync(),
               )
               as Map<String, dynamic>;
       final archivedPreview = archived['localArm64'] as Map<String, dynamic>;
-      expect(build, greaterThan(archivedPreview['versionCode'] as int));
-      expect(build, lessThanOrEqualTo(65535));
+      expect(betaBuild, greaterThan(archivedPreview['versionCode'] as int));
+      expect(betaBuild, lessThanOrEqualTo(65535));
       expect(appFallbackVersion, '${numeric.group(1)}+$build');
       expect(
         RegExp(
