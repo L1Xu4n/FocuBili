@@ -60,14 +60,18 @@ def workflow_step(name):
 
 
 class PublicReleaseAssetsTest(unittest.TestCase):
-    def run_publisher(self, missing=None, *, version=VERSION, build=BUILD,
-                      existing_fixture=None):
+    def bash(self):
         bash = (
             Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git/bin/bash.exe"
             if os.name == "nt"
             else shutil.which("bash")
         )
         self.assertTrue(bash and Path(bash).is_file(), "Bash is required")
+        return str(bash)
+
+    def run_publisher(self, missing=None, *, version=VERSION, build=BUILD,
+                      existing_fixture=None):
+        bash = self.bash()
         with tempfile.TemporaryDirectory(prefix="focubili-release-fixture-") as temporary:
             root = Path(temporary)
             for (run, artifact), files in ARTIFACTS.items():
@@ -105,7 +109,7 @@ class PublicReleaseAssetsTest(unittest.TestCase):
                 script += workflow_step("Publish GitHub Release") + "\n"
             (root / "publisher.sh").write_text(script, encoding="utf-8", newline="\n")
             result = subprocess.run(
-                [str(bash), "--noprofile", "--norc", "publisher.sh"],
+                [bash, "--noprofile", "--norc", "publisher.sh"],
                 cwd=root,
                 env={**os.environ, "VERSION": version, "FULL_VERSION": f"{version}+{build}",
                      "TAG": f"v{version}", "NOTES": "notes.md", "GITHUB_REPOSITORY": "L1Xu4n/FocuBili",
@@ -131,6 +135,26 @@ class PublicReleaseAssetsTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(files, {name.replace(VERSION, "1.9.0"): data
                                  for name, data in EXPECTED.items()})
+
+    def test_resolver_rejects_relaunching_retired_release(self):
+        for old_build in (32, 33, 2038):
+            with self.subTest(old_build=old_build), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                (root / "pubspec.yaml").write_text(f"version: 1.9.0+{old_build}\n", encoding="utf-8")
+                # Intentionally omit notes so an incorrect resolver never reaches network I/O.
+                script = workflow_step("Resolve version and successful build")
+                result = subprocess.run(
+                    [self.bash(), "--noprofile", "--norc", "-e", "-c", script],
+                    cwd=root,
+                    env={**os.environ, "GITHUB_OUTPUT": str(root / "output")},
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    timeout=15,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("use a new release version", result.stderr)
+                self.assertFalse((root / "output").exists())
 
     def test_existing_legacy_names_are_never_modified(self):
         assets = [self.asset(name, data) for name, data in EXPECTED.items()]
