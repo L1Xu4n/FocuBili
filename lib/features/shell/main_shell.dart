@@ -3,13 +3,18 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../core/layout/adaptive_layout.dart';
+import '../../core/router/app_router.dart';
+import '../../services/subscription_service.dart';
 import '../home/home_page.dart';
 import '../profile/profile_page.dart';
 import '../search/search_page.dart';
+import '../subscriptions/subscription_updates_page.dart';
 
 /// 应用主框架，负责首页、搜索和“我的”三个一级页面的切换。
 class MainShell extends StatefulWidget {
-  const MainShell({super.key});
+  const MainShell({super.key, this.subscriptionService});
+
+  final SubscriptionService? subscriptionService;
 
   /// 创建主框架的可变状态，用于保存当前一级页面位置。
   @override
@@ -20,6 +25,8 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell>
     with SingleTickerProviderStateMixin {
   late final AnimationController _navigationController;
+  late final SubscriptionService _subscriptions =
+      widget.subscriptionService ?? SubscriptionService.instance;
   int _currentIndex = 0;
   int? _transitionFrom;
   int? _transitionTo;
@@ -113,6 +120,7 @@ class _MainShellState extends State<MainShell>
         onSearchRequested: _openSearch,
         onProfileRequested: _openProfile,
         refreshGeneration: _homeRefreshGeneration,
+        subscriptionService: _subscriptions,
       ),
       SearchPage(onBackRequested: workspace ? null : _openHome),
       ProfilePage(onBackRequested: workspace ? null : _openHome),
@@ -120,7 +128,10 @@ class _MainShellState extends State<MainShell>
   }
 
   /// 创建横屏平板和桌面宽窗口使用的左侧一级导航。
-  Widget _buildWorkspaceNavigation(Size windowSize) {
+  Widget _buildWorkspaceNavigation(
+    Size windowSize, {
+    required bool showSubscription,
+  }) {
     final bool extended = AdaptiveLayout.usesExpandedWorkspace(windowSize);
     return NavigationRail(
       key: const Key('workspace-navigation-rail'),
@@ -133,14 +144,7 @@ class _MainShellState extends State<MainShell>
           : NavigationRailLabelType.all,
       leading: Padding(
         padding: const EdgeInsets.only(bottom: 12),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(12),
-          child: Image.asset(
-            'assets/icon/focubili_icon.png',
-            width: 42,
-            height: 42,
-          ),
-        ),
+        child: _buildWorkspaceLogo(),
       ),
       destinations: const <NavigationRailDestination>[
         NavigationRailDestination(
@@ -159,7 +163,107 @@ class _MainShellState extends State<MainShell>
           label: Text('我的'),
         ),
       ],
+      scrollable: showSubscription,
+      trailing: showSubscription
+          ? _buildWorkspaceSubscription(windowSize, extended: extended)
+          : null,
       onDestinationSelected: _selectPage,
+    );
+  }
+
+  /// 桌面在原应用图标位置提供关于入口，保留平板原来的静态图标。
+  Widget _buildWorkspaceLogo() {
+    final radius = BorderRadius.circular(12);
+    final logo = ClipRRect(
+      borderRadius: radius,
+      child: Image.asset(
+        'assets/icon/focubili_icon.png',
+        width: 42,
+        height: 42,
+      ),
+    );
+    if (!AdaptiveLayout.isDesktopPlatform(Theme.of(context).platform)) {
+      return logo;
+    }
+    return IconButton(
+      key: const Key('workspace-navigation-open-about'),
+      tooltip: '关于焦点哔哩',
+      style: IconButton.styleFrom(
+        padding: EdgeInsets.zero,
+        shape: RoundedRectangleBorder(borderRadius: radius),
+      ),
+      onPressed: () => Navigator.of(context).pushNamed(AppRoutes.about),
+      icon: logo,
+    );
+  }
+
+  /// 仅在桌面首页补上已启用订阅的快捷入口，沿用已有的未读数据。
+  Widget _buildWorkspaceSubscription(
+    Size windowSize, {
+    required bool extended,
+  }) {
+    final theme = Theme.of(context);
+    final railTheme = NavigationRailTheme.of(context);
+    final icon = IconTheme(
+      data:
+          railTheme.unselectedIconTheme ??
+          IconThemeData(size: 24, color: theme.colorScheme.onSurfaceVariant),
+      child: const Icon(Icons.rss_feed),
+    );
+    const label = Text('焦点订阅', textAlign: TextAlign.center);
+    final unread = _subscriptions.unreadCount;
+    Widget unreadBadge({Widget? child}) => Semantics(
+      label: '$unread 条未读',
+      excludeSemantics: true,
+      child: Badge.count(count: unread, child: child),
+    );
+    return SizedBox(
+      width: AdaptiveLayout.workspaceNavigationWidth(windowSize),
+      child: TextButton(
+        key: const Key('workspace-navigation-open-subscription'),
+        onPressed: () => Navigator.of(context).push<void>(
+          MaterialPageRoute(
+            builder: (_) => SubscriptionUpdatesPage(service: _subscriptions),
+          ),
+        ),
+        style: TextButton.styleFrom(
+          foregroundColor:
+              railTheme.unselectedLabelTextStyle?.color ??
+              theme.colorScheme.onSurface,
+          textStyle:
+              railTheme.unselectedLabelTextStyle ?? theme.textTheme.labelMedium,
+          minimumSize: const Size(48, 48),
+          padding: EdgeInsets.symmetric(
+            horizontal: extended ? 0 : 8,
+            vertical: 8,
+          ),
+        ),
+        // 与导航项共用图标列和文字起点；窄侧栏和其他导航项一样上下排列。
+        child: extended
+            ? Row(
+                children: [
+                  SizedBox(
+                    width: AdaptiveLayout.compactNavigationWidth,
+                    child: Center(child: icon),
+                  ),
+                  Flexible(child: label),
+                  if (unread > 0)
+                    Padding(
+                      padding: const EdgeInsetsDirectional.only(start: 8),
+                      child: unreadBadge(),
+                    ),
+                  const SizedBox(width: 8),
+                ],
+              )
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  unread > 0 ? unreadBadge(child: icon) : icon,
+                  const SizedBox(height: 4),
+                  label,
+                ],
+              ),
+      ),
     );
   }
 
@@ -266,7 +370,18 @@ class _MainShellState extends State<MainShell>
               if (workspace) {
                 return Row(
                   children: <Widget>[
-                    _buildWorkspaceNavigation(windowSize),
+                    ListenableBuilder(
+                      listenable: _subscriptions,
+                      builder: (context, _) => _buildWorkspaceNavigation(
+                        windowSize,
+                        showSubscription:
+                            _currentIndex == 0 &&
+                            AdaptiveLayout.isDesktopPlatform(
+                              Theme.of(context).platform,
+                            ) &&
+                            _subscriptions.enabled,
+                      ),
+                    ),
                     const VerticalDivider(width: 1),
                     Expanded(child: pageStack),
                   ],

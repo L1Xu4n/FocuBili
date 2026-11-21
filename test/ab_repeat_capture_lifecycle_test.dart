@@ -11,7 +11,14 @@ import 'package:focubili/services/native_playback_service.dart';
 import 'package:focubili/services/video_note_service.dart';
 
 import 'player_ab_repeat_test.dart'
-    show AbPlayback, AbOverlay, abVideo, mountAb, configureAb, unmountAb;
+    show
+        AbPlayback,
+        AbOverlay,
+        abVideo,
+        mountAb,
+        configureAb,
+        unmountAb,
+        tapPlaybackTimeline;
 import 'review_pr24_regression_test.dart' show ReviewOfflineLibrary;
 
 class ReviewAbPlayback extends AbPlayback {
@@ -136,7 +143,7 @@ void main() {
         await tester.pump(const Duration(milliseconds: 300));
         expect(p.seeks.last, delayed);
         final commandsBeforeManual = p.seeks.toList();
-        tester.widget<Slider>(find.byType(Slider).first).onChangeEnd!(0.75);
+        await tapPlaybackTimeline(tester, .75);
         await tester.pump(const Duration(milliseconds: 200));
         expect(
           p.seeks,
@@ -419,8 +426,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
       await tester.pump();
       expect(p.captures, 1);
-      final slider = tester.widget<Slider>(find.byType(Slider).first);
-      slider.onChangeEnd!(0.75);
+      await tapPlaybackTimeline(tester, .75);
       await tester.pump();
       p.captureGate!.complete();
       await tester.pumpAndSettle();

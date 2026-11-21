@@ -10,6 +10,7 @@ import '../../services/bilibili_auth_service.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/dashboard_layout_service.dart';
 import '../../services/learning_list_service.dart';
+import '../../services/subscription_service.dart';
 import '../focus/focus_dashboard.dart';
 import '../focus/focus_timer_scope.dart';
 import '../focus/focus_video_launcher.dart';
@@ -27,6 +28,7 @@ class HomePage extends StatefulWidget {
     this.videoService,
     this.authService,
     this.layoutService,
+    this.subscriptionService,
     this.refreshGeneration = 0,
   });
 
@@ -39,6 +41,8 @@ class HomePage extends StatefulWidget {
 
   /// 首页卡片布局存储，与学习清单和计时业务分开维护。
   final DashboardLayoutService? layoutService;
+
+  final SubscriptionService? subscriptionService;
 
   /// 创建首页状态，用于读取并刷新唯一突出显示的继续学习任务。
   @override
@@ -310,6 +314,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       child: FocusDashboard(
         controller: FocusTimerScope.of(context),
         layoutService: widget.layoutService,
+        subscriptionService: widget.subscriptionService,
         onOpenVideo: widget.onSearchRequested,
         onOpenProfile: widget.onProfileRequested,
         profileAvatarUrl: _homeSession.isActive

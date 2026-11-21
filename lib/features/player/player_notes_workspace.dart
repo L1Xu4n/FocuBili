@@ -1,5 +1,7 @@
 part of 'player_page.dart';
 
+enum _PlayerNotesLayout { workspace, belowVideo, floating }
+
 /// Storage-only state shared by an in-flight write and a departing editor.
 class _PendingPlayerNoteWrite {
   _PendingPlayerNoteWrite(this.id, this.framesRevision);
@@ -160,20 +162,28 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
     }
   }
 
-  bool get _usesSideNotes =>
-      _fullscreen || MediaQuery.orientationOf(context) == Orientation.landscape;
+  _PlayerNotesLayout get _playerNotesLayout {
+    if (_fullscreen) return _PlayerNotesLayout.floating;
+    final size = MediaQuery.sizeOf(context);
+    if (AdaptiveLayout.usesWorkspace(size)) return _PlayerNotesLayout.workspace;
+    return size.width > size.height
+        ? _PlayerNotesLayout.floating
+        : _PlayerNotesLayout.belowVideo;
+  }
 
-  /// A phone returning to portrait resumes the editor below the video.
-  void _restoreNotesForPortrait() {
-    if (_notesParked &&
-        MediaQuery.orientationOf(context) == Orientation.portrait) {
+  bool get _usesFloatingVideoNotes =>
+      _playerNotesLayout == _PlayerNotesLayout.floating;
+
+  /// Only the floating editor can park. Inline layouts resume the same draft.
+  void _restoreNotesForInlineLayout() {
+    if (_notesParked && !_usesFloatingVideoNotes) {
       _notesParked = false;
       _noteScrollOffsetBeforePark = null;
     }
   }
 
   void _parkVideoNotes({bool focusHandle = false}) {
-    if (!_notesOpen || _notesParked || !_usesSideNotes) return;
+    if (!_notesOpen || _notesParked || !_usesFloatingVideoNotes) return;
     final scroll = _sideNoteScrollController.hasClients
         ? _sideNoteScrollController.position
         : null;
@@ -200,7 +210,9 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
     _noteScrollOffsetBeforePark = null;
     setState(() => _notesParked = false);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_notesOpen || _notesParked || !_usesSideNotes) return;
+      if (!mounted || !_notesOpen || _notesParked || !_usesFloatingVideoNotes) {
+        return;
+      }
       // Keep navigation inside the editor without reopening the IME.
       _sideNoteFocusScope.requestScopeFocus();
     });
@@ -231,17 +243,17 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
     _stopControlsAutoHideTimer();
     _notesPanelAnimationTimer?.cancel();
     _notesPanelAnimationTimer = null;
-    final sidePanel = _usesSideNotes;
+    final floating = _usesFloatingVideoNotes;
     setState(() {
       _notesOverlayMounted = true;
-      _notesOpen = !sidePanel;
+      _notesOpen = !floating;
       _notesParked = false;
       _noteScrollOffsetBeforePark = null;
       _notesLoading = true;
       _showControls = true;
       _fullscreenNoteListCollapsed = false;
     });
-    if (sidePanel) {
+    if (floating) {
       // Mount offscreen before starting the entrance animation.
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted &&
@@ -289,9 +301,9 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
     }
     _flushVideoNoteAutoSave();
     _notesPanelAnimationTimer?.cancel();
-    final animateClose =
-        _usesSideNotes && _notesOverlayMounted && !_notesParked;
-    if (_usesSideNotes && _notesOverlayMounted) {
+    final floating = _usesFloatingVideoNotes;
+    final animateClose = floating && _notesOverlayMounted && !_notesParked;
+    if (floating && _notesOverlayMounted) {
       FocusManager.instance.primaryFocus?.unfocus();
     }
     setState(() {
@@ -1051,8 +1063,8 @@ mixin _PlayerNotesWorkspace on State<PlayerPage> {
     );
   }
 
-  /// 创建播放器下方的竖屏笔记工作区，打开后页面不再使用可折叠播放器。
-  Widget _buildPortraitVideoNotesPanel() {
+  /// 创建视频下方或工作台右侧的内嵌笔记工作区。
+  Widget _buildInlineVideoNotesPanel() {
     return Material(
       key: const Key('portrait-video-notes-panel'),
       color: Theme.of(context).colorScheme.surface,

@@ -321,8 +321,6 @@ class _PlayerPageState extends State<PlayerPage>
   }
 
   @override
-  bool _isDraggingProgress = false;
-  @override
   double _progress = 0;
   @override
   Timer? _controlsTimer;
@@ -464,6 +462,11 @@ class _PlayerPageState extends State<PlayerPage>
     _videoNoteService = widget.videoNoteService ?? VideoNoteService();
     _initializePlayerNoteFlags();
     _appPlatform = widget.appPlatform ?? AppPlatformDetector.current;
+    if (_appPlatform.isDesktop) {
+      FocusManager.instance
+        ..addEarlyKeyEventHandler(_handleDesktopEditorEscape)
+        ..addLateKeyEventHandler(_handleDesktopPlayerShortcut);
+    }
     _problemDiagnosticsService = ProblemDiagnosticsService();
     _playbackPreferencesService =
         widget.playbackPreferencesService ?? const PlaybackPreferencesService();
@@ -501,7 +504,10 @@ class _PlayerPageState extends State<PlayerPage>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _restoreNotesForPortrait();
+    if (_appPlatform.isDesktop && ModalRoute.isCurrentOf(context) == false) {
+      _desktopTapRecognizer?.cancelPendingTap();
+    }
+    _restoreNotesForInlineLayout();
     _bindFocusController(
       widget.focusTimerController ?? FocusTimerScope.maybeOf(context),
     );
@@ -518,9 +524,11 @@ class _PlayerPageState extends State<PlayerPage>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _handleAbRepeatLifecycle(state);
-    if (state != AppLifecycleState.resumed) _cancelTemporaryLongPress();
     if (state == AppLifecycleState.resumed) {
       unawaited(_loadCurrentVideoNotes());
+    } else {
+      _desktopTapRecognizer?.cancelPendingTap();
+      _cancelTemporaryLongPress();
     }
   }
 
@@ -551,6 +559,11 @@ class _PlayerPageState extends State<PlayerPage>
   /// 离开页面前取消重试状态、订阅和计时器，释放原生资源并恢复竖屏与系统栏。
   @override
   void dispose() {
+    if (_appPlatform.isDesktop) {
+      FocusManager.instance
+        ..removeEarlyKeyEventHandler(_handleDesktopEditorEscape)
+        ..removeLateKeyEventHandler(_handleDesktopPlayerShortcut);
+    }
     _tagSession.dispose();
     _playerToolsSession?.closeAfterOwnerDisposed();
     _playerToolsTriggerFocus.dispose();

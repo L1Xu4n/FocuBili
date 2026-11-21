@@ -302,29 +302,32 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
 
   Widget _buildItemCard(
     AppFavoriteItem item,
-    Key handleKey,
-    Widget? reorderHandle,
-  ) {
+    Widget? reorderHandle, {
+    Key? selectionHandleKey,
+    bool preview = false,
+  }) {
     void toggle() => setState(() => _selection.toggle(item.bvid));
     return AppFavoriteVideoTile(
-      key: Key('app-favorite-item-${item.bvid}'),
+      key: preview ? null : Key('app-favorite-item-${item.bvid}'),
       item: item,
-      loadPartCount: () => _favoritesService.resolvePartCount(
-        item,
-        _bilibiliService.lookupVideo,
-      ),
-      onTap: _busy
+      loadPartCount: preview
+          ? null
+          : () => _favoritesService.resolvePartCount(
+              item,
+              _bilibiliService.lookupVideo,
+            ),
+      onTap: preview || _busy
           ? null
           : _selection.active
           ? toggle
           : () => unawaited(_openVideo(item)),
-      onLongPress: _selection.active || _busy
+      onLongPress: preview || _selection.active || _busy
           ? null
           : () => _startSelection(item.bvid),
       reorderHandle: reorderHandle,
-      selectionControl: _selection.active
+      selectionControl: !preview && _selection.active
           ? _selection.checkbox(
-              handleKey: handleKey,
+              handleKey: selectionHandleKey!,
               id: item.bvid,
               title: item.title,
               onToggle: _busy ? null : toggle,
@@ -366,6 +369,7 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
     if (_visibleItems.isEmpty) {
       return const Center(child: Text('没有匹配的收藏视频'));
     }
+    final items = {for (final item in _visibleItems) item.bvid: item};
     return _selection.region(
       controller: _scrollController,
       busy: _busy,
@@ -375,13 +379,13 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
             !_selection.active && notification.depth == 0,
         onRefresh: _loadItems,
         child: AppFavoriteReorder(
-          ids: [for (final item in _visibleItems) item.bvid],
+          ids: items.keys.toList(),
           enabled:
               !_selection.active &&
               !_busy &&
               _searchController.text.trim().isEmpty,
           onDragStarted: () => ++_openGeneration,
-          onReorder: (ids) => unawaited(_reorderItems(ids)),
+          onReorder: _reorderItems,
           builder: (context, reorder) => AdaptiveTwoColumnList(
             key: const Key('app-favorite-items-list'),
             controller: _scrollController,
@@ -389,20 +393,25 @@ class _AppFavoriteDetailPageState extends State<AppFavoriteDetailPage> {
                 ? const NeverScrollableScrollPhysics()
                 : const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-            itemCount: _visibleItems.length,
+            itemCount: reorder.ids.length,
             mainAxisSpacing: 8,
             itemBuilder: (context, index) {
-              final item = _visibleItems[index];
-              return DragSelectionTarget(
-                key: ValueKey(item.bvid),
+              final item = items[reorder.ids[index]]!;
+              return reorder.row(
                 index: index,
-                builder: (context, handleKey) => reorder.row(
-                  context: context,
-                  id: item.bvid,
-                  title: item.title,
-                  handleKey: Key('reorder-app-favorite-item-${item.bvid}'),
-                  builder: (handle) => _buildItemCard(item, handleKey, handle),
-                ),
+                id: item.bvid,
+                title: item.title,
+                handleKey: Key('reorder-app-favorite-item-${item.bvid}'),
+                builder: (handle, {required preview}) => preview
+                    ? _buildItemCard(item, handle, preview: true)
+                    : DragSelectionTarget(
+                        index: index,
+                        builder: (context, handleKey) => _buildItemCard(
+                          item,
+                          handle,
+                          selectionHandleKey: handleKey,
+                        ),
+                      ),
               );
             },
           ),

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:focubili/core/router/app_router.dart';
 import 'package:focubili/features/profile/app_favorite_detail_page.dart';
 import 'package:focubili/features/profile/app_favorite_folders_page.dart';
@@ -33,6 +35,20 @@ class _VideoLookup extends BilibiliVideoInfoService {
   }
 }
 
+class _DeferredFolderReorder extends AppFavoritesService {
+  _DeferredFolderReorder(SharedPreferences preferences)
+    : super(preferencesLoader: () async => preferences);
+
+  final attempts = <List<String>>[];
+  final save = Completer<bool>();
+
+  @override
+  Future<bool> reorderFolders(List<String> ids) async {
+    attempts.add(ids.toList());
+    return await save.future && await super.reorderFolders(ids);
+  }
+}
+
 const _first = 'BV1GJ411x7h7';
 const _second = 'BV1xx411c7mD';
 const _third = 'BV1ab411c7Zk';
@@ -62,37 +78,54 @@ Finder _folderTitle(AppFavoriteFolder folder) => find.descendant(
 
 Finder _folderHandle(String id) =>
     find.byKey(ValueKey('reorder-app-favorite-folder-$id'));
+Finder _itemCard(String id) => find.byKey(ValueKey('app-favorite-item-$id'));
 Finder _itemHandle(String id) =>
     find.byKey(ValueKey('reorder-app-favorite-item-$id'));
 Finder _checkbox(String id) => find.byKey(ValueKey('select-local-video-$id'));
+Finder _gap(String id) => find.byKey(ValueKey('app-favorite-reorder-gap-$id'));
+Finder _proxy(String id) =>
+    find.byKey(ValueKey('app-favorite-reorder-proxy-$id'));
 
-Future<void> _holdAndMove(
-  WidgetTester tester,
-  Finder from,
-  Finder to, {
-  PointerDeviceKind kind = PointerDeviceKind.touch,
-  bool cancel = false,
-}) async {
-  final gesture = await tester.startGesture(tester.getCenter(from), kind: kind);
+Future<void> _holdAndMove(WidgetTester tester, Finder from, Finder to) async {
+  final gesture = await tester.startGesture(tester.getCenter(from));
   var moved = false;
   try {
     await tester.pump(kLongPressTimeout + const Duration(milliseconds: 20));
     await gesture.moveTo(tester.getCenter(to));
     await tester.pump();
-    if (kind == PointerDeviceKind.mouse) {
-      // Allow the target's hover state to settle before reparenting its row.
-      // Flutter 3.44 hit an OverlayPortal layout assertion on mouse drop.
-      await tester.pump(const Duration(milliseconds: 700));
-    }
     moved = true;
   } finally {
-    if (cancel || !moved) {
+    if (!moved) {
       await gesture.cancel();
     } else {
       await gesture.up();
     }
   }
   await tester.pumpAndSettle();
+}
+
+Future<TestGesture> _beginReorder(
+  WidgetTester tester,
+  Finder handle,
+  String id, {
+  required PointerDeviceKind kind,
+}) async {
+  final start = tester.getCenter(handle);
+  final gesture = await tester.startGesture(start, kind: kind);
+  await tester.pump();
+  expect(_proxy(id), findsNothing, reason: 'Pointer down alone does not lift');
+  if (kind == PointerDeviceKind.touch) {
+    await tester.pump(kLongPressTimeout - const Duration(milliseconds: 20));
+    expect(_proxy(id), findsNothing);
+    await tester.pump(const Duration(milliseconds: 20));
+  } else {
+    // No long-press delay on mouse. This starts well inside the source card.
+    await gesture.moveTo(start - const Offset(12, 0));
+    await tester.pump(const Duration(milliseconds: 16));
+  }
+  expect(_proxy(id), findsOneWidget);
+  expect(_gap(id), findsOneWidget);
+  return gesture;
 }
 
 void main() {
@@ -183,21 +216,64 @@ void main() {
         expect(await currentOrder(), [first.id, second.id, third.id]);
 
         final kind = wide ? PointerDeviceKind.mouse : PointerDeviceKind.touch;
-        await _holdAndMove(
-          tester,
-          _folderHandle(first.id),
-          secondRow,
-          kind: kind,
-          cancel: true,
-        );
+        final slotOne = tester.getCenter(_folderCard(first.id));
+        final slotTwo = tester.getCenter(_folderCard(second.id));
+        final slotThree = tester.getCenter(_folderCard(third.id));
+        Future<TestGesture> dragToSecond() async {
+          final gesture = await _beginReorder(
+            tester,
+            _folderHandle(first.id),
+            first.id,
+            kind: kind,
+          );
+          expect(tester.getCenter(_gap(first.id)), slotOne);
+          await gesture.moveTo(slotThree);
+          await tester.pump();
+          expect(tester.getCenter(_folderCard(second.id)), slotOne);
+          expect(tester.getCenter(_folderCard(third.id)), slotTwo);
+          expect(tester.getCenter(_gap(first.id)), slotThree);
+          await gesture.moveTo(slotTwo);
+          await tester.pump();
+          expect(tester.getCenter(_folderCard(third.id)), slotThree);
+          expect(tester.getCenter(_gap(first.id)), slotTwo);
+          final proxyPosition = tester.getCenter(_proxy(first.id));
+          const movement = Offset(8, 5);
+          await gesture.moveTo(slotTwo + movement);
+          await tester.pump();
+          expect(tester.getCenter(_proxy(first.id)), proxyPosition + movement);
+          expect(tester.getCenter(_folderCard(second.id)), slotOne);
+          expect(tester.getCenter(_gap(first.id)), slotTwo);
+          // No storage updates and no tooltip/overlay assertions during reflow.
+          expect(await currentOrder(), [first.id, second.id, third.id]);
+          expect(tester.takeException(), isNull);
+          return gesture;
+        }
+
+        final canceled = await dragToSecond();
+        await canceled.cancel();
+        await tester.pumpAndSettle();
+        expect(_proxy(first.id), findsNothing);
+        expect(_gap(first.id), findsNothing);
+        expect(tester.getCenter(_folderCard(first.id)), slotOne);
+        expect(tester.getCenter(_folderCard(second.id)), slotTwo);
         expect(await currentOrder(), [first.id, second.id, third.id]);
 
-        await _holdAndMove(
-          tester,
-          _folderHandle(first.id),
-          secondRow,
-          kind: kind,
-        );
+        final outside = await dragToSecond();
+        await outside.moveTo(const Offset(6, 6));
+        await tester.pump();
+        expect(tester.getCenter(_folderCard(second.id)), slotTwo);
+        await outside.up();
+        await tester.pumpAndSettle();
+        expect(_gap(first.id), findsNothing);
+        expect(await currentOrder(), [first.id, second.id, third.id]);
+
+        final dropped = await dragToSecond();
+        await dropped.up();
+        await tester.pumpAndSettle();
+        expect(_proxy(first.id), findsNothing);
+        expect(_gap(first.id), findsNothing);
+        expect(tester.getCenter(_folderCard(second.id)), slotOne);
+        expect(tester.getCenter(_folderCard(first.id)), slotTwo);
         expect(await currentOrder(), [second.id, first.id, third.id]);
         expect(find.text('导出此收藏夹'), findsNothing);
         expect(find.byType(AppFavoriteDetailPage), findsNothing);
@@ -275,6 +351,49 @@ void main() {
     expect(find.text('导出此收藏夹'), findsNothing);
   });
 
+  favoriteWidgetTest('提交期间保留预览顺序，保存失败才恢复', const Size(1120, 760), (
+    tester,
+    createService,
+  ) async {
+    final favorites = _DeferredFolderReorder(preferences);
+    final first = (await favorites.createFolder('头一个收藏夹'))!;
+    final second = (await favorites.createFolder('后一个收藏夹'))!;
+    await tester.pumpWidget(
+      MaterialApp(home: AppFavoriteFoldersPage(favoritesService: favorites)),
+    );
+    await tester.pumpAndSettle();
+
+    final origin = tester.getCenter(_folderCard(first.id));
+    final target = tester.getCenter(_folderCard(second.id));
+    final gesture = await _beginReorder(
+      tester,
+      _folderHandle(first.id),
+      first.id,
+      kind: PointerDeviceKind.mouse,
+    );
+    await gesture.moveTo(target);
+    await tester.pump();
+    expect(favorites.attempts, isEmpty);
+    expect(tester.getCenter(_folderCard(second.id)), origin);
+    await gesture.up();
+    await tester.pump();
+    expect(favorites.attempts, [
+      [second.id, first.id],
+    ]);
+    expect(_gap(first.id), findsNothing);
+    expect(tester.getCenter(_folderCard(second.id)), origin);
+    expect((await createService().loadFolders()).map((folder) => folder.id), [
+      first.id,
+      second.id,
+    ]);
+
+    favorites.save.complete(false);
+    await tester.pumpAndSettle();
+    expect(tester.getCenter(_folderCard(first.id)), origin);
+    expect(tester.getCenter(_folderCard(second.id)), target);
+    expect(find.text('未能保存收藏夹顺序，请刷新后重试。'), findsOneWidget);
+  });
+
   favoriteWidgetTest('保持手柄在底部边缘时滚动，放手使用当前所在的目录', const Size(360, 650), (
     tester,
     createService,
@@ -297,23 +416,28 @@ void main() {
       matching: find.byType(Scrollable),
     );
     final position = tester.state<ScrollableState>(scrollable).position;
-    final gesture = await tester.startGesture(
-      tester.getCenter(_folderHandle(ids.first)),
+    final gesture = await _beginReorder(
+      tester,
+      _folderHandle(ids.first),
+      ids.first,
+      kind: PointerDeviceKind.touch,
     );
     var targetIndex = -1;
     var canDrop = false;
     try {
-      await tester.pump(kLongPressTimeout + const Duration(milliseconds: 20));
       await gesture.moveTo(pointer);
       for (var frame = 0; frame < 40 && targetIndex == -1; frame++) {
         await tester.pump(const Duration(milliseconds: 100));
         if (position.pixels < 150) continue;
+        final gap = _gap(ids.first);
+        if (gap.evaluate().isEmpty || !tester.getRect(gap).contains(pointer)) {
+          continue;
+        }
         for (var i = 1; i < ids.length; i++) {
           final row = _folderCard(ids[i]);
           if (row.evaluate().isNotEmpty &&
-              tester.getRect(row).contains(pointer)) {
+              tester.getRect(row).bottom <= tester.getRect(gap).top) {
             targetIndex = i;
-            break;
           }
         }
       }
@@ -324,6 +448,8 @@ void main() {
             'Holding still at the edge must move more than one scroll step.',
       );
       expect(targetIndex, greaterThan(0));
+      expect(_proxy(ids.first), findsOneWidget);
+      expect((await favorites.loadFolders()).map((folder) => folder.id), ids);
       canDrop = true;
     } finally {
       if (canDrop) {
@@ -340,6 +466,69 @@ void main() {
       for (final folder in await favorites.loadFolders()) folder.id,
     ], expected);
     expect(tester.takeException(), isNull);
+  });
+
+  favoriteWidgetTest('桌面视频跨列即时排序，鼠标取消时恢复', const Size(1120, 760), (
+    tester,
+    createService,
+  ) async {
+    final favorites = createService();
+    final folder = (await favorites.createFolder('桌面收藏'))!;
+    await favorites.addItems(folder.id, [
+      _item(folder.id, _first, '视频一', 1),
+      _item(folder.id, _second, '视频二', 2),
+      _item(folder.id, _third, '视频三', 3),
+    ]);
+    final lookup = _VideoLookup();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AppFavoriteDetailPage(
+          folder: folder,
+          favoritesService: createService(),
+          bilibiliService: lookup,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final original = tester.getCenter(_itemCard(_third));
+    final target = tester.getCenter(_itemCard(_second));
+    expect(target.dy, original.dy);
+    expect(target.dx, greaterThan(original.dx));
+
+    for (final cancel in [true, false]) {
+      final gesture = await _beginReorder(
+        tester,
+        _itemHandle(_third),
+        _third,
+        kind: PointerDeviceKind.mouse,
+      );
+      await gesture.moveTo(target);
+      await tester.pump();
+      expect(tester.getCenter(_itemCard(_second)), original);
+      expect(tester.getCenter(_gap(_third)), target);
+      expect(lookup.requests, isEmpty);
+      expect(find.byType(Checkbox), findsNothing);
+      expect(
+        (await createService().loadItems(folder.id)).map((item) => item.bvid),
+        [_third, _second, _first],
+      );
+
+      if (cancel) {
+        await gesture.cancel();
+      } else {
+        await gesture.up();
+      }
+      await tester.pumpAndSettle();
+      expect(_gap(_third), findsNothing);
+      expect(_proxy(_third), findsNothing);
+      expect(tester.getCenter(_itemCard(_third)), cancel ? original : target);
+      expect(tester.takeException(), isNull);
+    }
+
+    expect(
+      (await createService().loadItems(folder.id)).map((item) => item.bvid),
+      [_second, _third, _first],
+    );
   });
 
   favoriteWidgetTest('视频拖动不播放或多选，重新打开后按新顺序播放并保留快速扫选', const Size(360, 760), (
@@ -387,7 +576,25 @@ void main() {
     expect(await currentOrder(), [_third, _second, _first]);
     await tester.tap(_itemHandle(_third));
     await tester.pumpAndSettle();
-    await _holdAndMove(tester, _itemHandle(_third), find.text('视频一'));
+    final thirdSlot = tester.getCenter(find.text('视频三'));
+    final firstSlot = tester.getCenter(find.text('视频一'));
+    final gesture = await _beginReorder(
+      tester,
+      _itemHandle(_third),
+      _third,
+      kind: PointerDeviceKind.touch,
+    );
+    await gesture.moveTo(firstSlot);
+    await tester.pump();
+    expect(tester.getCenter(find.text('视频二')), thirdSlot);
+    expect(tester.getRect(_gap(_third)).contains(firstSlot), isTrue);
+    expect(await currentOrder(), [_third, _second, _first]);
+    expect(lookup.requests, isEmpty);
+    expect(find.byType(Checkbox), findsNothing);
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(_gap(_third), findsNothing);
+    expect(_proxy(_third), findsNothing);
     expect(lookup.requests, isEmpty);
     expect(find.byType(Checkbox), findsNothing);
     expect(await currentOrder(), [_second, _first, _third]);

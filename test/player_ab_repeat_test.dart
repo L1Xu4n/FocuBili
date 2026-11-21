@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/features/player/player_page.dart';
 import 'package:focubili/features/player/widgets/player_ab_repeat_sheet.dart';
 import 'package:focubili/features/player/widgets/player_subtitle_sheet.dart';
+import 'package:focubili/features/player/widgets/player_timeline.dart';
 import 'package:focubili/models/ab_repeat_range.dart';
 import 'package:focubili/models/player_overlay_data.dart';
 import 'package:focubili/features/focus/focus_timer_controller.dart';
@@ -261,6 +262,19 @@ Future<void> unmountAb(WidgetTester tester) async {
   await tester.pump();
 }
 
+Future<void> tapPlaybackTimeline(WidgetTester tester, double progress) {
+  final slider = tester.getRect(
+    find.byKey(const Key('player-progress-slider')),
+  );
+  final track = PlayerTimelineGeometry.trackRect(
+    slider.size,
+    offset: slider.topLeft,
+  );
+  return tester.tapAt(
+    Offset(track.left + track.width * progress, track.center.dy),
+  );
+}
+
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
   testWidgets('replacing a loop does not wait for the previous A snapshot', (
@@ -458,8 +472,7 @@ void main() {
     final p = AbPlayback();
     await mountAb(tester, p);
     await configureAb(tester);
-    final slider = tester.widget<Slider>(find.byType(Slider).first);
-    slider.onChangeEnd!(0.75);
+    await tapPlaybackTimeline(tester, .75);
     await tester.pumpAndSettle();
     expect(p.seeks.last, const Duration(seconds: 90));
     expect(find.byKey(const Key('ab-repeat-marker-A')), findsNothing);

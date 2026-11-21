@@ -28,6 +28,8 @@ import 'home_drawer_hero_depth.dart';
 part 'focus_dashboard_home_layout.dart';
 part 'focus_dashboard_home_cards.dart';
 
+enum _HomeLayoutStatus { loading, ready, failed }
+
 /// 首页专注台，提供目标、计时控制、今日汇总和最近本机记录。
 class FocusDashboard extends StatefulWidget {
   /// 创建专注台，并接收打开视频、个人中心和统计页面的回调。
@@ -117,7 +119,8 @@ class _FocusDashboardState extends State<FocusDashboard> {
   bool _editingHomeCards = false;
   bool _drawerEnabled = true;
   DashboardLayout? _homeLayout;
-  bool _homeLayoutLoaded = false;
+  _HomeLayoutStatus _homeLayoutStatus = _HomeLayoutStatus.loading;
+  bool get _homeLayoutLoaded => _homeLayoutStatus == _HomeLayoutStatus.ready;
 
   bool _allAvailableCardsHidden(DashboardLayout? layout) {
     if (layout == null) return false;
@@ -136,6 +139,19 @@ class _FocusDashboardState extends State<FocusDashboard> {
           (!_homeLayoutLoaded || !_allAvailableCardsHidden(_homeLayout)));
   bool _restoringDrawer = false;
   bool _closingDrawer = false;
+  bool get _canRestoreDrawer =>
+      _homeLayoutLoaded && !_restoringDrawer && !_closingDrawer;
+
+  // Collapsing the desktop dock is transient; it never changes saved cards.
+  bool _desktopDockOpen = false;
+  bool _desktopDockVisited = false;
+  void _toggleDesktopDock() {
+    if (_desktopDockOpen) FocusManager.instance.primaryFocus?.unfocus();
+    setState(() {
+      _desktopDockOpen = !_desktopDockOpen;
+      _desktopDockVisited = true;
+    });
+  }
 
   Future<void> _closeEmptyDrawer() async {
     if (!mounted || _closingDrawer) return;
@@ -180,13 +196,15 @@ class _FocusDashboardState extends State<FocusDashboard> {
   }
 
   Future<void> _restoreDrawerForEditing() async {
-    if (_restoringDrawer || _closingDrawer || !_homeLayoutLoaded) return;
+    if (!_canRestoreDrawer) return;
     setState(() => _restoringDrawer = true);
     try {
       await _homeLayouts.saveDrawerEnabled(true);
       if (!mounted) return;
       setState(() {
         _drawerEnabled = true;
+        _desktopDockOpen = true;
+        _desktopDockVisited = true;
         _editingHomeCards = true;
         _homeScrollStartOffset = null;
         _homeBoardKey = GlobalKey(debugLabel: 'home-card-board');
@@ -228,11 +246,14 @@ class _FocusDashboardState extends State<FocusDashboard> {
         setState(() {
           _drawerEnabled = enabled;
           _homeLayout = layout;
-          _homeLayoutLoaded = true;
+          _homeLayoutStatus = _HomeLayoutStatus.ready;
         });
       }
     } catch (_) {
-      /* 卡片容器保留原有重试与错误反馈。 */
+      // 布局加载失败时仍显示原工作台，让卡片容器保留原有重试与错误反馈。
+      if (mounted) {
+        setState(() => _homeLayoutStatus = _HomeLayoutStatus.failed);
+      }
     }
   }
 
@@ -756,35 +777,52 @@ class _FocusDashboardState extends State<FocusDashboard> {
   }
 
   /// 创建今日专注分钟和正常完成次数的轻量汇总卡片。
-  Widget _buildTodaySummary(BuildContext context) {
+  Widget _buildTodaySummary(
+    BuildContext context, {
+    bool allowNavigation = true,
+  }) {
     final ThemeData theme = Theme.of(context);
+    final metrics = Padding(
+      padding: const EdgeInsets.all(18),
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: _FocusMetric(
+              label: '今日专注',
+              value: '${widget.controller.todayFocusedDuration().inMinutes}',
+              unit: '分钟',
+            ),
+          ),
+          SizedBox(
+            height: 46,
+            child: VerticalDivider(color: theme.colorScheme.outlineVariant),
+          ),
+          Expanded(
+            child: _FocusMetric(
+              label: '按时完成',
+              value: '${widget.controller.todayCompletedCount()}',
+              unit: '次',
+            ),
+          ),
+        ],
+      ),
+    );
     return Card(
       key: const Key('focus-today-summary'),
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Row(
-          children: <Widget>[
-            Expanded(
-              child: _FocusMetric(
-                label: '今日专注',
-                value: '${widget.controller.todayFocusedDuration().inMinutes}',
-                unit: '分钟',
+      clipBehavior: Clip.antiAlias,
+      child: allowNavigation
+          ? Tooltip(
+              message: '查看专注统计',
+              child: Semantics(
+                button: true,
+                child: InkWell(
+                  key: const Key('focus-today-summary-open-statistics'),
+                  onTap: widget.onOpenStatistics,
+                  child: metrics,
+                ),
               ),
-            ),
-            SizedBox(
-              height: 46,
-              child: VerticalDivider(color: theme.colorScheme.outlineVariant),
-            ),
-            Expanded(
-              child: _FocusMetric(
-                label: '按时完成',
-                value: '${widget.controller.todayCompletedCount()}',
-                unit: '次',
-              ),
-            ),
-          ],
-        ),
-      ),
+            )
+          : metrics,
     );
   }
 
@@ -847,8 +885,23 @@ class _FocusDashboardState extends State<FocusDashboard> {
         final FocusSession? finishedSession =
             widget.controller.lastFinishedSession;
         final bool useHomeHero = widget.onOpenProfile != null;
-        if (useHomeHero &&
-            AdaptiveLayout.usesWorkspace(MediaQuery.sizeOf(context))) {
+        final bool workspace =
+            useHomeHero &&
+            AdaptiveLayout.usesWorkspace(MediaQuery.sizeOf(context));
+        final bool desktopWorkspace =
+            workspace &&
+            AdaptiveLayout.isDesktopPlatform(Theme.of(context).platform);
+        if (desktopWorkspace &&
+            _homeLayoutStatus == _HomeLayoutStatus.loading) {
+          // 首次读取偏好时不要闪现可能已关闭的工作台和卡片。
+          return const SizedBox.expand();
+        }
+        if (desktopWorkspace) {
+          return _hasHomeDrawer
+              ? _buildDesktopDock(context, activeSession, finishedSession)
+              : _buildMinimalWorkspaceHome(context);
+        }
+        if (workspace) {
           return _buildWorkspaceDashboard(
             context,
             activeSession,

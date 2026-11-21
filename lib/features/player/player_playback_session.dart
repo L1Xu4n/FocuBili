@@ -32,6 +32,13 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
   int _sourceGeneration = 0;
   bool _externalNavigationSuspended = false;
 
+  // A touch/pen double tap can pause without changing already hidden controls.
+  // Consume this exception on its confirming snapshot, only on the same source.
+  int? _hiddenGesturePauseSource;
+
+  AppPlatform get _appPlatform;
+  bool get _controlsLocked;
+
   void _maybeAutoEnableSubtitles();
   void _cancelAutomaticSubtitlesForLocalSource();
 
@@ -50,7 +57,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
 
   /// 由手势协调器为真实播放暂停切换提供短暂动画。
   void _showPlaybackActionFeedback(bool playing);
-  void _clearDesktopPointerForTransition();
+  void _clearPlayerPointerForTransition();
   bool _shouldAnimatePlaybackAction(
     PlaybackSnapshot previous,
     PlaybackSnapshot snapshot,
@@ -65,7 +72,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     _clearAbRepeatForNavigation();
     _externalNavigationSuspended = true;
     _sourceGeneration++;
-    _clearDesktopPointerForTransition();
+    _clearPlayerPointerForTransition();
     await _suspendAbRepeatForSource();
     final service = _playbackService;
     if (service is! NativePlaybackService || service.ownsPlatformChannel) {
@@ -120,7 +127,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     bool? useLocal,
   }) async {
     final generation = ++_sourceGeneration;
-    _clearDesktopPointerForTransition();
+    _clearPlayerPointerForTransition();
     await Future.wait([
       _suspendAbRepeatForSource(),
       _settleTemporaryPlaybackSpeed(),
@@ -548,7 +555,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     if (snapshot.phase == PlaybackPhase.error ||
         snapshot.isRestoringPosition ||
         snapshot.isInPictureInPicture) {
-      _clearDesktopPointerForTransition();
+      _clearPlayerPointerForTransition();
     }
     final sleepExpired =
         previousSnapshot.sleepTimerRemaining > Duration.zero &&
@@ -618,6 +625,25 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     final bool leftPictureInPicture =
         _playbackSnapshot.isInPictureInPicture &&
         !snapshot.isInPictureInPicture;
+    final bool justPaused =
+        !snapshot.isPlaying &&
+        snapshot.phase == PlaybackPhase.ready &&
+        !snapshot.isRestoringPosition &&
+        snapshot.playRequested != true &&
+        (previousSnapshot.isPlaying || previousSnapshot.playRequested == true);
+    // Surface the toolbar for real desktop pauses (including sleep timer or
+    // external transport), not for buffering or a touch gesture that hid it.
+    final bool pausedOnDesktop =
+        justPaused &&
+        _appPlatform.isDesktop &&
+        _hiddenGesturePauseSource != _sourceGeneration &&
+        !_externalNavigationSuspended;
+    if (justPaused ||
+        snapshot.phase == PlaybackPhase.error ||
+        snapshot.phase == PlaybackPhase.ended ||
+        snapshot.isInPictureInPicture) {
+      _hiddenGesturePauseSource = null;
+    }
     final LearningListEntry? currentLearningEntry = _learningListEntry;
     final bool completedLearningEntry =
         justEnded &&
@@ -668,7 +694,8 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
       }
       if (snapshot.isInPictureInPicture) {
         _showControls = false;
-      } else if (leftPictureInPicture) {
+      } else if (leftPictureInPicture ||
+          (pausedOnDesktop && !_controlsLocked)) {
         _showControls = true;
       }
       if (leftEnded) {
@@ -831,7 +858,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     if (!mounted) {
       return;
     }
-    _clearDesktopPointerForTransition();
+    _clearPlayerPointerForTransition();
     setState(() {
       _playbackSnapshot = _playbackSnapshot.copyWith(
         phase: PlaybackPhase.error,

@@ -41,6 +41,8 @@ const _video = VideoPreview(
 );
 
 final _panel = find.byKey(const Key('fullscreen-video-notes-material'));
+final _inlinePanel = find.byKey(const Key('portrait-video-notes-panel'));
+final _workspacePane = find.byKey(const Key('player-workspace-side-pane'));
 final _barrier = find.byKey(const Key('park-video-notes-barrier'));
 final _handle = find.byKey(const Key('restore-parked-video-notes'));
 final _titleField = find.byKey(const Key('note-title-field'));
@@ -496,18 +498,179 @@ void main() {
     variant: TargetPlatformVariant.only(TargetPlatform.windows),
   );
 
-  testWidgets('桌面工作台复用右侧笔记，Escape 和空格操作把手，转竖屏回到原稿', (tester) async {
+  testWidgets('宽窗口的笔记替换工作台右栏，播放区不变，关闭后恢复详情', (tester) async {
+    final service = VideoNoteService();
     final playback = _PeekPlayback(startsPlaying: false);
     final boundary = await _mount(
+      tester,
+      playback,
+      service,
+      landscape: const Size(1024, 560),
+      fullscreen: false,
+      appPlatform: AppPlatform.windows,
+      scale: 1.4,
+    );
+    final noteEntry = find.byTooltip('记笔记');
+    final paneRect = tester.getRect(_workspacePane);
+    final playerRect = tester.getRect(_surface);
+    final playerState = tester.state(find.byType(FullscreenVideoTransform));
+    expect(
+      find.descendant(of: _workspacePane, matching: noteEntry),
+      findsOneWidget,
+    );
+    await tester.ensureVisible(noteEntry);
+    await tester.tap(noteEntry, kind: ui.PointerDeviceKind.mouse);
+    await _paint(tester);
+    await _capture(
+      tester,
+      boundary,
+      _before ? 'workspace-before' : 'workspace-inline',
+    );
+    expect(
+      find.descendant(of: _workspacePane, matching: _inlinePanel),
+      findsOneWidget,
+    );
+    expect(noteEntry, findsNothing);
+    expect(_panel, findsNothing);
+    expect(_barrier, findsNothing);
+    expect(_handle, findsNothing);
+    expect(tester.getRect(_workspacePane), paneRect);
+    expect(tester.getRect(_surface), playerRect);
+    expect(
+      tester.state(find.byType(FullscreenVideoTransform)),
+      same(playerState),
+    );
+    await tester.tap(_playPause, kind: ui.PointerDeviceKind.mouse);
+    await tester.pump();
+    expect(playback.plays, 1);
+    expect(_inlinePanel, findsOneWidget);
+
+    await tester.enterText(_titleField, _title);
+    await tester.enterText(_bodyField, _draft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.space);
+    expect(playback.pauses, 0);
+    expect(tester.widget<Text>(_position).data, '00:20');
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await _paint(tester);
+    expect(_inlinePanel, findsNothing);
+    expect(noteEntry, findsOneWidget);
+    expect(tester.getRect(_workspacePane), paneRect);
+    final note = (await service.loadNotesForVideo(_video.bvid)).single;
+    expect(note.title, _title);
+    expect(note.body, _draft);
+    expect(note.position, _anchor);
+
+    await _open(tester, fullscreen: false);
+    await tester.tap(find.byKey(Key('portrait-video-note-${note.id}')));
+    await _paint(tester);
+    expect(_controller(tester, _bodyField).text, _draft);
+    expect(playback.seeks, isEmpty);
+    final jump = find.byKey(const Key('jump-to-video-note-position'));
+    await tester.ensureVisible(jump);
+    await tester.tap(jump);
+    await _paint(tester);
+    expect(playback.seeks, [_anchor]);
+    await tester.ensureVisible(find.byKey(const Key('close-video-notes')));
+    await tester.tap(find.byKey(const Key('close-video-notes')).hitTestable());
+    await _paint(tester);
+    expect(noteEntry, findsOneWidget);
+    expect(playback.onlineOpens, 1);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('宽窗口与真实全屏切换时在各自布局继续同一份笔记', (tester) async {
+    const windowChannel = MethodChannel('window_manager');
+    const experienceChannel = MethodChannel(
+      'com.focubili.app/windows_experience',
+    );
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    final fullscreenChanges = <bool>[];
+    messenger.setMockMethodCallHandler(windowChannel, (call) async {
+      if (call.method == 'isMaximized') return false;
+      if (call.method == 'setFullScreen') {
+        fullscreenChanges.add(
+          (call.arguments as Map<Object?, Object?>)['isFullScreen'] as bool,
+        );
+      }
+      return null;
+    });
+    messenger.setMockMethodCallHandler(experienceChannel, (_) async => true);
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(windowChannel, null);
+      messenger.setMockMethodCallHandler(experienceChannel, null);
+    });
+    final playback = _PeekPlayback(startsPlaying: false);
+    await _mount(
       tester,
       playback,
       VideoNoteService(),
       landscape: const Size(1024, 560),
       fullscreen: false,
       appPlatform: AppPlatform.windows,
+    );
+    await _open(tester, fullscreen: false);
+    await tester.enterText(_bodyField, _draft);
+    await tester.tap(find.byTooltip('进入全屏').hitTestable());
+    await _paint(tester);
+    expect(_workspacePane, findsNothing);
+    expect(_inlinePanel, findsNothing);
+    expect(_panel.hitTestable(), findsOneWidget);
+    expect(_barrier, findsOneWidget);
+    expect(_controller(tester, _bodyField).text, _draft);
+    expect(tester.widget<Text>(_position).data, '视频位置：00:20');
+
+    await tester.tapAt(_leftEdge(tester));
+    await _paint(tester);
+    expect(_handle.hitTestable(), findsOneWidget);
+    await tester.tap(find.byTooltip('退出全屏').hitTestable());
+    await _paint(tester);
+    expect(
+      find.descendant(of: _workspacePane, matching: _inlinePanel),
+      findsOneWidget,
+    );
+    expect(_panel, findsNothing);
+    expect(_handle, findsNothing);
+    expect(_controller(tester, _bodyField).text, _draft);
+    expect(tester.widget<Text>(_position).data, '00:20');
+    expect(fullscreenChanges, [true, false]);
+
+    // An unmaximized resize can cross the breakpoint without going portrait.
+    tester.view.physicalSize = const Size(860, 520);
+    await _paint(tester);
+    expect(_workspacePane, findsNothing);
+    expect(_panel.hitTestable(), findsOneWidget);
+    await tester.tapAt(_leftEdge(tester));
+    await _paint(tester);
+    expect(_handle.hitTestable(), findsOneWidget);
+    tester.view.physicalSize = const Size(1024, 560);
+    await _paint(tester);
+    expect(_panel, findsNothing);
+    expect(_handle, findsNothing);
+    expect(_controller(tester, _bodyField).text, _draft);
+
+    await tester.binding.handlePopRoute();
+    await _paint(tester);
+    expect(_inlinePanel, findsNothing);
+    expect(find.byTooltip('记笔记'), findsOneWidget);
+    expect(playback.onlineOpens, 1);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('窄横屏仍可用 Escape 和空格操作笔记把手，转竖屏回到原稿', (tester) async {
+    final playback = _PeekPlayback(startsPlaying: false);
+    final boundary = await _mount(
+      tester,
+      playback,
+      VideoNoteService(),
+      landscape: const Size(860, 520),
+      fullscreen: false,
+      appPlatform: AppPlatform.windows,
       scale: 1.4,
     );
-    expect(find.byKey(const Key('player-workspace-layout')), findsOneWidget);
+    expect(_workspacePane, findsNothing);
     await _open(tester, fullscreen: false);
     await tester.enterText(_titleField, _title);
     await tester.enterText(_bodyField, _draft);
@@ -522,7 +685,7 @@ void main() {
     expect(playback.plays, 0);
     await tester.tapAt(_leftEdge(tester));
     await _paint(tester);
-    await _capture(tester, boundary, '04-workspace-parked');
+    await _capture(tester, boundary, '04-narrow-window-parked');
     tester.view.physicalSize = const Size(396, 700);
     await _paint(tester);
     expect(_handle, findsNothing);
