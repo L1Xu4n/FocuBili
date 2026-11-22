@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -7,6 +8,7 @@ import '../../core/layout/adaptive_page_frame.dart';
 import '../../services/bilibili_auth_service.dart';
 import '../../services/data_transfer_file_service.dart';
 import '../../services/settings_transfer_service.dart';
+import '../../services/unified_restore_service.dart';
 import 'settings_transfer_dialogs.dart';
 
 /// 提供用户主动操作的设置与登录迁移入口，登录备份仅在明确确认后导出，凭据不明文显示或写入诊断。
@@ -17,10 +19,12 @@ class DataTransferPage extends StatefulWidget {
     this.settingsService = const SettingsTransferService(),
     this.fileService = const DataTransferFileService(),
     this.authService,
+    this.unifiedRestoreService,
   });
   final SettingsTransferService settingsService;
   final DataTransferFileService fileService;
   final BilibiliAuthService? authService;
+  final UnifiedRestoreService? unifiedRestoreService;
 
   /// 创建迁移操作与确认弹窗的页面状态。
   @override
@@ -159,6 +163,87 @@ class _DataTransferPageState extends State<DataTransferPage> {
     if (_current) _message('设置已导入，请重启 APP 以应用设置。');
   });
 
+  Future<void> _importUnifiedBackup() => _run(() async {
+    final chosen = await FilePicker.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['zip'],
+      withData: false,
+    );
+    if (!_current || chosen == null) return;
+    final selected = chosen.files.single;
+    if (selected.path == null) throw const FormatException('Missing ZIP path');
+    final file = File(selected.path!);
+    const tooLarge = 'ZIP 文件超过 128 MB，无法导入。可以分项导出后分别导入。';
+    if (selected.size > UnifiedRestoreService.maximumZipBytes ||
+        await file.length() > UnifiedRestoreService.maximumZipBytes) {
+      if (_current) _message(tooLarge);
+      return;
+    }
+    final bytes = BytesBuilder(copy: false);
+    await for (final chunk in file.openRead()) {
+      if (!mounted || !_current) return;
+      if (bytes.length + chunk.length > UnifiedRestoreService.maximumZipBytes) {
+        _message(tooLarge);
+        return;
+      }
+      bytes.add(chunk);
+    }
+    final service = widget.unifiedRestoreService ?? UnifiedRestoreService();
+    final plan = await service.inspect(bytes.takeBytes());
+    if (!mounted || !_current) return;
+    final lines = [
+      if (plan.preview.isNotEmpty)
+        '只补充本机缺少的内容，不覆盖已有记录或已设置的偏好。'
+      else
+        '此备份没有可恢复到应用的数据。',
+      ...plan.preview,
+      ...plan.warnings,
+    ];
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: const Text('导入统一数据包'),
+        content: SingleChildScrollView(child: Text(lines.join('\n\n'))),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialog).pop(false),
+            child: Text(plan.preview.isEmpty ? '关闭' : '取消'),
+          ),
+          if (plan.preview.isNotEmpty)
+            FilledButton(
+              onPressed: () => Navigator.of(dialog).pop(true),
+              child: const Text('确认导入'),
+            ),
+        ],
+      ),
+    );
+    if (confirmed != true || !_current) return;
+    final result = await service.apply(plan);
+    if (!mounted || !_current) return;
+    final summary = result.added > 0
+        ? '已导入 ${result.added} 项，${result.kept} 项未覆盖。请重启应用查看。'
+        : '没有新增数据，${result.kept} 项未覆盖。';
+    if (result.warnings.isEmpty) {
+      _message(summary);
+    } else {
+      await showDialog<void>(
+        context: context,
+        builder: (dialog) => AlertDialog(
+          title: const Text('导入结果'),
+          content: SingleChildScrollView(
+            child: Text([summary, ...result.warnings].join('\n\n')),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialog).pop(),
+              child: const Text('关闭'),
+            ),
+          ],
+        ),
+      );
+    }
+  });
+
   /// 只在确认具体的明文文件/剪贴板目的地后读取当前稳定会话。
   Future<void> _exportLogin() => _run(() async {
     final method = await chooseDataTransferMethod(
@@ -285,6 +370,12 @@ class _DataTransferPageState extends State<DataTransferPage> {
                   subtitle: const Text('从文件或文本导入，确认后合并；重启生效'),
                   leading: const Icon(Icons.download_outlined),
                   onTap: _busy ? null : _importSettings,
+                ),
+                ListTile(
+                  title: const Text('导入统一数据包'),
+                  subtitle: const Text('选择统一导出的 ZIP，只补充缺少的本机数据'),
+                  leading: const Icon(Icons.folder_zip_outlined),
+                  onTap: _busy ? null : _importUnifiedBackup,
                 ),
               ],
             ),

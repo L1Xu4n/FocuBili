@@ -8,6 +8,7 @@ import '../models/search_content_filter.dart';
 import 'app_behavior_preferences_service.dart';
 import 'app_theme_mode_service.dart';
 import 'app_text_scale_service.dart';
+import 'content_blocklist_service.dart';
 import 'image_resource_cache.dart';
 import 'media_cache_service.dart';
 import 'playback_preferences_service.dart';
@@ -74,6 +75,77 @@ class SettingsTransferService {
     DeviceSettingsRuntimeAdapter.imageCapacityKey: _SettingType.integer,
   };
 
+  // ZIP restore is deliberately narrower than the overwrite-style settings
+  // JSON import. This list is explicit so future export keys cannot silently
+  // enable a device integration, affect accounts, or trim caches on restore.
+  static const _portableZipKeys = <String>{
+    'app_behavior.search_history_enabled',
+    'app_behavior.watch_history_enabled',
+    AppBehaviorPreferencesService.noteMarkdownEnabledKey,
+    VideoTagPreferences.key,
+    'appearance.theme_mode',
+    'appearance.theme_color',
+    'appearance.layout_orientation',
+    'playback_preferences.enable_double_tap_seek',
+    'playback_preferences.speeds',
+    'playback_preferences.line_preference',
+    'playback_preferences.mode',
+    'playback_preferences.subtitle_position',
+    PlaybackPreferencesService.subtitleOpacityKey,
+    PlaybackPreferencesService.autoEnableSubtitlesKey,
+    PlaybackPreferencesService.subtitlePriorityKey,
+    'playback_preferences.app_volume',
+    'playback_preferences.prefer_non_pcdn',
+    'playback_preferences.long_press_speed',
+    'playback_preferences.double_tap_regions',
+    'playback_preferences.action_animation',
+    'playback_preferences.control_scale',
+    'playback_preferences.show_note_time_markers',
+    'playback_preferences.subtitle_font_size',
+    'playback_preferences.two_finger_video_transform',
+    'playback_preferences.prefer_offline_cache',
+    'playback_preferences.wifi_default_quality',
+    'playback_preferences.mobile_default_quality',
+    'focubili_danmaku_preferences_v1',
+    'dashboard.layout.home',
+    'dashboard.home_drawer_enabled',
+    'dashboard.layout.profile',
+    'search.content_filter_v2',
+    ContentBlocklistService.storageKey,
+  };
+
+  static bool isPortableZipKey(String key) => _portableZipKeys.contains(key);
+
+  static void validatePortableZipValue(String key, Object? value) {
+    if (value == null || !isPortableZipKey(key)) {
+      throw const FormatException('不支持的备份设置');
+    }
+    if (key == ContentBlocklistService.storageKey) {
+      if (value is! String || value.length > 200000) {
+        throw const FormatException('屏蔽列表格式不正确');
+      }
+      ContentBlocklistService.validateBackup(value);
+    } else {
+      _validateValue(key, value);
+    }
+  }
+
+  /// Adds only absent portable keys. Present values (including explicitly
+  /// saved defaults) are never replaced by the archive.
+  Future<int> importMissingZipSettings(Map<String, Object> values) {
+    final snapshot = _snapshot(values);
+    return _enqueue(() async {
+      for (final entry in snapshot.entries) {
+        validatePortableZipValue(entry.key, entry.value);
+      }
+      if (snapshot.isEmpty) return 0;
+      Future<int> apply() => _apply(snapshot, onlyMissing: true);
+      return snapshot.containsKey(ContentBlocklistService.storageKey)
+          ? ContentBlocklistService.serializeWrites(apply)
+          : apply();
+    });
+  }
+
   /// 仅导出明确支持的设置，保留格式版本供将来升级兼容。
   Future<String> exportSettings() async {
     await _writes;
@@ -133,12 +205,7 @@ class SettingsTransferService {
   Future<void> importSettings(Map<String, Object> values) {
     // Freeze the confirmed input before entering the queue or awaiting storage.
     // The only supported collection value is a list of primitive strings.
-    final snapshot = Map<String, Object>.unmodifiable({
-      for (final entry in values.entries)
-        entry.key: entry.value is List
-            ? List<Object?>.unmodifiable(entry.value as List)
-            : entry.value,
-    });
+    final snapshot = _snapshot(values);
     return _enqueue(() async {
       for (final entry in snapshot.entries) {
         _validateValue(entry.key, entry.value);
@@ -148,11 +215,20 @@ class SettingsTransferService {
   }
 
   /// 只移除设置白名单，保留账号、协议状态、订阅源、笔记、清单和历史记录。
-  Future<void> resetSettings() =>
-      _enqueue(() => _apply({for (final key in _schema.keys) key: null}));
+  Future<void> resetSettings() => _enqueue(() async {
+    await _apply({for (final key in _schema.keys) key: null});
+  });
+
+  static Map<String, Object> _snapshot(Map<String, Object> settings) =>
+      Map.unmodifiable({
+        for (final entry in settings.entries)
+          entry.key: entry.value is List
+              ? List<Object?>.unmodifiable(entry.value as List)
+              : entry.value,
+      });
 
   /// 串行化导入和重置，前一次失败不会阻止下一次恢复操作。
-  Future<void> _enqueue(Future<void> Function() operation) {
+  Future<T> _enqueue<T>(Future<T> Function() operation) {
     final result = _writes.then((_) => operation());
     _writes = result.then<void>((_) {}, onError: (Object _, StackTrace _) {});
     return result;
@@ -332,8 +408,12 @@ class SettingsTransferService {
   }
 
   /// 保存一组设置并检查平台返回值，失败时尽力恢复全部旧值并报告状态。
-  Future<void> _apply(Map<String, Object?> values) async {
+  Future<int> _apply(
+    Map<String, Object?> values, {
+    bool onlyMissing = false,
+  }) async {
     final preferences = await preferencesLoader();
+    if (onlyMissing) await preferences.reload();
     final runtime = {
       for (final entry in values.entries)
         if (DeviceSettingsRuntimeAdapter.keys.contains(entry.key))
@@ -344,29 +424,52 @@ class SettingsTransferService {
         if (!DeviceSettingsRuntimeAdapter.keys.contains(entry.key))
           entry.key: entry.value,
     };
-    final old = {for (final key in regular.keys) key: preferences.get(key)};
+    final old = <String, Object?>{};
     final oldRuntime = runtime.isEmpty
         ? <String, Object>{}
         : await runtimeAdapter.readSettings();
     try {
       for (final entry in regular.entries) {
+        final previous = preferences.get(entry.key);
+        if (onlyMissing && previous != null) continue;
+        // Include the failing key in rollback: SharedPreferences may update
+        // its cache before a rejected platform write.
+        old[entry.key] = previous;
         if (!await _write(preferences, entry.key, entry.value)) {
           throw StateError('设置写入失败');
         }
       }
       if (runtime.isNotEmpty) await runtimeAdapter.writeSettings(runtime);
-      if (regular.containsKey(VideoTagPreferences.key)) {
-        VideoTagPreferences.changes.value++;
+      // The ZIP flow asks for a restart. Live widget listeners for tags and
+      // block rules can fetch more content; do not trigger them during restore.
+      if (!onlyMissing) {
+        if (old.containsKey(VideoTagPreferences.key)) {
+          VideoTagPreferences.changes.value++;
+        }
+        if (old.containsKey(
+          AppBehaviorPreferencesService.noteMarkdownEnabledKey,
+        )) {
+          AppBehaviorPreferencesService.changes.value++;
+        }
       }
-      if (regular.containsKey(
-        AppBehaviorPreferencesService.noteMarkdownEnabledKey,
-      )) {
-        AppBehaviorPreferencesService.changes.value++;
-      }
+      return old.length;
     } catch (_) {
       var restored = true;
-      for (final entry in old.entries) {
+      if (onlyMissing) {
         try {
+          // Do not undo a newer app edit while rolling back ZIP additions.
+          // Reload first because a failed setter can leave a provisional value.
+          await preferences.reload();
+        } catch (_) {
+          throw StateError('保存与恢复未全部成功，请检查设置后重试');
+        }
+      }
+      for (final entry in old.entries.toList().reversed) {
+        try {
+          if (onlyMissing &&
+              !_sameValue(preferences.get(entry.key), values[entry.key])) {
+            continue;
+          }
           if (!await _write(preferences, entry.key, entry.value)) {
             restored = false;
           }
@@ -386,6 +489,17 @@ class SettingsTransferService {
       await preferences.reload();
       throw StateError(restored ? '保存失败，已恢复原设置' : '保存与恢复未全部成功，请检查设置后重试');
     }
+  }
+
+  static bool _sameValue(Object? a, Object? b) {
+    if (a is List && b is List) {
+      if (a.length != b.length) return false;
+      for (var i = 0; i < a.length; i++) {
+        if (a[i] != b[i]) return false;
+      }
+      return true;
+    }
+    return a == b;
   }
 
   /// 根据白名单类型调用对应的偏好写入方法，不允许清空整个偏好容器。

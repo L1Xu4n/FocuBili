@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:archive/archive.dart';
 import 'package:file_picker/file_picker.dart';
 // ignore: implementation_imports
 import 'package:file_picker/src/platform/file_picker_platform_interface.dart';
@@ -12,6 +13,7 @@ import 'package:focubili/features/profile/data_transfer_page.dart';
 import 'package:focubili/services/data_transfer_file_service.dart';
 import 'package:focubili/services/settings_runtime_adapter.dart';
 import 'package:focubili/services/settings_transfer_service.dart';
+import 'package:focubili/services/video_note_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class _Runtime implements SettingsRuntimeAdapter {
@@ -48,6 +50,7 @@ class _FileSave extends DataTransferFileService {
 class _Picker extends FilePickerPlatform {
   File? selection;
   int calls = 0;
+  List<String>? lastAllowedExtensions;
   @override
   Future<FilePickerResult?> pickFiles({
     String? dialogTitle,
@@ -64,6 +67,7 @@ class _Picker extends FilePickerPlatform {
     bool cancelUploadOnWindowBlur = true,
   }) async {
     calls++;
+    lastAllowedExtensions = allowedExtensions;
     final selected = selection;
     return selected == null
         ? null
@@ -238,6 +242,74 @@ void main() {
       ),
       'synthetic-session-marker',
     );
+  });
+
+  testWidgets('统一数据包单独选择 ZIP，预览取消不写入，确认后补充笔记', (t) async {
+    final directory = Directory.systemTemp.createTempSync('unified-import-ui-');
+    addTearDown(() => directory.deleteSync(recursive: true));
+    final file = File('${directory.path}/FocuBili-export-test.zip');
+    final archive = Archive()
+      ..add(
+        ArchiveFile.string(
+          'manifest.json',
+          jsonEncode({
+            'format': 'focubili.unified-export',
+            'version': 1,
+            'credentialsIncluded': false,
+            'sections': ['notes'],
+          }),
+        ),
+      )
+      ..add(
+        ArchiveFile.string(
+          'notes/focubili_notes.json',
+          jsonEncode({
+            'format': 'focubili.video_notes',
+            'version': 2,
+            'notes': [
+              {
+                'id': 'legacy-test-note',
+                'bvid': 'BV1GJ411x7h7',
+                'videoTitle': '课程',
+                'ownerName': 'UP',
+                'partCid': 7,
+                'partPageNumber': 1,
+                'partTitle': '第一集',
+                'title': '复习',
+                'body': '稍后回看',
+                'createdAt': '2026-11-22T00:00:00.000Z',
+                'updatedAt': '2026-11-22T00:00:00.000Z',
+                'positionMs': 918,
+                'framePath': null,
+                'frames': [],
+              },
+            ],
+          }),
+        ),
+      );
+    file.writeAsBytesSync(ZipEncoder().encodeBytes(archive));
+    picker.selection = file;
+    await page(t);
+    final prefs = await SharedPreferences.getInstance();
+    for (final label in ['取消', '确认导入']) {
+      await _tap(t, '导入统一数据包');
+      for (var i = 0; i < 100 && find.text('确认导入').evaluate().isEmpty; i++) {
+        await t.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 5)),
+        );
+        await _advance(t);
+      }
+      expect(picker.lastAllowedExtensions, ['zip']);
+      expect(find.textContaining('时间点笔记：1 条'), findsOneWidget);
+      expect(prefs.getString(VideoNoteService.storageKey), isNull);
+      await _tap(t, label);
+    }
+    expect(
+      prefs.getString(VideoNoteService.storageKey),
+      contains('legacy-test-note'),
+    );
+    expect(find.textContaining('已导入 1 项'), findsOneWidget);
+    expect(writes + reads, 0);
   });
 
   testWidgets('手动文本、错误 JSON、未知敏感设置及登录文件不混用；失败保留草稿', (t) async {

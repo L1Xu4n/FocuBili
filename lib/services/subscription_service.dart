@@ -75,7 +75,7 @@ class SubscriptionService extends ChangeNotifier {
   final SubscriptionHistoryStore historyStorage;
   final String _instanceId =
       '${DateTime.now().microsecondsSinceEpoch}_${Random().nextInt(1 << 32)}';
-  int _leaseSequence = 0;
+  int _leaseSequence = 0, _unifiedRestoreSequence = 0;
   String? _leaseOwner;
   DateTime? _leaseUntil;
   String? _roundLease;
@@ -346,6 +346,161 @@ class SubscriptionService extends ChangeNotifier {
     };
   }
 
+  /// Validates the portable v1 representation, which intentionally lacks
+  /// local scheduler state, checkpoints, and the source's local identity token.
+  static SubscriptionUnifiedRestoreData parseUnifiedRestore(
+    Map<String, dynamic> document,
+  ) {
+    const flags = [
+      'enabled',
+      'notificationsEnabled',
+      'backgroundRefreshEnabled',
+    ];
+    const keys = {'format', 'version', 'sources', 'feed', 'history', ...flags};
+    if (document['format'] != 'focubili.subscriptions' ||
+        document['version'] != 1 ||
+        document.keys.any((key) => !keys.contains(key)) ||
+        flags.any((key) => document[key] is! bool) ||
+        document['sources'] is! List ||
+        document['history'] is! Map) {
+      throw const FormatException('焦点订阅备份格式无效');
+    }
+    final rawSources = document['sources'] as List;
+    if (rawSources.length > 1000 ||
+        rawSources.any((row) => row is! Map || row.containsKey('token'))) {
+      throw const FormatException('焦点订阅来源无效');
+    }
+    final sources = _parseExportSources([
+      for (final row in rawSources)
+        {...Map<String, dynamic>.from(row as Map), 'token': ''},
+    ]);
+    for (final source in sources) {
+      if (source.name.length > 1024 ||
+          (source.kind == SubscriptionKind.creator &&
+              source.seasonId != null)) {
+        throw const FormatException('焦点订阅来源无效');
+      }
+    }
+    final feed = _parseExportFeedRows(document['feed']);
+    final id = RegExp(r'^BV[0-9A-Za-z]{10}$');
+    final sourceKey = RegExp(
+      r'^creator:[1-9][0-9]*$|^collection:[1-9][0-9]*:[1-9][0-9]*$',
+    );
+    if (feed.length > 10000 ||
+        feed.any(
+          (item) =>
+              !id.hasMatch(item.bvid) ||
+              item.title.length > 4096 ||
+              item.sources.length > 1000 ||
+              item.sources.entries.any(
+                (entry) =>
+                    !sourceKey.hasMatch(entry.key) || entry.value.length > 1024,
+              ),
+        )) {
+      throw const FormatException('焦点订阅动态无效');
+    }
+    final history = document['history'] as Map;
+    if (history.length > 1000 ||
+        history.entries.any(
+          (entry) =>
+              entry.key is! String ||
+              !sourceKey.hasMatch(entry.key as String) ||
+              entry.value is! List,
+        )) {
+      throw const FormatException('焦点订阅历史无效');
+    }
+    return SubscriptionUnifiedRestoreData._(
+      List.unmodifiable(sources),
+      List.unmodifiable(feed),
+      history.values.fold<int>(
+        0,
+        (count, rows) => count + (rows as List).length,
+      ),
+    );
+  }
+
+  static String _restoredImageUrl(String value) {
+    if (value.length > 2048) return '';
+    final uri = Uri.tryParse(value.startsWith('//') ? 'https:$value' : value);
+    if (uri == null ||
+        (uri.scheme != 'https' && uri.scheme != 'http') ||
+        uri.userInfo.isNotEmpty ||
+        uri.hasPort ||
+        (!uri.host.endsWith('.hdslb.com') &&
+            !uri.host.endsWith('.biliimg.com'))) {
+      return '';
+    }
+    return Uri(scheme: 'https', host: uri.host, path: uri.path).toString();
+  }
+
+  /// Adds portable sources and recent feed only. Local collisions win and
+  /// restored rows never notify. Historical cursor state cannot be recreated.
+  Future<SubscriptionUnifiedRestoreResult> restoreUnifiedData(
+    SubscriptionUnifiedRestoreData data,
+  ) {
+    final tokenPrefix = '${_instanceId}_restore_${_unifiedRestoreSequence++}';
+    return _mutate(
+      () {
+        var added = 0;
+        var kept = data.historyCount;
+        final now = _clock();
+        for (final row in data.sources) {
+          if (_sources.containsKey(row.key) || _sources.length >= maxSources) {
+            kept++;
+            continue;
+          }
+          _sources[row.key] = SubscriptionSource(
+            kind: row.kind,
+            mid: row.mid,
+            seasonId: row.seasonId,
+            name: row.name,
+            token: '${tokenPrefix}_${row.key}',
+            paused: row.paused,
+            imageUrl: _restoredImageUrl(row.imageUrl),
+          );
+          _checkpoints[row.key] = SourceCheckpoint(baselineAt: now);
+          added++;
+        }
+        final newestFirst = data.feed.toList()
+          ..sort((a, b) => b.discoveredAt.compareTo(a.discoveredAt));
+        for (final row in newestFirst) {
+          final knownSources = {
+            for (final key in row.sources.keys)
+              if (_sources.containsKey(key)) key: _sources[key]!.name,
+          };
+          if (_feed.containsKey(row.bvid) ||
+              _announced.contains(row.bvid) ||
+              _feed.length >= displayLimit ||
+              knownSources.isEmpty ||
+              row.discoveredAt.isAfter(now) ||
+              _expired(row, now)) {
+            kept++;
+            continue;
+          }
+          _feed[row.bvid] = SubscriptionFeedItem(
+            bvid: row.bvid,
+            title: row.title,
+            coverUrl: _restoredImageUrl(row.coverUrl),
+            sources: Map.unmodifiable(knownSources),
+            discoveredAt: row.discoveredAt,
+            publishedAt: row.publishedAt,
+            readAt: row.readAt,
+            collectionAdded: row.collectionAdded,
+          );
+          _announced.add(row.bvid);
+          _notificationClaims.add(row.bvid);
+          added++;
+        }
+        _invalidateFeed();
+        return SubscriptionUnifiedRestoreResult(added: added, kept: kept);
+      },
+      validateBefore: (raw) {
+        // Never replace local subscription data with a lossy browsing projection.
+        _validateExportSnapshot(jsonDecode(raw) as Map<String, dynamic>);
+      },
+    );
+  }
+
   Future<SubscriptionHistoryBatch?> _readExportHistory(String job, int batch) =>
       switch (historyStorage) {
         final FileSubscriptionHistoryStore store => store.readForExport(
@@ -443,6 +598,16 @@ class SubscriptionService extends ChangeNotifier {
     'collectionAdded',
   };
 
+  static void _validateExportSnapshot(Map<String, dynamic> document) {
+    _validateExportFlags(document);
+    _parseExportSources(document['sources']);
+    _parseExportFeedRows(document['feed']);
+    for (final checkpoint in (document['checkpoints'] as Map).values) {
+      _parseExportFeedRows((checkpoint as Map)['pending']);
+    }
+    _parseExportHistoryJobs(document['historyJobs']);
+  }
+
   // Browsing tolerates some malformed legacy metadata. Expiration is not
   // permission to serialize that projection over ambiguous authoritative
   // bytes. Only inspect changed snapshots once and only when expiry is due.
@@ -453,13 +618,7 @@ class SubscriptionService extends ChangeNotifier {
     _checkedRetentionSnapshot = raw;
     try {
       final document = jsonDecode(raw) as Map<String, dynamic>;
-      _validateExportFlags(document);
-      _parseExportSources(document['sources']);
-      _parseExportFeedRows(document['feed']);
-      for (final checkpoint in (document['checkpoints'] as Map).values) {
-        _parseExportFeedRows((checkpoint as Map)['pending']);
-      }
-      _parseExportHistoryJobs(document['historyJobs']);
+      _validateExportSnapshot(document);
       return _retentionSnapshotSafe = true;
     } catch (_) {
       return _retentionSnapshotSafe = false;
@@ -650,6 +809,7 @@ class SubscriptionService extends ChangeNotifier {
     FutureOr<T> Function() action, {
     bool readOnly = false,
     bool retentionOnly = false,
+    void Function(String previous)? validateBefore,
   }) async {
     await initialize();
     final prior = _writes ?? Future<void>.value();
@@ -662,6 +822,7 @@ class SubscriptionService extends ChangeNotifier {
       var preserveRawSnapshot = false;
       Future<T> apply() async {
         try {
+          validateBefore?.call(previous);
           final canPrune = _hasExpiredFeed(_clock()) && _canPruneSnapshot;
           preserveRawSnapshot = retentionOnly && !canPrune;
           if (preserveRawSnapshot) return await action();
@@ -2078,6 +2239,28 @@ class SubscriptionService extends ChangeNotifier {
     if (store is SqliteSubscriptionSnapshotStore) unawaited(store.close());
     super.dispose();
   }
+}
+
+class SubscriptionUnifiedRestoreData {
+  const SubscriptionUnifiedRestoreData._(
+    this.sources,
+    this.feed,
+    this.historyCount,
+  );
+  final List<SubscriptionSource> sources;
+  final List<SubscriptionFeedItem> feed;
+  final int historyCount;
+
+  int get itemCount => sources.length + feed.length + historyCount;
+}
+
+class SubscriptionUnifiedRestoreResult {
+  const SubscriptionUnifiedRestoreResult({
+    required this.added,
+    required this.kept,
+  });
+  final int added;
+  final int kept;
 }
 
 class SubscriptionStorageException implements Exception {
