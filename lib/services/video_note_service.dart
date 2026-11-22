@@ -175,6 +175,60 @@ class VideoNoteService {
     await _withNotes((prefs) => _saveNormalized(prefs, normalized));
   }
 
+  /// Adds only missing IDs in one write, under the same queue as editors.
+  /// Files are staged only for accepted rows and reverted if storage rejects
+  /// the write. Existing raw rows and their files are never rewritten/deleted.
+  Future<({int added, int kept})> restoreMissingNotes(
+    List<VideoNote> candidates, {
+    required Future<VideoNote> Function(VideoNote) stage,
+    required Future<void> Function() rollback,
+  }) => _withNotes((prefs) async {
+    final raw = prefs.get(storageKey);
+    final Object? decoded = raw == null
+        ? <Object?>[]
+        : jsonDecode(raw as String);
+    if (decoded is! List<Object?>) {
+      throw const FormatException('Invalid existing notes');
+    }
+    final ids = <String>{};
+    for (final existing in decoded) {
+      if (existing is! Map<String, dynamic> ||
+          VideoNote.tryParse(existing) == null ||
+          !ids.add((existing['id'] as String).trim())) {
+        throw const FormatException('Invalid existing note');
+      }
+    }
+    final additions = <VideoNote>[];
+    try {
+      for (final candidate in candidates) {
+        if (decoded.length + additions.length >= maximumEntries) break;
+        if (!ids.add(candidate.id)) continue;
+        additions.add(await stage(candidate));
+      }
+      if (additions.isNotEmpty) {
+        await _writeNotes(
+          prefs,
+          jsonEncode([...decoded, ...additions.map((note) => note.toJson())]),
+          '笔记恢复失败',
+        );
+      }
+    } catch (_) {
+      try {
+        await rollback();
+      } catch (_) {
+        // Only newly staged private files are candidates for cleanup.
+      }
+      rethrow;
+    }
+    for (final bvid in additions.map((note) => note.bvid).toSet()) {
+      _changes.add(bvid);
+    }
+    return (
+      added: additions.length,
+      kept: candidates.length - additions.length,
+    );
+  });
+
   /// Finish an editor's detached write on the same storage queue. A deleted
   /// or newer copy is authoritative; a queued draft never recreates it.
   Future<bool> finishPendingDraft(

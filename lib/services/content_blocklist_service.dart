@@ -64,11 +64,29 @@ class ContentBlocklistService {
   ContentBlocklist _read(SharedPreferences preferences) {
     final raw = preferences.getString(storageKey);
     if (raw == null) return const ContentBlocklist();
+    return _decode(raw);
+  }
+
+  /// The backup may only write complete, valid entries in the current format.
+  /// Keep normal browsing's tolerance for older damaged rows unchanged.
+  static void validateBackup(String raw) => _decode(raw, strict: true);
+
+  static ContentBlocklist _decode(String raw, {bool strict = false}) {
     final data = jsonDecode(raw);
     if (data is! Map ||
         data['version'] != 1 ||
         data['videos'] is! Map ||
-        data['creators'] is! Map) {
+        data['creators'] is! Map ||
+        (strict &&
+            (data['version'] is! int ||
+                data.keys.any(
+                  (key) => !const {
+                    'version',
+                    'videos',
+                    'creators',
+                    'rules',
+                  }.contains(key),
+                )))) {
       throw const FormatException('Invalid local blocklist');
     }
     final videos = <String, String>{};
@@ -78,12 +96,19 @@ class ContentBlocklistService {
           _bvid.hasMatch(entry.key) &&
           entry.value is String) {
         videos[entry.key as String] = entry.value as String;
+      } else if (strict) {
+        throw const FormatException('Invalid blocked video');
       }
     }
     for (final entry in (data['creators'] as Map).entries) {
       final mid = int.tryParse('${entry.key}');
-      if (mid != null && mid > 0 && entry.value is String) {
+      if (mid != null &&
+          mid > 0 &&
+          entry.value is String &&
+          (!strict || entry.key == mid.toString())) {
         creators[mid] = entry.value as String;
+      } else if (strict) {
+        throw const FormatException('Invalid blocked creator');
       }
     }
     final rules = <ContentBlockKind, List<String>>{};
@@ -104,9 +129,16 @@ class ContentBlocklistService {
           if (rawValue is! String) {
             throw const FormatException('Invalid block rule value');
           }
-          final value = ContentBlockRule(kind, rawValue).validated().value;
-          if (seen.add(ContentBlockRule.normalizeText(value))) {
-            values.add(value);
+          try {
+            final value = ContentBlockRule(kind, rawValue).validated().value;
+            if (seen.add(ContentBlockRule.normalizeText(value))) {
+              values.add(value);
+            } else if (strict) {
+              throw const FormatException('Duplicate block rule');
+            }
+          } on ArgumentError {
+            if (!strict) rethrow;
+            throw const FormatException('Invalid block rule value');
           }
         }
         if (values.isNotEmpty) rules[kind] = List.unmodifiable(values);
@@ -129,7 +161,7 @@ class ContentBlocklistService {
     bool Function(SharedPreferences)? shouldCommit,
     void Function(SharedPreferences)? onCommit,
   }) {
-    final result = (_pending ?? Future<void>.value()).then((_) async {
+    return serializeWrites(() async {
       final preferences = await _authoritativePreferences();
       // Do not replace unreadable storage with an empty list during a mutation.
       final current = _read(preferences);
@@ -173,7 +205,15 @@ class ContentBlocklistService {
       onCommit?.call(preferences);
       changes.value++;
     });
-    final settled = result.catchError((Object _) {});
+  }
+
+  /// Backup restore uses the same queue as the in-app block/unblock actions.
+  static Future<T> serializeWrites<T>(Future<T> Function() operation) {
+    final result = (_pending ?? Future<void>.value()).then((_) => operation());
+    final settled = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
     _pending = settled;
     settled.then((_) {
       if (identical(_pending, settled)) _pending = null;

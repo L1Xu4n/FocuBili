@@ -1413,7 +1413,7 @@ class _PersonalizationSettingsPageState
           key: const Key('open-data-transfer'),
           leading: const Icon(Icons.import_export_rounded),
           title: const Text('数据导入与导出'),
-          subtitle: const Text('登录信息、设置迁移与恢复默认设置'),
+          subtitle: const Text('统一数据包、登录信息、设置迁移与恢复默认设置'),
           trailing: const Icon(Icons.chevron_right_rounded),
           onTap: () => Navigator.of(context).push<void>(
             MaterialPageRoute(builder: (_) => const DataTransferPage()),

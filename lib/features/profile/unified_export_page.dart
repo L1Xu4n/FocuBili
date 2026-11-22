@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/widgets/drag_checkbox_options.dart';
 import '../../services/local_export_service.dart';
 import '../../services/unified_export_service.dart';
+import 'data_transfer_page.dart';
 
 /// One deliberate local export, with personal data scope visible beforehand.
 class UnifiedExportPage extends StatefulWidget {
@@ -137,7 +138,7 @@ class _UnifiedExportPageState extends State<UnifiedExportPage> {
               const Padding(
                 padding: EdgeInsets.all(16),
                 child: Text(
-                  '视频媒体文件不打包，已下载视频请在离线视频页面导出。本资料包用于阅读和存档；各单项支持的导入方式仍在对应页面。',
+                  '视频媒体文件不打包，已下载视频请在离线视频页面导出。导入统一数据包可补充本机缺失的项目，其中可恢复的内容以导入预览为准。',
                 ),
               ),
               FilledButton.icon(
@@ -151,6 +152,16 @@ class _UnifiedExportPageState extends State<UnifiedExportPage> {
                       )
                     : const Icon(Icons.file_download_outlined),
                 label: Text(_exporting ? '正在生成资料包…' : '导出所选资料'),
+              ),
+              TextButton(
+                onPressed: _exporting
+                    ? null
+                    : () => Navigator.of(context).push<void>(
+                        MaterialPageRoute(
+                          builder: (_) => const DataTransferPage(),
+                        ),
+                      ),
+                child: const Text('前往数据导入与导出'),
               ),
               if (_status != null)
                 Padding(
