@@ -92,6 +92,7 @@ class _PersonalizationSettingsPageState
   bool _accountReadOnly = true;
   final _lineMenuKey =
       GlobalKey<PopupMenuButtonState<PlaybackLinePreference>>();
+  final _playbackSourceMenuKey = GlobalKey<PopupMenuButtonState<bool>>();
   bool _searchHistoryEnabled = true;
   bool _watchHistoryEnabled = true;
   bool _wbiSigningEnabled = false;
@@ -837,6 +838,55 @@ class _PersonalizationSettingsPageState
     );
   }
 
+  /// Saves the default source for the next opened video or part.
+  Future<void> _setPreferOfflineCache(bool enabled) async {
+    if (_saving || enabled == _preferences.preferOfflineCache) return;
+    final previous = _preferences.preferOfflineCache;
+    setState(() {
+      _saving = true;
+      _preferences = _preferences.copyWith(preferOfflineCache: enabled);
+    });
+    try {
+      await widget.preferencesService.savePreferOfflineCache(enabled);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _preferences = _preferences.copyWith(preferOfflineCache: previous);
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('播放来源设置保存失败，请稍后重试。')));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Widget _buildPlaybackSourceTile() => ListTile(
+    leading: const Icon(Icons.play_circle_outline_rounded),
+    title: const Text('优先播放来源'),
+    enabled: !_saving,
+    onTap: _saving
+        ? null
+        : () => _playbackSourceMenuKey.currentState?.showButtonMenu(),
+    subtitle: Text(
+      _preferences.preferOfflineCache
+          ? '离线优先：仅用当前分 P 已下载的缓存，不可用时尝试在线播放'
+          : '在线优先：在线播放不可用时，尝试当前分 P 已下载的缓存',
+    ),
+    trailing: PopupMenuButton<bool>(
+      key: _playbackSourceMenuKey,
+      enabled: !_saving,
+      tooltip: '选择优先播放来源',
+      icon: const Icon(Icons.arrow_drop_down),
+      initialValue: _preferences.preferOfflineCache,
+      onSelected: _setPreferOfflineCache,
+      itemBuilder: (context) => const [
+        PopupMenuItem(value: false, child: Text('在线播放优先')),
+        PopupMenuItem(value: true, child: Text('离线缓存优先')),
+      ],
+    ),
+  );
+
   /// 保存启动检查开关；重新开启时控制器会立即执行一次 GitHub Release 检查。
   Future<void> _setUpdateCheckEnabled(
     AppUpdateController controller,
@@ -1118,6 +1168,7 @@ class _PersonalizationSettingsPageState
       children: <Widget>[
         _buildDefaultQualityTile(forWifi: true),
         _buildDefaultQualityTile(forWifi: false),
+        _buildPlaybackSourceTile(),
         ListTile(
           key: const Key('playback-line-preference'),
           leading: const Icon(Icons.alt_route_rounded),

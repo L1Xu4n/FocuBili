@@ -31,6 +31,9 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
   int? _offlineQuality;
   int _sourceGeneration = 0;
   bool _externalNavigationSuspended = false;
+  void Function(PlaybackSnapshot)? _observeSourceStartup;
+
+  int get _partSwitchGeneration;
 
   // A touch/pen double tap can pause without changing already hidden controls.
   // Consume this exception on its confirming snapshot, only on the same source.
@@ -94,23 +97,23 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
   /// Refreshes membership after resume planning changes the initially selected part.
   void _refreshOfflinePartState();
 
-  /// Uses explicit per-part source choices without leaking them into another video.
-  bool _wantsLocalSource(
+  /// An explicit quality-menu choice applies only to this exact part.
+  bool? _localSourceOverride(
     VideoPreview video,
     VideoPart part, {
     bool? useLocal,
-  }) => widget.forceOffline && widget.video.isCourse
-      ? true
-      : useLocal ??
-            ('${video.bvid}:${part.cid}' == _sourceChoicePart
-                ? _sourceChoiceLocal
-                : null) ??
-            (video.fromOfflineCache ||
-                (widget.forceOffline && video.bvid == widget.video.bvid));
+  }) {
+    if (widget.forceOffline && widget.video.isCourse) return true;
+    return useLocal ??
+        ('${video.bvid}:${part.cid}' == _sourceChoicePart
+            ? _sourceChoiceLocal
+            : null) ??
+        (widget.forceOffline && video.bvid == widget.video.bvid ? true : null);
+  }
 
   /// Validates offline-only transitions before page identity or progress ownership changes.
   Future<void> _checkPlaybackPart(VideoPreview video, VideoPart part) async {
-    if (_wantsLocalSource(video, part)) {
+    if (_localSourceOverride(video, part) == true) {
       await PlaybackSourceResolver(
         _offlineVideoService,
       ).resolve(video.bvid, part.cid, preferLocal: true, requireLocal: true);
@@ -128,87 +131,179 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     required int quality,
     Duration? initialPosition,
     bool? useLocal,
+    bool allowStartupFallback = true,
   }) async {
     final generation = ++_sourceGeneration;
+    final navigation = _partSwitchGeneration;
+    final stopRevision = _playbackStopRevision;
+    _observeSourceStartup = null;
+    bool isCurrent() =>
+        mounted &&
+        generation == _sourceGeneration &&
+        navigation == _partSwitchGeneration &&
+        !_externalNavigationSuspended;
     _clearPlayerPointerForTransition();
     await Future.wait([
       _suspendAbRepeatForSource(),
       _settleTemporaryPlaybackSpeed(),
     ]);
-    if (!mounted ||
-        generation != _sourceGeneration ||
-        _externalNavigationSuspended) {
-      return;
-    }
+    if (!isCurrent()) return;
     try {
       final identity = '${video.bvid}:${part.cid}';
-      final wantsLocal = _wantsLocalSource(video, part, useLocal: useLocal);
-      final local = await PlaybackSourceResolver(_offlineVideoService).resolve(
-        video.bvid,
-        part.cid,
-        preferLocal: wantsLocal,
-        requireLocal: wantsLocal,
-      );
-      if (!mounted ||
-          generation != _sourceGeneration ||
-          _externalNavigationSuspended) {
-        return;
-      }
       final service = _playbackService;
+      final override = _localSourceOverride(video, part, useLocal: useLocal);
+      final preferCache =
+          !video.isCourse &&
+          ((video.fromOfflineCache && video.cid == part.cid) ||
+              _playbackPreferences.preferOfflineCache);
+      final resolver = PlaybackSourceResolver(_offlineVideoService);
+      Future<OfflineVideoDownload?> readLocal({bool requireLocal = false}) =>
+          resolver.resolve(
+            video.bvid,
+            part.cid,
+            preferLocal: true,
+            requireLocal: requireLocal,
+          );
+      final OfflineVideoDownload? local = override == true
+          ? await readLocal(requireLocal: true)
+          : override == null &&
+                preferCache &&
+                service is LocalFilePlaybackService
+          ? await readLocal()
+          : null;
+      if (!isCurrent()) return;
       if (_sourceChoicePart != identity) _sourceChoiceLocal = null;
       _sourceChoicePart = identity;
       if (useLocal != null) _sourceChoiceLocal = useLocal;
-      _playingOffline = local != null;
       if (widget.forceOffline && widget.video.isCourse) {
         _availableQualities = const [];
       }
 
-      _offlineQuality = local?.qualityId;
-      if (local != null) {
-        if (service is! LocalFilePlaybackService) {
-          throw const OfflineVideoException('当前平台不支持本地播放。');
-        }
-        _cancelAutomaticSubtitlesForLocalSource();
-        _defaultQualityPending = false;
-        // Keep online menu options and the complete VideoPreview when only media changes.
-        if (local.audioFilePath != null) {
-          if (service is! LocalTrackPlaybackService) {
-            throw const OfflineVideoException('当前平台不支持分离音视频缓存。');
-          }
-          await (service as LocalTrackPlaybackService).openLocalTracks(
-            videoFilePath: local.filePath,
-            audioFilePath: local.audioFilePath!,
-            title: local.title,
-            initialPosition: initialPosition,
-            video: video,
-            part: part,
+      final defaultQualityPending = _defaultQualityPending;
+      Future<void> open(OfflineVideoDownload? file) async {
+        _playingOffline = file != null;
+        _offlineQuality = file?.qualityId;
+        if (file != null) {
+          _cancelAutomaticSubtitlesForLocalSource();
+          _defaultQualityPending = false;
+          await _openManagedLocalMedia(
+            service,
+            file,
+            video,
+            part,
+            initialPosition,
           );
         } else {
-          await (service as LocalFilePlaybackService).openLocalFile(
-            filePath: local.filePath,
-            title: local.title,
-            initialPosition: initialPosition,
-            video: video,
+          _defaultQualityPending = defaultQualityPending;
+          await service.openVideo(
+            video,
             part: part,
+            quality: quality > 0 ? quality : _preferredOpeningQuality,
+            initialPosition: initialPosition,
           );
+          if (isCurrent() &&
+              video.bvid == _activeVideo.bvid &&
+              part.cid == _currentPart.cid) {
+            _maybeAutoEnableSubtitles();
+          }
         }
-      } else {
-        await service.openVideo(
-          video,
-          part: part,
-          quality: quality,
-          initialPosition: initialPosition,
-        );
-        if (mounted &&
-            generation == _sourceGeneration &&
-            !_externalNavigationSuspended &&
-            video.bvid == _activeVideo.bvid &&
-            part.cid == _currentPart.cid) {
-          _maybeAutoEnableSubtitles();
+      }
+
+      final canFallback =
+          override == null &&
+          !video.isCourse &&
+          service is LocalFilePlaybackService &&
+          allowStartupFallback &&
+          (local != null || !preferCache);
+      Future<bool> fallback() async {
+        if (!isCurrent() || stopRevision != _playbackStopRevision) return false;
+        final OfflineVideoDownload? alternate = local == null
+            ? await readLocal()
+            : null;
+        if (!isCurrent() ||
+            stopRevision != _playbackStopRevision ||
+            (local == null && alternate == null)) {
+          return false;
         }
+        await open(alternate);
+        return true;
+      }
+
+      Future<bool>? fallbackRequest;
+      Future<bool> fallbackOnce() => fallbackRequest ??= fallback();
+      // Android only acknowledges the request. A decode/network failure comes
+      // later in the state stream. Observe the matching source, not old states
+      // from a media item that is being replaced.
+      if (canFallback && service is NativePlaybackService) {
+        final source = (bvid: video.bvid, cid: part.cid, local: local != null);
+        var loading = false;
+        _observeSourceStartup = (snapshot) {
+          if (!isCurrent() || stopRevision != _playbackStopRevision) {
+            _observeSourceStartup = null;
+            return;
+          }
+          if (snapshot.sourceIdentity != source) return;
+          if (snapshot.phase == PlaybackPhase.loading) {
+            loading = true;
+          } else if (loading && snapshot.phase == PlaybackPhase.ready) {
+            _observeSourceStartup = null;
+          } else if (loading && snapshot.phase == PlaybackPhase.error) {
+            _observeSourceStartup = null;
+            unawaited(
+              fallbackOnce().then<void>(
+                (_) {},
+                onError: (Object error) {
+                  if (isCurrent()) _showPlaybackError('无法打开视频，请检查网络或缓存文件。');
+                },
+              ),
+            );
+          }
+        };
+      }
+      try {
+        await open(local);
+      } catch (_) {
+        if (!isCurrent()) return;
+        _observeSourceStartup = null;
+        if (!canFallback || !await fallbackOnce()) rethrow;
       }
     } finally {
       if (generation == _sourceGeneration) _resumeAbRepeatAfterSource();
+    }
+  }
+
+  /// Uses only validated library paths and preserves exact identity and position.
+  Future<void> _openManagedLocalMedia(
+    PlaybackService service,
+    OfflineVideoDownload file,
+    VideoPreview video,
+    VideoPart part,
+    Duration? initialPosition,
+  ) async {
+    if (service is! LocalFilePlaybackService) {
+      throw const OfflineVideoException('当前平台不支持本地播放。');
+    }
+    final audioPath = file.audioFilePath;
+    if (audioPath != null) {
+      if (service is! LocalTrackPlaybackService) {
+        throw const OfflineVideoException('当前平台不支持分离音视频缓存。');
+      }
+      await (service as LocalTrackPlaybackService).openLocalTracks(
+        videoFilePath: file.filePath,
+        audioFilePath: audioPath,
+        title: file.title,
+        initialPosition: initialPosition,
+        video: video,
+        part: part,
+      );
+    } else {
+      await (service as LocalFilePlaybackService).openLocalFile(
+        filePath: file.filePath,
+        title: file.title,
+        initialPosition: initialPosition,
+        video: video,
+        part: part,
+      );
     }
   }
 
@@ -371,6 +466,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
 
   /// 取消播放状态订阅和续播计时器，供页面销毁流程统一调用。
   void _disposePlayerPlaybackSession() {
+    _observeSourceStartup = null;
     _isRetrying = false;
     _resumeNoticeTimer?.cancel();
     unawaited(_playbackSubscription?.cancel() ?? Future<void>.value());
@@ -544,6 +640,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     if (!mounted) {
       return;
     }
+    _observeSourceStartup?.call(snapshot);
     if (_externalNavigationSuspended && snapshot.isPlaying) {
       final service = _playbackService;
       if (service is! NativePlaybackService || service.ownsPlatformChannel) {

@@ -168,7 +168,15 @@ mixin _PlayerPlaylistCoordinator on State<PlayerPage>, _PlayerVideoCoordinator {
     final request = epoch ?? ++_playlistEpoch;
     final navigation = _partSwitchGeneration;
     try {
-      final video = await _bilibiliService.lookupVideo(item.bvid);
+      final entry = item.learningEntry;
+      final video = entry == null
+          ? await _bilibiliService.lookupVideo(item.bvid)
+          : await lookupLearningVideo(
+              entry,
+              videoService: _bilibiliService,
+              offlineVideoService: _offlineVideoService,
+              preferCache: _playbackPreferences.preferOfflineCache,
+            );
       if (!mounted ||
           request != _playlistEpoch ||
           navigation != _partSwitchGeneration) {

@@ -6,6 +6,9 @@ import '../../models/video_preview.dart';
 import '../../models/playback_queue.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/learning_list_service.dart';
+import '../../services/offline_video_service.dart';
+import '../../services/playback_preferences_service.dart';
+import 'learning_video_lookup.dart';
 import '../player/player_page.dart';
 
 /// 统一从学习清单查询视频详情，并恢复任务保存的分P和播放时间点。
@@ -17,6 +20,9 @@ abstract final class LearningVideoLauncher {
     BilibiliService? service,
     LearningListService? learningListService,
     List<LearningListEntry>? playlist,
+    OfflineVideoService? offlineVideoService,
+    PlaybackPreferencesService preferencesService =
+        const PlaybackPreferencesService(),
   }) async {
     final String bvid = entry.bvid.trim();
     if (bvid.isEmpty) {
@@ -25,9 +31,22 @@ abstract final class LearningVideoLauncher {
       ).showSnackBar(const SnackBar(content: Text('这条学习任务没有有效的视频编号')));
       return false;
     }
-    final BilibiliService videoService = service ?? BilibiliVideoInfoService();
+    final library = offlineVideoService ?? OfflineVideoService();
+    final videoService =
+        service ?? BilibiliVideoInfoService(offlineVideoService: library);
     try {
-      final VideoPreview video = await videoService.lookupVideo(bvid);
+      var preferCache = false;
+      try {
+        preferCache = (await preferencesService.load()).preferOfflineCache;
+      } catch (_) {
+        // A broken preference must not prevent playback.
+      }
+      final video = await lookupLearningVideo(
+        entry,
+        videoService: videoService,
+        offlineVideoService: library,
+        preferCache: preferCache,
+      );
       if (!context.mounted) {
         return false;
       }
@@ -51,6 +70,8 @@ abstract final class LearningVideoLauncher {
             videoService: videoService,
             learningListService: learningListService,
             playlist: playlist,
+            offlineVideoService: library,
+            preferencesService: preferencesService,
           ),
         ),
       );
@@ -72,6 +93,8 @@ abstract final class LearningVideoLauncher {
     BilibiliService? videoService,
     LearningListService? learningListService,
     List<LearningListEntry>? playlist,
+    OfflineVideoService? offlineVideoService,
+    PlaybackPreferencesService? preferencesService,
   }) {
     final VideoPart part = _findPart(video, entry);
     return PlayerPage(
@@ -88,17 +111,22 @@ abstract final class LearningVideoLauncher {
       ),
       bilibiliService: videoService,
       learningListService: learningListService,
+      offlineVideoService: offlineVideoService,
+      playbackPreferencesService: preferencesService,
       learningContinuationScope: playlist
           ?.map((entry) => entry.stableId)
           .toSet(),
       initialPartCid: part.cid,
-      initialPosition: entry.position > Duration.zero ? entry.position : null,
+      initialPosition: entry.position,
       initialPositionSource: PlayerInitialPositionSource.learning,
     );
   }
 
   /// 按 CID 找回同一分 P；页码变化不会把旧进度应用到其他分 P。
   static VideoPart _findPart(VideoPreview video, LearningListEntry entry) {
+    if (video.bvid != entry.bvid.trim()) {
+      throw const BilibiliLookupException('视频编号与学习任务不匹配。');
+    }
     for (final VideoPart part in video.parts) {
       if (part.cid == entry.partCid) {
         return part;

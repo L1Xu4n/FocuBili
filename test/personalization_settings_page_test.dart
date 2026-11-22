@@ -390,6 +390,35 @@ void main() {
     expect(preferences.mobileDefaultQuality, PreferredPlaybackQuality.p480);
   });
 
+  testWidgets('优先播放来源可搜索并保存两种优先顺序', (tester) async {
+    tester.view.physicalSize = const Size(320, 650);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    const service = PlaybackPreferencesService();
+    await tester.pumpWidget(
+      const MaterialApp(home: PersonalizationSettingsPage()),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('settings-search')), '播放来源');
+    await tester.pumpAndSettle();
+    expect(find.textContaining('在线优先：'), findsOneWidget);
+
+    await tester.tap(find.text('优先播放来源'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('离线缓存优先'));
+    await tester.pumpAndSettle();
+    expect((await service.load()).preferOfflineCache, isTrue);
+    expect(find.textContaining('离线优先：'), findsOneWidget);
+
+    await tester.tap(find.text('优先播放来源'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('在线播放优先'));
+    await tester.pumpAndSettle();
+    expect((await service.load()).preferOfflineCache, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
   /// 验证外观设置首次选中跟随系统，点击深色后立即更新并写入本地。
   testWidgets('设置页切换并保存全局深色模式', (WidgetTester tester) async {
     final SharedPreferences preferences = await SharedPreferences.getInstance();
