@@ -212,7 +212,8 @@ void main() {
   testWidgets('online page selects local quality in place and switches back', (
     tester,
   ) async {
-    await const PlaybackPreferencesService().savePreferOfflineCache(true);
+    // Start online so this covers an explicit quality-menu source change.
+    await const PlaybackPreferencesService().savePreferOfflineCache(false);
     await const PlaybackPreferencesService().savePlaybackSpeeds([1, 4.5]);
     final backend = FeedbackPlayback();
     await tester.pumpWidget(
