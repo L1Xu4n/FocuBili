@@ -112,12 +112,8 @@ void main() {
       for (var i = 1; i <= 5; i++) {
         await service.addVideo(video(i));
       }
-      await service.moveEntries({
-        'BV2:2',
-        'BV3:3',
-        'BV4:4',
-        'BV5:5',
-      }, folder.id);
+      const groupedIds = {'BV2:2', 'BV3:3', 'BV4:4', 'BV5:5'};
+      await service.moveEntries(groupedIds, folder.id);
       await service.updateStatus(
         'BV5',
         LearningListStatus.completed,
@@ -166,10 +162,10 @@ void main() {
       await _shiftTap(tester, _checkbox(3));
       expect(find.text('已选 1'), findsOneWidget);
       await _shiftTap(tester, _checkbox(2));
-      expect(
-        [for (var id = 2; id <= 5; id++) _checked(tester, id)],
-        [true, true, true, false],
-      );
+      final groupSelection = [
+        for (var id = 2; id <= 5; id++) _checked(tester, id),
+      ];
+      expect(groupSelection, [true, true, true, false]);
       expect(find.text('已选 3'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
