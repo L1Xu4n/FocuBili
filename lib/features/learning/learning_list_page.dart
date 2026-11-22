@@ -1,7 +1,10 @@
 import 'package:focubili/features/common/app_network_image.dart';
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/layout/adaptive_page_frame.dart';
 import '../../core/widgets/drag_selection_region.dart';
@@ -46,6 +49,17 @@ class _LearningListPageState extends State<LearningListPage> {
   LearningListStatus? _statusFilter;
   bool _selecting = false;
   final Set<String> _selected = {};
+  String? _selectionAnchorId;
+
+  bool get _supportsShiftSelection =>
+      !kIsWeb &&
+      switch (defaultTargetPlatform) {
+        TargetPlatform.windows ||
+        TargetPlatform.macOS ||
+        TargetPlatform.linux => true,
+        _ => false,
+      };
+
   bool get _canReorder =>
       !_newestFirst &&
       !_sortSaving &&
@@ -150,12 +164,18 @@ class _LearningListPageState extends State<LearningListPage> {
 
   // Bulk actions apply only to the tasks the user can still see and review.
   void _pruneHiddenSelection() {
-    if (_selected.isEmpty) return;
+    if (_selected.isEmpty && _selectionAnchorId == null) return;
     final visible = _entries
         .where(_matchesQuery)
         .map((e) => e.stableId)
         .toSet();
     _selected.retainAll(visible);
+    if (!visible.contains(_selectionAnchorId)) _selectionAnchorId = null;
+  }
+
+  void _clearSelection() {
+    _selected.clear();
+    _selectionAnchorId = null;
   }
 
   void _beginSelection(LearningListEntry entry, BuildContext rowContext) {
@@ -163,6 +183,7 @@ class _LearningListPageState extends State<LearningListPage> {
     setState(() {
       _selecting = true;
       _selected.add(entry.stableId);
+      _selectionAnchorId = entry.stableId;
     });
     // The newly shown bulk-action toolbar may push this row below the fold.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -190,6 +211,37 @@ class _LearningListPageState extends State<LearningListPage> {
     }
   }
 
+  void _changeEntrySelection(
+    LearningListEntry entry, {
+    required bool checked,
+    required bool extend,
+  }) {
+    if (!_selecting || !_canSelectTasks || !_matchesQuery(entry)) return;
+    if (!extend) {
+      setState(() {
+        _setEntryChecked(entry, checked);
+        _selectionAnchorId = entry.stableId;
+      });
+      return;
+    }
+
+    // Use displayed order, not storage order or only the mounted rows.
+    final visible = [..._activeEntries, ..._completedEntries];
+    final target = visible.indexWhere((row) => row.stableId == entry.stableId);
+    if (target == -1) return;
+    final anchor = visible.indexWhere(
+      (row) => row.stableId == _selectionAnchorId,
+    );
+    final first = anchor == -1 || target < anchor ? target : anchor;
+    final last = anchor > target ? anchor : target;
+    setState(() {
+      if (anchor == -1) _selectionAnchorId = entry.stableId;
+      for (var i = first; i <= last; i++) {
+        _selected.add(visible[i].stableId);
+      }
+    });
+  }
+
   void _selectRange(
     DragSelectionUpdate change,
     List<LearningListEntry> visible,
@@ -200,6 +252,10 @@ class _LearningListPageState extends State<LearningListPage> {
     final first = previous < current ? previous : current;
     final last = previous > current ? previous : current;
     setState(() {
+      if (previous == change.anchor && current == change.anchor) {
+        final anchor = visible[change.anchor];
+        if (_matchesQuery(anchor)) _selectionAnchorId = anchor.stableId;
+      }
       for (var i = first; i <= last; i++) {
         _setEntryChecked(visible[i], change.checked);
       }
@@ -424,7 +480,7 @@ class _LearningListPageState extends State<LearningListPage> {
       if (mounted) {
         setState(() {
           _entries = entries;
-          _selected.clear();
+          _clearSelection();
         });
       }
     } catch (_) {
@@ -441,7 +497,7 @@ class _LearningListPageState extends State<LearningListPage> {
       if (mounted) {
         setState(() {
           _entries = entries;
-          _selected.clear();
+          _clearSelection();
         });
       }
     } catch (_) {
@@ -840,7 +896,7 @@ class _LearningListPageState extends State<LearningListPage> {
       if (mounted) {
         setState(() {
           _applyState(state);
-          _selected.clear();
+          _clearSelection();
         });
       }
       return true;
@@ -916,7 +972,7 @@ class _LearningListPageState extends State<LearningListPage> {
                   selected: _allFolders,
                   onSelected: (_) => setState(() {
                     _allFolders = true;
-                    _selected.clear();
+                    _clearSelection();
                   }),
                 ),
               ),
@@ -931,7 +987,7 @@ class _LearningListPageState extends State<LearningListPage> {
                   onSelected: (_) => setState(() {
                     _allFolders = false;
                     _folderId = null;
-                    _selected.clear();
+                    _clearSelection();
                   }),
                 ),
               ),
@@ -990,7 +1046,7 @@ class _LearningListPageState extends State<LearningListPage> {
           onSelected: (_) => setState(() {
             _allFolders = false;
             _folderId = folder.id;
-            _selected.clear();
+            _clearSelection();
           }),
           // Keep the native vertical padding and trim only the menu end.
           padding: const EdgeInsetsDirectional.fromSTEB(8, 8, 4, 8),
@@ -1092,7 +1148,8 @@ class _LearningListPageState extends State<LearningListPage> {
               .clamp(0, 1)
               .toDouble()
         : 0;
-    return Card(
+    var shiftClick = false;
+    final card = Card(
       key: Key('learning-list-${entry.stableId}'),
       margin: EdgeInsets.zero,
       clipBehavior: Clip.antiAlias,
@@ -1106,8 +1163,10 @@ class _LearningListPageState extends State<LearningListPage> {
                     value: checked,
                     semanticLabel: entry.title,
                     onChanged: _canSelectTasks
-                        ? (value) => setState(
-                            () => _setEntryChecked(entry, value == true),
+                        ? (value) => _changeEntrySelection(
+                            entry,
+                            checked: value == true,
+                            extend: shiftClick,
                           )
                         : null,
                   )
@@ -1205,7 +1264,11 @@ class _LearningListPageState extends State<LearningListPage> {
             ),
             onTap: _selecting
                 ? _canSelectTasks
-                      ? () => setState(() => _setEntryChecked(entry, !checked))
+                      ? () => _changeEntrySelection(
+                          entry,
+                          checked: !checked,
+                          extend: shiftClick,
+                        )
                       : null
                 : opening || updating || _reordering
                 ? null
@@ -1321,6 +1384,22 @@ class _LearningListPageState extends State<LearningListPage> {
           ),
         ],
       ),
+    );
+    return Listener(
+      onPointerUp: _selecting && _supportsShiftSelection
+          ? (event) {
+              if (event.kind != PointerDeviceKind.mouse ||
+                  !HardwareKeyboard.instance.isShiftPressed) {
+                return;
+              }
+              // The listener sees pointer-up before Flutter dispatches the
+              // recognized tap. Keep the modifier out of touch and keyboard
+              // activations, and do not select on a canceled gesture or drag.
+              shiftClick = true;
+              scheduleMicrotask(() => shiftClick = false);
+            }
+          : null,
+      child: card,
     );
   }
 
@@ -1472,7 +1551,9 @@ class _LearningListPageState extends State<LearningListPage> {
           ),
           if (_selecting) ...[
             Text(
-              '长按复选框并滑过任务可连续勾选或取消。',
+              _supportsShiftSelection
+                  ? '按住 Shift 点击可选中连续任务；长按复选框滑动可勾选或取消。'
+                  : '长按复选框并滑过任务可连续勾选或取消。',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 4),
@@ -1634,7 +1715,7 @@ class _LearningListPageState extends State<LearningListPage> {
             icon: Icon(_selecting ? Icons.close : Icons.checklist),
             onPressed: () => setState(() {
               _selecting = !_selecting;
-              _selected.clear();
+              _clearSelection();
             }),
           ),
           IconButton(
