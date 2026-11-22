@@ -565,17 +565,20 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
         _showPlayerNotice('当前学习范围没有后续任务');
         return;
       }
-      final hasOnlineDetails =
-          next.bvid == _activeVideo.bvid &&
-          !_activeVideo.fromOfflineCache &&
-          _activeVideo.parts.any((part) => part.cid == next.partCid);
-      final VideoPreview nextVideo = hasOnlineDetails
+      final knownOnlineVideo =
+          next.bvid == _activeVideo.bvid && !_activeVideo.fromOfflineCache
           ? _activeVideo
+          : null;
+      final VideoPreview nextVideo =
+          knownOnlineVideo != null &&
+              knownOnlineVideo.parts.any((part) => part.cid == next.partCid)
+          ? knownOnlineVideo
           : await lookupLearningVideo(
               next,
               videoService: _bilibiliService,
               offlineVideoService: _offlineVideoService,
               preferCache: _playbackPreferences.preferOfflineCache,
+              knownOnlineVideo: knownOnlineVideo,
             );
       if (!mounted ||
           _activeVideo.bvid != bvid ||

@@ -6,11 +6,13 @@ import '../../services/playback_source_resolver.dart';
 
 /// Finds metadata for the exact saved BV/CID. An online response omitting the
 /// part is returned only so callers can report it as removed and retain progress.
+/// Reuse known online metadata when continuing within the same video.
 Future<VideoPreview> lookupLearningVideo(
   LearningListEntry entry, {
   required BilibiliService videoService,
   required OfflineVideoService offlineVideoService,
   required bool preferCache,
+  VideoPreview? knownOnlineVideo,
 }) async {
   final bvid = entry.bvid.trim();
   Future<VideoPreview?>? cacheLookup;
@@ -36,7 +38,7 @@ Future<VideoPreview> lookupLearningVideo(
     if (cached != null) return cached;
   }
   try {
-    final video = await videoService.lookupVideo(bvid);
+    final video = knownOnlineVideo ?? await videoService.lookupVideo(bvid);
     if (video.bvid != bvid) {
       throw const BilibiliLookupException('视频编号与学习任务不匹配。');
     }

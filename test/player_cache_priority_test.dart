@@ -210,6 +210,40 @@ void main() {
   );
 
   test(
+    'known same-video details still allow an exact cache without a refresh',
+    () async {
+      const knownOnlineVideo = VideoPreview(
+        bvid: _bvid,
+        cid: 137649198,
+        title: 'Only the first part remains online',
+        ownerName: 'Review',
+        parts: [_first],
+      );
+      final details = _Details(null);
+      final cache = ReviewOfflineLibrary();
+      final cached = await lookupLearningVideo(
+        _entry(),
+        videoService: details,
+        offlineVideoService: cache,
+        preferCache: false,
+        knownOnlineVideo: knownOnlineVideo,
+      );
+      expect(cached.fromOfflineCache, isTrue);
+      expect(cached.initialPart.cid, _target.cid);
+
+      final unavailable = await lookupLearningVideo(
+        _entry(cid: 999999),
+        videoService: details,
+        offlineVideoService: cache,
+        preferCache: false,
+        knownOnlineVideo: knownOnlineVideo,
+      );
+      expect(unavailable, same(knownOnlineVideo));
+      expect(details.lookupRequests, isEmpty);
+    },
+  );
+
+  test(
     'a different cached part cannot satisfy the original learning task',
     () async {
       // Generic metadata can include parts with no matching downloaded file.
