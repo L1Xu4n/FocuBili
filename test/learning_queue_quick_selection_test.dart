@@ -105,7 +105,7 @@ void main() {
   );
 
   testWidgets(
-    'Shift-click respects sorting, filters, and cleared anchors',
+    'desktop Shift-click follows the displayed order and ignores hidden or cleared anchors',
     (tester) async {
       final service = LearningListService();
       final folder = (await service.createFolder('数学')).folders.single;
