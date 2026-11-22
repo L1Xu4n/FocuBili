@@ -55,6 +55,9 @@ class _Playback extends FeedbackPlayback {
   final seeks = <Duration>[];
   final offsets = <Duration>[];
   final openedParts = <int>[];
+  final speedCalls = <double>[];
+  Completer<void>? holdSpeedWrite;
+  double? speedAtDispose;
 
   void emit(
     bool playing, {
@@ -70,6 +73,7 @@ class _Playback extends FeedbackPlayback {
       isPlaying: playing,
       playRequested: playRequested,
       isInPictureInPicture: inPictureInPicture,
+      speed: rate,
     ),
   );
 
@@ -101,6 +105,19 @@ class _Playback extends FeedbackPlayback {
 
   @override
   Future<void> seekBy(Duration offset) async => offsets.add(offset);
+
+  @override
+  Future<void> setPlaybackSpeed(double speed) async {
+    speedCalls.add(speed);
+    if (speed == 3) await holdSpeedWrite?.future;
+    await super.setPlaybackSpeed(speed);
+  }
+
+  @override
+  Future<void> dispose() {
+    speedAtDispose = rate;
+    return super.dispose();
+  }
 }
 
 class _Metadata implements VideoShotService {
@@ -596,6 +613,188 @@ void main() {
       expect(find.byTooltip('进入全屏'), findsOneWidget);
       expect(playback.commands, ['pause', 'play']);
     },
+  );
+
+  const windows = TargetPlatformVariant({TargetPlatform.windows});
+
+  testWidgets(
+    'Windows transport keys win after mouse-dismissed tools; Enter still opens tools',
+    (t) async {
+      final playback = _Playback();
+      await _mount(t, playback, _Metadata());
+      final trigger = find.byKey(const Key('more-settings-menu'));
+      final panel = find.byKey(const Key('player-tools-panel'));
+      final close = find.byKey(const Key('player-tools-close'));
+
+      Future<void> clickTools() async {
+        await t.tap(trigger, kind: PointerDeviceKind.mouse);
+        await t.pumpAndSettle();
+        expect(panel, findsOneWidget);
+      }
+
+      for (final dismiss in ['escape', 'close', 'outside']) {
+        await clickTools();
+        if (dismiss == 'escape') {
+          await t.sendKeyEvent(LogicalKeyboardKey.escape, platform: 'windows');
+        } else if (dismiss == 'close') {
+          await t.tap(close, kind: PointerDeviceKind.mouse);
+        } else {
+          await t.tapAt(const Offset(5, 5), kind: PointerDeviceKind.mouse);
+        }
+        await t.pumpAndSettle();
+        expect(panel, findsNothing);
+        expect(
+          t.widget<IconButton>(trigger).focusNode!.hasPrimaryFocus,
+          isTrue,
+        );
+
+        await t.sendKeyEvent(LogicalKeyboardKey.space, platform: 'windows');
+        await t.pumpAndSettle();
+        expect(panel, findsNothing);
+        expect(playback.commands.last, 'pause');
+        await t.sendKeyEvent(
+          LogicalKeyboardKey.mediaPlayPause,
+          platform: 'windows',
+        );
+        await t.pumpAndSettle();
+        expect(playback.commands.last, 'play');
+      }
+
+      await t.sendKeyEvent(LogicalKeyboardKey.arrowLeft, platform: 'windows');
+      await t.pump();
+      expect(playback.offsets, [const Duration(seconds: -5)]);
+      await t.sendKeyEvent(LogicalKeyboardKey.enter, platform: 'windows');
+      await t.pumpAndSettle();
+      expect(panel, findsOneWidget);
+      await t.sendKeyEvent(LogicalKeyboardKey.arrowRight, platform: 'windows');
+      await t.sendKeyEvent(
+        LogicalKeyboardKey.mediaPlayPause,
+        platform: 'windows',
+      );
+      await t.pumpAndSettle();
+      expect(playback.offsets, [const Duration(seconds: -5)]);
+      expect(playback.commands, [
+        'pause',
+        'play',
+        'pause',
+        'play',
+        'pause',
+        'play',
+      ]);
+      await t.tap(close, kind: PointerDeviceKind.mouse);
+      await t.pumpAndSettle();
+      await t.sendKeyEvent(LogicalKeyboardKey.keyF, platform: 'windows');
+      await t.pumpAndSettle();
+      expect(find.byTooltip('退出全屏'), findsOneWidget);
+      expect(panel, findsNothing);
+    },
+    variant: windows,
+  );
+
+  testWidgets(
+    'Windows Right taps seek once; a hold is fixed at 3× and restores previous speed',
+    (t) async {
+      final playback = _Playback()..rate = 1.5;
+      await _mount(
+        t,
+        playback,
+        _Metadata(),
+        configurePreferences: () =>
+            const PlaybackPreferencesService().saveLongPressPlaybackSpeed(2),
+      );
+      const key = LogicalKeyboardKey.arrowRight;
+      final indicator = find.byKey(const Key('temporary-triple-speed'));
+      await t.sendKeyDownEvent(key, platform: 'windows');
+      await t.pump(const Duration(milliseconds: 100));
+      expect(playback.offsets, isEmpty);
+      await t.sendKeyUpEvent(key, platform: 'windows');
+      await t.pump();
+      expect(playback.offsets, [const Duration(seconds: 5)]);
+      expect(playback.speedCalls, isEmpty);
+
+      await t.sendKeyDownEvent(key, platform: 'windows');
+      await t.pump(const Duration(milliseconds: 400));
+      expect(indicator, findsOneWidget);
+      expect(find.text('三倍速中>>'), findsOneWidget);
+      expect(playback.speedCalls, [3.0]);
+      await t.sendKeyRepeatEvent(key, platform: 'windows');
+      await t.pump(const Duration(milliseconds: 500));
+      expect(playback.speedCalls, [3.0]);
+      expect(playback.offsets, [const Duration(seconds: 5)]);
+      await t.sendKeyUpEvent(key, platform: 'windows');
+      await t.pumpAndSettle();
+      expect(playback.speedCalls, [3.0, 1.5]);
+      expect(playback.rate, 1.5);
+      expect(indicator, findsNothing);
+      expect(playback.offsets, [const Duration(seconds: 5)]);
+    },
+    variant: windows,
+  );
+
+  testWidgets(
+    'Windows Right restores on route and app focus loss; late keyup does not seek',
+    (t) async {
+      final playback = _Playback()..rate = 1.25;
+      await _mount(t, playback, _Metadata());
+      const key = LogicalKeyboardKey.arrowRight;
+      Future<void> hold() async {
+        await t.sendKeyDownEvent(key, platform: 'windows');
+        await t.pump(const Duration(milliseconds: 400));
+        expect(playback.rate, 3);
+      }
+
+      await hold();
+      final navigator = Navigator.of(t.element(_surface));
+      unawaited(
+        navigator.push<void>(
+          MaterialPageRoute<void>(
+            requestFocus: false,
+            builder: (_) => const Scaffold(body: Text('cover player')),
+          ),
+        ),
+      );
+      await t.pumpAndSettle();
+      expect(playback.rate, 1.25);
+      navigator.pop();
+      await t.pumpAndSettle();
+      await t.sendKeyUpEvent(key, platform: 'windows');
+      await t.pump();
+      expect(playback.offsets, isEmpty);
+
+      await hold();
+      t.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await t.pump();
+      expect(playback.rate, 1.25);
+      t.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await t.sendKeyUpEvent(key, platform: 'windows');
+      await t.pumpAndSettle();
+      expect(playback.offsets, isEmpty);
+    },
+    variant: windows,
+  );
+
+  testWidgets(
+    'Windows Right restore drains in-flight speed changes before player disposal',
+    (t) async {
+      final gate = Completer<void>();
+      final playback = _Playback()
+        ..rate = 1.75
+        ..holdSpeedWrite = gate;
+      await _mount(t, playback, _Metadata());
+      const key = LogicalKeyboardKey.arrowRight;
+      await t.sendKeyDownEvent(key, platform: 'windows');
+      await t.pump(const Duration(milliseconds: 400));
+      expect(playback.speedCalls, [3.0]);
+      await t.pumpWidget(const SizedBox.shrink());
+      expect(playback.speedAtDispose, isNull);
+      gate.complete();
+      await t.pumpAndSettle();
+      await t.sendKeyUpEvent(key, platform: 'windows');
+      expect(playback.speedCalls, [3.0, 1.75]);
+      expect(playback.speedAtDispose, 1.75);
+      expect(playback.offsets, isEmpty);
+    },
+    variant: windows,
   );
 
   testWidgets(

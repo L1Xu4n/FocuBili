@@ -134,7 +134,7 @@ extension _PlayerPageView on _PlayerPageState {
             onLongPressEnd: gesturesEnabled ? _stopTemporarySpeed : null,
             // 长按取消函数恢复界面状态且不提交未确认的进度。
             onLongPressCancel: gesturesEnabled
-                ? _cancelTemporaryLongPress
+                ? _cancelPointerTemporarySpeed
                 : null,
             // 横向拖动开始函数立即进入进度预览，并计算当前视频对应的拖动速度。
             onHorizontalDragStart: gesturesEnabled

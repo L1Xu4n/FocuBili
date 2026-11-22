@@ -41,6 +41,7 @@ class _Playback extends FeedbackPlayback {
 
   final Duration position;
   final seeks = <Duration>[];
+  final seekOffsets = <Duration>[];
   final parts = <int>[];
 
   void emit({Duration? at}) => controller.add(
@@ -64,6 +65,9 @@ class _Playback extends FeedbackPlayback {
 
   @override
   Future<void> seekTo(Duration position) async => seeks.add(position);
+
+  @override
+  Future<void> seekBy(Duration offset) async => seekOffsets.add(offset);
 }
 
 class _Metadata implements VideoShotService {
@@ -581,7 +585,7 @@ void main() {
   );
 
   testWidgets(
-    'timeline accessibility gestures and keyboard seek without preview',
+    'timeline accessibility actions keep slider steps; hardware Right seeks 5 seconds',
     (t) async {
       final p = _Playback(position: const Duration(seconds: 100));
       final metadata = _Metadata((_) => null);
@@ -620,8 +624,8 @@ void main() {
       expect(p.seeks, [
         const Duration(milliseconds: 610150),
         const Duration(seconds: 100),
-        const Duration(milliseconds: 610150),
       ]);
+      expect(p.seekOffsets, [const Duration(seconds: 5)]);
       expect(metadata.calls, isEmpty);
       expect(_dragCard, findsNothing);
       await _remove(t, cache);

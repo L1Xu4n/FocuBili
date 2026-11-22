@@ -73,6 +73,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     _externalNavigationSuspended = true;
     _sourceGeneration++;
     _clearPlayerPointerForTransition();
+    if (_appPlatform.isDesktop) await _settleTemporaryPlaybackSpeed();
     await _suspendAbRepeatForSource();
     final service = _playbackService;
     if (service is! NativePlaybackService || service.ownsPlatformChannel) {
@@ -117,6 +118,8 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
   }
 
   Future<void> _settleTemporaryPlaybackSpeed();
+
+  void _cancelDesktopRightShortcut();
 
   /// Opens the chosen source through the existing backend and retains player controls.
   Future<void> _openPlaybackSource(
@@ -643,6 +646,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
         snapshot.phase == PlaybackPhase.ended ||
         snapshot.isInPictureInPicture) {
       _hiddenGesturePauseSource = null;
+      if (_appPlatform.isDesktop) _cancelDesktopRightShortcut();
     }
     final LearningListEntry? currentLearningEntry = _learningListEntry;
     final bool completedLearningEntry =
