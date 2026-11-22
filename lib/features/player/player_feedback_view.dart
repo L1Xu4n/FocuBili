@@ -347,9 +347,9 @@ extension _PlayerFeedbackView on _PlayerPageState {
               if (_temporarySpeedActive)
                 PlayerNoticeCard(
                   key: const Key('temporary-triple-speed'),
-                  message: _playbackPreferences.longPressPlaybackSpeed == 3
+                  message: _activeTemporarySpeed == 3
                       ? '三倍速中>>'
-                      : '${_playbackPreferences.longPressPlaybackSpeed}倍速中>>',
+                      : '$_activeTemporarySpeed倍速中>>',
                 ),
               for (final entry in _playerNotices.entries)
                 PlayerNoticeCard(

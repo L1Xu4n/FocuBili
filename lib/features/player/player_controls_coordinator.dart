@@ -23,6 +23,7 @@ mixin _PlayerControlsCoordinator
     reverseCurve: Curves.easeIn,
   );
   static const double _expandedPartItemHeight = 76;
+  bool _desktopWindowActive = true;
   bool get _playerToolsOpen;
 
   /// 说明控制层已经安排自动隐藏，供播放快照协调器避免重复创建计时器。
@@ -43,7 +44,7 @@ mixin _PlayerControlsCoordinator
 
   /// Mouse and keyboard transport reveal the controls, but never replace a
   /// source/seek transition or interfere with a playback prompt.
-  bool _toggleDesktopPlayback() {
+  bool _toggleDesktopPlayback({bool? play}) {
     final snapshot = _playbackSnapshot;
     final hasMedia = switch (snapshot.phase) {
       PlaybackPhase.ready || PlaybackPhase.ended => true,
@@ -71,9 +72,10 @@ mixin _PlayerControlsCoordinator
     _showPlayerControls();
     // A buffering video can report isPlaying=false even though it will resume
     // by itself. Space/click should pause that intent, not issue another play.
-    final shouldPlay =
-        snapshot.phase == PlaybackPhase.ended ||
-        !(snapshot.playRequested ?? snapshot.isPlaying);
+    final playing = snapshot.playRequested ?? snapshot.isPlaying;
+    final ended = snapshot.phase == PlaybackPhase.ended;
+    final shouldPlay = play ?? (ended || !playing);
+    if (play != null && shouldPlay == (!ended && playing)) return true;
     unawaited(_setPlaybackActive(shouldPlay));
     return true;
   }
@@ -276,7 +278,11 @@ mixin _PlayerControlsCoordinator
 
   /// 请求原生播放器切换倍速，并让控制层继续显示以便用户确认选择。
   Future<void> _changePlaybackSpeed(double speed) {
-    if (_temporarySpeedActive) setState(() => _temporarySpeedActive = false);
+    _clearDesktopRightPress();
+    if (_temporarySpeedActive) {
+      _temporarySpeedSource = null;
+      setState(() => _temporarySpeedActive = false);
+    }
     _showPlayerControls();
     return _queuePlaybackSpeed(speed, temporary: false);
   }
@@ -468,11 +474,22 @@ mixin _PlayerControlsCoordinator
     );
   }
 
-  bool _isDesktopRouteShortcut(LogicalKeyboardKey key) =>
-      key == LogicalKeyboardKey.space || key == LogicalKeyboardKey.escape;
+  static const _desktopPlaybackKeys = [
+    LogicalKeyboardKey.space,
+    LogicalKeyboardKey.arrowLeft,
+    LogicalKeyboardKey.arrowRight,
+    LogicalKeyboardKey.arrowUp,
+    LogicalKeyboardKey.arrowDown,
+    LogicalKeyboardKey.keyF,
+    LogicalKeyboardKey.mediaPlayPause,
+    LogicalKeyboardKey.mediaPlay,
+    LogicalKeyboardKey.mediaPause,
+  ];
 
   bool _desktopShortcutRouteIsCurrent() {
-    if (!mounted || _externalNavigationSuspended) return false;
+    if (!mounted || !_desktopWindowActive || _externalNavigationSuspended) {
+      return false;
+    }
     final route = ModalRoute.of(context);
     if (route?.isCurrent != true) return false;
     final focusContext = FocusManager.instance.primaryFocus?.context;
@@ -480,6 +497,57 @@ mixin _PlayerControlsCoordinator
         ? null
         : ModalRoute.of(focusContext);
     return focusRoute == null || identical(focusRoute, route);
+  }
+
+  bool _desktopCanHandlePlaybackKeys() =>
+      _desktopShortcutRouteIsCurrent() &&
+      !_controlsLocked &&
+      !_playbackSnapshot.isInPictureInPicture &&
+      !_playerToolsOpen &&
+      !_partSelectorExpanded &&
+      !_abRepeatEditorVisible &&
+      !_interactivePromptVisible &&
+      !_completionPromptVisible &&
+      !_isTextEditingFocused();
+
+  void _handleDesktopPlayerFocusChanged() {
+    if (mounted &&
+        _desktopRightKey != null &&
+        !_desktopCanHandlePlaybackKeys()) {
+      _cancelDesktopRightShortcut();
+    }
+  }
+
+  /// Route-owned transport beats the default Flutter shortcuts for focused
+  /// toolbar controls. The same controls remain reachable with Tab and Enter;
+  /// actual dialogs and editors keep their local keys.
+  KeyEventResult _handleDesktopPlayerKeys(KeyEvent event) {
+    final key = event.logicalKey;
+    if (!_desktopPlaybackKeys.contains(key)) return KeyEventResult.ignored;
+    final keyboard = HardwareKeyboard.instance;
+    if (!_desktopCanHandlePlaybackKeys() ||
+        keyboard.isAltPressed ||
+        keyboard.isControlPressed ||
+        keyboard.isMetaPressed ||
+        keyboard.isShiftPressed) {
+      if (key == LogicalKeyboardKey.arrowRight) _cancelDesktopRightShortcut();
+      return KeyEventResult.ignored;
+    }
+    if (key == LogicalKeyboardKey.arrowRight) {
+      _handleDesktopRight(event, _desktopCanHandlePlaybackKeys);
+    } else if (event is KeyDownEvent && !event.synthesized) {
+      switch (key) {
+        case LogicalKeyboardKey.mediaPlay:
+          _toggleDesktopPlayback(play: true);
+        case LogicalKeyboardKey.mediaPause:
+          _toggleDesktopPlayback(play: false);
+        case LogicalKeyboardKey.mediaPlayPause:
+          _toggleDesktopPlayback();
+        default:
+          _handlePlayerShortcut(event);
+      }
+    }
+    return KeyEventResult.handled;
   }
 
   /// The notebook or A/B editor can explicitly handle Escape while editing
@@ -501,20 +569,21 @@ mixin _PlayerControlsCoordinator
     return _handlePlayerShortcut(event);
   }
 
-  /// A route-level fallback after focused controls have had a chance to handle
-  /// Space/Escape (including dialogs and editable fields).
-  KeyEventResult _handleDesktopPlayerShortcut(KeyEvent event) {
+  /// Escape keeps the focused widget's first chance to dismiss its own UI.
+  KeyEventResult _handleDesktopPlayerEscape(KeyEvent event) {
     if (event is! KeyDownEvent ||
-        !_isDesktopRouteShortcut(event.logicalKey) ||
+        event.logicalKey != LogicalKeyboardKey.escape ||
         !_desktopShortcutRouteIsCurrent()) {
       return KeyEventResult.ignored;
     }
     return _handlePlayerShortcut(event);
   }
 
-  /// 保留原有焦点快捷键，但桌面空格与 Esc 只由当前路由入口处理。
+  /// 保留触屏焦点快捷键，桌面快捷键只由当前路由入口处理。
   KeyEventResult _handlePlayerKeyEvent(FocusNode _, KeyEvent event) =>
-      _appPlatform.isDesktop && _isDesktopRouteShortcut(event.logicalKey)
+      _appPlatform.isDesktop &&
+          (_desktopPlaybackKeys.contains(event.logicalKey) ||
+              event.logicalKey == LogicalKeyboardKey.escape)
       ? KeyEventResult.ignored
       : _handlePlayerShortcut(event);
 
@@ -533,7 +602,9 @@ mixin _PlayerControlsCoordinator
         return KeyEventResult.handled;
       }
     }
-    if (_notePeekHandleFocus.hasFocus && key == LogicalKeyboardKey.space) {
+    if (!_appPlatform.isDesktop &&
+        _notePeekHandleFocus.hasFocus &&
+        key == LogicalKeyboardKey.space) {
       // Run the focused button action instead of the player's Space shortcut.
       return KeyEventResult.ignored;
     }

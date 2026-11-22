@@ -3,9 +3,13 @@ part of 'player_page.dart';
 /// 标识一次竖向滑动正在调整亮度、音量，或因系统手势区而不做处理。
 enum _VerticalAdjustmentMode { none, brightness, volume }
 
+enum _TemporarySpeedSource { pointer, keyboard }
+
 /// 封装播放器画面的双击、长按、横滑、竖滑规则以及短暂反馈状态。
 mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
   static const Duration _gestureFeedbackDuration = Duration(seconds: 3);
+  static const _desktopRightHoldDelay = Duration(milliseconds: 350);
+  static const _desktopRightHoldSpeed = 3.0;
   static const double _fullscreenBottomGestureExclusionHeight = 72;
   static const double _fullscreenTopGestureExclusionHeight = 56;
   static const double _fullscreenHorizontalGestureSideExclusionWidth = 48;
@@ -23,6 +27,15 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
   int _playbackActionSequence = 0;
   bool? _playbackActionPlaying;
   bool _temporarySpeedActive = false;
+  _TemporarySpeedSource? _temporarySpeedSource;
+  bool _keyboardSpeedMayBeApplied = false;
+  PhysicalKeyboardKey? _desktopRightKey;
+  Timer? _desktopRightTimer;
+  bool _desktopRightHeld = false;
+  double get _activeTemporarySpeed =>
+      _temporarySpeedSource == _TemporarySpeedSource.keyboard
+      ? _desktopRightHoldSpeed
+      : _playbackPreferences.longPressPlaybackSpeed;
   @override
   bool _horizontalScrubbing = false;
   double? _requestedNormalSpeed;
@@ -142,12 +155,25 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
   String _formatSeconds(int totalSeconds);
 
   /// 取消手势反馈计时器并使晚到的预览图请求失效。
-  void _disposePlayerGestureCoordinator() {
+  Future<void> _disposePlayerGestureCoordinator() {
+    _clearDesktopRightPress();
     _playbackSpeedRequest++;
     _seekFeedbackTimer?.cancel();
     _doubleTapFeedbackTimer?.cancel();
     _playbackActionTimer?.cancel();
     _videoShotRequestToken += 1;
+    if (!_keyboardSpeedMayBeApplied) return Future<void>.value();
+    // A platform speed write may already be in flight. Put the restore after
+    // that write and ahead of releasing the player; do not touch widget state.
+    final speed = _normalPlaybackSpeed;
+    final player = _playbackService;
+    return _playbackSpeedCommands.then((_) async {
+      try {
+        await player.setPlaybackSpeed(speed);
+      } catch (_) {
+        // Disposal must still release the backend if it is already closing.
+      }
+    });
   }
 
   /// 记录双击第一次落点，供后续判断左中右分区手势使用。
@@ -237,28 +263,78 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
   }
 
   /// 长按使用已设置的临时倍速，恢复过程中再次长按也不会把临时速度当成原速度。
-  void _startTemporarySpeed(LongPressStartDetails details) {
+  void _startTemporarySpeed(LongPressStartDetails details) =>
+      _beginTemporarySpeed(
+        _playbackPreferences.longPressPlaybackSpeed,
+        _TemporarySpeedSource.pointer,
+      );
+
+  void _beginTemporarySpeed(double speed, _TemporarySpeedSource source) {
     if (!_playing || _temporarySpeedActive || _horizontalScrubbing) return;
     _requestedNormalSpeed ??= _playbackSpeed;
+    _temporarySpeedSource = source;
+    if (source == _TemporarySpeedSource.keyboard) {
+      _keyboardSpeedMayBeApplied = true;
+    }
     _stopControlsAutoHideTimer();
     setState(() => _temporarySpeedActive = true);
-    unawaited(
-      _queuePlaybackSpeed(
-        _playbackPreferences.longPressPlaybackSpeed,
-        temporary: true,
-      ),
-    );
+    unawaited(_queuePlaybackSpeed(speed, temporary: true));
   }
 
   void _stopTemporarySpeed(LongPressEndDetails details) =>
-      _cancelTemporaryLongPress();
+      _cancelPointerTemporarySpeed();
+
+  void _cancelPointerTemporarySpeed() =>
+      _cancelTemporaryLongPress(_TemporarySpeedSource.pointer);
 
   /// 松手、指针取消、暂停或切换分 P 时还原，不沿用临时速度。
-  void _cancelTemporaryLongPress() {
+  void _cancelTemporaryLongPress([_TemporarySpeedSource? source]) {
+    if (source != _TemporarySpeedSource.pointer) _clearDesktopRightPress();
+    if (source != null && source != _temporarySpeedSource) return;
     if (!_temporarySpeedActive) return;
+    _temporarySpeedSource = null;
     setState(() => _temporarySpeedActive = false);
     unawaited(_queuePlaybackSpeed(_normalPlaybackSpeed, temporary: false));
     _restartControlsAutoHideTimer();
+  }
+
+  void _clearDesktopRightPress() {
+    _desktopRightTimer?.cancel();
+    _desktopRightTimer = null;
+    _desktopRightKey = null;
+    _desktopRightHeld = false;
+  }
+
+  @override
+  void _cancelDesktopRightShortcut() =>
+      _cancelTemporaryLongPress(_TemporarySpeedSource.keyboard);
+
+  /// Decide tap versus hold before seeking; OS key repeats never seek or
+  /// queue additional speed commands. A synthetic release just cancels.
+  void _handleDesktopRight(KeyEvent event, bool Function() canHold) {
+    if (event.synthesized) {
+      if (event.physicalKey == _desktopRightKey) _cancelDesktopRightShortcut();
+      return;
+    }
+    if (event is KeyDownEvent && _desktopRightKey == null) {
+      _desktopRightKey = event.physicalKey;
+      _desktopRightTimer = Timer(_desktopRightHoldDelay, () {
+        _desktopRightTimer = null;
+        if (!mounted || !canHold()) {
+          _clearDesktopRightPress();
+          return;
+        }
+        _desktopRightHeld = true;
+        _beginTemporarySpeed(
+          _desktopRightHoldSpeed,
+          _TemporarySpeedSource.keyboard,
+        );
+      });
+    } else if (event is KeyUpEvent && event.physicalKey == _desktopRightKey) {
+      final tap = !_desktopRightHeld;
+      _cancelDesktopRightShortcut();
+      if (tap) _seekBy(5, showFeedback: true);
+    }
   }
 
   @override
@@ -277,7 +353,10 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
       try {
         await _playbackService.setPlaybackSpeed(speed);
         if (!mounted || request != _playbackSpeedRequest) return;
-        if (!temporary) _requestedNormalSpeed = null;
+        if (!temporary) {
+          _requestedNormalSpeed = null;
+          _keyboardSpeedMayBeApplied = false;
+        }
         setState(() => _playbackSpeed = speed);
         _syncDanmakuAnimation(_playbackSnapshot.copyWith(speed: speed));
       } catch (error) {
@@ -564,7 +643,7 @@ mixin _PlayerGestureCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
   /// 处理系统级指针取消，撤销横向预览、临时倍速和竖滑状态。
   void _handlePlayerPointerCancel(PointerCancelEvent event) {
     _cancelHorizontalScrub();
-    _cancelTemporaryLongPress();
+    _cancelPointerTemporarySpeed();
     if (_verticalAdjustmentMode != _VerticalAdjustmentMode.none) {
       _verticalAdjustmentMode = _VerticalAdjustmentMode.none;
       _scheduleSeekFeedbackClear();

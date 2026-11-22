@@ -659,7 +659,7 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets('窄横屏仍可用 Escape 和空格操作笔记把手，转竖屏回到原稿', (tester) async {
+  testWidgets('窄横屏仍可用 Escape 和回车操作笔记把手，转竖屏回到原稿', (tester) async {
     final playback = _PeekPlayback(startsPlaying: false);
     final boundary = await _mount(
       tester,
@@ -677,7 +677,7 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await _paint(tester);
     expect(_handle.hitTestable(), findsOneWidget);
-    await tester.sendKeyEvent(LogicalKeyboardKey.space);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await _paint(tester);
     expect(_handle, findsNothing);
     expect(_titleField.hitTestable(), findsOneWidget);

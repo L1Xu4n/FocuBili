@@ -466,8 +466,10 @@ class _PlayerPageState extends State<PlayerPage>
     _appPlatform = widget.appPlatform ?? AppPlatformDetector.current;
     if (_appPlatform.isDesktop) {
       FocusManager.instance
+        ..addListener(_handleDesktopPlayerFocusChanged)
         ..addEarlyKeyEventHandler(_handleDesktopEditorEscape)
-        ..addLateKeyEventHandler(_handleDesktopPlayerShortcut);
+        ..addEarlyKeyEventHandler(_handleDesktopPlayerKeys)
+        ..addLateKeyEventHandler(_handleDesktopPlayerEscape);
     }
     _problemDiagnosticsService = ProblemDiagnosticsService();
     _playbackPreferencesService =
@@ -508,6 +510,9 @@ class _PlayerPageState extends State<PlayerPage>
     super.didChangeDependencies();
     if (_appPlatform.isDesktop && ModalRoute.isCurrentOf(context) == false) {
       _desktopTapRecognizer?.cancelPendingTap();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _handleDesktopPlayerFocusChanged();
+      });
     }
     _restoreNotesForInlineLayout();
     _bindFocusController(
@@ -526,6 +531,7 @@ class _PlayerPageState extends State<PlayerPage>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _handleAbRepeatLifecycle(state);
+    _desktopWindowActive = state == AppLifecycleState.resumed;
     if (state == AppLifecycleState.resumed) {
       unawaited(_loadCurrentVideoNotes());
     } else {
@@ -563,8 +569,10 @@ class _PlayerPageState extends State<PlayerPage>
   void dispose() {
     if (_appPlatform.isDesktop) {
       FocusManager.instance
+        ..removeListener(_handleDesktopPlayerFocusChanged)
         ..removeEarlyKeyEventHandler(_handleDesktopEditorEscape)
-        ..removeLateKeyEventHandler(_handleDesktopPlayerShortcut);
+        ..removeEarlyKeyEventHandler(_handleDesktopPlayerKeys)
+        ..removeLateKeyEventHandler(_handleDesktopPlayerEscape);
     }
     _tagSession.dispose();
     _playerToolsSession?.closeAfterOwnerDisposed();
@@ -583,11 +591,16 @@ class _PlayerPageState extends State<PlayerPage>
     _disposePlayerVideoCoordinator();
     _disposePlayerPlaybackSession();
     _disposePlayerFocusCoordinator();
-    _disposePlayerGestureCoordinator();
+    final speedDrain = _disposePlayerGestureCoordinator();
     _disposePlayerNotesWorkspace();
     _disposePlayerOverlayCoordinator();
     _disposeDescriptionRecognizers();
-    unawaited(abRepeatDrain.whenComplete(_playbackService.dispose));
+    unawaited(
+      Future.wait([
+        abRepeatDrain,
+        speedDrain,
+      ]).whenComplete(_playbackService.dispose),
+    );
     unawaited(_restoreSystemUi());
     super.dispose();
   }
