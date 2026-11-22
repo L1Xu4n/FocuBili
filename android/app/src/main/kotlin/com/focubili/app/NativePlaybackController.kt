@@ -3068,6 +3068,9 @@ class NativePlaybackController(
             "playbackEvent",
             mapOf(
                 "phase" to playbackPhase,
+                "sourceBvid" to currentBvid,
+                "sourceCid" to currentCid,
+                "sourceLocal" to localSource,
                 "canContinueAsGuest" to canContinueAsGuest,
                 "isPlaying" to (nativePlayer?.isPlaying == true),
                 "playRequested" to nativePlayer?.playWhenReady,

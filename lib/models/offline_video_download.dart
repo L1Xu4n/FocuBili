@@ -88,7 +88,7 @@ class OfflineVideoDownload {
   }
 
   /// Reconstructs playable metadata without requiring an online lookup first.
-  VideoPreview toPreview() => VideoPreview(
+  VideoPreview toPreview({VideoPart? fallbackPart}) => VideoPreview(
     bvid: bvid,
     cid: cid,
     title: originalTitle.isEmpty ? title : originalTitle,
@@ -96,15 +96,18 @@ class OfflineVideoDownload {
     thumbnailUrl: coverUrl,
     duration: duration,
     fromOfflineCache: true,
-    parts: parts.isNotEmpty
+    parts: parts.any((part) => part.cid == cid)
         ? parts
         : [
-            VideoPart(
-              pageNumber: 1,
-              cid: cid,
-              title: title,
-              duration: duration,
-            ),
+            if (fallbackPart?.cid == cid)
+              fallbackPart!
+            else
+              VideoPart(
+                pageNumber: 1,
+                cid: cid,
+                title: title,
+                duration: duration,
+              ),
           ],
   );
 

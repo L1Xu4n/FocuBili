@@ -43,6 +43,10 @@ void main() {
         await resolver.resolve(file.bvid, file.cid + 1, preferLocal: true),
         isNull,
       );
+      expect(
+        await resolver.resolve('BV1xx411c7mD', file.cid, preferLocal: true),
+        isNull,
+      );
       await expectLater(
         resolver.resolve(
           file.bvid,

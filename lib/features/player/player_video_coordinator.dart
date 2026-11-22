@@ -376,6 +376,7 @@ mixin _PlayerVideoCoordinator
         part: _currentPart,
         quality: quality,
         initialPosition: _openingResumePlan!.position,
+        allowStartupFallback: shouldResume,
       );
       await service.setPlaybackSpeed(speed);
       if (!shouldResume) {

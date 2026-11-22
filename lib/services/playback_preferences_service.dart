@@ -299,6 +299,7 @@ class PlaybackPreferencesService {
   Future<void> savePreferOfflineCache(bool enabled) async {
     final preferences = await SharedPreferences.getInstance();
     if (!await preferences.setBool(_preferOfflineCacheKey, enabled)) {
+      await preferences.reload();
       throw StateError('Playback source preference was not saved');
     }
   }

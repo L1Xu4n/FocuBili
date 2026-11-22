@@ -115,6 +115,7 @@ class PlaybackSnapshot {
     this.restoredPosition = Duration.zero,
     this.isRestoringPosition = false,
     this.isInPictureInPicture = false,
+    this.sourceIdentity,
     this.message,
   });
 
@@ -136,6 +137,8 @@ class PlaybackSnapshot {
   final Duration restoredPosition;
   final bool isRestoringPosition;
   final bool isInPictureInPicture;
+  // Identifies asynchronous Android startup results without using display text.
+  final ({String bvid, int cid, bool local})? sourceIdentity;
   final String? message;
 
   /// 根据方法通道传回的字典创建播放状态，避免平台数据直接进入页面。
@@ -204,6 +207,16 @@ class PlaybackSnapshot {
       ),
       isRestoringPosition: values['isRestoringPosition'] == true,
       isInPictureInPicture: values['isInPictureInPicture'] == true,
+      sourceIdentity: switch ((
+        values['sourceBvid'],
+        values['sourceCid'],
+        values['sourceLocal'],
+      )) {
+        (final String bvid, final int cid, final bool local)
+            when bvid.isNotEmpty && cid > 0 =>
+          (bvid: bvid, cid: cid, local: local),
+        _ => null,
+      },
       message: values['message'] as String?,
     );
   }
@@ -246,6 +259,7 @@ class PlaybackSnapshot {
       restoredPosition: restoredPosition ?? this.restoredPosition,
       isRestoringPosition: isRestoringPosition ?? this.isRestoringPosition,
       isInPictureInPicture: isInPictureInPicture ?? this.isInPictureInPicture,
+      sourceIdentity: sourceIdentity,
       message: clearMessage ? null : (message ?? this.message),
     );
   }

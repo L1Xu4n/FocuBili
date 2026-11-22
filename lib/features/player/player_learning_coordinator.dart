@@ -565,9 +565,18 @@ mixin _PlayerLearningCoordinator on State<PlayerPage>, _PlayerPlaybackSession {
         _showPlayerNotice('当前学习范围没有后续任务');
         return;
       }
-      final VideoPreview nextVideo = next.bvid == _activeVideo.bvid
+      final hasOnlineDetails =
+          next.bvid == _activeVideo.bvid &&
+          !_activeVideo.fromOfflineCache &&
+          _activeVideo.parts.any((part) => part.cid == next.partCid);
+      final VideoPreview nextVideo = hasOnlineDetails
           ? _activeVideo
-          : await _bilibiliService.lookupVideo(next.bvid);
+          : await lookupLearningVideo(
+              next,
+              videoService: _bilibiliService,
+              offlineVideoService: _offlineVideoService,
+              preferCache: _playbackPreferences.preferOfflineCache,
+            );
       if (!mounted ||
           _activeVideo.bvid != bvid ||
           _currentPart.cid != part.cid) {

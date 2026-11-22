@@ -14,6 +14,7 @@ class PlaybackSourceResolver {
     required bool preferLocal,
     bool requireLocal = false,
   }) async {
+    if (!preferLocal && !requireLocal) return null;
     List<OfflineVideoDownload> files;
     try {
       files = await library.loadDownloads();
@@ -22,9 +23,7 @@ class PlaybackSourceResolver {
       return null;
     }
     for (final file in files) {
-      if (file.bvid == bvid &&
-          file.cid == cid &&
-          (preferLocal || requireLocal)) {
+      if (file.bvid == bvid && file.cid == cid) {
         return file;
       }
     }
