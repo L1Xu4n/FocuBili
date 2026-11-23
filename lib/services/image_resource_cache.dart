@@ -144,6 +144,7 @@ class ImageResourceCache extends ChangeNotifier {
   }
 
   /// Loads validated bytes, sharing each persisted download lease.
+  /// Rechecks the cache revision after retrying a load blocked by a writer.
   Future<CachedImageBytes> _load(
     String url,
     Map<String, String> headers,
@@ -252,7 +253,7 @@ class ImageResourceCache extends ChangeNotifier {
           if (waiters?.isEmpty == true) _directoryWaiters.remove(directory);
         }
         _checkRevision(revision);
-        return _load(url, headers, key, revision);
+        return await _load(url, headers, key, revision);
       }
       _checkRevision(revision);
       if (previous != null &&

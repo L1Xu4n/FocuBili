@@ -214,6 +214,7 @@ class BilibiliAuthService {
   }
 
   /// 每次先读取真实 Cookie，再合并同一快照的展示请求。
+  /// 等待共享验证完成，统一处理会话读取错误。
   Future<BilibiliSessionState> _loadDisplaySession() async {
     try {
       await _accountWrites;
@@ -227,7 +228,7 @@ class BilibiliAuthService {
         );
       }
       if (cookie.isEmpty) {
-        return _loadScopedSession(
+        return await _loadScopedSession(
           reuseUnchangedSession: false,
           displayCookie: cookie,
           displayEpoch: _display.epoch,
@@ -244,7 +245,7 @@ class BilibiliAuthService {
       // 按当前 Zone 隔离在途单飞表，避免不同测试 FakeAsync Zone 互相等待已结束的孤儿 Future。
       final pendingKey = (Zone.current, key);
       final pending = _display.pending[pendingKey];
-      if (pending != null) return pending;
+      if (pending != null) return await pending;
       final epoch = _display.epoch;
       final work = _loadScopedSession(
         reuseUnchangedSession: false,
