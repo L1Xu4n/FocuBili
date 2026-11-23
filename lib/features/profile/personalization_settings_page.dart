@@ -1,13 +1,17 @@
 import 'video_tag_setting.dart';
 import 'dart:async';
+import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/layout/adaptive_page_frame.dart';
 import '../../core/router/app_router.dart';
 import '../../core/theme/app_theme.dart';
 import '../../models/playback_preferences.dart';
 import '../../services/app_behavior_preferences_service.dart';
+import '../../services/app_icon_service.dart';
 import '../../services/playback_preferences_service.dart';
 import '../../services/app_layout_preferences_service.dart';
 import '../../services/app_update_service.dart';
@@ -78,6 +82,8 @@ class PersonalizationSettingsPage extends StatefulWidget {
 class _PersonalizationSettingsPageState
     extends State<PersonalizationSettingsPage>
     with WidgetsBindingObserver {
+  /// 当前自定义应用图标路径（null = 使用默认图标）。
+  final ValueNotifier<String?> _customIconPath = ValueNotifier<String?>(null);
   PlaybackPreferences _preferences = const PlaybackPreferences();
   FocusPreferences _focusPreferences = const FocusPreferences();
   bool _loading = true;
@@ -1370,6 +1376,128 @@ class _PersonalizationSettingsPageState
     );
   }
 
+  /// 自定义应用图标：改任务栏图标，可选在桌面生成带新图标的快捷方式。
+  Widget _buildCustomAppIconTile() {
+    return ValueListenableBuilder<String?>(
+      valueListenable: _customIconPath,
+      builder: (BuildContext context, String? path, Widget? _) {
+        final bool custom = path != null && path.isNotEmpty;
+        return ListTile(
+          key: const Key('custom-app-icon-tile'),
+          leading: const Icon(Icons.apps),
+          title: const Text('应用图标'),
+          subtitle: Text(custom ? '已使用自定义图标（任务栏已同步）' : '默认图标'),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              if (custom)
+                TextButton(
+                  key: const Key('reset-app-icon'),
+                  onPressed: () => unawaited(_resetAppIcon()),
+                  child: const Text('恢复默认'),
+                ),
+              TextButton(
+                key: const Key('pick-app-icon'),
+                onPressed: () => unawaited(_pickAppIcon()),
+                child: Text(custom ? '更换' : '选择图片'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// 选择图片 → 询问是否创建桌面快捷方式 → 应用。
+  Future<void> _pickAppIcon() async {
+    final FilePickerResult? picked = await FilePicker.pickFiles(
+      type: FileType.image,
+      withData: false,
+    );
+    final String? sourcePath = picked?.files.single.path;
+    if (sourcePath == null || sourcePath.isEmpty || !mounted) return;
+
+    bool createShortcut = false;
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) => StatefulBuilder(
+        builder: (BuildContext context, StateSetter setDialogState) {
+          return AlertDialog(
+            title: const Text('应用自定义图标'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Text('任务栏图标会立即更新。'),
+                const SizedBox(height: 8),
+                CheckboxListTile(
+                  key: const Key('create-desktop-shortcut'),
+                  contentPadding: EdgeInsets.zero,
+                  value: createShortcut,
+                  onChanged: (bool? value) =>
+                      setDialogState(() => createShortcut = value ?? false),
+                  title: const Text('同时在桌面创建快捷方式'),
+                  subtitle: const Text('桌面图标使用同一张图片'),
+                ),
+              ],
+            ),
+            actions: <Widget>[
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('应用'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      await const AppIconService().applyCustomIcon(
+        File(sourcePath),
+        createShortcut: createShortcut,
+      );
+      _customIconPath.value = sourcePath;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(createShortcut ? '图标已更新，桌面快捷方式已创建' : '任务栏图标已更新'),
+          ),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('图标应用失败：$error')));
+      }
+    }
+  }
+
+  /// 恢复默认图标并删除自定义快捷方式。
+  Future<void> _resetAppIcon() async {
+    try {
+      await const AppIconService().resetToDefault();
+      _customIconPath.value = null;
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('已恢复默认图标')));
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('恢复默认图标失败：$error')));
+      }
+    }
+  }
+
   /// 创建“外观与应用”设置卡，把主题、权限、更新、缓存和版本入口集中展示。
   SettingsSearchSection _buildApplicationSection(
     AppUpdateController updateController,
@@ -1389,6 +1517,8 @@ class _PersonalizationSettingsPageState
         if ((widget.appPlatform ?? AppPlatformDetector.current).isMobile)
           _buildLayoutModeTile(),
         _buildThemeModeTile(themeModeController),
+        if (!(widget.appPlatform ?? AppPlatformDetector.current).isMobile)
+          _buildCustomAppIconTile(),
         const VideoTagSetting(key: Key('video-tag-mode')),
         ListTile(
           key: const Key('ui-text-size-preference'),
