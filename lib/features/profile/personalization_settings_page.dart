@@ -129,6 +129,14 @@ class _PersonalizationSettingsPageState
   @override
   void initState() {
     super.initState();
+    // 读取已保存的自定义图标，避免把「自定义」误显示成「默认」。
+    unawaited(() async {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      final String? saved = prefs.getString(AppIconService.iconPathKey);
+      if (saved != null && saved.isNotEmpty && await File(saved).exists()) {
+        _customIconPath.value = saved;
+      }
+    }());
     if (widget.showLayoutSettings) {
       _settingsLevel = _SettingsLevel.appearanceAndApplication;
     }
