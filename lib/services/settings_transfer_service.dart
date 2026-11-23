@@ -61,6 +61,9 @@ class SettingsTransferService {
     'playback_preferences.subtitle_font_size': _SettingType.decimal,
     'playback_preferences.two_finger_video_transform': _SettingType.boolean,
     'playback_preferences.prefer_offline_cache': _SettingType.boolean,
+    PlaybackPreferencesService.codecPreferenceKey: _SettingType.text,
+    PlaybackPreferencesService.wifiOnlyOfflineDownloadsKey:
+        _SettingType.boolean,
     'playback_preferences.wifi_default_quality': _SettingType.integer,
     'playback_preferences.mobile_default_quality': _SettingType.integer,
     'focubili_danmaku_preferences_v1': _SettingType.json,
@@ -72,7 +75,9 @@ class SettingsTransferService {
     DeviceSettingsRuntimeAdapter.enabledKey: _SettingType.boolean,
     DeviceSettingsRuntimeAdapter.notificationsKey: _SettingType.boolean,
     DeviceSettingsRuntimeAdapter.backgroundKey: _SettingType.boolean,
+    DeviceSettingsRuntimeAdapter.wifiOnlyBackgroundKey: _SettingType.boolean,
     DeviceSettingsRuntimeAdapter.imageCapacityKey: _SettingType.integer,
+    DeviceSettingsRuntimeAdapter.androidMediaCapacityKey: _SettingType.integer,
   };
 
   // ZIP restore is deliberately narrower than the overwrite-style settings
@@ -104,6 +109,8 @@ class SettingsTransferService {
     'playback_preferences.subtitle_font_size',
     'playback_preferences.two_finger_video_transform',
     'playback_preferences.prefer_offline_cache',
+    PlaybackPreferencesService.codecPreferenceKey,
+    PlaybackPreferencesService.wifiOnlyOfflineDownloadsKey,
     'playback_preferences.wifi_default_quality',
     'playback_preferences.mobile_default_quality',
     'focubili_danmaku_preferences_v1',
@@ -152,7 +159,7 @@ class SettingsTransferService {
     final preferences = await preferencesLoader();
     final values = <String, Object>{};
     for (final key in _schema.keys) {
-      if (DeviceSettingsRuntimeAdapter.keys.contains(key)) continue;
+      if (DeviceSettingsRuntimeAdapter.allKeys.contains(key)) continue;
       final value = preferences.get(key);
       if (value != null) {
         _validateValue(key, value);
@@ -265,9 +272,14 @@ class SettingsTransferService {
         !AppThemeModeService.isSupportedColorValue(value as int)) {
       throw const FormatException('主题颜色无效');
     }
-    if (key == 'windows_media_cache_capacity_bytes' &&
+    if ((key == 'windows_media_cache_capacity_bytes' ||
+            key == DeviceSettingsRuntimeAdapter.androidMediaCapacityKey) &&
         !supportedMediaCacheBytes.contains(value)) {
       throw const FormatException('视频缓存容量无效');
+    }
+    if (key == PlaybackPreferencesService.codecPreferenceKey &&
+        !PlaybackCodecPreference.values.any((item) => item.name == value)) {
+      throw const FormatException('视频编码偏好无效');
     }
     if (key == 'playback_preferences.line_preference' &&
         !PlaybackLinePreference.values.any((item) => item.name == value)) {
@@ -416,12 +428,12 @@ class SettingsTransferService {
     if (onlyMissing) await preferences.reload();
     final runtime = {
       for (final entry in values.entries)
-        if (DeviceSettingsRuntimeAdapter.keys.contains(entry.key))
+        if (DeviceSettingsRuntimeAdapter.allKeys.contains(entry.key))
           entry.key: entry.value,
     };
     final regular = {
       for (final entry in values.entries)
-        if (!DeviceSettingsRuntimeAdapter.keys.contains(entry.key))
+        if (!DeviceSettingsRuntimeAdapter.allKeys.contains(entry.key))
           entry.key: entry.value,
     };
     final old = <String, Object?>{};
@@ -480,7 +492,8 @@ class SettingsTransferService {
       if (runtime.isNotEmpty) {
         try {
           await runtimeAdapter.writeSettings({
-            for (final key in runtime.keys) key: oldRuntime[key],
+            for (final key in runtime.keys)
+              if (oldRuntime.containsKey(key)) key: oldRuntime[key],
           });
         } catch (_) {
           restored = false;

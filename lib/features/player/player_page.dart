@@ -56,6 +56,7 @@ import '../../services/player_overlay_service_factory.dart';
 import '../../services/problem_diagnostics_service.dart';
 import '../../services/bilibili_public_content_service.dart';
 import '../../services/bilibili_interaction_service.dart';
+import '../../services/bilibili_image_url_policy.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/watch_history_service.dart';
 import '../../services/learning_list_service.dart';
@@ -290,21 +291,42 @@ class _PlayerPageState extends State<PlayerPage>
   /// 清理上一支视频的互动状态，并开始读取新视频对应的账号状态。
   @override
   void _resetVideoInteractionState() {
+    _resetOnlineInteractionState();
+    _currentVideoDownloaded = false;
+    _appFavoriteFolderIds = const <String>{};
+  }
+
+  /// 清理在线互动，保留本机收藏和下载状态。
+  void _resetOnlineInteractionState() {
     _interactionState = const BilibiliInteractionState();
     _interactionAction = null;
+    _interactionLoading = false;
     _authorFollowingStates.clear();
     _authorFollowActions.clear();
     _likeCountDelta = 0;
     _coinCountDelta = 0;
     _favoriteCountDelta = 0;
-    _currentVideoDownloaded = false;
-    _appFavoriteFolderIds = const <String>{};
   }
 
-  /// 在视频切换完成后异步读取当前视频的互动状态，避开 setState 回调中的异步副作用。
+  /// 本地源清除上一分 P 的互动、章节和剧情，并撤销其在途响应。
+  @override
+  void _clearOfflineSourceMetadata() {
+    setState(() {
+      _resetOnlineInteractionState();
+      _interactivePromptVisible = false;
+    });
+    unawaited(_playerEnhancementController.load(bvid: '', cid: 0));
+  }
+
+  /// 仅在线播放源打开后读取 B 站互动状态。
   @override
   void _startVideoInteractionStateLoad() {
     unawaited(_loadVideoInteractionState());
+  }
+
+  /// 在线和本地播放都提供本机下载与收藏入口。
+  @override
+  void _loadLocalVideoActions() {
     unawaited(_loadOfflineState());
     unawaited(_loadAppFavoriteState());
   }
@@ -489,17 +511,18 @@ class _PlayerPageState extends State<PlayerPage>
     )..attach();
     _appFavoritesService = widget.appFavoritesService ?? AppFavoritesService();
     _playerEnhancementController = PlayerEnhancementController(
-      service:
-          widget.playerEnhancementService ??
-          (widget.playbackService == null
-              ? BilibiliPublicPlayerEnhancementService()
-              : const EmptyPlayerEnhancementService()),
+      service: _PlayerSourceEnhancementService(
+        widget.playerEnhancementService ??
+            (widget.playbackService == null
+                ? BilibiliPublicPlayerEnhancementService()
+                : const EmptyPlayerEnhancementService()),
+      ),
     )..addListener(_handlePlayerEnhancementChanged);
     _initializePlaylist();
     _startPlayerPlaybackSession(widget.initialPosition);
     unawaited(_loadWatchHistoryBadges());
     unawaited(_loadCurrentLearningListEntry());
-    _startVideoInteractionStateLoad();
+    _loadLocalVideoActions();
     unawaited(_loadDanmakuPreferences());
     if (widget.playbackService == null) {
       unawaited(_allowPlayerOrientations());
@@ -612,4 +635,34 @@ class _PlayerPageState extends State<PlayerPage>
     _refreshPlayerTools();
     return _buildPlayerPage(context);
   }
+}
+
+/// 用空视频身份清除控制器状态，同时复用其已有的在途请求失效机制。
+class _PlayerSourceEnhancementService
+    implements BilibiliPlayerEnhancementService {
+  /// 保存当前页面选用的真实或测试增强服务。
+  const _PlayerSourceEnhancementService(this.delegate);
+
+  final BilibiliPlayerEnhancementService delegate;
+
+  /// 清除状态用的空身份直接返回空章节和剧情。
+  @override
+  Future<PlayerEnhancementMetadata> loadMetadata({
+    required String bvid,
+    required int cid,
+  }) => bvid.isEmpty
+      ? Future.value(const PlayerEnhancementMetadata())
+      : delegate.loadMetadata(bvid: bvid, cid: cid);
+
+  /// 请求播放器已选定的剧情节点。
+  @override
+  Future<InteractiveVideoNode> loadInteractiveNode({
+    required String bvid,
+    required int graphVersion,
+    int? edgeId,
+  }) => delegate.loadInteractiveNode(
+    bvid: bvid,
+    graphVersion: graphVersion,
+    edgeId: edgeId,
+  );
 }

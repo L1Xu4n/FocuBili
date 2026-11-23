@@ -12,6 +12,12 @@ internal data class PlaybackCandidateSelection(
  * 该策略不依赖 Android UI，可由 JVM 单元测试直接验证，并可供未来桌面播放器复用同一规则。
  */
 internal object PlaybackRecoveryPolicy {
+    const val MEDIA_MINIMUM_RETRY_COUNT = 3
+
+    /** 已拒绝、失效或移除的签名地址直接刷新播放数据，其他网络错误可先尝试备用线路。 */
+    fun shouldRefreshPlayurlImmediately(httpStatusCode: Int?): Boolean =
+        httpStatusCode == 403 || httpStatusCode == 404 || httpStatusCode == 410
+
     /** 返回所有视频与音频候选的组合数量；没有独立音轨时只轮换视频候选。 */
     fun candidateCount(videoCount: Int, audioCount: Int): Int {
         val safeVideoCount = videoCount.coerceAtLeast(1)

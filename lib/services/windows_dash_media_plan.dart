@@ -16,8 +16,8 @@ class WindowsDashMediaAttempt {
   final String audioCodec;
 
   /// 创建携带 Cookie、Referer 等必要请求头的视频 Media。
-  Media createVideoMedia(Map<String, String> headers) {
-    return Media(videoUrl, httpHeaders: headers);
+  Media createVideoMedia(Map<String, String> headers, {Duration? start}) {
+    return Media(videoUrl, httpHeaders: headers, start: start);
   }
 
   /// 创建并返回带请求头的外部音频 Media。
@@ -38,8 +38,11 @@ abstract final class WindowsDashMediaPlan {
   static const _maxMixedBackupAttempts = 4;
 
   /// 先尝试首选、同序备线和单侧替换，再有限地补试不同序号的备线。
-  static List<WindowsDashMediaAttempt> build(DesktopPlaybackSources sources) {
-    final videos = sources.videoUrls.toSet().toList();
+  static List<WindowsDashMediaAttempt> build(
+    DesktopPlaybackSources sources, {
+    DesktopVideoAlternative? video,
+  }) {
+    final videos = (video?.urls ?? sources.videoUrls).toSet().toList();
     final audios = sources.audioUrls.toSet().toList();
     if (sources.videoCodec == 'muxed' && audios.isEmpty) {
       return List.unmodifiable([
@@ -54,7 +57,7 @@ abstract final class WindowsDashMediaPlan {
     final String primaryVideo = videos.first;
     final String primaryAudio = audios.first;
 
-    // Each list is deduplicated above and the index ranges below do not overlap.
+    /// Adds a route for this representation with the selected audio's codec.
     void add(String videoUrl, String audioUrl) {
       attempts.add(
         WindowsDashMediaAttempt(

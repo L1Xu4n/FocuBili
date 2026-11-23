@@ -47,6 +47,8 @@ import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.session.MediaSession
+import com.focubili.app.AdaptivePlaybackLoadControl.Profile
+import com.focubili.app.PlaybackRecoveryPolicy.MEDIA_MINIMUM_RETRY_COUNT
 import io.flutter.embedding.engine.renderer.FlutterRenderer
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
@@ -181,12 +183,12 @@ class NativePlaybackController(
     private var ordinaryApiUserAgent: String? = null
     private var linePreference = "smart"
     private var preferNonPcdn = true
+    private var playbackOptions = PlaybackOptions()
     @Volatile private var failedVideoTracks: Set<Pair<Int, String>> = emptySet()
     private var canContinueAsGuest = false
     private var guestOfferGeneration: Long? = null
     private var guestConsentGeneration: Long? = null
     private val wbiSigner = PlaybackWbiSigner()
-    private val subtitleWbiSigner = PlaybackWbiSigner()
     private var currentQuality = DEFAULT_QUALITY
     private var availableQualities = listOf(
         PlaybackQualityOption(DEFAULT_QUALITY, "高清 720P"),
@@ -202,6 +204,7 @@ class NativePlaybackController(
     private var playbackCandidateAttempt = 0
     private var bypassMediaCacheForPlayback = false
     private var latestPlaybackSources: PlaybackSources? = null
+    private var mediaUrlsRejected = false
     private var playbackRequestToken = 0L
     private var lastProgressSaveElapsedMs = 0L
     private var playbackPhase = PHASE_IDLE
@@ -231,12 +234,33 @@ class NativePlaybackController(
         val qualities: List<PlaybackQualityOption>,
         val videoAlternatives: List<SelectedMediaTrack>,
         val diagnostic: PlaybackRequestDiagnostic,
+        val bufferProfile: Profile,
+        val dashCandidates: DashCandidates? = null,
     )
+
+    /** 保留 playurl 原始线路顺序、服务端返回档位上限和可播视频表示，供同一分 P 切换清晰度。 */
+    private data class DashCandidates(
+        val fetchedAtElapsedMs: Long,
+        val returnedQuality: Int,
+        val videoTracks: List<SelectedMediaTrack>,
+        val audioTrack: SelectedMediaTrack,
+    )
+
+    /** 保存一次 open 的编码与网络偏好，后台请求和媒体源共用此快照。 */
+    private data class PlaybackOptions(
+        val dataSaverCodec: Boolean = false,
+        val preferDataSaving: Boolean = false,
+    ) {
+        val bufferProfile: Profile get() = if (preferDataSaving) Profile.METERED else Profile.STANDARD
+    }
+
+    private enum class VideoDecoderSupport { UNSUPPORTED, PLAYABLE, HARDWARE }
 
     /** 保存一条选中媒体轨道的编码名称和主备地址，供兼容选择与缓存隔离使用。 */
     private data class SelectedMediaTrack(
         val urls: List<String>,
         val representation: PlaybackCacheRepresentation = PlaybackCacheRepresentation(),
+        val hardwareSupported: Boolean = false,
     ) {
         val quality: Int get() = representation.id
         val codec: String get() = representation.codec
@@ -363,6 +387,10 @@ class NativePlaybackController(
                         ownerName = call.argument<String>("ownerName").orEmpty(),
                         initialPositionMs = initialPositionMs,
                         course = course,
+                        options = PlaybackOptions(
+                            dataSaverCodec = call.argument<String>("codecPreference") == "dataSaver",
+                            preferDataSaving = call.argument<Boolean>("preferDataSaving") == true,
+                        ),
                     )
                     result.success(null)
                 }
@@ -897,7 +925,9 @@ class NativePlaybackController(
         if (PlaybackTrackPolicy.shouldUseSynchronousCodec(Build.SUPPORTED_ABIS.toList())) {
             renderersFactory.forceDisableMediaCodecAsynchronousQueueing()
         }
-        return ExoPlayer.Builder(activity, renderersFactory).build()
+        return ExoPlayer.Builder(activity, renderersFactory)
+            .setLoadControl(AdaptivePlaybackLoadControl())
+            .build()
     }
 
     /** 播放失败后先轮换备用 CDN，再有限次数刷新播放数据，避免长视频偶发断流直接报错。 */
@@ -968,7 +998,10 @@ class NativePlaybackController(
         }
         val candidateCount = sources?.let(::playbackCandidateCount) ?: 0
         val nextCandidateAttempt = playbackCandidateAttempt + 1
-        val shouldRefreshPlayurl = shouldRefreshPlayurlImmediately(failureDetails)
+        val shouldRefreshPlayurl = PlaybackRecoveryPolicy.shouldRefreshPlayurlImmediately(
+            failureDetails.httpStatusCode,
+        )
+        if (shouldRefreshPlayurl) mediaUrlsRejected = true
         if (!shouldRefreshPlayurl && sources != null && nextCandidateAttempt < candidateCount) {
             playbackCandidateAttempt = nextCandidateAttempt
             playbackPhase = PHASE_LOADING
@@ -1045,17 +1078,6 @@ class NativePlaybackController(
             is java.io.IOException -> "网络输入输出异常（IOException）"
             null -> "未提供底层原因"
             else -> "播放器内部异常（${cause.javaClass.simpleName.ifBlank { "Unknown" }}）"
-        }
-    }
-
-    /** 判断明确过期或被服务器拒绝的媒体地址是否应跳过候选轮换并立即刷新 playurl。 */
-    private fun shouldRefreshPlayurlImmediately(failureDetails: PlaybackFailureDetails): Boolean {
-        return when (failureDetails.httpStatusCode) {
-            HTTP_STATUS_FORBIDDEN,
-            HTTP_STATUS_NOT_FOUND,
-            HTTP_STATUS_GONE,
-            -> true
-            else -> false
         }
     }
 
@@ -1255,6 +1277,7 @@ class NativePlaybackController(
         ownerName: String,
         initialPositionMs: Long?,
         course: CoursePlaybackTarget?,
+        options: PlaybackOptions,
     ) {
         ensurePlayer()
         ensureTexture()
@@ -1265,6 +1288,7 @@ class NativePlaybackController(
         currentBvid = bvid
         clearLocalCourseGrant()
         currentCourse = course
+        playbackOptions = options
         canContinueAsGuest = false
         guestConsentGeneration = null
         failedVideoTracks = emptySet()
@@ -1288,6 +1312,7 @@ class NativePlaybackController(
         playbackCandidateAttempt = 0
         bypassMediaCacheForPlayback = false
         latestPlaybackSources = null
+        mediaUrlsRejected = false
         playbackPhase = PHASE_LOADING
         playbackMessage = if (pendingStartPositionMs > 0L) {
             "正在恢复上次播放位置…"
@@ -1317,6 +1342,7 @@ class NativePlaybackController(
         player?.clearMediaItems()
         if (!localCourseValid()) { revokeLocalCourse(); return }
         currentCourse = null
+        playbackOptions = PlaybackOptions()
         ordinaryApiUserAgentAllowed = false
         ordinaryApiUserAgent = null
         currentBvid = bvid
@@ -1344,6 +1370,7 @@ class NativePlaybackController(
         playbackCandidateAttempt = 0
         bypassMediaCacheForPlayback = true
         latestPlaybackSources = null
+        mediaUrlsRejected = false
         playbackPhase = PHASE_LOADING
         playbackMessage = "正在打开离线视频…"
         emitPlaybackState()
@@ -1362,6 +1389,7 @@ class NativePlaybackController(
         val mediaItem = MediaItem.Builder()
             .setMediaId("offline:${localFile.absolutePath}")
             .setUri(uri)
+            .setTag(Profile.LOCAL)
             .setMediaMetadata(
                 MediaMetadata.Builder()
                     .setTitle(currentTitle.ifBlank { "离线视频" })
@@ -1424,19 +1452,20 @@ class NativePlaybackController(
         if (localSource) {
             openLocalVideo(localVideoPath!!, localAudioPath, currentTitle, position,
                 currentBvid, currentCid, currentPageNumber, shouldPlay)
-        } else if (sources != null && (enabled || sources.videoUrls.isNotEmpty())) {
+        } else if (sources != null && currentCourse == null && (enabled || sources.videoUrls.isNotEmpty())) {
             prepareMediaSources(sources)
         } else {
-            // 听视频请求失败或正在刷新地址时，仍允许用户回到视频并重新查询。
+            // 听视频请求失败、在线课堂切流或正在刷新地址时，仍重新校验并查询播放源。
+            latestPlaybackSources = null
             playbackPhase = PHASE_LOADING
             requestPlaybackSources(currentBvid, currentCid, requestedQuality)
         }
         emitPlaybackState()
     }
 
-    /** 保留当前位置与播放状态，再重新请求指定清晰度。 */
+    /** 保留当前位置与播放状态，优先复用当前分 P 的新鲜 DASH 候选。 */
     private fun switchQuality(quality: Int) {
-        if (currentBvid.isEmpty() || currentCid <= 0L) {
+        if (localSource || currentBvid.isEmpty() || currentCid <= 0L) {
             reportError("当前没有可切换清晰度的视频。")
             return
         }
@@ -1444,6 +1473,8 @@ class NativePlaybackController(
             return
         }
         val nativePlayer = player ?: return
+        val requestToken = createPlaybackRequestToken()
+        val reusable = latestPlaybackSources?.let { reuseDashQuality(it, quality, requestToken) }
         val shouldResume = nativePlayer.playWhenReady
         pendingStartPositionMs = nativePlayer.currentPosition.coerceAtLeast(0L)
         nativePlayer.pause()
@@ -1458,7 +1489,44 @@ class NativePlaybackController(
         playbackPhase = PHASE_LOADING
         playbackMessage = "正在切换清晰度…"
         emitPlaybackState()
-        requestPlaybackSources(currentBvid, currentCid, quality)
+        if (reusable == null) {
+            requestPlaybackSources(currentBvid, currentCid, quality)
+        } else {
+            channel.invokeMethod("playbackRequestDiagnostic", reusable.diagnostic.toMap(true))
+            prepareMediaSources(reusable)
+        }
+    }
+
+    /** 仅在目标档有可用轨道、播放地址有效且会话代次仍匹配时，用原始候选重新选轨。 */
+    private fun reuseDashQuality(sources: PlaybackSources, quality: Int, requestToken: Long): PlaybackSources? {
+        val candidates = sources.dashCandidates ?: return null
+        val generation = sources.diagnostic.sessionGeneration
+        val age = SystemClock.elapsedRealtime() - candidates.fetchedAtElapsedMs
+        if (mediaUrlsRejected || sources.bvid != currentBvid || sources.cid != currentCid ||
+            quality > candidates.returnedQuality ||
+            age !in 0L until DASH_CANDIDATE_MAX_AGE_MS || !BilibiliSessionGate.isCurrent(generation)
+        ) return null
+        val tracks = selectVideoTracks(candidates.videoTracks, quality, playbackOptions)
+        val selected = tracks.firstOrNull()?.takeIf { it.quality == quality } ?: return null
+        if (!BilibiliSessionGate.validateResponse(generation) { CookieManager.getInstance().getCookie(it) }) {
+            return null
+        }
+        val diagnostic = PlaybackRequestDiagnostic(requestToken, wbiSigningEnabled, quality).apply {
+            sessionGeneration = generation
+            guestSelected = sources.diagnostic.guestSelected
+            selectedQuality = selected.quality
+        }
+        return applyPlaybackRoutePreference(
+            sources.copy(
+                videoUrls = selected.urls,
+                audioUrls = candidates.audioTrack.urls,
+                videoRepresentation = selected.representation,
+                actualQuality = selected.quality,
+                videoAlternatives = tracks.drop(1),
+                diagnostic = diagnostic,
+            ),
+            linePreference, preferNonPcdn,
+        )
     }
 
     /** 将 Media3 切换为指定倍速，并立即同步给 Flutter 与系统媒体会话。 */
@@ -1472,6 +1540,7 @@ class NativePlaybackController(
     private fun requestPlaybackSources(bvid: String, cid: Long, quality: Int) {
         val requestToken = createPlaybackRequestToken()
         val course = currentCourse
+        val options = playbackOptions
         val requestLinePreference = linePreference
         val requestPreferNonPcdn = preferNonPcdn
         val diagnostic = PlaybackRequestDiagnostic(requestToken, course == null && wbiSigningEnabled, quality)
@@ -1486,7 +1555,7 @@ class NativePlaybackController(
         playbackRequestExecutor.execute {
             val sourceResult = runCatching {
                 applyPlaybackRoutePreference(
-                    loadPlaybackSources(bvid, cid, quality, diagnostic, course, requestUserAgent),
+                    loadPlaybackSources(bvid, cid, quality, diagnostic, course, requestUserAgent, options),
                     requestLinePreference, requestPreferNonPcdn,
                 )
             }
@@ -1525,7 +1594,7 @@ class NativePlaybackController(
         },
     )
 
-    /** 请求播放 JSON，并挑选目标清晰度的 DASH 视频轨和最高质量音频轨。 */
+    /** 请求播放 JSON，按本次偏好选择 DASH 轨道并保存原始 UGC 候选。 */
     private fun loadPlaybackSources(
         bvid: String,
         cid: Long,
@@ -1533,9 +1602,11 @@ class NativePlaybackController(
         diagnostic: PlaybackRequestDiagnostic,
         course: CoursePlaybackTarget?,
         requestUserAgent: String?,
+        options: PlaybackOptions,
     ): PlaybackSources {
         val useWbi = diagnostic.wbiEnabled
-        val responseText = requestPlaybackInfoJson(bvid, cid, quality, diagnostic, course, requestUserAgent)
+        val responseText = requestPlaybackInfoJson(bvid, cid, quality, diagnostic, course, requestUserAgent, options)
+        val fetchedAtElapsedMs = SystemClock.elapsedRealtime()
         diagnostic.stage = "parse"
         val root = JSONObject(responseText)
         val code = root.optInt("code", -1)
@@ -1584,17 +1655,18 @@ class NativePlaybackController(
         }
         val dash = data.optJSONObject("dash")
         if (dash == null) {
-            if (course != null) return loadCourseProgressiveSource(bvid, cid, data, course, quality, diagnostic)
+            if (course != null) return loadCourseProgressiveSource(
+                bvid, cid, data, course, quality, diagnostic, options.bufferProfile,
+            )
             throw PlaybackSourceException("该视频没有可用的 DASH 播放数据。")
         }
         val returnedQuality = data.optInt("quality", quality).takeIf { it > 0 } ?: quality
         diagnostic.returnedQuality = returnedQuality
-        val videoTracks = selectMediaTracks(dash.optJSONArray("video"), minOf(quality, returnedQuality))
-            .filterNot { (it.quality to it.codec) in failedVideoTracks }
+        val videoCandidates = readVideoTracks(dash.optJSONArray("video"), options.dataSaverCodec)
+        val videoTracks = selectVideoTracks(videoCandidates, minOf(quality, returnedQuality), options)
         val videoTrack = videoTracks.firstOrNull() ?: SelectedMediaTrack(emptyList())
         diagnostic.selectedQuality = videoTrack.quality.takeIf { it > 0 }
-        val audioTrack = selectMediaTracks(dash.optJSONArray("audio")).firstOrNull()
-            ?: SelectedMediaTrack(emptyList())
+        val audioTrack = selectAudioTrack(dash.optJSONArray("audio"), options.preferDataSaving || options.dataSaverCodec)
         if (videoTrack.urls.isEmpty() && !audioOnly) {
             throw PlaybackSourceException("没有当前设备可解码的安全视频轨道，请尝试其他清晰度或听视频。")
         }
@@ -1612,6 +1684,11 @@ class NativePlaybackController(
             qualities = parseQualityOptions(data, dash, videoTrack.quality.takeIf { it > 0 } ?: returnedQuality),
             videoAlternatives = videoTracks.drop(1),
             diagnostic = diagnostic,
+            bufferProfile = options.bufferProfile,
+            // 课程清晰度切换继续通过原有购买状态校验。
+            dashCandidates = if (course == null) {
+                DashCandidates(fetchedAtElapsedMs, returnedQuality, videoCandidates, audioTrack)
+            } else null,
         )
     }
 
@@ -1623,6 +1700,7 @@ class NativePlaybackController(
         course: CoursePlaybackTarget,
         quality: Int,
         diagnostic: PlaybackRequestDiagnostic,
+        bufferProfile: Profile,
     ): PlaybackSources {
         val segments = data.optJSONArray("durl")
             ?: throw PlaybackSourceException("课程没有返回可支持的播放数据，请稍后重试。")
@@ -1650,6 +1728,7 @@ class NativePlaybackController(
             actualQuality = returnedQuality,
             qualities = parseQualityOptions(data, JSONObject(), returnedQuality),
             videoAlternatives = emptyList(), diagnostic = diagnostic,
+            bufferProfile = bufferProfile,
         )
     }
 
@@ -1661,6 +1740,7 @@ class NativePlaybackController(
         diagnostic: PlaybackRequestDiagnostic,
         course: CoursePlaybackTarget?,
         requestUserAgent: String?,
+        options: PlaybackOptions,
     ): String {
         val useWbi = diagnostic.wbiEnabled
         val snapshot = if (diagnostic.guestSelected) {
@@ -1726,7 +1806,8 @@ class NativePlaybackController(
         }
         val parameters = mapOf(
             "bvid" to bvid, "cid" to cid.toString(), "qn" to quality.toString(),
-            "fnval" to DASH_FEATURE_FLAG.toString(), "fourk" to "1",
+            "fnval" to (if (options.dataSaverCodec) DASH_AV1_FEATURE_FLAGS else DASH_FEATURE_FLAG).toString(),
+            "fourk" to "1",
         )
         val query = if (useWbi) {
             diagnostic.stage = "signing"
@@ -2065,7 +2146,7 @@ class NativePlaybackController(
     /** 使用固定的播放器元数据地址请求当前分P字幕信息，不允许调用方提供任意主机。 */
     private fun requestSubtitleMetadataJson(bvid: String, cid: Long, diagnostic: MutableMap<String, Any>): String {
         val parameters = try {
-            subtitleWbiSigner.sign(mapOf("bvid" to bvid, "cid" to cid.toString())) {
+            wbiSigner.sign(mapOf("bvid" to bvid, "cid" to cid.toString())) {
                 diagnostic["endpoint"] = "/x/web-interface/nav"
                 requestLimitedSubtitleJson(
                     endpoint = "https://$PLAYBACK_API_HOST/x/web-interface/nav",
@@ -2381,7 +2462,6 @@ class NativePlaybackController(
             connection.connectTimeout = NETWORK_TIMEOUT_MS
             connection.readTimeout = NETWORK_TIMEOUT_MS
             connection.setRequestProperty("Accept", "application/octet-stream")
-            connection.setRequestProperty("Accept-Encoding", "identity")
             connection.setRequestProperty("Referer", buildVideoPageUrl(bvid).orEmpty())
             connection.setRequestProperty("User-Agent", DESKTOP_USER_AGENT)
             readBilibiliCookieHeader().takeIf { cookie -> cookie.isNotBlank() }?.let { cookie ->
@@ -2394,6 +2474,7 @@ class NativePlaybackController(
                     "弹幕服务暂时不可用（HTTP $statusCode）。",
                 )
             }
+            // Android 会透明解压 gzip，上限按输入流的解压后字节计算。
             return connection.inputStream.use(::readDanmakuBytesWithLimit)
         } finally {
             connection.disconnect()
@@ -2660,55 +2741,112 @@ class NativePlaybackController(
         }
     }
 
-    /** 先过滤设备不支持的格式，再按清晰度和同档编码兼容性排序，保留有限回退队列。 */
-    private fun selectMediaTracks(mediaItems: JSONArray?, preferredId: Int? = null): List<SelectedMediaTrack> {
+    /** 验证响应中所有清晰度的视频轨，保留未去重的表示供切换时重新选轨。 */
+    private fun readVideoTracks(mediaItems: JSONArray?, dataSaver: Boolean): List<SelectedMediaTrack> {
         if (mediaItems == null) return emptyList()
-        val candidates = (0 until mediaItems.length()).mapNotNull(mediaItems::optJSONObject)
-            .filter { readMediaUrls(it).isNotEmpty() }
-        fun score(media: JSONObject): Long =
-            (if (preferredId != null) PlaybackTrackPolicy.compatibilityScore(media.optString("codecs")) else 0L) +
-                media.optInt("height").coerceAtLeast(0).toLong() * HEIGHT_SCORE_UNIT +
-                media.optLong("bandwidth").coerceAtLeast(0L)
-        val sorted = if (preferredId == null) candidates.sortedByDescending(::score) else {
-            PlaybackTrackPolicy.playableTracks(candidates, preferredId, { it.optInt("id") }, ::score, ::isVideoTrackSupported)
+        return (0 until mediaItems.length()).mapNotNull { index ->
+            val track = mediaItems.optJSONObject(index)?.let(::readDashTrack) ?: return@mapNotNull null
+            if (track.quality <= 0) return@mapNotNull null
+            when (videoDecoderSupport(track.representation, dataSaver)) {
+                VideoDecoderSupport.UNSUPPORTED -> null
+                VideoDecoderSupport.PLAYABLE -> track
+                VideoDecoderSupport.HARDWARE -> track.copy(hardwareSupported = true)
+            }
         }
-        return sorted.map { media ->
-            val urls = readMediaUrls(media)
-            val segmentBase = media.optJSONObject("segment_base") ?: media.optJSONObject("SegmentBase")
-            SelectedMediaTrack(
-                urls = urls,
-                representation = PlaybackCacheRepresentation(
-                    id = media.optInt("id"),
-                    bandwidth = media.optLong("bandwidth"),
-                    codec = media.optString("codecs").trim(),
-                    mimeType = media.optString("mime_type").ifBlank { media.optString("mimeType") },
-                    width = media.optInt("width"),
-                    height = media.optInt("height"),
-                    frameRate = media.optString("frame_rate").ifBlank { media.optString("frameRate") },
-                    initialization = segmentBase?.let {
-                        it.optString("initialization").ifBlank { it.optString("Initialization") }
-                    }.orEmpty(),
-                    indexRange = segmentBase?.let {
-                        it.optString("index_range").ifBlank { it.optString("indexRange") }
-                    }.orEmpty(),
-                    resourceUrl = urls.firstOrNull().orEmpty(),
-                ),
-            )
-        }.distinctBy { it.quality to it.codec }
     }
 
-    /** Media3 按真实 codec/profile、尺寸和帧率查询设备解码能力；探测失败不冒充支持。 */
-    private fun isVideoTrackSupported(media: JSONObject): Boolean = runCatching {
-        val codec = media.optString("codecs").trim()
-        val mime = MimeTypes.getMediaMimeType(codec) ?: return@runCatching false
-        if (!MimeTypes.isVideo(mime)) return@runCatching false
+    /** 排除曾失败的编码，然后按当前模式选择主轨和解码回退轨。 */
+    private fun selectVideoTracks(
+        candidates: List<SelectedMediaTrack>,
+        preferredQuality: Int,
+        options: PlaybackOptions,
+    ): List<SelectedMediaTrack> {
+        val failed = failedVideoTracks
+        return PlaybackTrackPolicy.videoTracks(
+            candidates, preferredQuality, options.dataSaverCodec,
+            quality = { it.quality }, codec = { it.codec }, bandwidth = { it.representation.bandwidth },
+            score = { PlaybackTrackPolicy.compatibilityScore(it.codec) + trackScore(it) },
+            supported = { (it.quality to it.codec) !in failed },
+            hardwareSupported = { it.hardwareSupported },
+        )
+    }
+
+    /** 普通模式保持原音质排序，省流模式只在设备可解码的音轨中应用软上限。 */
+    private fun selectAudioTrack(mediaItems: JSONArray?, dataSaver: Boolean): SelectedMediaTrack {
+        val candidates = (0 until (mediaItems?.length() ?: 0)).mapNotNull { index ->
+            mediaItems?.optJSONObject(index)?.let(::readDashTrack)
+        }
+        val selected = if (dataSaver) {
+            PlaybackTrackPolicy.dataSavingAudioTrack(
+                candidates.filter { isAudioTrackSupported(it.codec) },
+                { it.representation.bandwidth },
+            )
+        } else candidates.maxByOrNull(::trackScore)
+        return selected ?: SelectedMediaTrack(emptyList())
+    }
+
+    /** 保留原兼容模式按分辨率、码率评分的规则。 */
+    private fun trackScore(track: SelectedMediaTrack): Long =
+        track.representation.height.coerceAtLeast(0).toLong() * HEIGHT_SCORE_UNIT +
+            track.representation.bandwidth.coerceAtLeast(0L)
+
+    /** 解析一条 DASH 表示，并在排序线路前根据全部安全地址确定缓存资源路径。 */
+    private fun readDashTrack(media: JSONObject): SelectedMediaTrack? {
+        val urls = readMediaUrls(media)
+        if (urls.isEmpty()) return null
+        val segmentBase = media.optJSONObject("segment_base") ?: media.optJSONObject("SegmentBase")
+        val representation = PlaybackCacheRepresentation(
+            id = media.optInt("id"),
+            bandwidth = media.optLong("bandwidth"),
+            codec = media.optString("codecs").trim(),
+            mimeType = media.optString("mime_type").ifBlank { media.optString("mimeType") },
+            width = media.optInt("width"),
+            height = media.optInt("height"),
+            frameRate = media.optString("frame_rate").ifBlank { media.optString("frameRate") },
+            initialization = segmentBase?.let {
+                it.optString("initialization").ifBlank { it.optString("Initialization") }
+            }.orEmpty(),
+            indexRange = segmentBase?.let {
+                it.optString("index_range").ifBlank { it.optString("indexRange") }
+            }.orEmpty(),
+        )
+        return SelectedMediaTrack(urls, PlaybackCacheIdentity.withResourceUrls(representation, urls))
+    }
+
+    /** 使用同一个解码器验证视频格式支持和硬件加速属性。 */
+    private fun videoDecoderSupport(
+        representation: PlaybackCacheRepresentation,
+        inspectHardware: Boolean,
+    ): VideoDecoderSupport = runCatching {
+        val codec = representation.codec
+        val mime = MimeTypes.getMediaMimeType(codec) ?: return@runCatching VideoDecoderSupport.UNSUPPORTED
+        if (!MimeTypes.isVideo(mime)) return@runCatching VideoDecoderSupport.UNSUPPORTED
         val format = Format.Builder().setCodecs(codec).setSampleMimeType(mime).apply {
-            media.optInt("width").takeIf { it > 0 }?.let(::setWidth)
-            media.optInt("height").takeIf { it > 0 }?.let(::setHeight)
-            PlaybackTrackPolicy.frameRate(media.optString("frame_rate").ifBlank { media.optString("frameRate") })
-                ?.let(::setFrameRate)
+            representation.width.takeIf { it > 0 }?.let(::setWidth)
+            representation.height.takeIf { it > 0 }?.let(::setHeight)
+            PlaybackTrackPolicy.frameRate(representation.frameRate)?.let(::setFrameRate)
         }.build()
-        MediaCodecUtil.getDecoderInfos(mime, false, false).any { it.isFormatSupported(activity, format) }
+        var support = VideoDecoderSupport.UNSUPPORTED
+        for (decoder in MediaCodecUtil.getDecoderInfos(mime, false, false)) {
+            if (!runCatching { decoder.isFormatSupported(activity, format) }.getOrDefault(false)) continue
+            if (!inspectHardware) return@runCatching VideoDecoderSupport.PLAYABLE
+            if (PlaybackTrackPolicy.isHardwareDecoder(
+                    Build.VERSION.SDK_INT, decoder.name, decoder.hardwareAccelerated, decoder.softwareOnly,
+                )
+            ) return@runCatching VideoDecoderSupport.HARDWARE
+            support = VideoDecoderSupport.PLAYABLE
+        }
+        support
+    }.getOrDefault(VideoDecoderSupport.UNSUPPORTED)
+
+    /** 省流选轨前检查设备是否支持音频编码及其配置。 */
+    private fun isAudioTrackSupported(codec: String): Boolean = runCatching {
+        val mime = MimeTypes.getMediaMimeType(codec) ?: return@runCatching false
+        if (!MimeTypes.isAudio(mime)) return@runCatching false
+        val format = Format.Builder().setCodecs(codec).setSampleMimeType(mime).build()
+        MediaCodecUtil.getDecoderInfos(mime, false, false).any { decoder ->
+            runCatching { decoder.isFormatSupported(activity, format) }.getOrDefault(false)
+        }
     }.getOrDefault(false)
 
     /** 从一条 DASH 轨道读取并去重主备地址，只保留 B 站 HTTPS 媒体域名。 */
@@ -2818,10 +2956,10 @@ class NativePlaybackController(
      * 使用同步 `commit`，只有持久化成功后才向 Flutter 报告成功，避免 App 被杀死时设置丢失。
      */
     private fun setMediaCacheCapacity(capacityBytes: Long): Map<String, Any> {
-        requireMediaCacheIdle()
         if (readConfiguredMediaCacheCapacity() == capacityBytes) {
             return readMediaCacheStatus()
         }
+        requireMediaCacheIdle()
         releaseMediaCache()
         val saved = cachePreferences.edit()
             .putLong(CACHE_CAPACITY_PREFERENCE_KEY, capacityBytes)
@@ -2878,14 +3016,27 @@ class NativePlaybackController(
         return urls.getOrElse(index) { urls.first() }
     }
 
-    /** 由请求时固定的 BV/CID 和实际 DASH 表示生成版本化键，不读取可变播放状态。 */
-    private fun playbackCacheKey(sources: PlaybackSources, video: Boolean): String {
+    /** 由 BV/CID、DASH 表示和本次线路生成版本化键。 */
+    private fun playbackCacheKey(sources: PlaybackSources, video: Boolean, selectedUrl: String): String {
         return PlaybackCacheIdentity.key(
             bvid = sources.bvid,
             cid = sources.cid,
             quality = sources.actualQuality,
             video = video,
             representation = if (video) sources.videoRepresentation else sources.audioRepresentation,
+            selectedUrl = selectedUrl,
+        )
+    }
+
+    /** 在准备和清除损坏缓存时按同一规则找到当前的音视频线路。 */
+    private fun currentMediaUrls(sources: PlaybackSources): Pair<String, String> {
+        val selection = PlaybackRecoveryPolicy.candidateAt(
+            attemptIndex = playbackCandidateAttempt,
+            videoCount = sources.videoUrls.size,
+            audioCount = sources.audioUrls.size,
+        )
+        return mediaUrlAt(sources.videoUrls, selection.videoIndex) to mediaUrlAt(
+            sources.audioUrls, if (audioOnly) playbackCandidateAttempt else selection.audioIndex,
         )
     }
 
@@ -2896,9 +3047,12 @@ class NativePlaybackController(
      */
     private fun evictCurrentPlaybackCache(sources: PlaybackSources) {
         val cache = mediaCache ?: return
-        runCatching { cache.removeResource(playbackCacheKey(sources, video = true)) }
-        if (sources.audioUrls.isNotEmpty()) {
-            runCatching { cache.removeResource(playbackCacheKey(sources, video = false)) }
+        val (videoUrl, audioUrl) = currentMediaUrls(sources)
+        if (!audioOnly) {
+            runCatching { cache.removeResource(playbackCacheKey(sources, video = true, videoUrl)) }
+        }
+        if (audioUrl.isNotEmpty()) {
+            runCatching { cache.removeResource(playbackCacheKey(sources, video = false, audioUrl)) }
         }
     }
 
@@ -2917,14 +3071,7 @@ class NativePlaybackController(
         }
         currentQuality = sources.actualQuality
         availableQualities = sources.qualities
-        val selection = PlaybackRecoveryPolicy.candidateAt(
-            attemptIndex = playbackCandidateAttempt,
-            videoCount = sources.videoUrls.size,
-            audioCount = sources.audioUrls.size,
-        )
-        val videoUrl = mediaUrlAt(sources.videoUrls, selection.videoIndex)
-        val audioUrl = mediaUrlAt(sources.audioUrls,
-            if (audioOnly) playbackCandidateAttempt else selection.audioIndex)
+        val (videoUrl, audioUrl) = currentMediaUrls(sources)
         if (audioOnly && !isSafeMediaUrl(audioUrl)) {
             reportError("当前视频没有可用的独立音轨，暂不能省流收听。")
             return
@@ -2934,11 +3081,13 @@ class NativePlaybackController(
             .setTitle(displayTitle)
             .setArtist(currentOwnerName.ifBlank { "未知 UP 主" })
             .build()
+        val videoCacheKey = playbackCacheKey(sources, video = true, videoUrl)
+        val audioCacheKey = playbackCacheKey(sources, video = false, audioUrl)
         if (!bypassMediaCacheForPlayback && currentCourse == null) {
             val cache = ensureMediaCache()
             pinnedCacheEvictor?.pin(cache, buildSet {
-                if (!audioOnly) add(playbackCacheKey(sources, video = true))
-                if (isSafeMediaUrl(audioUrl)) add(playbackCacheKey(sources, video = false))
+                if (!audioOnly) add(videoCacheKey)
+                if (isSafeMediaUrl(audioUrl)) add(audioCacheKey)
             })
         }
         val sourceFactory = ProgressiveMediaSource.Factory(
@@ -2953,18 +3102,20 @@ class NativePlaybackController(
             sourceFactory.createMediaSource(
                 MediaItem.Builder().setMediaId("$currentBvid:$currentCid:audio")
                     .setUri(audioUrl).setMediaMetadata(mediaMetadata)
-                    .setCustomCacheKey(playbackCacheKey(sources, video = false)).build(),
+                    .setTag(sources.bufferProfile)
+                    .setCustomCacheKey(audioCacheKey).build(),
             )
         } else {
             val videoSource = sourceFactory.createMediaSource(
                 MediaItem.Builder().setMediaId("$currentBvid:$currentCid:$currentQuality")
                     .setUri(videoUrl).setMediaMetadata(mediaMetadata)
-                    .setCustomCacheKey(playbackCacheKey(sources, video = true)).build(),
+                    .setTag(sources.bufferProfile)
+                    .setCustomCacheKey(videoCacheKey).build(),
             )
             if (isSafeMediaUrl(audioUrl)) {
                 val audioSource = sourceFactory.createMediaSource(
                     MediaItem.Builder().setUri(audioUrl)
-                        .setCustomCacheKey(playbackCacheKey(sources, video = false)).build(),
+                        .setCustomCacheKey(audioCacheKey).build(),
                 )
                 MergingMediaSource(videoSource, audioSource)
             } else videoSource
@@ -3402,19 +3553,16 @@ class NativePlaybackController(
         private const val NETWORK_TIMEOUT_MS = 15_000
         private const val MEDIA_CONNECT_TIMEOUT_MS = 20_000
         private const val MEDIA_READ_TIMEOUT_MS = 25_000
-        private const val MEDIA_MINIMUM_RETRY_COUNT = 6
+        private const val DASH_CANDIDATE_MAX_AGE_MS = 10 * 60_000L
         private const val MAX_PLAYBACK_DATA_REFRESH_COUNT = 2
         /** 只检查有限层级的 cause 链，避免异常链异常循环影响播放器错误处理。 */
         private const val MAX_PLAYBACK_ERROR_CAUSE_DEPTH = 8
-        /** 这些状态明确表示当前媒体地址不可继续使用，应直接刷新 playurl。 */
-        private const val HTTP_STATUS_FORBIDDEN = 403
-        private const val HTTP_STATUS_NOT_FOUND = 404
-        private const val HTTP_STATUS_GONE = 410
         private const val BACKUP_SOURCE_RETRY_DELAY_MS = 450L
         private const val DEFAULT_TEXTURE_WIDTH = 1280
         private const val DEFAULT_TEXTURE_HEIGHT = 720
         private const val DEFAULT_QUALITY = 64
         private const val DASH_FEATURE_FLAG = 16
+        private const val DASH_AV1_FEATURE_FLAGS = DASH_FEATURE_FLAG or 2048
         private const val DEFAULT_PLAYBACK_SPEED = 1.0f
         private const val DEFAULT_VIDEO_ASPECT_RATIO = 16f / 9f
         private const val MIN_SCREEN_BRIGHTNESS = 0.01f

@@ -332,6 +332,33 @@ void main() {
   });
 
   /// 验证时间点保存会下载对应雪碧图并裁出第二格蓝色画面。
+  test('截图读取超时和超出 16 MiB 均安全降级', () async {
+    final pending = Completer<Uint8List>();
+    final service = BilibiliVideoShotService(
+      requestJson: (_) async => _previewResponse('atlas.jpg'),
+      requestImage: (_) => pending.future,
+      imageTimeout: const Duration(milliseconds: 10),
+    );
+    expect(
+      await service.captureFramePngBytes(
+        bvid: bvid,
+        cid: 42,
+        position: Duration.zero,
+      ),
+      isNull,
+    );
+    final oversized = Uint8List(16 * 1024 * 1024 + 1);
+    pending.complete(oversized);
+    expect(
+      await service.captureFramePngBytes(
+        bvid: bvid,
+        cid: 42,
+        position: Duration.zero,
+      ),
+      isNull,
+    );
+  });
+
   test('裁切时间点雪碧图为独立 PNG', () async {
     final Uint8List spriteBytes = await _buildSpritePng();
     final BilibiliVideoShotService service = BilibiliVideoShotService(

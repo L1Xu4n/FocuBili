@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../../models/subscription.dart';
+import '../../services/bilibili_image_url_policy.dart';
 import '../../services/cache_lifecycle.dart';
 import '../../services/subscription_source_visits.dart';
 import '../common/app_network_image.dart';
@@ -211,6 +212,9 @@ class _Avatar extends StatelessWidget {
               ? fallback
               : AppNetworkImage(
                   imageUrl: source.imageUrl,
+                  imageVariant: source.kind == SubscriptionKind.creator
+                      ? BilibiliImageVariant.avatar
+                      : BilibiliImageVariant.cover16x9,
                   httpHeaders: const {'Referer': 'https://www.bilibili.com/'},
                   memCacheWidth: 60,
                   fit: BoxFit.cover,

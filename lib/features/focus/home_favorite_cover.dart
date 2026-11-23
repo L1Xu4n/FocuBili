@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../common/app_network_image.dart';
 import '../common/favorite_folder_privacy_badge.dart';
 import '../../services/image_resource_cache.dart';
+import '../../services/bilibili_image_url_policy.dart';
 
 /// 首页收藏入口的紧凑封面，复用账号隔离的图片缓存，不单独获取视频信息。
 class HomeFavoriteCover extends StatelessWidget {
@@ -40,6 +41,7 @@ class HomeFavoriteCover extends StatelessWidget {
                   ? placeholder
                   : AppNetworkImage(
                       imageUrl: coverUrl,
+                      imageVariant: BilibiliImageVariant.cover16x9,
                       cache: cache,
                       fit: BoxFit.cover,
                       memCacheWidth: 256,

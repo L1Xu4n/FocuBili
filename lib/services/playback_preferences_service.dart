@@ -18,8 +18,11 @@ class PlaybackPreferencesService {
   static const subtitlePriorityKey = 'playback_preferences.subtitle_priority';
   static const appVolumeKey = 'playback_preferences.app_volume';
   static const preferNonPcdnKey = 'playback_preferences.prefer_non_pcdn';
+  static const codecPreferenceKey = 'playback_preferences.codec_preference';
+  static const wifiOnlyOfflineDownloadsKey =
+      'playback_preferences.wifi_only_offline_downloads';
 
-  /// 播放链只读取线路字段；存储不可用时仍以默认策略播放，不受其他损坏偏好影响。
+  /// 播放链只读取线路与编码字段；存储不可用时仍以默认策略播放，不受其他损坏偏好影响。
   Future<PlaybackPreferences> loadRoutePreferences() async {
     try {
       final preferences = await SharedPreferences.getInstance();
@@ -28,6 +31,9 @@ class PlaybackPreferencesService {
           preferences.get(linePreferenceKey),
         ),
         preferNonPcdn: preferences.get(preferNonPcdnKey) != false,
+        codecPreference: PlaybackCodecPreference.fromName(
+          preferences.get(codecPreferenceKey),
+        ),
       );
     } catch (_) {
       return const PlaybackPreferences();
@@ -87,6 +93,11 @@ class PlaybackPreferencesService {
             PlaybackPreferences.defaultSpeeds,
       ),
       preferOfflineCache: preferences.getBool(_preferOfflineCacheKey) ?? false,
+      codecPreference: PlaybackCodecPreference.fromName(
+        preferences.get(codecPreferenceKey),
+      ),
+      wifiOnlyOfflineDownloads:
+          preferences.get(wifiOnlyOfflineDownloadsKey) == true,
       enableDoubleTapSeek: preferences.getBool(_doubleTapSeekKey) ?? true,
       doubleTapRegions: _readDoubleTapRegions(
         preferences.getString(_regionsKey),
@@ -303,6 +314,14 @@ class PlaybackPreferencesService {
       throw StateError('Playback source preference was not saved');
     }
   }
+
+  /// 保存视频编码偏好，写入失败时恢复磁盘快照并报错。
+  Future<void> saveCodecPreference(PlaybackCodecPreference preference) =>
+      _saveValue(codecPreferenceKey, preference.name);
+
+  /// 保存“仅在未计量网络下载离线缓存”偏好，写入失败时恢复磁盘快照并报错。
+  Future<void> saveWifiOnlyOfflineDownloads(bool enabled) =>
+      _saveValue(wifiOnlyOfflineDownloadsKey, enabled);
 
   /// 保存双击手势开关，下一次进入播放器时继续沿用用户选择。
   Future<void> saveDoubleTapSeekEnabled(bool enabled) async {

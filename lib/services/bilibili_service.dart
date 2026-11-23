@@ -4,6 +4,7 @@ import 'dart:io';
 
 import '../models/video_preview.dart';
 import '../models/user_search.dart';
+import 'app_http_client.dart';
 import 'bilibili_request_policy.dart';
 import 'bilibili_lookup_exception.dart';
 import 'bilibili_video_metadata_client.dart';
@@ -88,6 +89,7 @@ class BilibiliVideoInfoService
   final BilibiliVideoMetadataClient? _metadataClient;
   final BilibiliCourseService? _courseService;
   final OfflineVideoService? _offlineVideoService;
+  final _tags = <(String, String?), (DateTime, List<String>)>{};
 
   /// Provides cached metadata to every lookup-based entry, including offline cold starts.
   Future<VideoPreview?> _cachedVideo(String bvid) async {
@@ -141,13 +143,26 @@ class BilibiliVideoInfoService
     }
   }
 
+  /// 短时复用同一视频的公开标签，避免详情页重复请求。
   @override
   Future<List<String>> loadVideoTags(String bvid) async {
     if (!RegExp(r'^BV[0-9A-Za-z]{10}$').hasMatch(bvid)) return const [];
+    final customUserAgent = await const HttpUserAgentPreferences().forRequest();
+    final key = (bvid, customUserAgent);
+    final cached = _tags.remove(key);
+    if (cached != null && DateTime.now().isBefore(cached.$1)) {
+      _tags[key] = cached;
+      return cached.$2;
+    }
     final raw = await _requestJson(
       Uri.https(_apiHost, _videoTagsPath, {'bvid': bvid}),
     );
-    return _parseVideoTags(raw);
+    final tags = List<String>.unmodifiable(_parseVideoTags(raw));
+    if (tags.isNotEmpty) {
+      _tags[key] = (DateTime.now().add(const Duration(seconds: 30)), tags);
+      if (_tags.length > 64) _tags.remove(_tags.keys.first);
+    }
+    return tags;
   }
 
   /// 解析视频标签接口并去重，损坏、空白或过长标签不会进入详情页。
@@ -1045,42 +1060,28 @@ class BilibiliVideoInfoService
     final custom = BilibiliHttpUserAgent.allowsMetadata(uri)
         ? await const HttpUserAgentPreferences().forRequest()
         : null;
-    final HttpClient client = HttpClient();
     try {
-      Future<String> send() async {
-        final HttpClientRequest request = await client.getUrl(uri);
-        if (custom != null) request.followRedirects = false;
-        final Map<String, String> requestHeaders =
-            BilibiliRequestPolicy.publicJsonHeaders(
-              uri,
-              userAgent: custom ?? _desktopUserAgent,
-            );
-        for (final MapEntry<String, String> header in requestHeaders.entries) {
-          request.headers.set(header.key, header.value);
-        }
-        final HttpClientResponse response = await request.close();
-        final String responseText = await response
-            .transform(utf8.decoder)
-            .join();
-        if (response.statusCode != HttpStatus.ok) {
-          throw BilibiliLookupException(
-            '视频详情接口暂时不可用（HTTP ${response.statusCode}）。',
-          );
-        }
-        return responseText;
+      final response = await AppHttpTransport.shared.send(
+        uri: uri,
+        headers: BilibiliRequestPolicy.publicJsonHeaders(
+          uri,
+          userAgent: custom ?? _desktopUserAgent,
+        ),
+        followRedirects: custom == null,
+        timeout: Duration(seconds: uri.path == _videoSearchPath ? 12 : 15),
+      );
+      if (response.statusCode != HttpStatus.ok) {
+        throw BilibiliLookupException(
+          '视频详情接口暂时不可用（HTTP ${response.statusCode}）。',
+        );
       }
-
-      final pending = send();
-      if (uri.path != _videoSearchPath) return await pending;
-      return await pending.timeout(const Duration(seconds: 12));
+      return response.bodyUtf8;
     } on TimeoutException {
       throw const BilibiliLookupException('搜索请求超时，请稍后重试。');
     } on SocketException {
       throw const BilibiliLookupException('无法连接到视频详情接口，请检查网络后重试。');
     } on HttpException {
       throw const BilibiliLookupException('视频详情接口的网络响应异常，请稍后重试。');
-    } finally {
-      client.close(force: true);
     }
   }
 }

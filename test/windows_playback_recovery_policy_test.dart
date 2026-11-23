@@ -3,6 +3,38 @@ import 'package:focubili/services/windows_playback_recovery_policy.dart';
 
 /// 验证 Windows 底层错误不会覆盖已经正常输出的音视频线路。
 void main() {
+  test('只把明确的视频解码失败分给解码回退', () {
+    final classify = WindowsPlaybackRecoveryPolicy.classify;
+    expect(
+      classify('Could not open codec.', prefix: 'vd'),
+      WindowsPlaybackFailure.videoDecoder,
+    );
+    expect(
+      classify('Failed to initialize a video decoder'),
+      WindowsPlaybackFailure.videoDecoder,
+    );
+    expect(
+      classify('Could not open codec.', prefix: 'ad'),
+      WindowsPlaybackFailure.route,
+    );
+    expect(
+      classify('network connection reset while opening decoder', prefix: 'vd'),
+      WindowsPlaybackFailure.route,
+    );
+    expect(
+      classify('HTTP error 403 Forbidden', prefix: 'vd'),
+      WindowsPlaybackFailure.expired,
+    );
+    expect(
+      classify('Server returned 410 Gone'),
+      WindowsPlaybackFailure.expired,
+    );
+    expect(
+      classify('HTTP status code 401'),
+      WindowsPlaybackFailure.accessDenied,
+    );
+  });
+
   /// 音视频都已解码且播放器未缓冲时，宽泛错误事件应被视为可忽略的旧事件或非致命日志。
   test('正常播放时底层错误不会触发备用线路', () {
     final bool shouldSwitch =

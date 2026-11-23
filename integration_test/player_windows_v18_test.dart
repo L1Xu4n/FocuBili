@@ -27,6 +27,8 @@ class _FixturePlayback extends WindowsPlaybackService {
     VideoPart? part,
     int quality = 64,
     Duration? initialPosition,
+    PlaybackCodecPreference? codecPreference,
+    bool preferDataSaving = false,
   }) => openLocalFile(
     filePath: path,
     video: video,

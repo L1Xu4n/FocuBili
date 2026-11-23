@@ -6,6 +6,7 @@ import 'package:focubili/features/common/app_network_image.dart';
 
 import '../../core/widgets/drag_selection_region.dart';
 import '../../models/subscription.dart';
+import '../../services/bilibili_image_url_policy.dart';
 import '../../services/image_resource_cache.dart';
 import '../../models/public_profile.dart';
 import '../../services/subscription_service.dart';
@@ -1043,6 +1044,22 @@ class _SubscriptionSettingsPageState extends State<SubscriptionSettingsPage> {
                           ? null
                           : _background,
                     ),
+                    if (_service.backgroundRefreshEnabled)
+                      SwitchListTile(
+                        key: const Key('subscription-wifi-only-background-switch'),
+                        title: const Text('仅在未计量网络后台检查'),
+                        value: _service.wifiOnlyBackgroundRefresh,
+                        subtitle: const Text(
+                          '开启后，后台任务仅在确认非计费网络（如不计费 Wi-Fi）时联网检查更新。',
+                        ),
+                        onChanged: _busy
+                            ? null
+                            : (value) => _action(
+                                () => _service.setWifiOnlyBackgroundRefresh(
+                                  value,
+                                ),
+                              ),
+                      ),
                     Text(
                       _service.lastBackgroundCheckAt == null
                           ? '最近后台检查：尚无记录'
@@ -1270,6 +1287,9 @@ class SubscriptionSourceImage extends StatelessWidget {
             ? fallback
             : AppNetworkImage(
                 imageUrl: source.imageUrl,
+                imageVariant: creator
+                    ? BilibiliImageVariant.avatar
+                    : BilibiliImageVariant.cover16x9,
                 httpHeaders: const {'Referer': 'https://www.bilibili.com/'},
                 fit: BoxFit.cover,
                 errorWidget: (_, _, _) => fallback,

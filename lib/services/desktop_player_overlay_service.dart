@@ -5,7 +5,9 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import '../models/player_overlay_data.dart';
+import 'app_http_client.dart';
 import 'bilibili_auth_service.dart';
+import 'cache_lifecycle.dart';
 import 'player_overlay_service.dart';
 import 'bilibili_wbi_signing_service.dart';
 import 'subtitle_diagnostic_log.dart';
@@ -47,6 +49,7 @@ class DesktopPlayerOverlayService
     BilibiliAuthService? authService,
     DesktopOverlayRequest? request,
   }) : _authService = authService ?? BilibiliAuthService(),
+       _useSharedPlayerInfo = request == null,
        _request = request ?? _performLimitedGet;
 
   static const int _maximumSubtitleMetadataBytes = 1024 * 1024;
@@ -67,7 +70,13 @@ class DesktopPlayerOverlayService
 
   final BilibiliAuthService _authService;
   final DesktopOverlayRequest _request;
+  final bool _useSharedPlayerInfo;
   static int _requestSequence = 0;
+  static int _playerInfoRevision = -1;
+  static final _playerInfoCache =
+      <Object, (DateTime, DesktopOverlayHttpResponse)>{};
+  static final _playerInfoPending =
+      <Object, Future<DesktopOverlayHttpResponse>>{};
   late final _wbiSigner = BilibiliWbiSigningService(
     requestJson: (uri, headers) async {
       final response = await _request(
@@ -114,23 +123,10 @@ class DesktopPlayerOverlayService
       facts: {'requestId': requestId, 'aid': 0, 'endpoint': '/x/player/wbi/v2'},
     );
     try {
-      final headers = await _buildHeaders(
-        bvid: normalizedBvid,
-        accept: 'application/json',
-        includeCookie: true,
-      );
-      final parameters = await _wbiSigner.signParameters({
-        'bvid': normalizedBvid,
-        'cid': cid.toString(),
-      }, headers: headers);
-      final Uri endpoint = Uri.https(
-        'api.bilibili.com',
-        '/x/player/wbi/v2',
-      ).replace(query: BilibiliWbiSigningService.encodeQuery(parameters));
-      final DesktopOverlayHttpResponse response = await _request(
-        endpoint,
-        headers,
-        _maximumSubtitleMetadataBytes,
+      final response = await _loadPlayerInfo(
+        normalizedBvid,
+        cid,
+        refresh: _subtitleSessions.containsKey(key),
       );
       if (!identical(_subtitleRequests[key], requestToken)) {
         return const SubtitleTrackLoadResult.unavailable();
@@ -143,7 +139,7 @@ class DesktopPlayerOverlayService
           source: 'dart-http',
           facts: {
             'requestId': requestId,
-            'endpoint': endpoint.path,
+            'endpoint': _playerInfoPath,
             'signed': true,
             'httpStatus': response.statusCode,
             'errorCode': 'subtitle_network',
@@ -163,7 +159,7 @@ class DesktopPlayerOverlayService
         source: 'dart-http',
         facts: {
           'requestId': requestId,
-          'endpoint': endpoint.path,
+          'endpoint': _playerInfoPath,
           'signed': true,
           'httpStatus': response.statusCode,
           'apiCode': code,
@@ -239,6 +235,155 @@ class DesktopPlayerOverlayService
       if (identical(_subtitleRequests[key], requestToken)) {
         _subtitleRequests.remove(key);
       }
+    }
+  }
+
+  static const _playerInfoPath = '/x/player/wbi/v2';
+
+  /// 获取增强功能所需的同一份已签名播放器原始响应。
+  Future<String> loadEnhancementPlayerInfo(String bvid, int cid) async {
+    final response = await _loadPlayerInfo(bvid, cid);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw HttpException('播放器信息请求失败（HTTP ${response.statusCode}）。');
+    }
+    return utf8.decode(response.bodyBytes);
+  }
+
+  /// 只在账号、登录状态、BV、CID 及签名模式一致时共享响应。
+  Future<DesktopOverlayHttpResponse> _loadPlayerInfo(
+    String bvid,
+    int cid, {
+    bool refresh = false,
+  }) async {
+    if (!_useSharedPlayerInfo) {
+      final headers = await _buildHeaders(
+        bvid: bvid,
+        accept: 'application/json',
+        includeCookie: true,
+      );
+      return _requestPlayerInfo(bvid, cid, headers);
+    }
+    final session = await _authService.capturePlaybackSession(_playerInfoPath);
+    await session.validate();
+    final revision = CacheLifecycle.subtitles.value;
+    if (_playerInfoRevision != revision) {
+      _playerInfoRevision = revision;
+      _playerInfoCache.clear();
+      _playerInfoPending.clear();
+    }
+    final key = (
+      CacheLifecycle.accountScope,
+      session.scopeKey,
+      session.snapshot.state,
+      bvid,
+      cid,
+      true,
+    );
+    final cached = _playerInfoCache.remove(key);
+    if (!refresh && cached != null && DateTime.now().isBefore(cached.$1)) {
+      _playerInfoCache[key] = cached;
+      return cached.$2;
+    }
+    final work = _playerInfoPending.putIfAbsent(key, () async {
+      final headers = await _buildHeaders(
+        bvid: bvid,
+        accept: 'application/json',
+        includeCookie: false,
+      );
+      final cookie = await session.headerFor(_playerInfoPath);
+      if (cookie.isNotEmpty) headers[HttpHeaders.cookieHeader] = cookie;
+      final result = await _requestPlayerInfo(
+        bvid,
+        cid,
+        headers,
+        session: session,
+      );
+      await session.validate();
+      if (revision != CacheLifecycle.subtitles.value) {
+        throw const _DesktopOverlayException();
+      }
+      if (_isCacheablePlayerInfo(result)) {
+        _playerInfoCache[key] = (
+          DateTime.now().add(const Duration(seconds: 20)),
+          result,
+        );
+        if (_playerInfoCache.length > 24) {
+          _playerInfoCache.remove(_playerInfoCache.keys.first);
+        }
+      }
+      return result;
+    });
+    try {
+      final result = await work;
+      await session.validate();
+      if (revision != CacheLifecycle.subtitles.value) {
+        throw const _DesktopOverlayException();
+      }
+      return result;
+    } finally {
+      if (identical(_playerInfoPending[key], work)) {
+        _playerInfoPending.remove(key);
+      }
+    }
+  }
+
+  /// 签名后读取固定官方端点，测试请求保持可注入。
+  Future<DesktopOverlayHttpResponse> _requestPlayerInfo(
+    String bvid,
+    int cid,
+    Map<String, String> headers, {
+    BilibiliPlaybackSession? session,
+  }) async {
+    final signer = session == null
+        ? _wbiSigner
+        : BilibiliWbiSigningService.shared;
+    final parameters = await signer.signParameters(
+      {'bvid': bvid, 'cid': cid.toString()},
+      headers: headers,
+      scopeKey: session?.signingScopeKey ?? 'default',
+      requestJson: session == null
+          ? null
+          : (uri, headers) async {
+              final cookie = await session.headerFor(uri.path);
+              final response = await AppHttpTransport.shared.send(
+                uri: uri,
+                headers: {...headers, HttpHeaders.cookieHeader: cookie},
+                maxResponseBytes: _maximumSubtitleMetadataBytes,
+                followRedirects: false,
+              );
+              if (response.statusCode != 200) {
+                throw WbiSigningException(httpStatus: response.statusCode);
+              }
+              await session.mergeResponse(
+                uri.path,
+                response.headerValues(HttpHeaders.setCookieHeader),
+              );
+              return response.bodyUtf8;
+            },
+    );
+    final endpoint = Uri.https(
+      'api.bilibili.com',
+      _playerInfoPath,
+    ).replace(query: BilibiliWbiSigningService.encodeQuery(parameters));
+    if (session != null) {
+      final cookie = await session.headerFor(_playerInfoPath);
+      if (cookie.isEmpty) {
+        headers.remove(HttpHeaders.cookieHeader);
+      } else {
+        headers[HttpHeaders.cookieHeader] = cookie;
+      }
+    }
+    return _request(endpoint, headers, _maximumSubtitleMetadataBytes);
+  }
+
+  /// 只保存 HTTP 与业务状态都成功的完整播放器响应。
+  bool _isCacheablePlayerInfo(DesktopOverlayHttpResponse response) {
+    if (response.statusCode != 200) return false;
+    try {
+      final root = _decodeJsonObject(response.bodyBytes);
+      return root['code'] == 0 && root['data'] is Map;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -407,49 +552,23 @@ class DesktopPlayerOverlayService
     }
   }
 
-  /// 限制响应大小、单次读取和总时长，慢速连续响应也会在 30 秒后停止。
+  /// 共享连接透明解压，并按解压后的字节执行各接口的限制。
   static Future<DesktopOverlayHttpResponse> _performLimitedGet(
     Uri endpoint,
     Map<String, String> headers,
     int maximumBytes,
   ) async {
-    final HttpClient client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 15);
-    final Timer deadline = Timer(const Duration(seconds: 30), () {
-      client.close(force: true);
-    });
-    try {
-      final HttpClientRequest request = await client
-          .getUrl(endpoint)
-          .timeout(const Duration(seconds: 15));
-      request.followRedirects = false;
-      headers.forEach(request.headers.set);
-      final HttpClientResponse response = await request.close().timeout(
-        const Duration(seconds: 15),
-      );
-      final int declaredLength = response.contentLength;
-      if (declaredLength > maximumBytes) {
-        throw const _DesktopOverlayException();
-      }
-      final BytesBuilder output = BytesBuilder(copy: false);
-      int receivedBytes = 0;
-      await for (final List<int> chunk in response.timeout(
-        const Duration(seconds: 15),
-      )) {
-        receivedBytes += chunk.length;
-        if (receivedBytes > maximumBytes) {
-          throw const _DesktopOverlayException();
-        }
-        output.add(chunk);
-      }
-      return DesktopOverlayHttpResponse(
-        statusCode: response.statusCode,
-        bodyBytes: output.takeBytes(),
-      );
-    } finally {
-      deadline.cancel();
-      client.close(force: true);
-    }
+    final response = await AppHttpTransport.shared.send(
+      uri: endpoint,
+      headers: headers,
+      maxResponseBytes: maximumBytes,
+      followRedirects: false,
+      timeout: const Duration(seconds: 30),
+    );
+    return DesktopOverlayHttpResponse(
+      statusCode: response.statusCode,
+      bodyBytes: response.bytes,
+    );
   }
 
   /// 使用同一登录状态创建请求头，读取失败时不悄悄改成匿名请求并缩减字幕列表。
@@ -460,7 +579,6 @@ class DesktopPlayerOverlayService
   }) async {
     final Map<String, String> headers = <String, String>{
       HttpHeaders.acceptHeader: accept,
-      HttpHeaders.acceptEncodingHeader: 'identity',
       HttpHeaders.refererHeader: 'https://www.bilibili.com/video/$bvid',
       HttpHeaders.userAgentHeader: BilibiliHttpAuthApi.desktopUserAgent,
       HttpHeaders.cacheControlHeader: 'no-cache',

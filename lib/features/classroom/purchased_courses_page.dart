@@ -6,6 +6,7 @@ import '../../core/layout/adaptive_layout.dart';
 import '../../services/bilibili_auth_service.dart';
 import '../../services/bilibili_course_link.dart';
 import '../../services/bilibili_course_service.dart';
+import '../../services/bilibili_image_url_policy.dart';
 import '../../services/cache_lifecycle.dart';
 import '../profile/login_page.dart';
 import 'course_page.dart';
@@ -87,6 +88,7 @@ class _PurchasedCoursesPageState extends State<PurchasedCoursesPage>
     return generation;
   }
 
+  /// Loads the account list and ignores results from superseded requests.
   Future<void> _load({bool clearSearch = false}) async {
     if (_suspended) return;
     final generation = _invalidate(clearSearch: clearSearch);
@@ -108,6 +110,12 @@ class _PurchasedCoursesPageState extends State<PurchasedCoursesPage>
         setState(() => _loading = false);
       }
     }
+  }
+
+  /// Refreshes the visible list from the official endpoint.
+  Future<void> _refresh() {
+    _service.clearMetadataCache();
+    return _load();
   }
 
   Future<void> _openLink() async {
@@ -222,7 +230,7 @@ class _PurchasedCoursesPageState extends State<PurchasedCoursesPage>
               },
               child: const Text('登录购买账号'),
             ),
-            FilledButton(onPressed: _load, child: const Text('重新加载')),
+            FilledButton(onPressed: _refresh, child: const Text('重新加载')),
           ],
         ),
       ],
@@ -266,7 +274,7 @@ class _PurchasedCoursesPageState extends State<PurchasedCoursesPage>
           ),
           IconButton(
             tooltip: '刷新已购课程',
-            onPressed: _loading ? null : _load,
+            onPressed: _loading ? null : _refresh,
             icon: const Icon(Icons.refresh_rounded),
           ),
         ],
@@ -274,7 +282,7 @@ class _PurchasedCoursesPageState extends State<PurchasedCoursesPage>
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
-              onRefresh: _load,
+              onRefresh: _refresh,
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   final inset = AdaptiveLayout.centeredHorizontalPadding(
@@ -447,6 +455,7 @@ class _CourseCover extends StatelessWidget {
   final PurchasedCourse course;
   final double width;
 
+  /// Accepts only public classroom covers on trusted HTTPS hosts.
   static Uri? _coverUri(String value) {
     final uri = Uri.tryParse(value);
     if (uri == null ||
@@ -484,7 +493,10 @@ class _CourseCover extends StatelessWidget {
                 // No session headers, purchase-record persistence or disk image
                 // cache. Flutter keeps only the usual in-memory decode cache.
                 : Image.network(
-                    url.toString(),
+                    BilibiliImageUrlPolicy.resolve(
+                      url.toString(),
+                      variant: BilibiliImageVariant.cover16x9,
+                    ),
                     fit: BoxFit.cover,
                     cacheWidth: (width * MediaQuery.devicePixelRatioOf(context))
                         .ceil()

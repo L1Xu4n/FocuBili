@@ -9,6 +9,7 @@ import '../models/offline_video_download.dart';
 import '../models/video_preview.dart';
 import '../models/playback_preferences.dart';
 import '../platform/platform_services.dart';
+import 'app_http_client.dart';
 import 'bilibili_cookie_store.dart';
 import 'offline_cache_locations.dart';
 import 'offline_media_plan.dart';
@@ -427,6 +428,10 @@ class OfflineVideoService {
           );
         } on DownloadInterrupted {
           rethrow;
+        } on FileSystemException {
+          throw const OfflineVideoException('本地存储空间不足或缓存目录不可用，请检查后重试。');
+        } on OfflineCacheLocationException {
+          rethrow;
         } catch (_) {
           control?.check();
           // 下一轮刷新临时地址；同一音轨已完成时可直接复用。
@@ -592,6 +597,7 @@ class OfflineVideoService {
     void Function(int, int?) onProgress,
   ) async {
     for (final url in track.urls) {
+      await control?.checkBeforeAttempt();
       try {
         /// 每次进度回调先检查暂停或取消，再汇总到整份音视频缓存。
         void report(int received, int? total) {
@@ -621,6 +627,10 @@ class OfflineVideoService {
         }
         return received;
       } on DownloadInterrupted {
+        rethrow;
+      } on FileSystemException {
+        rethrow;
+      } on OfflineCacheLocationException {
         rethrow;
       } catch (_) {
         control?.check();
@@ -652,29 +662,25 @@ class OfflineVideoService {
     DownloadControl? control,
   }) async {
     control?.check();
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 15);
-    control?.abort = () => client.close(force: true);
+    final cancelToken = AppHttpCancelToken();
+    control?.abort = cancelToken.cancel;
     try {
-      final request = await client.getUrl(uri);
-      request.followRedirects = false;
-      headers.forEach(request.headers.set);
-      final response = await request.close().timeout(
-        const Duration(seconds: 20),
+      final response = await AppHttpTransport.shared.send(
+        uri: uri,
+        headers: headers,
+        followRedirects: false,
+        timeout: const Duration(seconds: 20),
+        cancelToken: cancelToken,
       );
       if (response.statusCode != 200) {
         throw const OfflineVideoException('下载信息请求失败。');
       }
-      return await response
-          .timeout(const Duration(seconds: 20))
-          .transform(utf8.decoder)
-          .join();
+      return response.bodyUtf8;
     } catch (_) {
       control?.check();
       rethrow;
     } finally {
       control?.abort = null;
-      client.close(force: true);
     }
   }
 }

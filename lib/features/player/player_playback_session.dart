@@ -30,6 +30,9 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
   bool _changingPlaybackSource = false;
   int? _offlineQuality;
   int _sourceGeneration = 0;
+  (int, int)? _readyOnlineOverlaySource;
+  (String, int)? _onlineMetadataPart;
+  int _onlineMetadataEpoch = 0;
   bool _externalNavigationSuspended = false;
   void Function(PlaybackSnapshot)? _observeSourceStartup;
 
@@ -44,6 +47,27 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
 
   void _maybeAutoEnableSubtitles();
   void _cancelAutomaticSubtitlesForLocalSource();
+  void _clearDanmakuForPart();
+  void _clearOfflineSourceMetadata();
+  void _startVideoInteractionStateLoad();
+  void _loadLocalVideoActions();
+  set _networkType(DeviceNetworkType value);
+
+  /// 只在已打开的在线画面结束初始续播定位后请求弹幕。
+  bool get _canLoadOnlineDanmaku {
+    final snapshot = _playbackSnapshot;
+    final source = snapshot.sourceIdentity;
+    return !_playingOffline &&
+        _readyOnlineOverlaySource ==
+            (_sourceGeneration, _partSwitchGeneration) &&
+        !_externalNavigationSuspended &&
+        snapshot.phase == PlaybackPhase.ready &&
+        !snapshot.audioOnly &&
+        !snapshot.isRestoringPosition &&
+        (source == null ||
+            source ==
+                (bvid: _activeVideo.bvid, cid: _currentPart.cid, local: false));
+  }
 
   bool _observeAbRepeatSnapshot(
     PlaybackSnapshot previous,
@@ -132,6 +156,8 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     Duration? initialPosition,
     bool? useLocal,
     bool allowStartupFallback = true,
+    bool useNetworkDefault = false,
+    VoidCallback? onOnlineOpened,
   }) async {
     final generation = ++_sourceGeneration;
     final navigation = _partSwitchGeneration;
@@ -184,7 +210,12 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
         _playingOffline = file != null;
         _offlineQuality = file?.qualityId;
         if (file != null) {
+          _readyOnlineOverlaySource = null;
+          _onlineMetadataPart = null;
+          _onlineMetadataEpoch++;
+          _clearDanmakuForPart();
           _cancelAutomaticSubtitlesForLocalSource();
+          _clearOfflineSourceMetadata();
           _defaultQualityPending = false;
           await _openManagedLocalMedia(
             service,
@@ -194,16 +225,48 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
             initialPosition,
           );
         } else {
+          final network = await _loadNetworkStatusSafely();
+          if (!isCurrent()) return;
+          final preferences = _playbackPreferences;
+          final networkQuality = _preferredQualityForNetwork(
+            preferences,
+            network,
+          );
+          _networkType = network.type;
+          if (useNetworkDefault) _preferredOpeningQuality = networkQuality;
           _defaultQualityPending = defaultQualityPending;
           await service.openVideo(
             video,
             part: part,
-            quality: quality > 0 ? quality : _preferredOpeningQuality,
+            quality: useNetworkDefault
+                ? networkQuality
+                : quality > 0
+                ? quality
+                : _preferredOpeningQuality,
             initialPosition: initialPosition,
+            codecPreference: preferences.codecPreference,
+            preferDataSaving:
+                network.prefersDataSaving ||
+                preferences.codecPreference ==
+                    PlaybackCodecPreference.dataSaver,
           );
           if (isCurrent() &&
+              !_playingOffline &&
               video.bvid == _activeVideo.bvid &&
               part.cid == _currentPart.cid) {
+            _readyOnlineOverlaySource = (generation, navigation);
+            final metadataPart = (video.bvid, part.cid);
+            if (_onlineMetadataPart != metadataPart) {
+              _onlineMetadataPart = metadataPart;
+              _onlineMetadataEpoch++;
+              _startVideoInteractionStateLoad();
+              if (onOnlineOpened == null) {
+                unawaited(_loadPlayerEnhancements());
+              } else {
+                onOnlineOpened();
+              }
+            }
+            _ensureDanmakuSegmentsForPosition(_playbackSnapshot.position);
             _maybeAutoEnableSubtitles();
           }
         }
@@ -516,26 +579,34 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     }
   }
 
-  /// 读取当前网络类型；平台服务异常时按更保守的其他网络配置处理。
-  Future<DeviceNetworkType> _loadNetworkTypeSafely() async {
+  /// 在线开播时读取传输类型、计量状态与系统省流开关。
+  Future<DeviceNetworkStatus> _loadNetworkStatusSafely() async {
+    const unknown = DeviceNetworkStatus(type: DeviceNetworkType.other);
     if (widget.playbackService != null && widget.deviceStatusService == null) {
-      return DeviceNetworkType.other;
+      return unknown;
     }
     try {
-      return await _deviceStatusService.loadNetworkType();
+      return await _deviceStatusService.loadNetworkStatus();
     } catch (_) {
-      return DeviceNetworkType.other;
+      return unknown;
     }
   }
+
+  /// 提供控制栏所需的网络类型，沿用在线播放的设备状态读取。
+  Future<DeviceNetworkType> _loadNetworkTypeSafely() async =>
+      (await _loadNetworkStatusSafely()).type;
 
   /// 根据 Wi-Fi、有线或移动网络返回本次打开视频应请求的默认清晰度。
   int _preferredQualityForNetwork(
     PlaybackPreferences preferences,
-    DeviceNetworkType networkType,
+    DeviceNetworkStatus network,
   ) {
-    return switch (networkType) {
+    return switch (network.type) {
       DeviceNetworkType.wifi ||
       DeviceNetworkType.ethernet => preferences.wifiDefaultQuality.id,
+      DeviceNetworkType.other
+          when !_appPlatform.isMobile && !network.isKnownMetered =>
+        preferences.wifiDefaultQuality.id,
       DeviceNetworkType.mobile ||
       DeviceNetworkType.offline ||
       DeviceNetworkType.other => preferences.mobileDefaultQuality.id,
@@ -547,10 +618,9 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     final generation = _sourceGeneration;
     try {
       final PlaybackPreferences preferences = await _loadPlaybackPreferences();
-      final DeviceNetworkType networkType = await _loadNetworkTypeSafely();
       final int preferredQuality = _preferredQualityForNetwork(
         preferences,
-        networkType,
+        const DeviceNetworkStatus(type: DeviceNetworkType.other),
       );
       final SavedPlaybackState? savedState = await _playbackService
           .loadSavedPlaybackState(_activeVideo.bvid);
@@ -575,12 +645,11 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
       _applyInitialPlaybackConfiguration(
         part: resumePlan.part,
         levels: levels,
-        networkType: networkType,
+        networkType: DeviceNetworkType.other,
         preferredQuality: preferredQuality,
       );
       _refreshOfflinePartState();
       unawaited(_loadCurrentLearningListEntry());
-      unawaited(_loadPlayerEnhancements());
       if (resumePlan.shouldShowPartNotice && _activeVideo.parts.length > 1) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _showPartRestoreSnackBar(resumePlan.part.pageNumber);
@@ -597,6 +666,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
         _activeVideo,
         part: _currentPart,
         quality: preferredQuality,
+        useNetworkDefault: true,
         initialPosition:
             widget.initialPartCid != null &&
                 resumePlan.positionSource == PlaybackResumePositionSource.none

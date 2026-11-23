@@ -93,6 +93,8 @@ class _PersonalizationSettingsPageState
   final _lineMenuKey =
       GlobalKey<PopupMenuButtonState<PlaybackLinePreference>>();
   final _playbackSourceMenuKey = GlobalKey<PopupMenuButtonState<bool>>();
+  final _codecMenuKey =
+      GlobalKey<PopupMenuButtonState<PlaybackCodecPreference>>();
   bool _searchHistoryEnabled = true;
   bool _watchHistoryEnabled = true;
   bool _wbiSigningEnabled = false;
@@ -861,6 +863,84 @@ class _PersonalizationSettingsPageState
     }
   }
 
+  /// Saves the codec strategy for the next opened video.
+  Future<void> _setCodecPreference(PlaybackCodecPreference preference) async {
+    if (_saving || preference == _preferences.codecPreference) return;
+    final previous = _preferences.codecPreference;
+    setState(() {
+      _saving = true;
+      _preferences = _preferences.copyWith(codecPreference: preference);
+    });
+    try {
+      await widget.preferencesService.saveCodecPreference(preference);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _preferences = _preferences.copyWith(codecPreference: previous);
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('视频编码设置保存失败，请稍后重试。')));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// Saves whether offline downloads require a confirmed unmetered network.
+  Future<void> _setWifiOnlyOfflineDownloads(bool enabled) async {
+    if (_saving || enabled == _preferences.wifiOnlyOfflineDownloads) return;
+    final previous = _preferences.wifiOnlyOfflineDownloads;
+    setState(() {
+      _saving = true;
+      _preferences = _preferences.copyWith(wifiOnlyOfflineDownloads: enabled);
+    });
+    try {
+      await widget.preferencesService.saveWifiOnlyOfflineDownloads(enabled);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _preferences = _preferences.copyWith(
+          wifiOnlyOfflineDownloads: previous,
+        );
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('离线下载网络设置保存失败，请稍后重试。')));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Widget _buildCodecPreferenceTile() => ListTile(
+    key: const Key('playback-codec-preference'),
+    leading: const Icon(Icons.memory_rounded),
+    title: const Text('视频编码策略'),
+    enabled: !_saving,
+    onTap: _saving
+        ? null
+        : () => _codecMenuKey.currentState?.showButtonMenu(),
+    subtitle: Text(
+      _preferences.codecPreference == PlaybackCodecPreference.dataSaver
+          ? '硬解省流：在目标画质内优先设备确认支持的低码率硬解轨道（保留兼容回退）'
+          : '兼容优先：优先选择通用兼容性更高的 AVC 轨道，下次加载生效',
+    ),
+    trailing: PopupMenuButton<PlaybackCodecPreference>(
+      key: _codecMenuKey,
+      enabled: !_saving,
+      tooltip: '选择视频编码策略',
+      icon: const Icon(Icons.arrow_drop_down),
+      initialValue: _preferences.codecPreference,
+      onSelected: _setCodecPreference,
+      itemBuilder: (context) => [
+        for (final option in PlaybackCodecPreference.values)
+          PopupMenuItem(
+            value: option,
+            child: Text(option.label),
+          ),
+      ],
+    ),
+  );
+
   Widget _buildPlaybackSourceTile() => ListTile(
     leading: const Icon(Icons.play_circle_outline_rounded),
     title: const Text('优先播放来源'),
@@ -1169,6 +1249,15 @@ class _PersonalizationSettingsPageState
         _buildDefaultQualityTile(forWifi: true),
         _buildDefaultQualityTile(forWifi: false),
         _buildPlaybackSourceTile(),
+        _buildCodecPreferenceTile(),
+        SwitchListTile.adaptive(
+          key: const Key('wifi-only-offline-downloads'),
+          value: _preferences.wifiOnlyOfflineDownloads,
+          onChanged: _saving ? null : _setWifiOnlyOfflineDownloads,
+          secondary: const Icon(Icons.wifi_lock_outlined),
+          title: const Text('仅在未计量网络下载离线缓存'),
+          subtitle: const Text('开启后，非未计量网络或无法确认网络计费状态时自动暂停离线缓存任务'),
+        ),
         ListTile(
           key: const Key('playback-line-preference'),
           leading: const Icon(Icons.alt_route_rounded),

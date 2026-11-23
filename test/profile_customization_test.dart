@@ -13,7 +13,9 @@ class _AccountFixture extends BilibiliAuthService {
 
   /// 返回本地测试账号，避免真实网络与 Cookie 访问。
   @override
-  Future<BilibiliSessionState> loadCurrentSession() async =>
+  Future<BilibiliSessionState> loadCurrentSession({
+    bool forceRefresh = false,
+  }) async =>
       const BilibiliSessionState.active(
         BilibiliAccount(mid: 123, name: '测试账号', avatarUrl: ''),
       );

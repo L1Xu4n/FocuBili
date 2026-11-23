@@ -50,11 +50,13 @@ class WindowsPlaybackService
     Future<String> Function()? bufferStateReader,
     this.courseCacheGuard,
     AppPlatform? appPlatform,
+    DateTime Function()? clock,
   }) : _appPlatform = appPlatform ?? AppPlatformDetector.current,
        _sourceService = sourceService ?? BilibiliDesktopPlaybackSourceService(),
        _videoShotService = videoShotService ?? BilibiliVideoShotService.shared,
        _progressStore = progressStore ?? const WindowsPlaybackProgressStore(),
        _bufferStateReader = bufferStateReader,
+       _clock = clock ?? DateTime.now,
        _player =
            player ??
            Player(
@@ -89,6 +91,7 @@ class WindowsPlaybackService
   final BilibiliVideoShotService _videoShotService;
   final WindowsPlaybackProgressStore _progressStore;
   final Future<String> Function()? _bufferStateReader;
+  final DateTime Function() _clock;
   final Player _player;
   final CourseCachePlaybackGuard? courseCacheGuard;
   Timer? _courseExpiry;
@@ -139,6 +142,10 @@ class WindowsPlaybackService
         _snapshot.phase != PlaybackPhase.ended && _shouldPlayAfterFallback;
     final previous = _audioOnly;
     final generation = _beginSourceRequest();
+    if (video.isCourse) {
+      _courseAccountRevision ??=
+          _loadedCourseAccountRevision ?? CacheLifecycle.account.value;
+    }
     _audioOnly = enabled;
     _opening = true;
     _shouldPlayAfterFallback = playing;
@@ -165,6 +172,7 @@ class WindowsPlaybackService
           quality: _currentQuality,
           resumePosition: position,
           shouldPlay: _shouldPlayAfterFallback,
+          reuseSources: true,
         );
       }
     } catch (_) {
@@ -200,14 +208,28 @@ class WindowsPlaybackService
   Future<void> _progressSaveQueue = Future<void>.value();
   bool _disposed = false;
   bool _opening = false;
+  bool _mediaLoaded = false;
   bool _restoringPosition = false;
-  bool _handlingMediaError = false;
-  bool _cacheConfigured = false;
+  int? _recoveringGeneration;
+  Future<void>? _cacheConfiguration;
   int? _courseAccountRevision;
+  int? _loadedCourseAccountRevision;
   Future<void> _accountChangeStop = Future<void>.value();
   // Includes issued play commands: logout must stop after every media activation.
   final Set<Future<void>> _pendingMediaOpens = {};
   Future<void> Function()? _activeSessionValidator;
+  Future<void> Function()? _loadedSessionValidator;
+
+  /// 停掉底层已加载媒体后，再解除绑定在旧媒体上的课堂账号、校验器与到期保护。
+  Future<void> _stopLoadedMedia() async {
+    await _player.stop();
+    _mediaLoaded = false;
+    _loadedCourseAccountRevision = null;
+    _loadedSessionValidator = null;
+    _courseExpiry?.cancel();
+    _courseExpiry = null;
+    _activeCourseReceipt = null;
+  }
 
   /// Wait before registering a media command. Course-account revocation may
   /// wait for commands already registered in [_pendingMediaOpens]; a command
@@ -223,17 +245,21 @@ class WindowsPlaybackService
     return false;
   }
 
+  /// Checks authorization again before issuing a command on an existing source.
   Future<bool> _validateActiveSession(int generation) async {
     if (!_isCurrentSourceRequest(generation)) return false;
-    final validate = _activeSessionValidator;
+    final validate = _activeSessionValidator ?? _loadedSessionValidator;
     try {
       await validate?.call();
     } catch (error) {
       if (!_isCurrentSourceRequest(generation)) return false;
       _shouldPlayAfterFallback = false;
+      _cachedSources = null;
       _mediaAttempts = const [];
       final stopped = _accountChangeStop.then((_) async {
-        if (_isCurrentSourceRequest(generation)) await _player.stop();
+        if (_isCurrentSourceRequest(generation)) {
+          await _stopLoadedMedia();
+        }
       });
       _accountChangeStop = stopped.catchError((Object _) {});
       await stopped;
@@ -251,6 +277,9 @@ class WindowsPlaybackService
     final fence = Completer<void>();
     _pendingMediaOpens.add(fence.future);
     try {
+      _mediaLoaded = true;
+      _loadedCourseAccountRevision = _courseAccountRevision;
+      _loadedSessionValidator = _activeSessionValidator;
       await _player.open(media, play: play);
       await _validateActiveSession(generation);
     } finally {
@@ -288,7 +317,9 @@ class WindowsPlaybackService
     _courseExpiry = delay == null
         ? null
         : Timer(delay, () {
-            if (_isCurrentSourceRequest(generation)) {
+            if (!_disposed &&
+                (_isCurrentSourceRequest(generation) ||
+                    _loadedCourseAccountRevision != null)) {
               _handleCourseAccountChanged(message: '本次课程校验已到期，请返回离线缓存。');
             }
           });
@@ -300,17 +331,25 @@ class WindowsPlaybackService
     final version = _courseLibraryVersion = library.listVersion;
     final read = _activeCourseReceipt;
     final generation = _sourceGeneration;
-    if (read == null || !_isCurrentSourceRequest(generation)) return;
+    if (read == null ||
+        (!_isCurrentSourceRequest(generation) &&
+            _loadedCourseAccountRevision == null)) {
+      return;
+    }
     unawaited(() async {
       try {
         final fresh = await read();
-        if (_isCurrentSourceRequest(generation) &&
-            _courseLibraryVersion == version) {
+        if (!_disposed &&
+            _courseLibraryVersion == version &&
+            (_isCurrentSourceRequest(generation) ||
+                _loadedCourseAccountRevision != null)) {
           _scheduleCourseExpiry(library.untilExpiry(fresh), generation);
         }
       } catch (_) {
-        if (_isCurrentSourceRequest(generation) &&
-            _courseLibraryVersion == version) {
+        if (!_disposed &&
+            _courseLibraryVersion == version &&
+            (_isCurrentSourceRequest(generation) ||
+                _loadedCourseAccountRevision != null)) {
           _handleCourseAccountChanged(message: '课程缓存状态已变化，请返回离线缓存。');
         }
       }
@@ -319,9 +358,16 @@ class WindowsPlaybackService
 
   /// 课程媒体只属于请求时的账号；切换立即撤销候选并串行停流。
   void _handleCourseAccountChanged({String message = '登录状态已变化，请重新打开课程。'}) {
-    if (_disposed || _courseAccountRevision == null) return;
+    if (_disposed ||
+        (_courseAccountRevision == null &&
+            _loadedCourseAccountRevision == null)) {
+      return;
+    }
+    // 若新源打开失败后旧课堂仍加载在底层播放器中，须继续阻断后续 play() 重启。
+    _courseAccountRevision ??= _loadedCourseAccountRevision;
     final generation = ++_sourceGeneration;
     _activeCourseReceipt = null;
+    _activeSessionValidator = null;
     _courseExpiry?.cancel();
     _courseExpiry = null;
     _bufferedRanges = const [];
@@ -336,7 +382,9 @@ class WindowsPlaybackService
     _accountChangeStop = _accountChangeStop
         .then((_) async {
           await Future.wait(pendingOpens);
-          if (!_disposed) await _player.stop();
+          if (!_disposed) {
+            await _stopLoadedMedia();
+          }
         })
         .catchError((Object _) {});
     unawaited(
@@ -358,6 +406,31 @@ class WindowsPlaybackService
   int _currentMediaAttemptIndex = 0;
   List<WindowsDashMediaAttempt> _mediaAttempts =
       const <WindowsDashMediaAttempt>[];
+  PlaybackCodecPreference _codecPreference = PlaybackCodecPreference.compatible;
+  bool _preferDataSaving = false;
+  static const _sourceLifetime = Duration(minutes: 10);
+  ({
+    String bvid,
+    int cid,
+    int account,
+    DateTime fetchedAt,
+    DesktopPlaybackSources sources,
+  })?
+  _cachedSources;
+  DesktopPlaybackSources? _activeSources;
+  DesktopVideoAlternative? _activeVideoTrack;
+  ({
+    DesktopPlaybackSources sources,
+    DesktopVideoAlternative? track,
+    List<WindowsDashMediaAttempt> attempts,
+  })?
+  _cachedVideoAttempts;
+  final Set<({int quality, String codec, int bandwidth})> _failedVideoTracks =
+      {};
+  int _sourceRefreshes = 0;
+  WindowsPlaybackFailure _attemptFailure = WindowsPlaybackFailure.route;
+  bool _acceptAttemptErrors = false;
+  int _mediaAttemptRevision = 0;
   Map<String, String> _activeMediaHeaders = const <String, String>{};
   Media? _activeAudioMedia;
   String _activeAudioTrackToken = '';
@@ -422,6 +495,8 @@ class WindowsPlaybackService
     VideoPart? part,
     int quality = 64,
     Duration? initialPosition,
+    PlaybackCodecPreference? codecPreference,
+    bool preferDataSaving = false,
   }) async {
     _ensureAvailable();
     final VideoPart targetPart = part ?? video.initialPart;
@@ -459,8 +534,16 @@ class WindowsPlaybackService
     if (!_isCurrentSourceRequest(generation)) {
       return;
     }
-    await _diskCacheSession?.setDiskAllowed(!video.isCourse);
+    final effectiveCodec =
+        codecPreference ??
+        (await const PlaybackPreferencesService().loadRoutePreferences())
+            .codecPreference;
     if (!_isCurrentSourceRequest(generation)) return;
+    _codecPreference = effectiveCodec;
+    _preferDataSaving = preferDataSaving;
+    _cachedSources = null;
+    _cachedVideoAttempts = null;
+    _failedVideoTracks.clear();
     _currentVideo = video;
     _localSource = false;
     _currentPart = targetPart;
@@ -558,6 +641,9 @@ class WindowsPlaybackService
     }
     final isCourse = video?.isCourse == true;
     final guard = courseCacheGuard;
+    Future<CourseCacheEntry> Function()? nextCourseReceipt;
+    CourseCacheEntry? nextCourseEntry;
+    Future<void> Function()? nextSessionValidator;
     if (isCourse ||
         await CourseCachePlaybackGuard.isPrivateFile(file) ||
         audioFile != null &&
@@ -571,16 +657,15 @@ class WindowsPlaybackService
       );
       final receipt = await verify();
       if (!_isCurrentSourceRequest(generation)) return;
-      _activeCourseReceipt = verify;
-      _activeSessionValidator = () async {
-        await verify();
-      };
       final delay = guard.library.untilExpiry(receipt);
       if (delay != null && delay <= Duration.zero) {
         throw StateError('本次课程校验已到期。');
       }
-      _scheduleCourseExpiry(delay, generation);
-      await _diskCacheSession?.setDiskAllowed(false);
+      nextCourseReceipt = verify;
+      nextCourseEntry = receipt;
+      nextSessionValidator = () async {
+        await verify();
+      };
     }
     if (!_isCurrentSourceRequest(generation)) return;
     await _saveCurrentProgress(force: true);
@@ -622,7 +707,18 @@ class WindowsPlaybackService
       message: '正在打开离线视频…',
     );
     try {
-      await _player.stop();
+      await _stopLoadedMedia();
+      if (!_isCurrentSourceRequest(generation)) return;
+      _activeCourseReceipt = nextCourseReceipt;
+      _activeSessionValidator = nextSessionValidator;
+      if (nextCourseEntry != null && guard != null) {
+        final remaining = guard.library.untilExpiry(nextCourseEntry);
+        if (remaining != null && remaining <= Duration.zero) {
+          throw StateError('本次课程校验已到期。');
+        }
+        _scheduleCourseExpiry(remaining, generation);
+      }
+      await _applyMediaCachePolicy(generation, diskAllowed: !isCourse);
       if (!_isCurrentSourceRequest(generation)) return;
       await _openPlayerMedia(
         Media(
@@ -692,6 +788,7 @@ class WindowsPlaybackService
   Future<bool> _waitForMediaReady(int generation) async {
     final deadline = DateTime.now().add(_audioDecoderReadyTimeout);
     while (_isCurrentSourceRequest(generation)) {
+      if (_opening && _acceptAttemptErrors) _throwIfKnownMediaFailure();
       if (_player.state.duration > Duration.zero && _hasDecodedVideo()) {
         return true;
       }
@@ -876,14 +973,17 @@ class WindowsPlaybackService
     await _player.setRate(speed);
   }
 
-  /// 保留当前进度与播放状态，重新请求并打开用户选择的清晰度。
+  /// 保留进度和暂停意图，优先复用当前响应已经下发的确切清晰度。
   @override
   Future<void> selectQuality(int quality) async {
     _ensureAvailable();
     if (quality <= 0) {
       throw ArgumentError.value(quality, 'quality', '需要有效的清晰度编号。');
     }
-    if (_currentVideo == null || _currentPart == null) {
+    if (quality == _currentQuality ||
+        _localSource ||
+        _currentVideo == null ||
+        _currentPart == null) {
       return;
     }
     final Duration position = _player.state.position;
@@ -892,7 +992,10 @@ class WindowsPlaybackService
     final VideoPreview video = _currentVideo!;
     final VideoPart part = _currentPart!;
     final int generation = _beginSourceRequest();
-    _currentQuality = quality;
+    if (video.isCourse) {
+      _courseAccountRevision ??=
+          _loadedCourseAccountRevision ?? CacheLifecycle.account.value;
+    }
     await _openCurrentSource(
       generation: generation,
       video: video,
@@ -900,6 +1003,7 @@ class WindowsPlaybackService
       quality: quality,
       resumePosition: position,
       shouldPlay: shouldPlay,
+      reuseSources: true,
     );
   }
 
@@ -1097,10 +1201,13 @@ class WindowsPlaybackService
     }
   }
 
-  /// Preserve mpv disk-backed seeks with a measured soft disk threshold.
-  Future<void> _configureWindowsMediaCache() async {
-    if (_cacheConfigured || _disposed) return;
-    _cacheConfigured = true;
+  /// Shares one disk lease setup across initialization and concurrent opens.
+  Future<void> _configureWindowsMediaCache() =>
+      _cacheConfiguration ??= _createDiskCacheSession();
+
+  /// Connects the lease to the native player's verified option interface.
+  Future<void> _createDiskCacheSession() async {
+    if (_disposed) return;
     final platformPlayer = _player.platform;
     if (platformPlayer is! NativePlayer) return;
     final session = DesktopDiskCacheSession(
@@ -1109,6 +1216,19 @@ class WindowsPlaybackService
     );
     _diskCacheSession = session;
     await session.configure();
+  }
+
+  /// Applies the network and classroom budget after closing the old media.
+  Future<void> _applyMediaCachePolicy(
+    int generation, {
+    required bool diskAllowed,
+  }) async {
+    await _configureWindowsMediaCache();
+    if (!_isCurrentSourceRequest(generation)) return;
+    await _diskCacheSession?.applyPlaybackPolicy(
+      diskAllowed: diskAllowed,
+      preferDataSaving: _preferDataSaving,
+    );
   }
 
   /// 订阅底层播放、缓冲、进度、尺寸、结束和错误事件，并统一转换为页面快照。
@@ -1139,17 +1259,48 @@ class WindowsPlaybackService
           }
         }),
       )
-      ..add(
-        _player.stream.error.listen((String _) {
-          // 错误正文可能含临时 CDN 地址，因此不写日志也不直接交给页面。
-          unawaited(
-            _verifyPlayerError(
-              generation: _sourceGeneration,
-              mediaAttemptIndex: _currentMediaAttemptIndex,
-            ),
-          );
+      ..add(_player.stream.error.listen(_onPlayerError));
+    if (_player.platform is NativePlayer) {
+      _subscriptions.add(
+        _player.stream.log.listen((log) {
+          if (log.level == 'error' || log.level == 'fatal') {
+            _onPlayerError(log.text, prefix: log.prefix, fromLog: true);
+          }
         }),
       );
+    }
+  }
+
+  /// Keeps typed error evidence for the current open and verifies later failures.
+  void _onPlayerError(
+    String message, {
+    String prefix = '',
+    bool fromLog = false,
+  }) {
+    if (!_acceptAttemptErrors || _disposed) return;
+    final failure = WindowsPlaybackRecoveryPolicy.classify(
+      message,
+      prefix: prefix,
+    );
+    // A generic error must not overwrite an explicit decoder or status error.
+    if (failure != WindowsPlaybackFailure.route) {
+      if (_attemptFailure == WindowsPlaybackFailure.route ||
+          failure == WindowsPlaybackFailure.accessDenied ||
+          failure == WindowsPlaybackFailure.expired &&
+              _attemptFailure == WindowsPlaybackFailure.videoDecoder) {
+        _attemptFailure = failure;
+      }
+    } else if (fromLog) {
+      return;
+    }
+    if (_opening) return;
+    unawaited(
+      _verifyPlayerError(
+        generation: _sourceGeneration,
+        mediaAttemptIndex: _currentMediaAttemptIndex,
+        mediaAttemptRevision: _mediaAttemptRevision,
+      ),
+    );
   }
 
   /// 请求当前视频的播放源、载入外部音轨，并按调用前状态恢复进度和播放开关。
@@ -1160,6 +1311,7 @@ class WindowsPlaybackService
     required int quality,
     required Duration resumePosition,
     required bool shouldPlay,
+    bool reuseSources = false,
   }) async {
     if (!_isCurrentSourceRequest(generation)) {
       return;
@@ -1176,46 +1328,14 @@ class WindowsPlaybackService
     // while the revoked source is stopping must remain the final intent.
     if (!await _waitForAccountStop(generation)) return;
     try {
-      final DesktopPlaybackSources sources = video.isCourse
-          ? await _sourceService.loadCourse(
-              video: video,
-              part: part,
-              quality: quality,
-            )
-          : _appPlatform.isDesktop
-          ? await _sourceService.loadForVideo(
-              video: video,
-              cid: part.cid,
-              quality: quality,
-            )
-          : await _sourceService.load(
-              bvid: video.bvid,
-              cid: part.cid,
-              quality: quality,
-            );
-      if (!_isCurrentSourceRequest(generation)) {
+      if (!await _prepareNetworkSource(
+        generation: generation,
+        video: video,
+        part: part,
+        quality: quality,
+        reuseSources: reuseSources,
+      )) {
         return;
-      }
-      _activeSessionValidator = sources.validateSession;
-      await _validateActiveSession(generation);
-      if (!_isCurrentSourceRequest(generation)) return;
-      _availableQualities = sources.qualities;
-      _currentQuality = sources.actualQuality;
-      _currentMediaAttemptIndex = 0;
-      _mediaAttempts = WindowsDashMediaPlan.build(sources);
-      if (_audioOnly) {
-        _mediaAttempts = [
-          for (final url in sources.audioUrls)
-            WindowsDashMediaAttempt(
-              videoUrl: '',
-              audioUrl: url,
-              audioCodec: sources.audioCodecByUrl[url] ?? sources.audioCodec,
-            ),
-        ];
-      }
-      _activeMediaHeaders = sources.mediaHeaders;
-      if (_mediaAttempts.isEmpty) {
-        throw const DesktopPlaybackSourceException('播放数据没有返回安全的媒体地址。');
       }
       await _openFirstAvailableMedia(
         generation: generation,
@@ -1235,6 +1355,7 @@ class WindowsPlaybackService
       _opening = false;
       _restoringPosition = false;
       _restoredPosition = Duration.zero;
+      _acceptAttemptErrors = false;
       final String message = error is DesktopPlaybackSourceException
           ? error.message
           : error is BilibiliPlaybackSessionException
@@ -1247,37 +1368,260 @@ class WindowsPlaybackService
     }
   }
 
-  /// 首次打开播放源时同步轮换全部主备组合，避免第一条 CDN 失效就直接结束加载。
+  /// Reuses a live response for this account and part, or fetches and validates one.
+  Future<bool> _prepareNetworkSource({
+    required int generation,
+    required VideoPreview video,
+    required VideoPart part,
+    required int quality,
+    required bool reuseSources,
+  }) async {
+    final account = CacheLifecycle.account.value;
+    final now = _clock();
+    final cached = _cachedSources;
+    final age = cached == null ? null : now.difference(cached.fetchedAt);
+    final reusable =
+        reuseSources &&
+        !video.isCourse &&
+        cached != null &&
+        cached.bvid == video.bvid &&
+        cached.cid == part.cid &&
+        cached.account == account &&
+        !age!.isNegative &&
+        age < _sourceLifetime;
+    final cachedSelection = !reusable
+        ? null
+        : _activeSources?.actualQuality == quality
+        ? _activeSources
+        : cached.sources.forQuality(quality);
+    final DesktopPlaybackSources sources;
+    try {
+      sources =
+          cachedSelection ??
+          (video.isCourse
+              ? await _sourceService.loadCourse(
+                  video: video,
+                  part: part,
+                  quality: quality,
+                )
+              : await _sourceService.loadForVideo(
+                  video: video,
+                  cid: part.cid,
+                  quality: quality,
+                  codecPreference: _codecPreference,
+                  preferDataSaving: _preferDataSaving,
+                  useDesktopUserAgentOverride: _appPlatform.isDesktop,
+                ));
+    } on BilibiliPlaybackSessionException {
+      await _stopAfterAccessFailure(generation);
+      rethrow;
+    } on BilibiliRequestFailure catch (error) {
+      if (video.isCourse ||
+          const {-101, -401, -403}.contains(error.apiCode) ||
+          const {401, 403, 451}.contains(error.httpStatus)) {
+        await _stopAfterAccessFailure(generation);
+      }
+      rethrow;
+    }
+    if (!_isCurrentSourceRequest(generation)) return false;
+    if (account != CacheLifecycle.account.value) {
+      await _stopAfterAccessFailure(generation);
+      throw const BilibiliPlaybackSessionException('changing');
+    }
+    _activeSessionValidator = sources.validateSession;
+    if (!await _validateActiveSession(generation)) return false;
+    if (cachedSelection == null && !video.isCourse) {
+      _cachedSources = (
+        bvid: video.bvid,
+        cid: part.cid,
+        account: account,
+        fetchedAt: now,
+        sources: sources,
+      );
+    }
+    _activeSources = sources;
+    _availableQualities = sources.qualities;
+    _currentQuality = sources.actualQuality;
+    _activeMediaHeaders = sources.mediaHeaders;
+    if (_audioOnly) {
+      _currentMediaAttemptIndex = 0;
+      _mediaAttempts = [
+        for (final url in sources.audioUrls)
+          WindowsDashMediaAttempt(
+            videoUrl: '',
+            audioUrl: url,
+            audioCodec: sources.audioCodecByUrl[url] ?? sources.audioCodec,
+          ),
+      ];
+    } else {
+      final preferred = sources.selectedVideo;
+      final track =
+          preferred != null &&
+              _failedVideoTracks.contains(_videoTrackKey(preferred))
+          ? _compatibleVideoTrack(sources)
+          : preferred;
+      _selectVideoAttempts(sources, track);
+    }
+    if (_mediaAttempts.isEmpty) {
+      throw const DesktopPlaybackSourceException('播放数据没有返回可用的音视频线路。');
+    }
+    return true;
+  }
+
+  /// Uses representation metadata to avoid retrying a failed decoder after a URL refresh.
+  ({int quality, String codec, int bandwidth}) _videoTrackKey(
+    DesktopVideoAlternative track,
+  ) => (
+    quality: track.actualQuality,
+    codec: track.codec.toLowerCase(),
+    bandwidth: track.bandwidth,
+  );
+
+  /// Limits decoder fallback to an untried AVC representation at the same quality.
+  DesktopVideoAlternative? _compatibleVideoTrack(
+    DesktopPlaybackSources sources,
+  ) => sources.videoAlternatives
+      .where(
+        (track) =>
+            track.isAvc &&
+            track.actualQuality == sources.actualQuality &&
+            !_failedVideoTracks.contains(_videoTrackKey(track)),
+      )
+      .firstOrNull;
+
+  /// Builds routes for one representation so network errors stay within that track.
+  void _selectVideoAttempts(
+    DesktopPlaybackSources sources,
+    DesktopVideoAlternative? track,
+  ) {
+    _activeVideoTrack = track;
+    _currentMediaAttemptIndex = 0;
+    final cached = _cachedVideoAttempts;
+    if (cached != null &&
+        identical(cached.sources, sources) &&
+        identical(cached.track, track)) {
+      _mediaAttempts = cached.attempts;
+      return;
+    }
+    final List<WindowsDashMediaAttempt> attempts =
+        track == null && sources.selectedVideo != null
+        ? const []
+        : WindowsDashMediaPlan.build(sources, video: track);
+    _mediaAttempts = attempts;
+    _cachedVideoAttempts = (sources: sources, track: track, attempts: attempts);
+  }
+
+  /// Opens a candidate and handles typed failures within the same source request.
   Future<void> _openFirstAvailableMedia({
     required int generation,
     required Duration resumePosition,
+    WindowsPlaybackFailure? previousFailure,
   }) async {
+    var failure = previousFailure;
     while (_isCurrentSourceRequest(generation) &&
         _currentMediaAttemptIndex < _mediaAttempts.length) {
+      if (failure != null && !await _recoverMediaAttempt(failure, generation)) {
+        if (!_isCurrentSourceRequest(generation)) return;
+        throw DesktopPlaybackSourceException(
+          _currentVideo?.isCourse == true ||
+                  failure == WindowsPlaybackFailure.accessDenied
+              ? '媒体播放权限已失效，请重新打开视频。'
+              : '主线路和备用线路均无法播放，请稍后重试。',
+        );
+      }
+      if (!_isCurrentSourceRequest(generation)) return;
       try {
         await _openMediaAttempt(
           _mediaAttempts[_currentMediaAttemptIndex],
           generation: generation,
           resumePosition: resumePosition,
         );
+        _throwIfKnownMediaFailure();
+        _attemptFailure = WindowsPlaybackFailure.route;
         return;
       } on BilibiliPlaybackSessionException {
         rethrow;
-      } catch (_) {
-        if (!_isCurrentSourceRequest(generation)) {
-          return;
-        }
-        if (_currentMediaAttemptIndex + 1 >= _mediaAttempts.length) {
-          throw const DesktopPlaybackSourceException('主线路和备用线路均无法播放，请稍后重试。');
-        }
-        _currentMediaAttemptIndex += 1;
-        _emitPlayerState(
-          phaseOverride: PlaybackPhase.loading,
-          message: '当前播放线路不可用，正在切换备用线路…',
-        );
+      } catch (error) {
+        if (!_isCurrentSourceRequest(generation)) return;
+        failure = _attemptFailure != WindowsPlaybackFailure.route
+            ? _attemptFailure
+            : WindowsPlaybackRecoveryPolicy.classify(error.toString());
       }
     }
     throw const DesktopPlaybackSourceException('播放数据没有返回安全的媒体地址。');
+  }
+
+  /// Advances a CDN route, refreshes expired URLs once, or changes the failed decoder.
+  Future<bool> _recoverMediaAttempt(
+    WindowsPlaybackFailure failure,
+    int generation,
+  ) async {
+    final video = _currentVideo;
+    final part = _currentPart;
+    if (failure == WindowsPlaybackFailure.accessDenied ||
+        video?.isCourse == true && failure == WindowsPlaybackFailure.expired) {
+      await _stopAfterAccessFailure(generation);
+      return false;
+    }
+    if (failure == WindowsPlaybackFailure.expired) _cachedSources = null;
+    if (failure == WindowsPlaybackFailure.expired &&
+        video != null &&
+        part != null &&
+        _sourceRefreshes < WindowsPlaybackRecoveryPolicy.maxSourceRefreshes) {
+      _sourceRefreshes++;
+      _emitPlayerState(
+        phaseOverride: PlaybackPhase.loading,
+        message: '媒体地址已过期，正在刷新…',
+      );
+      return _prepareNetworkSource(
+        generation: generation,
+        video: video,
+        part: part,
+        quality: _currentQuality,
+        reuseSources: false,
+      );
+    }
+    if (failure == WindowsPlaybackFailure.videoDecoder && !_audioOnly) {
+      final failed = _activeVideoTrack;
+      final sources = _activeSources;
+      if (failed == null || sources == null || _localSource) return false;
+      _failedVideoTracks.add(_videoTrackKey(failed));
+      final fallback = _compatibleVideoTrack(sources);
+      if (fallback == null || failed.isAvc) return false;
+      _selectVideoAttempts(sources, fallback);
+      _emitPlayerState(
+        phaseOverride: PlaybackPhase.loading,
+        message: '视频解码失败，正在切换当前清晰度的 AVC 线路…',
+      );
+      return true;
+    }
+    if (_currentMediaAttemptIndex + 1 >= _mediaAttempts.length) return false;
+    _currentMediaAttemptIndex++;
+    _emitPlayerState(
+      phaseOverride: PlaybackPhase.loading,
+      message: '当前播放线路不可用，正在切换备用线路…',
+    );
+    return true;
+  }
+
+  /// Stops a denied stream before presenting the authorization error.
+  Future<void> _stopAfterAccessFailure(int generation) async {
+    if (!_isCurrentSourceRequest(generation)) return;
+    _shouldPlayAfterFallback = false;
+    _acceptAttemptErrors = false;
+    _cachedSources = null;
+    _mediaAttempts = const [];
+    await _stopLoadedMedia();
+  }
+
+  /// Ends an open early when the current logs and player outputs confirm failure.
+  void _throwIfKnownMediaFailure() {
+    if (_attemptFailure == WindowsPlaybackFailure.expired ||
+        _attemptFailure == WindowsPlaybackFailure.accessDenied ||
+        _attemptFailure == WindowsPlaybackFailure.videoDecoder &&
+            !_hasDecodedVideo()) {
+      throw StateError('Media attempt failed');
+    }
   }
 
   /// 打开一组视频和外部音频地址，先暂停并恢复位置，再挂载音轨和恢复用户原来的播放状态。
@@ -1289,14 +1633,23 @@ class WindowsPlaybackService
     if (!_isCurrentSourceRequest(generation)) return;
     // A backup is a different media instance even when its video/CID is unchanged.
     _bufferedRanges = const [];
-    if (_audioOnly) {
-      final media = attempt.createAudioMedia(
-        _activeMediaHeaders,
-        start: resumePosition,
-      );
-      _activeAudioMedia = media;
-      await _player.stop();
+    _mediaAttemptRevision++;
+    _acceptAttemptErrors = false;
+    _attemptFailure = WindowsPlaybackFailure.route;
+    if (_audioOnly || _mediaLoaded) {
+      await _stopLoadedMedia();
       if (!_isCurrentSourceRequest(generation)) return;
+    }
+    await _applyMediaCachePolicy(
+      generation,
+      diskAllowed: _currentVideo?.isCourse != true,
+    );
+    if (!_isCurrentSourceRequest(generation)) return;
+    final start = resumePosition > Duration.zero ? resumePosition : null;
+    if (_audioOnly) {
+      final media = attempt.createAudioMedia(_activeMediaHeaders, start: start);
+      _activeAudioMedia = media;
+      _acceptAttemptErrors = true;
       await _openPlayerMedia(media, play: false);
       if (!_isCurrentSourceRequest(generation)) return;
       // open/seek 的 Future 只表示命令已接收。先等本次音轨元数据，
@@ -1338,7 +1691,7 @@ class WindowsPlaybackService
     // 保留音频 Media 的强引用，避免 media_kit 的请求头缓存被垃圾回收清掉。
     _activeAudioMedia = attempt.audioUrl.isEmpty
         ? null
-        : attempt.createAudioMedia(_activeMediaHeaders);
+        : attempt.createAudioMedia(_activeMediaHeaders, start: start);
     _activeAudioTrackToken = _audioTrackTokenFor(generation);
     final AudioTrack audioTrack = _activeAudioMedia == null
         ? AudioTrack.auto()
@@ -1350,8 +1703,9 @@ class WindowsPlaybackService
     await _player.pause();
     // 原生命令完成可能晚于换视频；每次继续修改播放器前都复核来源代次。
     if (!_isCurrentSourceRequest(generation)) return;
+    _acceptAttemptErrors = true;
     await _openPlayerMedia(
-      attempt.createVideoMedia(_activeMediaHeaders),
+      attempt.createVideoMedia(_activeMediaHeaders, start: start),
       play: false,
     );
     if (!_isCurrentSourceRequest(generation)) return;
@@ -1360,11 +1714,7 @@ class WindowsPlaybackService
       return;
     }
     if (resumePosition > Duration.zero) {
-      // 视频一打开就先定位，不能让较慢的外部音轨挂载把历史跳转拖到数秒之后。
-      await _player.seek(resumePosition);
-      if (!_isCurrentSourceRequest(generation)) {
-        return;
-      }
+      // Media.start positions the initial request before the external audio mounts.
       _emitPlayerState(
         phaseOverride: PlaybackPhase.loading,
         message: '正在准备音视频…',
@@ -1480,6 +1830,7 @@ class WindowsPlaybackService
     DateTime? videoReadyAt;
     while (_isCurrentSourceRequest(generation) &&
         DateTime.now().isBefore(deadline)) {
+      if (_opening && _acceptAttemptErrors) _throwIfKnownMediaFailure();
       if (_hasDecodedVideo()) {
         if (await _hasDecodedAudio()) {
           return true;
@@ -1562,16 +1913,23 @@ class WindowsPlaybackService
   Future<void> _verifyPlayerError({
     required int generation,
     required int mediaAttemptIndex,
+    required int mediaAttemptRevision,
   }) async {
-    if (!_isCurrentMediaAttempt(generation, mediaAttemptIndex) || _opening) {
-      return;
-    }
+    /// Rejects delayed checks after a reopen, even if the route index repeats.
+    bool isCurrent() =>
+        _isCurrentMediaAttempt(generation, mediaAttemptIndex) &&
+        mediaAttemptRevision == _mediaAttemptRevision &&
+        !_opening;
+    if (!isCurrent()) return;
     final DateTime deadline = DateTime.now().add(_mediaErrorHealthCheckTimeout);
     do {
-      final bool hasDecodedAudio = await _hasDecodedAudio();
-      if (!_isCurrentMediaAttempt(generation, mediaAttemptIndex) || _opening) {
-        return;
+      if (_attemptFailure == WindowsPlaybackFailure.accessDenied ||
+          _attemptFailure == WindowsPlaybackFailure.expired &&
+              _currentVideo?.isCourse == true) {
+        break;
       }
+      final bool hasDecodedAudio = await _hasDecodedAudio();
+      if (!isCurrent()) return;
       final bool shouldSwitch =
           WindowsPlaybackRecoveryPolicy.shouldSwitchAfterPlayerError(
             isOpening: _opening,
@@ -1580,25 +1938,24 @@ class WindowsPlaybackService
             hasDecodedAudio: hasDecodedAudio,
           );
       if (!shouldSwitch) {
+        _attemptFailure = WindowsPlaybackFailure.route;
         return;
       }
       await Future<void>.delayed(const Duration(milliseconds: 100));
     } while (DateTime.now().isBefore(deadline));
-    if (!_isCurrentMediaAttempt(generation, mediaAttemptIndex) || _opening) {
-      return;
-    }
+    if (!isCurrent()) return;
     await _handleMediaError(
       expectedGeneration: generation,
       expectedMediaAttemptIndex: mediaAttemptIndex,
     );
   }
 
-  /// 收到媒体错误时依次切换剩余主备 CDN，并仅在全部线路失败后展示错误状态。
+  /// Coalesces recovery for this generation and preserves the playback intent.
   Future<void> _handleMediaError({
     int? expectedGeneration,
     int? expectedMediaAttemptIndex,
   }) async {
-    if (_disposed || _handlingMediaError) {
+    if (_disposed || _recoveringGeneration == _sourceGeneration) {
       return;
     }
     if (expectedGeneration != null &&
@@ -1609,78 +1966,64 @@ class WindowsPlaybackService
         )) {
       return;
     }
-    if (_mediaAttempts.isEmpty ||
-        _currentMediaAttemptIndex + 1 >= _mediaAttempts.length) {
-      _opening = false;
-      _emitPlayerState(
-        phaseOverride: PlaybackPhase.error,
-        message: 'Windows 播放器遇到媒体错误，请重试或切换清晰度。',
-      );
-      return;
-    }
-    _handlingMediaError = true;
     final int generation = _sourceGeneration;
-    final Duration resumePosition = _player.state.position;
+    _recoveringGeneration = generation;
+    final Duration resumePosition =
+        _pendingResumePositionAfterDecode > Duration.zero
+        ? _pendingResumePositionAfterDecode
+        : _player.state.position;
+    final failure =
+        _attemptFailure == WindowsPlaybackFailure.videoDecoder &&
+            _hasDecodedVideo()
+        ? WindowsPlaybackFailure.route
+        : _attemptFailure;
     _opening = true;
     _restoringPosition = resumePosition > Duration.zero;
     _emitPlayerState(
       phaseOverride: PlaybackPhase.loading,
-      message: '当前播放线路不可用，正在切换备用线路…',
+      message: '正在尝试恢复播放…',
     );
     try {
-      while (!_disposed &&
-          generation == _sourceGeneration &&
-          _currentMediaAttemptIndex + 1 < _mediaAttempts.length) {
-        _currentMediaAttemptIndex += 1;
-        try {
-          await _openMediaAttempt(
-            _mediaAttempts[_currentMediaAttemptIndex],
-            generation: generation,
-            resumePosition: resumePosition,
-          );
-          if (_disposed || generation != _sourceGeneration) {
-            return;
-          }
-          _opening = false;
-          _restoringPosition = false;
-          _emitPlayerState(
-            phaseOverride: PlaybackPhase.ready,
-            clearMessage: true,
-          );
-          return;
-        } on BilibiliPlaybackSessionException catch (error) {
-          if (!_isCurrentSourceRequest(generation)) return;
-          _opening = false;
-          _restoringPosition = false;
-          _emitPlayerState(
-            phaseOverride: PlaybackPhase.error,
-            message: error.toString(),
-          );
-          return;
-        } catch (_) {
-          // 当前组合同步打开失败时继续下一组，异常中可能含临时地址，因此保持静默。
-        }
-      }
-      if (!_disposed && generation == _sourceGeneration) {
-        _opening = false;
-        _restoringPosition = false;
-        _emitPlayerState(
-          phaseOverride: PlaybackPhase.error,
-          message: '主线路和备用线路均无法播放，请重试或切换清晰度。',
-        );
-      }
+      await _openFirstAvailableMedia(
+        generation: generation,
+        resumePosition: resumePosition,
+        previousFailure: failure,
+      );
+      if (!_isCurrentSourceRequest(generation)) return;
+      _opening = false;
+      _restoringPosition = false;
+      _emitPlayerState(phaseOverride: PlaybackPhase.ready, clearMessage: true);
+    } catch (error) {
+      if (!_isCurrentSourceRequest(generation)) return;
+      _opening = false;
+      _restoringPosition = false;
+      _acceptAttemptErrors = false;
+      _emitPlayerState(
+        phaseOverride: PlaybackPhase.error,
+        message:
+            error is DesktopPlaybackSourceException ||
+                error is BilibiliPlaybackSessionException ||
+                error is WbiSigningException
+            ? error.toString()
+            : 'Windows 播放器遇到媒体错误，请重试或切换清晰度。',
+      );
     } finally {
-      _handlingMediaError = false;
+      if (_recoveringGeneration == generation) _recoveringGeneration = null;
     }
   }
 
   /// 开始新的播放源请求并让先前仍在等待网络的分P或清晰度请求立即失效。
   int _beginSourceRequest() {
-    _courseExpiry?.cancel();
-    _courseExpiry = null;
     _sourceGeneration += 1;
+    _acceptAttemptErrors = false;
+    _attemptFailure = WindowsPlaybackFailure.route;
+    _sourceRefreshes = 0;
     _activeSessionValidator = null;
-    _activeCourseReceipt = null;
+    if (_loadedCourseAccountRevision == null) {
+      _courseExpiry?.cancel();
+      _courseExpiry = null;
+      _activeCourseReceipt = null;
+    }
     _bufferedRanges = const [];
     _restoringPosition = false;
     _restoredPosition = Duration.zero;
@@ -1744,7 +2087,9 @@ class WindowsPlaybackService
     final int width = _player.state.width ?? 0;
     final int height = _player.state.height ?? 0;
     PlaybackPhase phase = phaseOverride ?? _snapshot.phase;
-    if (phaseOverride == null && phase != PlaybackPhase.ended) {
+    if (phaseOverride == null &&
+        phase != PlaybackPhase.ended &&
+        phase != PlaybackPhase.error) {
       if (_opening || _player.state.buffering) {
         phase = PlaybackPhase.loading;
       } else if (_player.state.duration > Duration.zero || width > 0) {

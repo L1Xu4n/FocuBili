@@ -11,6 +11,7 @@ class _SyntheticRuntimeSettings implements SettingsRuntimeAdapter {
     DeviceSettingsRuntimeAdapter.enabledKey: true,
     DeviceSettingsRuntimeAdapter.notificationsKey: true,
     DeviceSettingsRuntimeAdapter.backgroundKey: true,
+    DeviceSettingsRuntimeAdapter.wifiOnlyBackgroundKey: true,
     DeviceSettingsRuntimeAdapter.imageCapacityKey: 128 * 1024 * 1024,
   };
   bool failOnce = false;
@@ -23,10 +24,18 @@ class _SyntheticRuntimeSettings implements SettingsRuntimeAdapter {
   @override
   Future<void> writeSettings(Map<String, Object?> updates) async {
     for (final entry in updates.entries) {
+      if (entry.key == DeviceSettingsRuntimeAdapter.androidMediaCapacityKey &&
+          entry.value == null &&
+          !values.containsKey(entry.key)) {
+        continue;
+      }
       values[entry.key] =
           entry.value ??
           (entry.key == DeviceSettingsRuntimeAdapter.imageCapacityKey
               ? 256 * 1024 * 1024
+              : entry.key ==
+                    DeviceSettingsRuntimeAdapter.androidMediaCapacityKey
+              ? 512 * 1024 * 1024
               : false);
       if (failOnce) {
         failOnce = false;

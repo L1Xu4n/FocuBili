@@ -420,7 +420,7 @@ void main() {
         expect(_placeholder(4), findsOneWidget);
         expect(
           client.requests.map((request) => request.url.toString()).toSet(),
-          {public, broken},
+          {'$public@480w_270h_1c.webp', '$broken@480w_270h_1c.webp'},
         );
         expect(
           client.requests.expand((request) => request.headers.sent.keys),

@@ -1086,6 +1086,7 @@ mixin _PlayerControlsCoordinator
   set _batteryPercent(int? value);
 
   /// 由页面状态类提供播放器顶部显示的网络类型。
+  @override
   set _networkType(DeviceNetworkType value);
 
   /// 由页面状态类标记状态栏同步回调是否已经排队。

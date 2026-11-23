@@ -1,11 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:focubili/models/subscription.dart';
 import 'package:focubili/models/public_profile.dart';
 import 'package:focubili/services/bilibili_public_content_service.dart';
+import 'package:focubili/services/bilibili_lookup_exception.dart';
+import 'package:focubili/services/subscription_history_store.dart';
 import 'package:focubili/services/subscription_service.dart';
 import 'learning_batch_test.dart' show RejectingPreferences;
 
@@ -32,6 +35,9 @@ class Content implements BilibiliPublicContentService {
   Completer<void>? hold;
   int? holdMid;
   int? holdPage;
+  Object? Function(int mid, int page)? failure;
+
+  /// Serves a synthetic page with optional latency and structured failures.
   Future<CreatorContentPage<CreatorVideo>> page(int mid, int index) async {
     calls.add('$mid:$index');
     if (hold != null &&
@@ -40,6 +46,8 @@ class Content implements BilibiliPublicContentService {
       await hold!.future;
     }
     if (index == failPage) throw StateError('429 / network');
+    final error = failure?.call(mid, index);
+    if (error != null) throw error;
     final data = pages[mid] ?? [[]];
     return CreatorContentPage(
       items: index <= data.length ? data[index - 1] : [],
@@ -73,6 +81,7 @@ void main() {
     Content content, {
     int budget = 20,
     DateTime Function()? clock,
+    SubscriptionHistoryStore? historyStore,
   }) async {
     final prefs = await SharedPreferences.getInstance();
     final service = SubscriptionService(
@@ -80,6 +89,7 @@ void main() {
       preferencesLoader: () async => prefs,
       pageBudget: budget,
       clock: clock,
+      historyStore: historyStore,
     );
     addTearDown(service.dispose);
     await service.initialize();
@@ -97,6 +107,201 @@ void main() {
     service.setForeground(true);
     await service.refresh(manual: true);
   }
+
+  test(
+    'completed live coverage shortens the next scan and excludes history',
+    () async {
+      final now = DateTime(2026, 10, 4, 12);
+      final c = Content();
+      final old = List.generate(
+        4,
+        (i) => [
+          item('old$i', publishedAt: now.subtract(const Duration(days: 1))),
+        ],
+      );
+      final burst = List.generate(
+        4,
+        (page) => List.generate(
+          20,
+          (index) => item('new${page}_$index', publishedAt: now),
+        ),
+      );
+      c.pages[1] = [...old, ...burst];
+      final s = await create(c, clock: () => now);
+      await baseline(s, [source(1)]);
+      await s.startHistory(source(1).key, limit: null);
+      expect(s.historyJob(source(1).key)!.ids, contains('new3_0'));
+      expect(
+        s.checkpoint(source(1).key)!.liveCoveredIds,
+        isNot(contains('new3_0')),
+      );
+      c.pages[1] = [...burst, ...old];
+      c.calls.clear();
+      await s.refresh(manual: true);
+      expect(c.calls, ['1:1', '1:2', '1:3', '1:4', '1:5', '1:6']);
+      expect(
+        s.feed.map((e) => e.bvid),
+        containsAll(burst.expand((page) => page).map((video) => video.bvid)),
+      );
+      expect(s.checkpoint(source(1).key)!.liveCoveredIds, contains('new3_0'));
+
+      c.pages[1] = [
+        [
+          item('later', publishedAt: now.add(const Duration(minutes: 1))),
+          ...burst.first,
+        ],
+        ...burst.skip(1),
+        ...old,
+      ];
+      c.calls.clear();
+      await s.refresh(manual: true);
+      expect(c.calls, ['1:1', '1:2', '1:3']);
+      expect(s.feed.map((e) => e.bvid), contains('later'));
+      final legacy = s.checkpoint(source(1).key)!.toJson()
+        ..remove('liveCoveredIds')
+        ..remove('consecutiveIdleScans');
+      final restored = SourceCheckpoint.fromJson(legacy);
+      expect(restored.liveCoveredIds, isEmpty);
+      expect(restored.consecutiveIdleScans, 0);
+    },
+  );
+
+  test('idle scans move from hourly to two and four hours, then reset', () async {
+    var now = DateTime(2026, 10, 4);
+    final c = Content()
+      ..pages[1] = [
+        [item('old')],
+      ];
+    final s = await create(c, clock: () => now);
+    await baseline(s, [source(1)]);
+
+    /// Advances the injected clock and checks calls through the automatic path.
+    Future<void> advance(int hours, {required bool due}) async {
+      now = now.add(Duration(hours: hours));
+      final calls = c.calls.length;
+      await s.refresh();
+      expect(c.calls.length - calls, due ? 1 : 0);
+    }
+
+    expect(s.checkpoint(source(1).key)!.consecutiveIdleScans, 0);
+    await advance(1, due: true);
+    await advance(1, due: true);
+    expect(s.checkpoint(source(1).key)!.consecutiveIdleScans, 2);
+    await advance(1, due: false);
+    await advance(1, due: true);
+    await advance(2, due: true);
+    expect(s.checkpoint(source(1).key)!.consecutiveIdleScans, 4);
+    await advance(3, due: false);
+    await advance(1, due: true);
+    c.pages[1] = [
+      [item('new', publishedAt: now), item('old')],
+    ];
+    await s.refresh(manual: true);
+    expect(s.checkpoint(source(1).key)!.consecutiveIdleScans, 0);
+    await advance(1, due: true);
+  });
+
+  for (final error in [
+    const BilibiliLookupException('risk', httpStatus: 412),
+    const BilibiliLookupException('risk', apiCode: -352),
+  ]) {
+    test(
+      'risk ${error.httpStatus ?? error.apiCode} pauses the site for five minutes',
+      () async {
+        var now = DateTime(2026, 10, 4);
+        final c = Content()
+          ..pages[2] = [
+            [item('ok2')],
+          ]
+          ..pages[3] = [
+            [item('ok3')],
+          ]
+          ..failure = (mid, _) => mid != 2 ? error : null;
+        final s = await create(c, clock: () => now);
+        await baseline(s, [source(1), source(2), source(3)]);
+        expect(c.calls, contains('1:1'));
+        expect(c.calls, isNot(contains('3:1')));
+        c.calls.clear();
+        now = now.add(const Duration(minutes: 4, seconds: 59));
+        await s.retrySource(source(1).key);
+        await s.refresh(manual: true);
+        expect(c.calls, isEmpty);
+
+        now = now.add(const Duration(seconds: 1));
+        final hold = Completer<void>();
+        c
+          ..failure = null
+          ..hold = hold;
+        final round = s.refresh(manual: true);
+        await Future<void>.delayed(Duration.zero);
+        expect(c.calls, ['1:1']);
+        hold.complete();
+        await round;
+        c.hold = null;
+        await s.refresh(manual: true);
+        expect(s.checkpoint(source(3).key)!.initialized, isTrue);
+      },
+    );
+  }
+
+  test(
+    'deleting a source reclaims its history directory after commit',
+    () async {
+      final root = await Directory.systemTemp.createTemp(
+        'focubili-history-test-',
+      );
+      addTearDown(() => root.delete(recursive: true));
+      final storage = FileSubscriptionHistoryStore(directory: () async => root);
+      final c = Content()
+        ..pages[1] = [
+          [item('old')],
+        ]
+        ..pages[2] = [
+          [item('kept')],
+        ];
+      final now = DateTime(2026, 10, 4);
+      final s = await create(c, clock: () => now, historyStore: storage);
+      await baseline(s, [source(1), source(2)]);
+      final shared = item('shared', publishedAt: now);
+      c.pages[1]!.first.insert(0, shared);
+      c.pages[2]!.first.insert(0, shared);
+      await s.refresh(manual: true);
+      expect(s.feed.single.sources, hasLength(2));
+      await s.startHistory(source(1).key);
+      await s.startHistory(source(2).key);
+      final deleted = s.historyJob(source(1).key)!.id;
+      final kept = s.historyJob(source(2).key)!.id;
+      final folder = Directory('${root.path}/subscription-history/$deleted');
+      expect(await folder.exists(), isTrue);
+      await s.deleteSources({source(1).key});
+      expect(s.historyJob(source(1).key), isNull);
+      expect(await folder.exists(), isFalse);
+      expect(await storage.read(kept, 0), isNotNull);
+      expect(s.feed.single.bvid, 'shared');
+    },
+  );
+
+  testWidgets('resuming supersedes a deferred inactive transition', (
+    tester,
+  ) async {
+    final c = Content()
+      ..pages[1] = [
+        [item('old')],
+      ];
+    final s = await create(c);
+    await baseline(s, [source(1)]);
+    s.scheduleBackground();
+    await tester.pump(const Duration(seconds: 2));
+    s.setForeground(true);
+    await tester.pump(const Duration(seconds: 2));
+    final beforeManual = c.calls.length;
+    await s.refresh(manual: true);
+    expect(c.calls.length, beforeManual + 1);
+    s.scheduleBackground();
+    await tester.pump(const Duration(seconds: 3));
+    await s.refresh(manual: true);
+    expect(c.calls.length, beforeManual + 1);
+  });
 
   test(
     'source and focus opt-in are saved atomically without notifications',

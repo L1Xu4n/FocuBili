@@ -7,6 +7,17 @@ import org.junit.Test
 
 /** 验证部分视频播放失败对应的编码优先级与缓存隔离规则。 */
 class PlaybackTrackPolicyTest {
+    /** 验证软上限包含 140 kbps，并处理全部超限、未知码率及空列表。 */
+    @Test
+    fun dataSavingAudioPrefersHighestWithinLimitThenLowestKnown() {
+        // 直接用码率构造各档位，测试排序规则本身。
+        fun selected(vararg rates: Long) = PlaybackTrackPolicy.dataSavingAudioTrack(rates.toList()) { it }
+        assertEquals(140_000L, selected(192_000L, 0L, 128_000L, 140_000L))
+        assertEquals(141_000L, selected(192_000L, -1L, 141_000L))
+        assertEquals(-1L, selected(-1L, 0L))
+        assertEquals(null, selected())
+    }
+
     /** 复现 v1.7 的低清 AVC 压过目标高清 HEVC；新策略必须先满足清晰度。 */
     @Test
     fun requestedHdHevcWinsOver360pAvcInEitherOrder() {

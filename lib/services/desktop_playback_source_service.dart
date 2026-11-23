@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
+import 'app_http_client.dart';
 import 'bilibili_auth_service.dart';
 import 'app_behavior_preferences_service.dart';
 import 'bilibili_http_user_agent.dart';
@@ -22,6 +24,38 @@ import 'problem_diagnostics_service.dart';
 typedef DesktopPlaybackJsonRequest =
     Future<String> Function(Uri endpoint, Map<String, String> headers);
 
+/// 一条 DASH 视频表示及其同编码的主备地址。
+class DesktopVideoAlternative {
+  /// 保留表示清晰度和码率，供选轨与解码回退使用。
+  const DesktopVideoAlternative({
+    required this.urls,
+    required this.codec,
+    required this.actualQuality,
+    required this.bandwidth,
+  });
+
+  final List<String> urls;
+  final String codec;
+  final int actualQuality;
+  final int bandwidth;
+
+  /// 识别 AVC 表示，兼容不同 CDN 返回的编码拼写。
+  bool get isAvc {
+    final name = codec.toLowerCase();
+    return name.startsWith('avc') || name == 'h264';
+  }
+
+  /// 识别可在省流模式下择优尝试的较新编码。
+  bool get isEfficient {
+    final name = codec.toLowerCase();
+    return name.startsWith('hev') ||
+        name.startsWith('hvc') ||
+        name == 'h265' ||
+        name.startsWith('av01') ||
+        name == 'av1';
+  }
+}
+
 /// 保存 Windows 播放器打开一条 B 站 DASH 视频需要的安全地址与界面信息。
 class DesktopPlaybackSources {
   /// 创建已经过域名校验的桌面播放源。
@@ -36,6 +70,10 @@ class DesktopPlaybackSources {
     required this.videoCodec,
     required this.audioCodec,
     this.validateSession,
+    this.requestedQuality,
+    this.returnedQuality,
+    this.videoAlternatives = const [],
+    this.selectedVideo,
   });
 
   final List<String> videoUrls;
@@ -48,6 +86,37 @@ class DesktopPlaybackSources {
   final String videoCodec;
   final String audioCodec;
   final Future<void> Function()? validateSession;
+  final int? requestedQuality;
+  final int? returnedQuality;
+  final List<DesktopVideoAlternative> videoAlternatives;
+  final DesktopVideoAlternative? selectedVideo;
+
+  /// 只复用响应中已解析出安全地址的确切清晰度。
+  DesktopPlaybackSources? forQuality(int quality) {
+    if (quality == actualQuality) return this;
+    final permitted = returnedQuality;
+    if (permitted == null || quality > permitted) return null;
+    for (final video in videoAlternatives) {
+      if (video.actualQuality != quality) continue;
+      return DesktopPlaybackSources(
+        videoUrls: video.urls,
+        audioUrls: audioUrls,
+        audioCodecByUrl: audioCodecByUrl,
+        referer: referer,
+        cookieHeader: cookieHeader,
+        actualQuality: quality,
+        qualities: qualities,
+        videoCodec: video.codec,
+        audioCodec: audioCodec,
+        validateSession: validateSession,
+        requestedQuality: quality,
+        returnedQuality: permitted,
+        videoAlternatives: videoAlternatives,
+        selectedVideo: video,
+      );
+    }
+    return null;
+  }
 
   /// 生成视频与音频 CDN 共同使用的最小请求头，不把 Cookie 写入地址或日志。
   Map<String, String> get mediaHeaders {
@@ -109,7 +178,9 @@ class BilibiliDesktopPlaybackSourceService {
   final DesktopPlaybackJsonRequest? _requestJson;
   final ProblemDiagnosticsService _diagnostics;
   final AppBehaviorPreferencesService _behaviorPreferences;
-  late final _wbiSigner = BilibiliWbiSigningService(requestJson: _readJson);
+  late final _wbiSigner = _requestJson == null && HttpOverrides.current == null
+      ? BilibiliWbiSigningService.shared
+      : BilibiliWbiSigningService(requestJson: _readJson);
   static int _requestId = 0;
 
   /// The regular Windows player alone has current, parsed upload rights.
@@ -118,14 +189,21 @@ class BilibiliDesktopPlaybackSourceService {
     required VideoPreview video,
     required int cid,
     required int quality,
+    PlaybackCodecPreference codecPreference =
+        PlaybackCodecPreference.compatible,
+    bool preferDataSaving = false,
+    bool useDesktopUserAgentOverride = true,
   }) async {
     final custom =
-        BilibiliHttpUserAgent.isKnownOrdinaryUpload(video) &&
+        useDesktopUserAgentOverride &&
+            BilibiliHttpUserAgent.isKnownOrdinaryUpload(video) &&
             BilibiliHttpUserAgent.allowsPlaybackQuality(quality) &&
             video.parts.any((part) => part.cid == cid)
         ? await const HttpUserAgentPreferences().forRequest()
         : null;
-    if (custom == null) {
+    if (custom == null &&
+        codecPreference == PlaybackCodecPreference.compatible &&
+        !preferDataSaving) {
       return load(bvid: video.bvid, cid: cid, quality: quality);
     }
     return _load(
@@ -133,6 +211,8 @@ class BilibiliDesktopPlaybackSourceService {
       cid: cid,
       quality: quality,
       customUserAgent: custom,
+      codecPreference: codecPreference,
+      preferDataSaving: preferDataSaving,
     );
   }
 
@@ -143,11 +223,15 @@ class BilibiliDesktopPlaybackSourceService {
     required int quality,
   }) => _load(bvid: bvid, cid: cid, quality: quality);
 
+  /// 请求普通视频播放数据，并将本次编码和网络偏好交给选轨器。
   Future<DesktopPlaybackSources> _load({
     required String bvid,
     required int cid,
     required int quality,
     String? customUserAgent,
+    PlaybackCodecPreference codecPreference =
+        PlaybackCodecPreference.compatible,
+    bool preferDataSaving = false,
   }) async {
     final String normalizedBvid = bvid.trim();
     if (!_bvidPattern.hasMatch(normalizedBvid)) {
@@ -207,7 +291,9 @@ class BilibiliDesktopPlaybackSourceService {
         'bvid': normalizedBvid,
         'cid': '$cid',
         'qn': '$quality',
-        'fnval': '16',
+        'fnval': codecPreference == PlaybackCodecPreference.dataSaver
+            ? '${16 | 2048}'
+            : '16',
         'fourk': '1',
       };
       if (wbiEnabled) {
@@ -216,6 +302,7 @@ class BilibiliDesktopPlaybackSourceService {
         parameters = await _wbiSigner.signParameters(
           {...parameters, 'fnver': '0', 'web_location': '1315873'},
           headers: headers,
+          scopeKey: requestSession.scopeKey,
           requestJson: (uri, headers) =>
               _readJson(uri, headers, facts, requestSession),
         );
@@ -245,6 +332,8 @@ class BilibiliDesktopPlaybackSourceService {
         cookieHeader: requestSession.snapshot.header,
         wbiEnabled: wbiEnabled,
         validateSession: requestSession.validate,
+        codecPreference: codecPreference,
+        preferDataSaving: preferDataSaving,
       );
       await requestSession.validate();
       facts['stage'] = 'complete';
@@ -416,9 +505,18 @@ class BilibiliDesktopPlaybackSourceService {
       'User-Agent': desktopUserAgent,
       'Cookie': cookie,
     });
+
     if (cookie != await _authService.readCookieHeader()) {
       throw const DesktopPlaybackSourceException('登录状态已变化，请重新打开课程。');
     }
+
+    /// Ensures a reused classroom URL still belongs to the purchasing account.
+    Future<void> validateSession() async {
+      if (cookie != await _authService.readCookieHeader()) {
+        throw const BilibiliPlaybackSessionException('changing');
+      }
+    }
+
     return _parseResponse(
       response,
       preferences: await const PlaybackPreferencesService()
@@ -428,6 +526,7 @@ class BilibiliDesktopPlaybackSourceService {
       cookieHeader: cookie,
       wbiEnabled: false,
       isCourse: true,
+      validateSession: validateSession,
     );
   }
 
@@ -441,6 +540,9 @@ class BilibiliDesktopPlaybackSourceService {
     required PlaybackPreferences preferences,
     bool isCourse = false,
     Future<void> Function()? validateSession,
+    PlaybackCodecPreference codecPreference =
+        PlaybackCodecPreference.compatible,
+    bool preferDataSaving = false,
   }) {
     final Object? decoded;
     try {
@@ -528,6 +630,8 @@ class BilibiliDesktopPlaybackSourceService {
           referer: referer,
           cookieHeader: cookieHeader,
           actualQuality: qn,
+          requestedQuality: requestedQuality,
+          returnedQuality: qn,
           qualities: _parseQualities(data, const {}, qn),
           videoCodec: 'muxed',
           audioCodec: '',
@@ -536,16 +640,26 @@ class BilibiliDesktopPlaybackSourceService {
       throw const DesktopPlaybackSourceException('该视频没有可用的 DASH 播放数据。');
     }
     final Map<Object?, Object?> dash = Map<Object?, Object?>.from(rawDash);
-    final int actualQuality =
-        (data['quality'] as num?)?.toInt() ?? requestedQuality;
-    final _DesktopMediaTrack videoTrack = _selectTrack(
+    final reportedQuality = (data['quality'] as num?)?.toInt() ?? 0;
+    final returnedQuality = reportedQuality > 0
+        ? reportedQuality
+        : requestedQuality;
+    final maxQuality = math.min(requestedQuality, returnedQuality);
+    final videoAlternatives = _selectVideoTracks(
       dash['video'],
-      preferredQuality: actualQuality,
+      preferences: preferences,
+      dataSaver: codecPreference == PlaybackCodecPreference.dataSaver,
     );
+    final videoTrack = videoAlternatives
+        .where((track) => track.actualQuality <= maxQuality)
+        .firstOrNull;
     final List<_DesktopMediaTrack> audioTracks = _selectAudioTracks(
       dash['audio'],
+      dataSaver:
+          preferDataSaving ||
+          codecPreference == PlaybackCodecPreference.dataSaver,
     );
-    if (videoTrack.urls.isEmpty) {
+    if (videoTrack == null) {
       throw const DesktopPlaybackSourceException('播放数据没有返回安全的视频地址。');
     }
     if (audioTracks.isEmpty) {
@@ -565,23 +679,19 @@ class BilibiliDesktopPlaybackSourceService {
     };
     return DesktopPlaybackSources(
       validateSession: validateSession,
-      videoUrls: PlaybackRoutePolicy.order(
-        videoTrack.urls,
-        preference: preferences.linePreference,
-        preferNonPcdn: preferences.preferNonPcdn,
-      ),
+      videoUrls: videoTrack.urls,
       audioUrls: List<String>.unmodifiable(audioUrls),
       audioCodecByUrl: Map<String, String>.unmodifiable(audioCodecByUrl),
       referer: referer,
       cookieHeader: cookieHeader,
-      actualQuality: actualQuality > 0 ? actualQuality : requestedQuality,
-      qualities: _parseQualities(
-        data,
-        dash,
-        actualQuality > 0 ? actualQuality : requestedQuality,
-      ),
+      actualQuality: videoTrack.actualQuality,
+      requestedQuality: requestedQuality,
+      returnedQuality: returnedQuality,
+      qualities: _parseQualities(data, dash, videoTrack.actualQuality),
       videoCodec: videoTrack.codec,
       audioCodec: audioTracks.first.codec,
+      selectedVideo: videoTrack,
+      videoAlternatives: videoAlternatives,
     );
   }
 
@@ -643,52 +753,67 @@ class BilibiliDesktopPlaybackSourceService {
     return List<PlaybackQuality>.unmodifiable(result);
   }
 
-  /// 从视频或音频数组选择最合适轨道；视频优先目标质量与 AVC，音频优先高码率。
-  _DesktopMediaTrack _selectTrack(Object? rawTracks, {int? preferredQuality}) {
-    if (rawTracks is! List) {
-      return const _DesktopMediaTrack();
-    }
-    Map<Object?, Object?>? selected;
-    int bestScore = -1;
-    for (final Object? rawTrack in rawTracks) {
-      if (rawTrack is! Map) {
-        continue;
-      }
+  /// 按清晰度保留表示，只有同档 AVC 可回退时才优先尝试更省流的新编码。
+  List<DesktopVideoAlternative> _selectVideoTracks(
+    Object? rawTracks, {
+    required PlaybackPreferences preferences,
+    required bool dataSaver,
+  }) {
+    if (rawTracks is! List) return const [];
+    final byQuality = <int, List<DesktopVideoAlternative>>{};
+    for (final rawTrack in rawTracks.whereType<Map>()) {
       final Map<Object?, Object?> track = Map<Object?, Object?>.from(rawTrack);
-      final int candidateQuality = (track['id'] as num?)?.toInt() ?? 0;
-      if (preferredQuality != null && candidateQuality > preferredQuality) {
-        continue;
-      }
+      final quality = (track['id'] as num?)?.toInt() ?? 0;
       final List<String> urls = _readMediaUrls(track);
-      if (urls.isEmpty) {
-        continue;
-      }
-      final String codec = _readText(track['codecs']).toLowerCase();
-      final int exactQualityBonus =
-          preferredQuality != null && candidateQuality == preferredQuality
-          ? 1000000000
-          : 0;
-      final int compatibilityBonus = codec.contains('avc') ? 500000000 : 0;
-      final int height = (track['height'] as num?)?.toInt() ?? 0;
-      final int bandwidth = (track['bandwidth'] as num?)?.toInt() ?? 0;
-      final int score =
-          exactQualityBonus + compatibilityBonus + height * 100000 + bandwidth;
-      if (score > bestScore) {
-        selected = track;
-        bestScore = score;
-      }
+      if (quality <= 0 || urls.isEmpty) continue;
+      (byQuality[quality] ??= []).add(
+        DesktopVideoAlternative(
+          urls: PlaybackRoutePolicy.order(
+            urls,
+            preference: preferences.linePreference,
+            preferNonPcdn: preferences.preferNonPcdn,
+          ),
+          codec: _readText(track['codecs']),
+          actualQuality: quality,
+          bandwidth: (track['bandwidth'] as num?)?.toInt() ?? 0,
+        ),
+      );
     }
-    if (selected == null) {
-      return const _DesktopMediaTrack();
+    final qualities = byQuality.keys.toList()..sort((a, b) => b.compareTo(a));
+    final result = <DesktopVideoAlternative>[];
+    for (final quality in qualities) {
+      final tracks = byQuality[quality]!;
+      tracks.sort((a, b) {
+        if (a.isAvc != b.isAvc) return a.isAvc ? -1 : 1;
+        return b.bandwidth.compareTo(a.bandwidth);
+      });
+      final baseline = tracks.first;
+      if (dataSaver && baseline.isAvc && baseline.bandwidth > 0) {
+        final efficient =
+            tracks
+                .where(
+                  (track) =>
+                      track.isEfficient &&
+                      track.bandwidth > 0 &&
+                      track.bandwidth < baseline.bandwidth,
+                )
+                .toList()
+              ..sort((a, b) => a.bandwidth.compareTo(b.bandwidth));
+        if (efficient.isNotEmpty) {
+          tracks.remove(efficient.first);
+          tracks.insert(0, efficient.first);
+        }
+      }
+      result.addAll(tracks);
     }
-    return _DesktopMediaTrack(
-      urls: _readMediaUrls(selected),
-      codec: _readText(selected['codecs']),
-    );
+    return List.unmodifiable(result);
   }
 
   /// 按 Windows 兼容性排列全部安全音频表示；通用 AAC 优先，其余编码保留为失败后的后备。
-  List<_DesktopMediaTrack> _selectAudioTracks(Object? rawTracks) {
+  List<_DesktopMediaTrack> _selectAudioTracks(
+    Object? rawTracks, {
+    required bool dataSaver,
+  }) {
     if (rawTracks is! List) {
       return const <_DesktopMediaTrack>[];
     }
@@ -709,7 +834,7 @@ class BilibiliDesktopPlaybackSourceService {
       candidates.add((
         order: index,
         track: _DesktopMediaTrack(urls: urls, codec: codec),
-        score: _audioCompatibilityScore(codec, bandwidth),
+        score: _audioCompatibilityScore(codec, bandwidth, dataSaver: dataSaver),
       ));
     }
     candidates.sort((left, right) {
@@ -722,14 +847,26 @@ class BilibiliDesktopPlaybackSourceService {
   }
 
   /// 给桌面音频编码计算稳定优先级：AAC-LC 最通用，其他 AAC 次之，未知增强编码最后尝试。
-  int _audioCompatibilityScore(String codec, int bandwidth) {
+  int _audioCompatibilityScore(
+    String codec,
+    int bandwidth, {
+    required bool dataSaver,
+  }) {
     final String normalized = codec.trim().toLowerCase();
     final int compatibility = normalized.contains('mp4a.40.2')
         ? 3
         : normalized.contains('mp4a') || normalized.contains('aac')
         ? 2
         : 1;
-    return compatibility * 1000000000 + bandwidth.clamp(0, 999999999);
+    final bitrate = bandwidth.clamp(0, 999999999);
+    final score = !dataSaver
+        ? bitrate
+        : switch (bitrate) {
+            0 => 0,
+            <= 140000 => 1000000000 + bitrate,
+            _ => 1000000000 - bitrate,
+          };
+    return compatibility * 2000000000 + score;
   }
 
   /// 从主地址与备用地址中去重，只保留 B 站媒体 CDN 的 HTTPS 地址。
@@ -774,17 +911,15 @@ class BilibiliDesktopPlaybackSourceService {
   /// 把未知 JSON 字段安全转换为去除首尾空白的文字。
   String _readText(Object? value) => value is String ? value.trim() : '';
 
-  /// 使用带超时的 HttpClient 读取固定播放接口，并拒绝非成功状态或空响应。
+  /// 使用共享连接池读取固定播放接口，保留真实状态和多条 Set-Cookie。
   static Future<({int statusCode, String body, List<String> cookies})>
   _requestPlaybackJson(Uri endpoint, Map<String, String> headers) async {
-    final HttpClient client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 15);
     try {
-      final HttpClientRequest request = await client.getUrl(endpoint);
-      request.followRedirects = false;
-      headers.forEach(request.headers.set);
-      final HttpClientResponse response = await request.close().timeout(
-        const Duration(seconds: 20),
+      final response = await AppHttpTransport.shared.send(
+        uri: endpoint,
+        headers: headers,
+        followRedirects: false,
+        timeout: const Duration(seconds: 20),
       );
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw DesktopPlaybackSourceException(
@@ -792,22 +927,19 @@ class BilibiliDesktopPlaybackSourceService {
           httpStatus: response.statusCode,
         );
       }
-      final String body = await response.transform(utf8.decoder).join();
+      final String body = response.bodyUtf8;
       if (body.trim().isEmpty) {
         throw const DesktopPlaybackSourceException('播放数据服务返回了空内容。');
       }
       return (
         statusCode: response.statusCode,
         body: body,
-        cookies:
-            response.headers[HttpHeaders.setCookieHeader] ?? const <String>[],
+        cookies: response.headerValues(HttpHeaders.setCookieHeader),
       );
     } on TimeoutException {
       throw const DesktopPlaybackSourceException('请求播放数据超时，请检查网络。');
     } on SocketException {
       throw const DesktopPlaybackSourceException('无法连接播放数据服务，请检查网络。');
-    } finally {
-      client.close(force: true);
     }
   }
 }

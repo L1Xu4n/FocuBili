@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'app_http_client.dart';
+
 import 'app_behavior_preferences_service.dart';
 import 'bilibili_auth_service.dart';
 import 'cache_lifecycle.dart';
@@ -155,6 +157,15 @@ class BilibiliInteractionService {
   final BilibiliAuthService _authService;
   final BilibiliInteractionRequest _request;
   final AppBehaviorPreferencesService _behaviorPreferencesService;
+  final _videoStates =
+      <
+        (int, int, int, String, int, int),
+        (DateTime, BilibiliInteractionState)
+      >{};
+  final _favoriteFolders =
+      <(int, int, int, int), (DateTime, List<BilibiliFavoriteFolder>)>{};
+  static const _stateTtl = Duration(seconds: 20);
+  int _readEpoch = 0;
 
   /// 读取视频和作者当前状态，单个可选状态接口失败时保留其他已成功状态。
   Future<BilibiliInteractionState> loadVideoState({
@@ -162,52 +173,58 @@ class BilibiliInteractionService {
     required int aid,
     required int ownerMid,
   }) async {
+    if (aid <= 0) return const BilibiliInteractionState();
     final _InteractionSession session = await _openSession();
-    bool isFollowing = false;
-    bool isLiked = false;
-    int coinCount = 0;
-    bool isFavorited = false;
-    int? favoriteMediaId;
-    final Set<int> favoriteMediaIds = <int>{};
-    if (ownerMid > 0) {
-      final Map<Object?, Object?>? data = await _tryGetData(
-        Uri.https(_apiHost, '/x/relation', <String, String>{
-          'fid': ownerMid.toString(),
-        }),
-        session,
-      );
-      if (data != null) {
-        isFollowing = _isFollowingAttribute(data['attribute']);
-      }
-    }
-    if (bvid.trim().isNotEmpty) {
-      final Object? likeData = await _tryGetRawData(
-        Uri.https(
-          _apiHost,
-          '/x/web-interface/archive/has/like',
-          <String, String>{'bvid': bvid.trim()},
-        ),
-        session,
-      );
-      if (likeData != null) {
-        isLiked = likeData is Map
-            ? _readBool(likeData['data'] ?? likeData['like'])
-            : _readBool(likeData);
-      }
-      final Map<Object?, Object?>? coinData = await _tryGetData(
-        Uri.https(_apiHost, '/x/web-interface/archive/coins', <String, String>{
-          'bvid': bvid.trim(),
-        }),
-        session,
-      );
-      if (coinData != null) {
-        coinCount = _readInteger(
-          coinData['multiply'] ?? coinData['number'],
-        ).clamp(0, 2);
-      }
-    }
-    if (aid > 0) {
-      final Map<Object?, Object?>? favoriteData = await _tryGetData(
+    final normalizedBvid = bvid.trim();
+    final key = (
+      session.generation,
+      session.revision,
+      session.accountMid,
+      normalizedBvid,
+      aid,
+      ownerMid,
+    );
+    final cached = _videoStates[key];
+    if (cached != null && DateTime.now().isBefore(cached.$1)) return cached.$2;
+    final epoch = _readEpoch;
+    final (relation, likeData, coinData, folderData) = await (
+      ownerMid <= 0
+          ? Future<Map<Object?, Object?>?>.value()
+          : _tryGetData(
+              Uri.https(_apiHost, '/x/relation', <String, String>{
+                'fid': ownerMid.toString(),
+              }),
+              session,
+            ),
+      normalizedBvid.isEmpty
+          ? Future<Object?>.value()
+          : _tryGetRawData(
+              Uri.https(
+                _apiHost,
+                '/x/web-interface/archive/has/like',
+                <String, String>{'bvid': normalizedBvid},
+              ),
+              session,
+            ),
+      normalizedBvid.isEmpty
+          ? Future<Map<Object?, Object?>?>.value()
+          : _tryGetData(
+              Uri.https(
+                _apiHost,
+                '/x/web-interface/archive/coins',
+                <String, String>{'bvid': normalizedBvid},
+              ),
+              session,
+            ),
+      _tryGetData(_favoriteFolderEndpoint(session: session, aid: aid), session),
+    ).wait;
+    final list = folderData?['list'];
+    final completeFolders = _hasCompleteFolderState(folderData, list);
+    final favoriteMediaIds = <int>{..._findFavoriteMediaIds(list)};
+    int? favoriteMediaId = favoriteMediaIds.firstOrNull;
+    Map<Object?, Object?>? favoriteData;
+    if (!completeFolders) {
+      favoriteData = await _tryGetData(
         Uri.https(_apiHost, '/x/v3/fav/resource/has', <String, String>{
           'rid': aid.toString(),
           'type': '2',
@@ -215,36 +232,74 @@ class BilibiliInteractionService {
         session,
       );
       if (favoriteData != null) {
-        isFavorited = _readFavoriteState(favoriteData);
         final int responseMediaId = _readPositiveInteger(
           favoriteData['media_id'] ?? favoriteData['mediaId'],
         );
         if (responseMediaId > 0) {
-          favoriteMediaId = responseMediaId;
+          favoriteMediaId ??= responseMediaId;
           favoriteMediaIds.add(responseMediaId);
         }
       }
-      final Map<Object?, Object?>? folderData = await _tryGetData(
-        _favoriteFolderEndpoint(session: session, aid: aid),
-        session,
-      );
-      if (folderData != null) {
-        favoriteMediaIds.addAll(_findFavoriteMediaIds(folderData['list']));
-        favoriteMediaId ??= _findFavoriteMediaId(
-          folderData['list'],
-          requireContainingVideo: true,
-        );
-        isFavorited = isFavorited || favoriteMediaIds.isNotEmpty;
-      }
     }
-    return BilibiliInteractionState(
-      isFollowing: isFollowing,
-      isLiked: isLiked,
-      coinCount: coinCount,
-      isFavorited: isFavorited,
+    if (!_matchesCurrentScope(session)) throw _staleSession;
+    final result = BilibiliInteractionState(
+      isFollowing: _isFollowingAttribute(relation?['attribute']),
+      isLiked: _readBool(
+        likeData is Map ? likeData['data'] ?? likeData['like'] : likeData,
+      ),
+      coinCount: _readInteger(
+        coinData?['multiply'] ?? coinData?['number'],
+      ).clamp(0, 2),
+      isFavorited:
+          favoriteMediaIds.isNotEmpty ||
+          (favoriteData != null && _readFavoriteState(favoriteData)),
       favoriteMediaId: favoriteMediaId,
       favoriteMediaIds: Set<int>.unmodifiable(favoriteMediaIds),
     );
+    if (epoch == _readEpoch) {
+      if (completeFolders) _rememberFolders(session, aid, list);
+      if ((ownerMid <= 0 || relation != null) &&
+          (normalizedBvid.isEmpty || (likeData != null && coinData != null)) &&
+          (completeFolders || favoriteData != null)) {
+        _videoStates.remove(key);
+        _videoStates[key] = (DateTime.now().add(_stateTtl), result);
+        if (_videoStates.length > 32) {
+          _videoStates.remove(_videoStates.keys.first);
+        }
+      }
+    }
+    return result;
+  }
+
+  /// 缺少状态字段、条目或可用编号时，需要独立收藏状态接口补全。
+  bool _hasCompleteFolderState(Map<Object?, Object?>? data, Object? list) {
+    if (list is! List ||
+        _readBool(data?['has_more']) ||
+        _readInteger(data?['count']) > list.length) {
+      return false;
+    }
+    return list.every((item) {
+      if (item is! Map || _readPositiveInteger(item['id']) <= 0) return false;
+      final state = item['fav_state'] ?? item['favState'];
+      return state is bool ||
+          state == 0 ||
+          state == 1 ||
+          state == '0' ||
+          state == '1';
+    });
+  }
+
+  /// 为收藏面板保留同一账号和视频已加载的完整收藏夹。
+  void _rememberFolders(_InteractionSession session, int aid, Object? list) {
+    final key = (session.generation, session.revision, session.accountMid, aid);
+    _favoriteFolders.remove(key);
+    _favoriteFolders[key] = (
+      DateTime.now().add(_stateTtl),
+      _parseFavoriteFolders(list),
+    );
+    if (_favoriteFolders.length > 32) {
+      _favoriteFolders.remove(_favoriteFolders.keys.first);
+    }
   }
 
   /// 读取指定 UP 主的关注状态，未登录或接口失败时抛出可展示的互动异常。
@@ -320,10 +375,18 @@ class BilibiliInteractionService {
       throw const BilibiliInteractionException('视频编号无效，无法读取收藏夹。');
     }
     final _InteractionSession session = await _openSession();
+    final key = (session.generation, session.revision, session.accountMid, aid);
+    final cached = _favoriteFolders[key];
+    if (cached != null && DateTime.now().isBefore(cached.$1)) return cached.$2;
+    final epoch = _readEpoch;
     final Map<Object?, Object?> data = await _getData(
       _favoriteFolderEndpoint(session: session, aid: aid),
       session,
     );
+    if (!_matchesCurrentScope(session)) throw _staleSession;
+    if (epoch == _readEpoch && _hasCompleteFolderState(data, data['list'])) {
+      _rememberFolders(session, aid, data['list']);
+    }
     return _parseFavoriteFolders(data['list']);
   }
 
@@ -858,9 +921,30 @@ class BilibiliInteractionService {
       response,
       requireExplicitCode: requireExplicitCode,
     );
+    _invalidateWriteState(endpoint.path, fields);
     return rawData is Map
         ? Map<Object?, Object?>.from(rawData)
         : const <Object?, Object?>{};
+  }
+
+  /// 使成功写入所影响的短时状态失效，并阻止旧读请求回填。
+  void _invalidateWriteState(String path, Map<String, String> fields) {
+    _readEpoch++;
+    if (path == '/x/relation/modify') {
+      final mid = int.tryParse(fields['fid'] ?? '');
+      _videoStates.removeWhere((key, _) => key.$6 == mid);
+      return;
+    }
+    final aid = int.tryParse(fields['aid'] ?? fields['rid'] ?? '');
+    if (aid != null) {
+      _videoStates.removeWhere((key, _) => key.$5 == aid);
+      if (path == '/x/v3/fav/resource/deal') {
+        _favoriteFolders.removeWhere((key, _) => key.$4 == aid);
+      }
+      return;
+    }
+    _videoStates.clear();
+    _favoriteFolders.clear();
   }
 
   /// 校验 HTTP 和业务响应，只把稳定错误文字交给界面。
@@ -945,39 +1029,31 @@ class BilibiliInteractionService {
     return number > 0 ? number : 0;
   }
 
-  /// 使用 HttpClient 发送带 Cookie 的 JSON GET 或表单 POST 请求。
+  /// 使用共享连接发送带 Cookie 的 GET 或保留正文的表单 POST。
   static Future<BilibiliInteractionResponse> _requestDefault(
     Uri endpoint, {
     required String cookieHeader,
     String? body,
   }) async {
-    final HttpClient client = HttpClient();
     try {
-      final HttpClientRequest request = body == null
-          ? await client.getUrl(endpoint)
-          : await client.postUrl(endpoint);
-      final Map<String, String> headers =
-          buildBilibiliInteractionRequestHeaders(
-            cookieHeader: cookieHeader,
-            hasBody: body != null,
-          );
-      for (final MapEntry<String, String> header in headers.entries) {
-        request.headers.set(header.key, header.value);
-      }
-      if (body != null) {
-        request.write(body);
-      }
-      final HttpClientResponse response = await request.close();
+      final response = await AppHttpTransport.shared.send(
+        uri: endpoint,
+        method: body == null ? 'GET' : 'POST',
+        bodyBytes: body == null ? null : utf8.encode(body),
+        followRedirects: false,
+        headers: buildBilibiliInteractionRequestHeaders(
+          cookieHeader: cookieHeader,
+          hasBody: body != null,
+        ),
+      );
       return BilibiliInteractionResponse(
         statusCode: response.statusCode,
-        body: await response.transform(utf8.decoder).join(),
+        body: response.bodyUtf8,
       );
     } on SocketException {
       throw const BilibiliInteractionException('无法连接 B 站互动服务，请检查网络后重试。');
     } on HttpException {
       throw const BilibiliInteractionException('B 站互动网络响应异常，请稍后重试。');
-    } finally {
-      client.close(force: true);
     }
   }
 }

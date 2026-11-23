@@ -5,11 +5,15 @@ import 'package:focubili/core/router/app_router.dart';
 import 'package:focubili/features/profile/favorite_folders_page.dart';
 import 'package:focubili/features/profile/favorite_videos_page.dart';
 import 'package:focubili/features/profile/followed_creators_page.dart';
+import 'package:focubili/features/profile/watch_history_page.dart';
 import 'package:focubili/models/account_collection.dart';
 import 'package:focubili/models/video_preview.dart';
+import 'package:focubili/models/watch_history_entry.dart';
 import 'package:focubili/services/bilibili_account_data_service.dart';
 import 'package:focubili/services/bilibili_auth_service.dart';
 import 'package:focubili/services/bilibili_service.dart';
+import 'package:focubili/services/watch_history_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// 提供固定已登录状态和测试 Cookie 的会话替身，不访问 Android WebView。
 class _TestSessionProvider implements BilibiliAccountSessionProvider {
@@ -21,7 +25,9 @@ class _TestSessionProvider implements BilibiliAccountSessionProvider {
 
   /// 返回预设会话；未传入时返回一个固定的已登录测试账号。
   @override
-  Future<BilibiliSessionState> loadCurrentSession() async {
+  Future<BilibiliSessionState> loadCurrentSession({
+    bool forceRefresh = false,
+  }) async {
     return state ??
         const BilibiliSessionState.active(
           BilibiliAccount(mid: 42, name: '测试账号', avatarUrl: ''),
@@ -131,6 +137,7 @@ void main() {
   testWidgets('收藏夹列表打开内容页', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(360, 800));
     addTearDown(() => tester.binding.setSurfaceSize(null));
+    var videoPageRequests = 0;
     final BilibiliAccountDataService service = _accountService((
       Uri endpoint,
     ) async {
@@ -146,6 +153,7 @@ void main() {
             }
           ''');
       }
+      videoPageRequests++;
       return _ok('''
           {
             "code": 0,
@@ -184,7 +192,38 @@ void main() {
 
     expect(find.byKey(const Key('favorite-videos-list')), findsOneWidget);
     expect(find.text('收藏视频'), findsOneWidget);
+    expect(videoPageRequests, 1);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('重进观看历史不会立刻重查确认无封面的视频', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final history = WatchHistoryService();
+    final videos = _RecordingVideoService();
+    await history.record(
+      WatchHistoryEntry(
+        bvid: 'BV1GJ411x7h7',
+        title: '旧记录',
+        ownerName: '测试 UP',
+        lastPartTitle: 'P1',
+        lastPartPageNumber: 1,
+        watchedAt: DateTime(2026),
+      ),
+    );
+    for (var visit = 0; visit < 2; visit++) {
+      await tester.pumpWidget(
+        _host(
+          WatchHistoryPage(
+            key: ValueKey(visit),
+            historyService: history,
+            bilibiliService: videos,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('旧记录'), findsOneWidget);
+    }
+    expect(videos.lookupCalls, 1);
   });
 
   /// 验证平板收藏内容使用双列，并保持加载、失效判断和播放器跳转能力。

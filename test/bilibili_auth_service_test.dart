@@ -93,6 +93,34 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
   });
+
+  /// 同一 Cookie 的并发展示共用一次 nav，强制复核和快照变化立即绕过缓存。
+  test('展示缓存合并同快照请求并拒绝复用旧 Cookie', () async {
+    final store = _RecordingCookieStore(
+      cookies: 'SESSDATA=fixture; buvid3=one',
+    );
+    final reply = Completer<BilibiliNavResponse>();
+    final api = _CallbackAuthApi((_) => reply.future);
+    final service = BilibiliAuthService(cookieStore: store, api: api);
+    final pending = Future.wait([
+      service.loadCurrentSession(),
+      service.loadCurrentSession(),
+    ]);
+    await Future<void>.delayed(Duration.zero);
+    expect(api.requestedCookies, hasLength(1));
+    reply.complete(_activeResponse());
+    expect((await pending).every((session) => session.isActive), isTrue);
+    expect((await service.loadCurrentSession()).isActive, isTrue);
+    expect(api.requestedCookies, hasLength(1));
+
+    store.cookies = 'SESSDATA=fixture; buvid3=two';
+    expect((await service.loadCurrentSession()).isActive, isTrue);
+    expect(api.requestedCookies.last, store.cookies);
+    expect(api.requestedCookies, hasLength(2));
+    await service.loadCurrentSession(forceRefresh: true);
+    expect(api.requestedCookies, hasLength(3));
+  });
+
   // 账号在快照读取期间退出时，旧快照不能进入导出文件。
   test('导出登录快照拒绝账号切换竞态与空会话', () async {
     final store = _DelayedExportCookieStore();

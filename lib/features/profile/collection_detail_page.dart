@@ -14,6 +14,7 @@ import '../../models/subscription.dart';
 import '../../models/video_preview.dart';
 import '../../models/playback_queue.dart';
 import '../../services/bilibili_public_content_service.dart';
+import '../../services/bilibili_image_url_policy.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/learning_list_service.dart';
 import '../../services/subscription_service.dart';
@@ -453,6 +454,7 @@ class _CollectionDetailPageState extends State<CollectionDetailPage> {
     }
     return AppNetworkImage(
       imageUrl: url,
+      imageVariant: BilibiliImageVariant.cover16x9,
       httpHeaders: const <String, String>{
         'Referer': 'https://www.bilibili.com/',
       },

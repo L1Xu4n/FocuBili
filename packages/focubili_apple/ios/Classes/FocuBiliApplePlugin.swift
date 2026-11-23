@@ -31,9 +31,27 @@ public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCen
     private var pictureInPicture: FocuBiliAppleVideoWindow?
     private var initialLink: String?
     private var networkType = "other"
+    private var networkMetered = "unknown"
+    private var networkLowDataMode = "unknown"
     private let monitor = NWPathMonitor()
     private var commands: [(MPRemoteCommand, Any)] = []
     private var observers: [NSObjectProtocol] = []
+
+    private static func networkStatusSnapshot(from path: NWPath) -> (String, String, String) {
+        if path.status != .satisfied {
+            return ("offline", "unknown", "unknown")
+        }
+        let type = path.usesInterfaceType(.wifi)
+            ? "wifi"
+            : path.usesInterfaceType(.cellular)
+                ? "mobile"
+                : path.usesInterfaceType(.wiredEthernet)
+                    ? "ethernet"
+                    : "other"
+        let metered = path.isExpensive ? "metered" : "unmetered"
+        let lowDataMode = path.isConstrained ? "on" : "off"
+        return (type, metered, lowDataMode)
+    }
 
     public static func register(with registrar: FlutterPluginRegistrar) {
         let instance = FocuBiliApplePlugin()
@@ -50,7 +68,7 @@ public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCen
             instance.subscriptionWorkerToken = FocuBiliSubscriptionScheduler.shared.currentRunToken
             instance.subscriptionWorkerFocusEpoch = SubscriptionFocusGate.shared.capture()
         }
-        let names = worker ? ["auth", "subscription_notifications"] : ["auth", "focus_notifications", "subscription_notifications", "device_status", "apple_media"]
+        let names = worker ? ["auth", "subscription_notifications", "device_status"] : ["auth", "focus_notifications", "subscription_notifications", "device_status", "apple_media"]
         #else
         let names = ["auth", "focus_notifications", "subscription_notifications", "device_status", "apple_media"]
         #endif
@@ -61,6 +79,15 @@ public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCen
             if name == "apple_media" { instance.mediaChannel = channel }
             if name == "subscription_notifications" { instance.subscriptionChannel = channel }
         }
+        instance.monitor.pathUpdateHandler = { [weak instance] path in
+            let snapshot = Self.networkStatusSnapshot(from: path)
+            DispatchQueue.main.async {
+                instance?.networkType = snapshot.0
+                instance?.networkMetered = snapshot.1
+                instance?.networkLowDataMode = snapshot.2
+            }
+        }
+        instance.monitor.start(queue: DispatchQueue(label: "focubili.network"))
         #if os(iOS)
         if worker { registrar.publish(instance); return }
         instance.channels.append(FocuBiliSubscriptionScheduler.shared.attach(messenger: messenger))
@@ -74,11 +101,6 @@ public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCen
             } else { result(FlutterMethodNotImplemented) }
         }
         instance.channels.append(deep)
-        instance.monitor.pathUpdateHandler = { [weak instance] path in
-            let value = path.status != .satisfied ? "offline" : path.usesInterfaceType(.wifi) ? "wifi" : path.usesInterfaceType(.cellular) ? "mobile" : path.usesInterfaceType(.wiredEthernet) ? "ethernet" : "other"
-            DispatchQueue.main.async { instance?.networkType = value }
-        }
-        instance.monitor.start(queue: DispatchQueue(label: "focubili.network"))
         UNUserNotificationCenter.current().delegate = instance
         instance.installRemoteCommands()
     }
@@ -96,6 +118,15 @@ public class FocuBiliApplePlugin: NSObject, FlutterPlugin, UNUserNotificationCen
         case "device_status":
             switch call.method {
             case "getNetworkType": result(networkType)
+            case "getNetworkStatus":
+                let current = (networkType == "other" && networkMetered == "unknown")
+                    ? Self.networkStatusSnapshot(from: monitor.currentPath)
+                    : (networkType, networkMetered, networkLowDataMode)
+                result([
+                    "type": current.0,
+                    "metered": current.1,
+                    "lowDataMode": current.2,
+                ])
             case "getBatteryPercent":
                 #if os(iOS)
                 UIDevice.current.isBatteryMonitoringEnabled = true

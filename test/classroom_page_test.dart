@@ -9,6 +9,7 @@ import 'package:focubili/features/classroom/course_page.dart';
 import 'package:focubili/services/bilibili_course_service.dart';
 import 'package:focubili/core/theme/app_theme.dart';
 import 'package:focubili/features/player/player_page.dart';
+import 'package:focubili/models/playback_preferences.dart';
 import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/platform/app_platform.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -24,6 +25,8 @@ class ChapterPlayback extends FeedbackPlayback {
     VideoPart? part,
     int quality = 64,
     Duration? initialPosition,
+    PlaybackCodecPreference? codecPreference,
+    bool preferDataSaving = false,
   }) async {
     expect(video.isCourse, isTrue);
     openedParts.add(part ?? video.initialPart);
@@ -32,6 +35,8 @@ class ChapterPlayback extends FeedbackPlayback {
       part: part,
       quality: quality,
       initialPosition: initialPosition,
+      codecPreference: codecPreference,
+      preferDataSaving: preferDataSaving,
     );
   }
 }

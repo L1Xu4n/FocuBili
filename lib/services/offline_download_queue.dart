@@ -9,10 +9,12 @@ import '../models/video_preview.dart';
 import 'cache_lifecycle.dart';
 import 'course_cache_access.dart';
 import 'course_cache_library.dart';
+import 'device_status_service.dart';
 import 'download_control.dart';
 import 'download_notification_service.dart';
 import 'offline_cache_locations.dart';
 import 'offline_video_service.dart';
+import 'playback_preferences_service.dart';
 
 /// Owns durable FIFO tasks independently of player and library page lifetimes.
 class OfflineDownloadQueue extends ChangeNotifier {
@@ -23,10 +25,13 @@ class OfflineDownloadQueue extends ChangeNotifier {
     OfflineVideoPreferencesLoader? preferencesLoader,
     Future<void> Function(List<OfflineDownloadTask>)? publishProgress,
     DateTime Function()? clock,
+    DeviceStatusService? deviceStatusService,
   }) : library = library ?? OfflineVideoService(),
        _preferencesLoader = preferencesLoader ?? SharedPreferences.getInstance,
        _publishProgress = publishProgress,
        _clock = clock ?? DateTime.now,
+       _deviceStatusService =
+           deviceStatusService ?? const NativeDeviceStatusService(),
        courses = courseLibrary ?? CourseCacheLibrary.instance {
     CacheLifecycle.account.addListener(_accountChanged);
   }
@@ -121,6 +126,7 @@ class OfflineDownloadQueue extends ChangeNotifier {
 
   final OfflineVideoPreferencesLoader _preferencesLoader;
   final DateTime Function() _clock;
+  final DeviceStatusService _deviceStatusService;
   final Future<void> Function(List<OfflineDownloadTask>)? _publishProgress;
   final List<OfflineDownloadTask> _tasks = [];
   final _completions = StreamController<OfflineDownloadTask>.broadcast();
@@ -732,15 +738,63 @@ class OfflineDownloadQueue extends ChangeNotifier {
 
   /// Executes one task and makes every error a visible, retryable terminal state.
   Future<void> _run(OfflineDownloadTask task, DownloadControl control) async {
+    const String meteredPauseMessage = '当前非未计量网络，已按“仅未计量网络下载”暂停离线缓存。';
+    bool pausedForMeteredNetwork = false;
+    bool checkingNetwork = false;
+
+    Future<bool> shouldPauseForMeteredNetwork() async {
+      final prefs = await _preferencesLoader();
+      if (prefs.getBool(
+            PlaybackPreferencesService.wifiOnlyOfflineDownloadsKey,
+          ) !=
+          true) {
+        return false;
+      }
+      final networkStatus = await _deviceStatusService.loadNetworkStatus();
+      return !networkStatus.allowsUnmeteredOnlyAction;
+    }
+
+    Future<void> enforceUnmeteredPolicy() async {
+      if (control.isInterrupted) return;
+      if (await shouldPauseForMeteredNetwork()) {
+        pausedForMeteredNetwork = true;
+        control.interrupt();
+      }
+    }
+
+    control.beforeAttempt = enforceUnmeteredPolicy;
     _speedSampleBytes = null;
     _speedClock.reset();
-    _speedTimer = Timer.periodic(
-      const Duration(seconds: 1),
-      (_) => _sampleSpeed(task.id),
-    );
+    _speedTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      _sampleSpeed(task.id);
+      if (checkingNetwork || control.isInterrupted) return;
+      checkingNetwork = true;
+      unawaited(
+        enforceUnmeteredPolicy()
+            .catchError((Object _) {})
+            .whenComplete(() => checkingNetwork = false),
+      );
+    });
     _replace(task.copyWith(status: DownloadTaskStatus.downloading));
     _emit();
     try {
+      if (await shouldPauseForMeteredNetwork()) {
+        final current = _find(task.id);
+        if (current != null) {
+          _replace(
+            current.copyWith(
+              status: DownloadTaskStatus.paused,
+              error: meteredPauseMessage,
+            ),
+          );
+        }
+        try {
+          await _save();
+        } catch (_) {}
+        _scheduleRetention();
+        _emit();
+        return;
+      }
       await _save();
       final int bytes;
       if (task.courseMid != null) {
@@ -793,7 +847,14 @@ class OfflineDownloadQueue extends ChangeNotifier {
     } on DownloadInterrupted {
       final current = _find(task.id);
       if (current != null) {
-        _replace(current.copyWith(status: DownloadTaskStatus.paused));
+        _replace(
+          pausedForMeteredNetwork
+              ? current.copyWith(
+                  status: DownloadTaskStatus.paused,
+                  error: meteredPauseMessage,
+                )
+              : current.copyWith(status: DownloadTaskStatus.paused),
+        );
       }
     } catch (error) {
       final current = _find(task.id);

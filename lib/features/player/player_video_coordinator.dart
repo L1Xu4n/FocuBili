@@ -49,9 +49,6 @@ mixin _PlayerVideoCoordinator
   /// 重置当前视频的互动状态并异步读取新视频的互动状态。
   void _resetVideoInteractionState();
 
-  /// 在视频状态更新完成后启动互动状态读取。
-  void _startVideoInteractionStateLoad();
-
   /// Reloads local offline membership after changing the current CID.
   @override
   void _refreshOfflinePartState();
@@ -199,7 +196,6 @@ mixin _PlayerVideoCoordinator
     _resumeNoticeTimer?.cancel();
     _resetFocusPlaybackIdentity();
     unawaited(_loadCurrentLearningListEntry());
-    unawaited(_loadPlayerEnhancements());
     try {
       await _openPlaybackSource(video, part: part, quality: _currentQuality);
       if (generation == _partSwitchGeneration &&
@@ -256,13 +252,14 @@ mixin _PlayerVideoCoordinator
     _openingResumePlan = PlaybackResumePlan.direct(part: branchPart);
     _refreshOfflinePartState();
     unawaited(_loadCurrentLearningListEntry());
-    unawaited(_playerEnhancementController.selectChoice(choice));
     try {
       await _openPlaybackSource(
         video,
         part: branchPart,
         quality: _currentQuality,
         initialPosition: Duration.zero,
+        onOnlineOpened: () =>
+            unawaited(_playerEnhancementController.selectChoice(choice)),
       );
     } on PlatformException catch (error) {
       if (_isCurrentVideoNavigation(generation, bvid: video.bvid)) {
@@ -599,8 +596,7 @@ mixin _PlayerVideoCoordinator
     _resumeNoticeTimer?.cancel();
     _resetFocusPlaybackIdentity();
     unawaited(_loadCurrentLearningListEntry());
-    _startVideoInteractionStateLoad();
-    unawaited(_loadPlayerEnhancements());
+    _loadLocalVideoActions();
     await _openPlaybackSource(
       video,
       part: targetPart,

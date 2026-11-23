@@ -10,6 +10,7 @@ import '../../core/widgets/drag_selection_region.dart';
 import '../../models/video_preview.dart';
 import '../../models/watch_history_entry.dart';
 import '../../services/bilibili_service.dart';
+import '../../services/bilibili_image_url_policy.dart';
 import '../../services/watch_history_service.dart';
 import 'local_video_list_selection.dart';
 
@@ -37,6 +38,9 @@ class WatchHistoryPage extends StatefulWidget {
 class _WatchHistoryPageState extends State<WatchHistoryPage> {
   late final WatchHistoryService _historyService;
   late final BilibiliService _bilibiliService;
+  static final _defaultThumbnailRetry = <String, DateTime>{};
+  static final _injectedThumbnailRetry = Expando<Map<String, DateTime>>();
+  late final Map<String, DateTime> _thumbnailRetry;
   final TextEditingController _searchController = TextEditingController();
   List<WatchHistoryEntry> _entries = const <WatchHistoryEntry>[];
   bool _isLoading = true;
@@ -76,6 +80,10 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
     super.initState();
     _historyService = widget.historyService ?? WatchHistoryService();
     _bilibiliService = widget.bilibiliService ?? BilibiliVideoInfoService();
+    final injected = widget.bilibiliService;
+    _thumbnailRetry = injected == null
+        ? _defaultThumbnailRetry
+        : (_injectedThumbnailRetry[injected] ??= <String, DateTime>{});
     _loadHistory();
   }
 
@@ -120,14 +128,21 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
     List<WatchHistoryEntry> entries,
     int generation,
   ) async {
+    final now = DateTime.now();
+    _thumbnailRetry.removeWhere((_, until) => !until.isAfter(now));
     final List<WatchHistoryEntry> missingEntries = entries
-        .where((WatchHistoryEntry entry) => entry.thumbnailUrl.isEmpty)
+        .where(
+          (entry) =>
+              entry.thumbnailUrl.isEmpty &&
+              !_thumbnailRetry.containsKey(entry.bvid),
+        )
         .toList(growable: false);
     if (missingEntries.isEmpty) {
       return;
     }
     final Map<String, String> thumbnailUrls = <String, String>{};
     for (int offset = 0; offset < missingEntries.length; offset += 2) {
+      if (!mounted || generation != _loadGeneration) return;
       final int end = (offset + 2).clamp(0, missingEntries.length).toInt();
       final List<MapEntry<String, String>?> results = await Future.wait(
         missingEntries.sublist(offset, end).map(_lookupMissingThumbnail),
@@ -151,18 +166,30 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
     }
   }
 
-  /// 查询一条旧记录的公开视频详情并返回 BV 与封面；无封面或网络失败时返回空值。
+  /// 无封面时短期跳过补查，网络失败则只短暂退避。
   Future<MapEntry<String, String>?> _lookupMissingThumbnail(
     WatchHistoryEntry entry,
   ) async {
     try {
       final VideoPreview video = await _bilibiliService.lookupVideo(entry.bvid);
       if (video.thumbnailUrl.isEmpty) {
+        _deferThumbnail(entry.bvid, const Duration(minutes: 2));
         return null;
       }
+      _thumbnailRetry.remove(entry.bvid);
       return MapEntry<String, String>(entry.bvid, video.thumbnailUrl);
     } catch (_) {
+      _deferThumbnail(entry.bvid, const Duration(seconds: 5));
       return null;
+    }
+  }
+
+  /// Keeps retry deadlines bounded for the current app session.
+  void _deferThumbnail(String bvid, Duration delay) {
+    _thumbnailRetry.remove(bvid);
+    _thumbnailRetry[bvid] = DateTime.now().add(delay);
+    if (_thumbnailRetry.length > 512) {
+      _thumbnailRetry.remove(_thumbnailRetry.keys.first);
     }
   }
 
@@ -336,10 +363,9 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
             else
               AppNetworkImage(
                 imageUrl: entry.thumbnailUrl,
+                imageVariant: BilibiliImageVariant.cover16x10,
                 httpHeaders: const <String, String>{
                   'Referer': 'https://www.bilibili.com/',
-                  'User-Agent':
-                      'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36',
                 },
                 fit: BoxFit.cover,
                 memCacheWidth: 320,

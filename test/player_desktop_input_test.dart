@@ -83,6 +83,8 @@ class _Playback extends FeedbackPlayback {
     VideoPart? part,
     int quality = 64,
     Duration? initialPosition,
+    PlaybackCodecPreference? codecPreference,
+    bool preferDataSaving = false,
   }) async {
     openedParts.add((part ?? video.initialPart).cid);
     emit(true);

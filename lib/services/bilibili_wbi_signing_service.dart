@@ -2,6 +2,9 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 
+import 'app_http_client.dart';
+import 'cache_lifecycle.dart';
+
 /// 只读取固定官方接口 JSON；测试可替换网络，签名材料不包含登录凭据。
 typedef WbiJsonRequest =
     Future<String> Function(Uri endpoint, Map<String, String> headers);
@@ -39,6 +42,31 @@ class BilibiliWbiSigningService {
     DateTime Function()? clock,
   }) : _requestJson = requestJson,
        _clock = clock ?? DateTime.now;
+
+  static final BilibiliWbiSigningService shared = _createShared();
+
+  /// 清除旧会话的签名材料，并让旧请求无法重新写入公共缓存。
+  static BilibiliWbiSigningService _createShared() {
+    final service = BilibiliWbiSigningService(requestJson: _requestNav);
+    CacheLifecycle.account.addListener(service._keys.clear);
+    return service;
+  }
+
+  /// 使用共享连接请求官方签名材料。
+  static Future<String> _requestNav(
+    Uri uri,
+    Map<String, String> headers,
+  ) async {
+    final response = await AppHttpTransport.shared.send(
+      uri: uri,
+      headers: headers,
+      followRedirects: false,
+    );
+    if (response.statusCode != 200) {
+      throw WbiSigningException(httpStatus: response.statusCode);
+    }
+    return response.bodyUtf8;
+  }
 
   static const _keyOrder = <int>[
     46,
@@ -78,38 +106,64 @@ class BilibiliWbiSigningService {
   static final _filteredCharacters = RegExp(r"[!'()*]");
   final WbiJsonRequest _requestJson;
   final DateTime Function() _clock;
-  String? _cachedKey;
-  DateTime? _cachedAt;
-  Future<String>? _pendingKey;
+  final Map<Object, _WbiKeyBucket> _keys = {};
+  static const _defaultScope = 'default';
 
   /// 为当前请求生成新时间戳；并发请求共享一次材料获取，失败不缓存。
   Future<Map<String, String>> signParameters(
     Map<String, String> parameters, {
     required Map<String, String> headers,
     WbiJsonRequest? requestJson,
+    Object scopeKey = _defaultScope,
   }) async {
+    final bucket = _keys.putIfAbsent(scopeKey, _WbiKeyBucket.new);
     final now = _clock();
-    final age = _cachedAt == null ? null : now.difference(_cachedAt!);
+    final age = bucket.cachedAt == null
+        ? null
+        : now.difference(bucket.cachedAt!);
     final String key;
-    if (_cachedKey != null &&
+    if (bucket.key != null &&
         age != null &&
         !age.isNegative &&
         age < const Duration(hours: 1)) {
-      key = _cachedKey!;
+      key = bucket.key!;
     } else {
-      key = await (_pendingKey ??= _loadKey(headers, requestJson).whenComplete(
-        () {
-          _pendingKey = null;
-        },
-      ));
+      final seedVersion = bucket.seedVersion;
+      key = await (bucket.pending ??= _loadKey(headers, requestJson)
+          .then((key) {
+            if (!identical(_keys[scopeKey], bucket)) {
+              throw const WbiSigningException();
+            }
+            if (bucket.seedVersion == seedVersion) {
+              bucket.key = key;
+              bucket.cachedAt = _clock();
+            }
+            return bucket.key!;
+          })
+          .whenComplete(() {
+            bucket.pending = null;
+          }));
     }
+    if (!identical(_keys[scopeKey], bucket)) throw const WbiSigningException();
     return sign(parameters, key, _clock().millisecondsSinceEpoch ~/ 1000);
   }
 
-  /// The next eligible request may refresh rotated public signing material.
-  void invalidate() {
-    _cachedKey = null;
-    _cachedAt = null;
+  /// 下一次请求可刷新此会话的签名材料，旧的在途请求不能回填。
+  void invalidate([Object scopeKey = _defaultScope]) {
+    _keys.remove(scopeKey);
+  }
+
+  /// 复用已收到的 nav 材料；字段无效时保留现有缓存。
+  void seedFromNavImages(Object scopeKey, Object? imgUrl, Object? subUrl) {
+    try {
+      final key = deriveMixinKey(_keyFromUrl(imgUrl), _keyFromUrl(subUrl));
+      final bucket = _keys.putIfAbsent(scopeKey, _WbiKeyBucket.new);
+      bucket.seedVersion++;
+      bucket.key = key;
+      bucket.cachedAt = _clock();
+    } on WbiSigningException {
+      // 部分 nav 响应不包含签名图片。
+    }
   }
 
   /// 从 nav 的 wbi_img 提取材料；游客 nav 的 -101 仍可能包含有效材料。
@@ -127,10 +181,7 @@ class BilibiliWbiSigningService {
       if (code is int && code != 0 && code != -101) {
         throw WbiSigningException(apiCode: code);
       }
-      final key = mixinKeyFromNavImages(root['data']['wbi_img']);
-      _cachedKey = key;
-      _cachedAt = _clock();
-      return key;
+      return mixinKeyFromNavImages(root['data']['wbi_img']);
     } on BilibiliRequestFailure catch (error) {
       throw WbiSigningException(
         httpStatus: error.httpStatus,
@@ -199,4 +250,12 @@ class BilibiliWbiSigningService {
         )
         .join('&');
   }
+}
+
+/// 保存单一会话的签名材料与在途请求。
+class _WbiKeyBucket {
+  int seedVersion = 0;
+  String? key;
+  DateTime? cachedAt;
+  Future<String>? pending;
 }

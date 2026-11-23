@@ -861,6 +861,7 @@ class CourseCacheLibrary extends ChangeNotifier {
         await _file(dir, '$name.part.resume');
         for (final url in t.urls) {
           await check();
+          await c.checkBeforeAttempt();
           try {
             String? objectVersion;
             final n = await downloader.download(

@@ -3,12 +3,14 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../models/video_metadata_request_diagnostic.dart';
+import 'app_http_client.dart';
 import 'bilibili_auth_service.dart';
 import 'bilibili_lookup_exception.dart';
 import 'bilibili_request_policy.dart';
 import 'bilibili_http_user_agent.dart';
 import 'http_user_agent_preferences.dart';
 import 'bilibili_wbi_signing_service.dart';
+import 'cache_lifecycle.dart';
 import 'problem_diagnostics_service.dart';
 
 class VideoMetadataResponse {
@@ -28,23 +30,85 @@ typedef VideoMetadataTransport =
       Map<String, String> headers,
     );
 
-/// A single guarded session covers nav, signed details, parsing and publication.
-/// Only concurrent work is shared; completed metadata and credentials aren't cached.
+/// 保存通过官方接口和调用方解析验证的成功正文，按最近使用顺序淘汰。
+class BilibiliVideoMetadataCache {
+  /// 允许测试注入私有缓存和时钟。
+  BilibiliVideoMetadataCache({
+    this.ttl = const Duration(minutes: 5),
+    this.maxEntries = 200,
+    DateTime Function()? clock,
+  }) : _clock = clock ?? DateTime.now;
+
+  final Duration ttl;
+  final int maxEntries;
+  final DateTime Function() _clock;
+  final _bodies = <Object, (DateTime, String)>{};
+  final _pending = <Object, (Future<String>, Map<String, Object?>)>{};
+  int _revision = CacheLifecycle.account.value;
+
+  /// 首次访问新账号时释放旧正文与在途工作。
+  void _syncAccount() {
+    if (_revision == CacheLifecycle.account.value) return;
+    _revision = CacheLifecycle.account.value;
+    _bodies.clear();
+    _pending.clear();
+  }
+
+  /// 读取有效正文并提升到最近使用位置。
+  String? _read(Object key) {
+    final entry = _bodies.remove(key);
+    if (entry == null || !_clock().isBefore(entry.$1)) return null;
+    _bodies[key] = entry;
+    return entry.$2;
+  }
+
+  /// 保存正文并维持固定条目上限。
+  void _write(Object key, String body) {
+    if (maxEntries <= 0) return;
+    _bodies.remove(key);
+    _bodies[key] = (_clock().add(ttl), body);
+    while (_bodies.length > maxEntries) {
+      _bodies.remove(_bodies.keys.first);
+    }
+  }
+}
+
+/// 请求、解析及结果交付均使用同一份受保护的会话快照。
 class BilibiliVideoMetadataClient {
+  /// 默认客户端共享缓存，注入传输时默认使用隔离缓存与签名器。
   BilibiliVideoMetadataClient({
     BilibiliAuthService? authService,
     VideoMetadataTransport? transport,
     ProblemDiagnosticsService? diagnostics,
+    BilibiliVideoMetadataCache? cache,
   }) : _auth = authService ?? BilibiliAuthService(),
        _transport = transport ?? _get,
+       _cache =
+           cache ??
+           (transport == null && authService == null
+               ? _sharedCache
+               : BilibiliVideoMetadataCache()),
+       _signer = transport == null
+           ? BilibiliWbiSigningService.shared
+           : BilibiliWbiSigningService(
+               requestJson: (_, _) async => throw const WbiSigningException(),
+             ),
        _diagnostics = diagnostics ?? ProblemDiagnosticsService();
+
+  static final _sharedCache = _createSharedCache();
+
+  /// 在账号切换或登出时立即丢弃线上正文与在途请求表。
+  static BilibiliVideoMetadataCache _createSharedCache() {
+    final cache = BilibiliVideoMetadataCache();
+    CacheLifecycle.account.addListener(cache._syncAccount);
+    return cache;
+  }
 
   final BilibiliAuthService _auth;
   final VideoMetadataTransport _transport;
   final ProblemDiagnosticsService _diagnostics;
-  final Map<Object, (Future<String>, Map<String, Object?>)> _pending = {};
-  Object? _signingScope;
-  BilibiliWbiSigningService? _signer;
+  final BilibiliVideoMetadataCache _cache;
+  final BilibiliWbiSigningService _signer;
   static int _requestId = 0;
   static const viewPath = '/x/web-interface/wbi/view';
   static const partsPath = '/x/player/pagelist';
@@ -52,6 +116,7 @@ class BilibiliVideoMetadataClient {
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
       'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
+  /// 共享已校验正文，每个调用方独立解析和验证交付。
   Future<T> load<T extends Object>({
     required String bvid,
     required bool details,
@@ -84,18 +149,31 @@ class BilibiliVideoMetadataClient {
       // in-flight response from a different preference. The WBI material
       // cache remains scoped by authorization only.
       final key = (session.scopeKey, bvid, details, customUserAgent);
-      var work = _pending[key];
+      await session.validate();
+      _cache._syncAccount();
+      final cachedBody = _cache._read(key);
+      if (cachedBody != null) {
+        facts['stage'] = 'parse';
+        final result = await parse(cachedBody);
+        await session.validate();
+        facts['stage'] = 'complete';
+        facts['outcome'] = 'success';
+        return result;
+      }
+      final pending = _cache._pending;
+      var work = pending[key];
       if (work == null) {
         work = (_load(bvid, details, session, facts, customUserAgent), facts);
-        _pending[key] = work;
+        pending[key] = work;
+        final created = work;
         // The listener consumes both outcomes and cannot leak an unhandled error.
         unawaited(
           work.$1.then<void>(
             (_) {
-              _pending.remove(key);
+              if (identical(pending[key], created)) pending.remove(key);
             },
             onError: (Object _, StackTrace _) {
-              _pending.remove(key);
+              if (identical(pending[key], created)) pending.remove(key);
             },
           ),
         );
@@ -122,6 +200,7 @@ class BilibiliVideoMetadataClient {
       facts['stage'] = 'parse';
       final result = await parse(body);
       await session.validate();
+      _cache._write(key, body);
       facts['stage'] = 'complete';
       facts['outcome'] = 'success';
       return result;
@@ -179,6 +258,7 @@ class BilibiliVideoMetadataClient {
     }
   }
 
+  /// 使用会话签名并发起详情或分 P 请求。
   Future<String> _load(
     String bvid,
     bool details,
@@ -191,18 +271,13 @@ class BilibiliVideoMetadataClient {
     if (details) {
       facts['stage'] = 'signing';
       facts['endpoint_kind'] = 'nav';
-      if (_signingScope != session.scopeKey) {
-        _signingScope = session.scopeKey;
-        _signer = BilibiliWbiSigningService(
-          // Every call supplies its guarded request below; never retain a session
-          // or credential snapshot in the public-material cache.
-          requestJson: (_, _) async => throw const WbiSigningException(),
-        );
-      }
-      parameters = await _signer!.signParameters(
+      parameters = await _signer.signParameters(
         parameters,
         headers: const {},
         requestJson: (uri, headers) => _read(uri, session, facts),
+        scopeKey: identical(_signer, BilibiliWbiSigningService.shared)
+            ? session.signingScopeKey
+            : session.scopeKey,
       );
       await session.validate();
       facts['wbi_signed'] = true;
@@ -222,6 +297,7 @@ class BilibiliVideoMetadataClient {
     return body;
   }
 
+  /// 校验 HTTP 和业务结果，保留响应中的多值 Cookie。
   Future<String> _read(
     Uri uri,
     BilibiliPlaybackSession session,
@@ -268,32 +344,20 @@ class BilibiliVideoMetadataClient {
     return response.body;
   }
 
+  /// 使用共享连接读取正文和所有 Set-Cookie 响应头。
   static Future<VideoMetadataResponse> _get(
     Uri uri,
     Map<String, String> headers,
   ) async {
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 15);
-    try {
-      final request = await client
-          .getUrl(uri)
-          .timeout(const Duration(seconds: 15));
-      request.followRedirects = false;
-      headers.forEach(request.headers.set);
-      final response = await request.close().timeout(
-        const Duration(seconds: 15),
-      );
-      final body = await response
-          .transform(utf8.decoder)
-          .join()
-          .timeout(const Duration(seconds: 15));
-      return VideoMetadataResponse(
-        response.statusCode,
-        body,
-        cookies: response.headers[HttpHeaders.setCookieHeader] ?? const [],
-      );
-    } finally {
-      client.close(force: true);
-    }
+    final response = await AppHttpTransport.shared.send(
+      uri: uri,
+      headers: headers,
+      followRedirects: false,
+    );
+    return VideoMetadataResponse(
+      response.statusCode,
+      response.bodyUtf8,
+      cookies: response.headerValues(HttpHeaders.setCookieHeader),
+    );
   }
 }

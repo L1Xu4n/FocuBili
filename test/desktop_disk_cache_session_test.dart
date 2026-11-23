@@ -4,8 +4,12 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:focubili/services/desktop_disk_cache_session.dart';
 import 'package:focubili/services/media_cache_service.dart';
+import 'package:media_kit/media_kit.dart';
+
+import '../tool/desktop_disk_cache_probe.dart';
 
 class TestDiskStorage extends WindowsMediaCacheService {
+  /// Uses test-owned storage with a deliberately small threshold.
   TestDiskStorage(Directory directory)
     : super(
         directoryLoader: () async => directory,
@@ -13,20 +17,31 @@ class TestDiskStorage extends WindowsMediaCacheService {
       );
   bool failRead = false;
   @override
+  /// Keeps the threshold small enough to cross with a short fixture.
   Future<int> loadCapacityBytes() async => 128;
   @override
+  /// Can simulate a disk accounting failure without touching outside files.
   Future<int> diskBytes() {
     if (failRead) throw const FileSystemException('Synthetic read failure');
     return super.diskBytes();
   }
 }
 
+/// Exercises the cache policy through its property and filesystem interfaces.
 void main() {
+  final libmpv = Platform.environment['FOCUBILI_DESKTOP_CACHE_PROBE_LIBMPV'];
+  if (libmpv != null) {
+    test('native loopback pauses both media transfers before EOF', () async {
+      MediaKit.ensureInitialized(libmpv: libmpv);
+      await verifyPausedReadAheadPlateau();
+    });
+  }
   late Directory root;
   late TestDiskStorage storage;
   late DesktopDiskCacheSession session;
   late Map<String, String> properties;
   late Set<String> rejectedProperties;
+  late Map<String, String> forcedReadback;
   Completer<void>? blockWrite;
   Completer<void>? enteredWrite;
   setUp(() async {
@@ -36,6 +51,7 @@ void main() {
     );
     properties = {};
     rejectedProperties = {};
+    forcedReadback = {};
     blockWrite = null;
     enteredWrite = null;
     session = DesktopDiskCacheSession(
@@ -49,9 +65,33 @@ void main() {
         }
         if (!rejectedProperties.contains(name)) properties[name] = value;
       },
-      readProperty: (name) async => properties[name] ?? '',
+      readProperty: (name) async {
+        if (forcedReadback.containsKey(name)) return forcedReadback[name]!;
+        final value = properties[name] ?? '';
+        return name.endsWith('-secs') && value.isNotEmpty
+            ? double.parse(value).toStringAsFixed(6)
+            : value;
+      },
     );
   });
+
+  /// Creates a lease and opts into the unmetered media policy.
+  Future<void> configureForPlayback() async {
+    await session.configure();
+    await session.applyPlaybackPolicy(
+      diskAllowed: true,
+      preferDataSaving: false,
+    );
+  }
+
+  /// Checks time and byte limits together so a partial policy fails the test.
+  void expectBudgets(int seconds, int forwardBytes, int backBytes) {
+    expect(double.parse(properties['cache-secs']!), seconds);
+    expect(double.parse(properties['demuxer-readahead-secs']!), seconds);
+    expect(properties['demuxer-max-bytes'], '$forwardBytes');
+    expect(properties['demuxer-max-back-bytes'], '$backBytes');
+  }
+
   tearDown(() async {
     await session.releaseAfterPlayerClosed();
     WindowsMediaCacheRuntime.diskMessages.clear();
@@ -62,11 +102,14 @@ void main() {
     'uses visible disk packet files and preserves both metadata budgets',
     () async {
       await session.configure();
+      final lease = session.directoryPath;
+      expect(properties['cache-on-disk'], 'no');
+      await configureForPlayback();
+      expect(session.directoryPath, lease);
       expect(properties['cache-on-disk'], 'yes');
       expect(properties['demuxer-cache-dir'], session.directoryPath);
       expect(properties['demuxer-cache-unlink-files'], 'whendone');
-      expect(properties['demuxer-max-bytes'], '128');
-      expect(properties['demuxer-max-back-bytes'], '128');
+      expectBudgets(30, 128, 128);
       expect(WindowsMediaCacheRuntime.bufferMessage, isNull);
       expect(session.configurationError, isNull);
     },
@@ -75,14 +118,39 @@ void main() {
   test(
     'classroom suppresses disk writes even after sampler sees an empty session',
     () async {
-      await session.configure();
-      await session.setDiskAllowed(false);
+      await configureForPlayback();
+      const mib = 1024 * 1024;
+      await session.applyPlaybackPolicy(
+        diskAllowed: false,
+        preferDataSaving: false,
+      );
       expect(properties['cache-on-disk'], 'no');
+      expectBudgets(30, 32 * mib, 64 * mib);
+      expect(WindowsMediaCacheRuntime.bufferMessage, contains('课堂'));
       await session.sample();
       expect(properties['cache-on-disk'], 'no');
-      await session.setDiskAllowed(true);
+      await session.applyPlaybackPolicy(
+        diskAllowed: false,
+        preferDataSaving: true,
+      );
+      expectBudgets(15, 16 * mib, 16 * mib);
+      await session.sample();
+      expect(properties['cache-on-disk'], 'no');
+      await session.applyPlaybackPolicy(
+        diskAllowed: true,
+        preferDataSaving: true,
+      );
+      expectBudgets(15, 16 * mib, 16 * mib);
+      expect(WindowsMediaCacheRuntime.bufferMessage, contains('计量网络'));
+      await session.sample();
+      expect(properties['cache-on-disk'], 'no');
+      await session.applyPlaybackPolicy(
+        diskAllowed: true,
+        preferDataSaving: false,
+      );
       await session.sample();
       expect(properties['cache-on-disk'], 'yes');
+      expectBudgets(30, 128, 128);
     },
   );
 
@@ -90,7 +158,7 @@ void main() {
     'mpv 0.36 legacy names preserve disk mode with verified directory and unlink policy',
     () async {
       rejectedProperties = {'demuxer-cache-dir'};
-      await session.configure();
+      await configureForPlayback();
       expect(properties['cache-dir'], session.directoryPath);
       expect(properties['cache-unlink-files'], 'whendone');
       expect(properties['cache-on-disk'], 'yes');
@@ -101,7 +169,7 @@ void main() {
   test(
     'soft threshold retains active bytes, disables writes and recovers next media',
     () async {
-      await session.configure();
+      await configureForPlayback();
       final packet = await File(
         '${session.directoryPath}/mpv-packet',
       ).writeAsBytes(List.filled(160, 1));
@@ -113,10 +181,7 @@ void main() {
       ); // Overshoot is explicit, never truncated.
       expect(await packet.exists(), isTrue);
       expect(properties['cache-on-disk'], 'no');
-      expect(
-        properties['demuxer-max-back-bytes'],
-        desktopFallbackMemoryBytes.toString(),
-      );
+      expectBudgets(30, 32 * 1024 * 1024, desktopFallbackMemoryBytes);
       await storage.maintain();
       expect(await packet.exists(), isTrue);
       await expectLater(
@@ -148,7 +213,7 @@ void main() {
       final packet = await File(
         '${peer.directory.path}/peer-packet',
       ).writeAsBytes(List.filled(150, 2));
-      await session.configure();
+      await configureForPlayback();
       expect(properties['cache-on-disk'], 'no');
       expect(session.writesSuspended, isTrue);
       await session.sample();
@@ -162,7 +227,7 @@ void main() {
   });
 
   test('mpv write rejection is detected by readback and retried', () async {
-    await session.configure();
+    await configureForPlayback();
     await File(
       '${session.directoryPath}/packet',
     ).writeAsBytes(List.filled(150, 1));
@@ -179,7 +244,7 @@ void main() {
   test(
     'accounting failure stops new disk writes without deleting active data',
     () async {
-      await session.configure();
+      await configureForPlayback();
       final packet = await File(
         '${session.directoryPath}/packet',
       ).writeAsBytes([1]);
@@ -196,7 +261,7 @@ void main() {
     'unsupported required option falls back with an explicit diagnostic',
     () async {
       rejectedProperties = {'demuxer-cache-unlink-files', 'cache-unlink-files'};
-      await session.configure();
+      await configureForPlayback();
       expect(properties['cache-on-disk'], 'no');
       expect(WindowsMediaCacheRuntime.bufferMessage, contains('未能启用'));
       expect(
@@ -210,8 +275,33 @@ void main() {
     'failed fallback does not claim that the threshold is enforced',
     () async {
       rejectedProperties = {'cache-on-disk'};
-      await session.configure();
+      await configureForPlayback();
       expect(WindowsMediaCacheRuntime.bufferMessage, contains('无法确认'));
+    },
+  );
+
+  test(
+    'rejects invalid, nonfinite and out of tolerance time readback',
+    () async {
+      await session.configure();
+      for (final readback in ['bad', 'NaN', 'Infinity', '30.01']) {
+        forcedReadback['cache-secs'] = readback;
+        await session.applyPlaybackPolicy(
+          diskAllowed: true,
+          preferDataSaving: false,
+        );
+        expect(session.configurationError, isA<StateError>());
+        expect(session.configurationError.toString(), contains('cache-secs'));
+        expect(WindowsMediaCacheRuntime.bufferMessage, contains('无法确认'));
+        expect(properties['cache-on-disk'], 'no');
+      }
+      forcedReadback.clear();
+      await session.applyPlaybackPolicy(
+        diskAllowed: true,
+        preferDataSaving: false,
+      );
+      expect(session.configurationError, isNull);
+      expectBudgets(30, 128, 128);
     },
   );
 

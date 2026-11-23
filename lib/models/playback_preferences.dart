@@ -3,6 +3,23 @@ import 'playback_mode.dart';
 export 'playback_line_preference.dart';
 export 'playback_mode.dart';
 
+/// 定义视频编码选择策略；默认优先兼容性，省流模式优先设备确认支持的硬解低码率轨道。
+enum PlaybackCodecPreference {
+  compatible('兼容优先'),
+  dataSaver('硬解省流');
+
+  const PlaybackCodecPreference(this.label);
+
+  final String label;
+
+  static PlaybackCodecPreference fromName(Object? value) {
+    return values.firstWhere(
+      (PlaybackCodecPreference preference) => preference.name == value,
+      orElse: () => compatible,
+    );
+  }
+}
+
 /// 定义设置页可以选择的常用 B 站视频清晰度。
 enum PreferredPlaybackQuality {
   p360(16, '流畅 360P'),
@@ -182,6 +199,8 @@ class PlaybackPreferences {
     this.wifiDefaultQuality = PreferredPlaybackQuality.p720,
     this.mobileDefaultQuality = PreferredPlaybackQuality.p720,
     this.preferOfflineCache = false,
+    this.codecPreference = PlaybackCodecPreference.compatible,
+    this.wifiOnlyOfflineDownloads = false,
     this.playbackSpeeds = defaultSpeeds,
     this.longPressPlaybackSpeed = defaultLongPressPlaybackSpeed,
   });
@@ -204,6 +223,8 @@ class PlaybackPreferences {
   final PreferredPlaybackQuality wifiDefaultQuality;
   final PreferredPlaybackQuality mobileDefaultQuality;
   final bool preferOfflineCache;
+  final PlaybackCodecPreference codecPreference;
+  final bool wifiOnlyOfflineDownloads;
   final List<double> playbackSpeeds;
   final double longPressPlaybackSpeed;
 
@@ -227,6 +248,8 @@ class PlaybackPreferences {
     PreferredPlaybackQuality? wifiDefaultQuality,
     PreferredPlaybackQuality? mobileDefaultQuality,
     bool? preferOfflineCache,
+    PlaybackCodecPreference? codecPreference,
+    bool? wifiOnlyOfflineDownloads,
     List<double>? playbackSpeeds,
     double? longPressPlaybackSpeed,
   }) {
@@ -264,6 +287,9 @@ class PlaybackPreferences {
       wifiDefaultQuality: wifiDefaultQuality ?? this.wifiDefaultQuality,
       mobileDefaultQuality: mobileDefaultQuality ?? this.mobileDefaultQuality,
       preferOfflineCache: preferOfflineCache ?? this.preferOfflineCache,
+      codecPreference: codecPreference ?? this.codecPreference,
+      wifiOnlyOfflineDownloads:
+          wifiOnlyOfflineDownloads ?? this.wifiOnlyOfflineDownloads,
       playbackSpeeds: playbackSpeeds == null
           ? this.playbackSpeeds
           : normalizeSpeeds(playbackSpeeds),

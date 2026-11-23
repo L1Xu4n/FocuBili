@@ -117,6 +117,8 @@ class _UnavailablePlaybackService implements PlaybackService {
     VideoPart? part,
     int quality = 64,
     Duration? initialPosition,
+    PlaybackCodecPreference? codecPreference,
+    bool preferDataSaving = false,
   }) async {}
 
   /// 未支持平台没有可继续的播放会话。

@@ -23,6 +23,10 @@ import 'package:focubili/services/watch_history_service.dart';
 
 /// 为主页和合集组件测试提供固定公开内容，不访问网络。
 class _FakePublicContentService implements BilibiliPublicContentService {
+  int videoRequests = 0;
+  int articleRequests = 0;
+  int collectionRequests = 0;
+
   /// 返回固定 UP 主资料。
   @override
   Future<CreatorProfile> loadProfile(int mid) async {
@@ -46,6 +50,7 @@ class _FakePublicContentService implements BilibiliPublicContentService {
     int mid, {
     int page = 1,
   }) async {
+    articleRequests++;
     return CreatorContentPage<CreatorArticle>(
       items: const <CreatorArticle>[
         CreatorArticle(id: 88, title: '测试专栏', summary: '专栏摘要', coverUrl: ''),
@@ -61,6 +66,7 @@ class _FakePublicContentService implements BilibiliPublicContentService {
     int mid, {
     int page = 1,
   }) async {
+    collectionRequests++;
     return CreatorContentPage<CreatorCollection>(
       items: <CreatorCollection>[
         CreatorCollection(
@@ -114,6 +120,7 @@ class _FakePublicContentService implements BilibiliPublicContentService {
     String keyword = '',
     CreatorVideoOrder order = CreatorVideoOrder.latest,
   }) async {
+    videoRequests++;
     return CreatorContentPage<CreatorVideo>(
       items: List<CreatorVideo>.generate(
         8,
@@ -455,11 +462,12 @@ void main() {
   testWidgets('用户主页显示投稿专栏合集且不显示消息', (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(450, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
+    final content = _FakePublicContentService();
     await tester.pumpWidget(
       _host(
         UserProfilePage(
           mid: 7,
-          publicContentService: _FakePublicContentService(),
+          publicContentService: content,
           videoService: _FakeVideoService(),
         ),
       ),
@@ -500,6 +508,18 @@ void main() {
     await tester.tap(find.text('合集'));
     await tester.pumpAndSettle();
     expect(find.text('测试合集'), findsOneWidget);
+    for (final tab in ['投稿', '专栏', '合集']) {
+      await tester.tap(find.text(tab));
+      await tester.pumpAndSettle();
+    }
+    expect(
+      [
+        content.videoRequests,
+        content.articleRequests,
+        content.collectionRequests,
+      ],
+      [1, 1, 1],
+    );
   });
 
   /// 验证主页关注按钮调用真实服务边界，并在成功后切换为取消关注。

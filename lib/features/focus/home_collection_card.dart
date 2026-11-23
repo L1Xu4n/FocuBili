@@ -9,6 +9,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../models/account_collection.dart';
 import '../../services/app_favorites_service.dart';
 import '../../services/bilibili_account_data_service.dart';
+import '../../services/bilibili_auth_service.dart';
+import '../../services/bilibili_image_url_policy.dart';
 import '../../services/cache_lifecycle.dart';
 import '../../services/following_group_service.dart';
 import '../profile/app_favorite_detail_page.dart';
@@ -408,7 +410,9 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
     final editEpoch = _remoteFolderEditEpoch;
     try {
       final page = await _favoriteFolders();
-      final identity = await _api.checkHomeCollectionIdentity();
+      final identity = await BilibiliAuthService.withForcedSessionRefresh(
+        _api.checkHomeCollectionIdentity,
+      );
       if (!mounted ||
           generation != _generation ||
           mid != _mid ||
@@ -522,7 +526,9 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
     final result = await _favoriteFolderCover(mediaId);
     final cover = result.cover;
     if (!valid() || cover == null || cover.isEmpty) return '';
-    final current = await _api.currentHomeCollectionMid();
+    final current = await BilibiliAuthService.withForcedSessionRefresh(
+      _api.currentHomeCollectionMid,
+    );
     if (!valid()) return '';
     if (current != null && current != mid) CacheLifecycle.accountChanged();
     return current == mid ? cover : '';
@@ -550,7 +556,9 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
         }),
       );
       if (!mounted || generation != _generation || mid != _mid) return;
-      final identity = await _api.checkHomeCollectionIdentity();
+      final identity = await BilibiliAuthService.withForcedSessionRefresh(
+        _api.checkHomeCollectionIdentity,
+      );
       if (!mounted || generation != _generation || mid != _mid) return;
       if (_keepFavoritesDisplay(identity, revision)) {
         if (covers.any((entry) => _coverSessionEnded(entry.status))) {
@@ -876,7 +884,9 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
   }
 
   Future<bool> _sameAccount(int expectedMid) async {
-    final current = await _api.currentHomeCollectionMid();
+    final current = await BilibiliAuthService.withForcedSessionRefresh(
+      _api.currentHomeCollectionMid,
+    );
     if (current != null && current != expectedMid && mounted) {
       CacheLifecycle.accountChanged();
     }
@@ -1004,7 +1014,9 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
     bool isCurrent() => mounted && generation == _generation;
     var editing = true;
     try {
-      final mid = await _api.currentHomeCollectionMid();
+      final mid = await BilibiliAuthService.withForcedSessionRefresh(
+        _api.currentHomeCollectionMid,
+      );
       if (!isCurrent()) return;
       // 读不到刚才显示的账号时，不把其编辑误保存到访客空间。
       if (mid == null || mid != _mid) {
@@ -1054,7 +1066,10 @@ class _HomeCollectionCardState extends State<HomeCollectionCard> {
           );
       editing = false;
       if (config == null || !isCurrent()) return;
-      if ((await _api.currentHomeCollectionMid()) != mid) {
+      if ((await BilibiliAuthService.withForcedSessionRefresh(
+            _api.currentHomeCollectionMid,
+          )) !=
+          mid) {
         if (isCurrent()) throw StateError('无法确认当前账号，配置未保存');
         return;
       }
@@ -1761,6 +1776,7 @@ class _ChoiceAvatar extends StatelessWidget {
           child: imageUrl.isEmpty
               ? fallback
               : AppNetworkImage(
+                  imageVariant: BilibiliImageVariant.avatar,
                   imageUrl: imageUrl,
                   cache: cache,
                   fit: BoxFit.cover,

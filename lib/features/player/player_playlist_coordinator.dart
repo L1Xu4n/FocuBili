@@ -169,13 +169,21 @@ mixin _PlayerPlaylistCoordinator on State<PlayerPage>, _PlayerVideoCoordinator {
     final navigation = _partSwitchGeneration;
     try {
       final entry = item.learningEntry;
+      final knownOnlineVideo =
+          _activeVideo.bvid == item.bvid &&
+              !_activeVideo.fromOfflineCache &&
+              (entry == null ||
+                  _activeVideo.parts.any((part) => part.cid == entry.partCid))
+          ? _activeVideo
+          : null;
       final video = entry == null
-          ? await _bilibiliService.lookupVideo(item.bvid)
+          ? knownOnlineVideo ?? await _bilibiliService.lookupVideo(item.bvid)
           : await lookupLearningVideo(
               entry,
               videoService: _bilibiliService,
               offlineVideoService: _offlineVideoService,
               preferCache: _playbackPreferences.preferOfflineCache,
+              knownOnlineVideo: knownOnlineVideo,
             );
       if (!mounted ||
           request != _playlistEpoch ||

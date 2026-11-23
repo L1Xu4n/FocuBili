@@ -119,6 +119,8 @@ class AbPlayback extends FeedbackPlayback implements ListeningPlaybackService {
     VideoPart? part,
     int quality = 64,
     Duration? initialPosition,
+    PlaybackCodecPreference? codecPreference,
+    bool preferDataSaving = false,
   }) async {
     onlineOpens++;
     currentCid = (part ?? video.initialPart).cid;

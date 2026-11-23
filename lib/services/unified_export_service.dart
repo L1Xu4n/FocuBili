@@ -8,6 +8,7 @@ import '../models/video_note.dart';
 import '../models/player_overlay_data.dart';
 import '../platform/app_platform.dart';
 import 'app_behavior_preferences_service.dart';
+import 'media_cache_service.dart';
 import 'native_playback_progress_export.dart';
 import 'subtitle_export_service.dart';
 import 'cached_player_overlay_service.dart';
@@ -112,6 +113,8 @@ class UnifiedExportService {
     'playback_preferences.prefer_non_pcdn',
     'playback_preferences.two_finger_video_transform',
     'playback_preferences.prefer_offline_cache',
+    PlaybackPreferencesService.codecPreferenceKey,
+    PlaybackPreferencesService.wifiOnlyOfflineDownloadsKey,
     'playback_preferences.wifi_default_quality',
     'playback_preferences.mobile_default_quality',
     'playback_preferences.long_press_speed',
@@ -155,7 +158,7 @@ class UnifiedExportService {
       switch (section) {
         UnifiedExportSection.settings =>
           _settingsKeys.contains(key) ||
-              DeviceSettingsRuntimeAdapter.keys.contains(key),
+              DeviceSettingsRuntimeAdapter.allKeys.contains(key),
         UnifiedExportSection.learning => _learningKeys.contains(key),
         UnifiedExportSection.favorites =>
           key == 'app_favorites.folders_v1' || _favoriteItems.hasMatch(key),
@@ -188,7 +191,7 @@ class UnifiedExportService {
     // Capture one local preferences snapshot before asynchronous image reads.
     final captured = <String, Object?>{
       for (final key in prefs.getKeys())
-        if (!DeviceSettingsRuntimeAdapter.keys.contains(key) &&
+        if (!DeviceSettingsRuntimeAdapter.allKeys.contains(key) &&
             ordered.any((section) => includesKey(section, key)))
           key: prefs.get(key),
     };
@@ -205,6 +208,18 @@ class UnifiedExportService {
         throw const FormatException('Invalid image cache capacity');
       }
       captured[DeviceSettingsRuntimeAdapter.imageCapacityKey] = capacity;
+      if (runtime.containsKey(
+        DeviceSettingsRuntimeAdapter.androidMediaCapacityKey,
+      )) {
+        final androidCapacity =
+            runtime[DeviceSettingsRuntimeAdapter.androidMediaCapacityKey];
+        if (androidCapacity is! int ||
+            !supportedMediaCacheBytes.contains(androidCapacity)) {
+          throw const FormatException('Invalid Android media cache capacity');
+        }
+        captured[DeviceSettingsRuntimeAdapter.androidMediaCapacityKey] =
+            androidCapacity;
+      }
     }
     for (final section in ordered) {
       if (section == UnifiedExportSection.notes) {

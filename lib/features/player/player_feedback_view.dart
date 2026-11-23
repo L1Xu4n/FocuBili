@@ -2,22 +2,38 @@ part of 'player_page.dart';
 
 /// 组合播放器的拖动预览、学习完播和互动剧情选择反馈。
 extension _PlayerFeedbackView on _PlayerPageState {
+  /// Keeps within-atlas scrubbing immediate while coalescing atlas changes.
+  Widget _buildDebouncedVideoShotFrame(
+    VideoShotFrame frame, {
+    required bool showUnavailable,
+    required double displayWidth,
+  }) => _DebouncedVideoShotAtlas(
+    key: ValueKey((_activeVideo.bvid, _currentPart.cid)),
+    frame: frame,
+    builder: (frame) => _buildVideoShotFrame(
+      frame,
+      showUnavailable: showUnavailable,
+      displayWidth: displayWidth,
+    ),
+  );
+
   /// 等完整图集实际解码才画目标格；传输期间不用上一张图冒充。
   Widget _buildVideoShotFrame(
     VideoShotFrame frame, {
-    bool showUnavailable = true,
-    double displayWidth = 176,
+    required bool showUnavailable,
+    required double displayWidth,
   }) {
     final displayHeight = displayWidth * frame.frameHeight / frame.frameWidth;
     final sheetPixelWidth = frame.frameWidth * frame.sheetColumns;
     final decodeWidth =
-        (176 * frame.sheetColumns * MediaQuery.devicePixelRatioOf(context))
+        (displayWidth *
+                frame.sheetColumns *
+                MediaQuery.devicePixelRatioOf(context))
             .ceil()
-            .clamp(1, 2048);
-    final smallerUrl = sheetPixelWidth > decodeWidth
-        ? frame.resizedPublicAtlasUrl(decodeWidth)
-        : null;
+            .clamp(1, sheetPixelWidth.ceil().clamp(1, 2048));
+    final smallerUrl = frame.resizedPublicAtlasUrl(decodeWidth);
 
+    // Fall back to the original atlas once when the WebP cannot be used.
     Widget atlas(String url, {required bool resized}) {
       Widget unavailable() => resized
           ? atlas(frame.imageUrl, resized: false)
@@ -137,16 +153,13 @@ extension _PlayerFeedbackView on _PlayerPageState {
                       children: [
                         if (showThumbnail)
                           if (frame != null)
-                            _buildVideoShotFrame(
+                            _buildDebouncedVideoShotFrame(
                               frame,
                               showUnavailable: !dragging,
-                              displayWidth: dragging
-                                  ? ((constraints.maxHeight - 40) *
-                                            frame.frameWidth /
-                                            frame.frameHeight)
-                                        .clamp(1.0, constraints.maxWidth - 16)
-                                        .clamp(1.0, 176.0)
-                                  : 176,
+                              displayWidth: _videoShotDisplayWidth(
+                                constraints,
+                                frame,
+                              ),
                             )
                           else if (_videoShotLoading)
                             const _VideoShotLoading(),
@@ -169,8 +182,15 @@ extension _PlayerFeedbackView on _PlayerPageState {
     );
   }
 
+  /// Sizes the frame to fit the actual preview area before requesting its atlas.
+  double _videoShotDisplayWidth(
+    BoxConstraints constraints,
+    VideoShotFrame frame,
+  ) => ((constraints.maxHeight - 40) * frame.frameWidth / frame.frameHeight)
+      .clamp(1.0, (constraints.maxWidth - 16).clamp(1.0, 176.0));
+
   /// 画面横滑的反馈独立于底部时间轴预览。
-  Widget _buildSeekFeedback() {
+  Widget _buildSeekFeedback(BoxConstraints constraints) {
     final Duration target = Duration(
       milliseconds:
           (_displayDuration.inMilliseconds * _horizontalScrubTargetProgress)
@@ -199,7 +219,11 @@ extension _PlayerFeedbackView on _PlayerPageState {
                 mainAxisSize: MainAxisSize.min,
                 children: <Widget>[
                   if (frame != null)
-                    _buildVideoShotFrame(frame)
+                    _buildDebouncedVideoShotFrame(
+                      frame,
+                      showUnavailable: true,
+                      displayWidth: _videoShotDisplayWidth(constraints, frame),
+                    )
                   else if (_horizontalScrubbing && _videoShotLoading)
                     const _VideoShotLoading(),
                   Text(message, style: const TextStyle(color: Colors.white)),
@@ -377,7 +401,7 @@ extension _PlayerFeedbackView on _PlayerPageState {
               final liveScrub = _horizontalScrubbing || _seekFeedback != null;
               final doubleTap = !liveScrub && _doubleTapSeekSeconds != 0;
               final Widget gesture = liveScrub
-                  ? _buildSeekFeedback()
+                  ? _buildSeekFeedback(constraints)
                   : doubleTap
                   ? PlayerSeekFeedback(
                       key: ValueKey('seek-$_doubleTapFeedbackSequence'),
@@ -449,6 +473,66 @@ extension _PlayerFeedbackView on _PlayerPageState {
           subtitlePosition: _playbackPreferences.subtitlePosition,
         );
       },
+    );
+  }
+}
+
+class _DebouncedVideoShotAtlas extends StatefulWidget {
+  const _DebouncedVideoShotAtlas({
+    super.key,
+    required this.frame,
+    required this.builder,
+  });
+
+  final VideoShotFrame frame;
+  final Widget Function(VideoShotFrame) builder;
+
+  /// Tracks the mounted atlas separately from the latest requested frame.
+  @override
+  State<_DebouncedVideoShotAtlas> createState() =>
+      _DebouncedVideoShotAtlasState();
+}
+
+class _DebouncedVideoShotAtlasState extends State<_DebouncedVideoShotAtlas> {
+  late VideoShotFrame _active = widget.frame;
+  Timer? _switch;
+
+  /// Restarts the short timer only when the target atlas URL changes.
+  @override
+  void didUpdateWidget(covariant _DebouncedVideoShotAtlas oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final next = widget.frame;
+    if (next.imageUrl == _active.imageUrl) {
+      _switch?.cancel();
+      _active = next;
+    } else if (next.imageUrl != oldWidget.frame.imageUrl) {
+      _switch?.cancel();
+      _switch = Timer(const Duration(milliseconds: 90), () {
+        setState(() => _active = widget.frame);
+      });
+    }
+  }
+
+  /// Stops pending atlas switches when the preview closes.
+  @override
+  void dispose() {
+    _switch?.cancel();
+    super.dispose();
+  }
+
+  /// Keeps the old atlas mounted and hides its frame during a pending switch.
+  @override
+  Widget build(BuildContext context) {
+    final waiting = _active.imageUrl != widget.frame.imageUrl;
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        Offstage(
+          offstage: waiting,
+          child: TickerMode(enabled: !waiting, child: widget.builder(_active)),
+        ),
+        if (waiting) const _VideoShotLoading(),
+      ],
     );
   }
 }

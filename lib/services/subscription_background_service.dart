@@ -181,7 +181,12 @@ abstract final class SubscriptionBackgroundScheduler {
     }
   }
 
-  static Future<void> configure(bool enabled, int generation) {
+  /// Replaces the periodic request with the current generation and constraints.
+  static Future<void> configure(
+    bool enabled,
+    int generation, {
+    bool wifiOnlyBackgroundRefresh = false,
+  }) {
     final result = _queue.then((_) async {
       await initialize();
       if (!enabled) {
@@ -194,7 +199,11 @@ abstract final class SubscriptionBackgroundScheduler {
         frequency: const Duration(hours: 1),
         initialDelay: const Duration(hours: 1),
         existingWorkPolicy: ExistingPeriodicWorkPolicy.update,
-        constraints: Constraints(networkType: NetworkType.connected),
+        constraints: Constraints(
+          networkType: wifiOnlyBackgroundRefresh
+              ? NetworkType.unmetered
+              : NetworkType.connected,
+        ),
         inputData: {'generation': generation},
         backoffPolicy: BackoffPolicy.exponential,
         backoffPolicyDelay: const Duration(minutes: 15),

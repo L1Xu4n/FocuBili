@@ -58,6 +58,8 @@ class _Playback extends FeedbackPlayback {
     VideoPart? part,
     int quality = 64,
     Duration? initialPosition,
+    PlaybackCodecPreference? codecPreference,
+    bool preferDataSaving = false,
   }) async {
     parts.add((part ?? video.initialPart).cid);
     emit();
@@ -399,13 +401,17 @@ void main() {
         final width = t.getRect(_surface).width;
         await swipe.moveBy(Offset(width * .06, 0));
         await t.pump();
-        expect(cache.urls, [_first, _second]);
+        expect(cache.urls, [_first]);
         expect(_loading, findsOneWidget);
         expect(
           _shot,
           findsNothing,
           reason: 'do not reuse a frame for another atlas or time',
         );
+        await t.pump(const Duration(milliseconds: 89));
+        expect(cache.urls, [_first]);
+        await t.pump(const Duration(milliseconds: 1));
+        expect(cache.urls, [_first, _second]);
         p.emit(at: const Duration(seconds: 50));
         await t.pump(const Duration(seconds: 4));
         expect(
@@ -443,13 +449,39 @@ void main() {
     await _mount(t, p, metadata, cache, dpr: 3);
     final swipe = await _begin(t);
     await _pumpImages(t, 12);
-    expect(cache.urls, ['$_publicJpg@1056w.webp', _publicJpg]);
     expect(_shot, findsOneWidget);
+    final displayedWidth = t.getSize(_shot).width;
+    final expectedDecodeWidth = (displayedWidth * 2 * t.view.devicePixelRatio)
+        .ceil();
+    expect(expectedDecodeWidth, lessThan(1056));
+    expect(cache.urls, [
+      '$_publicJpg@${expectedDecodeWidth}w.webp',
+      _publicJpg,
+    ]);
     expect(_unavailable, findsNothing);
     await swipe.cancel();
     await t.pump();
     expect(p.seeks, isEmpty);
     expect(_shot, findsNothing);
+    await _remove(t, cache);
+  });
+
+  testWidgets('an already small public atlas requests equal-width WebP', (
+    t,
+  ) async {
+    final bytes = await _atlas(t, Colors.green);
+    final cache = _Atlases((_) => bytes);
+    await _mount(
+      t,
+      _Playback(),
+      _Metadata((_) => _oneAtlas(_publicJpg)),
+      cache,
+    );
+    final swipe = await _begin(t);
+    await _pumpImages(t);
+    expect(cache.urls, ['$_publicJpg@32w.webp']);
+    expect(_shot, findsOneWidget);
+    await swipe.cancel();
     await _remove(t, cache);
   });
 

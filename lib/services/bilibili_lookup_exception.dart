@@ -10,6 +10,13 @@ class BilibiliLookupException implements Exception, BilibiliRequestFailure {
   @override
   final int? apiCode;
 
+  /// 结构化判定明确的站点风控/限流状态码（HTTP 412 或业务 -352 / -779 / -799）。
+  bool get isRiskControl =>
+      httpStatus == 412 ||
+      apiCode == -352 ||
+      apiCode == -779 ||
+      apiCode == -799;
+
   @override
   String toString() => message;
 }

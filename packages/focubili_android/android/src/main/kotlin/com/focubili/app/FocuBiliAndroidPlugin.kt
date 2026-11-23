@@ -15,11 +15,16 @@ import io.flutter.plugin.common.PluginRegistry
 class FocuBiliAndroidPlugin : FlutterPlugin, ActivityAware, PluginRegistry.NewIntentListener {
     private var cookieController: BilibiliCookieController? = null
     private var notificationController: SubscriptionNotificationController? = null
+    private var networkStatusController: AndroidNetworkStatusController? = null
     private var activityBinding: ActivityPluginBinding? = null
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         cookieController = BilibiliCookieController(binding.binaryMessenger)
         notificationController = SubscriptionNotificationController(
+            binding.applicationContext,
+            binding.binaryMessenger,
+        )
+        networkStatusController = AndroidNetworkStatusController(
             binding.applicationContext,
             binding.binaryMessenger,
         )
@@ -31,6 +36,8 @@ class FocuBiliAndroidPlugin : FlutterPlugin, ActivityAware, PluginRegistry.NewIn
         cookieController = null
         notificationController?.dispose()
         notificationController = null
+        networkStatusController?.dispose()
+        networkStatusController = null
     }
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {

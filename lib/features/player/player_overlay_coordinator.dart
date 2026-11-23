@@ -284,6 +284,7 @@ mixin _PlayerOverlayCoordinator
   }
 
   /// 清理旧分P的弹幕内存与晚到请求，避免切P后在新视频上绘制旧视频文字。
+  @override
   void _clearDanmakuForPart() {
     _danmakuRequestToken += 1;
     _danmakuFrameController.stop();
@@ -303,10 +304,12 @@ mixin _PlayerOverlayCoordinator
     return Duration(seconds: failureCount * 2);
   }
 
-  /// 确保当前片段存在，并在接近六分钟边界时预取下一片段减少播放中的等待。
+  /// 在线源完成续播定位后加载目标片段，临近片段边界时预取下一段。
   @override
   void _ensureDanmakuSegmentsForPosition(Duration position) {
-    if (!_danmakuEnabled || _playbackSnapshot.isInPictureInPicture) {
+    if (!_danmakuEnabled ||
+        !_canLoadOnlineDanmaku ||
+        _playbackSnapshot.isInPictureInPicture) {
       return;
     }
     final int currentSegment = DanmakuSegmentLoadResult.segmentIndexForPosition(

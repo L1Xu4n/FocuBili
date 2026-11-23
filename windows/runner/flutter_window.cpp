@@ -224,6 +224,17 @@ bool FlutterWindow::OnCreate() {
           result->Success(flutter::EncodableValue(std::string("other")));
           return;
         }
+        if (call.method_name() == "getNetworkStatus") {
+          result->Success(flutter::EncodableValue(flutter::EncodableMap{
+              {flutter::EncodableValue("type"),
+               flutter::EncodableValue(std::string("other"))},
+              {flutter::EncodableValue("metered"),
+               flutter::EncodableValue(std::string("unknown"))},
+              {flutter::EncodableValue("lowDataMode"),
+               flutter::EncodableValue(std::string("unknown"))},
+          }));
+          return;
+        }
         result->NotImplemented();
       });
 

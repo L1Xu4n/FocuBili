@@ -78,7 +78,9 @@ class _Session implements BilibiliAccountSessionProvider {
   int cookieReads = 0;
 
   @override
-  Future<BilibiliSessionState> loadCurrentSession() async => state;
+  Future<BilibiliSessionState> loadCurrentSession({
+    bool forceRefresh = false,
+  }) async => state;
 
   @override
   Future<String> readCookieHeader() async {

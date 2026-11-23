@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../common/favorite_folder_privacy_badge.dart';
+import '../../services/bilibili_image_url_policy.dart';
 
 /// 为账号收藏与本机收藏提供同一套自适应封面、名称和数量布局。
 class FavoriteFolderCard extends StatelessWidget {
@@ -75,6 +76,7 @@ class FavoriteFolderCard extends StatelessWidget {
                           ? _placeholder(context)
                           : AppNetworkImage(
                               imageUrl: coverUrl,
+                              imageVariant: BilibiliImageVariant.cover16x9,
                               httpHeaders: const {
                                 'Referer': 'https://www.bilibili.com/',
                               },

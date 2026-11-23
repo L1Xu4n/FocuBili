@@ -75,6 +75,9 @@ extension _PlayerDetailsView on _PlayerPageState {
     }
     return AppNetworkImage(
       imageUrl: url,
+      imageVariant: width == height
+          ? BilibiliImageVariant.avatar
+          : BilibiliImageVariant.cover16x9,
       httpHeaders: const <String, String>{
         'Referer': 'https://www.bilibili.com/',
       },
@@ -107,10 +110,11 @@ extension _PlayerDetailsView on _PlayerPageState {
 
   /// 读取当前视频的关注、点赞、投币和收藏状态，失败时保留默认未操作状态。
   Future<void> _loadVideoInteractionState() async {
-    if (_activeVideo.isCourse || _activeVideo.aid <= 0) {
+    if (_playingOffline || _activeVideo.isCourse || _activeVideo.aid <= 0) {
       return;
     }
-    final String bvid = _activeVideo.bvid;
+    final video = _activeVideo;
+    final epoch = _onlineMetadataEpoch;
     final Set<int> authorMids = <int>{
       if (_activeVideo.ownerMid > 0) _activeVideo.ownerMid,
       ..._activeVideo.authors
@@ -123,15 +127,16 @@ extension _PlayerDetailsView on _PlayerPageState {
     try {
       final BilibiliInteractionState state = await _interactionService
           .loadVideoState(
-            bvid: _activeVideo.bvid,
-            aid: _activeVideo.aid,
-            ownerMid: _activeVideo.ownerMid,
+            bvid: video.bvid,
+            aid: video.aid,
+            ownerMid: video.ownerMid,
           );
+      if (!mounted || _playingOffline || epoch != _onlineMetadataEpoch) return;
       final Map<int, bool> followingStates = <int, bool>{
-        if (_activeVideo.ownerMid > 0) _activeVideo.ownerMid: state.isFollowing,
+        if (video.ownerMid > 0) video.ownerMid: state.isFollowing,
       };
       await Future.wait(
-        authorMids.where((int mid) => mid != _activeVideo.ownerMid).map((
+        authorMids.where((int mid) => mid != video.ownerMid).map((
           int mid,
         ) async {
           try {
@@ -143,7 +148,7 @@ extension _PlayerDetailsView on _PlayerPageState {
           }
         }),
       );
-      if (mounted && _activeVideo.bvid == bvid) {
+      if (mounted && !_playingOffline && epoch == _onlineMetadataEpoch) {
         _updatePlayerState(() {
           _interactionState = state;
           _authorFollowingStates
@@ -154,7 +159,7 @@ extension _PlayerDetailsView on _PlayerPageState {
     } on Object {
       // 未登录或状态接口暂时不可用时，写操作仍会给出明确提示。
     } finally {
-      if (mounted) {
+      if (mounted && epoch == _onlineMetadataEpoch) {
         _updatePlayerState(() => _interactionLoading = false);
       }
     }
