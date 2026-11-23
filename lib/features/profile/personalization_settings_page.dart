@@ -916,9 +916,7 @@ class _PersonalizationSettingsPageState
     leading: const Icon(Icons.memory_rounded),
     title: const Text('视频编码策略'),
     enabled: !_saving,
-    onTap: _saving
-        ? null
-        : () => _codecMenuKey.currentState?.showButtonMenu(),
+    onTap: _saving ? null : () => _codecMenuKey.currentState?.showButtonMenu(),
     subtitle: Text(
       _preferences.codecPreference == PlaybackCodecPreference.dataSaver
           ? '硬解省流：在目标画质内优先设备确认支持的低码率硬解轨道（保留兼容回退）'
@@ -933,10 +931,7 @@ class _PersonalizationSettingsPageState
       onSelected: _setCodecPreference,
       itemBuilder: (context) => [
         for (final option in PlaybackCodecPreference.values)
-          PopupMenuItem(
-            value: option,
-            child: Text(option.label),
-          ),
+          PopupMenuItem(value: option, child: Text(option.label)),
       ],
     ),
   );

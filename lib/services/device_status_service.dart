@@ -76,8 +76,7 @@ class DeviceNetworkStatus {
     );
     final DeviceNetworkMeteredStatus rawMetered =
         DeviceNetworkMeteredStatus.fromPlatformName(values['metered']);
-    final DeviceNetworkMeteredStatus metered =
-        type == DeviceNetworkType.offline
+    final DeviceNetworkMeteredStatus metered = type == DeviceNetworkType.offline
         ? DeviceNetworkMeteredStatus.unknown
         : rawMetered;
     final DeviceLowDataModeStatus lowDataMode =

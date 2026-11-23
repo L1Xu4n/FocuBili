@@ -34,10 +34,9 @@ class _GroupReadSession implements BilibiliAccountSessionProvider {
   @override
   Future<BilibiliSessionState> loadCurrentSession({
     bool forceRefresh = false,
-  }) async =>
-      const BilibiliSessionState.active(
-        BilibiliAccount(mid: 7, name: '测试账号', avatarUrl: ''),
-      );
+  }) async => const BilibiliSessionState.active(
+    BilibiliAccount(mid: 7, name: '测试账号', avatarUrl: ''),
+  );
 
   @override
   Future<String> readCookieHeader() async => 'SESSDATA=fixture';

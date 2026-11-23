@@ -90,7 +90,9 @@ abstract final class BilibiliImageUrlPolicy {
     if (!_transformableExtensions.contains(extension)) {
       return rawUrl;
     }
-    return uri.replace(scheme: 'https', path: '$path${variant.suffix}').toString();
+    return uri
+        .replace(scheme: 'https', path: '$path${variant.suffix}')
+        .toString();
   }
 
   /// 仅当 URL 匹配已证实不可变的内容寻址路径时返回 true，供缓存层在 CDN 明确返回

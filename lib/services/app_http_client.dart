@@ -50,8 +50,7 @@ class AppHttpResponseTooLargeException implements Exception {
   final int maxBytes;
 
   @override
-  String toString() =>
-      'AppHttpResponseTooLargeException(maxBytes: $maxBytes)';
+  String toString() => 'AppHttpResponseTooLargeException(maxBytes: $maxBytes)';
 }
 
 /// 当调用方通过 [AppHttpCancelToken] 主动中止请求时抛出。

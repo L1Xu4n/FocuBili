@@ -212,7 +212,11 @@ void main() {
       addTearDown(queue.dispose);
 
       await queue.initialize();
-      await queue.enqueue(_sampleVideo, part: _sampleVideo.initialPart, quality: 64);
+      await queue.enqueue(
+        _sampleVideo,
+        part: _sampleVideo.initialPart,
+        quality: 64,
+      );
       await Future<void>.delayed(const Duration(milliseconds: 50));
 
       expect(downloadCalls, 0);
@@ -231,7 +235,8 @@ void main() {
       addTearDown(() => imageRoot.delete(recursive: true));
 
       final ImageResourceCache imageCache = ImageResourceCache(
-        directory: () async => Directory('${imageRoot.path}/focubili_images_v1'),
+        directory: () async =>
+            Directory('${imageRoot.path}/focubili_images_v1'),
       );
       addTearDown(imageCache.dispose);
 

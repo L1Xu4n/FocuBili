@@ -15,10 +15,9 @@ class _AccountFixture extends BilibiliAuthService {
   @override
   Future<BilibiliSessionState> loadCurrentSession({
     bool forceRefresh = false,
-  }) async =>
-      const BilibiliSessionState.active(
-        BilibiliAccount(mid: 123, name: '测试账号', avatarUrl: ''),
-      );
+  }) async => const BilibiliSessionState.active(
+    BilibiliAccount(mid: 123, name: '测试账号', avatarUrl: ''),
+  );
 
   /// 记录退出登录，确保隐藏摘要不会删除账号状态。
   @override

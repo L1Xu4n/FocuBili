@@ -18,8 +18,7 @@ class _SignedOutAccountFixture extends BilibiliAuthService {
   @override
   Future<BilibiliSessionState> loadCurrentSession({
     bool forceRefresh = false,
-  }) async =>
-      const BilibiliSessionState.signedOut();
+  }) async => const BilibiliSessionState.signedOut();
 }
 
 /// 把测试窗口设置为指定逻辑尺寸，确保 MediaQuery 和布局约束使用同一宽高。

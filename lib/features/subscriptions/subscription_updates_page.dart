@@ -1046,7 +1046,9 @@ class _SubscriptionSettingsPageState extends State<SubscriptionSettingsPage> {
                     ),
                     if (_service.backgroundRefreshEnabled)
                       SwitchListTile(
-                        key: const Key('subscription-wifi-only-background-switch'),
+                        key: const Key(
+                          'subscription-wifi-only-background-switch',
+                        ),
                         title: const Text('仅在未计量网络后台检查'),
                         value: _service.wifiOnlyBackgroundRefresh,
                         subtitle: const Text(

@@ -19,10 +19,8 @@ void main() {
     await server.close(force: true);
   });
 
-  Uri serverUri(String path) => Uri.http(
-    server.address.address,
-    path,
-  ).replace(port: server.port);
+  Uri serverUri(String path) =>
+      Uri.http(server.address.address, path).replace(port: server.port);
 
   test(
     'supports GET/POST, multi-value headers, 304, and transparent gzip within limit',
