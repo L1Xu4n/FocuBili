@@ -56,6 +56,7 @@ class PlatformCapabilities {
     required this.supportsPictureInPicture,
     required this.supportsDoNotDisturb,
     required this.supportsDesktopWindow,
+    required this.supportsMeteredNetworkDetection,
   });
 
   final AppPlatform platform;
@@ -70,6 +71,9 @@ class PlatformCapabilities {
   final bool supportsPictureInPicture;
   final bool supportsDoNotDisturb;
   final bool supportsDesktopWindow;
+
+  /// 当前平台的原生通道能否读取系统网络计费状态。
+  final bool supportsMeteredNetworkDetection;
 
   /// 根据明确平台建立当前已兑现的能力表，未来平台在实现前保持不可用。
   factory PlatformCapabilities.forPlatform(AppPlatform platform) {
@@ -88,6 +92,7 @@ class PlatformCapabilities {
         supportsPictureInPicture: true,
         supportsDoNotDisturb: true,
         supportsDesktopWindow: false,
+        supportsMeteredNetworkDetection: true,
       ),
       AppPlatform.windows => const PlatformCapabilities(
         platform: AppPlatform.windows,
@@ -103,6 +108,7 @@ class PlatformCapabilities {
         supportsPictureInPicture: false,
         supportsDoNotDisturb: false,
         supportsDesktopWindow: true,
+        supportsMeteredNetworkDetection: false,
       ),
       AppPlatform.ios || AppPlatform.macos => PlatformCapabilities(
         platform: platform,
@@ -120,6 +126,7 @@ class PlatformCapabilities {
         supportsPictureInPicture: true,
         supportsDoNotDisturb: false,
         supportsDesktopWindow: platform == AppPlatform.macos,
+        supportsMeteredNetworkDetection: true,
       ),
       AppPlatform.linux => const PlatformCapabilities(
         platform: AppPlatform.linux,
@@ -135,6 +142,7 @@ class PlatformCapabilities {
         supportsPictureInPicture: true,
         supportsDoNotDisturb: false,
         supportsDesktopWindow: true,
+        supportsMeteredNetworkDetection: false,
       ),
       AppPlatform.unsupported => PlatformCapabilities(
         platform: platform,
@@ -149,6 +157,7 @@ class PlatformCapabilities {
         supportsPictureInPicture: false,
         supportsDoNotDisturb: false,
         supportsDesktopWindow: false,
+        supportsMeteredNetworkDetection: false,
       ),
     };
   }

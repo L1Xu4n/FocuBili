@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../core/layout/adaptive_page_frame.dart';
+import '../../platform/app_platform.dart';
+import '../../platform/platform_capabilities.dart';
 import '../../services/media_cache_service.dart';
 import '../../services/media_cache_service_factory.dart';
 import '../../services/image_resource_cache.dart';
@@ -13,15 +15,17 @@ import 'offline_cache_location_dialog.dart';
 
 /// 按平台展示 Android Media3 边播缓存或 Windows media_kit 播放缓冲。
 class CacheManagementPage extends StatefulWidget {
-  /// 创建可注入缓存服务的页面，测试时可传入不依赖 Android 的假服务。
+  /// 创建缓存管理页，测试时可注入缓存服务和用于选择说明文案的平台。
   const CacheManagementPage({
     super.key,
     MediaCacheService? service,
     this.imageCache,
+    this.appPlatform,
   }) : _service = service;
 
   final MediaCacheService? _service;
   final ImageResourceCache? imageCache;
+  final AppPlatform? appPlatform;
 
   /// 创建保存缓存状态、加载状态和操作状态的页面状态。
   @override
@@ -247,10 +251,30 @@ class _CacheManagementPageState extends State<CacheManagementPage> {
     );
   }
 
-  /// 创建平台化说明卡片，明确持久边播缓存、临时播放缓冲和离线下载之间的边界。
+  /// 根据缓存后端和平台的网络计费识别能力，展示对应的缓存与预读说明。
   Widget _buildExplanationCard(MediaCacheStatus? status) {
     final bool windowsBuffer =
         status?.storageKind == MediaCacheStorageKind.windowsPlaybackBuffer;
+    final bool supportsMeteredNetworkDetection =
+        PlatformCapabilities.forPlatform(
+          widget.appPlatform ?? AppPlatformDetector.current,
+        ).supportsMeteredNetworkDetection;
+    const String defaultReadAheadExplanation =
+        '当前平台暂不支持自动识别系统计费网络，播放将使用默认预读策略。'
+        '如需省流，可在「个性化设置」中手动调整画质或编码偏好。';
+    final String readAheadExplanation;
+    if (supportsMeteredNetworkDetection) {
+      readAheadExplanation = windowsBuffer
+          ? '计量网络或低数据模式下自动切换为有界内存缓冲（15 秒预读、前后各 16 MB 预算）且不新增磁盘缓冲。'
+          : '播放器按网络计费状态动态调整正向预读（未计量约 30 秒，计量/低数据模式约 15 秒），并保留 10 秒后向回看缓冲。';
+    } else {
+      readAheadExplanation = windowsBuffer
+          ? defaultReadAheadExplanation
+          : '默认正向预读约 30 秒，并保留 10 秒后向回看缓冲。$defaultReadAheadExplanation';
+    }
+    final String diskBufferPrefix = supportsMeteredNetworkDetection
+        ? '未计量网络'
+        : '默认';
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -269,15 +293,15 @@ class _CacheManagementPageState extends State<CacheManagementPage> {
             const SizedBox(height: 8),
             Text(
               windowsBuffer
-                  ? '未计量网络保留本次播放的磁盘回看缓冲（默认软阈值 512 MB），并限制约 30 秒正向预读以减少暂停与短看流量浪费。'
-                        '计量网络或低数据模式下自动切换为有界内存缓冲（15 秒预读、前后各 16 MB 预算）且不新增磁盘缓冲。'
+                  ? '$diskBufferPrefix保留本次播放的磁盘回看缓冲（默认软阈值 512 MB），并限制约 30 秒正向预读以减少暂停与短看流量浪费。'
+                        '$readAheadExplanation'
                         '每 0.5 秒按实际文件大小检查；达到软阈值后暂停新增磁盘写入并保留已有文件到播放结束，绝不删除活跃文件；'
                         '检查和播放器响应存在延迟，实际占用可能超过阈值，这不是磁盘硬上限。'
                         '达到阈值后新增数据使用正向 32 MB、后向 64 MB 的内存预算，独立音视频各有一份，解码内存另计。'
                         '设置在下次打开播放器时生效。关闭后自动清理已结束会话，启动时回收崩溃残留；'
                         '不是离线下载，不能跨重启复用，不影响手动离线文件。'
                   : '边播边缓存默认 512 MB，超过上限自动淘汰最久未使用的内容，不是离线下载。'
-                        '播放器按网络计费状态动态调整正向预读（未计量约 30 秒，计量/低数据模式约 15 秒），并保留 10 秒后向回看缓冲。'
+                        '$readAheadExplanation'
                         '当前播放内容和写入中的分片受到保护；全部被占用时暂停新增缓存，继续联网播放。'
                         '系统也可能清理临时缓存，手动离线下载不参与自动清理。',
             ),

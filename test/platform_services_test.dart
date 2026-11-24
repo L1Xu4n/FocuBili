@@ -15,6 +15,19 @@ import 'package:focubili/services/player_overlay_service.dart';
 
 /// 验证统一平台检测、能力表和服务装配不会把未来平台误当成 Android。
 void main() {
+  /// 确认服务装配只在已接入原生计费状态的系统声明支持。
+  test('计费网络检测能力与各平台原生实现一致', () {
+    for (final platform in AppPlatform.values) {
+      expect(
+        PlatformServices.forPlatform(
+          platform,
+        ).capabilities.supportsMeteredNetworkDetection,
+        platform == AppPlatform.android || platform.isApple,
+        reason: platform.name,
+      );
+    }
+  });
+
   /// 覆盖所有已知系统名和未知环境，保证检测结果可以被穷尽处理。
   test('平台检测器区分五个目标系统和未知平台', () {
     expect(

@@ -15,6 +15,7 @@ import '../../services/focus_notification_service.dart';
 import '../../services/focus_preferences_service.dart';
 import '../../services/windows_clipboard_link_service.dart';
 import '../../platform/app_platform.dart';
+import '../../platform/platform_capabilities.dart';
 import 'app_theme_mode_controller.dart';
 import 'app_text_size_page.dart';
 import 'http_user_agent_settings_page.dart';
@@ -886,9 +887,10 @@ class _PersonalizationSettingsPageState
     }
   }
 
-  /// Saves whether offline downloads require a confirmed unmetered network.
+  /// 保存离线下载的网络限制；无法检测计费状态的平台只允许关闭。
   Future<void> _setWifiOnlyOfflineDownloads(bool enabled) async {
     if (_saving || enabled == _preferences.wifiOnlyOfflineDownloads) return;
+    if (enabled && !_supportsMeteredNetworkDetection) return;
     final previous = _preferences.wifiOnlyOfflineDownloads;
     setState(() {
       _saving = true;
@@ -910,6 +912,11 @@ class _PersonalizationSettingsPageState
       if (mounted) setState(() => _saving = false);
     }
   }
+
+  /// 读取当前平台的计费检测能力，测试可使用页面注入的平台。
+  bool get _supportsMeteredNetworkDetection => PlatformCapabilities.forPlatform(
+    widget.appPlatform ?? AppPlatformDetector.current,
+  ).supportsMeteredNetworkDetection;
 
   Widget _buildCodecPreferenceTile() => ListTile(
     key: const Key('playback-codec-preference'),
@@ -1234,6 +1241,8 @@ class _PersonalizationSettingsPageState
   /// 创建“播放与专注”设置卡，集中播放器行为、清晰度和专注系统能力。
   SettingsSearchSection _buildPlaybackAndFocusSection() {
     final platform = widget.appPlatform ?? AppPlatformDetector.current;
+    final supportsMeteredDetection = _supportsMeteredNetworkDetection;
+    final wifiOnlyDownloads = _preferences.wifiOnlyOfflineDownloads;
     final bool supportsDoNotDisturb =
         widget.focusNotificationService.supportsDoNotDisturb;
     return _buildSettingsSection(
@@ -1247,11 +1256,20 @@ class _PersonalizationSettingsPageState
         _buildCodecPreferenceTile(),
         SwitchListTile.adaptive(
           key: const Key('wifi-only-offline-downloads'),
-          value: _preferences.wifiOnlyOfflineDownloads,
-          onChanged: _saving ? null : _setWifiOnlyOfflineDownloads,
+          value: wifiOnlyDownloads,
+          onChanged:
+              _saving || (!supportsMeteredDetection && !wifiOnlyDownloads)
+              ? null
+              : _setWifiOnlyOfflineDownloads,
           secondary: const Icon(Icons.wifi_lock_outlined),
           title: const Text('仅在未计量网络下载离线缓存'),
-          subtitle: const Text('开启后，非未计量网络或无法确认网络计费状态时自动暂停离线缓存任务'),
+          subtitle: Text(
+            supportsMeteredDetection
+                ? '开启后，非未计量网络或无法确认网络计费状态时自动暂停离线缓存任务'
+                : wifiOnlyDownloads
+                ? '当前平台暂不支持检测网络计费状态，开启此项会导致即使连接普通 Wi-Fi 也会暂停下载。请关闭此开关后继续下载。'
+                : '当前平台暂不支持检测网络计费状态，此功能暂不可用。',
+          ),
         ),
         ListTile(
           key: const Key('playback-line-preference'),

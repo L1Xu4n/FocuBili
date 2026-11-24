@@ -176,55 +176,87 @@ void main() {
     },
   );
 
-  test(
-    'OfflineDownloadQueue pauses task when wifiOnlyOfflineDownloads is enabled on metered or unknown network',
-    () async {
-      final Directory root = await Directory.systemTemp.createTemp(
-        'focubili_queue_wifi_test_',
-      );
-      addTearDown(() => root.delete(recursive: true));
+  for (final (platform, status, expectedMessage) in const [
+    (
+      AppPlatform.android,
+      DeviceNetworkStatus(
+        type: DeviceNetworkType.mobile,
+        metered: DeviceNetworkMeteredStatus.metered,
+      ),
+      '当前非未计量网络',
+    ),
+    (
+      AppPlatform.linux,
+      DeviceNetworkStatus(type: DeviceNetworkType.other),
+      '「个性化设置 → 播放与专注」',
+    ),
+    (
+      AppPlatform.windows,
+      DeviceNetworkStatus(type: DeviceNetworkType.other),
+      '「个性化设置 → 播放与专注」',
+    ),
+  ]) {
+    /// 验证任务的初始网络检查，并覆盖关闭已导入限制后的恢复路径。
+    test(
+      '${platform.name} pauses restricted downloads with recovery guidance',
+      () async {
+        final Directory root = await Directory.systemTemp.createTemp(
+          'focubili_queue_wifi_test_',
+        );
+        addTearDown(() => root.delete(recursive: true));
 
-      int downloadCalls = 0;
-      final OfflineVideoService library = OfflineVideoService(
-        directoryLoader: () async => root,
-        cookieStore: _MemoryCookieStore(),
-        requestText: (Uri uri, Map<String, String> headers) async {
-          downloadCalls += 1;
-          throw StateError('Should not start network transfer');
-        },
-      );
+        final attemptedDownload = Completer<void>();
+        final OfflineVideoService library = OfflineVideoService(
+          directoryLoader: () async => root,
+          cookieStore: _MemoryCookieStore(),
+          requestText: (Uri uri, Map<String, String> headers) async {
+            if (!attemptedDownload.isCompleted) attemptedDownload.complete();
+            throw StateError(
+              'Stub ends the request without contacting the network',
+            );
+          },
+        );
 
-      SharedPreferences.setMockInitialValues(<String, Object>{
-        PlaybackPreferencesService.wifiOnlyOfflineDownloadsKey: true,
-      });
+        SharedPreferences.setMockInitialValues(<String, Object>{
+          PlaybackPreferencesService.wifiOnlyOfflineDownloadsKey: true,
+        });
 
-      final _FixedDeviceStatusService network = _FixedDeviceStatusService(
-        const DeviceNetworkStatus(
-          type: DeviceNetworkType.mobile,
-          metered: DeviceNetworkMeteredStatus.metered,
-        ),
-      );
+        final OfflineDownloadQueue queue = OfflineDownloadQueue(
+          library: library,
+          deviceStatusService: _FixedDeviceStatusService(status),
+          appPlatform: platform,
+        );
+        addTearDown(queue.close);
+        final paused = Completer<OfflineDownloadTask>();
+        queue.addListener(() {
+          final task = queue.tasks.singleOrNull;
+          if (!paused.isCompleted &&
+              task?.status == DownloadTaskStatus.paused) {
+            paused.complete(task!);
+          }
+        });
 
-      final OfflineDownloadQueue queue = OfflineDownloadQueue(
-        library: library,
-        deviceStatusService: network,
-      );
-      addTearDown(queue.dispose);
+        await queue.initialize();
+        await queue.enqueue(
+          _sampleVideo,
+          part: _sampleVideo.initialPart,
+          quality: 64,
+        );
+        final task = await paused.future.timeout(const Duration(seconds: 5));
 
-      await queue.initialize();
-      await queue.enqueue(
-        _sampleVideo,
-        part: _sampleVideo.initialPart,
-        quality: 64,
-      );
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-
-      expect(downloadCalls, 0);
-      expect(queue.tasks, hasLength(1));
-      expect(queue.tasks.single.status, DownloadTaskStatus.paused);
-      expect(queue.tasks.single.error, contains('仅未计量网络下载'));
-    },
-  );
+        expect(attemptedDownload.isCompleted, isFalse);
+        expect(task.error, contains(expectedMessage));
+        if (platform != AppPlatform.android) {
+          expect(task.error, contains('关闭“仅在未计量网络下载离线缓存”'));
+          await const PlaybackPreferencesService().saveWifiOnlyOfflineDownloads(
+            false,
+          );
+          await queue.resume(task.id);
+          await attemptedDownload.future.timeout(const Duration(seconds: 5));
+        }
+      },
+    );
+  }
 
   test(
     'SettingsTransferService supports codecPreference, wifiOnlyOfflineDownloads, and Android Media3 capacity symmetry with cache_busy rollback',
@@ -506,6 +538,7 @@ void main() {
       final OfflineDownloadQueue queue = OfflineDownloadQueue(
         library: library,
         deviceStatusService: network,
+        appPlatform: AppPlatform.macos,
       );
       addTearDown(queue.dispose);
 

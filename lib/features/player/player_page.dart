@@ -252,17 +252,27 @@ class _PlayerPageState extends State<PlayerPage>
   final _tagSession = PlayerTagSession();
   @override
   VideoPreview get _activeVideo => _displayedVideo;
+
+  /// 绑定新稿件，等播放源确认后再允许标签联网。
   @override
   set _activeVideo(VideoPreview video) {
     _displayedVideo = video;
-    _tagSession.bind(video);
+    _tagSession.bind(video, online: false);
   }
+
+  /// 将实际播放源的在线状态同步给详情标签会话。
+  @override
+  void _setOnlineVideoTags(bool online) => _tagSession.setOnline(online);
 
   @override
   late VideoPart _currentPart;
   BilibiliInteractionState _interactionState = const BilibiliInteractionState();
   bool _interactionLoading = false;
-  String? _interactionAction;
+  int _interactionLoadRevision = 0;
+  final Map<int, String> _videoInteractionActions = <int, String>{};
+
+  /// 只显示当前稿件的写操作，其余稿件的锁由各自请求释放。
+  String? get _interactionAction => _videoInteractionActions[_activeVideo.aid];
   final Map<int, bool> _authorFollowingStates = <int, bool>{};
   final Set<int> _authorFollowActions = <int>{};
   int _likeCountDelta = 0;
@@ -288,7 +298,7 @@ class _PlayerPageState extends State<PlayerPage>
   @override
   bool get _playerToolsOpen => _playerToolsSession != null;
 
-  /// 清理上一支视频的互动状态，并开始读取新视频对应的账号状态。
+  /// 清理上一支视频的互动和本机操作状态。
   @override
   void _resetVideoInteractionState() {
     _resetOnlineInteractionState();
@@ -296,26 +306,16 @@ class _PlayerPageState extends State<PlayerPage>
     _appFavoriteFolderIds = const <String>{};
   }
 
-  /// 清理在线互动，保留本机收藏和下载状态。
-  void _resetOnlineInteractionState() {
-    _interactionState = const BilibiliInteractionState();
-    _interactionAction = null;
+  /// 清除读取状态，同稿切分 P 时保留已知互动，写操作自行释放各目标的锁。
+  @override
+  void _resetOnlineInteractionState({bool keepVideoState = false}) {
     _interactionLoading = false;
+    if (keepVideoState) return;
+    _interactionState = const BilibiliInteractionState();
     _authorFollowingStates.clear();
-    _authorFollowActions.clear();
     _likeCountDelta = 0;
     _coinCountDelta = 0;
     _favoriteCountDelta = 0;
-  }
-
-  /// 本地源清除上一分 P 的互动、章节和剧情，并撤销其在途响应。
-  @override
-  void _clearOfflineSourceMetadata() {
-    setState(() {
-      _resetOnlineInteractionState();
-      _interactivePromptVisible = false;
-    });
-    unawaited(_playerEnhancementController.load(bvid: '', cid: 0));
   }
 
   /// 仅在线播放源打开后读取 B 站互动状态。

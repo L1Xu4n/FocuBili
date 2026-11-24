@@ -46,7 +46,7 @@ mixin _PlayerVideoCoordinator
   /// 更新当前正在播放的分 P。
   set _currentPart(VideoPart value);
 
-  /// 重置当前视频的互动状态并异步读取新视频的互动状态。
+  /// 在更换稿件时清除互动和本机操作状态。
   void _resetVideoInteractionState();
 
   /// Reloads local offline membership after changing the current CID.
@@ -57,6 +57,13 @@ mixin _PlayerVideoCoordinator
   void _handlePlayerEnhancementChanged() {
     if (!mounted) {
       return;
+    }
+    final branch = _pendingInteractiveBranch;
+    if (branch != null &&
+        _onlineMetadataPart == (branch.bvid, _activeVideo.aid, branch.cid) &&
+        _playerEnhancementController.graphVersion == branch.graphVersion &&
+        _playerEnhancementController.loadedBranchEdgeId == branch.edgeId) {
+      _pendingInteractiveBranch = null;
     }
     final PlaybackSnapshot snapshot = _playbackSnapshot;
     setState(() {
@@ -135,9 +142,19 @@ mixin _PlayerVideoCoordinator
     }
   }
 
-  /// 请求当前 BV 与 CID 的章节及互动信息，旧请求由控制器令牌自动丢弃。
+  /// 优先读取当前 CID 等待中的剧情分支，普通分 P 仍从章节和剧情入口开始。
   @override
   Future<void> _loadPlayerEnhancements() {
+    final branch = _pendingInteractiveBranch;
+    if (branch != null &&
+        branch.bvid == _activeVideo.bvid &&
+        branch.cid == _currentPart.cid) {
+      return _playerEnhancementController.loadBranch(
+        bvid: branch.bvid,
+        graphVersion: branch.graphVersion,
+        edgeId: branch.edgeId,
+      );
+    }
     return _playerEnhancementController.load(
       bvid: _activeVideo.bvid,
       cid: _currentPart.cid,
@@ -153,7 +170,7 @@ mixin _PlayerVideoCoordinator
       _showPlayerNotice('视频已变化，请重新选择当前视频的分 P。');
       return;
     }
-    if (part.cid == _currentPart.cid) {
+    if (part.cid == _currentPart.cid && _pendingInteractiveBranch == null) {
       if (_partSelectorExpanded) {
         _closePartSelector();
       }
@@ -181,6 +198,9 @@ mixin _PlayerVideoCoordinator
     _clearDanmakuForPart();
     _resetVideoShotPreview();
     setState(() {
+      _invalidateOnlineMetadata();
+      _resetOnlineInteractionState(keepVideoState: true);
+      _pendingInteractiveBranch = null;
       _currentPart = part;
       _progress = 0;
       _showControls = true;
@@ -189,6 +209,7 @@ mixin _PlayerVideoCoordinator
       _resetPlaybackProgressTracking();
       _interactivePromptVisible = false;
     });
+    _clearPlayerEnhancements();
     _refreshPlayerNoteIdentity();
     _shownRestoredCid = null;
     _openingResumePlan = PlaybackResumePlan.direct(part: part);
@@ -215,7 +236,11 @@ mixin _PlayerVideoCoordinator
 
   /// 打开用户明确选择的互动剧情 CID，并提前读取这个节点的下一批选择。
   Future<void> _playInteractiveChoice(InteractiveVideoChoice choice) async {
-    if (_interactiveChoiceOpening) {
+    final graphVersion = _playerEnhancementController.graphVersion;
+    final choices = _playerEnhancementController.interactiveNode?.choices;
+    if (_interactiveChoiceOpening ||
+        graphVersion == null ||
+        choices?.contains(choice) != true) {
       return;
     }
     final video = _activeVideo;
@@ -241,6 +266,14 @@ mixin _PlayerVideoCoordinator
       duration: Duration.zero,
     );
     setState(() {
+      _invalidateOnlineMetadata();
+      _resetOnlineInteractionState(keepVideoState: true);
+      _pendingInteractiveBranch = (
+        bvid: video.bvid,
+        cid: branchPart.cid,
+        graphVersion: graphVersion,
+        edgeId: choice.edgeId,
+      );
       _currentPart = branchPart;
       _progress = 0;
       _showControls = true;
@@ -258,8 +291,6 @@ mixin _PlayerVideoCoordinator
         part: branchPart,
         quality: _currentQuality,
         initialPosition: Duration.zero,
-        onOnlineOpened: () =>
-            unawaited(_playerEnhancementController.selectChoice(choice)),
       );
     } on PlatformException catch (error) {
       if (_isCurrentVideoNavigation(generation, bvid: video.bvid)) {
@@ -549,6 +580,8 @@ mixin _PlayerVideoCoordinator
     // was in flight. Snapshot it under the old video before clearing the UI.
     _flushVideoNoteAutoSave(updateUi: false);
     setState(() {
+      _invalidateOnlineMetadata();
+      _pendingInteractiveBranch = null;
       _activeVideo = video;
       _currentPart = targetPart;
       _playbackSnapshot = _playbackSnapshot.copyWith(
@@ -589,6 +622,7 @@ mixin _PlayerVideoCoordinator
       _interactiveChoiceOpening = false;
       _resetVideoInteractionState();
     });
+    _clearPlayerEnhancements();
     _refreshPlayerNoteIdentity();
     _shownRestoredCid = null;
     _openingResumePlan = resumePlan;

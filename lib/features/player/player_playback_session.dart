@@ -31,8 +31,10 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
   int? _offlineQuality;
   int _sourceGeneration = 0;
   (int, int)? _readyOnlineOverlaySource;
-  (String, int)? _onlineMetadataPart;
+  (String, int, int)? _onlineMetadataPart;
   int _onlineMetadataEpoch = 0;
+  ({String bvid, int cid, int graphVersion, int edgeId})?
+  _pendingInteractiveBranch;
   bool _externalNavigationSuspended = false;
   void Function(PlaybackSnapshot)? _observeSourceStartup;
 
@@ -48,9 +50,12 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
   void _maybeAutoEnableSubtitles();
   void _cancelAutomaticSubtitlesForLocalSource();
   void _clearDanmakuForPart();
-  void _clearOfflineSourceMetadata();
+  void _resetOnlineInteractionState({bool keepVideoState = false});
   void _startVideoInteractionStateLoad();
   void _loadLocalVideoActions();
+
+  /// 将播放源的在线状态交给页面持有的标签会话。
+  void _setOnlineVideoTags(bool online);
   set _networkType(DeviceNetworkType value);
 
   /// 只在已打开的在线画面结束初始续播定位后请求弹幕。
@@ -148,6 +153,24 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
 
   void _cancelDesktopRightShortcut();
 
+  /// 在提交新视频、分 P 或本地源时立即撤销上一来源的在线回填。
+  void _invalidateOnlineMetadata() {
+    _onlineMetadataEpoch++;
+    _onlineMetadataPart = null;
+    _readyOnlineOverlaySource = null;
+  }
+
+  /// 比对稿件和分 P，避免只靠 BV 号或来源请求完成顺序识别当前内容。
+  bool _matchesVideoPart(VideoPreview video, int cid) =>
+      _activeVideo.bvid == video.bvid &&
+      _activeVideo.aid == video.aid &&
+      _currentPart.cid == cid;
+
+  /// 复用增强控制器的请求令牌，同步撤销旧章节及剧情节点的在途响应。
+  void _clearPlayerEnhancements() {
+    unawaited(_playerEnhancementController.load(bvid: '', cid: 0));
+  }
+
   /// Opens the chosen source through the existing backend and retains player controls.
   Future<void> _openPlaybackSource(
     VideoPreview video, {
@@ -157,7 +180,6 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     bool? useLocal,
     bool allowStartupFallback = true,
     bool useNetworkDefault = false,
-    VoidCallback? onOnlineOpened,
   }) async {
     final generation = ++_sourceGeneration;
     final navigation = _partSwitchGeneration;
@@ -210,12 +232,15 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
         _playingOffline = file != null;
         _offlineQuality = file?.qualityId;
         if (file != null) {
-          _readyOnlineOverlaySource = null;
-          _onlineMetadataPart = null;
-          _onlineMetadataEpoch++;
+          _invalidateOnlineMetadata();
+          _setOnlineVideoTags(false);
           _clearDanmakuForPart();
           _cancelAutomaticSubtitlesForLocalSource();
-          _clearOfflineSourceMetadata();
+          setState(() {
+            _resetOnlineInteractionState();
+            _interactivePromptVisible = false;
+          });
+          _clearPlayerEnhancements();
           _defaultQualityPending = false;
           await _openManagedLocalMedia(
             service,
@@ -252,19 +277,14 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
           );
           if (isCurrent() &&
               !_playingOffline &&
-              video.bvid == _activeVideo.bvid &&
-              part.cid == _currentPart.cid) {
+              _matchesVideoPart(video, part.cid)) {
             _readyOnlineOverlaySource = (generation, navigation);
-            final metadataPart = (video.bvid, part.cid);
+            _setOnlineVideoTags(true);
+            final metadataPart = (video.bvid, video.aid, part.cid);
             if (_onlineMetadataPart != metadataPart) {
               _onlineMetadataPart = metadataPart;
-              _onlineMetadataEpoch++;
               _startVideoInteractionStateLoad();
-              if (onOnlineOpened == null) {
-                unawaited(_loadPlayerEnhancements());
-              } else {
-                onOnlineOpened();
-              }
+              unawaited(_loadPlayerEnhancements());
             }
             _ensureDanmakuSegmentsForPosition(_playbackSnapshot.position);
             _maybeAutoEnableSubtitles();
@@ -1060,7 +1080,7 @@ mixin _PlayerPlaybackSession on State<PlayerPage> {
     }
   }
 
-  /// 再次请求当前视频、分 P 和清晰度，等待后端快照决定是否替换原错误提示。
+  /// 重试当前播放源，成功后由统一打开路径恢复待加载的剧情分支。
   Future<void> _retryPlayback() async {
     if (_isRetrying || !mounted) {
       return;

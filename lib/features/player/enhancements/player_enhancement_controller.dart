@@ -32,6 +32,13 @@ class PlayerEnhancementController extends ChangeNotifier {
   /// 判断当前视频是否带有有效互动剧情版本。
   bool get isInteractive => _metadata.interaction != null;
 
+  /// 返回当前互动剧情版本，切节点时用它绑定用户选择。
+  int? get graphVersion => _metadata.interaction?.graphVersion;
+
+  /// 返回已成功读取的分支编号，初始节点或未读完的分支返回空值。
+  int? get loadedBranchEdgeId =>
+      _interactiveNode == null ? null : _lastRequestedEdgeId;
+
   /// 判断播放器完播时是否应该交给互动选择层处理，节点尚在加载时也保留加载或重试入口。
   bool get handlesPlaybackCompletion {
     final InteractiveVideoNode? node = _interactiveNode;
@@ -122,15 +129,26 @@ class PlayerEnhancementController extends ChangeNotifier {
     }
   }
 
-  /// 在用户选择剧情后读取目标节点，让下一次完播显示正确的后续选择。
-  Future<void> selectChoice(InteractiveVideoChoice choice) async {
-    final int token = _requestToken;
-    _lastRequestedEdgeId = choice.edgeId;
+  /// 按选择时绑定的剧情版本读取目标节点，并撤销上一节点的在途请求。
+  Future<void> loadBranch({
+    required String bvid,
+    required int graphVersion,
+    required int edgeId,
+  }) async {
+    final int token = ++_requestToken;
+    if (_bvid != bvid || this.graphVersion != graphVersion) {
+      _metadata = PlayerEnhancementMetadata(
+        interaction: InteractiveVideoInfo(graphVersion: graphVersion),
+      );
+    }
+    _bvid = bvid;
+    _metadataLoading = false;
+    _metadataError = null;
+    _lastRequestedEdgeId = edgeId;
     _interactiveNode = null;
     _interactiveNodeError = null;
     _interactiveChoicePresented = false;
-    notifyListeners();
-    await _loadInteractiveNode(token: token, edgeId: choice.edgeId);
+    await _loadInteractiveNode(token: token, edgeId: edgeId);
   }
 
   /// 重新请求上一次失败的互动节点，起始节点和剧情分支都能复用。

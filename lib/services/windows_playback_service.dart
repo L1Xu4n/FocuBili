@@ -597,7 +597,7 @@ class WindowsPlaybackService
     part: part,
   );
 
-  /// 本地音视频一起加载并校验解码和位置，之后才报告就绪。
+  /// 停止旧媒体后打开本地音视频并接收错误，校验解码和位置后报告就绪。
   Future<void> _openLocalMedia({
     required String filePath,
     String? audioFilePath,
@@ -720,6 +720,9 @@ class WindowsPlaybackService
       }
       await _applyMediaCachePolicy(generation, diskAllowed: !isCourse);
       if (!_isCurrentSourceRequest(generation)) return;
+      _mediaAttemptRevision++;
+      _attemptFailure = WindowsPlaybackFailure.route;
+      _acceptAttemptErrors = true;
       await _openPlayerMedia(
         Media(
           (_audioOnly ? audioFile ?? file : file).absolute.path,
@@ -775,6 +778,7 @@ class WindowsPlaybackService
       if (_isCurrentSourceRequest(generation)) {
         _opening = false;
         _restoringPosition = false;
+        _acceptAttemptErrors = false;
         _emitPlayerState(
           phaseOverride: PlaybackPhase.error,
           message: '无法打开离线视频。',
@@ -798,7 +802,7 @@ class WindowsPlaybackService
     return false;
   }
 
-  /// Resumes the current Windows media session.
+  /// 恢复当前媒体会话，并只处理这次恢复所对应的音轨错误。
   @override
   Future<void> play() async {
     _ensureAvailable();
@@ -817,7 +821,7 @@ class WindowsPlaybackService
     if (_isCurrentSourceRequest(generation)) _emitPlayerState();
     if (_activeAudioMedia != null && _isCurrentSourceRequest(generation)) {
       if (!await _waitForDecodedAudio(generation)) {
-        await _handleMediaError();
+        if (_isCurrentSourceRequest(generation)) await _handleMediaError();
         return;
       }
       await _restoreResumePositionAfterDecode(
@@ -1271,7 +1275,13 @@ class WindowsPlaybackService
     }
   }
 
-  /// Keeps typed error evidence for the current open and verifies later failures.
+  /// 判断错误是否属于只适用于网络播放的 HTTP 授权或地址过期故障。
+  static bool _isNetworkAuthorizationFailure(WindowsPlaybackFailure failure) {
+    return failure == WindowsPlaybackFailure.accessDenied ||
+        failure == WindowsPlaybackFailure.expired;
+  }
+
+  /// 记录当前媒体的错误类型，并在就绪后核验仍适用于当前媒体的错误。
   void _onPlayerError(
     String message, {
     String prefix = '',
@@ -1282,6 +1292,7 @@ class WindowsPlaybackService
       message,
       prefix: prefix,
     );
+    if (_localSource && _isNetworkAuthorizationFailure(failure)) return;
     // A generic error must not overwrite an explicit decoder or status error.
     if (failure != WindowsPlaybackFailure.route) {
       if (_attemptFailure == WindowsPlaybackFailure.route ||
@@ -1614,10 +1625,9 @@ class WindowsPlaybackService
     await _stopLoadedMedia();
   }
 
-  /// Ends an open early when the current logs and player outputs confirm failure.
+  /// 在网络授权失效或视频解码失败且无画面时提前结束打开流程。
   void _throwIfKnownMediaFailure() {
-    if (_attemptFailure == WindowsPlaybackFailure.expired ||
-        _attemptFailure == WindowsPlaybackFailure.accessDenied ||
+    if ((!_localSource && _isNetworkAuthorizationFailure(_attemptFailure)) ||
         _attemptFailure == WindowsPlaybackFailure.videoDecoder &&
             !_hasDecodedVideo()) {
       throw StateError('Media attempt failed');
@@ -1909,23 +1919,25 @@ class WindowsPlaybackService
     return normalized == 'yes' || normalized == 'true' || normalized == '1';
   }
 
-  /// 延迟核验 media_kit 的宽泛错误事件；当前音视频仍健康时忽略它，只有确认失效才轮换线路。
+  /// 延迟核验 media_kit 的错误事件，确认当前音视频失效后交给错误处理。
   Future<void> _verifyPlayerError({
     required int generation,
     required int mediaAttemptIndex,
     required int mediaAttemptRevision,
   }) async {
-    /// Rejects delayed checks after a reopen, even if the route index repeats.
+    /// 只接受当前仍在接收错误的媒体实例，避免晚到的检查再次触发处理。
     bool isCurrent() =>
         _isCurrentMediaAttempt(generation, mediaAttemptIndex) &&
         mediaAttemptRevision == _mediaAttemptRevision &&
+        _acceptAttemptErrors &&
         !_opening;
     if (!isCurrent()) return;
     final DateTime deadline = DateTime.now().add(_mediaErrorHealthCheckTimeout);
     do {
-      if (_attemptFailure == WindowsPlaybackFailure.accessDenied ||
-          _attemptFailure == WindowsPlaybackFailure.expired &&
-              _currentVideo?.isCourse == true) {
+      if (!_localSource &&
+          (_attemptFailure == WindowsPlaybackFailure.accessDenied ||
+              _attemptFailure == WindowsPlaybackFailure.expired &&
+                  _currentVideo?.isCourse == true)) {
         break;
       }
       final bool hasDecodedAudio = await _hasDecodedAudio();
@@ -1950,7 +1962,7 @@ class WindowsPlaybackService
     );
   }
 
-  /// Coalesces recovery for this generation and preserves the playback intent.
+  /// 报告离线媒体故障，或为当前网络媒体合并恢复请求并保留播放意图。
   Future<void> _handleMediaError({
     int? expectedGeneration,
     int? expectedMediaAttemptIndex,
@@ -1964,6 +1976,17 @@ class WindowsPlaybackService
           expectedGeneration,
           expectedMediaAttemptIndex,
         )) {
+      return;
+    }
+    if (_localSource) {
+      // 双轨离线候选只用于挂载音轨，两条路径都来自本地文件。
+      _acceptAttemptErrors = false;
+      _opening = false;
+      _restoringPosition = false;
+      _emitPlayerState(
+        phaseOverride: PlaybackPhase.error,
+        message: '离线视频播放失败，请重新打开或重新下载。',
+      );
       return;
     }
     final int generation = _sourceGeneration;

@@ -6,6 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/offline_download_task.dart';
 import '../models/video_preview.dart';
+import '../platform/app_platform.dart';
+import '../platform/platform_capabilities.dart';
 import 'cache_lifecycle.dart';
 import 'course_cache_access.dart';
 import 'course_cache_library.dart';
@@ -18,7 +20,7 @@ import 'playback_preferences_service.dart';
 
 /// Owns durable FIFO tasks independently of player and library page lifetimes.
 class OfflineDownloadQueue extends ChangeNotifier {
-  /// Injects storage, transfer and notification boundaries for deterministic tests.
+  /// 注入存储、下载、通知和平台能力，便于在测试中模拟设备。
   OfflineDownloadQueue({
     OfflineVideoService? library,
     CourseCacheLibrary? courseLibrary,
@@ -26,12 +28,16 @@ class OfflineDownloadQueue extends ChangeNotifier {
     Future<void> Function(List<OfflineDownloadTask>)? publishProgress,
     DateTime Function()? clock,
     DeviceStatusService? deviceStatusService,
+    AppPlatform? appPlatform,
   }) : library = library ?? OfflineVideoService(),
        _preferencesLoader = preferencesLoader ?? SharedPreferences.getInstance,
        _publishProgress = publishProgress,
        _clock = clock ?? DateTime.now,
        _deviceStatusService =
            deviceStatusService ?? const NativeDeviceStatusService(),
+       _supportsMeteredNetworkDetection = PlatformCapabilities.forPlatform(
+         appPlatform ?? AppPlatformDetector.current,
+       ).supportsMeteredNetworkDetection,
        courses = courseLibrary ?? CourseCacheLibrary.instance {
     CacheLifecycle.account.addListener(_accountChanged);
   }
@@ -127,6 +133,7 @@ class OfflineDownloadQueue extends ChangeNotifier {
   final OfflineVideoPreferencesLoader _preferencesLoader;
   final DateTime Function() _clock;
   final DeviceStatusService _deviceStatusService;
+  final bool _supportsMeteredNetworkDetection;
   final Future<void> Function(List<OfflineDownloadTask>)? _publishProgress;
   final List<OfflineDownloadTask> _tasks = [];
   final _completions = StreamController<OfflineDownloadTask>.broadcast();
@@ -736,12 +743,15 @@ class OfflineDownloadQueue extends ChangeNotifier {
     );
   }
 
-  /// Executes one task and makes every error a visible, retryable terminal state.
+  /// 执行任务，并将网络限制或下载异常显示为可重试的状态。
   Future<void> _run(OfflineDownloadTask task, DownloadControl control) async {
-    const String meteredPauseMessage = '当前非未计量网络，已按“仅未计量网络下载”暂停离线缓存。';
+    final String meteredPauseMessage = _supportsMeteredNetworkDetection
+        ? '当前非未计量网络，已按“仅未计量网络下载”暂停离线缓存。'
+        : '当前平台暂不支持检测网络计费状态，离线下载已暂停。请在「个性化设置 → 播放与专注」关闭“仅在未计量网络下载离线缓存”，然后继续任务。';
     bool pausedForMeteredNetwork = false;
     bool checkingNetwork = false;
 
+    // 每次检查都重新读取偏好，关闭限制后可直接继续任务。
     Future<bool> shouldPauseForMeteredNetwork() async {
       final prefs = await _preferencesLoader();
       if (prefs.getBool(
@@ -754,6 +764,7 @@ class OfflineDownloadQueue extends ChangeNotifier {
       return !networkStatus.allowsUnmeteredOnlyAction;
     }
 
+    // 传输过程中发现网络已不符合限制时，停止当前下载。
     Future<void> enforceUnmeteredPolicy() async {
       if (control.isInterrupted) return;
       if (await shouldPauseForMeteredNetwork()) {

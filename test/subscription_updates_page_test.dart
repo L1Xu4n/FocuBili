@@ -80,7 +80,12 @@ void main() {
       ..pages[1] = [
         [item('baseline')],
       ];
-    final service = SubscriptionService(contentService: content);
+    // 统一发现时间，使拖选行按 BV 排序，避免系统时钟精度改变行顺序。
+    final now = DateTime(2026, 1, 15, 12);
+    final service = SubscriptionService(
+      contentService: content,
+      clock: () => now,
+    );
     addTearDown(service.dispose);
     await service.addSource(source(1));
     await service.setEnabled(true);
@@ -504,6 +509,70 @@ void main() {
     expect(find.byType(SwitchListTile), findsNothing);
     expect(find.text('添加 UP 主或 UGC 合集'), findsNothing);
   });
+
+  for (final (platform, canSchedule) in const [
+    (AppPlatform.linux, false),
+    (AppPlatform.windows, true),
+    (AppPlatform.android, true),
+  ]) {
+    /// 从订阅更新页验证网络限制，并覆盖后台调度不可用时关闭已保存限制的入口。
+    testWidgets('${platform.name} 订阅后台检查的计费网络限制', (tester) async {
+      final service = SubscriptionService(
+        platform: platform,
+        backgroundScheduler: canSchedule ? (_, _) async {} : null,
+      );
+      addTearDown(service.dispose);
+      await service.setEnabled(true);
+      if (canSchedule) await service.setBackgroundRefreshEnabled(true);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SubscriptionUpdatesPage(
+            service: service,
+            appPlatform: platform,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('焦点订阅设置'));
+      await tester.pumpAndSettle();
+
+      final target = find.byKey(
+        const Key('subscription-wifi-only-background-switch'),
+      );
+      // 读取设置页实际开关的值与回调，确认开关是否可以操作。
+      SwitchListTile tile() => tester.widget<SwitchListTile>(target);
+
+      expect(tile().value, isFalse);
+      if (platform == AppPlatform.android) {
+        expect(tile().onChanged, isNotNull);
+        expect(find.textContaining('后台任务仅在确认非计费网络'), findsOneWidget);
+        await tester.tap(target);
+      } else {
+        expect(tile().onChanged, isNull);
+        expect(find.textContaining('此功能暂不可用'), findsOneWidget);
+        if (!canSchedule) {
+          expect(find.textContaining('当前使用前台检查'), findsOneWidget);
+        }
+        // 模拟从备份恢复的旧偏好，绕过界面上的开启保护。
+        await service.setWifiOnlyBackgroundRefresh(true);
+      }
+      await tester.pumpAndSettle();
+      expect(tile().value, isTrue);
+      expect(tile().onChanged, isNotNull);
+      if (platform != AppPlatform.android) {
+        expect(find.textContaining('请关闭此开关以解除限制'), findsOneWidget);
+      }
+
+      await tester.ensureVisible(target);
+      await tester.pumpAndSettle();
+      await tester.tap(target);
+      await tester.pumpAndSettle();
+      expect(tile().value, isFalse);
+      expect(service.wifiOnlyBackgroundRefresh, isFalse);
+      if (platform != AppPlatform.android) expect(tile().onChanged, isNull);
+    });
+  }
+
   testWidgets('source status explains initialization and failures honestly', (
     tester,
   ) async {
@@ -569,6 +638,9 @@ void main() {
       await tester.pumpAndSettle();
       final retry = find.text('重试此来源');
       await tester.scrollUntilVisible(retry, 150);
+      // 新增网络说明占用一行设置，点击前将按钮滚到视口中央。
+      await Scrollable.ensureVisible(tester.element(retry), alignment: 0.5);
+      await tester.pumpAndSettle();
       content.failPage = null;
       await tester.tap(retry);
       await tester.pumpAndSettle();

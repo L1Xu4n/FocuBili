@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:focubili/features/profile/cache_management_page.dart';
+import 'package:focubili/platform/app_platform.dart';
 import 'package:focubili/services/media_cache_service.dart';
 
 /// 用内存状态替代 Android 原生通道，使缓存管理页面能够稳定地进行 Widget 测试。
@@ -57,19 +58,20 @@ class _MemoryImageCache extends ImageResourceCache {
       value = ImageCacheUsage(value.usedBytes, bytes, value.objects);
 }
 
-/// 为页面创建带 Material 主题和独立缓存服务的测试宿主。
-Widget _buildTestApp(MediaCacheService service) {
+/// 为页面创建缓存服务独立、可指定说明文案平台的 Material 测试宿主。
+Widget _buildTestApp(MediaCacheService service, {AppPlatform? appPlatform}) {
   return MaterialApp(
     home: CacheManagementPage(
       service: service,
       imageCache: _MemoryImageCache(),
+      appPlatform: appPlatform,
     ),
   );
 }
 
 /// 验证缓存管理页面的占用、容量和播放保护行为。
 void main() {
-  /// 验证页面显示原生缓存快照和“非离线下载”的产品边界。
+  /// 验证 Android 页面显示缓存快照及按网络计费状态调整的预读说明。
   testWidgets('显示缓存用量和边播边缓存说明', (WidgetTester tester) async {
     final _FakeMediaCacheService service = _FakeMediaCacheService(
       const MediaCacheStatus(
@@ -79,12 +81,16 @@ void main() {
       ),
     );
 
-    await tester.pumpWidget(_buildTestApp(service));
+    await tester.pumpWidget(
+      _buildTestApp(service, appPlatform: AppPlatform.android),
+    );
     await tester.pumpAndSettle();
 
     expect(find.text('64.0 MB / 512.0 MB'), findsOneWidget);
     expect(find.textContaining('不是离线下载'), findsOneWidget);
     expect(find.text('清空已缓存视频'), findsOneWidget);
+    expect(find.textContaining('计量/低数据模式约 15 秒'), findsOneWidget);
+    expect(find.textContaining('暂不支持自动识别系统计费网络'), findsNothing);
   });
 
   /// 验证用户切换容量后页面使用服务返回的最新配置。
@@ -150,24 +156,48 @@ void main() {
     expect(picker.onChanged, isNull);
   });
 
-  /// 验证 Windows 状态会展示临时播放缓冲文案，而不是冒充可重复使用的 Android 持久缓存。
-  testWidgets('Windows 页面展示播放缓冲边界', (WidgetTester tester) async {
-    final _FakeMediaCacheService service = _FakeMediaCacheService(
-      const MediaCacheStatus(
-        usedBytes: 16 * 1024 * 1024,
-        capacityBytes: defaultMediaCacheBytes,
-        isPlaybackActive: false,
-        storageKind: MediaCacheStorageKind.windowsPlaybackBuffer,
-      ),
-    );
+  for (final platform in [
+    AppPlatform.windows,
+    AppPlatform.linux,
+    AppPlatform.macos,
+  ]) {
+    /// 用相同的临时缓冲后端验证各平台的默认预读和计费网络说明。
+    testWidgets('${platform.displayName} 页面展示播放缓冲边界和预读说明', (
+      WidgetTester tester,
+    ) async {
+      final _FakeMediaCacheService service = _FakeMediaCacheService(
+        const MediaCacheStatus(
+          usedBytes: 16 * 1024 * 1024,
+          capacityBytes: defaultMediaCacheBytes,
+          isPlaybackActive: false,
+          storageKind: MediaCacheStorageKind.windowsPlaybackBuffer,
+        ),
+      );
 
-    await tester.pumpWidget(_buildTestApp(service));
-    await tester.pumpAndSettle();
+      await tester.pumpWidget(_buildTestApp(service, appPlatform: platform));
+      await tester.pumpAndSettle();
 
-    expect(find.text('缓存管理'), findsOneWidget);
-    expect(find.text('磁盘播放缓冲实际占用'), findsOneWidget);
-    expect(find.text('清空播放缓冲'), findsOneWidget);
-    expect(find.textContaining('下次打开播放器时生效'), findsOneWidget);
-    expect(find.textContaining('不是离线下载'), findsOneWidget);
-  });
+      expect(find.text('缓存管理'), findsOneWidget);
+      expect(find.text('磁盘播放缓冲实际占用'), findsOneWidget);
+      expect(find.text('清空播放缓冲'), findsOneWidget);
+      expect(find.textContaining('约 30 秒正向预读'), findsOneWidget);
+      expect(find.textContaining('下次打开播放器时生效'), findsOneWidget);
+      expect(find.textContaining('不是离线下载'), findsOneWidget);
+      if (platform == AppPlatform.macos) {
+        expect(
+          find.textContaining('计量网络或低数据模式下自动切换为有界内存缓冲（15 秒预读'),
+          findsOneWidget,
+        );
+        expect(find.textContaining('暂不支持自动识别系统计费网络'), findsNothing);
+      } else {
+        expect(
+          find.textContaining('暂不支持自动识别系统计费网络，播放将使用默认预读策略'),
+          findsOneWidget,
+        );
+        expect(find.textContaining('「个性化设置」中手动调整画质或编码偏好'), findsOneWidget);
+        expect(find.textContaining('未计量网络'), findsNothing);
+        expect(find.textContaining('15 秒'), findsNothing);
+      }
+    });
+  }
 }

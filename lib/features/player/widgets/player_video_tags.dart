@@ -15,6 +15,7 @@ class PlayerTagSession extends ChangeNotifier {
       failed = false,
       _fetched = false,
       _closed = false;
+  bool _sourceOnline = false;
   List<String> tags = const [];
   int _rev = 0, _pref = 0;
 
@@ -26,38 +27,55 @@ class PlayerTagSession extends ChangeNotifier {
     _preference();
   }
 
+  /// 只应用最近一次读取的标签显示偏好。
   Future<void> _preference() async {
     final revision = ++_pref;
     final next = await VideoTagPreferences.load();
     if (_closed || revision != _pref || mode == next) return;
     mode = next;
-    _reset();
+    _resetPresentation();
   }
 
+  /// 当前稿件和实际播放源都允许时才请求在线标签。
   bool get _online =>
-      _video != null &&
-      !_video!.isCourse &&
-      !_video!.fromOfflineCache &&
-      source != null;
+      _video != null && !_video!.isCourse && _sourceOnline && source != null;
   bool get visible =>
       mode != null &&
       mode != VideoTagMode.hidden &&
       _video?.isCourse == false &&
       (tags.isNotEmpty || _online);
 
-  void bind(VideoPreview video) {
+  /// 新稿件使用自己的标签，播放器可等实际来源确认后再允许联网。
+  void bind(VideoPreview video, {bool? online}) {
     final changed = _video?.bvid != video.bvid;
     _video = video;
-    if (changed) _reset();
+    if (changed) {
+      _sourceOnline = online ?? !video.fromOfflineCache;
+      tags = video.tags;
+      _fetched = tags.isNotEmpty;
+      _resetPresentation();
+    } else if (online != null) {
+      setOnline(online);
+    }
   }
 
-  void _reset() {
+  /// 切本地时丢弃在途结果，恢复在线后继续已展开且未完成的加载。
+  void setOnline(bool online) {
+    if (_sourceOnline == online) return;
+    _sourceOnline = online;
+    _rev++;
+    busy = false;
+    failed = false;
+    if (expanded && visible) unawaited(_load());
+    notifyListeners();
+  }
+
+  /// 根据偏好重置展开状态并撤销旧请求，保留当前稿件已读取的标签。
+  void _resetPresentation() {
     _rev++;
     expanded = mode == VideoTagMode.expanded;
     busy = false;
     failed = false;
-    tags = _video?.tags ?? const [];
-    _fetched = tags.isNotEmpty;
     if (visible && expanded) unawaited(_load());
     notifyListeners();
   }
