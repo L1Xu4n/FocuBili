@@ -19,6 +19,7 @@ const _runtime = {
   DeviceSettingsRuntimeAdapter.enabledKey: true,
   DeviceSettingsRuntimeAdapter.notificationsKey: true,
   DeviceSettingsRuntimeAdapter.backgroundKey: true,
+  DeviceSettingsRuntimeAdapter.wifiOnlyBackgroundKey: true,
   DeviceSettingsRuntimeAdapter.imageCapacityKey: 64 * 1024 * 1024,
 };
 
@@ -101,13 +102,13 @@ void main() {
       final preferences = await SharedPreferences.getInstance();
       final plan = restore.validate(values);
       expect(plan.candidateCount, 5);
-      expect(plan.skippedCount, 11);
+      expect(plan.skippedCount, 12);
       expect(preferences.get(_speeds), isNull);
 
       final result = await restore.apply(plan);
       expect(result.added, 4);
       expect(result.retained, 1);
-      expect(result.skipped, 11);
+      expect(result.skipped, 12);
       expect(preferences.getString(_theme), 'system');
       expect(preferences.getDouble(_opacity), 0.75);
       expect(preferences.getStringList(_speeds), ['1.0', '2.0']);
@@ -155,7 +156,7 @@ void main() {
         'unknown': {'accountToken': 'synthetic'},
         'appearance.text_scale': 1.15, // JSON-only, not in v1 ZIP.
       });
-      expect(result.skipped, 6);
+      expect(result.skipped, 7);
       expect(result.added, 0);
       expect(result.retained, 0);
     },

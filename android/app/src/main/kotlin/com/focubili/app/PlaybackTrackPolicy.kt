@@ -7,6 +7,8 @@ internal object PlaybackTrackPolicy {
     private const val AVC_TRACK_SCORE = 10_000_000_000_000L
     private const val HEVC_TRACK_SCORE = 100_000_000_000L
     private const val MAX_CODEC_CACHE_KEY_LENGTH = 40
+    private const val DATA_SAVING_AUDIO_LIMIT = 140_000L
+    private val softwareDecoderPrefixes = listOf("omx.google.", "c2.android.", "c2.ffmpeg.")
 
     /** 给 AVC/H.264 最高兼容分，HEVC 次之，未知或 AV1 编码保持最低优先级。 */
     fun compatibilityScore(codec: String): Long {
@@ -45,6 +47,46 @@ internal object PlaybackTrackPolicy {
         items.filter { isAtOrBelowPreferred(quality(it), preferred) && supported(it) }
             .sortedWith(compareByDescending<T> { quality(it) }.thenByDescending { score(it) })
 
+    /** 省流时在画质上限内依序比较硬解、已知低码率和兼容分，再按清晰度及编码去重。 */
+    fun <T> videoTracks(
+        items: List<T>,
+        preferred: Int,
+        dataSaver: Boolean,
+        quality: (T) -> Int,
+        codec: (T) -> String,
+        bandwidth: (T) -> Long,
+        score: (T) -> Long,
+        supported: (T) -> Boolean,
+        hardwareSupported: (T) -> Boolean,
+    ): List<T> {
+        val ordered = if (dataSaver) {
+            items.filter { isAtOrBelowPreferred(quality(it), preferred) && supported(it) }
+                .sortedWith(compareByDescending<T> { quality(it) }
+                    .thenByDescending { hardwareSupported(it) }
+                    .thenBy { bandwidth(it) <= 0 }
+                    .thenBy { bandwidth(it).coerceAtLeast(0L) }
+                    .thenByDescending { score(it) })
+        } else {
+            playableTracks(items, preferred, quality, score, supported)
+        }
+        return ordered.distinctBy { quality(it) to codec(it) }
+    }
+
+    /** 在已兼容的音轨里优先取最接近上限的一档，其次取最低已知码率。 */
+    fun <T> dataSavingAudioTrack(items: List<T>, bandwidth: (T) -> Long): T? {
+        val known = items.filter { bandwidth(it) > 0L }
+        return known.filter { bandwidth(it) <= DATA_SAVING_AUDIO_LIMIT }.maxByOrNull(bandwidth)
+            ?: known.minByOrNull(bandwidth)
+            ?: items.firstOrNull()
+    }
+
+    /** 使用系统硬件标记，旧系统同时排除 Media3 和前缀识别的软件解码器。 */
+    fun isHardwareDecoder(apiLevel: Int, name: String, hardwareAccelerated: Boolean, softwareOnly: Boolean): Boolean {
+        if (apiLevel >= 29) return hardwareAccelerated
+        return !softwareOnly && softwareDecoderPrefixes.none { name.startsWith(it, ignoreCase = true) }
+    }
+
+    /** 将整数、小数或分数帧率转换成可用于设备格式探测的有效值。 */
     fun frameRate(text: String): Float? {
         val parts = text.split('/')
         val value = when (parts.size) {

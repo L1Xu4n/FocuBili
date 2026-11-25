@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:focubili/services/bilibili_course_service.dart';
 import 'package:focubili/services/bilibili_service.dart';
+import 'package:focubili/services/cache_lifecycle.dart';
 
 const purchasedResponse =
     '{"code":0,"data":{"total":1,"data":[{"id":968174948}]}}';
@@ -28,6 +29,44 @@ String response(
   },
 });
 void main() {
+  test(
+    'metadata reuse is session scoped and purchase authorization stays fresh',
+    () async {
+      var cookie = 'session-one';
+      var paidRequests = 0;
+      var seasonRequests = 0;
+      final target = Uri.parse(
+        'https://www.bilibili.com/cheese/play/ss968174948',
+      );
+      final service = BilibiliCourseService(
+        readCookies: () async => cookie,
+        requestJson: (uri, _) async {
+          if (uri.path.endsWith('/my/paid')) {
+            paidRequests++;
+            return purchasedResponse;
+          }
+          seasonRequests++;
+          return response([episode(seasonRequests)]);
+        },
+      );
+      expect(await service.purchasedCourses(), hasLength(1));
+      expect(await service.purchasedCourses(), hasLength(1));
+      expect(paidRequests, 1);
+      final first = await service.lookup(target);
+      expect(await service.lookup(target), same(first));
+      expect(seasonRequests, 1);
+      await service.requirePurchasedCourse(968174948, cookie);
+      expect(paidRequests, 3);
+
+      service.clearMetadataCache();
+      await service.purchasedCourses();
+      expect(paidRequests, 4);
+      cookie = 'session-two';
+      expect((await service.lookup(target)).initialPart.courseEpisodeId, 2);
+      CacheLifecycle.accountChanged();
+      expect((await service.lookup(target)).initialPart.courseEpisodeId, 3);
+    },
+  );
   test(
     'course metadata keeps namespace and 64-bit episode media IDs',
     () async {

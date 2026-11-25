@@ -15,11 +15,13 @@ const flagKeys = {
   'enabled',
   'notificationsEnabled',
   'backgroundRefreshEnabled',
+  'wifiOnlyBackgroundRefresh',
 };
 const disabledFlags = {
   'enabled': false,
   'notificationsEnabled': false,
   'backgroundRefreshEnabled': false,
+  'wifiOnlyBackgroundRefresh': false,
 };
 
 class _ReadOnlyPreferences extends Fake implements SharedPreferences {
@@ -193,11 +195,12 @@ void main() {
     test(
       'legacy version $version reads all boolean combinations without migration or content access',
       () async {
-        for (var bits = 0; bits < 8; bits++) {
+        for (var bits = 0; bits < 16; bits++) {
           final flags = {
             'enabled': bits & 1 != 0,
             'notificationsEnabled': bits & 2 != 0,
             'backgroundRefreshEnabled': bits & 4 != 0,
+            'wifiOnlyBackgroundRefresh': bits & 8 != 0,
           };
           final raw = jsonEncode({
             'version': version,

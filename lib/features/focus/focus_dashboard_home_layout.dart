@@ -194,6 +194,7 @@ extension _FocusDashboardHomeLayout on _FocusDashboardState {
     return ClipOval(
       child: AppNetworkImage(
         imageUrl: avatarUrl,
+        imageVariant: .avatar,
         width: 46,
         height: 46,
         fit: BoxFit.cover,

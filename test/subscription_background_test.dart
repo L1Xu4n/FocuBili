@@ -3,11 +3,51 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:workmanager/workmanager.dart';
 import 'package:focubili/models/subscription.dart';
+import 'package:focubili/services/device_status_service.dart';
+import 'package:focubili/services/subscription_background_service.dart';
 import 'package:focubili/services/subscription_service.dart';
 import 'package:focubili/services/subscription_snapshot_store.dart';
 
 import 'subscription_service_test.dart' show Content, item, source;
+
+class _NetworkStatus extends Fake implements DeviceStatusService {
+  DeviceNetworkStatus status = const DeviceNetworkStatus(
+    type: DeviceNetworkType.wifi,
+  );
+
+  /// Supplies the current synthetic network state to the worker.
+  @override
+  Future<DeviceNetworkStatus> loadNetworkStatus() async => status;
+}
+
+class _WorkmanagerPlatform extends WorkmanagerPlatform {
+  final requests = <(NetworkType?, ExistingPeriodicWorkPolicy?, Object?)>[];
+
+  /// Records constraints and generation at the Android scheduler boundary.
+  @override
+  Future<void> registerPeriodicTask(
+    String uniqueName,
+    String taskName, {
+    Duration? frequency,
+    Duration? flexInterval,
+    Map<String, dynamic>? inputData,
+    Duration? initialDelay,
+    Constraints? constraints,
+    ExistingPeriodicWorkPolicy? existingWorkPolicy,
+    BackoffPolicy? backoffPolicy,
+    Duration? backoffPolicyDelay,
+    String? tag,
+    ForegroundServiceConfig? foregroundServiceConfig,
+  }) async {
+    requests.add((
+      constraints?.networkType,
+      existingWorkPolicy,
+      inputData?['generation'],
+    ));
+  }
+}
 
 /// Simulates the atomic-store mutation contract, including commit failure.
 /// Android integration tests exercise the real sqflite backend separately.
@@ -77,11 +117,14 @@ void main() {
   late Content content;
   final scheduled = <(bool, int)>[];
   var now = DateTime(2026, 10, 5);
-  Future<SubscriptionService> create() async {
+
+  /// Creates a service using the same snapshot across foreground and worker runs.
+  Future<SubscriptionService> create({DeviceStatusService? network}) async {
     final service = SubscriptionService(
       snapshotStore: store,
       contentService: content,
       clock: () => now,
+      deviceStatusService: network,
       backgroundScheduler: (enabled, generation) async {
         scheduled.add((enabled, generation));
       },
@@ -112,6 +155,59 @@ void main() {
     now = now.add(const Duration(hours: 2));
     return ui;
   }
+
+  test(
+    'Android schedule uses unmetered with the update policy when opted in',
+    () async {
+      final original = WorkmanagerPlatform.instance;
+      final platform = _WorkmanagerPlatform();
+      WorkmanagerPlatform.instance = platform;
+      addTearDown(() => WorkmanagerPlatform.instance = original);
+      await SubscriptionBackgroundScheduler.configure(true, 1);
+      await SubscriptionBackgroundScheduler.configure(
+        true,
+        2,
+        wifiOnlyBackgroundRefresh: true,
+      );
+      expect(platform.requests, [
+        (NetworkType.connected, ExistingPeriodicWorkPolicy.update, 1),
+        (NetworkType.unmetered, ExistingPeriodicWorkPolicy.update, 2),
+      ]);
+    },
+  );
+
+  test(
+    'worker rechecks persisted unmetered policy before requesting pages',
+    () async {
+      final ui = await baseline();
+      final previousGeneration = store.generation;
+      await ui.setWifiOnlyBackgroundRefresh(true);
+      expect(store.generation, greaterThan(previousGeneration));
+      expect(
+        (await ui.exportPreferenceFlags())['wifiOnlyBackgroundRefresh'],
+        isTrue,
+      );
+      final network = _NetworkStatus();
+      final worker = await create(network: network);
+      expect(worker.wifiOnlyBackgroundRefresh, isTrue);
+      final calls = content.calls.length;
+      await worker.runBackgroundCheck(store.generation);
+      expect(content.calls.length, calls);
+      network.status = DeviceNetworkStatus.fromLegacyType(
+        DeviceNetworkType.mobile,
+      );
+      await worker.runBackgroundCheck(store.generation);
+      expect(content.calls.length, calls);
+      network.status = const DeviceNetworkStatus(
+        type: DeviceNetworkType.ethernet,
+        metered: DeviceNetworkMeteredStatus.unmetered,
+      );
+      await worker.runBackgroundCheck(previousGeneration);
+      expect(content.calls.length, calls);
+      await worker.runBackgroundCheck(store.generation);
+      expect(content.calls.length, greaterThan(calls));
+    },
+  );
 
   test(
     'default off, migration preserves old JSON and missing image fields',

@@ -7,6 +7,7 @@ import '../../core/router/app_router.dart';
 import '../../core/widgets/editable_card_board.dart';
 import '../../services/dashboard_layout_service.dart';
 import '../../services/bilibili_auth_service.dart';
+import '../../services/bilibili_image_url_policy.dart';
 import '../../services/app_update_service.dart';
 import 'favorite_folders_page.dart';
 import 'app_favorite_folders_page.dart';
@@ -59,13 +60,13 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   /// 验证当前 Cookie 并保留“未登录、过期、网络错误”三种不同页面状态。
-  Future<void> _loadAccount() async {
+  Future<void> _loadAccount({bool forceRefresh = false}) async {
     if (mounted) {
       setState(() => _loadingAccount = true);
     }
     try {
       final BilibiliSessionState session = await _authService
-          .loadCurrentSession();
+          .loadCurrentSession(forceRefresh: forceRefresh);
       if (mounted) {
         setState(() {
           _session = session;
@@ -325,7 +326,7 @@ class _ProfilePageState extends State<ProfilePage> {
           children: <Widget>[
             OutlinedButton(
               // 重试按钮函数只重新验证会话，不会自动清除可能仍有效的 Cookie。
-              onPressed: _loadAccount,
+              onPressed: () => _loadAccount(forceRefresh: true),
               child: const Text('重试'),
             ),
             TextButton(
@@ -360,6 +361,7 @@ class _ProfilePageState extends State<ProfilePage> {
       child: ClipOval(
         child: AppNetworkImage(
           imageUrl: avatarUrl,
+          imageVariant: BilibiliImageVariant.avatar,
           width: radius * 2,
           height: radius * 2,
           fit: BoxFit.cover,

@@ -30,6 +30,8 @@ class FeedbackPlayback extends ReviewLocalPlayback {
     VideoPart? part,
     int quality = 64,
     Duration? initialPosition,
+    PlaybackCodecPreference? codecPreference,
+    bool preferDataSaving = false,
   }) async {
     onlineOpens++;
     openedPosition = initialPosition;

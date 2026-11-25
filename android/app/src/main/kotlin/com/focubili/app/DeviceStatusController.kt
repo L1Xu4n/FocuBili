@@ -36,6 +36,9 @@ class DeviceStatusController(
         when (call.method) {
             METHOD_GET_BATTERY_PERCENT -> result.success(readBatteryPercent())
             METHOD_GET_NETWORK_TYPE -> result.success(readNetworkType())
+            METHOD_GET_NETWORK_STATUS -> result.success(
+                AndroidNetworkStatusReader.readNetworkStatus(applicationContext),
+            )
             METHOD_GET_DIAGNOSTIC_DEVICE_INFO -> result.success(readDiagnosticDeviceInfo())
             "getWebViewInfo" -> result.success(readWebViewInfo())
             else -> result.notImplemented()
@@ -144,6 +147,7 @@ class DeviceStatusController(
         const val CHANNEL_NAME = "com.focubili.app/device_status"
         const val METHOD_GET_BATTERY_PERCENT = "getBatteryPercent"
         const val METHOD_GET_NETWORK_TYPE = "getNetworkType"
+        const val METHOD_GET_NETWORK_STATUS = "getNetworkStatus"
         const val METHOD_GET_DIAGNOSTIC_DEVICE_INFO = "getDiagnosticDeviceInfo"
         const val NETWORK_WIFI = "wifi"
         const val NETWORK_MOBILE = "mobile"

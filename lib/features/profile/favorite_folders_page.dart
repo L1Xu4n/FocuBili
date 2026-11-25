@@ -42,13 +42,20 @@ class _FavoriteFolderSnapshot {
   AccountDataPage<FavoriteFolder>? page;
   DateTime? fetchedAt;
   final covers = <int, ({String url, int count, DateTime readAt})>{};
+  final firstPages =
+      <
+        int,
+        ({AccountDataPage<FavoriteVideo> page, int count, DateTime expires})
+      >{};
 
+  /// Clears snapshots from the previous account generation.
   void forRevision(int revision) {
     if (_revision == revision) return;
     _revision = revision;
     page = null;
     fetchedAt = null;
     covers.clear();
+    firstPages.clear();
   }
 }
 
@@ -148,6 +155,7 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
         request == _request &&
         revision == CacheLifecycle.account.value;
 
+    if (force) _snapshot.firstPages.clear();
     if (!_isLoading) setState(() => _isLoading = true);
     final AccountDataPage<FavoriteFolder> result = await _accountDataService
         .loadFavoriteFolders();
@@ -169,10 +177,19 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
             .map((folder) => folder.mediaId)
             .toSet();
         _snapshot.covers.removeWhere((id, _) => !eligible.contains(id));
+        final counts = {
+          for (final folder in result.items) folder.mediaId: folder.mediaCount,
+        };
+        _snapshot.firstPages.removeWhere(
+          (id, entry) =>
+              entry.count != counts[id] ||
+              !entry.expires.isAfter(DateTime.now()),
+        );
       } else if (sessionRejected) {
         _snapshot.page = null;
         _snapshot.fetchedAt = null;
         _snapshot.covers.clear();
+        _snapshot.firstPages.clear();
       }
     });
     if (keepPreviousList) {
@@ -216,16 +233,27 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
                   .firstOrNull
                   ?.coverUrl ??
               '';
-          return (id: folder.mediaId, count: folder.mediaCount, url: cover);
+          return (
+            id: folder.mediaId,
+            count: folder.mediaCount,
+            url: cover,
+            page: page,
+          );
         }),
       );
       if (!current()) return;
       setState(() {
         for (final result in results.nonNulls) {
+          final now = DateTime.now();
           _snapshot.covers[result.id] = (
             url: result.url,
             count: result.count,
-            readAt: DateTime.now(),
+            readAt: now,
+          );
+          _snapshot.firstPages[result.id] = (
+            page: result.page,
+            count: result.count,
+            expires: now.add(const Duration(seconds: 60)),
           );
         }
       });
@@ -239,11 +267,21 @@ class _FavoriteFoldersPageState extends State<FavoriteFoldersPage> {
       return;
     }
     final revision = CacheLifecycle.account.value;
+    _snapshot.forRevision(revision);
+    final prefetched = _snapshot.firstPages[folder.mediaId];
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         // 详情页复用只读列表；明确保存时才进入独立互动服务。
         builder: (BuildContext context) => FavoriteVideosPage(
           folder: folder,
+          prefetchedPage:
+              prefetched == null || prefetched.count != folder.mediaCount
+              ? null
+              : (
+                  revision: revision,
+                  expires: prefetched.expires,
+                  page: prefetched.page,
+                ),
           editableOwnerMid: folder.ownerMid,
           interactionService: widget.interactionService,
           onFolderEdited: (updated) {

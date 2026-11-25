@@ -247,16 +247,20 @@ void main() {
       'resume during paused ${audio ? 'audio' : 'quality'} source load stays playing',
       () async {
         final player = _OrderedPlayer();
+        var now = DateTime.utc(2026, 1, 1);
         final sources = _Sources();
         final service = WindowsPlaybackService(
           player: player,
           sourceService: sources,
+          clock: () => now,
         );
         final snapshots = <PlaybackSnapshot>[];
         final subscription = service.states.listen(snapshots.add);
         try {
           await service.openVideo(VideoPreview.placeholder());
           await service.pause();
+          // Expire live DASH reuse so switching to audio-only exercises a real source load.
+          if (audio) now = now.add(const Duration(minutes: 11));
           sources.gate = Completer<void>();
           sources.loadEntered = Completer<void>();
           final switching = audio

@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 
 import '../models/public_profile.dart';
 import '../models/video_preview.dart';
+import 'app_http_client.dart';
 import 'bilibili_auth_service.dart';
 import 'bilibili_service.dart';
 import 'bilibili_wbi_signing_service.dart';
@@ -82,7 +83,8 @@ class BilibiliHttpPublicContentService
        _cookieStore = cookieStore ?? createDefaultBilibiliCookieStore(),
        _skipPlatformCookie =
            cookieStore == null &&
-           (requestJson != null || requestSessionJson != null);
+           (requestJson != null || requestSessionJson != null),
+       _useSharedWbi = requestJson == null && requestSessionJson == null;
 
   static const String _apiHost = 'api.bilibili.com';
   static const String _desktopUserAgent =
@@ -98,21 +100,30 @@ class BilibiliHttpPublicContentService
   final PublicContentSessionJsonRequest _requestSessionJson;
   final BilibiliCookieStore _cookieStore;
   final bool _skipPlatformCookie;
-  late final _wbi = BilibiliWbiSigningService(
-    requestJson: (uri, headers) => _requestSessionJson(
-      uri,
-      cookieHeader: headers['Cookie'] ?? '',
-      referer: 'https://www.bilibili.com/',
-    ),
-  );
+  final bool _useSharedWbi;
+  late final _wbi = _useSharedWbi
+      ? BilibiliWbiSigningService.shared
+      : BilibiliWbiSigningService(
+          requestJson: (uri, headers) => _requestSessionJson(
+            uri,
+            cookieHeader: headers['Cookie'] ?? '',
+            referer: 'https://www.bilibili.com/',
+          ),
+        );
+
+  /// Signs public API parameters while preserving upstream failure codes.
   Future<Map<String, String>> _signed(
     Map<String, String> parameters,
     String cookie,
   ) async {
     try {
       return await _wbi.signParameters(parameters, headers: {'Cookie': cookie});
-    } on WbiSigningException {
-      throw const BilibiliLookupException('WBI 签名材料暂时不可用，请稍后重试。');
+    } on WbiSigningException catch (error) {
+      throw BilibiliLookupException(
+        'WBI 签名材料暂时不可用，请稍后重试。',
+        httpStatus: error.httpStatus,
+        apiCode: error.apiCode,
+      );
     }
   }
 
@@ -170,9 +181,14 @@ class BilibiliHttpPublicContentService
         videoCount: _readNonNegativeInt(data['archive_count']),
         articleCount: _readNonNegativeInt(data['article_count']),
       );
-    } on BilibiliLookupException {
+    } on BilibiliLookupException catch (error) {
       // 旧名片接口对部分账号返回空资料或非标准错误码时，仍尝试完整 WBI 资料接口。
-      return _loadProfileWithWbi(mid, cookieHeader: cookieHeader);
+      try {
+        return await _loadProfileWithWbi(mid, cookieHeader: cookieHeader);
+      } on BilibiliLookupException catch (fallback) {
+        if (error.isRiskControl && !fallback.isRiskControl) throw error;
+        rethrow;
+      }
     }
   }
 
@@ -246,7 +262,7 @@ class BilibiliHttpPublicContentService
         cookieHeader: cookieHeader,
       );
     } on BilibiliLookupException catch (error) {
-      if (!_isTransientRiskControl(error)) {
+      if (!error.isRiskControl) {
         rethrow;
       }
       _wbi.invalidate();
@@ -259,11 +275,15 @@ class BilibiliHttpPublicContentService
           cookieHeader: cookieHeader,
         );
       } on BilibiliLookupException catch (fallbackError) {
-        if (!_isTransientRiskControl(fallbackError)) {
-          rethrow;
+        if (!fallbackError.isRiskControl) {
+          throw error;
         }
-        throw const BilibiliLookupException(
+        throw BilibiliLookupException(
           'B 站只对“投稿”启用了额外风控，请确认已经登录，稍后刷新投稿；专栏和合集不受此限制。',
+          httpStatus: error.httpStatus == 412
+              ? error.httpStatus
+              : fallbackError.httpStatus ?? error.httpStatus,
+          apiCode: fallbackError.apiCode ?? error.apiCode,
         );
       }
     }
@@ -276,14 +296,6 @@ class BilibiliHttpPublicContentService
       hasMore: total > 0 ? safePage * 20 < total : videos.length == 20,
       totalCount: total > 0 ? total : null,
     );
-  }
-
-  /// 判断请求是否命中可自动恢复的频率或风控错误，避免把永久错误反复重试。
-  bool _isTransientRiskControl(BilibiliLookupException error) {
-    return error.message.contains('错误码：-352') ||
-        error.message.contains('错误码：-779') ||
-        error.message.contains('错误码：-799') ||
-        error.message.contains('412');
   }
 
   /// 使用实时 WBI 密钥、完整空间参数和现有会话请求投稿，避免先触发旧接口风控。
@@ -546,7 +558,11 @@ class BilibiliHttpPublicContentService
     final int code = _readInteger(root['code']) ?? -1;
     if (code != 0) {
       final String message = _readText(root['message'], '请求失败');
-      throw BilibiliLookupException('$message（错误码：$code）');
+      throw BilibiliLookupException(
+        '$message（错误码：$code）',
+        httpStatus: HttpStatus.ok,
+        apiCode: code,
+      );
     }
     final Object? rawData = root['data'];
     if (rawData is! Map) {
@@ -832,36 +848,48 @@ class BilibiliHttpPublicContentService
   }) async {
     final scope = SubscriptionRequestScope.current;
     await scope?.beforeRequest();
-    final HttpClient client = HttpClient();
-    void abort() => client.close(force: true);
+    final token = AppHttpCancelToken();
+    final abort = token.cancel;
     scope?.attach(abort);
     try {
-      final HttpClientRequest request = await client.getUrl(endpoint);
-      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      request.headers.set(HttpHeaders.userAgentHeader, _desktopUserAgent);
-      request.headers.set(HttpHeaders.refererHeader, referer);
       final Uri? refererUri = Uri.tryParse(referer);
-      if (refererUri?.host == 'space.bilibili.com') {
-        request.headers.set('Origin', 'https://space.bilibili.com');
-      }
-      if (cookieHeader.isNotEmpty) {
-        request.headers.set(HttpHeaders.cookieHeader, cookieHeader);
-      }
-      final HttpClientResponse response = await request.close();
-      final String responseText = await response.transform(utf8.decoder).join();
+      final response = await AppHttpTransport.shared.send(
+        uri: endpoint,
+        followRedirects: false,
+        maxResponseBytes: 8 * 1024 * 1024,
+        cancelToken: token,
+        headers: {
+          HttpHeaders.acceptHeader: 'application/json',
+          HttpHeaders.userAgentHeader: _desktopUserAgent,
+          HttpHeaders.refererHeader: referer,
+          if (refererUri?.host == 'space.bilibili.com')
+            'Origin': 'https://space.bilibili.com',
+          if (cookieHeader.isNotEmpty) HttpHeaders.cookieHeader: cookieHeader,
+        },
+      );
       if (response.statusCode != HttpStatus.ok) {
+        int? code;
+        try {
+          final payload = jsonDecode(response.bodyUtf8);
+          if (payload is Map) code = int.tryParse('${payload['code']}');
+        } on FormatException {
+          // Some HTTP errors have an HTML or empty body.
+        }
         throw BilibiliLookupException(
           '公开内容接口暂时不可用（HTTP ${response.statusCode}）。',
+          httpStatus: response.statusCode,
+          apiCode: code,
         );
       }
-      return responseText;
+      return response.bodyUtf8;
     } on SocketException {
       throw const BilibiliLookupException('无法连接到公开内容接口，请检查网络后重试。');
     } on HttpException {
       throw const BilibiliLookupException('公开内容接口响应异常，请稍后重试。');
+    } on TimeoutException {
+      throw const BilibiliLookupException('公开内容请求超时，请稍后重试。');
     } finally {
       scope?.detach(abort);
-      client.close(force: true);
     }
   }
 }

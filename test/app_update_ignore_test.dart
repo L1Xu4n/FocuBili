@@ -270,6 +270,7 @@ void main() {
       await const AppUpdatePreferencesService().loadIgnoredUpdate(),
       isNull,
     );
+    SharedPreferences.setMockInitialValues({});
     final updates = controller();
     await updates.initialize();
     await updates.ignoreCurrentUpdate();

@@ -75,6 +75,9 @@ extension _PlayerDetailsView on _PlayerPageState {
     }
     return AppNetworkImage(
       imageUrl: url,
+      imageVariant: width == height
+          ? BilibiliImageVariant.avatar
+          : BilibiliImageVariant.cover16x9,
       httpHeaders: const <String, String>{
         'Referer': 'https://www.bilibili.com/',
       },
@@ -105,15 +108,30 @@ extension _PlayerDetailsView on _PlayerPageState {
     );
   }
 
-  /// 读取当前视频的关注、点赞、投币和收藏状态，失败时保留默认未操作状态。
+  /// 捕获互动请求的代次及稿件、分 P 身份，供异步回填点核对。
+  bool Function() _captureInteractionFence() {
+    final video = _activeVideo;
+    final cid = _currentPart.cid;
+    final epoch = _onlineMetadataEpoch;
+    return () =>
+        mounted &&
+        epoch == _onlineMetadataEpoch &&
+        _matchesVideoPart(video, cid);
+  }
+
+  /// 读取当前视频的关注、点赞、投币和收藏状态，失败时保留已有状态。
   Future<void> _loadVideoInteractionState() async {
-    if (_activeVideo.isCourse || _activeVideo.aid <= 0) {
+    if (_playingOffline || _activeVideo.isCourse || _activeVideo.aid <= 0) {
       return;
     }
-    final String bvid = _activeVideo.bvid;
+    final video = _activeVideo;
+    final isSamePart = _captureInteractionFence();
+    final revision = ++_interactionLoadRevision;
+    // 同一分 P 上由写操作触发的新读取也会淘汰旧读取。
+    bool isCurrent() => revision == _interactionLoadRevision && isSamePart();
     final Set<int> authorMids = <int>{
-      if (_activeVideo.ownerMid > 0) _activeVideo.ownerMid,
-      ..._activeVideo.authors
+      if (video.ownerMid > 0) video.ownerMid,
+      ...video.authors
           .map((VideoAuthor author) => author.mid)
           .where((int mid) => mid > 0),
     };
@@ -123,15 +141,16 @@ extension _PlayerDetailsView on _PlayerPageState {
     try {
       final BilibiliInteractionState state = await _interactionService
           .loadVideoState(
-            bvid: _activeVideo.bvid,
-            aid: _activeVideo.aid,
-            ownerMid: _activeVideo.ownerMid,
+            bvid: video.bvid,
+            aid: video.aid,
+            ownerMid: video.ownerMid,
           );
+      if (!isCurrent()) return;
       final Map<int, bool> followingStates = <int, bool>{
-        if (_activeVideo.ownerMid > 0) _activeVideo.ownerMid: state.isFollowing,
+        if (video.ownerMid > 0) video.ownerMid: state.isFollowing,
       };
       await Future.wait(
-        authorMids.where((int mid) => mid != _activeVideo.ownerMid).map((
+        authorMids.where((int mid) => mid != video.ownerMid).map((
           int mid,
         ) async {
           try {
@@ -143,7 +162,7 @@ extension _PlayerDetailsView on _PlayerPageState {
           }
         }),
       );
-      if (mounted && _activeVideo.bvid == bvid) {
+      if (isCurrent()) {
         _updatePlayerState(() {
           _interactionState = state;
           _authorFollowingStates
@@ -154,9 +173,37 @@ extension _PlayerDetailsView on _PlayerPageState {
     } on Object {
       // 未登录或状态接口暂时不可用时，写操作仍会给出明确提示。
     } finally {
-      if (mounted) {
+      if (isCurrent()) {
         _updatePlayerState(() => _interactionLoading = false);
       }
+    }
+  }
+
+  /// 释放写入目标的锁，旧分 P 请求完成后通过当前分 P 的读取刷新状态。
+  void _finishInteractionWrite(
+    bool Function() isCurrent, {
+    int? aid,
+    int? mid,
+  }) {
+    final affectsCurrent = aid != null
+        ? aid == _activeVideo.aid
+        : mid == _activeVideo.ownerMid ||
+              _activeVideo.authors.any((author) => author.mid == mid);
+    // 即使已经切走，也要释放原目标的锁。
+    void release() {
+      if (aid != null) _videoInteractionActions.remove(aid);
+      if (mid != null) _authorFollowActions.remove(mid);
+    }
+
+    if (!mounted || !affectsCurrent) {
+      release();
+      return;
+    }
+    _updatePlayerState(release);
+    if ((!isCurrent() || _interactionLoading) &&
+        _onlineMetadataPart ==
+            (_activeVideo.bvid, _activeVideo.aid, _currentPart.cid)) {
+      _startVideoInteractionStateLoad();
     }
   }
 
@@ -170,13 +217,14 @@ extension _PlayerDetailsView on _PlayerPageState {
     final bool following =
         _authorFollowingStates[author.mid] ??
         (author.mid == _activeVideo.ownerMid && _interactionState.isFollowing);
+    final isCurrent = _captureInteractionFence();
     _updatePlayerState(() => _authorFollowActions.add(author.mid));
     try {
       await _interactionService.setFollowing(
         mid: author.mid,
         following: !following,
       );
-      if (mounted) {
+      if (isCurrent()) {
         _updatePlayerState(() {
           _authorFollowingStates[author.mid] = !following;
           if (author.mid == _activeVideo.ownerMid) {
@@ -190,13 +238,11 @@ extension _PlayerDetailsView on _PlayerPageState {
         );
       }
     } on Object catch (error) {
-      if (mounted) {
+      if (isCurrent()) {
         _showTransientSnackBar(error.toString());
       }
     } finally {
-      if (mounted) {
-        _updatePlayerState(() => _authorFollowActions.remove(author.mid));
-      }
+      _finishInteractionWrite(isCurrent, mid: author.mid);
     }
   }
 
@@ -205,11 +251,13 @@ extension _PlayerDetailsView on _PlayerPageState {
     if (_interactionAction != null || _activeVideo.aid <= 0) {
       return;
     }
+    final aid = _activeVideo.aid;
     final bool liked = _interactionState.isLiked;
-    _updatePlayerState(() => _interactionAction = 'like');
+    final isCurrent = _captureInteractionFence();
+    _updatePlayerState(() => _videoInteractionActions[aid] = 'like');
     try {
-      await _interactionService.setLiked(aid: _activeVideo.aid, liked: !liked);
-      if (mounted) {
+      await _interactionService.setLiked(aid: aid, liked: !liked);
+      if (isCurrent()) {
         _updatePlayerState(() {
           _interactionState = _interactionState.copyWith(isLiked: !liked);
           _likeCountDelta += liked ? -1 : 1;
@@ -217,13 +265,11 @@ extension _PlayerDetailsView on _PlayerPageState {
         _showTransientSnackBar(liked ? '已取消点赞' : '已点赞');
       }
     } on Object catch (error) {
-      if (mounted) {
+      if (isCurrent()) {
         _showTransientSnackBar(error.toString());
       }
     } finally {
-      if (mounted) {
-        _updatePlayerState(() => _interactionAction = null);
-      }
+      _finishInteractionWrite(isCurrent, aid: aid);
     }
   }
 
@@ -276,17 +322,16 @@ extension _PlayerDetailsView on _PlayerPageState {
       _showTransientSnackBar('这支视频已经投满 2 枚硬币');
       return;
     }
+    final aid = _activeVideo.aid;
+    final isCurrent = _captureInteractionFence();
     final int? multiply = await _showCoinAmountSheet(remainingCoins);
-    if (!mounted || multiply == null) {
+    if (!isCurrent() || multiply == null || _interactionAction != null) {
       return;
     }
-    _updatePlayerState(() => _interactionAction = 'coin');
+    _updatePlayerState(() => _videoInteractionActions[aid] = 'coin');
     try {
-      await _interactionService.addCoin(
-        aid: _activeVideo.aid,
-        multiply: multiply,
-      );
-      if (mounted) {
+      await _interactionService.addCoin(aid: aid, multiply: multiply);
+      if (isCurrent()) {
         _updatePlayerState(() {
           _interactionState = _interactionState.copyWith(
             coinCount: (_interactionState.coinCount + multiply).clamp(0, 2),
@@ -296,13 +341,11 @@ extension _PlayerDetailsView on _PlayerPageState {
         _showTransientSnackBar('已投 $multiply 枚硬币');
       }
     } on Object catch (error) {
-      if (mounted) {
+      if (isCurrent()) {
         _showTransientSnackBar(error.toString());
       }
     } finally {
-      if (mounted) {
-        _updatePlayerState(() => _interactionAction = null);
-      }
+      _finishInteractionWrite(isCurrent, aid: aid);
     }
   }
 
@@ -500,24 +543,25 @@ extension _PlayerDetailsView on _PlayerPageState {
     final aid = _activeVideo.aid;
     final account = CacheLifecycle.account.value;
     final scope = CacheLifecycle.accountScope;
+    final isCurrent = _captureInteractionFence();
+    // 收藏面板还受账号会话约束，切换账号后旧选项失效。
     bool current() =>
-        mounted &&
-        _activeVideo.aid == aid &&
+        isCurrent() &&
         CacheLifecycle.account.value == account &&
         CacheLifecycle.accountScope == scope;
     List<BilibiliFavoriteFolder> folders;
-    _updatePlayerState(() => _interactionAction = 'favorite');
+    _updatePlayerState(() => _videoInteractionActions[aid] = 'favorite');
     try {
       folders = await _interactionService.loadFavoriteFolders(aid: aid);
     } on Object catch (error) {
-      if (mounted) {
+      if (current()) {
         _showTransientSnackBar(error.toString());
       }
       return;
     } finally {
-      if (mounted) {
-        _updatePlayerState(() => _interactionAction = null);
-      }
+      // 目录查询只持锁到读取结束，提交时再次确认写锁可用。
+      _videoInteractionActions.remove(aid);
+      if (_activeVideo.aid == aid) _updatePlayerState(() {});
     }
     if (!current()) {
       return;
@@ -540,7 +584,8 @@ extension _PlayerDetailsView on _PlayerPageState {
         return;
       }
     }
-    _updatePlayerState(() => _interactionAction = 'favorite');
+    if (_interactionAction != null) return;
+    _updatePlayerState(() => _videoInteractionActions[aid] = 'favorite');
     try {
       if (newFolder != null) {
         final BilibiliFavoriteFolder createdFolder = await _interactionService
@@ -582,13 +627,11 @@ extension _PlayerDetailsView on _PlayerPageState {
         }
       }
     } on Object catch (error) {
-      if (mounted) {
+      if (current()) {
         _showTransientSnackBar(error.toString());
       }
     } finally {
-      if (mounted) {
-        _updatePlayerState(() => _interactionAction = null);
-      }
+      _finishInteractionWrite(current, aid: aid);
     }
   }
 

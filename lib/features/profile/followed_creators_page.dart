@@ -7,6 +7,7 @@ import '../../core/layout/adaptive_page_frame.dart';
 import '../../core/layout/adaptive_two_column_list.dart';
 import '../../models/account_collection.dart';
 import '../../services/bilibili_account_data_service.dart';
+import '../../services/bilibili_image_url_policy.dart';
 import '../../services/bilibili_public_content_service.dart';
 import '../../services/bilibili_service.dart';
 import 'user_profile_page.dart';
@@ -169,6 +170,7 @@ class _FollowedCreatorsPageState extends State<FollowedCreatorsPage> {
       child: ClipOval(
         child: AppNetworkImage(
           imageUrl: creator.avatarUrl,
+          imageVariant: BilibiliImageVariant.avatar,
           httpHeaders: const <String, String>{
             'Referer': 'https://www.bilibili.com/',
           },

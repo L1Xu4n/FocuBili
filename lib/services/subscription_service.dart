@@ -12,6 +12,8 @@ import '../models/subscription_history.dart';
 import 'subscription_history_store.dart';
 import 'subscription_request_scope.dart';
 import 'bilibili_public_content_service.dart';
+import 'bilibili_lookup_exception.dart';
+import 'device_status_service.dart';
 import '../platform/app_platform.dart';
 import 'subscription_snapshot_store.dart';
 import 'subscription_background_service.dart';
@@ -20,6 +22,7 @@ import 'subscription_notification_delivery.dart';
 
 /// Device-local polling with platform-owned scheduling. No cloud writes.
 class SubscriptionService extends ChangeNotifier {
+  /// Creates the subscription service with injectable scheduling and scan policy.
   SubscriptionService({
     BilibiliPublicContentService? contentService,
     Future<SharedPreferences> Function()? preferencesLoader,
@@ -28,6 +31,8 @@ class SubscriptionService extends ChangeNotifier {
     SubscriptionSnapshotStore? snapshotStore,
     SubscriptionHistoryStore? historyStore,
     Future<void> Function(bool enabled, int generation)? backgroundScheduler,
+    DeviceStatusService? deviceStatusService,
+    Duration Function(int consecutiveIdleScans)? idleRefreshInterval,
     this.pageBudget = 20,
     this.maxSources = 100,
     this.requestTimeout = const Duration(seconds: 30),
@@ -47,6 +52,10 @@ class SubscriptionService extends ChangeNotifier {
        content = contentService ?? BilibiliHttpPublicContentService(),
        _preferencesLoader = preferencesLoader ?? SharedPreferences.getInstance,
        _clock = clock ?? DateTime.now,
+       _deviceStatusService =
+           deviceStatusService ?? const NativeDeviceStatusService(),
+       _idleRefreshInterval =
+           idleRefreshInterval ?? _defaultIdleRefreshInterval,
        _retentionTimerFactory =
            retentionTimerFactory ??
            (AppPlatformDetector.isFlutterTest ? null : Timer.new),
@@ -94,11 +103,20 @@ class SubscriptionService extends ChangeNotifier {
 
   final Future<SharedPreferences> Function() _preferencesLoader;
   final DateTime Function() _clock;
+  final DeviceStatusService _deviceStatusService;
+  final Duration Function(int) _idleRefreshInterval;
+  DateTime? _riskControlUntil;
+  bool _riskControlProbe = false;
+  Timer? _scheduledBackground;
   final Timer Function(Duration, void Function())? _retentionTimerFactory;
   final SubscriptionSnapshotStore? _snapshotStore;
   final Future<void> Function(bool enabled, int generation)?
   _backgroundScheduler;
   bool backgroundRefreshEnabled = false;
+  bool _wifiOnlyBackgroundRefresh = false;
+
+  /// Whether background requests require a known unmetered network.
+  bool get wifiOnlyBackgroundRefresh => _wifiOnlyBackgroundRefresh;
   DateTime? lastBackgroundCheckAt;
   String? backgroundStatus;
   int _generation = 0, _refreshGeneration = 0, _backgroundCursor = 0;
@@ -221,6 +239,8 @@ class SubscriptionService extends ChangeNotifier {
       'enabled': document['enabled'] ?? false,
       'notificationsEnabled': document['notificationsEnabled'] ?? false,
       'backgroundRefreshEnabled': document['backgroundRefreshEnabled'] ?? false,
+      'wifiOnlyBackgroundRefresh':
+          document['wifiOnlyBackgroundRefresh'] ?? false,
     });
   }
 
@@ -261,6 +281,7 @@ class SubscriptionService extends ChangeNotifier {
       'enabled',
       'notificationsEnabled',
       'backgroundRefreshEnabled',
+      'wifiOnlyBackgroundRefresh',
     ]) {
       if (document.containsKey(key) && document[key] is! bool) {
         throw const SubscriptionStorageException();
@@ -732,6 +753,8 @@ class SubscriptionService extends ChangeNotifier {
     'enabled': enabled,
     'notificationsEnabled': notificationsEnabled,
     'backgroundRefreshEnabled': backgroundRefreshEnabled,
+    'wifiOnlyBackgroundRefresh': wifiOnlyBackgroundRefresh,
+    'riskControlUntil': _riskControlUntil?.toIso8601String(),
     'generation': _generation,
     'backgroundCursor': _backgroundCursor,
     'lastBackgroundCheckAt': lastBackgroundCheckAt?.toIso8601String(),
@@ -797,6 +820,10 @@ class SubscriptionService extends ChangeNotifier {
     enabled = j['enabled'] == true;
     notificationsEnabled = j['notificationsEnabled'] == true;
     backgroundRefreshEnabled = j['backgroundRefreshEnabled'] == true;
+    _wifiOnlyBackgroundRefresh = j['wifiOnlyBackgroundRefresh'] == true;
+    _riskControlUntil = DateTime.tryParse(
+      j['riskControlUntil'] as String? ?? '',
+    );
     _generation = j['generation'] as int? ?? 0;
     _backgroundCursor = j['backgroundCursor'] as int? ?? 0;
     lastBackgroundCheckAt = DateTime.tryParse(
@@ -922,7 +949,9 @@ class SubscriptionService extends ChangeNotifier {
     return next;
   }
 
+  /// Saves subscription opt-in and invalidates outdated requests and schedules.
   Future<void> setEnabled(bool value) async {
+    cancelScheduledBackground();
     // Invalidate pending responses immediately, before waiting on disk.
     _epoch++;
     _cancelRequests();
@@ -959,6 +988,24 @@ class SubscriptionService extends ChangeNotifier {
     }
   }
 
+  /// Saves the worker network policy and invalidates the previous generation.
+  Future<void> setWifiOnlyBackgroundRefresh(bool value) async {
+    await initialize();
+    if (wifiOnlyBackgroundRefresh == value) return;
+    _epoch++;
+    _cancelRequests();
+    try {
+      await _suspendNativeBackground();
+      await _mutate(() {
+        _wifiOnlyBackgroundRefresh = value;
+        _generation++;
+      });
+    } finally {
+      await reconcileBackgroundSchedule();
+      if (enabled && _foreground) unawaited(refresh());
+    }
+  }
+
   Future<void> _suspendNativeBackground() async {
     try {
       // Invalidate the native iOS run before committing a changed policy. All
@@ -970,6 +1017,7 @@ class SubscriptionService extends ChangeNotifier {
     }
   }
 
+  /// Reconciles native work with the persisted generation and network policy.
   Future<void> reconcileBackgroundSchedule() async {
     await _nativeScheduler?.refreshStatus();
     if (!backgroundRefreshSupported) {
@@ -980,9 +1028,16 @@ class SubscriptionService extends ChangeNotifier {
     final generation = _generation;
     final requested = enabled && backgroundRefreshEnabled;
     try {
-      await (_backgroundScheduler ??
-          _nativeScheduler?.configure ??
-          SubscriptionBackgroundScheduler.configure)(requested, generation);
+      final schedule = _backgroundScheduler ?? _nativeScheduler?.configure;
+      if (schedule != null) {
+        await schedule(requested, generation);
+      } else {
+        await SubscriptionBackgroundScheduler.configure(
+          requested,
+          generation,
+          wifiOnlyBackgroundRefresh: wifiOnlyBackgroundRefresh,
+        );
+      }
       if (backgroundStatus == '后台任务安排失败，请重新开关后重试' ||
           backgroundStatus == '等待系统安排检查') {
         await _mutate(() {
@@ -1015,20 +1070,28 @@ class SubscriptionService extends ChangeNotifier {
     await _clearIfExpired();
   }
 
+  /// Runs a worker only if its schedule generation and network policy allow it.
   Future<void> runBackgroundCheck(
     int generation, {
     Duration budget = const Duration(minutes: 8),
   }) async {
+    final epoch = _epoch;
     await reload();
     if (!_loaded ||
         !enabled ||
         !backgroundRefreshEnabled ||
-        generation != _generation) {
+        generation != _generation ||
+        epoch != _epoch ||
+        _disposed ||
+        _backgroundRunGeneration != null) {
       return;
     }
     _backgroundRunGeneration = generation;
     _runDeadline = _clock().add(budget);
     try {
+      if (!await _allowsBackgroundNetwork() || epoch != _epoch || _disposed) {
+        return;
+      }
       await refresh();
       await _mutate(() {
         if (generation != _generation ||
@@ -1048,6 +1111,17 @@ class SubscriptionService extends ChangeNotifier {
     } finally {
       _backgroundRunGeneration = null;
       _runDeadline = null;
+    }
+  }
+
+  /// Fails closed when the platform cannot confirm an unmetered connection.
+  Future<bool> _allowsBackgroundNetwork() async {
+    if (!wifiOnlyBackgroundRefresh) return true;
+    try {
+      return (await _deviceStatusService.loadNetworkStatus())
+          .allowsUnmeteredOnlyAction;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -1161,21 +1235,47 @@ class SubscriptionService extends ChangeNotifier {
 
   Future<void> deleteSource(String key) => deleteSources({key});
 
+  /// Removes source references first, then reclaims unreferenced history pages.
   Future<void> deleteSources(Set<String> keys) async {
     _epoch++;
     _cancelRequests();
     try {
       await _suspendNativeBackground();
-      await _mutate(() {
+      final removedJobs = await _mutate(() {
         _generation++;
+        final jobs = <String>{};
         for (final key in keys) {
           _sources.remove(key);
           _checkpoints.remove(key);
+          final job = _historyJobs.remove(key);
+          if (job != null) jobs.add(job.id);
         }
+        return jobs;
       });
+      await _reclaimHistoryJobs(removedJobs);
     } finally {
       await reconcileBackgroundSchedule();
       if (enabled && _foreground) unawaited(refresh());
+    }
+  }
+
+  /// Uses authoritative references and ignores directory cleanup failures.
+  Future<void> _reclaimHistoryJobs(Set<String> jobs) async {
+    final reclaimer = historyStorage;
+    if (jobs.isEmpty || reclaimer is! SubscriptionHistoryReclaimer) return;
+    try {
+      await _mutate(() async {
+        final referenced = _historyJobs.values.map((job) => job.id).toSet();
+        for (final job in jobs.difference(referenced)) {
+          try {
+            await (reclaimer as SubscriptionHistoryReclaimer).deleteJob(job);
+          } catch (_) {
+            // Other orphan directories can still be removed.
+          }
+        }
+      }, readOnly: true);
+    } catch (_) {
+      // The deletion remains committed if the reference check fails.
     }
   }
 
@@ -1303,7 +1403,9 @@ class SubscriptionService extends ChangeNotifier {
     }
   }
 
+  /// Updates foreground state immediately and supersedes any delayed transition.
   void setForeground(bool value) {
+    cancelScheduledBackground();
     _foreground = value;
     _scheduleFeedExpiry();
     if (!value && !_desktopBackgroundAllowed) {
@@ -1327,6 +1429,37 @@ class SubscriptionService extends ChangeNotifier {
       }());
     }
   }
+
+  /// Defers an inactive transition while a temporary system overlay is visible.
+  void scheduleBackground({Duration delay = const Duration(seconds: 3)}) {
+    cancelScheduledBackground();
+    if (!_disposed && _foreground) {
+      _scheduledBackground = Timer(delay, () => setForeground(false));
+    }
+  }
+
+  /// Cancels a queued inactive transition, including when the user signs out.
+  void cancelScheduledBackground() {
+    _scheduledBackground?.cancel();
+    _scheduledBackground = null;
+  }
+
+  /// Keeps the hourly cadence while reducing checks for repeatedly idle sources.
+  static Duration _defaultIdleRefreshInterval(int idleScans) => Duration(
+    hours: idleScans >= 4
+        ? 4
+        : idleScans >= 2
+        ? 2
+        : 1,
+  );
+
+  /// Checks freshness independently of the source's failure backoff.
+  bool _isDue(SourceCheckpoint cp, DateTime now, bool manual) =>
+      manual ||
+      cp.partial ||
+      cp.lastSuccess == null ||
+      now.difference(cp.lastSuccess!) >=
+          _idleRefreshInterval(cp.consecutiveIdleScans);
 
   void _schedule() {
     _timer?.cancel();
@@ -1384,6 +1517,7 @@ class SubscriptionService extends ChangeNotifier {
     return completed;
   }
 
+  /// Runs a bounded live refresh for sources eligible under the current policy.
   Future<void> _refreshRound(bool manual) async {
     await initialize();
     try {
@@ -1392,6 +1526,11 @@ class SubscriptionService extends ChangeNotifier {
       return;
     }
     if (!enabled || !_canRun || !_loaded || _disposed) return;
+    if (!_foreground &&
+        _backgroundRunGeneration == null &&
+        !await _allowsBackgroundNetwork()) {
+      return;
+    }
     _refreshGeneration = _generation;
     final epoch = _epoch;
     final allSources = sources;
@@ -1408,10 +1547,7 @@ class SubscriptionService extends ChangeNotifier {
           cp != null &&
           !cp.blocked &&
           (cp.retryAt == null || !now.isBefore(cp.retryAt!)) &&
-          (manual ||
-              cp.partial ||
-              cp.lastSuccess == null ||
-              now.difference(cp.lastSuccess!) >= const Duration(hours: 1));
+          _isDue(cp, now, manual);
     }).toList();
     if (pending.isEmpty) return;
     if (_localLeaseDone != null) await _localLeaseDone!.future;
@@ -1437,12 +1573,7 @@ class SubscriptionService extends ChangeNotifier {
         if (cp == null || !_active(source, epoch)) continue;
         final now = _clock();
         if (cp.retryAt != null && now.isBefore(cp.retryAt!)) continue;
-        if (!manual &&
-            !cp.partial &&
-            cp.lastSuccess != null &&
-            now.difference(cp.lastSuccess!) < const Duration(hours: 1)) {
-          continue;
-        }
+        if (!_isDue(cp, now, manual)) continue;
         try {
           if (_backgroundRunGeneration != null) {
             await _mutate(() {
@@ -1604,11 +1735,19 @@ class SubscriptionService extends ChangeNotifier {
     }
   }
 
+  /// Requests one page, sharing the Bilibili circuit across live and history scans.
   Future<CreatorContentPage<CreatorVideo>> _requestPage(
     SubscriptionSource source,
     int page,
     String task,
   ) async {
+    final pausedUntil = _riskControlUntil;
+    if (pausedUntil != null &&
+        (_clock().isBefore(pausedUntil) || _riskControlProbe)) {
+      throw const _SubscriptionSitePaused();
+    }
+    final probing = pausedUntil != null;
+    if (probing) _riskControlProbe = true;
     final scope = SubscriptionRequestScope();
     _requests[task] = scope;
     try {
@@ -1648,8 +1787,28 @@ class SubscriptionService extends ChangeNotifier {
       if (result.items.isEmpty && result.hasMore) {
         throw const SubscriptionPaginationException('接口没有继续返回内容');
       }
+      if (probing && _riskControlUntil == pausedUntil) {
+        await _mutate(() {
+          if (_riskControlUntil == pausedUntil) _riskControlUntil = null;
+        });
+      }
       return result;
+    } catch (error) {
+      if (!scope.cancelled &&
+          error is BilibiliLookupException &&
+          error.isRiskControl) {
+        final until = _clock().add(const Duration(minutes: 5));
+        _riskControlUntil = until;
+        await _mutate(() {
+          final previous = _riskControlUntil;
+          if (previous == null || previous.isBefore(until)) {
+            _riskControlUntil = until;
+          }
+        });
+      }
+      rethrow;
     } finally {
+      if (probing) _riskControlProbe = false;
       if (identical(_requests[task], scope)) _requests.remove(task);
     }
   }
@@ -1736,6 +1895,7 @@ class SubscriptionService extends ChangeNotifier {
     }
   }
 
+  /// Clears one source's backoff while respecting the site circuit.
   Future<void> retrySource(String key) async {
     final retry = await _mutate(() {
       final cp = _checkpoints[key];
@@ -1754,6 +1914,7 @@ class SubscriptionService extends ChangeNotifier {
         cp.nextPage = 1;
         cp.knownPages = 0;
         cp.needsHeadRecheck = false;
+        cp.scanCoveredIds.clear();
       }
       // Make this incomplete source eligible without forcing all other recent
       // sources past the normal one-hour freshness window.
@@ -1769,6 +1930,7 @@ class SubscriptionService extends ChangeNotifier {
     await refresh();
   }
 
+  /// Advances live coverage and promotes it only after closing the scan.
   Future<Map<String, SubscriptionFeedItem>> _scan(
     SubscriptionSource source,
     int epoch,
@@ -1862,6 +2024,7 @@ class SubscriptionService extends ChangeNotifier {
               page.items.every(
                 (video) =>
                     next.anchors.contains(video.bvid) ||
+                    next.liveCoveredIds.contains(video.bvid) ||
                     (next.fullBaseline && next.seen.contains(video.bvid)) ||
                     (video.publishedAt != null &&
                         next.baselineAt != null &&
@@ -1879,6 +2042,10 @@ class SubscriptionService extends ChangeNotifier {
                 : 0;
           }
           final additions = <String, SubscriptionFeedItem>{};
+          next.scanCoveredIds = {
+            ...next.scanCoveredIds,
+            ...ids,
+          }.take(SourceCheckpoint.liveCoverageLimit).toSet();
           for (final video in page.items) {
             final published = video.publishedAt;
             final validDate =
@@ -1900,6 +2067,10 @@ class SubscriptionService extends ChangeNotifier {
                     : wasInitialized
                     ? (next.fullBaseline || afterStart)
                     : afterStart);
+            if (event) {
+              next.scanFoundNew = true;
+              next.consecutiveIdleScans = 0;
+            }
             if (_mergeLive(_feedItem(source, video), newEvent: event)) {
               additions[video.bvid] = _feed[video.bvid]!;
             }
@@ -1930,6 +2101,17 @@ class SubscriptionService extends ChangeNotifier {
             next.initialized = true;
             next.fullBaseline = next.fullBaseline || !page.hasMore;
             next.anchors = {...next.firstPage, ...next.secondPage};
+            next.liveCoveredIds = {
+              ...next.anchors,
+              ...next.scanCoveredIds,
+              ...next.liveCoveredIds,
+            }.take(SourceCheckpoint.liveCoverageLimit).toSet();
+            next.scanCoveredIds.clear();
+            if (wasInitialized && !next.scanFoundNew && !next.scanHadFailure) {
+              next.consecutiveIdleScans++;
+            }
+            next.scanFoundNew = false;
+            next.scanHadFailure = false;
             next.watermark = next.scanNewest ?? next.watermark;
             next.scanNewest = null;
             next.nextPage = 1;
@@ -1958,10 +2140,11 @@ class SubscriptionService extends ChangeNotifier {
         cp = SourceCheckpoint.fromJson(_checkpoints[source.key]!.toJson());
       }
     } catch (error) {
-      if (active()) {
+      if (error is! _SubscriptionSitePaused && active()) {
         await _mutate(() {
           if (!active()) return;
           final current = _checkpoints[source.key]!;
+          current.scanHadFailure = true;
           if (error is SubscriptionPaginationException) {
             current.blocked = true;
             current.error = '${error.message}；已保存内容保留，可稍后手动重试。';
@@ -2058,6 +2241,7 @@ class SubscriptionService extends ChangeNotifier {
     return result;
   }
 
+  /// Imports immutable pages while holding the job's current write authorization.
   Future<void> _runHistory(String key) async {
     await initialize();
     final runOwner = '${_instanceId}_${++_leaseSequence}';
@@ -2116,8 +2300,11 @@ class SubscriptionService extends ChangeNotifier {
           _historyJobs[key]?.id == job.id &&
           _historyJobs[key]?.runOwner == runOwner &&
           _historyJobs[key]?.status == HistoryImportStatus.running;
+      var attemptedWrite = false;
       try {
         var batch = await historyStorage.read(job.id, job.batches);
+        if (!active()) break;
+        final needsWrite = batch == null;
         if (batch == null) {
           final requestedPage = job.revisit
               ? max(1, job.nextPage - 1)
@@ -2143,20 +2330,29 @@ class SubscriptionService extends ChangeNotifier {
             signature: signature,
             total: page.totalCount,
           );
-          await historyStorage.write(job.id, job.batches, batch);
-          batch = await historyStorage.read(job.id, job.batches);
         }
-        if (batch == null ||
-            (batch.page != job.nextPage &&
-                !(job.revisit && batch.page == job.nextPage - 1))) {
+        if (batch.page != job.nextPage &&
+            !(job.revisit && batch.page == job.nextPage - 1)) {
           throw const SubscriptionPaginationException('历史页与保存位置不一致');
         }
-        final saved = batch;
-        await _mutate(() {
+        final staged = batch;
+        await _mutate(() async {
           if (!active()) return;
           final current = _historyJobs[key]!;
           if (current.batches != job.batches || current.runOwner != runOwner) {
             return;
+          }
+          // Start I/O only after checking the latest stored references.
+          if (needsWrite) {
+            attemptedWrite = true;
+            await historyStorage.write(job.id, job.batches, staged);
+          }
+          final saved = needsWrite
+              ? await historyStorage.read(job.id, job.batches)
+              : staged;
+          if (!active()) return;
+          if (saved == null || saved.page != staged.page) {
+            throw const SubscriptionPaginationException('历史页与保存位置不一致');
           }
           _checkProgress(
             current.signatures,
@@ -2191,7 +2387,7 @@ class SubscriptionService extends ChangeNotifier {
           }
         });
       } catch (error) {
-        if (!_disposed) {
+        if (error is! _SubscriptionSitePaused && !_disposed) {
           await _mutate(() {
             if (!active()) return;
             final current = _historyJobs[key]!;
@@ -2211,6 +2407,10 @@ class SubscriptionService extends ChangeNotifier {
         break;
       } finally {
         await _releaseLease(lease);
+        // Deletion can win a cross-engine CAS after page I/O has started.
+        if (attemptedWrite && _historyJobs[key]?.id != job.id && !_disposed) {
+          await _reclaimHistoryJobs({job.id});
+        }
       }
     }
     if (!_disposed) {
@@ -2226,12 +2426,14 @@ class SubscriptionService extends ChangeNotifier {
   }
 
   @override
+  /// Cancels requests, delayed lifecycle transitions and scheduled work.
   void dispose() {
     _disposed = true;
     _foreground = false;
     _refreshAgain = false;
     _epoch++;
     _cancelRequests();
+    cancelScheduledBackground();
     _timer?.cancel();
     final store = _snapshotStore;
     _scheduleFeedExpiry();
@@ -2239,6 +2441,11 @@ class SubscriptionService extends ChangeNotifier {
     if (store is SqliteSubscriptionSnapshotStore) unawaited(store.close());
     super.dispose();
   }
+}
+
+/// An intentional request skip while Bilibili is rejecting traffic.
+class _SubscriptionSitePaused implements Exception {
+  const _SubscriptionSitePaused();
 }
 
 class SubscriptionUnifiedRestoreData {

@@ -23,6 +23,7 @@ import 'core/theme/app_text_scale.dart';
 import 'features/shell/main_shell.dart';
 import 'models/focus_session.dart';
 import 'models/video_preview.dart';
+import 'platform/app_platform.dart';
 import 'services/app_update_service.dart';
 import 'services/bilibili_deep_link_service.dart';
 import 'services/bilibili_service.dart';
@@ -137,7 +138,7 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
     _videoService = widget.videoService ?? BilibiliVideoInfoService();
     unawaited(_initializeDeepLinks());
     if (widget.checkForUpdatesOnStart) {
-      unawaited(_initializeUpdateCheck());
+      unawaited(_appUpdateController.initialize(checkOnStart: false));
     }
   }
 
@@ -165,7 +166,15 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _clipboardLinkMonitor.setForeground(state == AppLifecycleState.resumed);
     if (_firstLaunchReady) {
-      _subscriptions.setForeground(state == AppLifecycleState.resumed);
+      if (state == AppLifecycleState.resumed) {
+        _subscriptions.setForeground(true);
+      } else if (state == AppLifecycleState.inactive &&
+          AppPlatformDetector.current.isMobile) {
+        // 移动端拉下通知栏或短暂系统弹窗不立即中断在途订阅同步。
+        _subscriptions.scheduleBackground(delay: const Duration(seconds: 3));
+      } else {
+        _subscriptions.setForeground(false);
+      }
     }
   }
 
@@ -271,6 +280,9 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
     _subscriptions.setForeground(
       WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed,
     );
+    if (widget.checkForUpdatesOnStart) {
+      unawaited(_initializeUpdateCheck());
+    }
     if (_pendingSubscriptionTap) _handleSubscriptionTap();
     _clipboardLinkMonitor.start(
       (String text) => unawaited(_handleClipboardText(text)),
@@ -358,9 +370,10 @@ class _FocuBiliAppState extends State<FocuBiliApp> with WidgetsBindingObserver {
       );
   }
 
-  /// 每次真实应用启动按用户开关检查一次；新版本提示会优先带上第一条简短更新内容。
+  /// 每次真实应用同意协议后按用户开关和冷却策略检查一次；新版本提示优先带上首条更新内容。
   Future<void> _initializeUpdateCheck() async {
-    await _appUpdateController.initialize(checkOnStart: true);
+    await _appUpdateController.initialize(checkOnStart: false);
+    await _appUpdateController.triggerStartupCheckIfNeeded();
     if (!mounted || !_appUpdateController.hasUpdate) {
       return;
     }

@@ -5,6 +5,7 @@ import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../../../models/player_enhancement.dart';
+import '../../../services/bilibili_image_url_policy.dart';
 
 /// 让 B 站图片 CDN 返回与网页播放页一致的章节预览图资源。
 const Map<String, String> _bilibiliChapterPreviewHeaders = <String, String>{
@@ -474,6 +475,7 @@ class _VideoChapterPanelState extends State<VideoChapterPanel> {
                               'video-chapter-preview-$index',
                             ),
                             imageUrl: chapter.imageUrl,
+                            imageVariant: BilibiliImageVariant.chapter,
                             httpHeaders: _bilibiliChapterPreviewHeaders,
                             fit: BoxFit.cover,
                             // 加载期间保持一张有比例的预览占位，避免列表看起来像漏掉了图片。

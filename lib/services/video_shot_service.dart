@@ -4,7 +4,9 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import '../models/video_shot_preview.dart';
+import 'app_http_client.dart';
 import 'bilibili_service.dart';
+import 'image_resource_cache.dart';
 
 /// 定义可注入的雪碧图二进制请求，测试时无需访问真实图片服务器。
 typedef VideoShotImageRequest = Future<Uint8List> Function(Uri endpoint);
@@ -41,9 +43,11 @@ class BilibiliVideoShotService implements VideoShotService {
     VideoShotImageRequest? requestImage,
     DateTime Function()? clock,
     Duration requestTimeout = _defaultTimeout,
+    Duration imageTimeout = _imageTimeout,
   }) : _requestJson = requestJson ?? _requestPublicJson,
        _requestImage = requestImage ?? _requestPublicImage,
        _clock = clock ?? DateTime.now,
+       _captureTimeout = imageTimeout,
        _requestTimeout = requestTimeout;
 
   /// Preview metadata uses an anonymous endpoint. Share only the production
@@ -54,6 +58,7 @@ class BilibiliVideoShotService implements VideoShotService {
   static const String _userAgent =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0 Safari/537.36';
   static const _defaultTimeout = Duration(seconds: 8);
+  static const _imageTimeout = Duration(seconds: 15);
   static const _previewLifetime = Duration(minutes: 5);
   static const _entryLimit = 32;
   static const _byteBudget = 256 * 1024;
@@ -61,6 +66,7 @@ class BilibiliVideoShotService implements VideoShotService {
   final VideoShotImageRequest _requestImage;
   final DateTime Function() _clock;
   final Duration _requestTimeout;
+  final Duration _captureTimeout;
   final _previews =
       <(String, int), ({VideoShotPreview value, DateTime expires, int size})>{};
   final _pending = <(String, int), Future<VideoShotPreview?>>{};
@@ -181,8 +187,9 @@ class BilibiliVideoShotService implements VideoShotService {
       if (frame == null || imageUri == null) {
         return null;
       }
-      final Uint8List imageBytes = await _requestImage(imageUri);
-      if (imageBytes.isEmpty) {
+      final imageBytes = await _requestImage(imageUri).timeout(_captureTimeout);
+      if (imageBytes.isEmpty ||
+          imageBytes.length > ImageResourceCache.maximumObjectBytes) {
         return null;
       }
       return await _cropFramePng(imageBytes, frame);
@@ -297,6 +304,8 @@ class BilibiliVideoShotService implements VideoShotService {
       final Uri? uri = Uri.tryParse(normalized);
       if (uri != null &&
           uri.scheme == 'https' &&
+          uri.userInfo.isEmpty &&
+          uri.port == 443 &&
           (uri.host.endsWith('.hdslb.com') ||
               uri.host.endsWith('.biliimg.com'))) {
         urls.add(uri.toString());
@@ -307,49 +316,34 @@ class BilibiliVideoShotService implements VideoShotService {
 
   /// 发出不带 Cookie 的只读截图请求。
   static Future<String> _requestPublicJson(Uri endpoint) async {
-    final HttpClient client = HttpClient();
-    try {
-      Future<String> requestJson() async {
-        final HttpClientRequest request = await client.getUrl(endpoint);
-        request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-        request.headers.set(HttpHeaders.userAgentHeader, _userAgent);
-        request.headers.set(
-          HttpHeaders.refererHeader,
-          'https://www.bilibili.com/',
-        );
-        final HttpClientResponse response = await request.close();
-        if (response.statusCode != HttpStatus.ok) return '';
-        return response.transform(utf8.decoder).join();
-      }
-
-      return await requestJson().timeout(_defaultTimeout);
-    } finally {
-      client.close(force: true);
-    }
+    final response = await AppHttpTransport.shared.send(
+      uri: endpoint,
+      followRedirects: false,
+      timeout: _defaultTimeout,
+      maxResponseBytes: 1024 * 1024,
+      headers: const {
+        HttpHeaders.acceptHeader: 'application/json',
+        HttpHeaders.userAgentHeader: _userAgent,
+        HttpHeaders.refererHeader: 'https://www.bilibili.com/',
+      },
+    );
+    return response.statusCode == HttpStatus.ok ? response.bodyUtf8 : '';
   }
 
   /// 下载可信 B 站雪碧图原始字节，非成功响应返回空数组供调用方安全降级。
   static Future<Uint8List> _requestPublicImage(Uri endpoint) async {
-    final HttpClient client = HttpClient();
-    try {
-      final HttpClientRequest request = await client.getUrl(endpoint);
-      request.headers.set(HttpHeaders.acceptHeader, 'image/*');
-      request.headers.set(HttpHeaders.userAgentHeader, _userAgent);
-      request.headers.set(
-        HttpHeaders.refererHeader,
-        'https://www.bilibili.com/',
-      );
-      final HttpClientResponse response = await request.close();
-      if (response.statusCode != HttpStatus.ok) {
-        return Uint8List(0);
-      }
-      final BytesBuilder bytes = BytesBuilder(copy: false);
-      await for (final List<int> chunk in response) {
-        bytes.add(chunk);
-      }
-      return bytes.takeBytes();
-    } finally {
-      client.close(force: true);
-    }
+    final response = await AppHttpTransport.shared.send(
+      uri: endpoint,
+      pool: AppHttpClientPoolKind.publicImage,
+      followRedirects: false,
+      timeout: _imageTimeout,
+      maxResponseBytes: ImageResourceCache.maximumObjectBytes,
+      headers: const {
+        HttpHeaders.acceptHeader: 'image/*',
+        HttpHeaders.userAgentHeader: _userAgent,
+        HttpHeaders.refererHeader: 'https://www.bilibili.com/',
+      },
+    );
+    return response.statusCode == HttpStatus.ok ? response.bytes : Uint8List(0);
   }
 }

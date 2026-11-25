@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../models/account_collection.dart';
 import '../../services/image_resource_cache.dart';
+import '../../services/bilibili_image_url_policy.dart';
 import 'app_network_image.dart';
 
 /// Preview up to three already-saved public avatars, without fetching profiles.
@@ -67,6 +68,7 @@ class FollowingGroupAvatar extends StatelessWidget {
                         child: ClipOval(
                           child: AppNetworkImage(
                             imageUrl: entries[index],
+                            imageVariant: BilibiliImageVariant.avatar,
                             cache: cache,
                             fit: BoxFit.cover,
                             memCacheWidth: 96,
@@ -114,6 +116,7 @@ class FollowingGroupMemberAvatar extends StatelessWidget {
               ? fallback
               : AppNetworkImage(
                   imageUrl: urls.first,
+                  imageVariant: BilibiliImageVariant.avatar,
                   fit: BoxFit.cover,
                   memCacheWidth: 96,
                   excludeFromSemantics: true,

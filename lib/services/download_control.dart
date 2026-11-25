@@ -17,6 +17,10 @@ class DownloadControl {
   void Function()? _abort;
   final Completer<void> _interruption = Completer<void>();
 
+  /// Optional pre-attempt hook (for example, re-checking unmetered network policy
+  /// before starting a new track or mirror retry).
+  Future<void> Function()? beforeAttempt;
+
   /// Indicates whether a task must stop before publishing downloaded files.
   bool get isInterrupted => _interrupted;
 
@@ -43,6 +47,13 @@ class DownloadControl {
       }),
       _interruption.future.then<T>((_) => throw const DownloadInterrupted()),
     ]);
+  }
+
+  /// Checks both interruption state and any caller-installed pre-transfer gate.
+  Future<void> checkBeforeAttempt() async {
+    check();
+    await beforeAttempt?.call();
+    check();
   }
 
   /// Prevents retries and metadata publication after pause or deletion.

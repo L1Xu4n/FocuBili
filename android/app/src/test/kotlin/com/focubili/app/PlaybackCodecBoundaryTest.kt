@@ -6,9 +6,51 @@ import org.junit.Test
 
 class PlaybackCodecBoundaryTest {
     data class Track(val quality: Int, val codec: String, val supported: Boolean)
+    /** 生成默认兼容模式的有序候选。 */
     private fun plan(vararg tracks: Track) = PlaybackTrackPolicy.playableTracks(
         tracks.toList(), 80, { it.quality }, { PlaybackTrackPolicy.compatibilityScore(it.codec) }, { it.supported },
     )
+
+    private data class SavingTrack(
+        val quality: Int,
+        val codec: String,
+        val bandwidth: Long,
+        val hardware: Boolean,
+        val supported: Boolean = true,
+    )
+
+    /** 同档先选硬解和低码率再去重，兼容模式保留 AVC 首选和原码率顺序。 */
+    @Test
+    fun lowBitrateHardwareWinsBeforeDeduplicationAndKeepsAvcFallback() {
+        val avc = SavingTrack(80, "avc1", 800_000, false)
+        val highHevc = SavingTrack(80, "hvc1", 900_000, true)
+        val lowHevc = highHevc.copy(bandwidth = 500_000)
+        val knownAv1 = SavingTrack(80, "av01", 550_000, true)
+        val unknownAv1 = knownAv1.copy(bandwidth = 0)
+        val unsupported = SavingTrack(80, "av01.unsupported", 1, true, supported = false)
+        val lowQualityAvc = avc.copy(quality = 64, bandwidth = 10)
+        val items = listOf(avc, highHevc, unknownAv1, lowHevc, knownAv1, unsupported, lowQualityAvc, avc.copy(quality = 120))
+        // 两种模式使用与控制器相同的排序和去重入口。
+        fun ranked(dataSaver: Boolean) = PlaybackTrackPolicy.videoTracks(
+            items, 80, dataSaver, { it.quality }, { it.codec }, { it.bandwidth },
+            { PlaybackTrackPolicy.compatibilityScore(it.codec) + it.bandwidth },
+            { it.supported }, { it.hardware },
+        )
+        assertEquals(listOf(lowHevc, knownAv1, avc, lowQualityAvc), ranked(true))
+        assertEquals(listOf(avc, highHevc, knownAv1, lowQualityAvc), ranked(false))
+    }
+
+    /** API 29 起采用系统硬解标记，旧版排除软件属性和常见软件前缀。 */
+    @Test
+    fun decoderHardwareClassificationHonorsPlatformBoundary() {
+        assertTrue(PlaybackTrackPolicy.isHardwareDecoder(29, "vendor.av1.decoder", true, false))
+        assertFalse(PlaybackTrackPolicy.isHardwareDecoder(29, "vendor.av1.decoder", false, false))
+        assertTrue(PlaybackTrackPolicy.isHardwareDecoder(28, "OMX.vendor.avc", false, false))
+        assertFalse(PlaybackTrackPolicy.isHardwareDecoder(28, "OMX.vendor.avc", true, true))
+        for (name in listOf("OMX.google.avc", "c2.android.av1", "c2.ffmpeg.hevc")) {
+            assertFalse(PlaybackTrackPolicy.isHardwareDecoder(28, name, true, false))
+        }
+    }
 
     @Test fun unsupportedHdCannotOverrideSupportedLowAvc() {
         val tracks = plan(Track(80, "hvc1", false), Track(16, "avc1", true))

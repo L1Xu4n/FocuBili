@@ -119,6 +119,11 @@ void main() {
         },
       );
       final initial = await cache.load(url);
+      final binary = (await (await directory()).list().toList())
+          .whereType<File>()
+          .singleWhere((file) => file.path.endsWith('.bin'));
+      await binary.setLastModified(DateTime.utc(2000));
+      final modified = await binary.lastModified();
       now = now.add(const Duration(seconds: 2));
       final updated = await Future.wait(
         List.generate(10, (_) => cache.load(url)),
@@ -126,8 +131,100 @@ void main() {
       expect(seen.length, 2);
       expect(seen.last['If-None-Match'], '"v1"');
       expect(updated.first.identity, initial.identity);
+      expect(await binary.lastModified(), modified);
       await cache.load(url);
       expect(seen.length, 2);
+    },
+  );
+
+  test(
+    'missing binary during 304 is retried once without validators',
+    () async {
+      cache.dispose();
+      cache = make(
+        request: (_, headers) async {
+          requests++;
+          if (requests == 1) {
+            return response(1, {'etag': '"v1"', 'cache-control': 'max-age=0'});
+          }
+          if (requests == 2) {
+            expect(headers['If-None-Match'], '"v1"');
+            final files = await (await directory()).list().toList();
+            await files
+                .singleWhere((file) => file.path.endsWith('.bin'))
+                .delete();
+            return ImageCacheResponse(304, Uint8List(0));
+          }
+          expect(headers, isEmpty);
+          return response(9);
+        },
+      );
+      await cache.load(url);
+      expect((await cache.load(url)).bytes.first, 9);
+      expect(requests, 3);
+    },
+  );
+
+  test(
+    'CDN max-age gives content hashes seven days and avatars one day',
+    () async {
+      const archive =
+          'https://i0.hdslb.com/bfs/archive/'
+          '0123456789abcdef0123456789abcdef.jpg';
+      const avatar =
+          'https://i0.hdslb.com/bfs/face/'
+          '0123456789abcdef0123456789abcdef.jpg';
+      cache.dispose();
+      cache = make(
+        request: (_, _) async => response(++requests, {
+          'cache-control': 'max-age=864000',
+          'age': '60',
+        }),
+      );
+      await cache.load(archive);
+      await cache.load(avatar);
+      now = now.add(const Duration(days: 1));
+      expect((await cache.load(archive)).bytes.first, 1);
+      expect((await cache.load(avatar)).bytes.first, 3);
+      now = now.add(const Duration(days: 6));
+      expect((await cache.load(archive)).bytes.first, 4);
+    },
+  );
+
+  test(
+    'another cache instance wakes on local lease release without polling',
+    () async {
+      final started = Completer<void>();
+      final release = Completer<void>();
+      final registered = Completer<void>();
+      var polls = 0;
+      cache.dispose();
+      cache = make(
+        request: (_, _) async {
+          started.complete();
+          await release.future;
+          return response();
+        },
+      );
+      final writer = cache.load(url);
+      await started.future;
+      final reader = make();
+      addTearDown(reader.dispose);
+      final waiting = runZoned(
+        () => reader.load(url),
+        zoneSpecification: ZoneSpecification(
+          createTimer: (self, parent, zone, duration, callback) {
+            if (duration == const Duration(milliseconds: 100)) polls++;
+            if (!registered.isCompleted) registered.complete();
+            return parent.createTimer(zone, duration, callback);
+          },
+        ),
+      );
+      await registered.future.timeout(const Duration(seconds: 5));
+      release.complete();
+      expect((await waiting).identity, (await writer).identity);
+      expect(polls, 0);
+      expect(requests, 0);
     },
   );
   test(

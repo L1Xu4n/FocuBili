@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../models/account_collection.dart';
 import '../models/following_group.dart';
+import 'app_http_client.dart';
 import 'bilibili_auth_service.dart';
 
 /// 保存一次账号数据 HTTP 请求的状态码和正文，方便网络层与解析层独立测试。
@@ -29,18 +30,20 @@ abstract interface class BilibiliAccountDataApi {
   Future<BilibiliAccountDataResponse> get(Uri endpoint, String cookieHeader);
 }
 
-/// 使用 Dart HttpClient 请求 B 站只读账号数据接口的默认网络实现。
+/// 使用共享 API 连接池请求 B 站只读账号数据。
 class BilibiliHttpAccountDataApi implements BilibiliAccountDataApi {
   /// 创建网络客户端；测试可提供受控的 HttpClient 工厂。
   BilibiliHttpAccountDataApi({HttpClient Function()? clientFactory})
-    : _clientFactory = clientFactory ?? HttpClient.new;
+    : _transport = clientFactory == null
+          ? AppHttpTransport.shared
+          : AppHttpTransport(clientFactory: clientFactory);
 
   static const String _desktopUserAgent =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
       'AppleWebKit/537.36 (KHTML, like Gecko) '
       'Chrome/126.0.0.0 Safari/537.36';
 
-  final HttpClient Function() _clientFactory;
+  final AppHttpTransport _transport;
 
   /// 为固定 B 站 API 附加临时 Cookie、来源页和浏览器标识后发起只读 GET。
   @override
@@ -48,35 +51,28 @@ class BilibiliHttpAccountDataApi implements BilibiliAccountDataApi {
     Uri endpoint,
     String cookieHeader,
   ) async {
-    final HttpClient client = _clientFactory();
-    try {
-      final HttpClientRequest request = await client
-          .getUrl(endpoint)
-          .timeout(const Duration(seconds: 15));
-      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      request.headers.set(HttpHeaders.cookieHeader, cookieHeader);
-      request.headers.set(HttpHeaders.userAgentHeader, _desktopUserAgent);
-      request.headers.set(
-        HttpHeaders.refererHeader,
-        'https://www.bilibili.com/',
-      );
-      final HttpClientResponse response = await request.close().timeout(
-        const Duration(seconds: 15),
-      );
-      return BilibiliAccountDataResponse(
-        statusCode: response.statusCode,
-        body: await response.transform(utf8.decoder).join(),
-      );
-    } finally {
-      client.close(force: true);
-    }
+    final response = await _transport.send(
+      uri: endpoint,
+      followRedirects: false,
+      maxResponseBytes: 8 * 1024 * 1024,
+      headers: {
+        HttpHeaders.acceptHeader: 'application/json',
+        HttpHeaders.cookieHeader: cookieHeader,
+        HttpHeaders.userAgentHeader: _desktopUserAgent,
+        HttpHeaders.refererHeader: 'https://www.bilibili.com/',
+      },
+    );
+    return BilibiliAccountDataResponse(
+      statusCode: response.statusCode,
+      body: response.bodyUtf8,
+    );
   }
 }
 
 /// 抽象当前账号会话的只读能力，使账号数据服务不依赖登录页面或 Cookie 存储细节。
 abstract interface class BilibiliAccountSessionProvider {
   /// 验证并返回当前平台会话状态，不会自动清除 Cookie。
-  Future<BilibiliSessionState> loadCurrentSession();
+  Future<BilibiliSessionState> loadCurrentSession({bool forceRefresh = false});
 
   /// 只在账号数据请求进行时读取一次临时 Cookie 请求头。
   Future<String> readCookieHeader();
@@ -93,8 +89,8 @@ class AuthBackedAccountSessionProvider
 
   /// 复用登录服务对 signedOut、expired 与 networkError 的明确判断。
   @override
-  Future<BilibiliSessionState> loadCurrentSession() {
-    return _authService.loadCurrentSession();
+  Future<BilibiliSessionState> loadCurrentSession({bool forceRefresh = false}) {
+    return _authService.loadCurrentSession(forceRefresh: forceRefresh);
   }
 
   /// 按需读取当前平台的 B 站 Cookie，不在账号服务中持久化副本。
@@ -132,27 +128,30 @@ class BilibiliAccountDataService {
   final BilibiliAccountSessionProvider _sessionProvider;
   final BilibiliAccountDataApi _api;
 
-  /// 取得当前经过会话检查的 UID；未登录时不返回旧账号身份。
+  /// 写入或导入前重新验证 UID，避免复用展示用的会话快照。
   Future<int?> currentAccountMid() async =>
-      (await _openReadSession()).account?.mid;
+      (await _openReadSession(forceRefresh: true)).account?.mid;
 
   /// 首页配置使用已验证 UID，明确未登录才使用访客键 0；未知状态不读写。
   Future<int?> currentHomeCollectionMid() async =>
-      (await checkHomeCollectionIdentity()).mid;
+      _homeCollectionIdentity(await _openReadSession(forceRefresh: true)).mid;
 
   /// Exposes transport failures without converting them into verified identity.
   Future<({int? mid, bool transientNetworkError})>
-  checkHomeCollectionIdentity() async {
-    final session = await _openReadSession();
-    return (
-      mid: switch (session.status) {
-        _AccountReadSessionStatus.ready => session.account!.mid,
-        _AccountReadSessionStatus.signedOut => 0,
-        _ => null,
-      },
-      transientNetworkError: session.transientTransportFailure,
-    );
-  }
+  checkHomeCollectionIdentity() async =>
+      _homeCollectionIdentity(await _openReadSession());
+
+  /// Maps a verified session into the home collection's account key.
+  ({int? mid, bool transientNetworkError}) _homeCollectionIdentity(
+    _AccountReadSession session,
+  ) => (
+    mid: switch (session.status) {
+      _AccountReadSessionStatus.ready => session.account!.mid,
+      _AccountReadSessionStatus.signedOut => 0,
+      _ => null,
+    },
+    transientNetworkError: session.transientTransportFailure,
+  );
 
   /// 在同一个只读会话内完整读取远端分组及成员，任何失败都不返回半份导入资料。
   /// 自动镜像可能删除本机成员，不能仅用另一个请求返回的总数判断已读完。
@@ -192,7 +191,7 @@ class BilibiliAccountDataService {
         ),
       );
     }
-    final current = await _openReadSession();
+    final current = await _openReadSession(forceRefresh: true);
     final validationFailure = _sessionFailurePage<FollowingGroup>(
       current,
       page: 1,
@@ -467,10 +466,12 @@ class BilibiliAccountDataService {
   }
 
   /// 检查现有会话后才读取临时 Cookie，确保无登录时绝不发起账号数据请求。
-  Future<_AccountReadSession> _openReadSession() async {
+  Future<_AccountReadSession> _openReadSession({
+    bool forceRefresh = false,
+  }) async {
     try {
       final BilibiliSessionState state = await _sessionProvider
-          .loadCurrentSession();
+          .loadCurrentSession(forceRefresh: forceRefresh);
       switch (state.status) {
         case BilibiliSessionStatus.signedOut:
           return const _AccountReadSession.signedOut();

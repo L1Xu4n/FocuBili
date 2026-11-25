@@ -49,6 +49,8 @@ class _PartSpeedPlayback extends AbPlayback {
     VideoPart? part,
     int quality = 64,
     Duration? initialPosition,
+    PlaybackCodecPreference? codecPreference,
+    bool preferDataSaving = false,
   }) async {
     speedsAtOpen.add(current.speed);
     await super.openVideo(
@@ -56,6 +58,8 @@ class _PartSpeedPlayback extends AbPlayback {
       part: part,
       quality: quality,
       initialPosition: initialPosition,
+      codecPreference: codecPreference,
+      preferDataSaving: preferDataSaving,
     );
   }
 }

@@ -15,6 +15,7 @@ import '../../services/focus_notification_service.dart';
 import '../../services/focus_preferences_service.dart';
 import '../../services/windows_clipboard_link_service.dart';
 import '../../platform/app_platform.dart';
+import '../../platform/platform_capabilities.dart';
 import 'app_theme_mode_controller.dart';
 import 'app_text_size_page.dart';
 import 'http_user_agent_settings_page.dart';
@@ -93,6 +94,8 @@ class _PersonalizationSettingsPageState
   final _lineMenuKey =
       GlobalKey<PopupMenuButtonState<PlaybackLinePreference>>();
   final _playbackSourceMenuKey = GlobalKey<PopupMenuButtonState<bool>>();
+  final _codecMenuKey =
+      GlobalKey<PopupMenuButtonState<PlaybackCodecPreference>>();
   bool _searchHistoryEnabled = true;
   bool _watchHistoryEnabled = true;
   bool _wbiSigningEnabled = false;
@@ -861,6 +864,85 @@ class _PersonalizationSettingsPageState
     }
   }
 
+  /// Saves the codec strategy for the next opened video.
+  Future<void> _setCodecPreference(PlaybackCodecPreference preference) async {
+    if (_saving || preference == _preferences.codecPreference) return;
+    final previous = _preferences.codecPreference;
+    setState(() {
+      _saving = true;
+      _preferences = _preferences.copyWith(codecPreference: preference);
+    });
+    try {
+      await widget.preferencesService.saveCodecPreference(preference);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _preferences = _preferences.copyWith(codecPreference: previous);
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('视频编码设置保存失败，请稍后重试。')));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// 保存离线下载的网络限制；无法检测计费状态的平台只允许关闭。
+  Future<void> _setWifiOnlyOfflineDownloads(bool enabled) async {
+    if (_saving || enabled == _preferences.wifiOnlyOfflineDownloads) return;
+    if (enabled && !_supportsMeteredNetworkDetection) return;
+    final previous = _preferences.wifiOnlyOfflineDownloads;
+    setState(() {
+      _saving = true;
+      _preferences = _preferences.copyWith(wifiOnlyOfflineDownloads: enabled);
+    });
+    try {
+      await widget.preferencesService.saveWifiOnlyOfflineDownloads(enabled);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _preferences = _preferences.copyWith(
+          wifiOnlyOfflineDownloads: previous,
+        );
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('离线下载网络设置保存失败，请稍后重试。')));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// 读取当前平台的计费检测能力，测试可使用页面注入的平台。
+  bool get _supportsMeteredNetworkDetection => PlatformCapabilities.forPlatform(
+    widget.appPlatform ?? AppPlatformDetector.current,
+  ).supportsMeteredNetworkDetection;
+
+  Widget _buildCodecPreferenceTile() => ListTile(
+    key: const Key('playback-codec-preference'),
+    leading: const Icon(Icons.memory_rounded),
+    title: const Text('视频编码策略'),
+    enabled: !_saving,
+    onTap: _saving ? null : () => _codecMenuKey.currentState?.showButtonMenu(),
+    subtitle: Text(
+      _preferences.codecPreference == PlaybackCodecPreference.dataSaver
+          ? '硬解省流：在目标画质内优先设备确认支持的低码率硬解轨道（保留兼容回退）'
+          : '兼容优先：优先选择通用兼容性更高的 AVC 轨道，下次加载生效',
+    ),
+    trailing: PopupMenuButton<PlaybackCodecPreference>(
+      key: _codecMenuKey,
+      enabled: !_saving,
+      tooltip: '选择视频编码策略',
+      icon: const Icon(Icons.arrow_drop_down),
+      initialValue: _preferences.codecPreference,
+      onSelected: _setCodecPreference,
+      itemBuilder: (context) => [
+        for (final option in PlaybackCodecPreference.values)
+          PopupMenuItem(value: option, child: Text(option.label)),
+      ],
+    ),
+  );
+
   Widget _buildPlaybackSourceTile() => ListTile(
     leading: const Icon(Icons.play_circle_outline_rounded),
     title: const Text('优先播放来源'),
@@ -1159,6 +1241,8 @@ class _PersonalizationSettingsPageState
   /// 创建“播放与专注”设置卡，集中播放器行为、清晰度和专注系统能力。
   SettingsSearchSection _buildPlaybackAndFocusSection() {
     final platform = widget.appPlatform ?? AppPlatformDetector.current;
+    final supportsMeteredDetection = _supportsMeteredNetworkDetection;
+    final wifiOnlyDownloads = _preferences.wifiOnlyOfflineDownloads;
     final bool supportsDoNotDisturb =
         widget.focusNotificationService.supportsDoNotDisturb;
     return _buildSettingsSection(
@@ -1169,6 +1253,24 @@ class _PersonalizationSettingsPageState
         _buildDefaultQualityTile(forWifi: true),
         _buildDefaultQualityTile(forWifi: false),
         _buildPlaybackSourceTile(),
+        _buildCodecPreferenceTile(),
+        SwitchListTile.adaptive(
+          key: const Key('wifi-only-offline-downloads'),
+          value: wifiOnlyDownloads,
+          onChanged:
+              _saving || (!supportsMeteredDetection && !wifiOnlyDownloads)
+              ? null
+              : _setWifiOnlyOfflineDownloads,
+          secondary: const Icon(Icons.wifi_lock_outlined),
+          title: const Text('仅在未计量网络下载离线缓存'),
+          subtitle: Text(
+            supportsMeteredDetection
+                ? '开启后，非未计量网络或无法确认网络计费状态时自动暂停离线缓存任务'
+                : wifiOnlyDownloads
+                ? '当前平台暂不支持检测网络计费状态，开启此项会导致即使连接普通 Wi-Fi 也会暂停下载。请关闭此开关后继续下载。'
+                : '当前平台暂不支持检测网络计费状态，此功能暂不可用。',
+          ),
+        ),
         ListTile(
           key: const Key('playback-line-preference'),
           leading: const Icon(Icons.alt_route_rounded),

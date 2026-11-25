@@ -12,6 +12,7 @@ import '../../models/public_profile.dart';
 import '../../models/video_preview.dart';
 import '../../models/playback_queue.dart';
 import '../../services/bilibili_account_data_service.dart';
+import '../../services/bilibili_image_url_policy.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/bilibili_interaction_service.dart';
 import '../../services/cache_lifecycle.dart';
@@ -32,6 +33,7 @@ class FavoriteVideosPage extends StatefulWidget {
     this.editableOwnerMid,
     this.interactionService,
     this.onFolderEdited,
+    this.prefetchedPage,
   });
 
   /// 当前页面读取的收藏夹基本资料。
@@ -48,6 +50,10 @@ class FavoriteVideosPage extends StatefulWidget {
   final int? editableOwnerMid;
   final BilibiliInteractionService? interactionService;
   final ValueChanged<FavoriteFolder>? onFolderEdited;
+
+  /// Carries a short-lived first page from the folder cover request.
+  final ({int revision, DateTime expires, AccountDataPage<FavoriteVideo> page})?
+  prefetchedPage;
 
   /// 创建管理首次读取、分页、刷新和打开播放器状态的页面状态。
   @override
@@ -91,7 +97,7 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
     _folder = widget.folder;
     _sourceAccount = CacheLifecycle.account.value;
     CacheLifecycle.account.addListener(_accountChanged);
-    unawaited(_loadFirstPage());
+    unawaited(_loadFirstPage(usePrefetch: true));
   }
 
   @override
@@ -157,7 +163,7 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
   }
 
   /// 读取收藏夹第 1 页；刷新失败时保留原有已成功显示的视频列表。
-  Future<void> _loadFirstPage() async {
+  Future<void> _loadFirstPage({bool usePrefetch = false}) async {
     if (!mounted || !_sourceCurrent) return;
     final generation = ++_loadGeneration;
     setState(() {
@@ -166,8 +172,13 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
       _isLoadingMore = false;
       _openingBvid = null;
     });
-    final AccountDataPage<FavoriteVideo> result = await _accountDataService
-        .loadFavoriteVideos(widget.folder.mediaId);
+    final prefetched = usePrefetch ? widget.prefetchedPage : null;
+    final result =
+        prefetched != null &&
+            prefetched.revision == _sourceAccount &&
+            prefetched.expires.isAfter(DateTime.now())
+        ? prefetched.page
+        : await _accountDataService.loadFavoriteVideos(widget.folder.mediaId);
     if (!mounted || generation != _loadGeneration || !_sourceCurrent) return;
     final bool keepPreviousList = !result.isSuccess && _videos.isNotEmpty;
     setState(() {
@@ -332,6 +343,7 @@ class _FavoriteVideosPageState extends State<FavoriteVideosPage> {
             else
               AppNetworkImage(
                 imageUrl: video.coverUrl,
+                imageVariant: BilibiliImageVariant.cover16x9,
                 httpHeaders: const <String, String>{
                   'Referer': 'https://www.bilibili.com/',
                 },

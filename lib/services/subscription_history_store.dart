@@ -8,18 +8,50 @@ abstract interface class SubscriptionHistoryStore {
   Future<void> write(String job, int batch, SubscriptionHistoryBatch value);
 }
 
+/// Optional capability for stores that can reclaim all pages belonging to a job.
+abstract interface class SubscriptionHistoryReclaimer {
+  Future<void> deleteJob(String job);
+}
+
 /// One flushed immutable page per file. The authoritative task cursor is
 /// committed afterwards; an interrupted commit reuses the same saved page.
-class FileSubscriptionHistoryStore implements SubscriptionHistoryStore {
+class FileSubscriptionHistoryStore
+    implements SubscriptionHistoryStore, SubscriptionHistoryReclaimer {
   FileSubscriptionHistoryStore({Future<Directory> Function()? directory})
     : _directory = directory ?? getApplicationSupportDirectory;
   final Future<Directory> Function() _directory;
-  Future<File> _file(String job, int batch) async {
-    if (!RegExp(r'^[a-zA-Z0-9_-]+$').hasMatch(job) || batch < 0) {
+
+  /// Resolves an opaque job ID within the history root.
+  Future<Directory> _jobDirectory(String job) async {
+    if (!RegExp(r'^[a-zA-Z0-9_-]+$').hasMatch(job)) {
       throw const FormatException('Invalid history location');
     }
     final root = await _directory();
-    return File('${root.path}/subscription-history/$job/$batch/page.json');
+    return Directory('${root.path}/subscription-history/$job');
+  }
+
+  /// Resolves the page file for a validated job and batch number.
+  Future<File> _file(String job, int batch) async {
+    if (batch < 0) throw const FormatException('Invalid history location');
+    final directory = await _jobDirectory(job);
+    return File('${directory.path}/$batch/page.json');
+  }
+
+  /// Deletes a real job directory and refuses redirected history roots.
+  @override
+  Future<void> deleteJob(String job) async {
+    final directory = await _jobDirectory(job);
+    if (await FileSystemEntity.type(
+          directory.parent.path,
+          followLinks: false,
+        ) !=
+        FileSystemEntityType.directory) {
+      return;
+    }
+    if (await FileSystemEntity.type(directory.path, followLinks: false) ==
+        FileSystemEntityType.directory) {
+      await directory.delete(recursive: true);
+    }
   }
 
   @override
@@ -88,8 +120,16 @@ class FileSubscriptionHistoryStore implements SubscriptionHistoryStore {
   }
 }
 
-class MemorySubscriptionHistoryStore implements SubscriptionHistoryStore {
+class MemorySubscriptionHistoryStore
+    implements SubscriptionHistoryStore, SubscriptionHistoryReclaimer {
   final _pages = <String, SubscriptionHistoryBatch>{};
+
+  /// Clears only the pages keyed to this job.
+  @override
+  Future<void> deleteJob(String job) async {
+    _pages.removeWhere((key, _) => key.startsWith('$job:'));
+  }
+
   @override
   Future<SubscriptionHistoryBatch?> read(String job, int batch) async =>
       _pages['$job:$batch'];

@@ -6,6 +6,9 @@ import 'package:focubili/features/common/app_network_image.dart';
 
 import '../../core/widgets/drag_selection_region.dart';
 import '../../models/subscription.dart';
+import '../../platform/app_platform.dart';
+import '../../platform/platform_capabilities.dart';
+import '../../services/bilibili_image_url_policy.dart';
 import '../../services/image_resource_cache.dart';
 import '../../models/public_profile.dart';
 import '../../services/subscription_service.dart';
@@ -24,6 +27,7 @@ import 'subscription_timeline_tile.dart';
 import 'subscription_history_page.dart';
 
 class SubscriptionUpdatesPage extends StatefulWidget {
+  /// 创建订阅更新页，并将可选的测试平台传给设置页。
   const SubscriptionUpdatesPage({
     super.key,
     this.service,
@@ -31,12 +35,14 @@ class SubscriptionUpdatesPage extends StatefulWidget {
     this.coverCache,
     this.learningService,
     this.notificationService = const FocusNotificationService(),
+    this.appPlatform,
   });
   final SubscriptionService? service;
   final ImageResourceCache? coverCache;
   final BilibiliService? videoService;
   final LearningListService? learningService;
   final FocusNotificationService notificationService;
+  final AppPlatform? appPlatform;
   @override
   State<SubscriptionUpdatesPage> createState() =>
       _SubscriptionUpdatesPageState();
@@ -109,6 +115,7 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
     }
   }
 
+  /// 从订阅更新页打开设置，并沿用当前页面的平台。
   Future<void> _openSettings() async {
     if (_settingsOpen) return;
     _settingsOpen = true;
@@ -118,6 +125,7 @@ class _SubscriptionUpdatesPageState extends State<SubscriptionUpdatesPage>
           builder: (_) => SubscriptionSettingsPage(
             service: _service,
             notificationService: widget.notificationService,
+            appPlatform: widget.appPlatform,
           ),
         ),
       );
@@ -722,13 +730,16 @@ class _SubscriptionFilterHeader extends SliverPersistentHeaderDelegate {
 
 /// Source management stays one level below the update feed.
 class SubscriptionSettingsPage extends StatefulWidget {
+  /// 创建订阅设置页，测试可指定平台以覆盖不同设备能力。
   const SubscriptionSettingsPage({
     super.key,
     required this.service,
     this.notificationService = const FocusNotificationService(),
+    this.appPlatform,
   });
   final SubscriptionService service;
   final FocusNotificationService notificationService;
+  final AppPlatform? appPlatform;
   @override
   State<SubscriptionSettingsPage> createState() =>
       _SubscriptionSettingsPageState();
@@ -923,11 +934,16 @@ class _SubscriptionSettingsPageState extends State<SubscriptionSettingsPage> {
   Widget build(BuildContext context) =>
       ListenableBuilder(listenable: _service, builder: _buildSettings);
 
+  /// 构建订阅设置及订阅源列表，独立判断后台调度与网络计费检测能力。
   Widget _buildSettings(BuildContext context, Widget? _) {
     final sources = _service.sources;
     final orderedIds = sources.map((source) => source.key).toList();
     _selected.retainAll(orderedIds);
     final batchEnabled = !_busy && _selected.isNotEmpty;
+    final supportsMeteredDetection = PlatformCapabilities.forPlatform(
+      widget.appPlatform ?? AppPlatformDetector.current,
+    ).supportsMeteredNetworkDetection;
+    final wifiOnlyBackground = _service.wifiOnlyBackgroundRefresh;
     return PopScope(
       canPop: !_selecting,
       onPopInvokedWithResult: (didPop, _) {
@@ -1043,6 +1059,37 @@ class _SubscriptionSettingsPageState extends State<SubscriptionSettingsPage> {
                           ? null
                           : _background,
                     ),
+                    if (_service.backgroundRefreshEnabled ||
+                        wifiOnlyBackground ||
+                        !supportsMeteredDetection)
+                      SwitchListTile(
+                        key: const Key(
+                          'subscription-wifi-only-background-switch',
+                        ),
+                        title: const Text('仅在未计量网络后台检查'),
+                        value: wifiOnlyBackground,
+                        subtitle: Text(
+                          supportsMeteredDetection
+                              ? '开启后，后台任务仅在确认非计费网络（如不计费 Wi-Fi）时联网检查更新。'
+                              : wifiOnlyBackground
+                              ? '当前平台暂不支持检测网络计费状态。后台检查运行时，即使连接普通 Wi-Fi，此限制也会阻止联网。请关闭此开关以解除限制。'
+                              : '当前平台暂不支持检测网络计费状态，此功能暂不可用。',
+                        ),
+                        onChanged:
+                            _busy ||
+                                (!supportsMeteredDetection &&
+                                    !wifiOnlyBackground)
+                            ? null
+                            : (value) {
+                                // 不支持检测的平台只允许解除已保存的限制。
+                                if (value && !supportsMeteredDetection) return;
+                                _action(
+                                  () => _service.setWifiOnlyBackgroundRefresh(
+                                    value,
+                                  ),
+                                );
+                              },
+                      ),
                     Text(
                       _service.lastBackgroundCheckAt == null
                           ? '最近后台检查：尚无记录'
@@ -1270,6 +1317,9 @@ class SubscriptionSourceImage extends StatelessWidget {
             ? fallback
             : AppNetworkImage(
                 imageUrl: source.imageUrl,
+                imageVariant: creator
+                    ? BilibiliImageVariant.avatar
+                    : BilibiliImageVariant.cover16x9,
                 httpHeaders: const {'Referer': 'https://www.bilibili.com/'},
                 fit: BoxFit.cover,
                 errorWidget: (_, _, _) => fallback,

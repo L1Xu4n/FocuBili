@@ -410,6 +410,8 @@ class _FakePlaybackService
     VideoPart? part,
     int quality = 64,
     Duration? initialPosition,
+    PlaybackCodecPreference? codecPreference,
+    bool preferDataSaving = false,
   }) async {
     final VideoPart targetPart = part ?? video.initialPart;
     openVideoRequests += 1;
@@ -835,6 +837,10 @@ class _FakeDeviceStatusService implements DeviceStatusService {
   /// 返回构造时传入的网络类型，不读取 Android 连接信息。
   @override
   Future<DeviceNetworkType> loadNetworkType() async => networkType;
+
+  @override
+  Future<DeviceNetworkStatus> loadNetworkStatus() async =>
+      DeviceNetworkStatus.fromLegacyType(networkType);
 }
 
 /// 为播放器组件测试提供固定字幕轨道和条目，不访问 Android 通道或真实字幕地址。

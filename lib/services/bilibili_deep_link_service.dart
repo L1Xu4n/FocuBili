@@ -1,10 +1,10 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
 
 import '../core/utils/bilibili_id_converter.dart';
+import 'app_http_client.dart';
 import 'bilibili_course_link.dart';
 
 /// 定义短链接展开函数，测试可以避免访问真实网络。
@@ -171,8 +171,13 @@ abstract final class BilibiliDeepLinkParser {
 /// 从系统分享文本或剪贴板文字中提取并解析可播放的 B站链接。
 class BilibiliIncomingLinkResolver {
   /// 创建外部文本解析器；正式环境默认以受限网络请求展开 `b23.tv`。
-  BilibiliIncomingLinkResolver({BilibiliShortLinkExpander? expandShortLink})
-    : _expandShortLink = expandShortLink ?? _expandB23Link;
+  BilibiliIncomingLinkResolver({
+    BilibiliShortLinkExpander? expandShortLink,
+    AppHttpTransport? transport,
+  }) : _expandShortLink =
+           expandShortLink ??
+           ((link) =>
+               _expandB23Link(link, transport ?? AppHttpTransport.shared));
 
   static final RegExp _webLinkPattern = RegExp(
     r'https?://[^\s<>\u3000]+',
@@ -200,7 +205,7 @@ class BilibiliIncomingLinkResolver {
         continue;
       }
       try {
-        final Uri? expanded = await _expandShortLink(candidate);
+        final Uri? expanded = await expandShortLink(candidate);
         final BilibiliVideoDeepLinkTarget? expandedTarget = expanded == null
             ? null
             : BilibiliDeepLinkParser.parse(expanded.toString());
@@ -213,6 +218,9 @@ class BilibiliIncomingLinkResolver {
     }
     return null;
   }
+
+  /// 返回已识别的视频、课程或用户空间原地址，保留跳转参数。
+  Future<Uri?> expandShortLink(Uri uri) => _expandShortLink(uri);
 
   /// 提取文本中的 HTTP(S) 链接并去掉常见句末标点，保持原出现顺序。
   static List<Uri> extractWebLinks(String rawText) {
@@ -231,42 +239,54 @@ class BilibiliIncomingLinkResolver {
     return List<Uri>.unmodifiable(links);
   }
 
-  /// 仅请求 `b23.tv` 并跟随有限次重定向，最终地址仍由严格视频解析器校验。
-  static Future<Uri?> _expandB23Link(Uri shortLink) async {
+  /// 跟随最多五跳官方重定向，识别终点后直接返回原 URL。
+  static Future<Uri?> _expandB23Link(
+    Uri shortLink,
+    AppHttpTransport transport,
+  ) async {
     if (shortLink.scheme != 'https' ||
         shortLink.host.toLowerCase() != _shortLinkHost) {
       return null;
     }
-    final HttpClient client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 5);
-    try {
-      final HttpClientRequest request = await client
-          .getUrl(shortLink)
-          .timeout(const Duration(seconds: 5));
-      request.followRedirects = true;
-      request.maxRedirects = 5;
-      request.headers.set(
-        HttpHeaders.userAgentHeader,
-        'Mozilla/5.0 FocuBili/1.4',
+    var current = shortLink;
+    final visited = <Uri>{};
+    for (var hop = 0; hop < 5 && visited.add(current); hop++) {
+      final response = await transport.send(
+        uri: current,
+        headers: const {
+          HttpHeaders.userAgentHeader: 'Mozilla/5.0 FocuBili/1.4',
+        },
+        followRedirects: false,
+        timeout: const Duration(seconds: 5),
+        maxResponseBytes: 16 * 1024,
       );
-      final HttpClientResponse response = await request.close().timeout(
-        const Duration(seconds: 5),
-      );
-      Uri resolved = shortLink;
-      for (final RedirectInfo redirect in response.redirects) {
-        resolved = resolved.resolveUri(redirect.location);
+      if (!const {301, 302, 303, 307, 308}.contains(response.statusCode)) {
+        return null;
       }
-      await response.drain<void>();
-      return resolved;
-    } on SocketException {
-      return null;
-    } on HttpException {
-      return null;
-    } on TimeoutException {
-      return null;
-    } finally {
-      client.close(force: true);
+      final location = Uri.tryParse(response.redirectLocation ?? '');
+      if (location == null || location.toString().isEmpty) return null;
+      final target = current.resolveUri(location);
+      if (_isRecognizedTarget(target)) return target;
+      if (target.scheme != 'https' ||
+          target.userInfo.isNotEmpty ||
+          target.port != 443 ||
+          !(target.host == _shortLinkHost ||
+              target.host == 'bilibili.com' ||
+              target.host.endsWith('.bilibili.com'))) {
+        return null;
+      }
+      current = target;
     }
+    return null;
+  }
+
+  /// 视频、课程和用户空间都可在响应 Location 中直接识别。
+  static bool _isRecognizedTarget(Uri uri) {
+    if (BilibiliDeepLinkParser.parse(uri.toString()) != null) return true;
+    return (uri.scheme == 'https' || uri.scheme == 'http') &&
+        uri.host == 'space.bilibili.com' &&
+        uri.pathSegments.isNotEmpty &&
+        (int.tryParse(uri.pathSegments.first) ?? 0) > 0;
   }
 }
 

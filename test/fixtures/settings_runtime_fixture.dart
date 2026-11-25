@@ -9,6 +9,7 @@ class FixtureSettingsRuntimeAdapter implements SettingsRuntimeAdapter {
     DeviceSettingsRuntimeAdapter.enabledKey: false,
     DeviceSettingsRuntimeAdapter.notificationsKey: false,
     DeviceSettingsRuntimeAdapter.backgroundKey: false,
+    DeviceSettingsRuntimeAdapter.wifiOnlyBackgroundKey: false,
     DeviceSettingsRuntimeAdapter.imageCapacityKey: 256 * 1024 * 1024,
   };
 

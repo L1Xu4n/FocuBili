@@ -121,8 +121,15 @@ void main() {
       sources,
     ).first;
 
-    final Media videoMedia = attempt.createVideoMedia(sources.mediaHeaders);
-    final Media audioMedia = attempt.createAudioMedia(sources.mediaHeaders);
+    const start = Duration(minutes: 3);
+    final Media videoMedia = attempt.createVideoMedia(
+      sources.mediaHeaders,
+      start: start,
+    );
+    final Media audioMedia = attempt.createAudioMedia(
+      sources.mediaHeaders,
+      start: start,
+    );
     final AudioTrack audioTrack = attempt.createAudioTrack(
       audioMedia,
       title: 'FocuBili audio 1:0',
@@ -130,11 +137,32 @@ void main() {
 
     expect(videoMedia.httpHeaders, sources.mediaHeaders);
     expect(audioMedia.httpHeaders, sources.mediaHeaders);
+    expect(videoMedia.start, start);
+    expect(audioMedia.start, start);
     expect(audioTrack.id, attempt.audioUrl);
     expect(audioTrack.title, 'FocuBili audio 1:0');
     expect(Media(audioTrack.id).httpHeaders, sources.mediaHeaders);
     expect(Media(audioTrack.id).httpHeaders!['Cookie'], isNull);
     expect(Media(audioTrack.id).httpHeaders!['Referer'], sources.referer);
+  });
+
+  test('解码回退计划仅使用明确指定的表示及其主备 CDN', () {
+    const fallback = DesktopVideoAlternative(
+      urls: [
+        'https://avc.bilivideo.com/video',
+        'https://backup.bilivideo.com/video',
+      ],
+      codec: 'avc1',
+      actualQuality: 64,
+      bandwidth: 300000,
+    );
+    final sources = _createSources();
+    final attempts = WindowsDashMediaPlan.build(sources, video: fallback);
+    expect(
+      attempts.map((item) => item.videoUrl).toSet(),
+      fallback.urls.toSet(),
+    );
+    expect(attempts.every((item) => item.audioUrl.isNotEmpty), isTrue);
   });
 
   test('缺少外部音频时不生成会静默播放的纯视频尝试', () {

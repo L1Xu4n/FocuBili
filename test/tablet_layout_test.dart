@@ -16,8 +16,9 @@ import 'package:focubili/services/subscription_onboarding_service.dart';
 class _SignedOutAccountFixture extends BilibiliAuthService {
   /// 直接返回未登录状态，保留个人中心真实的账号摘要布局。
   @override
-  Future<BilibiliSessionState> loadCurrentSession() async =>
-      const BilibiliSessionState.signedOut();
+  Future<BilibiliSessionState> loadCurrentSession({
+    bool forceRefresh = false,
+  }) async => const BilibiliSessionState.signedOut();
 }
 
 /// 把测试窗口设置为指定逻辑尺寸，确保 MediaQuery 和布局约束使用同一宽高。

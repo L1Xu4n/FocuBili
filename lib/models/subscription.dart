@@ -119,8 +119,14 @@ class SubscriptionFeedItem {
 
 /// Persistent dedupe index is independent from the 500-item display cache.
 class SourceCheckpoint {
+  /// Creates a checkpoint with independent live coverage and delivery dedupe.
   SourceCheckpoint({
     Set<String>? seen,
+    Set<String>? liveCoveredIds,
+    Set<String>? scanCoveredIds,
+    this.consecutiveIdleScans = 0,
+    this.scanFoundNew = false,
+    this.scanHadFailure = false,
     this.initialized = false,
     this.nextPage = 1,
     Map<String, SubscriptionFeedItem>? pending,
@@ -145,8 +151,14 @@ class SourceCheckpoint {
   }) : anchors = anchors ?? {},
        signatures = signatures ?? {},
        seen = seen ?? {},
+       liveCoveredIds = liveCoveredIds ?? {},
+       scanCoveredIds = scanCoveredIds ?? {},
        pending = pending ?? {};
+  static const liveCoverageLimit = 800;
   Set<String> seen;
+  Set<String> liveCoveredIds, scanCoveredIds;
+  int consecutiveIdleScans;
+  bool scanFoundNew, scanHadFailure;
   bool initialized;
   int nextPage, failures;
   Map<String, SubscriptionFeedItem> pending;
@@ -162,6 +174,8 @@ class SourceCheckpoint {
   List<String> secondPage;
   bool get partial =>
       catchingUp || nextPage > 1 || (algorithm == 1 && pending.isNotEmpty);
+
+  /// Persists committed coverage separately from an interrupted scan.
   Map<String, Object?> toJson() => {
     'algorithm': algorithm,
     'baselineAt': baselineAt?.toIso8601String(),
@@ -176,6 +190,11 @@ class SourceCheckpoint {
     'signatures': signatures,
     'secondPage': secondPage,
     'seen': seen.toList(),
+    'liveCoveredIds': liveCoveredIds.toList(),
+    'scanCoveredIds': scanCoveredIds.toList(),
+    'consecutiveIdleScans': consecutiveIdleScans,
+    'scanFoundNew': scanFoundNew,
+    'scanHadFailure': scanHadFailure,
     'initialized': initialized,
     'nextPage': nextPage,
     'pending': pending.values.map((e) => e.toJson()).toList(),
@@ -186,6 +205,8 @@ class SourceCheckpoint {
     'retryAt': retryAt?.toIso8601String(),
     'error': error,
   };
+
+  /// Older snapshots start without trusted live coverage or idle history.
   factory SourceCheckpoint.fromJson(Map<String, dynamic> j) => SourceCheckpoint(
     algorithm: j['algorithm'] as int? ?? 1,
     baselineAt: DateTime.tryParse(j['baselineAt'] as String? ?? ''),
@@ -200,6 +221,11 @@ class SourceCheckpoint {
     signatures: Map<String, int>.from(j['signatures'] as Map? ?? {}),
     secondPage: List<String>.from(j['secondPage'] as List? ?? []),
     seen: Set<String>.from(j['seen'] as List),
+    liveCoveredIds: _readCoverage(j['liveCoveredIds']),
+    scanCoveredIds: _readCoverage(j['scanCoveredIds']),
+    consecutiveIdleScans: j['consecutiveIdleScans'] as int? ?? 0,
+    scanFoundNew: j['scanFoundNew'] == true,
+    scanHadFailure: j['scanHadFailure'] == true,
     initialized: j['initialized'] == true,
     nextPage: j['nextPage'] as int,
     pending: {
@@ -219,4 +245,8 @@ class SourceCheckpoint {
         : DateTime.parse(j['retryAt'] as String),
     error: j['error'] as String?,
   );
+
+  /// Reads only a bounded prefix of a persisted coverage set.
+  static Set<String> _readCoverage(Object? entries) =>
+      (entries as List? ?? []).take(liveCoverageLimit).cast<String>().toSet();
 }

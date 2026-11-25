@@ -16,7 +16,9 @@ import 'package:flutter/services.dart';
 
 import '../models/video_preview.dart';
 import '../models/playback_buffer_range.dart';
+import '../models/playback_preferences.dart';
 export '../models/playback_buffer_range.dart';
+export '../models/playback_preferences.dart' show PlaybackCodecPreference;
 import 'local_file_playback_service.dart';
 import 'listening_playback_service.dart';
 
@@ -284,6 +286,8 @@ abstract interface class PlaybackService {
     VideoPart? part,
     int quality = 64,
     Duration? initialPosition,
+    PlaybackCodecPreference? codecPreference,
+    bool preferDataSaving = false,
   });
 
   /// 继续原生播放器播放。
@@ -421,6 +425,8 @@ class NativePlaybackService
     VideoPart? part,
     int quality = 64,
     Duration? initialPosition,
+    PlaybackCodecPreference? codecPreference,
+    bool preferDataSaving = false,
   }) async {
     if (video.isCourse
         ? video.bvid != 'cheese:ss${video.courseSeasonId}' ||
@@ -465,9 +471,13 @@ class NativePlaybackService
         ? await const HttpUserAgentPreferences().forRequest()
         : null;
     _ordinaryApiUserAgentAllowed = confirmedOrdinary;
+    final PlaybackCodecPreference effectiveCodecPreference =
+        codecPreference ?? preferences.codecPreference;
     await _invokeVoid('open', <String, Object?>{
       'linePreference': preferences.linePreference.name,
       'preferNonPcdn': preferences.preferNonPcdn,
+      'codecPreference': effectiveCodecPreference.name,
+      'preferDataSaving': preferDataSaving,
       'bvid': video.bvid.trim(),
       'cid': targetPart.cid,
       if (video.isCourse) 'courseEpisodeId': targetPart.courseEpisodeId,

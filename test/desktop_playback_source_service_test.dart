@@ -1,6 +1,8 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:focubili/models/playback_preferences.dart';
+import 'package:focubili/models/video_preview.dart';
 import 'package:focubili/services/bilibili_auth_service.dart';
 import 'package:focubili/services/desktop_playback_source_service.dart';
 
@@ -30,6 +32,89 @@ class _MemoryCookieStore implements BilibiliCookieStore {
 
 /// 验证 Windows 播放源解析、媒体地址安全校验、轨道选择与错误处理。
 void main() {
+  test('选中轨道决定实际清晰度，省流同时保留同档 AVC 与音频后备', () async {
+    late Uri endpoint;
+    var audioRates = [0, 200000, 150000, 120000, 140000];
+
+    /// Builds one representation whose route can be identified independently.
+    Map<String, Object> track(int id, int rate, String codec, String path) => {
+      'id': id,
+      'bandwidth': rate,
+      'codecs': codec,
+      'base_url': 'https://media.bilivideo.com/$path',
+      'backup_url': ['https://backup.bilivideo.cn/$path'],
+    };
+    final service = BilibiliDesktopPlaybackSourceService(
+      authService: BilibiliAuthService(cookieStore: _MemoryCookieStore()),
+      requestJson: (uri, _) async {
+        endpoint = uri;
+        return jsonEncode({
+          'code': 0,
+          'data': {
+            'quality': 80,
+            'dash': {
+              'video': [
+                track(80, 400000, 'avc1', '80-avc'),
+                track(48, 300000, 'avc1', '48-avc'),
+                track(48, 170000, 'hev1', '48-hevc'),
+                track(48, 0, 'av01', '48-unknown'),
+                track(32, 90000, 'av01', '32-av1'),
+                track(32, 190000, 'hev1', '32-hevc'),
+              ],
+              'audio': [
+                track(301, 100000, 'ec-3', 'enhanced'),
+                for (final rate in audioRates)
+                  track(302, rate, 'mp4a.40.2', 'audio-$rate'),
+              ],
+            },
+          },
+        });
+      },
+    );
+
+    /// Requests a cap between two actual DASH qualities without a custom UA.
+    Future<DesktopPlaybackSources> load(
+      PlaybackCodecPreference preference, {
+      bool metered = false,
+    }) => service.loadForVideo(
+      video: VideoPreview.placeholder(),
+      cid: 1,
+      quality: 64,
+      codecPreference: preference,
+      preferDataSaving: metered,
+      useDesktopUserAgentOverride: false,
+    );
+    final saver = await load(PlaybackCodecPreference.dataSaver);
+    expect(endpoint.queryParameters['fnval'], '2064');
+    expect(
+      (saver.requestedQuality, saver.returnedQuality, saver.actualQuality),
+      (64, 80, 48),
+    );
+    expect(saver.videoCodec, 'hev1');
+    expect(
+      saver.videoAlternatives
+          .where((track) => track.actualQuality == 48)
+          .map((track) => (track.codec, track.urls.length, track.bandwidth)),
+      [('hev1', 2, 170000), ('avc1', 2, 300000), ('av01', 2, 0)],
+    );
+    expect(saver.forQuality(80)?.actualQuality, 80);
+    expect(saver.forQuality(64), isNull);
+    expect(
+      saver.forQuality(32)?.videoCodec,
+      'hev1',
+      reason: '没有同档 AVC 时保留默认顺序',
+    );
+    expect(saver.audioUrls.first, endsWith('audio-140000'));
+    audioRates = [0, 200000, 150000];
+    final metered = await load(
+      PlaybackCodecPreference.compatible,
+      metered: true,
+    );
+    expect(endpoint.queryParameters['fnval'], '16');
+    expect(metered.videoCodec, 'avc1');
+    expect(metered.audioUrls.first, endsWith('audio-150000'));
+  });
+
   test('选择目标清晰度 AVC 轨道并保留安全主备地址', () async {
     late Uri requestedEndpoint;
     late Map<String, String> requestedHeaders;

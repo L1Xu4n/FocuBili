@@ -100,10 +100,14 @@ class _Harness {
   String raw = '{"seekable-ranges":[{"start":20,"end":45}]}';
   Completer<String>? nextRead;
   int reads = 0;
-  _Harness({BilibiliDesktopPlaybackSourceService? source}) {
+  _Harness({
+    BilibiliDesktopPlaybackSourceService? source,
+    DateTime Function()? clock,
+  }) {
     service = WindowsPlaybackService(
       player: player,
       sourceService: source ?? SyntheticCourseSources(),
+      clock: clock,
       bufferStateReader: () {
         reads++;
         return nextRead?.future ?? Future.value(raw);
@@ -235,8 +239,9 @@ void main() {
       test(
         'explicit pause wins during ${audioOnly ? 'audio' : 'quality'} $stage',
         () async {
+          var now = DateTime.utc(2026, 1, 1);
           final sources = _DelayedSources();
-          final h = _Harness(source: sources);
+          final h = _Harness(source: sources, clock: () => now);
           try {
             await h.open();
             final playsBefore = h.player.plays;
@@ -246,6 +251,8 @@ void main() {
             } else if (stage == 'media play') {
               h.player.playGate = gate;
             } else {
+              // Expire live DASH reuse when specifically exercising audio source load.
+              if (audioOnly) now = now.add(const Duration(minutes: 11));
               sources.gate = gate;
             }
             final switching = audioOnly

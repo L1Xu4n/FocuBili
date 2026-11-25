@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../../services/bilibili_image_url_policy.dart';
 import '../../services/image_resource_cache.dart';
 
 /// Every remote cover/avatar uses the same encoded cache. Display size only
@@ -12,6 +13,7 @@ class AppNetworkImage extends StatefulWidget {
   const AppNetworkImage({
     super.key,
     required this.imageUrl,
+    this.imageVariant,
     this.httpHeaders = const {},
     this.width,
     this.height,
@@ -25,6 +27,7 @@ class AppNetworkImage extends StatefulWidget {
     this.cache,
   });
   final String imageUrl;
+  final BilibiliImageVariant? imageVariant;
   final Map<String, String> httpHeaders;
   final double? width, height;
   final BoxFit? fit;
@@ -48,6 +51,10 @@ class _AppNetworkImageState extends State<AppNetworkImage> {
     'Referer': 'https://www.bilibili.com/',
     ...widget.httpHeaders,
   };
+  String get _requestUrl => BilibiliImageUrlPolicy.resolve(
+    widget.imageUrl,
+    variant: widget.imageVariant,
+  );
 
   @override
   void initState() {
@@ -66,6 +73,7 @@ class _AppNetworkImageState extends State<AppNetworkImage> {
       cache.addListener(_invalidated);
     }
     if (oldWidget.imageUrl != widget.imageUrl ||
+        oldWidget.imageVariant != widget.imageVariant ||
         !mapEquals(oldWidget.httpHeaders, widget.httpHeaders) ||
         oldWidget.cache != widget.cache) {
       _data = null;
@@ -98,7 +106,7 @@ class _AppNetworkImageState extends State<AppNetworkImage> {
   Future<void> _load() async {
     final token = ++_request;
     try {
-      final data = await cache.load(widget.imageUrl, headers: _headers);
+      final data = await cache.load(_requestUrl, headers: _headers);
       if (mounted && token == _request) setState(() => _data = data);
     } catch (error) {
       if (mounted && token == _request) setState(() => _error = error);
@@ -157,7 +165,7 @@ class _AppNetworkImageState extends State<AppNetworkImage> {
           errorBuilder: (context, error, stack) {
             unawaited(
               cache
-                  .remove(widget.imageUrl, headers: _headers)
+                  .remove(_requestUrl, headers: _headers)
                   .catchError((Object _) {}),
             );
             return widget.errorWidget?.call(context, widget.imageUrl, error) ??

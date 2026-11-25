@@ -19,11 +19,15 @@ class _FakeSessionProvider implements BilibiliAccountSessionProvider {
   String cookieHeader;
   int loadCalls = 0;
   int cookieReadCalls = 0;
+  final refreshes = <bool>[];
 
   /// 返回测试预设的登录状态，并记录账号数据服务是否先验证会话。
   @override
-  Future<BilibiliSessionState> loadCurrentSession() async {
+  Future<BilibiliSessionState> loadCurrentSession({
+    bool forceRefresh = false,
+  }) async {
     loadCalls += 1;
+    refreshes.add(forceRefresh);
     return state;
   }
 
@@ -79,6 +83,17 @@ BilibiliAccountDataService _service(
 
 /// 集中验证账号数据服务只请求已验证会话对应的固定只读接口。
 void main() {
+  test('展示会话可复用，写入前身份复核强制刷新', () async {
+    final session = _FakeSessionProvider(state: _activeSession());
+    final api = _RecordingAccountDataApi((_) async => _ok('{}'));
+    final service = _service(session, api);
+    expect((await service.checkHomeCollectionIdentity()).mid, 42);
+    expect(await service.currentHomeCollectionMid(), 42);
+    expect(await service.currentAccountMid(), 42);
+    expect(session.refreshes, [false, true, true]);
+    expect(api.endpoints, isEmpty);
+  });
+
   /// 分组读取完整成功才返回快照，成员接口错误不返回可误提交的部分结果。
   test('关注分组完整读取与失败中止', () async {
     final session = _FakeSessionProvider(state: _activeSession());

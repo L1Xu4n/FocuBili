@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/widgets.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -163,12 +164,16 @@ class AppUpdateService {
   AppUpdateService({
     Future<Map<String, Object?>> Function()? releaseLoader,
     HttpClient? httpClient,
+    HttpClient Function()? httpClientFactory,
     AppUpdateTargetPlatform? targetPlatform,
     String releaseChannel = const String.fromEnvironment(
       'FOCUBILI_RELEASE_CHANNEL',
     ),
   }) : _releaseLoader = releaseLoader,
-       _httpClient = httpClient,
+       _transport = AppUpdateTransport(
+         client: httpClient,
+         clientFactory: httpClientFactory,
+       ),
        _releaseChannel = releaseChannel,
        _targetPlatform = targetPlatform ?? _currentTargetPlatform();
 
@@ -190,9 +195,16 @@ class AppUpdateService {
   static const int _maximumReleaseHighlightLength = 80;
 
   final Future<Map<String, Object?>> Function()? _releaseLoader;
-  final HttpClient? _httpClient;
+  final AppUpdateTransport _transport;
   final AppUpdateTargetPlatform _targetPlatform;
   final String _releaseChannel;
+
+  /// Resolves the effective channel from the build and installed package.
+  bool _usesBeta(String currentVersion, AppUpdateInstallation? installation) =>
+      _releaseChannel == 'beta' ||
+      isBetaVersion(currentVersion) ||
+      (_targetPlatform == AppUpdateTargetPlatform.android &&
+          installation?.packageName == 'com.focubili.app.preview');
 
   /// 请求最新正式 Release；网络、限流和格式错误均转换为可展示的失败状态。
   Future<AppUpdateResult> check({
@@ -200,11 +212,7 @@ class AppUpdateService {
     AppUpdateInstallation? installation,
   }) async {
     try {
-      final beta =
-          _releaseChannel == 'beta' ||
-          isBetaVersion(currentVersion) ||
-          (_targetPlatform == AppUpdateTargetPlatform.android &&
-              installation?.packageName == 'com.focubili.app.preview');
+      final beta = _usesBeta(currentVersion, installation);
       final Map<String, Object?>? release = beta
           ? await _loadBetaRelease(currentVersion)
           : _releaseLoader == null
@@ -278,6 +286,7 @@ class AppUpdateService {
     }
   }
 
+  /// Checks every applicable page before publishing the best Beta.
   Future<Map<String, Object?>?> _loadBetaRelease(String currentVersion) async {
     if (!validSemVer(currentVersion.replaceFirst(RegExp(r'^v'), ''))) {
       throw const FormatException('Invalid installed preview version');
@@ -287,10 +296,13 @@ class AppUpdateService {
     for (var page = 1; page <= maximumBetaPages; page++) {
       final Object? raw = _releaseLoader != null
           ? [await _releaseLoader()]
-          : await AppUpdateTransport(client: _httpClient).readJson(
+          : await _readReleasePage(
               releasesApiUri.replace(
                 queryParameters: {'per_page': '$betaPageSize', 'page': '$page'},
               ),
+              channel: 'beta',
+              page: page,
+              isValid: (raw) => raw is List && raw.length <= betaPageSize,
             );
       if (raw is! List || raw.length > betaPageSize) {
         throw const FormatException('Invalid release history');
@@ -347,9 +359,7 @@ class AppUpdateService {
         return null;
       }
       final manifest = AppUpdateReleaseManifest.tryParse(
-        await AppUpdateTransport(
-          client: _httpClient,
-        ).readJson(uri, releaseAsset: true),
+        await _transport.readJson(uri, releaseAsset: true),
         tag,
       );
       if (manifest == null) return null;
@@ -526,16 +536,103 @@ class AppUpdateService {
     };
   }
 
-  /// 使用带超时的系统 HTTP 客户端访问 GitHub API，避免启动检查长期占用连接。
+  /// Loads and validates the stable endpoint through the conditional page cache.
   Future<Map<String, Object?>> _loadLatestRelease() async {
-    final decoded = await AppUpdateTransport(
-      client: _httpClient,
-    ).readJson(latestReleaseApiUri);
-    if (decoded is! Map<String, Object?>) {
-      throw const FormatException('GitHub Release 响应格式无效。');
+    final decoded = await _readReleasePage(
+      latestReleaseApiUri,
+      channel: 'stable',
+      page: 1,
+      isValid: (raw) {
+        if (raw is! Map<String, Object?> ||
+            raw['draft'] == true ||
+            raw['prerelease'] == true) {
+          return false;
+        }
+        final version = _readVersion(raw['tag_name'] ?? raw['name']);
+        return version.isNotEmpty && !version.contains('-');
+      },
+    );
+    return decoded as Map<String, Object?>;
+  }
+
+  /// Revalidates a single page and replaces its validator and body together.
+  Future<Object?> _readReleasePage(
+    Uri endpoint, {
+    required String channel,
+    required int page,
+    required bool Function(Object?) isValid,
+  }) async {
+    final key = 'app_update.release_page.v1.$channel.$page.$endpoint';
+    SharedPreferences? preferences;
+    Map<String, dynamic>? cached;
+    try {
+      preferences = await SharedPreferences.getInstance();
+      final record = preferences.getString(key);
+      if (record != null &&
+          record.length <= AppUpdateTransport.maxReleaseBytes * 2 + 8192) {
+        cached = jsonDecode(record) as Map<String, dynamic>;
+      }
+    } catch (_) {
+      // Cache access is optional; a successful request still counts.
+    }
+    var response = await _transport.fetch(
+      endpoint,
+      etag: _validValidator(cached?['etag']),
+      lastModified: _validValidator(cached?['lastModified']),
+    );
+    if (response.statusCode == HttpStatus.notModified) {
+      final body = cached?['body'];
+      if (body is String && body.length <= AppUpdateTransport.maxReleaseBytes) {
+        final bytes = utf8.encode(body);
+        if (bytes.length <= AppUpdateTransport.maxReleaseBytes &&
+            sha256.convert(bytes).toString() == cached?['digest']) {
+          try {
+            final decoded = jsonDecode(body);
+            if (isValid(decoded)) return decoded;
+          } on FormatException {
+            // Follow the same recovery as a missing cached body.
+          }
+        }
+      }
+      response = await _transport.fetch(endpoint);
+      if (response.statusCode != HttpStatus.ok) {
+        throw const FormatException('Missing release response body');
+      }
+    }
+    final decoded = jsonDecode(response.body);
+    if (!isValid(decoded)) {
+      throw const FormatException('Invalid release response');
+    }
+    try {
+      final etag = _validValidator(response.etag);
+      final lastModified = _validValidator(response.lastModified);
+      if (etag == null && lastModified == null) {
+        if (cached != null) await preferences?.remove(key);
+      } else {
+        await preferences?.setString(
+          key,
+          jsonEncode({
+            'etag': etag,
+            'lastModified': lastModified,
+            'body': response.body,
+            'digest': sha256.convert(utf8.encode(response.body)).toString(),
+          }),
+        );
+      }
+    } catch (_) {
+      // A storage error must not hide a complete network result.
     }
     return decoded;
   }
+
+  /// Bounds response validators before persisting or sending them as headers.
+  static String? _validValidator(Object? value) =>
+      value is String &&
+          value.isNotEmpty &&
+          value.length <= 1024 &&
+          value.codeUnits.every((code) => code >= 32 && code < 127)
+      ? value
+      : null;
 
   static bool isBetaVersion(String version) =>
       (_ParsedVersion.parse(
@@ -706,6 +803,106 @@ class _ParsedVersion {
   final String? preRelease;
 }
 
+/// Stores the automatic deadline and the last complete available update.
+class _AppUpdateStartupCache {
+  /// Creates local startup state for one installation.
+  const _AppUpdateStartupCache(this.retryAt, this.update);
+
+  static const key = 'app_update.startup_cache.v1';
+  static const maxLength = 16 * 1024;
+  final DateTime retryAt;
+  final AppUpdateResult? update;
+
+  /// Restores a bounded record for the same installed version and channel.
+  static Future<_AppUpdateStartupCache?> read(
+    String identity,
+    String currentVersion,
+    DateTime now,
+  ) async {
+    try {
+      final raw = (await SharedPreferences.getInstance()).getString(key);
+      if (raw == null || raw.length > maxLength) return null;
+      final data = jsonDecode(raw) as Map<String, dynamic>;
+      if (data['installation'] != identity) return null;
+      final retryAt = DateTime.parse(data['retryAt'] as String);
+      if (retryAt.isAfter(now.add(AppUpdateController._startupCooldown))) {
+        return null;
+      }
+      final saved = data['update'] as Map<String, dynamic>?;
+      if (saved == null) return _AppUpdateStartupCache(retryAt, null);
+      final latest = saved['latestVersion'] as String;
+      if (latest.isEmpty ||
+          AppUpdateService._readVersion(latest) != latest ||
+          AppUpdateService.compareVersions(latest, currentVersion) <= 0) {
+        return null;
+      }
+      final url = Uri.tryParse(saved['releaseUrl'] as String? ?? '');
+      final pageTag = url?.pathSegments.lastOrNull ?? '';
+      final download = Uri.tryParse(saved['downloadUrl'] as String? ?? '');
+      final parts = download?.pathSegments ?? const <String>[];
+      final trustedDownload =
+          download != null &&
+              parts.length == 6 &&
+              AppUpdateService._readVersion(parts[4]) == latest &&
+              AppUpdateService._isTrustedReleaseAsset(
+                download,
+                parts[4],
+                parts[5],
+              )
+          ? download
+          : null;
+      return _AppUpdateStartupCache(
+        retryAt,
+        AppUpdateResult(
+          status: AppUpdateStatus.available,
+          currentVersion: currentVersion,
+          latestVersion: latest,
+          updateIdentity: saved['identity'] as String?,
+          releaseUrl: AppUpdateService._safeReleasePage(url, pageTag),
+          downloadUrl: trustedDownload,
+          downloadActionLabel: trustedDownload == null
+              ? '查看 Release'
+              : saved['action'] as String,
+          releaseHighlights: List<String>.from(saved['highlights'] as List),
+          message: saved['message'] as String?,
+        ),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Persists the deadline and update presentation in one preference write.
+  Future<void> save(String identity) async {
+    try {
+      final available = update;
+      final encoded = jsonEncode({
+        'installation': identity,
+        'retryAt': retryAt.toIso8601String(),
+        'update': available == null
+            ? null
+            : {
+                'latestVersion': available.latestVersion,
+                'identity': available.updateIdentity,
+                'releaseUrl': available.releaseUrl?.toString(),
+                'downloadUrl': available.downloadUrl?.toString(),
+                'action': available.downloadActionLabel,
+                'highlights': available.releaseHighlights,
+                'message': available.message,
+              },
+      });
+      final preferences = await SharedPreferences.getInstance();
+      if (encoded.length <= maxLength) {
+        await preferences.setString(key, encoded);
+      } else {
+        await preferences.remove(key);
+      }
+    } catch (_) {
+      // The controller still keeps the deadline for this process.
+    }
+  }
+}
+
 /// 统一管理启动检查、手动重试、红点和设置开关。
 class AppUpdateController extends ChangeNotifier {
   /// 创建更新状态控制器，并允许测试替换网络、存储和版本读取服务。
@@ -713,14 +910,24 @@ class AppUpdateController extends ChangeNotifier {
     AppUpdateService? updateService,
     AppUpdatePreferencesService? preferencesService,
     AppVersionProvider? versionProvider,
+    DateTime Function()? clock,
   }) : _updateService = updateService ?? AppUpdateService(),
+       _persistStartupCache = preferencesService == null,
        _preferencesService =
            preferencesService ?? const AppUpdatePreferencesService(),
-       _versionProvider = versionProvider ?? const PlatformAppVersionProvider();
+       _versionProvider = versionProvider ?? const PlatformAppVersionProvider(),
+       _clock = clock ?? DateTime.now;
 
   final AppUpdateService _updateService;
+  final bool _persistStartupCache;
   final AppUpdatePreferencesService _preferencesService;
   final AppVersionProvider _versionProvider;
+  final DateTime Function() _clock;
+  static const _startupCooldown = Duration(hours: 6);
+  static const _failureBackoff = Duration(minutes: 15);
+  _AppUpdateStartupCache? _startupCache;
+  String? _startupCacheIdentity;
+  Future<void>? _startupCheck;
   AppUpdateInstallation? _installation;
 
   AppUpdateResult _result = const AppUpdateResult.idle();
@@ -796,10 +1003,12 @@ class AppUpdateController extends ChangeNotifier {
       await _loadingFuture;
       _loadingFuture = null;
     }
-    if (!_disposed && checkOnStart && _enabled) {
-      await checkNow(manual: false);
-    }
+    if (checkOnStart) await triggerStartupCheckIfNeeded();
   }
+
+  /// Call after the first-launch agreement is ready. Runs once per controller.
+  Future<void> triggerStartupCheckIfNeeded() =>
+      _startupCheck ??= _checkLatestUpdate(bypassCooldown: false);
 
   /// 合并并发初始化请求，页面快速重建时不会重复访问平台插件。
   Future<void> _loadInitialState() async {
@@ -831,6 +1040,26 @@ class AppUpdateController extends ChangeNotifier {
         currentVersion: currentVersion,
         message: _enabled ? null : '已关闭启动时检查更新',
       );
+      _startupCacheIdentity = jsonEncode([
+        currentVersion,
+        _updateService._usesBeta(currentVersion, _installation),
+        _updateService._targetPlatform.name,
+        _installation?.packageName,
+        _installation?.certificateSha256,
+        _installation?.buildNumber,
+      ]);
+      _startupCache = _persistStartupCache
+          ? await _AppUpdateStartupCache.read(
+              _startupCacheIdentity!,
+              currentVersion,
+              _clock(),
+            )
+          : null;
+      final cachedUpdate = _startupCache?.update;
+      if (_enabled && cachedUpdate != null) {
+        _result = cachedUpdate;
+        _availableUpdate = cachedUpdate;
+      }
     } catch (_) {
       _result = const AppUpdateResult(
         status: AppUpdateStatus.failed,
@@ -862,7 +1091,7 @@ class AppUpdateController extends ChangeNotifier {
       return;
     }
     _notify();
-    await checkNow(manual: false);
+    await _checkLatestUpdate(bypassCooldown: true);
   }
 
   /// 手动检查始终执行，即使启动自动检查开关处于关闭状态。
@@ -879,11 +1108,12 @@ class AppUpdateController extends ChangeNotifier {
     // 同时接管两个 Future 的错误，持久化失败仍由调用页面明确提示。
     await Future.wait<void>([
       ?clearIgnoredUpdate,
-      _checkLatestUpdate(),
+      _checkLatestUpdate(bypassCooldown: true),
     ], eagerError: true);
   }
 
-  Future<void> _checkLatestUpdate() async {
+  /// Consults the startup deadline for auto checks and refreshes it on completion.
+  Future<void> _checkLatestUpdate({required bool bypassCooldown}) async {
     if (_checking || _disposed) {
       return;
     }
@@ -891,6 +1121,11 @@ class AppUpdateController extends ChangeNotifier {
       await initialize(checkOnStart: false);
     }
     if (_checking || _disposed || _result.currentVersion.isEmpty) {
+      return;
+    }
+    final retryAt = _startupCache?.retryAt;
+    if (!bypassCooldown &&
+        (!_enabled || (retryAt != null && _clock().isBefore(retryAt)))) {
       return;
     }
     final int requestGeneration = ++_requestGeneration;
@@ -914,8 +1149,15 @@ class AppUpdateController extends ChangeNotifier {
     } else if (checkedResult.status == AppUpdateStatus.upToDate) {
       _availableUpdate = null;
     }
+    final identity = _startupCacheIdentity;
+    final delay = checkedResult.status == AppUpdateStatus.failed
+        ? _failureBackoff
+        : _startupCooldown;
+    final cache = _AppUpdateStartupCache(_clock().add(delay), _availableUpdate);
+    _startupCache = cache;
     _checking = false;
     _notify();
+    if (_persistStartupCache && identity != null) await cache.save(identity);
   }
 
   /// 异步平台调用返回较晚时，不向已经释放的页面控制器发送通知。

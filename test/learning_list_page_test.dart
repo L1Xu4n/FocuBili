@@ -81,7 +81,9 @@ class _FixedAuthService extends BilibiliAuthService {
 
   /// 返回测试指定的会话状态。
   @override
-  Future<BilibiliSessionState> loadCurrentSession() async => session;
+  Future<BilibiliSessionState> loadCurrentSession({
+    bool forceRefresh = false,
+  }) async => session;
 }
 
 /// 注册学习清单管理页和首页唯一继续学习任务的组件测试。

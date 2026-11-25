@@ -1,7 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'app_http_client.dart';
 import 'bilibili_course_link.dart';
+import 'desktop_player_overlay_service.dart';
 
 import '../models/player_enhancement.dart';
 
@@ -36,13 +38,21 @@ abstract interface class BilibiliPlayerEnhancementService {
   });
 }
 
-/// 使用 B 站公开网页接口读取章节和互动剧情，不读取或保存用户 Cookie。
+/// 读取章节和互动剧情，支持与桌面及 Apple 字幕共享同一播放器响应。
 class BilibiliPublicPlayerEnhancementService
     implements BilibiliPlayerEnhancementService {
   /// 创建服务；正式环境使用 HTTPS，测试可以传入固定 JSON 请求函数。
   BilibiliPublicPlayerEnhancementService({
     PlayerEnhancementJsonRequest? requestJson,
-  }) : _requestJson = requestJson ?? _requestPublicJson;
+  }) : _requestJson = requestJson ?? _requestPublicJson,
+       _sharedPlayerInfo =
+           requestJson == null &&
+               (Platform.isWindows ||
+                   Platform.isLinux ||
+                   Platform.isMacOS ||
+                   Platform.isIOS)
+           ? DesktopPlayerOverlayService()
+           : null;
 
   static const String _apiHost = 'api.bilibili.com';
   static const String _playerInfoPath = '/x/player/wbi/v2';
@@ -53,6 +63,7 @@ class BilibiliPublicPlayerEnhancementService
       'Chrome/126.0.0.0 Safari/537.36';
 
   final PlayerEnhancementJsonRequest _requestJson;
+  final DesktopPlayerOverlayService? _sharedPlayerInfo;
 
   /// 请求播放器信息，并把 view_points 与 interaction 转为稳定的本地模型。
   @override
@@ -68,7 +79,8 @@ class BilibiliPublicPlayerEnhancementService
       'cid': cid.toString(),
     });
     final Map<Object?, Object?> data = _readApiData(
-      await _requestJson(endpoint),
+      await (_sharedPlayerInfo?.loadEnhancementPlayerInfo(bvid, cid) ??
+          _requestJson(endpoint)),
       fallbackMessage: '暂时无法读取视频分段信息。',
     );
     final List<VideoChapter> chapters = _parseChapters(data['view_points']);
@@ -247,28 +259,20 @@ class BilibiliPublicPlayerEnhancementService
   /// 读取文字并去掉两端空白，非文字字段会安全转为空字符串。
   static String _readText(Object? value) => value?.toString().trim() ?? '';
 
-  /// 使用一次性 HttpClient 请求公开 JSON，并设置网页接口需要的基础请求头。
+  /// 使用共享连接请求公开 JSON。
   static Future<String> _requestPublicJson(Uri uri) async {
-    final HttpClient client = HttpClient();
-    try {
-      final HttpClientRequest request = await client.getUrl(uri);
-      request.headers.set(HttpHeaders.userAgentHeader, _desktopUserAgent);
-      request.headers.set(
-        HttpHeaders.refererHeader,
-        'https://www.bilibili.com/',
-      );
-      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      final HttpClientResponse response = await request.close();
-      final String body = await utf8.decoder.bind(response).join();
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw PlayerEnhancementException(
-          '播放器增强接口请求失败（${response.statusCode}）。',
-        );
-      }
-      return body;
-    } finally {
-      client.close(force: true);
+    final response = await AppHttpTransport.shared.send(
+      uri: uri,
+      headers: const {
+        HttpHeaders.userAgentHeader: _desktopUserAgent,
+        HttpHeaders.refererHeader: 'https://www.bilibili.com/',
+        HttpHeaders.acceptHeader: 'application/json',
+      },
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw PlayerEnhancementException('播放器增强接口请求失败（${response.statusCode}）。');
     }
+    return response.bodyUtf8;
   }
 }
 

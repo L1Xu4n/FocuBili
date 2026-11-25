@@ -2,7 +2,7 @@ import 'cache_file_lock.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
+import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
@@ -10,6 +10,8 @@ import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
 import 'cache_lifecycle.dart';
+import 'app_http_client.dart';
+import 'bilibili_image_url_policy.dart';
 
 /// Bounded encoded image cache. URL transformations and every request header
 /// remain part of identity; neither URLs nor headers are written into the index.
@@ -45,6 +47,9 @@ class ImageResourceCache extends ChangeNotifier {
   static const capacities = [64, 128, 256, 512]; // MiB
   static const maximumObjectBytes = 16 * 1024 * 1024;
   static final Map<String, Future<void>> _locks = {};
+  static final Map<String, Set<Completer<void>>> _directoryWaiters = {};
+  static final Set<String> _localLeases = {};
+  static final int _isolateId = Random.secure().nextInt(1 << 32);
   static int _leaseSerial = 0;
   final Future<Directory> Function() _directory;
   final ImageCacheRequest _request;
@@ -55,15 +60,47 @@ class ImageResourceCache extends ChangeNotifier {
   int _activeDownloads = 0;
   final Map<String, Future<CachedImageBytes>> _pending = {};
   final Map<String, DateTime> _retryAfter = {};
+  final _leaseReleases = <String, Future<void> Function()>{};
   int _revision = 0;
+  final _revisionWaiters = <Completer<void>>{};
   int get revision => _revision;
   bool _accountInvalidation = false;
   bool get accountInvalidation => _accountInvalidation;
+
+  /// Cancels local waiters when the active account changes.
   void _accountChanged() {
     _accountInvalidation = true;
+    _advanceRevision();
+    notifyListeners();
+  }
+
+  /// Invalidates in-flight work and immediately releases its local waiters.
+  void _advanceRevision() {
     _revision++;
     _retryAfter.clear();
-    notifyListeners();
+    for (final waiter in _revisionWaiters) {
+      if (!waiter.isCompleted) waiter.complete();
+    }
+    _revisionWaiters.clear();
+    for (final release in _leaseReleases.values.toList()) {
+      unawaited(release());
+    }
+  }
+
+  /// Gives equivalent paths one lock and notification key in this isolate.
+  static String _directoryKey(Directory dir) {
+    final path = dir.uri.normalizePath().toFilePath(
+      windows: Platform.isWindows,
+    );
+    return Platform.isWindows ? path.toLowerCase() : path;
+  }
+
+  /// Wakes waiters after a change to the persisted directory state.
+  static void _wakeDirectory(String key) {
+    for (final waiter
+        in _directoryWaiters.remove(key) ?? const <Completer<void>>{}) {
+      if (!waiter.isCompleted) waiter.complete();
+    }
   }
 
   String _key(String url, Map<String, String> headers) => resourceKey(
@@ -106,6 +143,8 @@ class ImageResourceCache extends ChangeNotifier {
     });
   }
 
+  /// Loads validated bytes, sharing each persisted download lease.
+  /// Rechecks the cache revision after retrying a load blocked by a writer.
   Future<CachedImageBytes> _load(
     String url,
     Map<String, String> headers,
@@ -116,195 +155,291 @@ class ImageResourceCache extends ChangeNotifier {
     CachedImageBytes? previous;
     String? epoch;
     String? lease;
-    bool waitForWriter = false;
+    Completer<void>? writerSignal;
+    String? waitingDirectory;
+    Duration? writerPoll;
     try {
-      await _locked((dir, index) async {
-        epoch = index['epoch'] as String;
-        final entries = index['entries'] as Map<String, dynamic>;
-        final value = entries[key];
-        if (value is Map) {
-          record = Map<String, dynamic>.from(value);
-          try {
-            final file = File('${dir.path}/$key.bin');
-            if (await FileSystemEntity.type(file.path, followLinks: false) !=
-                FileSystemEntityType.file) {
-              throw const FileSystemException('Invalid cache file');
-            }
-            final bytes = await file.readAsBytes();
-            final digest = sha256.convert(bytes).toString();
-            if (bytes.length != record!['size'] ||
-                digest != record!['digest']) {
-              throw const FileSystemException('Damaged cache file');
-            }
-            previous = CachedImageBytes(bytes, '$epoch:$key:$digest');
-            record!['used'] = _clock().microsecondsSinceEpoch;
-            entries[key] = record;
-          } catch (_) {
-            entries.remove(key);
-            record = null;
-          }
-        }
-        if (!(_retryAfter[key]?.isAfter(_clock()) ?? false) &&
-            (previous == null ||
-                (record!['expires'] as int) <=
-                    _clock().millisecondsSinceEpoch)) {
-          final leases =
-              index.putIfAbsent('leases', () => <String, dynamic>{}) as Map;
-          final existing = leases[key];
-          if (existing != null || leases.length >= 6) {
-            waitForWriter = true;
-          } else {
-            lease =
-                '$pid:${DateTime.now().microsecondsSinceEpoch}:${_leaseSerial++}';
-            leases[key] = {
-              'owner': lease,
-              'until': DateTime.now()
-                  .add(const Duration(seconds: 30))
-                  .millisecondsSinceEpoch,
-            };
-          }
-        }
-      });
-    } on FileSystemException {
-      // A full/unavailable cache disk must not stop images from loading online.
-    }
-    _checkRevision(revision);
-    if (waitForWriter) {
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-      _checkRevision(revision);
-      return _load(url, headers, key, revision);
-    }
-    if (previous != null &&
-        (record!['expires'] as int) > _clock().millisecondsSinceEpoch) {
-      return previous!;
-    }
-    if ((_retryAfter[key]?.isAfter(_clock()) ?? false)) {
-      if (previous != null && record?['mustRevalidate'] != true) {
-        return previous!;
-      }
-      throw const ImageCacheFailure();
-    }
-    final conditional = Map<String, String>.of(headers);
-    if (record?['etag'] is String) {
-      conditional['If-None-Match'] = record!['etag'] as String;
-    }
-    if (record?['modified'] is String) {
-      conditional['If-Modified-Since'] = record!['modified'] as String;
-    }
-    try {
-      final response = await _limitedRequest(
-        Uri.parse(url),
-        conditional,
-        revision,
-      );
-      _checkRevision(revision);
-      if (response.status != 200 &&
-          !(response.status == 304 && previous != null)) {
-        if ([401, 403, 404, 410].contains(response.status)) {
-          await remove(url, headers: headers);
-          previous = null;
-        }
-        throw const ImageCacheFailure();
-      }
-      final bytes = response.status == 304 ? previous!.bytes : response.bytes;
-      if (bytes.isEmpty || bytes.length > maximumObjectBytes) {
-        throw const ImageCacheFailure();
-      }
-      final digest = sha256.convert(bytes).toString();
-      final control =
-          response.headers['cache-control']?.toLowerCase() ??
-          (response.status == 304 ? (record?['control'] as String?) : null) ??
-          '';
-      final noStore =
-          control.contains('no-store') ||
-          response.headers['vary']?.trim() == '*';
-      final seconds = int.tryParse(
-        RegExp(
-              r'(?:^|,)\s*max-age\s*=\s*"?(\d+)',
-            ).firstMatch(control)?.group(1) ??
-            '',
-      );
-      final age = int.tryParse(response.headers['age'] ?? '') ?? 0;
-      // Recheck mutable avatars at least daily, even if the CDN advertises years.
-      final ttl = control.contains('no-cache')
-          ? 0
-          : ((seconds ?? 86400) - age).clamp(0, 86400);
-      final now = _clock();
-      if (epoch != null && lease != null) {
-        try {
-          await _locked((dir, index) async {
-            _checkRevision(revision);
-            if (index['epoch'] != epoch) throw const ImageCacheCancelled();
-            if ((index['leases'] as Map?)?[key]?['owner'] != lease) {
-              throw const ImageCacheCancelled();
-            }
-            final entries = index['entries'] as Map<String, dynamic>;
-            final capacity = index['capacity'] as int;
-            if (noStore || bytes.length > capacity) {
+      try {
+        await _locked((dir, index) async {
+          _checkRevision(revision);
+          epoch = index['epoch'] as String;
+          final entries = index['entries'] as Map<String, dynamic>;
+          final value = entries[key];
+          if (value is Map) {
+            record = Map<String, dynamic>.from(value);
+            try {
+              final file = File('${dir.path}/$key.bin');
+              if (await FileSystemEntity.type(file.path, followLinks: false) !=
+                  FileSystemEntityType.file) {
+                throw const FileSystemException('Invalid cache file');
+              }
+              final bytes = await file.readAsBytes();
+              final digest = sha256.convert(bytes).toString();
+              if (bytes.length != record!['size'] ||
+                  digest != record!['digest']) {
+                throw const FileSystemException('Damaged cache file');
+              }
+              previous = CachedImageBytes(bytes, '$epoch:$key:$digest');
+              record!['used'] = _clock().microsecondsSinceEpoch;
+              entries[key] = record;
+            } catch (_) {
               entries.remove(key);
-              await _delete(File('${dir.path}/$key.bin'));
-              return;
+              record = null;
             }
-            final temp = File('${dir.path}/$key.part');
-            if (await FileSystemEntity.type(temp.path, followLinks: false) ==
-                FileSystemEntityType.link) {
-              await Link(temp.path).delete();
+          }
+          if (!(_retryAfter[key]?.isAfter(_clock()) ?? false) &&
+              (previous == null ||
+                  (record!['expires'] as int) <=
+                      _clock().millisecondsSinceEpoch)) {
+            final leases =
+                index.putIfAbsent('leases', () => <String, dynamic>{}) as Map;
+            final existing = leases[key];
+            if (existing != null || leases.length >= 6) {
+              final blockers = existing != null ? [existing] : leases.values;
+              waitingDirectory = _directoryKey(dir);
+              writerSignal = Completer<void>();
+              _directoryWaiters
+                  .putIfAbsent(waitingDirectory!, () => {})
+                  .add(writerSignal!);
+              _revisionWaiters.add(writerSignal!);
+              if (blockers.any(
+                (entry) => !_localLeases.contains(entry['owner']),
+              )) {
+                writerPoll = const Duration(milliseconds: 100);
+              } else {
+                final firstExpiry = blockers
+                    .map((entry) => entry['until'] as int)
+                    .reduce(min);
+                writerPoll = Duration(
+                  milliseconds: max(
+                    1,
+                    firstExpiry - DateTime.now().millisecondsSinceEpoch,
+                  ),
+                );
+              }
+            } else {
+              final owner =
+                  '$pid:$_isolateId:${DateTime.now().microsecondsSinceEpoch}:${_leaseSerial++}';
+              lease = owner;
+              _localLeases.add(owner);
+              Future<void>? release;
+              _leaseReleases[owner] = () =>
+                  release ??= _releaseLease(key, owner);
+              leases[key] = {
+                'owner': owner,
+                'until': DateTime.now()
+                    .add(const Duration(seconds: 30))
+                    .millisecondsSinceEpoch,
+              };
             }
-            await temp.writeAsBytes(bytes, flush: true);
-            await temp.rename('${dir.path}/$key.bin');
-            entries[key] = {
-              'size': bytes.length,
-              'digest': digest,
-              'used': now.microsecondsSinceEpoch,
-              'expires': now.millisecondsSinceEpoch + ttl * 1000,
-              'control': control,
-              'mustRevalidate':
-                  control.contains('must-revalidate') ||
-                  control.contains('no-cache'),
-              'etag':
-                  response.headers['etag'] ??
-                  (response.status == 304 ? (record?['etag']) : null),
-              'modified':
-                  response.headers['last-modified'] ??
-                  (response.status == 304 ? (record?['modified']) : null),
-            };
-            await _trim(dir, index);
-          });
-        } on FileSystemException {
-          // Atomic .part writes are cleaned during maintenance; deliver bytes.
-        }
+          }
+        });
+      } on FileSystemException {
+        // A full/unavailable cache disk must not stop images from loading online.
       }
-      _retryAfter.remove(key);
-      return CachedImageBytes(
-        bytes,
-        '${epoch ?? revision}:$key:$digest',
-        cacheable: !noStore,
-      );
-    } on ImageCacheCancelled {
-      rethrow;
-    } catch (_) {
+      if (writerSignal case final signal?) {
+        final timer = Timer(writerPoll!, () {
+          if (!signal.isCompleted) signal.complete();
+        });
+        try {
+          _checkRevision(revision);
+          await signal.future;
+        } finally {
+          timer.cancel();
+          _revisionWaiters.remove(signal);
+          final directory = waitingDirectory!;
+          final waiters = _directoryWaiters[directory];
+          waiters?.remove(signal);
+          if (waiters?.isEmpty == true) _directoryWaiters.remove(directory);
+        }
+        _checkRevision(revision);
+        return await _load(url, headers, key, revision);
+      }
       _checkRevision(revision);
-      _retryAfter[key] = _clock().add(const Duration(seconds: 20));
-      if (_retryAfter.length > 512) _retryAfter.remove(_retryAfter.keys.first);
-      if (previous != null && record?['mustRevalidate'] != true) {
+      if (previous != null &&
+          (record!['expires'] as int) > _clock().millisecondsSinceEpoch) {
         return previous!;
       }
-      throw const ImageCacheFailure();
-    } finally {
-      if (lease != null) {
-        try {
-          await _locked((_, index) async {
-            final leases = index['leases'];
-            if (leases is Map &&
-                leases[key] is Map &&
-                leases[key]['owner'] == lease) {
-              leases.remove(key);
-            }
-          });
-        } catch (_) {
-          /* Expiring lease repairs a killed writer or full disk. */
+      if ((_retryAfter[key]?.isAfter(_clock()) ?? false)) {
+        if (previous != null && record?['mustRevalidate'] != true) {
+          return previous!;
         }
+        throw const ImageCacheFailure();
       }
+      final conditional = Map<String, String>.of(headers);
+      if (record?['etag'] is String) {
+        conditional['If-None-Match'] = record!['etag'] as String;
+      }
+      if (record?['modified'] is String) {
+        conditional['If-Modified-Since'] = record!['modified'] as String;
+      }
+      try {
+        final uri = Uri.parse(url);
+        var response = await _limitedRequest(uri, conditional, revision);
+        while (true) {
+          _checkRevision(revision);
+          if (response.status != 200 &&
+              !(response.status == 304 && previous != null)) {
+            if ([401, 403, 404, 410].contains(response.status)) {
+              previous = null;
+              if (epoch != null && lease != null) {
+                await _removeKey(key, epoch: epoch, lease: lease);
+              }
+            }
+            throw const ImageCacheFailure();
+          }
+          final bytes = response.status == 304
+              ? previous!.bytes
+              : response.bytes;
+          if (bytes.isEmpty || bytes.length > maximumObjectBytes) {
+            throw const ImageCacheFailure();
+          }
+          final digest = response.status == 304
+              ? record!['digest'] as String
+              : sha256.convert(bytes).toString();
+          final control =
+              response.headers['cache-control']?.toLowerCase() ??
+              (response.status == 304
+                  ? (record?['control'] as String?)
+                  : null) ??
+              '';
+          final noStore =
+              control.contains('no-store') ||
+              (response.headers['vary']
+                      ?.split(',')
+                      .any((value) => value.trim() == '*') ??
+                  false);
+          final seconds = int.tryParse(
+            RegExp(
+                  r'(?:^|,)\s*max-age\s*=\s*"?(\d+)',
+                ).firstMatch(control)?.group(1) ??
+                '',
+          );
+          final age = int.tryParse(response.headers['age'] ?? '') ?? 0;
+          final maxTtl = BilibiliImageUrlPolicy.isProvenImmutableContentUrl(uri)
+              ? 7 * 86400
+              : 86400;
+          final ttl = control.contains('no-cache')
+              ? 0
+              : ((seconds ?? 86400) - max(0, age)).clamp(0, maxTtl);
+          final now = _clock();
+          var retryUnconditionally = response.status == 304 && lease == null;
+          if (epoch != null && lease != null) {
+            try {
+              await _locked((dir, index) async {
+                _checkRevision(revision);
+                if (index['epoch'] != epoch) throw const ImageCacheCancelled();
+                if ((index['leases'] as Map?)?[key]?['owner'] != lease) {
+                  throw const ImageCacheCancelled();
+                }
+                final entries = index['entries'] as Map<String, dynamic>;
+                final capacity = index['capacity'] as int;
+                if (noStore || bytes.length > capacity) {
+                  entries.remove(key);
+                  await _delete(File('${dir.path}/$key.bin'));
+                  return;
+                }
+                final file = File('${dir.path}/$key.bin');
+                if (response.status == 304) {
+                  if (entries[key]?['digest'] != digest ||
+                      await FileSystemEntity.type(
+                            file.path,
+                            followLinks: false,
+                          ) !=
+                          FileSystemEntityType.file ||
+                      await file.length() != bytes.length) {
+                    retryUnconditionally = true;
+                    entries.remove(key);
+                    return;
+                  }
+                } else {
+                  final temp = File('${dir.path}/$key.part');
+                  if (await FileSystemEntity.type(
+                        temp.path,
+                        followLinks: false,
+                      ) ==
+                      FileSystemEntityType.link) {
+                    await Link(temp.path).delete();
+                  }
+                  await temp.writeAsBytes(bytes, flush: true);
+                  await temp.rename(file.path);
+                }
+                entries[key] = {
+                  'size': bytes.length,
+                  'digest': digest,
+                  'used': now.microsecondsSinceEpoch,
+                  'expires': now.millisecondsSinceEpoch + ttl * 1000,
+                  'control': control,
+                  'mustRevalidate':
+                      control.contains('must-revalidate') ||
+                      control.contains('no-cache'),
+                  'etag':
+                      response.headers['etag'] ??
+                      (response.status == 304 ? (record?['etag']) : null),
+                  'modified':
+                      response.headers['last-modified'] ??
+                      (response.status == 304 ? (record?['modified']) : null),
+                };
+                await _trim(dir, index);
+              });
+            } on FileSystemException {
+              // Atomic .part writes are cleaned during maintenance; deliver bytes.
+              retryUnconditionally = response.status == 304;
+            }
+          }
+          if (retryUnconditionally) {
+            _checkRevision(revision);
+            previous = null;
+            record = null;
+            final unconditional = Map<String, String>.of(headers)
+              ..removeWhere(
+                (name, _) => const {
+                  'if-none-match',
+                  'if-modified-since',
+                }.contains(name.toLowerCase()),
+              );
+            response = await _limitedRequest(uri, unconditional, revision);
+            continue;
+          }
+          _checkRevision(revision);
+          _retryAfter.remove(key);
+          return CachedImageBytes(
+            bytes,
+            '${epoch ?? revision}:$key:$digest',
+            cacheable: !noStore,
+          );
+        }
+      } on ImageCacheCancelled {
+        rethrow;
+      } catch (_) {
+        _checkRevision(revision);
+        _retryAfter[key] = _clock().add(const Duration(seconds: 20));
+        if (_retryAfter.length > 512) {
+          _retryAfter.remove(_retryAfter.keys.first);
+        }
+        if (previous != null && record?['mustRevalidate'] != true) {
+          return previous!;
+        }
+        throw const ImageCacheFailure();
+      }
+    } finally {
+      await _leaseReleases[lease]?.call();
+      _checkRevision(revision);
+    }
+  }
+
+  /// Releases just this writer's persisted lease, including after cancellation.
+  Future<void> _releaseLease(String key, String owner) async {
+    try {
+      await _locked((_, index) async {
+        final leases = index['leases'] as Map;
+        if (leases[key]?['owner'] == owner) leases.remove(key);
+      }, notifyWaiters: true);
+    } catch (_) {
+      // An expired lease also recovers from a killed writer or full disk.
+    } finally {
+      _leaseReleases.remove(owner);
+      _localLeases.remove(owner);
     }
   }
 
@@ -320,9 +455,10 @@ class ImageResourceCache extends ChangeNotifier {
         'focubili_images_v1') {
       throw const FileSystemException('Unsafe image cache directory');
     }
-    final prior = _locks[dir.path] ?? Future<void>.value();
+    final directoryKey = _directoryKey(dir);
+    final prior = _locks[directoryKey] ?? Future<void>.value();
     final done = Completer<void>();
-    _locks[dir.path] = done.future;
+    _locks[directoryKey] = done.future;
     await prior;
     CacheFileLock? lock;
     try {
@@ -360,7 +496,9 @@ class ImageResourceCache extends ChangeNotifier {
         await lock?.release();
       } finally {
         done.complete();
-        if (identical(_locks[dir.path], done.future)) _locks.remove(dir.path);
+        if (identical(_locks[directoryKey], done.future)) {
+          _locks.remove(directoryKey);
+        }
       }
     }
   }
@@ -388,8 +526,7 @@ class ImageResourceCache extends ChangeNotifier {
   /// Fence first, then delete. Old downloads cannot repopulate after completion.
   Future<ImageCacheUsage> clear() {
     _accountInvalidation = false;
-    _revision++;
-    _retryAfter.clear();
+    _advanceRevision();
     notifyListeners();
     return _locked((dir, index) async {
       index['epoch'] = '${DateTime.now().microsecondsSinceEpoch}-$_revision';
@@ -397,16 +534,25 @@ class ImageResourceCache extends ChangeNotifier {
       index['leases'] = <String, dynamic>{};
       await _repair(dir, index);
       return _usage(index);
-    });
+    }, notifyWaiters: true);
   }
 
+  /// Removes the image for the current account and request headers.
   Future<void> remove(String url, {Map<String, String> headers = const {}}) =>
+      _removeKey(_key(url, headers));
+
+  /// Removes the captured key even if the active account has since changed.
+  Future<void> _removeKey(String key, {String? epoch, String? lease}) =>
       _locked((dir, index) async {
-        final key = _key(url, headers);
+        if (lease != null &&
+            (index['epoch'] != epoch ||
+                (index['leases'] as Map)[key]?['owner'] != lease)) {
+          throw const ImageCacheCancelled();
+        }
         (index['entries'] as Map).remove(key);
         (index['leases'] as Map).remove(key);
         await _delete(File('${dir.path}/$key.bin'));
-      });
+      }, notifyWaiters: true);
 
   ImageCacheUsage _usage(Map<String, dynamic> index) => ImageCacheUsage(
     (index['entries'] as Map).values.fold<int>(
@@ -451,9 +597,11 @@ class ImageResourceCache extends ChangeNotifier {
     entries.removeWhere((key, _) => !found.contains(key));
   }
 
+  /// Serializes index transactions and signals changes after releasing the lock.
   Future<T> _locked<T>(
-    Future<T> Function(Directory, Map<String, dynamic>) action,
-  ) async {
+    Future<T> Function(Directory, Map<String, dynamic>) action, {
+    bool notifyWaiters = false,
+  }) async {
     final dir = (await _directory()).absolute;
     if (dir.uri.pathSegments.where((s) => s.isNotEmpty).last !=
             'focubili_images_v1' ||
@@ -462,9 +610,10 @@ class ImageResourceCache extends ChangeNotifier {
       throw const FileSystemException('Unsafe image cache directory');
     }
     await dir.create(recursive: true);
-    final prior = _locks[dir.path] ?? Future<void>.value();
+    final directoryKey = _directoryKey(dir);
+    final prior = _locks[directoryKey] ?? Future<void>.value();
     final done = Completer<void>();
-    _locks[dir.path] = done.future;
+    _locks[directoryKey] = done.future;
     await prior;
     CacheFileLock? lock;
     try {
@@ -532,7 +681,10 @@ class ImageResourceCache extends ChangeNotifier {
         await lock?.release();
       } finally {
         done.complete();
-        if (identical(_locks[dir.path], done.future)) _locks.remove(dir.path);
+        if (identical(_locks[directoryKey], done.future)) {
+          _locks.remove(directoryKey);
+        }
+        if (notifyWaiters) _wakeDirectory(directoryKey);
       }
     }
   }
@@ -575,6 +727,7 @@ class ImageResourceCache extends ChangeNotifier {
     '${(await getApplicationCacheDirectory()).path}/focubili_images_v1',
   );
 
+  /// Downloads through the bounded image pool without forwarding redirects.
   static Future<ImageCacheResponse> _download(
     Uri uri,
     Map<String, String> headers,
@@ -582,42 +735,25 @@ class ImageResourceCache extends ChangeNotifier {
     if (!['http', 'https'].contains(uri.scheme)) {
       throw const ImageCacheFailure();
     }
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 10);
-    final deadline = Timer(
-      const Duration(seconds: 25),
-      () => client.close(force: true),
+    final response = await AppHttpTransport.shared.send(
+      uri: uri,
+      headers: headers,
+      followRedirects: false,
+      maxResponseBytes: maximumObjectBytes,
+      timeout: const Duration(seconds: 25),
+      pool: AppHttpClientPoolKind.publicImage,
     );
-    try {
-      final request = await client.getUrl(uri);
-      // Do not forward caller headers (possibly credentials) to redirect hosts.
-      request.followRedirects = false;
-      headers.forEach(request.headers.set);
-      final response = await request.close();
-      if (response.contentLength > maximumObjectBytes) {
-        throw const ImageCacheFailure();
-      }
-      final builder = BytesBuilder(copy: false);
-      await for (final chunk in response) {
-        if (builder.length + chunk.length > maximumObjectBytes) {
-          throw const ImageCacheFailure();
-        }
-        builder.add(chunk);
-      }
-      return ImageCacheResponse(response.statusCode, builder.takeBytes(), {
-        for (final name in [
-          'cache-control',
-          'etag',
-          'last-modified',
-          'vary',
-          'age',
-        ])
-          name: ?response.headers.value(name),
-      });
-    } finally {
-      deadline.cancel();
-      client.close(force: true);
-    }
+    return ImageCacheResponse(response.statusCode, response.bytes, {
+      for (final name in [
+        'cache-control',
+        'etag',
+        'last-modified',
+        'vary',
+        'age',
+      ])
+        if (response.headerValues(name).isNotEmpty)
+          name: response.headerValues(name).join(', '),
+    });
   }
 }
 

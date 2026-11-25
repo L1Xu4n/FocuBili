@@ -2,7 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
+import 'package:flutter/widgets.dart';
+
 import '../models/video_preview.dart';
+import 'app_http_client.dart';
 import 'bilibili_auth_service.dart';
 import 'bilibili_course_link.dart';
 import 'cache_lifecycle.dart';
@@ -38,14 +42,30 @@ class BilibiliCourseService {
     CourseJsonRequest? requestJson,
     Future<String> Function()? readCookies,
   }) : _requestJson = requestJson ?? _request,
+       _usesDefaultTransport = requestJson == null && readCookies == null,
        _readCookies =
            readCookies ?? BilibiliAuthService().readStableCookieHeader;
 
   final CourseJsonRequest _requestJson;
   final Future<String> Function() _readCookies;
+  final bool _usesDefaultTransport;
+  static final _CourseCacheLifecycle _lifecycle = _CourseCacheLifecycle();
 
   static const _courseSessionChanged = '登录状态已变化，请重新打开课程。';
   static const _listSessionChanged = '登录状态已变化，请刷新已购课程。';
+
+  /// Drops purchase metadata and fences in-flight writes before a refresh.
+  void clearMetadataCache() => _lifecycle.clearFor(this);
+
+  /// Partitions metadata by generation, verified scope and session fingerprint.
+  _CourseMetadataCache _metadataCache(int revision, String cookie) {
+    final identity = (
+      revision,
+      CacheLifecycle.accountScope,
+      sha256.convert(utf8.encode(cookie)).toString(),
+    );
+    return _lifecycle.cacheFor(this, identity);
+  }
 
   void _checkRevision(int revision, String message) {
     if (revision != CacheLifecycle.account.value) {
@@ -132,14 +152,20 @@ class BilibiliCourseService {
   }
 
   /// Same paginated endpoint and fields as the official classroom "mine" page.
-  /// Publish only a complete list from one session; never cache purchase data.
+  /// Reuses a complete list briefly in memory within the same session.
   Future<List<PurchasedCourse>> purchasedCourses() async {
     try {
       final revision = CacheLifecycle.account.value;
       final cookie = await _readCookies().timeout(const Duration(seconds: 10));
       _checkRevision(revision, _listSessionChanged);
       if (cookie.trim().isEmpty) {
+        clearMetadataCache();
         throw const CourseLookupException('请先在“我的”登录购买课程的 B 站账号。');
+      }
+      final cache = _metadataCache(revision, cookie);
+      final cached = cache.purchases;
+      if (cached != null && cached.expires.isAfter(DateTime.now())) {
+        return cached.value;
       }
       final courses = <PurchasedCourse>[];
       final seen = <int>{};
@@ -186,7 +212,11 @@ class BilibiliCourseService {
           );
         }
         await _checkSession(revision, cookie, _listSessionChanged);
-        if (courses.length >= total) return List.unmodifiable(courses);
+        if (courses.length >= total) {
+          final result = List<PurchasedCourse>.unmodifiable(courses);
+          cache.purchases = (value: result, expires: cache.expiresNext);
+          return result;
+        }
         if (courses.length == before) break;
       }
       throw const CourseLookupException('已购课程列表未加载完整，请刷新重试。');
@@ -199,6 +229,7 @@ class BilibiliCourseService {
     }
   }
 
+  /// Loads and briefly remembers complete, account-scoped course metadata.
   Future<VideoPreview> lookup(Uri input) async {
     final uri = BilibiliCourseLink.parse(input.toString());
     if (uri == null) throw const CourseLookupException('无效的课堂链接。');
@@ -209,7 +240,13 @@ class BilibiliCourseService {
       _checkRevision(revision, _courseSessionChanged);
       final target = uri.pathSegments.last;
       if (cookie.trim().isEmpty) {
+        clearMetadataCache();
         throw const CourseLookupException('请先登录购买课程的 B 站账号。');
+      }
+      final cache = _metadataCache(revision, cookie);
+      final cached = cache.previews[target];
+      if (cached != null && cached.expires.isAfter(DateTime.now())) {
+        return cached.value;
       }
       final requestedEpisode = target.startsWith('ep')
           ? int.parse(target.substring(2))
@@ -309,7 +346,7 @@ class BilibiliCourseService {
       // A concurrent logout/account switch must not publish stale metadata.
       await _checkSession(revision, cookie, _courseSessionChanged);
       final author = _map(data['up_info']);
-      return VideoPreview(
+      final preview = VideoPreview(
         bvid: 'cheese:ss$seasonId',
         courseSeasonId: seasonId,
         requestedCourseEpisodeId: requestedEpisode,
@@ -325,6 +362,8 @@ class BilibiliCourseService {
         ),
         parts: List.unmodifiable(parts),
       );
+      cache.remember(target, preview);
+      return preview;
     } on CourseLookupException {
       rethrow;
     } on TimeoutException {
@@ -364,6 +403,7 @@ class BilibiliCourseService {
     return Uri.tryParse(text)?.scheme == 'https' ? text : '';
   }
 
+  /// Sends credentials only to the allowlisted classroom API paths.
   static Future<String> _request(Uri uri, String cookie) async {
     // Only fixed official API endpoints may receive the in-memory session.
     if (uri.scheme != 'https' ||
@@ -375,36 +415,108 @@ class BilibiliCourseService {
         }.contains(uri.path)) {
       throw const CourseLookupException('无效的课程请求地址。');
     }
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 12);
-    try {
-      final request = await client
-          .getUrl(uri)
-          .timeout(const Duration(seconds: 15));
-      request.followRedirects = false;
-      request.headers.set(
-        HttpHeaders.refererHeader,
-        'https://www.bilibili.com/',
-      );
-      request.headers.set(
-        HttpHeaders.userAgentHeader,
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-      );
-      if (cookie.isNotEmpty) {
-        request.headers.set(HttpHeaders.cookieHeader, cookie);
-      }
-      final response = await request.close().timeout(
-        const Duration(seconds: 15),
-      );
-      if (response.statusCode != 200) {
-        throw CourseLookupException('课程服务暂不可用（HTTP ${response.statusCode}）。');
-      }
-      return await response
-          .transform(utf8.decoder)
-          .join()
-          .timeout(const Duration(seconds: 15));
-    } finally {
-      client.close(force: true);
+    final response = await AppHttpTransport.shared.send(
+      uri: uri,
+      followRedirects: false,
+      maxResponseBytes: 8 * 1024 * 1024,
+      headers: {
+        HttpHeaders.refererHeader: 'https://www.bilibili.com/',
+        HttpHeaders.userAgentHeader:
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        if (cookie.isNotEmpty) HttpHeaders.cookieHeader: cookie,
+      },
+    );
+    if (response.statusCode != 200) {
+      throw CourseLookupException('课程服务暂不可用（HTTP ${response.statusCode}）。');
     }
+    return response.bodyUtf8;
+  }
+}
+
+class _CourseMetadataCache {
+  _CourseMetadataCache(this.identity);
+
+  final (int, String, String) identity;
+  ({List<PurchasedCourse> value, DateTime expires})? purchases;
+  final previews = <String, ({VideoPreview value, DateTime expires})>{};
+  DateTime get expiresNext => DateTime.now().add(const Duration(seconds: 30));
+
+  /// Bounds the number of remembered course directories per session.
+  void remember(String target, VideoPreview preview) {
+    previews.remove(target);
+    previews[target] = (value: preview, expires: expiresNext);
+    if (previews.length > 32) previews.remove(previews.keys.first);
+  }
+}
+
+class _CourseCacheLifecycle with WidgetsBindingObserver {
+  _CourseCacheLifecycle() {
+    CacheLifecycle.account.addListener(_clearAll);
+  }
+
+  _CourseMetadataCache? _shared;
+  var _injected = Expando<_CourseMetadataCache>();
+  WidgetsBinding? _binding;
+  bool _suspended = false;
+
+  /// Shares production reads while keeping injected clients independent.
+  _CourseMetadataCache cacheFor(
+    BilibiliCourseService service,
+    (int, String, String) identity,
+  ) {
+    _observeBinding();
+    if (_suspended) return _CourseMetadataCache(identity);
+    final current = service._usesDefaultTransport
+        ? _shared
+        : _injected[service];
+    if (current?.identity == identity) return current!;
+    final cache = _CourseMetadataCache(identity);
+    if (service._usesDefaultTransport) {
+      _shared = cache;
+    } else {
+      _injected[service] = cache;
+    }
+    return cache;
+  }
+
+  /// Registers for background invalidation when a widgets binding exists.
+  void _observeBinding() {
+    if (_binding != null) return;
+    try {
+      final binding = WidgetsBinding.instance;
+      _binding = binding;
+      binding.addObserver(this);
+      final state = binding.lifecycleState;
+      if (state != null) didChangeAppLifecycleState(state);
+    } on FlutterError {
+      // Service-only callers may run without a widgets binding.
+    }
+  }
+
+  /// Clears every account-scoped metadata snapshot when entering background.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.paused) {
+      _suspended = true;
+      _clearAll();
+    } else if (state == AppLifecycleState.resumed) {
+      _suspended = false;
+    }
+  }
+
+  /// Clears the cache accessible by this service.
+  void clearFor(BilibiliCourseService service) {
+    if (service._usesDefaultTransport) {
+      _shared = null;
+    } else {
+      _injected[service] = null;
+    }
+  }
+
+  /// Drops all references so pre-invalidation responses cannot refill the cache.
+  void _clearAll() {
+    _shared = null;
+    _injected = Expando<_CourseMetadataCache>();
   }
 }

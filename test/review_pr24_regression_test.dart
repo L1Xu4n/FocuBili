@@ -31,6 +31,8 @@ class ReviewLocalPlayback extends NativePlaybackService {
     VideoPart? part,
     int quality = 64,
     Duration? initialPosition,
+    PlaybackCodecPreference? codecPreference,
+    bool preferDataSaving = false,
   }) async => fail('Offline entry opened online media');
 
   /// Records a pause from the shared player's real control button.

@@ -5,7 +5,10 @@ import 'dart:collection';
 import 'package:focubili/features/common/app_network_image.dart';
 import 'package:flutter/foundation.dart' show listEquals, setEquals;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart'
+    show MatrixUtils, RenderAbstractViewport;
 import '../../services/bilibili_course_link.dart';
+import '../../services/bilibili_image_url_policy.dart';
 
 import '../../core/layout/adaptive_layout.dart';
 import '../../core/layout/adaptive_two_column_list.dart';
@@ -118,6 +121,8 @@ class _SearchPageState extends State<SearchPage> {
   final Queue<VideoSearchResult> _episodeCountLookupQueue =
       Queue<VideoSearchResult>();
   final Set<String> _episodeCountLookupAttemptedBvids = <String>{};
+  final _episodeRows = <String, (VideoSearchResult, BuildContext, int)>{};
+  bool _episodeVisibilityCheckScheduled = false;
   final Map<String, String> _fallbackEpisodeCountTexts = <String, String>{};
   late final BilibiliService _service;
   late final BilibiliUserSearchService _userSearchService;
@@ -206,6 +211,7 @@ class _SearchPageState extends State<SearchPage> {
 
   /// 搜索结果接近底部时自动请求下一页，并防止同一页重复加载。
   void _handleResultScroll() {
+    _scheduleEpisodeVisibilityCheck();
     if (!_resultScrollController.hasClients ||
         _resultScrollController.position.extentAfter > 160 ||
         _autoLoadFailed) {
@@ -734,6 +740,7 @@ class _SearchPageState extends State<SearchPage> {
     _knownSearchOwnerMids.clear();
     _knownSearchInitialPartCids.clear();
     _episodeCountLookupQueue.clear();
+    _episodeRows.clear();
     _episodeCountLookupAttemptedBvids.clear();
     _fallbackEpisodeCountTexts.clear();
     setState(
@@ -1108,25 +1115,50 @@ class _SearchPageState extends State<SearchPage> {
     }
   }
 
-  /// 为当前已渲染、且服务端未返回分集文字的卡片安排一次详情补查。
-  ///
-  /// 该函数在绘制完成后才入队，避免为尚未出现的搜索结果消耗网络；同一
-  /// BV 号无论成功或失败都只会尝试一次，避免滚动列表重复触发详情请求。
-  void _scheduleEpisodeCountFallback(VideoSearchResult result) {
-    if (result.episodeCountText.isNotEmpty ||
-        _fallbackEpisodeCountTexts.containsKey(result.bvid)) {
-      return;
-    }
+  /// 在布局后只排入与列表视口相交的卡片，并移除已离屏的待发项。
+  void _scheduleEpisodeVisibilityCheck() {
+    if (_episodeVisibilityCheckScheduled) return;
+    _episodeVisibilityCheckScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_isSearchResultDisplayed(result.bvid)) {
-        return;
+      _episodeVisibilityCheckScheduled = false;
+      if (!mounted) return;
+      _episodeRows.removeWhere(
+        (_, row) => !row.$2.mounted || row.$3 != _requestGeneration,
+      );
+      _episodeCountLookupQueue.removeWhere(
+        (row) => !_isEpisodeRowVisible(row.bvid),
+      );
+      final queued = _episodeCountLookupQueue.map((row) => row.bvid).toSet();
+      for (final row in _episodeRows.values) {
+        final result = row.$1;
+        if (!_episodeCountLookupAttemptedBvids.contains(result.bvid) &&
+            !queued.contains(result.bvid) &&
+            _isEpisodeRowVisible(result.bvid)) {
+          _episodeCountLookupQueue.addLast(result);
+        }
       }
-      if (!_episodeCountLookupAttemptedBvids.add(result.bvid)) {
-        return;
-      }
-      _episodeCountLookupQueue.addLast(result);
       _pumpEpisodeCountLookups();
     });
+  }
+
+  /// 使用实际绘制位置，排除预渲染或仍挂载在缓存区的列表项。
+  bool _isEpisodeRowVisible(String bvid) {
+    final row = _episodeRows[bvid];
+    if (row == null ||
+        !row.$2.mounted ||
+        row.$3 != _requestGeneration ||
+        !_isSearchResultDisplayed(bvid)) {
+      return false;
+    }
+    final render = row.$2.findRenderObject();
+    if (render == null || !render.attached) return false;
+    final viewport = RenderAbstractViewport.maybeOf(render);
+    if (viewport == null || !viewport.attached) return false;
+    final bounds = MatrixUtils.transformRect(
+      render.getTransformTo(viewport),
+      render.paintBounds,
+    );
+    return viewport.paintBounds.overlaps(bounds);
   }
 
   /// 判断某个 BV 号是否仍在当前搜索列表中，防止切换关键词后补查旧卡片。
@@ -1141,7 +1173,8 @@ class _SearchPageState extends State<SearchPage> {
     while (_activeEpisodeCountLookups < _maxEpisodeCountLookupConcurrency &&
         _episodeCountLookupQueue.isNotEmpty) {
       final VideoSearchResult result = _episodeCountLookupQueue.removeFirst();
-      if (!_isSearchResultDisplayed(result.bvid)) {
+      if (!_isEpisodeRowVisible(result.bvid) ||
+          !_episodeCountLookupAttemptedBvids.add(result.bvid)) {
         continue;
       }
       _activeEpisodeCountLookups += 1;
@@ -2389,6 +2422,7 @@ class _SearchPageState extends State<SearchPage> {
               : ClipOval(
                   child: AppNetworkImage(
                     imageUrl: result.avatarUrl,
+                    imageVariant: BilibiliImageVariant.avatar,
                     width: 56,
                     height: 56,
                     fit: BoxFit.cover,
@@ -2482,10 +2516,7 @@ class _SearchPageState extends State<SearchPage> {
     final String episodeCountText = isDirectResult
         ? result.episodeCountText
         : _episodeCountTextFor(result);
-    if (!isDirectResult) {
-      _scheduleEpisodeCountFallback(result);
-    }
-    return SearchVideoRow(
+    final row = SearchVideoRow(
       rowKey: ValueKey<String>(
         '${isDirectResult ? 'direct' : 'search'}-${result.bvid}',
       ),
@@ -2599,6 +2630,14 @@ class _SearchPageState extends State<SearchPage> {
               },
             ),
     );
+    if (isDirectResult || episodeCountText.isNotEmpty) return row;
+    return Builder(
+      builder: (rowContext) {
+        _episodeRows[result.bvid] = (result, rowContext, _requestGeneration);
+        _scheduleEpisodeVisibilityCheck();
+        return row;
+      },
+    );
   }
 
   /// 按视频行分配的宽度显示 16:9 封面，保留时长及分集角标。
@@ -2620,6 +2659,7 @@ class _SearchPageState extends State<SearchPage> {
             else
               AppNetworkImage(
                 imageUrl: result.thumbnailUrl,
+                imageVariant: BilibiliImageVariant.cover16x10,
                 httpHeaders: const <String, String>{
                   'Referer': 'https://www.bilibili.com/',
                 },

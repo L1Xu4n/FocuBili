@@ -18,11 +18,13 @@ import 'subscription_performance_probe_test.dart'
 const _enabled = DeviceSettingsRuntimeAdapter.enabledKey;
 const _notifications = DeviceSettingsRuntimeAdapter.notificationsKey;
 const _background = DeviceSettingsRuntimeAdapter.backgroundKey;
+const _wifiOnlyBackground = DeviceSettingsRuntimeAdapter.wifiOnlyBackgroundKey;
 const _capacity = DeviceSettingsRuntimeAdapter.imageCapacityKey;
 const _runtimeValues = <String, Object>{
   _enabled: false,
   _notifications: true,
   _background: false,
+  _wifiOnlyBackground: false,
   _capacity: 8192,
 };
 
@@ -419,6 +421,7 @@ void main() {
         _enabled: true,
         _notifications: false,
         _background: true,
+        _wifiOnlyBackground: false,
         _capacity: 8192,
       });
       prefs.values.remove(SubscriptionService.storageKey);
@@ -426,6 +429,7 @@ void main() {
         _enabled: false,
         _notifications: false,
         _background: false,
+        _wifiOnlyBackground: false,
         _capacity: 8192,
       });
       expect(snapshots.value, isNull);

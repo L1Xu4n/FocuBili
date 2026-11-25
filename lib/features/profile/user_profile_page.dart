@@ -18,6 +18,7 @@ import '../../models/subscription.dart';
 import '../../models/video_preview.dart';
 import '../../models/watch_history_entry.dart';
 import '../../services/bilibili_public_content_service.dart';
+import '../../services/bilibili_image_url_policy.dart';
 import '../../services/bilibili_interaction_service.dart';
 import '../../services/bilibili_service.dart';
 import '../../services/cache_lifecycle.dart';
@@ -73,6 +74,17 @@ class UserProfilePage extends StatefulWidget {
 
 /// 标识用户主页下方三类公开内容。
 enum _CreatorTab { videos, articles, collections }
+
+/// Holds one tab's loaded pages and request state while another tab is visible.
+class _CreatorTabContent {
+  List<Object> items = const [];
+  int page = 0;
+  int totalCount = 0;
+  bool hasMore = true;
+  bool loading = true;
+  bool loadingMore = false;
+  String? error;
+}
 
 /// Retain only the avatar URL. AppNetworkImage owns the shared image bytes.
 class _CreatorAvatarSnapshot {
@@ -143,17 +155,20 @@ class _UserProfilePageState extends State<UserProfilePage>
   Timer? _highlightTimer;
   final TextEditingController _videoSearchController = TextEditingController();
   CreatorProfile? _profile;
-  List<Object> _items = const <Object>[];
   _CreatorTab _selectedTab = _CreatorTab.videos;
-  int _page = 0;
-  bool _hasMore = true;
+  final _tabContents = <_CreatorTab, _CreatorTabContent>{};
+  _CreatorTabContent get _content => _tabContents[_selectedTab]!;
+  List<Object> get _items => _content.items;
+  int get _page => _content.page;
+  int get _totalCount => _content.totalCount;
+  bool get _hasMore => _content.hasMore;
+  bool get _loadingContent => _content.loading;
+  bool get _loadingMore => _content.loadingMore;
+  String? get _contentError => _content.error;
   bool _loadingProfile = true;
-  bool _loadingContent = true;
-  bool _loadingMore = false;
   int _contentGeneration = 0;
   int _selectionVisibilityEpoch = 0;
   String? _profileError;
-  String? _contentError;
   bool? _isFollowing;
   bool _followBusy = false;
   bool _batchBusy = false;
@@ -164,12 +179,13 @@ class _UserProfilePageState extends State<UserProfilePage>
   Set<String> _learningListBvids = const <String>{};
   String _videoKeyword = '';
   CreatorVideoOrder _videoOrder = CreatorVideoOrder.latest;
-  int _totalCount = 0;
   bool _videoSearchExpanded = false;
   bool _profileSignExpanded = false;
   Map<String, WatchHistoryEntry> _watchHistoryByBvid =
       const <String, WatchHistoryEntry>{};
   final Queue<CreatorVideo> _partCountLookupQueue = Queue<CreatorVideo>();
+  final _partCountCandidates = <String, (CreatorVideo, BuildContext)>{};
+  bool _partCountScanScheduled = false;
   final Set<String> _partCountLookupAttemptedBvids = <String>{};
   final Map<String, int> _resolvedPartCounts = <String, int>{};
   int _activePartCountLookups = 0;
@@ -201,6 +217,7 @@ class _UserProfilePageState extends State<UserProfilePage>
         );
     _tabController = TabController(length: 3, vsync: this)
       ..addListener(_handleTabChanged);
+    _profileScrollController.addListener(_schedulePartCountScan);
     unawaited(_loadProfile());
     unawaited(_loadFollowingState());
     unawaited(_loadFirstContentPage());
@@ -282,6 +299,7 @@ class _UserProfilePageState extends State<UserProfilePage>
         : '';
   }
 
+  /// Clears cached profile and tab data on account changes.
   void _profileAccountChanged() {
     if (!mounted) return;
     setState(() {
@@ -289,9 +307,18 @@ class _UserProfilePageState extends State<UserProfilePage>
       _cachedAvatarUrl = _avatarSnapshots.read(widget.mid);
     });
     unawaited(_loadProfile());
+    _resetTabContents();
+  }
+
+  /// Invalidates tabs and part counts for the previous creator or account.
+  void _resetTabContents() {
+    _tabContents.clear();
+    _partCountLookupAttemptedBvids.clear();
+    _resolvedPartCounts.clear();
     unawaited(_loadFirstContentPage());
   }
 
+  /// Reloads when the route begins displaying a different creator.
   @override
   void didUpdateWidget(covariant UserProfilePage oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -299,7 +326,7 @@ class _UserProfilePageState extends State<UserProfilePage>
       _profile = null;
       _cachedAvatarUrl = _avatarSnapshots.read(widget.mid);
       unawaited(_loadProfile());
-      unawaited(_loadFirstContentPage());
+      _resetTabContents();
     } else if (oldWidget.currentPlayback != widget.currentPlayback) {
       _cancelVideoLocation();
     }
@@ -318,7 +345,7 @@ class _UserProfilePageState extends State<UserProfilePage>
     super.dispose();
   }
 
-  /// 标签动画完成后切换内容类型，并从第一页重新读取。
+  /// 切换标签时复用已有分页，只读取尚未加载的标签。
   void _handleTabChanged() {
     if (_tabController.indexIsChanging) {
       return;
@@ -331,13 +358,20 @@ class _UserProfilePageState extends State<UserProfilePage>
     if (nextTab == _selectedTab) {
       return;
     }
-    _selectedTab = nextTab;
-    unawaited(_loadFirstContentPage());
+    setState(() {
+      _selectedTab = nextTab;
+      _contentGeneration++;
+      _resetContentView();
+    });
+    if (!_tabContents.containsKey(nextTab)) {
+      unawaited(_loadFirstContentPage());
+    }
   }
 
   /// 接收嵌套列表滚动通知，在距离底部较近时自动读取下一页。
   bool _handleContentScrollNotification(ScrollNotification notification) {
     if (notification.metrics.axis != Axis.vertical) return false;
+    _schedulePartCountScan();
     if (_locatingCurrentVideo) {
       if (notification is UserScrollNotification &&
           notification.direction != ScrollDirection.idle) {
@@ -389,53 +423,51 @@ class _UserProfilePageState extends State<UserProfilePage>
     }
   }
 
-  /// 读取当前标签第 1 页，并清除上一标签留下的内容和错误。
-  Future<void> _loadFirstContentPage({bool keepVideoLocation = false}) async {
+  /// Clears transient interactions and queued work for a replaced view.
+  void _resetContentView({bool keepVideoLocation = false}) {
     if (!keepVideoLocation) _cancelVideoLocation();
     _videoRowKeys.clear();
     _selection.end();
+    _partCountCandidates.clear();
+    _partCountLookupQueue.clear();
+  }
+
+  /// Reads a fresh first page for the selected tab and fences older responses.
+  Future<void> _loadFirstContentPage({bool keepVideoLocation = false}) async {
     final _CreatorTab requestedTab = _selectedTab;
-    final generation = ++_contentGeneration;
-    if (mounted) {
-      setState(() {
-        _items = const <Object>[];
-        _page = 0;
-        _hasMore = true;
-        _loadingContent = true;
-        _loadingMore = false;
-        _contentError = null;
-      });
-    }
+    if (!mounted) return;
+    final content = _CreatorTabContent();
+    setState(() {
+      _contentGeneration++;
+      _resetContentView(keepVideoLocation: keepVideoLocation);
+      _tabContents[requestedTab] = content;
+    });
     try {
       final CreatorContentPage<Object> result = await _loadContentPage(
         requestedTab,
         1,
       );
-      if (!mounted ||
-          requestedTab != _selectedTab ||
-          generation != _contentGeneration) {
+      if (!mounted || !identical(_tabContents[requestedTab], content)) {
         return;
       }
       setState(() {
         // 首屏同样必须按 BV 去重；否则两个卡片会镜像同一选择，
         // 空 BV 还会产生可勾选但不能保存的条目。
-        _items = requestedTab == _CreatorTab.videos
+        content.items = requestedTab == _CreatorTab.videos
             ? _mergeContent(const [], result.items, requestedTab)
             : result.items;
-        _page = result.page;
-        _hasMore = result.hasMore;
-        _totalCount = result.totalCount ?? _items.length;
-        _loadingContent = false;
+        content.page = result.page;
+        content.hasMore = result.hasMore;
+        content.totalCount = result.totalCount ?? content.items.length;
+        content.loading = false;
       });
     } catch (error) {
-      if (!mounted ||
-          requestedTab != _selectedTab ||
-          generation != _contentGeneration) {
+      if (!mounted || !identical(_tabContents[requestedTab], content)) {
         return;
       }
       setState(() {
-        _contentError = error.toString();
-        _loadingContent = false;
+        content.error = error.toString();
+        content.loading = false;
       });
     }
   }
@@ -616,14 +648,12 @@ class _UserProfilePageState extends State<UserProfilePage>
       return false;
     }
     final _CreatorTab requestedTab = _selectedTab;
-    final generation = _contentGeneration;
+    final content = _content;
     final requestedPage = _page + 1;
     bool isCurrent() =>
-        mounted &&
-        requestedTab == _selectedTab &&
-        generation == _contentGeneration;
+        mounted && identical(_tabContents[requestedTab], content);
 
-    setState(() => _loadingMore = true);
+    setState(() => content.loadingMore = true);
     try {
       final CreatorContentPage<Object> result = await _loadContentPage(
         requestedTab,
@@ -631,18 +661,24 @@ class _UserProfilePageState extends State<UserProfilePage>
       );
       if (!isCurrent()) return false;
       setState(() {
-        _loadingMore = false;
+        content.loadingMore = false;
         if (result.page == requestedPage) {
-          _items = _mergeContent(_items, result.items, requestedTab);
-          _page = result.page;
-          _hasMore = result.hasMore;
+          content.items = _mergeContent(
+            content.items,
+            result.items,
+            requestedTab,
+          );
+          content.page = result.page;
+          content.hasMore = result.hasMore;
         }
       });
-      return result.page == requestedPage;
+      return requestedTab == _selectedTab && result.page == requestedPage;
     } catch (error) {
       if (!isCurrent()) return false;
-      setState(() => _loadingMore = false);
-      if (!forLocation) _showMessage('加载更多失败：$error');
+      setState(() => content.loadingMore = false);
+      if (!forLocation && requestedTab == _selectedTab) {
+        _showMessage('加载更多失败：$error');
+      }
       return false;
     }
   }
@@ -869,21 +905,49 @@ class _UserProfilePageState extends State<UserProfilePage>
     }
   }
 
-  /// 为当前已经显示、但列表接口没有集数的投稿安排一次视频详情补查。
-  void _schedulePartCountFallback(CreatorVideo item) {
-    if (item.partCount > 1 || _resolvedPartCounts.containsKey(item.bvid)) {
+  /// Registers a mounted row that may need a part count when it is visible.
+  void _trackPartCountCandidate(CreatorVideo item, BuildContext context) {
+    if (item.partCount > 1 ||
+        _partCountLookupAttemptedBvids.contains(item.bvid)) {
       return;
     }
+    _partCountCandidates[item.bvid] = (item, context);
+    _schedulePartCountScan();
+  }
+
+  /// Rebuilds the unsent queue from rows intersecting the viewport after layout.
+  void _schedulePartCountScan() {
+    if (_partCountScanScheduled || _partCountCandidates.isEmpty) return;
+    _partCountScanScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_isVideoDisplayed(item.bvid)) {
-        return;
-      }
-      if (!_partCountLookupAttemptedBvids.add(item.bvid)) {
-        return;
-      }
-      _partCountLookupQueue.addLast(item);
-      _pumpPartCountLookups();
+      _partCountScanScheduled = false;
+      if (mounted) _pumpPartCountLookups();
     });
+  }
+
+  /// Tests painted row bounds against the actual scroll viewport.
+  bool _isInPartCountViewport(BuildContext context) {
+    final box = context.findRenderObject();
+    if (box is! RenderBox || !box.attached || !box.hasSize) return false;
+    var viewport = RenderAbstractViewport.maybeOf(box);
+    if (viewport == null || viewport == box) return false;
+    var bounds = MatrixUtils.transformRect(
+      box.getTransformTo(viewport),
+      Offset.zero & box.size,
+    );
+    while (viewport != null) {
+      bounds = bounds.intersect(viewport.paintBounds);
+      if (bounds.isEmpty) return false;
+      final outer = RenderAbstractViewport.maybeOf(viewport.parent);
+      if (outer != null) {
+        bounds = MatrixUtils.transformRect(
+          viewport.getTransformTo(outer),
+          bounds,
+        );
+      }
+      viewport = outer;
+    }
+    return true;
   }
 
   bool _isCreatorVideoBlocked(CreatorVideo item) =>
@@ -901,7 +965,10 @@ class _UserProfilePageState extends State<UserProfilePage>
       : loaded.where((item) => !_isCreatorVideoBlocked(item)).toList();
 
   @override
-  void onDiscoveryBlocklistChanged() => _reconcileDiscoverySelection();
+  void onDiscoveryBlocklistChanged() {
+    _reconcileDiscoverySelection();
+    _schedulePartCountScan();
+  }
 
   void _reconcileDiscoverySelection() {
     _selectionVisibilityEpoch++;
@@ -932,14 +999,25 @@ class _UserProfilePageState extends State<UserProfilePage>
         );
   }
 
-  /// 在最多两个并发请求的限制内依次补查投稿详情，避免同时请求整屏视频。
+  /// Discards offscreen queued rows and starts up to two visible lookups.
   void _pumpPartCountLookups() {
+    _partCountCandidates.removeWhere((_, candidate) => !candidate.$2.mounted);
+    _partCountLookupQueue
+      ..clear()
+      ..addAll(
+        _partCountCandidates.values
+            .where(
+              (candidate) =>
+                  _isVideoDisplayed(candidate.$1.bvid) &&
+                  _isInPartCountViewport(candidate.$2),
+            )
+            .map((candidate) => candidate.$1),
+      );
     while (_activePartCountLookups < _maximumPartCountLookupConcurrency &&
         _partCountLookupQueue.isNotEmpty) {
       final CreatorVideo item = _partCountLookupQueue.removeFirst();
-      if (!_isVideoDisplayed(item.bvid)) {
-        continue;
-      }
+      _partCountCandidates.remove(item.bvid);
+      if (!_partCountLookupAttemptedBvids.add(item.bvid)) continue;
       _activePartCountLookups += 1;
       unawaited(_resolvePartCountFallback(item));
     }
@@ -947,10 +1025,15 @@ class _UserProfilePageState extends State<UserProfilePage>
 
   /// 查询完整视频详情，并把真实分P数量缓存到对应投稿卡片。
   Future<void> _resolvePartCountFallback(CreatorVideo item) async {
+    final revision = CacheLifecycle.account.value;
+    final mid = widget.mid;
     try {
       final VideoPreview video = await _videoService.lookupVideo(item.bvid);
       final int partCount = video.parts.length;
-      if (mounted && partCount > 1 && _isVideoDisplayed(item.bvid)) {
+      if (mounted &&
+          partCount > 1 &&
+          mid == widget.mid &&
+          revision == CacheLifecycle.account.value) {
         setState(() => _resolvedPartCounts[item.bvid] = partCount);
       }
     } catch (_) {
@@ -1084,6 +1167,7 @@ class _UserProfilePageState extends State<UserProfilePage>
     required double width,
     required double height,
     required BoxFit fit,
+    BilibiliImageVariant variant = BilibiliImageVariant.cover16x9,
     IconData placeholderIcon = Icons.image_outlined,
   }) {
     if (url.isEmpty) {
@@ -1091,6 +1175,7 @@ class _UserProfilePageState extends State<UserProfilePage>
     }
     return AppNetworkImage(
       imageUrl: url,
+      imageVariant: variant,
       httpHeaders: const <String, String>{
         'Referer': 'https://www.bilibili.com/',
       },
@@ -1371,6 +1456,7 @@ class _UserProfilePageState extends State<UserProfilePage>
                     ClipOval(
                       child: _buildImage(
                         avatarUrl,
+                        variant: BilibiliImageVariant.avatar,
                         width: 96,
                         height: 96,
                         fit: BoxFit.cover,
@@ -1417,6 +1503,7 @@ class _UserProfilePageState extends State<UserProfilePage>
                           child: ClipOval(
                             child: _buildImage(
                               avatarUrl,
+                              variant: BilibiliImageVariant.avatar,
                               width: 82,
                               height: 82,
                               fit: BoxFit.cover,
@@ -1576,7 +1663,6 @@ class _UserProfilePageState extends State<UserProfilePage>
     final selecting = _selection.active;
     final selected = _selection.ids.contains(item.bvid);
     final WatchHistoryEntry? watchHistory = _watchHistoryByBvid[item.bvid];
-    _schedulePartCountFallback(item);
     final int partCount = _partCountFor(item);
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
@@ -2077,7 +2163,10 @@ class _UserProfilePageState extends State<UserProfilePage>
                         ? null
                         : _videoRowKeys.putIfAbsent(item.bvid, GlobalKey.new),
                     index: index,
-                    builder: (context, key) => _buildVideoCard(item, key),
+                    builder: (context, key) {
+                      _trackPartCountCandidate(item, context);
+                      return _buildVideoCard(item, key);
+                    },
                   );
                 },
               ),

@@ -4,8 +4,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:focubili/features/profile/profile_page.dart';
+import 'package:focubili/features/profile/personalization_settings_page.dart';
+import 'package:focubili/platform/app_platform.dart';
 import 'package:focubili/services/bilibili_auth_service.dart';
 import 'package:focubili/services/dashboard_layout_service.dart';
+import 'package:focubili/services/playback_preferences_service.dart';
+import 'package:focubili/services/settings_transfer_service.dart';
 
 /// 提供固定已登录账号，并记录布局操作是否误调用账号清理。
 class _AccountFixture extends BilibiliAuthService {
@@ -13,10 +17,11 @@ class _AccountFixture extends BilibiliAuthService {
 
   /// 返回本地测试账号，避免真实网络与 Cookie 访问。
   @override
-  Future<BilibiliSessionState> loadCurrentSession() async =>
-      const BilibiliSessionState.active(
-        BilibiliAccount(mid: 123, name: '测试账号', avatarUrl: ''),
-      );
+  Future<BilibiliSessionState> loadCurrentSession({
+    bool forceRefresh = false,
+  }) async => const BilibiliSessionState.active(
+    BilibiliAccount(mid: 123, name: '测试账号', avatarUrl: ''),
+  );
 
   /// 记录退出登录，确保隐藏摘要不会删除账号状态。
   @override
@@ -66,6 +71,70 @@ void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
   // 恢复平台覆盖，避免桌面测试影响其他页面。
   tearDown(() => debugDefaultTargetPlatformOverride = null);
+
+  for (final platform in [
+    AppPlatform.linux,
+    AppPlatform.windows,
+    AppPlatform.android,
+  ]) {
+    /// 通过个性化设置验证默认状态、已导入状态和关闭后的持久化结果。
+    testWidgets('${platform.name} 离线下载网络限制可按平台能力操作', (tester) async {
+      const preferences = PlaybackPreferencesService();
+      final target = find.byKey(const Key('wifi-only-offline-downloads'));
+
+      // 每次从个性化设置首页进入，重新载入当前设备的偏好。
+      Future<void> openSetting() async {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: PersonalizationSettingsPage(
+              key: UniqueKey(),
+              appPlatform: platform,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await _tapVisible(
+          tester,
+          find.byKey(const Key('open-playback-focus-settings')),
+        );
+      }
+
+      // 读取实际开关以检查其当前状态与可操作性。
+      SwitchListTile tile() => tester.widget<SwitchListTile>(target);
+
+      await openSetting();
+      expect(tile().value, isFalse);
+      if (platform == AppPlatform.android) {
+        expect(tile().onChanged, isNotNull);
+        expect(find.textContaining('自动暂停离线缓存任务'), findsOneWidget);
+        await _tapVisible(tester, target);
+      } else {
+        expect(tile().onChanged, isNull);
+        expect(find.textContaining('此功能暂不可用'), findsOneWidget);
+        if (platform == AppPlatform.linux) {
+          await const SettingsTransferService().importSettings({
+            PlaybackPreferencesService.wifiOnlyOfflineDownloadsKey: true,
+          });
+        } else {
+          // Windows 覆盖从旧版本保留下来的同一偏好。
+          await preferences.saveWifiOnlyOfflineDownloads(true);
+        }
+        await openSetting();
+        expect(find.textContaining('请关闭此开关后继续下载'), findsOneWidget);
+      }
+      expect(tile().value, isTrue);
+      expect(tile().onChanged, isNotNull);
+      expect((await preferences.load()).wifiOnlyOfflineDownloads, isTrue);
+
+      await _tapVisible(tester, target);
+      expect(tile().value, isFalse);
+      expect((await preferences.load()).wifiOnlyOfflineDownloads, isFalse);
+      if (platform != AppPlatform.android) {
+        expect(tile().onChanged, isNull);
+        expect(find.textContaining('此功能暂不可用'), findsOneWidget);
+      }
+    });
+  }
 
   /// 打开真实排序菜单，再验证隐藏恢复及账号状态不会受布局编辑影响。
   testWidgets('账号和全部可选入口可隐藏恢复，设置必需且重进保持顺序', (tester) async {

@@ -95,6 +95,12 @@ class _Headers extends Fake implements HttpHeaders {
       values[name.toLowerCase()] = value.toString();
   @override
   String? value(String name) => values[name.toLowerCase()];
+
+  /// Exposes response headers through the shared HTTP transport interface.
+  @override
+  void forEach(void Function(String, List<String>) action) {
+    values.forEach((name, value) => action(name, [value]));
+  }
 }
 
 class _Response extends Stream<List<int>> implements HttpClientResponse {
@@ -102,11 +108,15 @@ class _Response extends Stream<List<int>> implements HttpClientResponse {
     Object? json, {
     this.statusCode = 200,
     String? location,
+    String? etag,
+    String? lastModified,
     List<int>? bytes,
     int? advertisedLength,
   }) : data = bytes ?? utf8.encode(jsonEncode(json)),
        _length = advertisedLength {
     if (location != null) headers.set('location', location);
+    if (etag != null) headers.set('etag', etag);
+    if (lastModified != null) headers.set('last-modified', lastModified);
   }
   final List<int> data;
   final int? _length;
@@ -142,6 +152,10 @@ class _Request extends Fake implements HttpClientRequest {
   @override
   bool followRedirects = true;
   @override
+  int maxRedirects = 5;
+  @override
+  bool persistentConnection = true;
+  @override
   Future<HttpClientResponse> close() async => client.respond(uri);
 }
 
@@ -152,6 +166,8 @@ class _Client extends Fake implements HttpClient {
   int closes = 0;
   @override
   set connectionTimeout(Duration? value) {}
+  @override
+  bool autoUncompress = true;
   @override
   Future<HttpClientRequest> getUrl(Uri uri) async {
     final request = _Request(uri, this);
@@ -185,9 +201,160 @@ Future<AppUpdateResult> _check(
   releaseChannel: channel,
 ).check(currentVersion: version, installation: installation);
 
+class _InstalledStableVersion implements AppVersionProvider {
+  /// Supplies a stable version for startup checks without platform plugins.
+  @override
+  Future<String> loadVersion() async => '1.9.0';
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  test(
+    'revalidates each Beta page and still picks the highest version',
+    () async {
+      var cached = false;
+      final first = List<Object?>.generate(30, (_) => _release(2));
+      final client = _Client((uri) {
+        final page = uri.queryParameters['page'];
+        if (cached) return _Response(null, statusCode: 304, bytes: []);
+        return _Response(
+          page == '1' ? first : [_release(12)],
+          etag: '"p$page"',
+        );
+      });
+      expect(
+        (await _check(
+          client,
+          platform: AppUpdateTargetPlatform.other,
+        )).latestVersion,
+        '1.9.0-beta.12',
+      );
+      cached = true;
+      final result = await _check(
+        client,
+        platform: AppUpdateTargetPlatform.other,
+      );
+      expect(result.latestVersion, '1.9.0-beta.12');
+      expect(
+        client.requests.skip(2).map((r) => r.headers.value('If-None-Match')),
+        ['"p1"', '"p2"'],
+      );
+    },
+  );
+
+  test(
+    '304 with a corrupt cached body retries once without validators',
+    () async {
+      const modified = 'Tue, 10 Nov 2026 08:00:00 GMT';
+      var calls = 0;
+      final client = _Client((_) {
+        calls++;
+        if (calls == 2) return _Response(null, statusCode: 304, bytes: []);
+        return _Response(
+          {'tag_name': calls == 1 ? 'v2.0.0' : 'v2.1.0'},
+          etag: '"release"',
+          lastModified: modified,
+        );
+      });
+      final service = AppUpdateService(httpClient: client);
+      expect(
+        (await service.check(currentVersion: '1.9.0')).latestVersion,
+        '2.0.0',
+      );
+      final prefs = await SharedPreferences.getInstance();
+      final key = prefs.getKeys().singleWhere(
+        (k) => k.startsWith('app_update.release_page'),
+      );
+      final cache = jsonDecode(prefs.getString(key)!) as Map<String, dynamic>;
+      cache['body'] = '{"tag_name":"v9.9.9"}';
+      await prefs.setString(key, jsonEncode(cache));
+      expect(
+        (await service.check(currentVersion: '1.9.0')).latestVersion,
+        '2.1.0',
+      );
+      expect(calls, 3);
+      expect(client.requests[1].headers.value('If-None-Match'), '"release"');
+      expect(client.requests[1].headers.value('If-Modified-Since'), modified);
+      expect(client.requests[2].headers.value('If-None-Match'), isNull);
+      expect(client.requests[2].headers.value('If-Modified-Since'), isNull);
+    },
+  );
+
+  test(
+    'startup runs after agreement and persists cooldown and last update',
+    () async {
+      var now = DateTime(2026, 11, 10, 8);
+      var requests = 0;
+
+      /// Starts a fresh controller sharing the same local preferences.
+      AppUpdateController controller() {
+        final value = AppUpdateController(
+          versionProvider: _InstalledStableVersion(),
+          clock: () => now,
+          updateService: AppUpdateService(
+            releaseLoader: () async {
+              requests++;
+              return {'tag_name': 'v2.0.0'};
+            },
+          ),
+        );
+        addTearDown(value.dispose);
+        return value;
+      }
+
+      final first = controller();
+      await first.initialize(checkOnStart: false);
+      expect(requests, 0);
+      await Future.wait([
+        first.triggerStartupCheckIfNeeded(),
+        first.triggerStartupCheckIfNeeded(),
+      ]);
+      expect(requests, 1);
+      now = now.add(const Duration(hours: 5, minutes: 59));
+      final restarted = controller();
+      await restarted.triggerStartupCheckIfNeeded();
+      expect(requests, 1);
+      expect(restarted.availableUpdate?.latestVersion, '2.0.0');
+      await restarted.checkNow();
+      expect(requests, 2);
+      now = now.add(const Duration(hours: 6));
+      await controller().triggerStartupCheckIfNeeded();
+      expect(requests, 3);
+    },
+  );
+
+  test('startup network errors retry after fifteen minutes', () async {
+    var now = DateTime(2026, 11, 10, 8);
+    var requests = 0;
+
+    /// Recreates the controller to test the persisted failure deadline.
+    Future<AppUpdateStatus> start() async {
+      final value = AppUpdateController(
+        versionProvider: _InstalledStableVersion(),
+        clock: () => now,
+        updateService: AppUpdateService(
+          releaseLoader: () async {
+            requests++;
+            if (requests == 1) throw const SocketException('offline');
+            return {'tag_name': 'v2.0.0'};
+          },
+        ),
+      );
+      addTearDown(value.dispose);
+      await value.triggerStartupCheckIfNeeded();
+      return value.result.status;
+    }
+
+    expect(await start(), AppUpdateStatus.failed);
+    now = now.add(const Duration(minutes: 14));
+    await start();
+    expect(requests, 1);
+    now = now.add(const Duration(minutes: 1));
+    expect(await start(), AppUpdateStatus.available);
+    expect(requests, 2);
+  });
 
   test('numbered Beta manifest keeps verified Android download', () async {
     final result = await _check(

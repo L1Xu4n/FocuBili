@@ -39,12 +39,16 @@ class ReturningPlayback extends NativePlaybackService {
     VideoPart? part,
     int quality = 64,
     Duration? initialPosition,
+    PlaybackCodecPreference? codecPreference,
+    bool preferDataSaving = false,
   }) async {
     await super.openVideo(
       video,
       part: part,
       quality: quality,
       initialPosition: initialPosition,
+      codecPreference: codecPreference,
+      preferDataSaving: preferDataSaving,
     );
     emit(
       PlaybackSnapshot(

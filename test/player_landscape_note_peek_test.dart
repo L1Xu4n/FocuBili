@@ -72,6 +72,8 @@ class _PeekPlayback extends FeedbackPlayback implements PlaybackVideoSurface {
     VideoPart? part,
     int quality = 64,
     Duration? initialPosition,
+    PlaybackCodecPreference? codecPreference,
+    bool preferDataSaving = false,
   }) async {
     onlineOpens++;
     emit(
