@@ -85,6 +85,40 @@ class BilibiliSessionState {
       status == BilibiliSessionStatus.active && account != null;
 }
 
+/// 规范化登录页手动粘贴的 Cookie，只在手动输入入口调用。
+///
+/// Chrome DevTools 复制 Cookie 单元格时默认只得到值，没有 `SESSDATA=` 前缀。
+/// 只有形状像 SESSDATA 的单个值（可见 ASCII，含逗号或 `%2C`）才补全键名；
+/// 其他内容原样返回，仍由 [BilibiliAuthService.loginWithCookie] 判断。
+/// 补全后的会话只有 SESSDATA，没有 `bili_jct` 和 `DedeUserID`。
+String normalizePastedCookie(String input) {
+  String text = input.trim();
+  while (text.endsWith(';')) {
+    text = text.substring(0, text.length - 1).trimRight();
+  }
+  if (text.length >= 2 &&
+      (text.startsWith('"') || text.startsWith("'")) &&
+      text.endsWith(text[0])) {
+    text = text.substring(1, text.length - 1).trim();
+  }
+  if (text.toUpperCase() == 'SESSDATA') {
+    throw const BilibiliAuthException(
+      '只复制到了 Cookie 名称，请复制 SESSDATA 那一行的 Value。',
+    );
+  }
+  final bool singleValue = RegExp(
+    r'^[\x21\x23-\x26\x28-\x3a\x3c\x3e-\x7e]+$',
+  ).hasMatch(text);
+  final bool looksLikeSessdata =
+      text.contains(',') || text.toUpperCase().contains('%2C');
+  if (!singleValue || !looksLikeSessdata) {
+    return text;
+  }
+  // DevTools 勾选 "Show URL-decoded" 时复制到的是解码形式，转回 Cookie 原本的编码。
+  final String encoded = text.replaceAll(',', '%2C').replaceAll('*', '%2A');
+  return 'SESSDATA=$encoded';
+}
+
 /// 表示登录操作无法继续，并携带不包含 Cookie 内容的中文说明。
 class BilibiliAuthException implements Exception {
   /// 创建一条不会暴露 Cookie 内容的登录错误说明。
@@ -318,11 +352,7 @@ class BilibiliAuthService {
 
   /// 先用官方接口验证用户粘贴的 Cookie，成功后才替换本机 B 站 Cookie。
   Future<BilibiliAccount> loginWithCookie(String rawCookie) async {
-    final String trimmed = rawCookie.trim();
-    // Chrome DevTools 复制 Cookie 单元格时默认只复制值，没有 `SESSDATA=` 前缀。
-    final String cookie = RegExp(r'^[^=;\s]+$').hasMatch(trimmed)
-        ? 'SESSDATA=$trimmed'
-        : trimmed;
+    final String cookie = rawCookie.trim();
     if (!_containsSessionCookie(cookie)) {
       throw const BilibiliAuthException('Cookie 中没有找到有效的 SESSDATA，无法建立登录状态。');
     }

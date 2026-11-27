@@ -251,9 +251,35 @@ void main() {
     expect(store.replacedCookie, newCookie);
   });
 
-  /// 验证从 DevTools 只复制到 SESSDATA 值时会补全键名后再验证。
-  test('只粘贴 SESSDATA 值时自动补全键名', () async {
-    final _RecordingCookieStore store = _RecordingCookieStore();
+  /// 验证登录页只给形状像 SESSDATA 的单个值补键名，其他输入原样交给服务判断。
+  test('手动粘贴的 SESSDATA 值按形状补全键名', () {
+    const Map<String, String> cases = <String, String>{
+      '  4b1a%2C1811202529%2C481cd%2Ab2Cj  ':
+          'SESSDATA=4b1a%2C1811202529%2C481cd%2Ab2Cj',
+      '4b1a,1811202529,481cd*b2Cj': 'SESSDATA=4b1a%2C1811202529%2C481cd%2Ab2Cj',
+      '"4b1a%2C18%2Cab";': 'SESSDATA=4b1a%2C18%2Cab',
+      "'4b1a%2C18%2Cab'": 'SESSDATA=4b1a%2C18%2Cab',
+      'SESSDATA=abc; bili_jct=csrf;': 'SESSDATA=abc; bili_jct=csrf',
+      'my-password-123': 'my-password-123',
+      '4b1a%2C18 ab': '4b1a%2C18 ab',
+      '中文%2C值': '中文%2C值',
+      'ab\u0007%2Ccd': 'ab\u0007%2Ccd',
+      '': '',
+    };
+    cases.forEach((String input, String expected) {
+      expect(normalizePastedCookie(input), expected, reason: input);
+    });
+    expect(
+      () => normalizePastedCookie(' sessdata; '),
+      throwsA(isA<BilibiliAuthException>()),
+    );
+  });
+
+  /// 验证服务入口不补全裸值，备份导入等调用方仍在本地拒绝缺少 SESSDATA 的输入。
+  test('缺少 SESSDATA 键名时不发请求也不替换会话', () async {
+    final _RecordingCookieStore store = _RecordingCookieStore(
+      cookies: 'SESSDATA=old-account',
+    );
     final _CallbackAuthApi api = _CallbackAuthApi(
       (String _) async => _activeResponse(),
     );
@@ -262,14 +288,15 @@ void main() {
       api: api,
     );
 
-    await service.loginWithCookie('  abc%2C123%2Cdef  ');
-
-    expect(api.requestedCookies, <String>['SESSDATA=abc%2C123%2Cdef']);
-    expect(store.replacedCookie, 'SESSDATA=abc%2C123%2Cdef');
-    await expectLater(
-      service.loginWithCookie('bili_jct=only-csrf'),
-      throwsA(isA<BilibiliAuthException>()),
-    );
+    for (final String input in <String>['4b1a%2C18%2Cab', 'bili_jct=csrf']) {
+      await expectLater(
+        service.loginWithCookie(input),
+        throwsA(isA<BilibiliAuthException>()),
+      );
+    }
+    expect(api.requestedCookies, isEmpty);
+    expect(store.replaceCalls, 0);
+    expect(store.cookies, 'SESSDATA=old-account');
   });
 
   /// 验证 Windows 官方网页快照无需预判 Cookie 名，只以官方接口的已登录结果为准。
