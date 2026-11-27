@@ -166,7 +166,7 @@ class _LoginPageState extends State<LoginPage> {
     });
     try {
       final BilibiliAccount account = await _authService.loginWithCookie(
-        _cookieController.text,
+        normalizePastedCookie(_cookieController.text),
       );
       if (mounted) {
         Navigator.of(context).pop(account);
@@ -214,6 +214,7 @@ class _LoginPageState extends State<LoginPage> {
             decoration: InputDecoration(
               labelText: 'B 站 Cookie',
               hintText: '需要包含 SESSDATA',
+              helperText: '只粘 SESSDATA 的值也能登录；点赞、投币、收藏还需要 bili_jct。',
               suffixIcon: IconButton(
                 // Cookie 可见按钮函数只改变本地输入显示方式。
                 onPressed: _toggleCookieVisibility,
