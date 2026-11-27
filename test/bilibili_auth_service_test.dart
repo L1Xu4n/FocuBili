@@ -251,6 +251,27 @@ void main() {
     expect(store.replacedCookie, newCookie);
   });
 
+  /// 验证从 DevTools 只复制到 SESSDATA 值时会补全键名后再验证。
+  test('只粘贴 SESSDATA 值时自动补全键名', () async {
+    final _RecordingCookieStore store = _RecordingCookieStore();
+    final _CallbackAuthApi api = _CallbackAuthApi(
+      (String _) async => _activeResponse(),
+    );
+    final BilibiliAuthService service = BilibiliAuthService(
+      cookieStore: store,
+      api: api,
+    );
+
+    await service.loginWithCookie('  abc%2C123%2Cdef  ');
+
+    expect(api.requestedCookies, <String>['SESSDATA=abc%2C123%2Cdef']);
+    expect(store.replacedCookie, 'SESSDATA=abc%2C123%2Cdef');
+    await expectLater(
+      service.loginWithCookie('bili_jct=only-csrf'),
+      throwsA(isA<BilibiliAuthException>()),
+    );
+  });
+
   /// 验证 Windows 官方网页快照无需预判 Cookie 名，只以官方接口的已登录结果为准。
   test('网页 Cookie 快照由官方接口确认后保存', () async {
     final _RecordingCookieStore store = _RecordingCookieStore();

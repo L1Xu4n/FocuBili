@@ -318,7 +318,11 @@ class BilibiliAuthService {
 
   /// 先用官方接口验证用户粘贴的 Cookie，成功后才替换本机 B 站 Cookie。
   Future<BilibiliAccount> loginWithCookie(String rawCookie) async {
-    final String cookie = rawCookie.trim();
+    final String trimmed = rawCookie.trim();
+    // Chrome DevTools 复制 Cookie 单元格时默认只复制值，没有 `SESSDATA=` 前缀。
+    final String cookie = RegExp(r'^[^=;\s]+$').hasMatch(trimmed)
+        ? 'SESSDATA=$trimmed'
+        : trimmed;
     if (!_containsSessionCookie(cookie)) {
       throw const BilibiliAuthException('Cookie 中没有找到有效的 SESSDATA，无法建立登录状态。');
     }
